@@ -389,7 +389,7 @@ describe("PublicFeaturesApp", () => {
     {
       slug: "slides",
       title: "Present from the same canvas where technical ideas are built.",
-      section: "Slides are structured whiteboards.",
+      section: "How a deck comes together",
     },
   ])(
     "renders the richer $slug feature page",
@@ -435,7 +435,7 @@ describe("PublicFeaturesApp", () => {
   it.each([
     { finalCta: "Start using SageMath", slug: "sage" },
     { finalCta: "Start using CoCalc whiteboards", slug: "whiteboard" },
-    { finalCta: "Start making slides", slug: "slides" },
+    { finalCta: "Start with a deck", slug: "slides" },
     { finalCta: "Start using R", slug: "r-statistical-software" },
     { finalCta: "Start using Octave", slug: "octave" },
     { finalCta: "Start using Julia", slug: "julia" },
