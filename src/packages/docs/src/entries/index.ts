@@ -13,6 +13,7 @@ import { DOCUMENTATION_ENTRIES } from "./docs";
 import { FILES_ENTRIES } from "./files";
 import { HOSTS_ENTRIES } from "./hosts";
 import { JUPYTER_ENTRIES } from "./jupyter";
+import { MIGRATION_ENTRIES } from "./migration";
 import { PROJECTS_ENTRIES } from "./projects";
 import { SELF_HOSTING_ENTRIES } from "./self-hosting";
 import { TEACHING_ENTRIES } from "./teaching";
@@ -29,6 +30,7 @@ const ENTRY_GROUPS: DocsEntry[] = [
   ...FILES_ENTRIES,
   ...HOSTS_ENTRIES,
   ...JUPYTER_ENTRIES,
+  ...MIGRATION_ENTRIES,
   ...PROJECTS_ENTRIES,
   ...SELF_HOSTING_ENTRIES,
   ...TEACHING_ENTRIES,
@@ -41,6 +43,7 @@ const ENTRY_BY_ID = new Map(ENTRY_GROUPS.map((entry) => [entry.id, entry]));
 const DOCS_ENTRY_IDS = [
   "account.settings",
   "billing.settings",
+  "account.migrating-from-cocalc-com",
   "admin.overview",
   "admin.news",
   "admin.site-settings",
