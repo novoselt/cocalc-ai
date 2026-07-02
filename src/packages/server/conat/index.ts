@@ -113,7 +113,16 @@ export async function initConatApi() {
   startRootfsReleaseGcMaintenance();
   startRootfsScanMaintenance();
   startRestoreLroWorker();
-  startLegacyMigrationProjectRestoreWorker();
+  if (isPrimaryBayWorker()) {
+    startLegacyMigrationProjectRestoreWorker();
+  } else {
+    logger.info(
+      "legacy migration project restore worker skipped on non-primary bay worker",
+      {
+        worker_id: process.env.COCALC_BAY_WORKER_ID,
+      },
+    );
+  }
   startHostLroWorker();
   startAccountProjectIndexProjectionMaintenance();
   startAccountCollaboratorIndexProjectionMaintenance();

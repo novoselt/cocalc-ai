@@ -157,12 +157,21 @@ describe("ensureLroSchema", () => {
   });
 
   it("migrates child LRO parent tracking into existing tables", async () => {
+    connectQueryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("pg_try_advisory_lock")) {
+        return { rows: [{ acquired: true }] };
+      }
+      if (sql.includes("information_schema.columns")) {
+        return { rows: [{ exists: false }] };
+      }
+      return { rows: [] };
+    });
     const { ensureLroSchema } = await import("./lro-db");
 
     await ensureLroSchema();
 
     const sql = connectQueryMock.mock.calls.map(([sql]) => `${sql}`);
-    expect(sql.some((x) => x.includes("pg_advisory_lock"))).toBe(true);
+    expect(sql.some((x) => x.includes("pg_try_advisory_lock"))).toBe(true);
     expect(sql.some((x) => x.includes("pg_advisory_unlock"))).toBe(true);
     expect(
       sql.some((x) => x.includes("ADD COLUMN IF NOT EXISTS parent_id UUID")),

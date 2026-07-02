@@ -262,9 +262,13 @@ async function claimRestoreRows({
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    await client.query(
-      "SELECT pg_advisory_xact_lock(hashtext('legacy-migration-project-restore-claim'))",
+    const lock = await client.query<{ acquired: boolean }>(
+      "SELECT pg_try_advisory_xact_lock(hashtext('legacy-migration-project-restore-claim')) AS acquired",
     );
+    if (lock.rows[0]?.acquired !== true) {
+      await client.query("ROLLBACK");
+      return [];
+    }
 
     const activeByHost = new Map<string, number>();
     const active = await client.query<{

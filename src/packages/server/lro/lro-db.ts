@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import getPool from "@cocalc/database/pool";
+import getPool, { type PoolClient } from "@cocalc/database/pool";
 import type {
   LroScopeType,
   LroStatus,
@@ -15,12 +15,57 @@ const TERMINAL_STATUSES: LroStatus[] = [
 
 const pool = () => getPool();
 
+async function hasColumn({
+  client,
+  table,
+  column,
+}: {
+  client: PoolClient;
+  table: string;
+  column: string;
+}): Promise<boolean> {
+  const result = await client.query<{ exists: boolean }>(
+    `
+    SELECT EXISTS (
+      SELECT 1
+        FROM information_schema.columns
+       WHERE table_schema='public'
+         AND table_name=$1
+         AND column_name=$2
+    ) AS exists
+    `,
+    [table, column],
+  );
+  return result.rows[0]?.exists === true;
+}
+
+async function addColumnIfMissing({
+  client,
+  table,
+  column,
+  definition,
+}: {
+  client: PoolClient;
+  table: string;
+  column: string;
+  definition: string;
+}): Promise<void> {
+  if (await hasColumn({ client, table, column })) return;
+  await client.query(
+    `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${definition}`,
+  );
+}
+
 export async function ensureLroSchema(): Promise<void> {
   const client = await pool().connect();
+  let locked = false;
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext($1))", [
-      "cocalc:lro-schema",
-    ]);
+    const lock = await client.query<{ acquired: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS acquired",
+      ["cocalc:lro-schema"],
+    );
+    locked = lock.rows[0]?.acquired === true;
+    if (!locked) return;
     await client.query(`
       CREATE TABLE IF NOT EXISTS long_running_operations (
         op_id UUID PRIMARY KEY,
@@ -61,24 +106,35 @@ export async function ensureLroSchema(): Promise<void> {
     await client.query(
       "CREATE INDEX IF NOT EXISTS lro_updated_idx ON long_running_operations(updated_at)",
     );
-    await client.query(
-      "ALTER TABLE long_running_operations ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ",
-    );
-    await client.query(
-      "ALTER TABLE long_running_operations ADD COLUMN IF NOT EXISTS dismissed_by UUID",
-    );
-    await client.query(
-      "ALTER TABLE long_running_operations ADD COLUMN IF NOT EXISTS parent_id UUID",
-    );
+    await addColumnIfMissing({
+      client,
+      table: "long_running_operations",
+      column: "dismissed_at",
+      definition: "TIMESTAMPTZ",
+    });
+    await addColumnIfMissing({
+      client,
+      table: "long_running_operations",
+      column: "dismissed_by",
+      definition: "UUID",
+    });
+    await addColumnIfMissing({
+      client,
+      table: "long_running_operations",
+      column: "parent_id",
+      definition: "UUID",
+    });
     await client.query(
       "CREATE INDEX IF NOT EXISTS lro_parent_idx ON long_running_operations(parent_id)",
     );
   } finally {
-    try {
-      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [
-        "cocalc:lro-schema",
-      ]);
-    } catch {}
+    if (locked) {
+      try {
+        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [
+          "cocalc:lro-schema",
+        ]);
+      } catch {}
+    }
     client.release();
   }
 }
