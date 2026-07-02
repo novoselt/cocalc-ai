@@ -73,6 +73,7 @@ Table({
       "((run_quota ->> 'always_running'))", // same reason as above
       "host_id", // project-host placement lookup
       "owning_bay_id", // owning control-plane bay lookup
+      "backup_repo_id", // project backup repository lookup
       "usage_account_id", // membership usage, storage, and egress attribution
       "runtime_sponsor_account_id", // runtime admission, priority, and RAM-limit attribution
     ],

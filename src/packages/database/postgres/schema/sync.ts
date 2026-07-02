@@ -230,10 +230,12 @@ async function updateIndex(
   if (action == "create") {
     // ATTN if you consider adding CONCURRENTLY to create index, read the note earlier above about this
     await db.query(
-      `CREATE ${unique ? "UNIQUE" : ""} INDEX ${name} ON ${table} ${query}`,
+      `CREATE ${unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quoteField(
+        name,
+      )} ON ${quoteField(table)} ${query}`,
     );
   } else if (action == "delete") {
-    await db.query(`DROP INDEX ${name}`);
+    await db.query(`DROP INDEX CONCURRENTLY IF EXISTS ${quoteField(name)}`);
   } else {
     // typescript would catch this, but just in case:
     throw Error(`BUG: unknown action ${name}`);

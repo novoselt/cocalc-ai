@@ -125,7 +125,16 @@ export async function initConatApi() {
   }
   startHostLroWorker();
   startAccountProjectIndexProjectionMaintenance();
-  startAccountCollaboratorIndexProjectionMaintenance();
+  if (isPrimaryBayWorker()) {
+    startAccountCollaboratorIndexProjectionMaintenance();
+  } else {
+    logger.info(
+      "account collaborator index projector skipped on non-primary bay worker",
+      {
+        worker_id: process.env.COCALC_BAY_WORKER_ID,
+      },
+    );
+  }
   startAccountNotificationIndexProjectionMaintenance();
   startNotificationEmailOutboxMaintenance();
   startMembershipSideEffectsMaintenance();
