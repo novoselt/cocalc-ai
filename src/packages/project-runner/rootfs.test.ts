@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { mkdir, readFile, rm, writeFile } from "fs/promises";
 
 const executeCode = jest.fn();
@@ -136,5 +139,70 @@ describe("rootfs overlay mount recovery", () => {
     ).rejects.toThrow(/project disk quota is full/);
 
     expect(executeCode).not.toHaveBeenCalled();
+  });
+});
+
+describe("rootfs host path normalization", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "cocalc-rootfs-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("keeps the standard .local directory path unchanged", async () => {
+    mkdirSync(join(tmp, ".local"), { recursive: true });
+
+    const mod = await import("./run/rootfs");
+
+    expect(mod.getImageNamePath(tmp)).toBe(
+      join(tmp, ".local/share/cocalc/rootfs/current-image.txt"),
+    );
+  });
+
+  it("maps legacy absolute /home/user .local symlinks into the project", async () => {
+    mkdirSync(join(tmp, "portable-scripts/.local"), { recursive: true });
+    symlinkSync("/home/user/portable-scripts/.local", join(tmp, ".local"));
+
+    const mod = await import("./run/rootfs");
+
+    expect(mod.getImageNamePath(tmp)).toBe(
+      join(
+        tmp,
+        "portable-scripts/.local/share/cocalc/rootfs/current-image.txt",
+      ),
+    );
+
+    const paths = mod.getPaths({
+      home: tmp,
+      image: "docker.io/buildpack-deps:noble-scm",
+      project_id: "project-id",
+    });
+    expect(paths.upperdir).toBe(
+      join(
+        tmp,
+        "portable-scripts/.local/share/cocalc/rootfs/docker.io%2Fbuildpack-deps%3Anoble-scm/upperdir",
+      ),
+    );
+    expect(paths.workdir).toBe(
+      join(
+        tmp,
+        "portable-scripts/.local/share/cocalc/rootfs/docker.io%2Fbuildpack-deps%3Anoble-scm/workdir",
+      ),
+    );
+  });
+
+  it("keeps relative .local symlinks unchanged", async () => {
+    mkdirSync(join(tmp, "portable-scripts/.local"), { recursive: true });
+    symlinkSync("portable-scripts/.local", join(tmp, ".local"));
+
+    const mod = await import("./run/rootfs");
+
+    expect(mod.getImageNamePath(tmp)).toBe(
+      join(tmp, ".local/share/cocalc/rootfs/current-image.txt"),
+    );
   });
 });
