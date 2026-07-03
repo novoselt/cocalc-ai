@@ -56,7 +56,11 @@ set -euo pipefail
 host="${HOST:-127.0.0.1}"
 port="${PORT:-6010}"
 run_dir="${TMPDIR:-/tmp}/cocalc-rstudio-${USER:-user}"
+data_dir="${HOME:-/home/user}/.config/cocalc-rstudio"
 mkdir -p "$run_dir"
+mkdir -p "$data_dir/db"
+database_config="$run_dir/database.conf"
+printf 'provider=sqlite\ndirectory=%s\n' "$data_dir/db" >"$database_config"
 cookie_key="$run_dir/secure-cookie-key"
 if [ ! -f "$cookie_key" ]; then
   umask 077
@@ -67,9 +71,14 @@ exec rserver \
   --www-address="$host" \
   --www-port="$port" \
   --auth-none=1 \
+  --auth-encrypt-password=0 \
+  --auth-minimum-user-id=0 \
   --server-user="$(id -un)" \
+  --server-data-dir="$data_dir" \
+  --server-working-dir="${HOME:-/home/user}" \
+  --server-pid-file="$run_dir/rserver.pid" \
   --secure-cookie-key-file="$cookie_key" \
-  --database-config-file="$run_dir/database.conf"
+  --database-config-file="$database_config"
 EOF
 $SUDO chmod 755 /usr/local/bin/cocalc-rstudio-server
 

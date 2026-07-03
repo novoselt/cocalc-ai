@@ -312,8 +312,25 @@ export const BUILTIN_APP_TEMPLATE_CATALOG: AppTemplateCatalogV1 = {
         kind: "service",
         preferred_port: "6006",
         service_open_mode: "proxy",
-        command:
-          "rserver --server-daemonize=0 --auth-none=1 --auth-encrypt-password=0 --www-port=${PORT} --www-root-path=${APP_BASE_URL} --auth-minimum-user-id=0",
+        command: `set -euo pipefail
+tmp="\${TMPDIR:-/tmp}/rserver"
+home="\${HOME:-/home/user}"
+data="\$home/.config/rserver"
+mkdir -p "\$tmp" "\$data/db"
+printf 'provider=sqlite\\ndirectory=%s\\n' "\$data/db" > "\$tmp/db.conf"
+exec rserver \\
+  --server-daemonize=0 \\
+  --auth-none=1 \\
+  --auth-encrypt-password=0 \\
+  --auth-minimum-user-id=0 \\
+  --server-user="$(id -un)" \\
+  --database-config-file="\$tmp/db.conf" \\
+  --server-data-dir="\$data" \\
+  --server-working-dir="\$home" \\
+  --server-pid-file="\$tmp/rserver.pid" \\
+  --www-address="\${HOST:-127.0.0.1}" \\
+  --www-port="\${PORT}" \\
+  --www-root-path="\${APP_BASE_URL}"`,
       },
     },
     {
