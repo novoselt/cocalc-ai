@@ -60,12 +60,10 @@ export async function ensureLroSchema(): Promise<void> {
   const client = await pool().connect();
   let locked = false;
   try {
-    const lock = await client.query<{ acquired: boolean }>(
-      "SELECT pg_try_advisory_lock(hashtext($1)) AS acquired",
-      ["cocalc:lro-schema"],
-    );
-    locked = lock.rows[0]?.acquired === true;
-    if (!locked) return;
+    await client.query("SELECT pg_advisory_lock(hashtext($1))", [
+      "cocalc:lro-schema",
+    ]);
+    locked = true;
     await client.query(`
       CREATE TABLE IF NOT EXISTS long_running_operations (
         op_id UUID PRIMARY KEY,
