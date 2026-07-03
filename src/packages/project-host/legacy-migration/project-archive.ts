@@ -398,7 +398,8 @@ async function scanProjectArchiveTar({
   try {
     await runProjectArchiveTarCommand({
       archivePath,
-      args: ["-tvf", "-"],
+      // The member list is fed back to tar -T; keep backslashes literal.
+      args: ["--quoting-style=literal", "-tvf", "-"],
       onStdoutLine: (line) => {
         const parsed = parseTarVerboseLine(line);
         if (parsed == null) {
@@ -506,6 +507,7 @@ async function extractProjectArchiveTar({
     "--delay-directory-restore",
     "--no-same-owner",
     "--no-overwrite-dir",
+    "--no-wildcards",
     "-xvf",
     "-",
     "-C",
