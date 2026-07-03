@@ -82,6 +82,13 @@ exec rserver \
 EOF
 $SUDO chmod 755 /usr/local/bin/cocalc-rstudio-server
 
+# RStudio Server 2026 stores session-rpc-key under /var/lib/rstudio-server even
+# when server-data-dir is overridden. Make that state path usable by the project
+# user and remove any package-created root/rstudio-owned key.
+$SUDO mkdir -p /var/lib/rstudio-server
+$SUDO chmod 1777 /var/lib/rstudio-server
+$SUDO rm -f /var/lib/rstudio-server/session-rpc-key
+
 $SUDO chown -R "$owner_uid:$owner_gid" /opt/cocalc-r
 $SUDO chmod -R u+rwX,go+rX /opt/cocalc-r
 $SUDO rm -rf /var/lib/apt/lists/*

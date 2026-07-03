@@ -6,6 +6,7 @@ Rscript --vanilla -e 'stopifnot(requireNamespace("shiny", quietly=TRUE)); stopif
 test -f /opt/cocalc-r/examples/shiny-hello/app.R
 
 tmp="$(mktemp -d)"
+chmod 1777 "$tmp"
 port="${RSTUDIO_VERIFY_PORT:-6197}"
 log="$tmp/rstudio.log"
 cleanup() {
@@ -17,7 +18,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-HOST=127.0.0.1 PORT="$port" TMPDIR="$tmp" cocalc-rstudio-server >"$log" 2>&1 &
+if [ "$(id -u)" -eq 0 ] && id user >/dev/null 2>&1; then
+  sudo -H -u user env HOST=127.0.0.1 PORT="$port" TMPDIR="$tmp" \
+    cocalc-rstudio-server >"$log" 2>&1 &
+else
+  HOST=127.0.0.1 PORT="$port" TMPDIR="$tmp" cocalc-rstudio-server \
+    >"$log" 2>&1 &
+fi
 pid="$!"
 
 ready=false
