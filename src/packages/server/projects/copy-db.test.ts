@@ -20,6 +20,37 @@ const HOST_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SRC_PROJECT_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const DEST_PROJECT_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
+async function ensureLroTableForCopyDbTest(): Promise<void> {
+  await getPool().query(`
+    CREATE TABLE IF NOT EXISTS long_running_operations (
+      op_id UUID PRIMARY KEY,
+      kind TEXT NOT NULL,
+      scope_type TEXT NOT NULL,
+      scope_id UUID NOT NULL,
+      status TEXT NOT NULL,
+      created_by UUID,
+      owner_type TEXT,
+      owner_id UUID,
+      routing TEXT,
+      input JSONB DEFAULT '{}'::jsonb,
+      result JSONB DEFAULT '{}'::jsonb,
+      error TEXT,
+      progress_summary JSONB DEFAULT '{}'::jsonb,
+      attempt INTEGER DEFAULT 0,
+      heartbeat_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
+      dismissed_at TIMESTAMPTZ,
+      dismissed_by UUID,
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      dedupe_key TEXT,
+      parent_id UUID
+    )
+  `);
+}
+
 beforeAll(async () => {
   await before({ noConat: true });
 }, 15000);
@@ -31,6 +62,7 @@ beforeEach(async () => {
   const { ensureLroSchema } = await import("@cocalc/server/lro/lro-db");
   await ensureCopySchema();
   await ensureLroSchema();
+  await ensureLroTableForCopyDbTest();
   const pool = getPool();
   await pool.query("DELETE FROM project_copies");
   await pool.query("DELETE FROM long_running_operations");
