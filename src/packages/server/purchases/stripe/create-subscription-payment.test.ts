@@ -161,4 +161,77 @@ describe("createSubscriptionPayment", () => {
     expect(subscriptions[0].latest_purchase_id).toBe(purchases[0].id);
     expect(subscriptions[0].payment).toMatchObject({ status: "paid" });
   });
+
+  it("converts a legacy migration grant to its configured renewal class when paid", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        class: "member",
+        cost: 72,
+        interval: "year",
+        status: "past_due",
+      },
+    );
+    const newExpiresMs = Date.now() + 365 * 24 * 60 * 60 * 1000;
+    await getPool().query(
+      `
+      UPDATE subscriptions
+         SET payment=$2,
+             metadata=metadata || $3::jsonb
+       WHERE id=$1
+      `,
+      [
+        subscription_id,
+        {
+          new_expires_ms: newExpiresMs,
+          payment_intent_id: "pi_legacy_renewal",
+          status: "active",
+        },
+        JSON.stringify({
+          grant: true,
+          source_id: "legacy-migration",
+          renewal_configured: true,
+          renewal_class: "basic",
+          renewal_interval: "year",
+        }),
+      ],
+    );
+
+    await processSubscriptionRenewal({
+      account_id,
+      paymentIntent: {
+        metadata: { subscription_id: `${subscription_id}` },
+      },
+      amount: 72,
+    });
+
+    const { rows: purchases } = await getPool().query(
+      `SELECT description
+         FROM purchases
+        WHERE account_id=$1
+          AND service='membership'
+          AND description->>'type'='membership'
+          AND (description->>'subscription_id')::int=$2`,
+      [account_id, subscription_id],
+    );
+    expect(purchases).toHaveLength(1);
+    expect(purchases[0].description).toMatchObject({
+      class: "basic",
+      interval: "year",
+    });
+
+    const { rows: subscriptions } = await getPool().query(
+      "SELECT metadata, interval FROM subscriptions WHERE id=$1",
+      [subscription_id],
+    );
+    expect(subscriptions[0].metadata).toMatchObject({
+      class: "basic",
+      grant: false,
+      renewal_class: "basic",
+      renewal_interval: "year",
+    });
+    expect(subscriptions[0].interval).toBe("year");
+  });
 });

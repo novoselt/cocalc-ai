@@ -1185,11 +1185,17 @@ async function currentLegacyMigrationMembershipSubscription(
 function legacyMigrationMembershipGrantResponse(
   subscription: LegacyMigrationMembershipSubscription | null,
 ): LegacyMigrationFinancialMembershipGrantHomeBayResponse {
-  const membership_class = clean(subscription?.metadata?.class) ?? null;
+  const metadata = subscription?.metadata ?? {};
+  const membership_class =
+    metadata.renewal_configured === true
+      ? (clean(metadata.renewal_class) ?? clean(metadata.class) ?? null)
+      : null;
   const membership_interval =
-    subscription?.interval === "month"
+    metadata.renewal_configured === true &&
+    metadata.renewal_interval === "month"
       ? "month"
-      : subscription?.interval === "year"
+      : metadata.renewal_configured === true &&
+          metadata.renewal_interval === "year"
         ? "year"
         : null;
   return {
@@ -1200,7 +1206,7 @@ function legacyMigrationMembershipGrantResponse(
       subscription?.current_period_end != null
         ? new Date(subscription.current_period_end).toISOString()
         : null,
-    membership_renewal_configured: subscription?.status === "active",
+    membership_renewal_configured: metadata.renewal_configured === true,
   };
 }
 
@@ -2012,7 +2018,8 @@ export async function configureFinancialMembershipRenewalHomeBay({
 
     const metadata = {
       ...(grant.metadata ?? {}),
-      ...(selectedClass != null ? { class: selectedClass } : {}),
+      renewal_class: selectedClass,
+      renewal_interval: selectedInterval,
       renewal_configured: selectedClass != null,
       renewal_configured_at: new Date().toISOString(),
     };

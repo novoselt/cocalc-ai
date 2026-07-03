@@ -32,6 +32,53 @@ const SUBSCRIPTION_PAYMENT_SLACK = 0.01;
 
 const logger = getLogger("purchases:stripe:create-subscription-payment");
 
+function cleanString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function renewalMembershipTerms({
+  metadata,
+  interval,
+}: {
+  metadata: any;
+  interval: "month" | "year";
+}): {
+  membershipClass: string;
+  interval: "month" | "year";
+  metadata: any;
+} {
+  if (
+    metadata?.type === "membership" &&
+    metadata?.source_id === "legacy-migration" &&
+    metadata?.grant === true &&
+    metadata?.renewal_configured === true
+  ) {
+    const membershipClass = cleanString(metadata.renewal_class);
+    if (membershipClass) {
+      const renewalInterval =
+        metadata.renewal_interval === "month" ||
+        metadata.renewal_interval === "year"
+          ? metadata.renewal_interval
+          : interval;
+      return {
+        membershipClass,
+        interval: renewalInterval,
+        metadata: {
+          ...metadata,
+          class: membershipClass,
+          grant: false,
+          legacy_migration_grant_converted_at: new Date().toISOString(),
+        },
+      };
+    }
+  }
+  return {
+    membershipClass: metadata.class,
+    interval,
+    metadata,
+  };
+}
+
 export default async function createSubscriptionPayment({
   account_id,
   subscription_id,
@@ -233,6 +280,7 @@ export async function processSubscriptionRenewal({
     }
     const { cost, metadata, interval, latest_purchase_id } = subscriptions[0];
     const costValue = toDecimal(cost);
+    const renewalTerms = renewalMembershipTerms({ metadata, interval });
     let { payment } = subscriptions[0];
     logger.debug("processSubscriptionRenewal", {
       payment,
@@ -276,12 +324,12 @@ export async function processSubscriptionRenewal({
       description: {
         type: "membership",
         subscription_id: subscriptionId,
-        class: metadata.class,
-        interval,
+        class: renewalTerms.membershipClass,
+        interval: renewalTerms.interval,
       },
       client: transaction,
       cost: costValue,
-      period_start: subtractInterval(end, interval),
+      period_start: subtractInterval(end, renewalTerms.interval),
       period_end: end,
     });
 
@@ -302,14 +350,16 @@ export async function processSubscriptionRenewal({
     );
 
     const update = await transaction.query(
-      "UPDATE subscriptions SET payment=$5, status='active',current_period_start=$1,current_period_end=$2,latest_purchase_id=$3 WHERE id=$4 AND account_id=$6",
+      "UPDATE subscriptions SET payment=$5, status='active',current_period_start=$1,current_period_end=$2,latest_purchase_id=$3,metadata=$7,interval=$8 WHERE id=$4 AND account_id=$6",
       [
-        subtractInterval(end, interval),
+        subtractInterval(end, renewalTerms.interval),
         end,
         purchase_id,
         subscriptionId,
         payment,
         account_id,
+        renewalTerms.metadata,
+        renewalTerms.interval,
       ],
     );
     if (update.rowCount != 1) {
@@ -321,13 +371,13 @@ export async function processSubscriptionRenewal({
       event_key: `subscription:${subscriptionId}:renewed:${purchase_id}`,
       event_type: "membership_renewed",
       account_id,
-      membership_class: metadata.class,
+      membership_class: renewalTerms.membershipClass,
       source: "subscription",
-      interval,
+      interval: renewalTerms.interval,
       subscription_id: subscriptionId,
       purchase_id,
       amount: costValue,
-      period_start: subtractInterval(end, interval),
+      period_start: subtractInterval(end, renewalTerms.interval),
       period_end: end,
       trial_status: isTrialConversion ? "converted" : "none",
       client: transaction,
@@ -336,10 +386,10 @@ export async function processSubscriptionRenewal({
       account_id,
       subscription_id: subscriptionId,
       purchase_id,
-      membership_class: metadata.class,
-      interval,
+      membership_class: renewalTerms.membershipClass,
+      interval: renewalTerms.interval,
       amount: costValue,
-      period_start: subtractInterval(end, interval),
+      period_start: subtractInterval(end, renewalTerms.interval),
       period_end: end,
       trial_status: isTrialConversion ? "converted" : "none",
       client: transaction,
@@ -349,12 +399,12 @@ export async function processSubscriptionRenewal({
         event_key: `subscription:${subscriptionId}:trial-converted:${purchase_id}`,
         event_type: "trial_converted",
         account_id,
-        membership_class: metadata.class,
+        membership_class: renewalTerms.membershipClass,
         source: "trial",
-        interval,
+        interval: renewalTerms.interval,
         subscription_id: subscriptionId,
         purchase_id,
-        period_start: subtractInterval(end, interval),
+        period_start: subtractInterval(end, renewalTerms.interval),
         period_end: end,
         trial_days: metadata.trial_days ?? null,
         trial_status: "converted",
