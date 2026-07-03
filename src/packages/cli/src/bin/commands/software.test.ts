@@ -1573,6 +1573,91 @@ test("software deploy static accepts comma-separated profiles", async () => {
   );
 });
 
+test("software deploy accepts comma-separated components sequentially", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-deploy-multi-component-"));
+  const localStore = join(dir, "store");
+  const repoRoot = makeRepoRoot("software-deploy-multi-component-repo-");
+  const runs: CapturedRun[] = [];
+  const r2 = makeR2Client();
+  const program = createProgram(
+    makeDeps({
+      localStore,
+      repoRoot,
+      runs,
+      env: r2Env,
+      r2Client: r2.client,
+    }),
+  );
+  const originalArgv1 = process.argv[1];
+  process.argv[1] = join(dir, "cocalc-bin");
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (value?: unknown) => {
+    logs.push(String(value ?? ""));
+  };
+
+  try {
+    await program.parseAsync([
+      "node",
+      "test",
+      "--json",
+      "software",
+      "deploy",
+      "--build",
+      "static,hub:multi-component",
+      "staging",
+      "--env-file",
+      join(dir, "missing.env"),
+    ]);
+  } finally {
+    console.log = originalLog;
+    process.argv[1] = originalArgv1;
+  }
+
+  assert.equal(runs.length, 4);
+  assert.equal(runs[0].command, "pnpm");
+  assert.equal(runs[0].args.includes("build:bay-static-bundle"), true);
+  assert.equal(runs[1].command, join(dir, "cocalc-bin"));
+  let rocketIndex = runs[1].args.indexOf("rocket");
+  assert.notEqual(rocketIndex, -1);
+  assert.deepEqual(runs[1].args.slice(rocketIndex, rocketIndex + 5), [
+    "rocket",
+    "deploy",
+    "staging",
+    "--scope",
+    "static",
+  ]);
+
+  assert.equal(runs[2].command, "pnpm");
+  assert.equal(runs[2].args.includes("build:bay-hub-bundle"), true);
+  assert.equal(runs[3].command, join(dir, "cocalc-bin"));
+  rocketIndex = runs[3].args.indexOf("rocket");
+  assert.notEqual(rocketIndex, -1);
+  assert.deepEqual(runs[3].args.slice(rocketIndex, rocketIndex + 5), [
+    "rocket",
+    "deploy",
+    "staging",
+    "--scope",
+    "hub",
+  ]);
+
+  assert.equal(logs.length, 1);
+  const payload = JSON.parse(logs[0]);
+  assert.equal(payload.ok, true);
+  assert.deepEqual(payload.data.components, ["static", "hub"]);
+  assert.equal(payload.data.selector, "multi-component");
+  assert.deepEqual(payload.data.targets, ["staging"]);
+  assert.equal(payload.data.deployments.length, 2);
+  assert.equal(payload.data.deployments[0].component, "static");
+  assert.equal(payload.data.deployments[0].profile, "staging");
+  assert.equal(payload.data.deployments[0].built, true);
+  assert.equal(payload.data.deployments[1].component, "hub");
+  assert.equal(payload.data.deployments[1].profile, "staging");
+  assert.equal(payload.data.deployments[1].built, true);
+  assert.ok(r2.objects.has("software/deployments/staging/static/index.json"));
+  assert.ok(r2.objects.has("software/deployments/staging/hub/index.json"));
+});
+
 test("software history shows unknown for unsealed started deployments", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-history-started-"));
   const localStore = join(dir, "store");
@@ -2704,6 +2789,28 @@ test("software deploy release channels reject comma-separated targets", async ()
         join(dir, "missing.env"),
       ]),
     /software deploy cli accepts exactly one release channel/,
+  );
+});
+
+test("software deploy rejects mixed site-profile and release-channel components", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-deploy-mixed-target-kind-"));
+  const localStore = join(dir, "store");
+  const program = createProgram(makeDeps({ localStore, env: r2Env }));
+
+  await assert.rejects(
+    async () =>
+      await program.parseAsync([
+        "node",
+        "test",
+        "--quiet",
+        "software",
+        "deploy",
+        "hub,cli:mixed-target",
+        "staging",
+        "--env-file",
+        join(dir, "missing.env"),
+      ]),
+    /cannot mix site-profile components and release-channel components/,
   );
 });
 
