@@ -120,17 +120,13 @@ describe("PublicFeaturesApp", () => {
       />,
     );
 
-    expect(screen.getByText("Durable execution")).not.toBeNull();
     expect(
-      screen.getByText(
-        "Let the agent work with the notebook you actually have open",
-      ),
+      screen.getByText("Jupyter notebooks for work that needs to keep going"),
     ).not.toBeNull();
     expect(
-      screen.getByText(
-        "Put notebook cells on a whiteboard when the idea is a graph",
-      ),
+      screen.getByText("When the notebook depends on more than cells"),
     ).not.toBeNull();
+    expect(screen.getByText("Ready to use Jupyter in CoCalc?")).not.toBeNull();
   });
 
   it("uses projects as the jupyter CTA for authenticated users", () => {
@@ -150,7 +146,7 @@ describe("PublicFeaturesApp", () => {
     for (const link of projectLinks) {
       expect(link.getAttribute("href")).toBe("/projects");
     }
-    expect(screen.queryByText("Start using Jupyter on CoCalc")).toBeNull();
+    expect(screen.queryByText("Start using Jupyter in CoCalc")).toBeNull();
   });
 
   it("renders the richer latex feature page", () => {
@@ -162,16 +158,10 @@ describe("PublicFeaturesApp", () => {
     );
 
     expect(
-      screen.getByText(
-        "Write the paper where the code, figures, and review live",
-      ),
+      screen.getByText("LaTeX project with source, PDF preview, and build log"),
     ).not.toBeNull();
-    expect(screen.getByText("When the paper becomes a project")).not.toBeNull();
-    expect(
-      screen.getByText(
-        "Use Codex as an editor and build assistant, not an author",
-      ),
-    ).not.toBeNull();
+    expect(screen.getByText("Keep the working tree together")).not.toBeNull();
+    expect(screen.getByText("Ready to write LaTeX in CoCalc?")).not.toBeNull();
   });
 
   it("uses projects as the latex CTA for authenticated users", () => {
@@ -203,12 +193,14 @@ describe("PublicFeaturesApp", () => {
     );
 
     expect(
-      screen.getByText("Teach in the same environment where students work"),
+      screen.getByText("Teach where students compute, write, and collaborate"),
     ).not.toBeNull();
-    expect(screen.getByText("Assign, collect, grade, return")).not.toBeNull();
     expect(
-      screen.getByText("Grade in the same environment students used"),
+      screen.getByText(
+        "Run coursework in shared projects while the LMS keeps rosters and calendars.",
+      ),
     ).not.toBeNull();
+    expect(screen.getByText("Start with course projects")).not.toBeNull();
   });
 
   it("uses projects as the teaching CTA for authenticated users", () => {
@@ -228,7 +220,7 @@ describe("PublicFeaturesApp", () => {
     for (const link of projectLinks) {
       expect(link.getAttribute("href")).toBe("/projects");
     }
-    expect(screen.queryByText("Start teaching with CoCalc")).toBeNull();
+    expect(screen.queryByText("Start a course in CoCalc")).toBeNull();
   });
 
   it("renders the richer terminal feature page", () => {
@@ -282,11 +274,11 @@ describe("PublicFeaturesApp", () => {
       screen.getByText("A Linux workspace you can actually administer."),
     ).not.toBeNull();
     expect(
-      screen.getByText("Learn and use Linux without risking your own machine"),
+      screen.getByText(
+        "Install at the right layer, verify, and document what changed",
+      ),
     ).not.toBeNull();
-    expect(
-      screen.getByText("RootFS images make setup reusable"),
-    ).not.toBeNull();
+    expect(screen.getByText("Ready to use Linux in CoCalc?")).not.toBeNull();
   });
 
   it("uses projects as the linux CTA for authenticated users", () => {
@@ -356,20 +348,20 @@ describe("PublicFeaturesApp", () => {
 
     expect(
       screen.getByText(
-        "A Miro-like whiteboard rebuilt for computational work.",
+        "Whiteboards and slides that keep the code, math, and explanations together.",
       ),
     ).not.toBeNull();
     expect(
-      screen.getByText("Put Jupyter cells in a directed graph."),
+      screen.getByText("Move board work into a slide deck when it is ready."),
     ).not.toBeNull();
-    expect(screen.getByText("Transparent format")).not.toBeNull();
+    expect(screen.getByText("Start with a board or deck")).not.toBeNull();
   });
 
   it.each([
     {
       slug: "sage",
-      title: "Use SageMath where its history and future meet.",
-      section: "Build, test, and develop Sage from source.",
+      title: "Use SageMath inside collaborative mathematics projects.",
+      section: "Use Sage with the surrounding project.",
     },
     {
       slug: "julia",
@@ -389,7 +381,7 @@ describe("PublicFeaturesApp", () => {
     {
       slug: "slides",
       title: "Present from the same canvas where technical ideas are built.",
-      section: "Slides are structured whiteboards.",
+      section: "How a deck comes together",
     },
   ])(
     "renders the richer $slug feature page",
@@ -414,7 +406,7 @@ describe("PublicFeaturesApp", () => {
     },
   );
 
-  it.each(["julia", "r-statistical-software"])(
+  it.each(["julia", "r-statistical-software", "teaching"])(
     "renders the configured support link on the %s feature page",
     (slug) => {
       render(
@@ -433,7 +425,7 @@ describe("PublicFeaturesApp", () => {
   );
 
   it.each([
-    { finalCta: "Start using SageMath on CoCalc", slug: "sage" },
+    { finalCta: "Start using SageMath", slug: "sage" },
     { finalCta: "Start using CoCalc whiteboards", slug: "whiteboard" },
     { finalCta: "Start making slides", slug: "slides" },
     { finalCta: "Start using R", slug: "r-statistical-software" },
@@ -460,27 +452,39 @@ describe("PublicFeaturesApp", () => {
       for (const link of projectLinks) {
         expect(link.getAttribute("href")).toBe("/projects");
       }
-      expect(screen.queryByText(finalCta)).toBeNull();
+      expect(screen.queryByRole("link", { name: finalCta })).toBeNull();
     },
   );
 
   it("renders the compare feature page", () => {
-    render(
+    const { container } = render(
       <PublicFeaturesApp
         config={{ help_email: "help@example.com", site_name: "Launchpad" }}
         initialRoute={{ slug: "compare", view: "detail" }}
       />,
     );
 
+    expect(screen.getByText("When is CoCalc the right fit?")).not.toBeNull();
+    expect(screen.getByText("Decision checklist")).not.toBeNull();
+    expect(screen.getByText("Where to go next")).not.toBeNull();
     expect(
-      screen.getByText("Compare CoCalc by workflow, not by one checkbox"),
-    ).not.toBeNull();
-    expect(screen.getByText("How CoCalc compares by category")).not.toBeNull();
-    expect(
-      screen.getByText("Google Colab and quick notebook hosts"),
+      screen.getByText(
+        "Hosted by CoCalc, run it yourself, or a private deployment your organization operates.",
+      ),
     ).not.toBeNull();
     expect(
-      screen.getByText("AI agents now change the comparison"),
-    ).not.toBeNull();
+      screen
+        .getByRole("link", { name: "Contact support" })
+        .getAttribute("href"),
+    ).toBe("mailto:help@example.com");
+    expect(
+      container.querySelectorAll(".cocalc-compare-route-row"),
+    ).toHaveLength(3);
+    expect(
+      screen.queryByRole("link", { name: "Review pricing options" }),
+    ).toBeNull();
+    expect(
+      screen.queryByText("Google Colab and quick notebook hosts"),
+    ).toBeNull();
   });
 });
