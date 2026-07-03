@@ -113,6 +113,9 @@ export const TABLE_OWNERSHIP = {
     ownership: "account-home",
     authority: "account_id",
     portability: "unsupported",
+    secondary_reference_fields: {
+      bay_id: "Bay that recorded the analytics event, not ownership authority.",
+    },
     notes:
       "Bay-local immutable membership analytics event ledger. Rows are written alongside account-home billing and membership lifecycle actions and are aggregated across bays for admin analytics.",
   }),
