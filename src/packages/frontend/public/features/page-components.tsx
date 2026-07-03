@@ -35,7 +35,7 @@ export function featureSupportPath({
     context: `feature-${context}`,
     subject,
     title,
-    type: "support",
+    type: "question",
   });
   return `${featureAppPath("support/new")}?${params.toString()}`;
 }

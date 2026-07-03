@@ -7,7 +7,6 @@ import type { CSSProperties } from "react";
 
 import { Button, Col, Flex, Row, Typography } from "antd";
 
-import { CodeBlock } from "@cocalc/frontend/public/common";
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
 import {
   PUBLIC_COLORS,
@@ -37,6 +36,15 @@ const FIT_BUTTON_STYLE: CSSProperties = { width: "fit-content" };
 const LEAD_STYLE: CSSProperties = {
   fontSize: PUBLIC_TYPE.lead,
   margin: 0,
+};
+const MOCK_CODE_STYLE: CSSProperties = {
+  background: PUBLIC_COLORS.surface,
+  border: `1px solid ${PUBLIC_COLORS.border}`,
+  borderRadius: PUBLIC_RADIUS.panel,
+  margin: 0,
+  overflow: "auto",
+  padding: 14,
+  whiteSpace: "pre-wrap",
 };
 const MUTED_TEXT_STYLE: CSSProperties = { color: PUBLIC_COLORS.mutedText };
 const NO_MARGIN_STYLE: CSSProperties = { margin: 0 };
@@ -79,14 +87,13 @@ function LatexEvidencePanel() {
         </Flex>
         <Row gutter={[14, 14]} align="stretch">
           <Col xs={24} md={13}>
-            <CodeBlock
-              ariaLabel="LaTeX source with generated table input"
-              code={`\\section{Spectral gap}
+            <pre style={MOCK_CODE_STYLE}>
+              {`\\section{Spectral gap}
 The experiment in Figure~\\ref{fig:gap}
 shows concentration after normalization.
 
 \\input{tables/summary.tex}`}
-            />
+            </pre>
           </Col>
           <Col xs={24} md={11}>
             <div

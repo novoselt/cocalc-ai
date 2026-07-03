@@ -179,7 +179,7 @@ sudo apt-get install -y graphviz
 dot -V
 # graphviz version reported
 
-python -m pip install networkx
+python -m pip install graphviz networkx
 python - <<'PY'
 import graphviz, networkx
 print("ready")

@@ -427,7 +427,7 @@ describe("PublicFeaturesApp", () => {
   it.each([
     { finalCta: "Start using SageMath", slug: "sage" },
     { finalCta: "Start using CoCalc whiteboards", slug: "whiteboard" },
-    { finalCta: "Start with a deck", slug: "slides" },
+    { finalCta: "Start making slides", slug: "slides" },
     { finalCta: "Start using R", slug: "r-statistical-software" },
     { finalCta: "Start using Octave", slug: "octave" },
     { finalCta: "Start using Julia", slug: "julia" },
