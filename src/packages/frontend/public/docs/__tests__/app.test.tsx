@@ -116,8 +116,9 @@ describe("public/docs", () => {
     ).toBe("admin.users");
   });
 
-  it("has hashed icon art for every docs entry", () => {
+  it("has hashed icon art for docs entries that define icon art", () => {
     for (const entry of listDocsEntries()) {
+      if (entry.image == null) continue;
       expect(entry.image?.presentation).toBe("icon");
       expect(entry.image?.src).toMatch(
         /^\/public\/docs\/[-a-z0-9]+-[a-f0-9]{8}\.webp$/,

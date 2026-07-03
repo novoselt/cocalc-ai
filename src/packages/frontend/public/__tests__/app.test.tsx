@@ -235,7 +235,7 @@ describe("PublicApp", () => {
     ).not.toBeNull();
     expect(screen.getByText("William Stein, Founder and CEO")).not.toBeNull();
     expect(
-      screen.getByText(/Get to know the math prodigy behind CoCalc/),
+      screen.getByText(/founder of CoCalc and SageMath, Inc\./),
     ).not.toBeNull();
     expect(screen.queryByText("Team")).toBeNull();
   });
@@ -577,7 +577,7 @@ describe("PublicApp", () => {
     ).not.toBeNull();
     expect(
       screen.getByText(
-        /William is both the CEO and a lead software developer for both the front and back end of CoCalc/i,
+        /William is both the CEO and a lead software developer across the front and back end of CoCalc/i,
       ),
     ).not.toBeNull();
     expect(screen.getByText("Previous Experience")).not.toBeNull();

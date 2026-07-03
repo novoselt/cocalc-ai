@@ -122,7 +122,7 @@ describe("DocsBrowser", () => {
 
     expect(onSelectedEntryChange).toHaveBeenCalledWith(secondEntry);
     expect(
-      screen.getByRole("heading", { name: secondEntry.title }),
+      screen.getByRole("heading", { level: 1, name: secondEntry.title }),
     ).toBeTruthy();
   });
 
@@ -206,7 +206,7 @@ describe("DocsBrowser", () => {
       const nextCategory = categoryOrder[index + 1];
       return (
         nextCategory != null &&
-        allEntries.some((entry) => entry.category === candidate)
+        allEntries.filter((entry) => entry.category === candidate).length > 1
       );
     });
     if (category == null) throw new Error("missing next docs chapter");
@@ -234,7 +234,7 @@ describe("DocsBrowser", () => {
 
     expect(onSelectedEntryChange).toHaveBeenCalledWith(nextChapter);
     expect(
-      screen.getByRole("heading", { name: nextChapter.title }),
+      screen.getByRole("heading", { level: 1, name: nextChapter.title }),
     ).toBeTruthy();
   });
 
