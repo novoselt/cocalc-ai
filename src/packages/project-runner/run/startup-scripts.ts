@@ -10,6 +10,7 @@ import {
 import { DEFAULT_PROJECT_RUNTIME_HOME } from "@cocalc/util/project-runtime";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { hostPathForProjectPath } from "./project-path";
 
 export async function writeStartupScripts(home: string) {
   const ssh = join(home, START_PROJECT_SSH);
@@ -18,7 +19,10 @@ export async function writeStartupScripts(home: string) {
     mode: 0o700,
   });
 
-  const startup = join(home, PROJECT_STARTUP_SCRIPT_PATH);
+  const startup = hostPathForProjectPath(
+    home,
+    join(home, PROJECT_STARTUP_SCRIPT_PATH),
+  );
   await mkdir(dirname(startup), { recursive: true, mode: 0o700 });
   try {
     await writeFile(startup, PROJECT_STARTUP_SCRIPT_TEMPLATE, {
