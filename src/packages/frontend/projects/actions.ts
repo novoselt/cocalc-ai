@@ -3711,6 +3711,31 @@ export class ProjectsActions extends Actions<ProjectsState> {
       }
       return undefined;
     };
+    const recordBlockedStart = ({
+      blocked,
+      state,
+      extraDetails,
+    }: {
+      blocked: LroSummary;
+      state?: string;
+      extraDetails?: Record<string, unknown>;
+    }) => {
+      recordUxLatencyEvent({
+        event_type: "project_start",
+        metric: "project_start_running_blocked",
+        duration_ms: elapsedUxMs(timer),
+        project_id,
+        client_event_id,
+        segment,
+        details: {
+          ...details,
+          observed_state: state,
+          ...extraDetails,
+          op_status: blocked.status,
+          op_error: blocked.error,
+        },
+      });
+    };
     const poll = async () => {
       const state = store.getIn([
         "project_map",
@@ -3745,20 +3770,12 @@ export class ProjectsActions extends Actions<ProjectsState> {
       if (!stuckReported && elapsedMs >= stuck_after_ms) {
         const blocked = await terminalBlockedStart();
         if (blocked) {
-          recordUxLatencyEvent({
-            event_type: "project_start",
-            metric: "project_start_running_blocked",
-            duration_ms: elapsedUxMs(timer),
-            project_id,
-            client_event_id,
-            segment,
-            details: {
-              ...details,
-              observed_state: state,
+          recordBlockedStart({
+            blocked,
+            state,
+            extraDetails: {
               stuck_after_ms,
               deadline_ms,
-              op_status: blocked.status,
-              op_error: blocked.error,
             },
           });
           return;
@@ -3780,6 +3797,19 @@ export class ProjectsActions extends Actions<ProjectsState> {
         });
       }
       if (elapsedMs >= deadline_ms) {
+        const blocked = await terminalBlockedStart();
+        if (blocked) {
+          recordBlockedStart({
+            blocked,
+            state,
+            extraDetails: {
+              stuck_after_ms,
+              deadline_ms,
+              timed_out_after_ms: deadline_ms,
+            },
+          });
+          return;
+        }
         recordUxLatencyEvent({
           event_type: "project_start",
           metric: "project_start_running_timeout",
