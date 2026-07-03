@@ -66,4 +66,55 @@ describe("getProjectAppOpenUrl", () => {
       }),
     ).resolves.toBe("https://host.example/project-1/port/6002/");
   });
+
+  it("opens proxy-mode managed service apps at the running status URL", async () => {
+    const spec: AppSpec = {
+      version: 1,
+      id: "rserver",
+      title: "RStudio Server",
+      kind: "service",
+      command: {
+        exec: "bash",
+        args: ["-lc", "cocalc-rstudio-server"],
+      },
+      lifecycle: {
+        mode: "managed",
+      },
+      network: {
+        listen_host: "127.0.0.1",
+        port: 6006,
+        protocol: "http",
+      },
+      proxy: {
+        base_path: "/apps/rserver",
+        strip_prefix: true,
+        websocket: true,
+        open_mode: "proxy",
+        readiness_timeout_s: 120,
+      },
+      wake: {
+        enabled: true,
+        keep_warm_s: 1800,
+        startup_timeout_s: 120,
+      },
+    };
+    const status: ManagedAppStatus = {
+      id: "rserver",
+      title: "RStudio Server",
+      kind: "service",
+      state: "running",
+      lifecycle_mode: "managed",
+      url: "/project-1/proxy/6006/",
+      port: 6006,
+      pid: 123,
+    };
+
+    await expect(
+      getProjectAppOpenUrl({
+        project_id: "project-1",
+        spec,
+        status,
+      }),
+    ).resolves.toBe("https://host.example/project-1/proxy/6006/");
+  });
 });

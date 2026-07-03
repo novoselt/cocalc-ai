@@ -112,7 +112,7 @@ export async function getProjectAppOpenUrl({
   const preferredLocal =
     serviceOpenMode === "port"
       ? (serviceLocal ?? basePathLocal)
-      : (basePathLocal ?? serviceLocal);
+      : (serviceLocal ?? basePathLocal);
   if (!preferredLocal) return;
   const local =
     withProjectHostBase(project_id, preferredLocal) ?? preferredLocal;

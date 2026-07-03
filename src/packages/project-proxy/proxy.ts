@@ -1,4 +1,5 @@
 import * as http from "node:http";
+import type { ClientRequest } from "node:http";
 import type { Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import httpProxy from "http-proxy-3";
@@ -97,6 +98,91 @@ function getChunkByteLength(chunk: unknown): number {
   return 0;
 }
 
+function firstHeaderValue(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return `${value[0] ?? ""}`.trim();
+  return `${value ?? ""}`.trim();
+}
+
+function forwardedProto(req: http.IncomingMessage): string {
+  const proto = firstHeaderValue(req.headers["x-forwarded-proto"])
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  if (proto) return proto;
+  // @ts-ignore node IncomingMessage.socket may have encrypted in tls mode.
+  return req.socket?.encrypted ? "https" : "http";
+}
+
+function stripDefaultPort(host: string, proto: string): string {
+  if (!host) return host;
+  if (proto === "https") return host.replace(/:443$/, "").replace(/:80$/, "");
+  if (proto === "http") return host.replace(/:80$/, "");
+  return host;
+}
+
+function forwardedHost(req: http.IncomingMessage): string {
+  const host =
+    firstHeaderValue(req.headers["x-forwarded-host"]) ||
+    firstHeaderValue(req.headers.host);
+  return stripDefaultPort(host, forwardedProto(req));
+}
+
+function normalizeForwardedHeaders(
+  proxyReq: ClientRequest,
+  req: http.IncomingMessage,
+): void {
+  const proto = forwardedProto(req);
+  const host = forwardedHost(req);
+  if (proto) {
+    proxyReq.setHeader("x-forwarded-proto", proto);
+    proxyReq.setHeader("x-forwarded-port", proto === "https" ? "443" : "80");
+  }
+  if (host) {
+    proxyReq.setHeader("x-forwarded-host", host);
+  }
+}
+
+function normalizeRedirectLocation(
+  location: string,
+  req: http.IncomingMessage,
+): string {
+  try {
+    const parsed = new URL(location);
+    if (parsed.protocol === "https:" && parsed.port === "80") {
+      parsed.port = "";
+      return parsed.toString();
+    }
+    if (parsed.protocol === "http:" && parsed.port === "443") {
+      parsed.port = "";
+      return parsed.toString();
+    }
+    const isLoopback =
+      parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+    if (isLoopback) {
+      const proto = forwardedProto(req);
+      const host = forwardedHost(req);
+      if (host) {
+        return `${proto}://${host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+      }
+    }
+  } catch {
+    // Relative or malformed locations are left alone.
+  }
+  return location;
+}
+
+function normalizeProxyRedirectHeaders(
+  proxyRes: http.IncomingMessage,
+  req: http.IncomingMessage,
+): void {
+  const location = proxyRes.headers.location;
+  if (typeof location !== "string" || !location) return;
+  const normalized = normalizeRedirectLocation(location, req);
+  if (normalized !== location) {
+    proxyRes.headers.location = normalized;
+  }
+}
+
 async function defaultResolveTarget(
   req: http.IncomingMessage,
 ): Promise<ResolveResult> {
@@ -176,6 +262,7 @@ export function createProxyHandlers({
   });
 
   proxy.on("proxyReq", (proxyReq, req) => {
+    normalizeForwardedHeaders(proxyReq, req);
     proxyReq.setHeader("X-Proxy-By", "cocalc-proxy");
     const cookie = stripProjectHostProxyAuthCookies(req.headers.cookie, {
       preserveCookieNames,
@@ -188,6 +275,7 @@ export function createProxyHandlers({
   });
 
   proxy.on("proxyReqWs", (proxyReq, req) => {
+    normalizeForwardedHeaders(proxyReq, req);
     const cookie = stripProjectHostProxyAuthCookies(req.headers.cookie, {
       preserveCookieNames,
     });
@@ -213,16 +301,17 @@ export function createProxyHandlers({
     }
   });
 
-  if (noteUpstreamHttpBytes) {
-    proxy.on("proxyRes", (proxyRes, req) => {
+  proxy.on("proxyRes", (proxyRes, req) => {
+    normalizeProxyRedirectHeaders(proxyRes, req);
+    if (noteUpstreamHttpBytes) {
       proxyRes.on("data", (chunk) => {
         const bytes = getChunkByteLength(chunk);
         if (bytes > 0) {
           noteUpstreamHttpBytes({ req, bytes });
         }
       });
-    });
-  }
+    }
+  });
 
   const handleRequest = async (
     req: http.IncomingMessage,
@@ -311,6 +400,7 @@ export function attachProjectProxy({
   });
 
   proxy.on("proxyReq", (proxyReq, req) => {
+    normalizeForwardedHeaders(proxyReq, req);
     proxyReq.setHeader("X-Proxy-By", "cocalc-proxy");
     const cookie = stripProjectHostProxyAuthCookies(req.headers.cookie);
     if (cookie) {
@@ -321,6 +411,7 @@ export function attachProjectProxy({
   });
 
   proxy.on("proxyReqWs", (_proxyReq, req) => {
+    normalizeForwardedHeaders(_proxyReq, req);
     const cookie = stripProjectHostProxyAuthCookies(req.headers.cookie);
     if (cookie) {
       _proxyReq.setHeader("cookie", cookie);
@@ -344,16 +435,17 @@ export function attachProjectProxy({
     }
   });
 
-  if (noteUpstreamHttpBytes) {
-    proxy.on("proxyRes", (proxyRes, req) => {
+  proxy.on("proxyRes", (proxyRes, req) => {
+    normalizeProxyRedirectHeaders(proxyRes, req);
+    if (noteUpstreamHttpBytes) {
       proxyRes.on("data", (chunk) => {
         const bytes = getChunkByteLength(chunk);
         if (bytes > 0) {
           noteUpstreamHttpBytes({ req, bytes });
         }
       });
-    });
-  }
+    }
+  });
 
   app.use(async (req, res, next) => {
     await rewriteRequest?.(req);
