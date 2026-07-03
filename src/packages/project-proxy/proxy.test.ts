@@ -135,3 +135,120 @@ describe("project proxy upstream boundary metering", () => {
     await closeServer(upstream);
   });
 });
+
+describe("project proxy forwarded app redirects", () => {
+  it("normalizes forwarded HTTPS host and port headers for upstream apps", async () => {
+    const upstream = http.createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          proto: req.headers["x-forwarded-proto"],
+          host: req.headers["x-forwarded-host"],
+          port: req.headers["x-forwarded-port"],
+        }),
+      );
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    const app = express();
+    const server = http.createServer(app);
+    attachProjectProxy({
+      httpServer: server,
+      app,
+      resolveTarget: async () => ({
+        handled: true,
+        target: { host: "127.0.0.1", port: upstreamPort },
+      }),
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const proxyPort = (server.address() as AddressInfo).port;
+
+    const body = await new Promise<string>((resolve, reject) => {
+      http
+        .get(
+          {
+            host: "127.0.0.1",
+            port: proxyPort,
+            path: `/${PROJECT_ID}/proxy/6006/`,
+            headers: {
+              Host: "host-example.cocalc.ai:80",
+              "X-Forwarded-Proto": "https",
+              "X-Forwarded-Port": "80",
+            },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+            res.on("end", () =>
+              resolve(Buffer.concat(chunks).toString("utf8")),
+            );
+          },
+        )
+        .on("error", reject);
+    });
+
+    expect(JSON.parse(body)).toEqual({
+      proto: "https",
+      host: "host-example.cocalc.ai",
+      port: "443",
+    });
+
+    await closeServer(server);
+    await closeServer(upstream);
+  });
+
+  it("removes invalid https port 80 from upstream Location headers", async () => {
+    const upstream = http.createServer((_req, res) => {
+      res.writeHead(302, {
+        Location:
+          "https://host-example.cocalc.ai:80/11111111-1111-4111-8111-111111111111/proxy/6006/unsupported_browser.htm",
+      });
+      res.end("");
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    const app = express();
+    const server = http.createServer(app);
+    attachProjectProxy({
+      httpServer: server,
+      app,
+      resolveTarget: async () => ({
+        handled: true,
+        target: { host: "127.0.0.1", port: upstreamPort },
+      }),
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const proxyPort = (server.address() as AddressInfo).port;
+
+    const location = await new Promise<string | undefined>(
+      (resolve, reject) => {
+        http
+          .get(
+            {
+              host: "127.0.0.1",
+              port: proxyPort,
+              path: `/${PROJECT_ID}/proxy/6006/`,
+            },
+            (res) => {
+              res.resume();
+              res.on("end", () => resolve(res.headers.location));
+            },
+          )
+          .on("error", reject);
+      },
+    );
+
+    expect(location).toBe(
+      "https://host-example.cocalc.ai/11111111-1111-4111-8111-111111111111/proxy/6006/unsupported_browser.htm",
+    );
+
+    await closeServer(server);
+    await closeServer(upstream);
+  });
+});

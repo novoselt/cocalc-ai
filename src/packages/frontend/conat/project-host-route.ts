@@ -8,9 +8,7 @@ export function routeProjectHostHttpUrl({
   windowOrigin?: string;
 }): string {
   if (!url || !routingAddress) return url;
-  const routingBase = routingAddress.endsWith("/")
-    ? routingAddress.slice(0, -1)
-    : routingAddress;
+  const routingBase = normalizeRoutingAddress(routingAddress);
   const appendToRoutingBase = (path: string): string => {
     let suffix = path;
     try {
@@ -59,4 +57,21 @@ export function routeProjectHostHttpUrl({
   } catch {
     return url;
   }
+}
+
+export function normalizeRoutingAddress(routingAddress: string): string {
+  const trimmed = routingAddress.endsWith("/")
+    ? routingAddress.slice(0, -1)
+    : routingAddress;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === "https:" && parsed.port === "80") {
+      parsed.port = "";
+      return parsed.toString().replace(/\/+$/, "");
+    }
+  } catch {
+    // Fall through to the trimmed input when the routing address is relative or
+    // otherwise not parseable as an absolute URL.
+  }
+  return trimmed;
 }

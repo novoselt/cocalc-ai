@@ -10,6 +10,15 @@ describe("routeProjectHostHttpUrl", () => {
     ).toBe("https://host-abc.example.com/7d/proxy/6002/");
   });
 
+  it("strips invalid https port 80 from project-host routing addresses", () => {
+    expect(
+      routeProjectHostHttpUrl({
+        url: "/7d/proxy/6002/",
+        routingAddress: "https://host-abc.example.com:80",
+      }),
+    ).toBe("https://host-abc.example.com/7d/proxy/6002/");
+  });
+
   it("reroutes site-origin project URLs through the project-host address", () => {
     expect(
       routeProjectHostHttpUrl({
