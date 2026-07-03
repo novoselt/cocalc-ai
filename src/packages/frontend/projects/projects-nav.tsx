@@ -47,7 +47,6 @@ const PROJECT_NAME_STYLE: CSS = {
   display: "flex",
   gap: 4,
   overflow: "hidden",
-  maxWidth: "200px",
   minWidth: 0,
   whiteSpace: "nowrap",
   width: "100%",
@@ -243,7 +242,7 @@ function ProjectTab({ project_id }: ProjectTabProps) {
         project={project}
         size={20}
         border
-        style={{ marginTop: "-2px" }}
+        style={{ flex: "0 0 auto", marginTop: "-2px" }}
       />
     );
   }
@@ -745,6 +744,9 @@ export function ProjectsNav(props: ProjectsNavProps) {
                 onDragStart={onDragStart}
                 onDragEnd={onDragEnd}
                 items={project_ids}
+                maxItemWidth={360}
+                itemChromeWidth={30}
+                overflowWidth={36}
               >
                 <Tabs
                   animated={false}
