@@ -694,7 +694,7 @@ async function unverifiedLegacyEmailMatches(account_id: string): Promise<{
              END AS gmail_canonical_email,
              last_active
         FROM legacy_migration_accounts
-       WHERE COALESCE(email_address_verified, false)=true
+       WHERE COALESCE(email_address, '') <> ''
     )
     SELECT legacy_account_id,
            email_address,
@@ -749,7 +749,7 @@ async function ensureVerifiedEmailLinks(account_id: string): Promise<void> {
                ELSE NULL
              END AS gmail_canonical_email
         FROM legacy_migration_accounts
-       WHERE COALESCE(email_address_verified, false)=true
+       WHERE COALESCE(email_address, '') <> ''
     )
     INSERT INTO legacy_migration_account_links
       (legacy_account_id, account_id, claim_method, metadata, created, updated)
@@ -1102,16 +1102,14 @@ export async function ensureVerifiedEmailLinksForAllAccounts(): Promise<number> 
              lower(email_address) AS email_address,
              NULL::TEXT AS gmail_canonical_email
         FROM legacy_migration_accounts legacy
-       WHERE COALESCE(email_address_verified, false)=true
-         AND COALESCE(email_address, '') <> ''
+       WHERE COALESCE(email_address, '') <> ''
       UNION
       SELECT legacy_account_id,
              ${legacyCanonical} AS email_key,
              lower(email_address) AS email_address,
              ${legacyCanonical} AS gmail_canonical_email
         FROM legacy_migration_accounts legacy
-       WHERE COALESCE(email_address_verified, false)=true
-         AND COALESCE(email_address, '') <> ''
+       WHERE COALESCE(email_address, '') <> ''
          AND split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
     )
     INSERT INTO legacy_migration_account_links
@@ -1303,8 +1301,7 @@ async function financialRowsForAccount(
                  = replace(split_part(split_part(lower(accounts.email_address), '@', 1), '+', 1), '.', '')
            )
          )
-       WHERE COALESCE(accounts.email_address_verified, false)=true
-         AND raw.payload->>'status' IN ('active', 'trialing', 'canceled')
+       WHERE raw.payload->>'status' IN ('active', 'trialing', 'canceled')
        GROUP BY accounts.legacy_account_id
     ),
     site_license_payloads AS (
@@ -2232,17 +2229,12 @@ export async function financialMigrationCandidateAccountIds({
                         COALESCE(legacy.stripe_customer_id, '') <> ''
                         AND raw.payload->>'stripe_customer_id'=legacy.stripe_customer_id
                       )
+                      OR lower(raw.payload->>'customer_email')=lower(legacy.email_address)
                       OR (
-                        COALESCE(legacy.email_address_verified, false)=true
-                        AND (
-                          lower(raw.payload->>'customer_email')=lower(legacy.email_address)
-                          OR (
-                            split_part(lower(legacy.email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
-                            AND split_part(lower(raw.payload->>'customer_email'), '@', 2) IN ('gmail.com', 'googlemail.com')
-                            AND replace(split_part(split_part(lower(raw.payload->>'customer_email'), '@', 1), '+', 1), '.', '')
-                                = replace(split_part(split_part(lower(legacy.email_address), '@', 1), '+', 1), '.', '')
-                          )
-                        )
+                        split_part(lower(legacy.email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
+                        AND split_part(lower(raw.payload->>'customer_email'), '@', 2) IN ('gmail.com', 'googlemail.com')
+                        AND replace(split_part(split_part(lower(raw.payload->>'customer_email'), '@', 1), '+', 1), '.', '')
+                            = replace(split_part(split_part(lower(legacy.email_address), '@', 1), '+', 1), '.', '')
                       )
                     )
                   )
