@@ -39,6 +39,9 @@ interface Props {
   items: (string | number)[];
   children?: ReactNode;
   style?: CSSProperties;
+  maxItemWidth?: number;
+  itemChromeWidth?: number;
+  overflowWidth?: number;
 }
 
 interface ItemContextType {
@@ -54,7 +57,16 @@ export function useItemContext() {
 }
 
 export function SortableTabs(props: Props) {
-  const { onDragStart, onDragEnd, items, children, style } = props;
+  const {
+    onDragStart,
+    onDragEnd,
+    items,
+    children,
+    style,
+    maxItemWidth = 250 + 65,
+    itemChromeWidth = 55,
+    overflowWidth = 46,
+  } = props;
   const mouseSensor = useSensor(MouseSensor, {
     activationConstraint: {
       distance: 2,
@@ -91,22 +103,30 @@ export function SortableTabs(props: Props) {
       return lastRef.current?.itemWidth;
     }
 
-    // resize?.width - 46 - the minus 46 is to take into account the "..." dropdown.
+    // overflowWidth accounts for the Ant Design overflow dropdown.
     const itemWidth =
       Math.max(
         80,
         Math.min(
-          250 + 65,
-          ((resize?.width ?? 500) - 46) / Math.max(1, items.length),
+          maxItemWidth,
+          ((resize?.width ?? 500) - overflowWidth) / Math.max(1, items.length),
         ),
-      ) - 55; // the constant accounts for the margin and x for an antd tab.
+      ) - itemChromeWidth; // accounts for Ant Design tab padding and close button chrome.
     lastRef.current = {
       width: resize.width ?? 0,
       length: items.length,
       itemWidth,
     };
     return itemWidth;
-  }, [resize.width, items.length, divRef.current, isPointerOver]);
+  }, [
+    resize.width,
+    items.length,
+    divRef.current,
+    isPointerOver,
+    maxItemWidth,
+    itemChromeWidth,
+    overflowWidth,
+  ]);
 
   return (
     <div

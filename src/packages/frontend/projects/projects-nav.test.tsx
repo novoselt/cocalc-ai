@@ -162,22 +162,12 @@ describe("ProjectsNav", () => {
     expect(pageActions.set_active_tab).not.toHaveBeenCalledWith("projects");
   });
 
-  it("toggles the active project star from a project tab", () => {
+  it("renders project tabs without star controls", () => {
     render(<ProjectsNav height={42} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Star project" }));
-
-    expect(mockSetProjectBookmarked).toHaveBeenCalledWith("project-1", true);
-    expect(pageActions.set_active_tab).not.toHaveBeenCalledWith("project-1");
-  });
-
-  it("shows a filled star for starred project tabs", () => {
-    mockBookmarkedProjects = ["project-1"];
-
-    render(<ProjectsNav height={42} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Unstar project" }));
-
-    expect(mockSetProjectBookmarked).toHaveBeenCalledWith("project-1", false);
+    expect(screen.getByText("Alpha")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Star project" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unstar project" })).toBeNull();
+    expect(mockSetProjectBookmarked).not.toHaveBeenCalled();
   });
 });
