@@ -28,10 +28,22 @@ $SUDO mkdir -p "$jupyter_prefix"
 $SUDO chown -R "$(id -u):$(id -g)" "$jupyter_prefix"
 python3 -m venv --clear "$jupyter_prefix"
 "$jupyter_prefix/bin/pip" install --no-cache-dir --upgrade pip setuptools wheel
-"$jupyter_prefix/bin/pip" install --no-cache-dir jupyter_client
-$SUDO ln -sf "$jupyter_prefix/bin/jupyter" /usr/local/bin/jupyter
+"$jupyter_prefix/bin/pip" install --no-cache-dir \
+  ipykernel \
+  jupyter \
+  jupyter-console \
+  jupyterlab \
+  notebook
+
+for exe in pip pip3 jupyter jupyter-lab jupyter-notebook jupyter-console; do
+  if [ -x "$jupyter_prefix/bin/$exe" ]; then
+    $SUDO ln -sf "$jupyter_prefix/bin/$exe" "/usr/local/bin/$exe"
+  fi
+done
+$SUDO ln -sf "$jupyter_prefix/bin/jupyter-lab" /usr/local/bin/jupyterlab
 
 $SUDO Rscript --vanilla - <<RS
+Sys.setenv(PATH = paste("$jupyter_prefix/bin", Sys.getenv("PATH"), sep = .Platform\$path.sep))
 options(repos = c(CRAN = "$cran"))
 if (!requireNamespace("IRkernel", quietly = TRUE)) {
   install.packages("IRkernel", Ncpus = max(1, parallel::detectCores(logical = FALSE)))

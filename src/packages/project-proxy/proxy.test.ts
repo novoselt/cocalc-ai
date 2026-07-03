@@ -19,6 +19,73 @@ async function closeServer(server: Server | http.Server): Promise<void> {
 }
 
 describe("project proxy upstream boundary metering", () => {
+  it("forwards JSON bodies already parsed by Express middleware", async () => {
+    const upstream = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            method: req.method,
+            body: Buffer.concat(chunks).toString("utf8"),
+            contentLength: req.headers["content-length"],
+          }),
+        );
+      });
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    const app = express();
+    app.use(express.json());
+    const server = http.createServer(app);
+    attachProjectProxy({
+      httpServer: server,
+      app,
+      resolveTarget: async () => ({
+        handled: true,
+        target: { host: "127.0.0.1", port: upstreamPort },
+      }),
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const proxyPort = (server.address() as AddressInfo).port;
+
+    const payload = JSON.stringify({ method: "client_init" });
+    const body = await new Promise<string>((resolve, reject) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port: proxyPort,
+          path: `/${PROJECT_ID}/proxy/6006/rpc/client_init`,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload),
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+          res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        },
+      );
+      req.on("error", reject);
+      req.end(payload);
+    });
+
+    expect(JSON.parse(body)).toEqual({
+      method: "POST",
+      body: payload,
+      contentLength: `${Buffer.byteLength(payload)}`,
+    });
+
+    await closeServer(server);
+    await closeServer(upstream);
+  });
+
   it("reports upstream HTTP response bytes", async () => {
     const payload = Buffer.from("hello over http");
     const upstream = http.createServer((_req, res) => {

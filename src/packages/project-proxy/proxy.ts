@@ -142,12 +142,36 @@ function normalizeForwardedHeaders(
   }
 }
 
+function serializeParsedBody(body: unknown): Buffer | undefined {
+  if (body == null) return undefined;
+  if (Buffer.isBuffer(body)) return body;
+  if (typeof body === "string") return Buffer.from(body);
+  if (body instanceof ArrayBuffer) return Buffer.from(body);
+  if (ArrayBuffer.isView(body)) {
+    return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  }
+  return Buffer.from(JSON.stringify(body));
+}
+
+function restreamParsedBody(
+  proxyReq: ClientRequest,
+  req: http.IncomingMessage,
+): void {
+  const body = serializeParsedBody((req as any).body);
+  if (body == null) return;
+  proxyReq.setHeader("content-length", `${body.byteLength}`);
+  proxyReq.write(body);
+}
+
 function normalizeRedirectLocation(
   location: string,
   req: http.IncomingMessage,
 ): string {
   try {
     const parsed = new URL(location);
+    if (parsed.toString() !== location && parsed.port === "") {
+      return parsed.toString();
+    }
     if (parsed.protocol === "https:" && parsed.port === "80") {
       parsed.port = "";
       return parsed.toString();
@@ -272,6 +296,7 @@ export function createProxyHandlers({
     } else {
       proxyReq.removeHeader("cookie");
     }
+    restreamParsedBody(proxyReq, req);
   });
 
   proxy.on("proxyReqWs", (proxyReq, req) => {
@@ -408,6 +433,7 @@ export function attachProjectProxy({
     } else {
       proxyReq.removeHeader("cookie");
     }
+    restreamParsedBody(proxyReq, req);
   });
 
   proxy.on("proxyReqWs", (_proxyReq, req) => {
