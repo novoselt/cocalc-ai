@@ -1,9 +1,13 @@
 {
   "id": "cocalc/r",
   "version": 1,
-  "description": "Install R, common development libraries, and an R Jupyter kernel.",
+  "description": "Install R, common development libraries, JupyterLab, Notebook, and an R Jupyter kernel.",
   "inputs": {
     "cran": { "type": "string", "default": "https://cloud.r-project.org" },
+    "jupyter_prefix": {
+      "type": "string",
+      "default": "/opt/cocalc-r-jupyter"
+    },
     "owner_uid": { "type": "string", "default": "2001" },
     "owner_gid": { "type": "string", "default": "2001" }
   },
@@ -22,8 +26,8 @@
     "content": {
       "version": 1,
       "title": "R",
-      "subtitle": "R with an IRkernel Jupyter kernel.",
-      "highlights": ["R", "IRkernel", "Jupyter"],
+      "subtitle": "R with JupyterLab, Notebook, and an IRkernel Jupyter kernel.",
+      "highlights": ["R", "IRkernel", "JupyterLab", "Notebook"],
       "actions": [
         {
           "kind": "external-link",
