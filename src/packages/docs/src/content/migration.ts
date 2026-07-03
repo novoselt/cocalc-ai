@@ -10,9 +10,10 @@ Use the same email address on CoCalc.ai that you used for cocalc.com. Legacy
 billing and projects are matched by verified email address, so a different
 email address will not show the migration tools.
 
-On cocalc.com, open your account profile and confirm the email address on that
-account. On CoCalc.ai, sign up or sign in with that exact address, then verify
-the email address in **profile settings**.
+On CoCalc.ai, sign up or sign in with the same email address you used
+on cocalc.com, then verify the email address in **profile settings**.
+If you want to merge multiple accounts from cocalc.com, configure and
+verify each of them in cocalc.ai's **profile settings**. 
 
 ## Use the migration banner
 
