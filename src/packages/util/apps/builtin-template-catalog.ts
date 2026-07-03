@@ -320,8 +320,14 @@ mkdir -p "\$tmp" "\$data/db"
 if command -v sudo >/dev/null 2>&1 && [ -d /var/lib/rstudio-server ]; then
   sudo chmod 1777 /var/lib/rstudio-server || true
   sudo rm -f /var/lib/rstudio-server/session-rpc-key || true
+  sudo rm -f /var/lib/rstudio-server/secure-cookie-key || true
 fi
 printf 'provider=sqlite\\ndirectory=%s\\n' "\$data/db" > "\$tmp/db.conf"
+cookie_key="\$tmp/secure-cookie-key"
+if [ ! -f "\$cookie_key" ]; then
+  umask 077
+  head -c 32 /dev/urandom > "\$cookie_key"
+fi
 exec rserver \\
   --server-daemonize=0 \\
   --auth-none=1 \\
@@ -332,6 +338,7 @@ exec rserver \\
   --server-data-dir="\$data" \\
   --server-working-dir="\$home" \\
   --server-pid-file="\$tmp/rserver.pid" \\
+  --secure-cookie-key-file="\$cookie_key" \\
   --www-address="\${HOST:-127.0.0.1}" \\
   --www-port="\${PORT}" \\
   --www-root-path="\${APP_BASE_URL}"`,
