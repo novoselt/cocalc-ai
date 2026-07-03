@@ -56,7 +56,11 @@ set -euo pipefail
 host="${HOST:-127.0.0.1}"
 port="${PORT:-6010}"
 run_dir="${TMPDIR:-/tmp}/cocalc-rstudio-${USER:-user}"
+data_dir="${HOME:-/home/user}/.config/cocalc-rstudio"
 mkdir -p "$run_dir"
+mkdir -p "$data_dir/db"
+database_config="$run_dir/database.conf"
+printf 'provider=sqlite\ndirectory=%s\n' "$data_dir/db" >"$database_config"
 cookie_key="$run_dir/secure-cookie-key"
 if [ ! -f "$cookie_key" ]; then
   umask 077
@@ -67,11 +71,23 @@ exec rserver \
   --www-address="$host" \
   --www-port="$port" \
   --auth-none=1 \
+  --auth-encrypt-password=0 \
+  --auth-minimum-user-id=0 \
   --server-user="$(id -un)" \
+  --server-data-dir="$data_dir" \
+  --server-working-dir="${HOME:-/home/user}" \
+  --server-pid-file="$run_dir/rserver.pid" \
   --secure-cookie-key-file="$cookie_key" \
-  --database-config-file="$run_dir/database.conf"
+  --database-config-file="$database_config"
 EOF
 $SUDO chmod 755 /usr/local/bin/cocalc-rstudio-server
+
+# RStudio Server 2026 stores session-rpc-key under /var/lib/rstudio-server even
+# when server-data-dir is overridden. Make that state path usable by the project
+# user and remove any package-created root/rstudio-owned key.
+$SUDO mkdir -p /var/lib/rstudio-server
+$SUDO chmod 1777 /var/lib/rstudio-server
+$SUDO rm -f /var/lib/rstudio-server/session-rpc-key
 
 $SUDO chown -R "$owner_uid:$owner_gid" /opt/cocalc-r
 $SUDO chmod -R u+rwX,go+rX /opt/cocalc-r
