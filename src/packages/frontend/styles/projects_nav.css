@@ -15,3 +15,17 @@
 .cocalc-top-bar-element:hover {
   background-color: var(--cocalc-col-top-bar-hover);
 }
+
+.cocalc-project-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab {
+  padding-left: 6px;
+  padding-right: 2px;
+}
+
+.cocalc-project-tabs .ant-tabs-tab-btn {
+  min-width: 0;
+}
+
+.cocalc-project-tabs .ant-tabs-tab-remove {
+  margin-left: 2px;
+  padding-inline: 2px;
+}

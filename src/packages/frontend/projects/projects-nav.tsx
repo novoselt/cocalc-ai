@@ -30,7 +30,6 @@ import {
   ProjectStatusAlertDetails,
   visibleProjectStatusAlerts,
 } from "@cocalc/frontend/project/project-status-alerts";
-import { COMPUTE_STATES } from "@cocalc/util/schema";
 import { COLORS } from "@cocalc/util/theme";
 import { useProjectState } from "../project/page/project-state-hook";
 import { useProjectHasInternetAccess } from "../project/settings/has-internet-access-hook";
@@ -41,18 +40,28 @@ import {
   projectThemeFromProject,
 } from "./theme";
 import { useBookmarkedProjects } from "./use-bookmarked-projects";
-import { normalizeProjectStateForDisplay } from "./host-operational";
 import { NewProjectCreator } from "./create-project";
 
 const PROJECT_NAME_STYLE: CSS = {
   alignItems: "center",
   display: "flex",
   gap: 4,
-  whiteSpace: "nowrap",
   overflow: "hidden",
-  textOverflow: "ellipsis",
   maxWidth: "200px",
+  minWidth: 0,
+  whiteSpace: "nowrap",
   width: "100%",
+} as const;
+
+const PROJECT_TITLE_FADE_STYLE: CSS = {
+  display: "block",
+  flex: "1 1 auto",
+  minWidth: 0,
+  overflow: "hidden",
+  whiteSpace: "nowrap",
+  WebkitMaskImage:
+    "linear-gradient(90deg, #000 calc(100% - 18px), transparent)",
+  maskImage: "linear-gradient(90deg, #000 calc(100% - 18px), transparent)",
 } as const;
 
 type ProjectsNavMode = "tabs" | "dropdown";
@@ -70,8 +79,6 @@ function getStoredProjectsNavMode(): ProjectsNavMode {
 
 interface ProjectTabProps {
   project_id: string;
-  starred: boolean;
-  onToggleStar: (project_id: string) => void;
 }
 
 function useProjectStatusAlerts(project_id: string) {
@@ -120,7 +127,7 @@ function ProjectStarButton({
   );
 }
 
-function ProjectTab({ project_id, starred, onToggleStar }: ProjectTabProps) {
+function ProjectTab({ project_id }: ProjectTabProps) {
   const { width } = useItemContext();
 
   // determine, if the "no internet" icon + text is shown – only known for sure, if project is running
@@ -137,14 +144,12 @@ function ProjectTab({ project_id, starred, onToggleStar }: ProjectTabProps) {
     useAccountOtherSetting<boolean>("hide_project_popovers") ?? false;
   const active_top_tab = useTypedRedux("page", "active_top_tab");
   const project = useRedux(["projects", "project_map", project_id]);
-  const host_info = useTypedRedux("projects", "host_info");
   const pageActions = useActions("page");
   const public_project_titles = useTypedRedux(
     "projects",
     "public_project_titles",
   );
   const statusAlerts = useProjectStatusAlerts(project_id);
-  const any_alerts = statusAlerts.length > 0;
 
   const title = project?.get("title") ?? public_project_titles?.get(project_id);
   if (title == null) {
@@ -157,23 +162,6 @@ function ProjectTab({ project_id, starred, onToggleStar }: ProjectTabProps) {
   if (active_top_tab == project_id) {
     set_window_title(title);
   }
-
-  const hostId = project?.get("host_id") as string | undefined;
-  const hostInfo = hostId ? host_info?.get(hostId) : undefined;
-  const project_state = normalizeProjectStateForDisplay({
-    projectState: project?.getIn(["state", "state"]),
-    hostId,
-    hostInfo,
-  });
-  const projectStateKey = (project_state ??
-    "opened") as keyof typeof COMPUTE_STATES;
-
-  const icon =
-    any_alerts && project_state === "running" ? (
-      <Icon name={"exclamation-triangle"} style={{ color: COLORS.BS_RED }} />
-    ) : (
-      <Icon name={COMPUTE_STATES[projectStateKey]?.icon ?? "bullhorn"} />
-    );
 
   function click_title(e) {
     // we intercept a click with a modification key in order to open that project in a new window
@@ -280,25 +268,8 @@ function ProjectTab({ project_id, starred, onToggleStar }: ProjectTabProps) {
       }}
     >
       <div style={PROJECT_NAME_STYLE} onClick={click_title}>
-        {icon}
         {renderNoInternet()}
-        {renderAvatar()}{" "}
-        <ProjectStarButton
-          project_id={project_id}
-          starred={starred}
-          onToggleStar={onToggleStar}
-        />
-        <span
-          style={{
-            minWidth: 0,
-            overflow: "hidden",
-            position: "relative",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {title}
-        </span>
+        {renderAvatar()} <span style={PROJECT_TITLE_FADE_STYLE}>{title}</span>
       </div>
     </div>
   );
@@ -381,17 +352,11 @@ export function ProjectsNav(props: ProjectsNavProps) {
     if (openProjects == null) return [];
     return openProjects.toJS().map((project_id) => {
       return {
-        label: (
-          <ProjectTab
-            project_id={project_id}
-            starred={bookmarkedProjectSet.has(project_id)}
-            onToggleStar={toggleProjectStar}
-          />
-        ),
+        label: <ProjectTab project_id={project_id} />,
         key: project_id,
       };
     });
-  }, [bookmarkedProjectSet, openProjects, toggleProjectStar]);
+  }, [openProjects]);
 
   const project_ids: string[] = useMemo(() => {
     if (openProjects == null) return [];
@@ -783,6 +748,7 @@ export function ProjectsNav(props: ProjectsNavProps) {
               >
                 <Tabs
                   animated={false}
+                  className="cocalc-project-tabs"
                   moreIcon={
                     <Icon style={{ fontSize: "18px" }} name="ellipsis" />
                   }
