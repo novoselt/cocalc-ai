@@ -3,8 +3,7 @@ Privileges: This uses sudo with the root-owned runtime wrapper for overlayfs
 mount lifecycle operations only.
 */
 
-import { lstatSync, readlinkSync } from "fs";
-import { dirname, isAbsolute, join, normalize, relative } from "path";
+import { dirname, join } from "path";
 import { data } from "@cocalc/backend/data";
 import { executeCode } from "@cocalc/backend/execute-code";
 import { mkdir, rm, stat, writeFile, readFile } from "fs/promises";
@@ -19,6 +18,7 @@ import {
 } from "./rootfs-base";
 import { lroProgress } from "@cocalc/conat/lro/progress";
 import { RefcountLeaseManager } from "@cocalc/util/refcount/lease";
+import { hostPathForProjectPath } from "./project-path";
 
 import getLogger from "@cocalc/backend/logger";
 import { getConatClient } from "./conat-client";
@@ -39,7 +39,6 @@ const ROOTFS_MOUNT_MODE =
 
 const PROJECT_ROOTS =
   process.env.COCALC_PROJECT_ROOTS ?? join(data, "cache", "project-roots");
-const PROJECT_CONTAINER_HOME = "/home/user";
 
 function isDiskQuotaError(err: unknown): boolean {
   const anyErr = err as { code?: unknown; errno?: unknown; message?: unknown };
@@ -58,48 +57,6 @@ function getMergedPath(project_id) {
 
 export function getRootfsMountpoint(project_id: string): string {
   return getMergedPath(project_id);
-}
-
-function isPathInside(base: string, path: string): boolean {
-  const rel = relative(base, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-function hostPathForProjectPath(home: string, path: string): string {
-  const local = join(home, ".local");
-  if (!isPathInside(local, path)) {
-    return path;
-  }
-
-  let target: string;
-  try {
-    const info = lstatSync(local);
-    if (!info.isSymbolicLink()) {
-      return path;
-    }
-    target = readlinkSync(local);
-  } catch {
-    return path;
-  }
-
-  if (!isAbsolute(target)) {
-    return path;
-  }
-
-  const targetRelativeToContainerHome = relative(
-    PROJECT_CONTAINER_HOME,
-    normalize(target),
-  );
-  if (
-    targetRelativeToContainerHome.startsWith("..") ||
-    isAbsolute(targetRelativeToContainerHome)
-  ) {
-    return path;
-  }
-
-  // Legacy projects may have .local -> /home/user/... inside the container.
-  // Resolve that to the equivalent project path for host-side mount setup.
-  return join(home, targetRelativeToContainerHome, relative(local, path));
 }
 
 export function getImageNamePath(home): string {
