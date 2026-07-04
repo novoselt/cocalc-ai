@@ -8,10 +8,6 @@ import { useEffect, useRef, useState } from "react";
 import { useIntl } from "react-intl";
 import SSHKeyList from "@cocalc/frontend/account/ssh-keys/ssh-key-list";
 import { redux, useTypedRedux } from "@cocalc/frontend/app-framework";
-import {
-  FreshAuthModal,
-  useFreshAuthAction,
-} from "@cocalc/frontend/auth/fresh-auth";
 import { A, CopyToClipBoard, Tooltip } from "@cocalc/frontend/components";
 import CopyButton from "@cocalc/frontend/components/copy-button";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -26,7 +22,6 @@ import { Project } from "./types";
 import { lite } from "@cocalc/frontend/lite";
 
 const { Text, Paragraph } = Typography;
-const SETUP_KEY_EXPIRE_MS = 60 * 60 * 1000;
 const COPYABLE_PROPS = {
   inputWidth: "100%",
   inputStyle: { minWidth: 0 },
@@ -62,11 +57,7 @@ export function SSHPanel({
   const useCliSsh = localProxy || isLaunchpad;
   const [sshCopied, setSshCopied] = useState(false);
   const [setupModalOpen, setSetupModalOpen] = useState(false);
-  const [setupLoading, setSetupLoading] = useState(false);
-  const [setupError, setSetupError] = useState<string | undefined>();
-  const [setupApiKey, setSetupApiKey] = useState<string | undefined>();
   const copyTimeoutRef = useRef<number | null>(null);
-  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   const ssh_keys = project.getIn([
     "users",
@@ -98,9 +89,8 @@ export function SSHPanel({
       : null;
   const apiUrl =
     typeof window === "undefined" ? "<hub-url>" : window.location.origin;
-  const setupCommand = setupApiKey
-    ? `COCALC_API_KEY=${shellQuote(setupApiKey)} cocalc --api ${shellQuote(apiUrl)} project ssh-config add -w ${shellQuote(projectId)}`
-    : "";
+  const cliLoginCommand = `cocalc --api ${shellQuote(apiUrl)} auth login`;
+  const setupCommand = `cocalc --api ${shellQuote(apiUrl)} project ssh-config add -w ${shellQuote(projectId)}`;
   const connectCommand = `ssh ${projectId}`;
   const scpUploadCommand = `scp ./local-file ${projectId}:~/`;
   const scpDownloadCommand = `scp ${projectId}:~/remote-file ./`;
@@ -126,38 +116,6 @@ export function SSHPanel({
       setSshCopied(false);
       copyTimeoutRef.current = null;
     }, 1200);
-  };
-
-  const createSshSetupKeyNow = async () => {
-    setSetupError(undefined);
-    setSetupLoading(true);
-    try {
-      const title = project.get("title") || projectId;
-      const response = await webapp_client.account_client.api_keys({
-        action: "create",
-        name: `SSH setup for ${title}`,
-        expire: new Date(Date.now() + SETUP_KEY_EXPIRE_MS),
-        capabilities: ["project:exec"],
-        allowed_project_ids: [projectId],
-      });
-      const secret = response?.[0]?.secret;
-      if (!secret) {
-        throw Error("failed to create account API key");
-      }
-      setSetupApiKey(secret);
-    } finally {
-      setSetupLoading(false);
-    }
-  };
-
-  const createSshSetupKey = async () => {
-    setSetupModalOpen(true);
-    if (setupApiKey || setupLoading) return;
-    try {
-      await runFreshAuthAction(createSshSetupKeyNow);
-    } catch (err) {
-      setSetupError(`${err}`);
-    }
   };
 
   return (
@@ -204,7 +162,7 @@ export function SSHPanel({
                   <>
                     Launchpad SSH is routed through Cloudflare. Install the{" "}
                     <A href={COCALC_CLI_DOWNLOAD_URL}>CoCalc CLI</A> once, then
-                    generate a setup command for this {projectLabelLower}.
+                    sign in and configure SSH for this {projectLabelLower}.
                   </>
                 }
               />
@@ -220,10 +178,9 @@ export function SSHPanel({
                 <div style={{ marginTop: 6 }}>
                   <Button
                     type="primary"
-                    loading={setupLoading}
-                    onClick={createSshSetupKey}
+                    onClick={() => setSetupModalOpen(true)}
                   >
-                    Generate setup command
+                    Show setup commands
                   </Button>
                 </div>
               </div>
@@ -286,64 +243,46 @@ export function SSHPanel({
             >
               <Space direction="vertical" size={12} style={{ width: "100%" }}>
                 <Paragraph style={{ marginBottom: 0 }}>
-                  Run this once in your terminal. It uses a temporary one-hour
-                  account API key to install SSH access for this{" "}
-                  {projectLabelLower}, install or reuse your local SSH key, and
-                  write the route to <Text code>~/.ssh/config</Text>.
+                  Run these commands in your terminal. First sign the CoCalc CLI
+                  into this site using your browser, then configure SSH for this{" "}
+                  {projectLabelLower}. The setup command installs or reuses your
+                  local SSH key and writes the route to{" "}
+                  <Text code>~/.ssh/config</Text>.
                 </Paragraph>
-                {setupError && (
-                  <Alert
-                    type="error"
-                    showIcon
-                    message="Unable to create setup command"
-                    description={setupError}
+                <div>
+                  <Text strong>Sign in to the CoCalc CLI</Text>
+                  <CopyToClipBoard
+                    value={cliLoginCommand}
+                    {...COPYABLE_PROPS}
                   />
-                )}
-                {setupLoading && (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="Creating a one-hour account API key..."
+                </div>
+                <div>
+                  <Text strong>Configure SSH</Text>
+                  <CopyToClipBoard value={setupCommand} {...COPYABLE_PROPS} />
+                </div>
+                <div>
+                  <Text strong>Connect</Text>
+                  <CopyToClipBoard value={connectCommand} {...COPYABLE_PROPS} />
+                </div>
+                <div>
+                  <Text strong>Copy files with scp</Text>
+                  <CopyToClipBoard
+                    value={scpUploadCommand}
+                    {...COPYABLE_PROPS}
                   />
-                )}
-                {setupCommand && (
-                  <>
-                    <div>
-                      <Text strong>Configure SSH</Text>
-                      <CopyToClipBoard
-                        value={setupCommand}
-                        {...COPYABLE_PROPS}
-                      />
-                    </div>
-                    <div>
-                      <Text strong>Connect</Text>
-                      <CopyToClipBoard
-                        value={connectCommand}
-                        {...COPYABLE_PROPS}
-                      />
-                    </div>
-                    <div>
-                      <Text strong>Copy files with scp</Text>
-                      <CopyToClipBoard
-                        value={scpUploadCommand}
-                        {...COPYABLE_PROPS}
-                      />
-                      <CopyToClipBoard
-                        value={scpDownloadCommand}
-                        {...COPYABLE_PROPS}
-                      />
-                    </div>
-                    <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                      Existing SSH access keeps working after this API key
-                      expires because SSH uses the installed public key and the
-                      generated <Text code>~/.ssh/config</Text> entry. The API
-                      key is not stored in your SSH config.
-                    </Paragraph>
-                  </>
-                )}
+                  <CopyToClipBoard
+                    value={scpDownloadCommand}
+                    {...COPYABLE_PROPS}
+                  />
+                </div>
+                <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                  If you have already signed in to this site with the CoCalc
+                  CLI, you can skip the login command. SSH keeps working after
+                  setup because it uses your installed public key and the
+                  generated <Text code>~/.ssh/config</Text> entry.
+                </Paragraph>
               </Space>
             </Modal>
-            <FreshAuthModal {...freshAuthModalProps} />
           </>
         ) : sshCommand ? (
           <>
