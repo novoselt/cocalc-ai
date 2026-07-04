@@ -113,6 +113,56 @@ function setCachedProject<W extends ProjectLike>(
   }
 }
 
+function messageOf(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return `${err}`;
+}
+
+function isProjectBayPermissionDenied(err: unknown): boolean {
+  const message = messageOf(err);
+  const code = (err as { code?: unknown } | null)?.code;
+  return (
+    (code === 403 ||
+      code === "403" ||
+      message.includes("code='403'") ||
+      message.includes("code=403")) &&
+    message.includes("permission denied publishing") &&
+    message.includes("system.getProjectBay")
+  );
+}
+
+function projectBayPermissionDeniedError(
+  project_id: string,
+  err: unknown,
+): Error {
+  const error = new Error(
+    [
+      `Cannot resolve project ${project_id} with these credentials.`,
+      "This command needs an account-level project routing lookup before it can connect to the project host.",
+      "The current API key appears to be project-scoped, so it can run project operations but cannot call the account-level routing API.",
+      "Use an account API key or a browser-authenticated CLI session, then retry the command.",
+      `Original error: ${messageOf(err)}`,
+    ].join("\n"),
+  );
+  (error as { code?: unknown }).code = (err as { code?: unknown } | null)?.code;
+  return error;
+}
+
+async function getProjectBayWithHelpfulError<W extends ProjectLike>(
+  ctx: ProjectCacheContext<W>,
+  project_id: string,
+) {
+  try {
+    return await ctx.hub.system.getProjectBay({ project_id });
+  } catch (err) {
+    if (isProjectBayPermissionDenied(err)) {
+      throw projectBayPermissionDeniedError(project_id, err);
+    }
+    throw err;
+  }
+}
+
 export function projectState(value: ProjectLike["state"]): string {
   return typeof value?.state === "string" ? value.state : "";
 }
@@ -284,7 +334,7 @@ export async function queryProjects<W extends ProjectLike = ProjectLike>({
     }
     return visibleRows;
   }
-  const located = await ctx.hub.system.getProjectBay({ project_id });
+  const located = await getProjectBayWithHelpfulError(ctx, project_id);
   if (!located?.project_id) {
     if (localErr) {
       throw localErr;
@@ -330,9 +380,7 @@ export async function resolveProject<W extends ProjectLike = ProjectLike>(
       return rows[0];
     }
     try {
-      const located = await ctx.hub.system.getProjectBay({
-        project_id: identifier,
-      });
+      const located = await getProjectBayWithHelpfulError(ctx, identifier);
       if (located?.project_id) {
         const remoteProject = {
           project_id: located.project_id,
