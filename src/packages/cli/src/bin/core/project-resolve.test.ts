@@ -425,6 +425,7 @@ test("queryProjects falls back to getProjectBay for exact remote UUID reads", as
 test("queryProjects explains project-scoped API key routing failures", async () => {
   delete process.env.COCALC_ACCOUNT_PROJECT_INDEX_PROJECT_LIST_READS;
   const ctx = {
+    apiBaseUrl: "https://cocalc.ai",
     projectCache: new Map(),
     hub: {
       db: {
@@ -456,7 +457,7 @@ test("queryProjects explains project-scoped API key routing failures", async () 
       assert.match(err.message, /Cannot resolve project/);
       assert.match(err.message, /project-scoped/);
       assert.match(err.message, /account-level project routing lookup/);
-      assert.match(err.message, /cocalc --api <api-url> auth login/);
+      assert.match(err.message, /cocalc --api https:\/\/cocalc\.ai auth login/);
       assert.match(err.message, /without COCALC_API_KEY/);
       return true;
     },

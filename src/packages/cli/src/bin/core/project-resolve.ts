@@ -22,6 +22,7 @@ export type HostLike = {
 export type ProjectCacheContext<W extends ProjectLike = ProjectLike> = {
   projectCache: Map<string, { expiresAt: number; project: W }>;
   accountId?: string;
+  apiBaseUrl?: string;
   hub: Pick<HubApi, "db" | "system" | "hosts">;
 };
 
@@ -119,6 +120,13 @@ function messageOf(err: unknown): string {
   return `${err}`;
 }
 
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_/:.,=+@%-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function isProjectBayPermissionDenied(err: unknown): boolean {
   const message = messageOf(err);
   const code = (err as { code?: unknown } | null)?.code;
@@ -133,15 +141,20 @@ function isProjectBayPermissionDenied(err: unknown): boolean {
 }
 
 function projectBayPermissionDeniedError(
+  ctx: ProjectCacheContext,
   project_id: string,
   err: unknown,
 ): Error {
+  const api = `${ctx.apiBaseUrl ?? ""}`.trim();
+  const authCommand = api
+    ? `cocalc --api ${shellQuote(api)} auth login --email <you@example.com>`
+    : "cocalc --api <api-url> auth login --email <you@example.com>";
   const error = new Error(
     [
       `Cannot resolve project ${project_id} with these credentials.`,
       "This command needs an account-level project routing lookup before it can connect to the project host.",
       "The current API key appears to be project-scoped, so it can run project operations but cannot call the account-level routing API.",
-      "Use an account API key or create a browser-authenticated CLI session with `cocalc --api <api-url> auth login --email <you@example.com>`, complete the browser approval, then retry the command without COCALC_API_KEY so the CLI uses that login session.",
+      `Use an account API key or create a browser-authenticated CLI session with \`${authCommand}\`, complete the browser approval, then retry the same command without COCALC_API_KEY so the CLI uses that login session.`,
       `Original error: ${messageOf(err)}`,
     ].join("\n"),
   );
@@ -157,7 +170,7 @@ async function getProjectBayWithHelpfulError<W extends ProjectLike>(
     return await ctx.hub.system.getProjectBay({ project_id });
   } catch (err) {
     if (isProjectBayPermissionDenied(err)) {
-      throw projectBayPermissionDeniedError(project_id, err);
+      throw projectBayPermissionDeniedError(ctx, project_id, err);
     }
     throw err;
   }
