@@ -141,7 +141,7 @@ function projectBayPermissionDeniedError(
       `Cannot resolve project ${project_id} with these credentials.`,
       "This command needs an account-level project routing lookup before it can connect to the project host.",
       "The current API key appears to be project-scoped, so it can run project operations but cannot call the account-level routing API.",
-      "Use an account API key or a browser-authenticated CLI session, then retry the command.",
+      "Use an account API key or create a browser-authenticated CLI session with `cocalc --api <api-url> auth login --email <you@example.com>`, complete the browser approval, then retry the command without COCALC_API_KEY so the CLI uses that login session.",
       `Original error: ${messageOf(err)}`,
     ].join("\n"),
   );

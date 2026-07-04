@@ -456,7 +456,8 @@ test("queryProjects explains project-scoped API key routing failures", async () 
       assert.match(err.message, /Cannot resolve project/);
       assert.match(err.message, /project-scoped/);
       assert.match(err.message, /account-level project routing lookup/);
-      assert.match(err.message, /Use an account API key/);
+      assert.match(err.message, /cocalc --api <api-url> auth login/);
+      assert.match(err.message, /without COCALC_API_KEY/);
       return true;
     },
   );
