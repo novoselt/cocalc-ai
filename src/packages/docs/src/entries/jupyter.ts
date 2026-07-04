@@ -8,6 +8,7 @@ import { docsIcon, projectActionParameters } from "../helpers";
 import {
   CREATE_JUPYTER_BODY,
   CUSTOM_JUPYTER_KERNELS_BODY,
+  OCTAVE_JUPYTER_KERNEL_BODY,
   USE_JUPYTER_BODY,
 } from "../content";
 
@@ -79,5 +80,26 @@ export const JUPYTER_ENTRIES: DocsEntry[] = [
     summary:
       "Create a custom Jupyter kernel backed by a uv-managed Python virtual environment.",
     title: "Custom Jupyter kernels with uv",
+  },
+  {
+    audiences: ["instructors", "researchers", "students", "teams"],
+    body: OCTAVE_JUPYTER_KERNEL_BODY.trim(),
+    category: "Jupyter",
+    id: "jupyter.octave-kernel",
+    image: docsIcon(
+      "/public/docs/custom-jupyter-kernels-58a40bde.webp",
+      "A custom Jupyter kernel connected to an isolated project environment",
+    ),
+    lastReviewed: "2026-07-04",
+    noActionReason:
+      "Octave setup is a project terminal workflow that installs system packages and registers a kernelspec.",
+    searchKeywords:
+      "octave gnu octave jupyter kernel octave-kernel matlab project install gnuplot kernelspec",
+    siteProfiles: ["cocalc-ai"],
+    slug: "jupyter/install-octave-kernel",
+    status: "ready",
+    summary:
+      "Install GNU Octave and octave-kernel into an existing CoCalc AI project without changing the default Python kernel.",
+    title: "Install the Octave Jupyter kernel",
   },
 ];
