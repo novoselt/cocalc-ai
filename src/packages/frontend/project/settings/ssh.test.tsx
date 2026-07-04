@@ -1,5 +1,5 @@
 import immutable from "immutable";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { SSHPanel } from "./ssh";
 
 const useHostInfo = jest.fn();
@@ -61,68 +61,6 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
   useTypedRedux: (...args: any[]) => useTypedRedux(...args),
 }));
 
-jest.mock("@cocalc/frontend/auth/fresh-auth", () => {
-  const React = require("react");
-  const isFreshAuthRequiredError = (err: unknown) =>
-    `${(err as any)?.code ?? ""}` === "fresh_auth_required" ||
-    `${(err as any)?.message ?? err ?? ""}`
-      .toLowerCase()
-      .includes("fresh auth");
-  return {
-    FreshAuthModal: ({ open, onSuccess }: any) =>
-      open ? (
-        <button type="button" onClick={onSuccess}>
-          Verify fresh auth
-        </button>
-      ) : null,
-    useFreshAuthAction: () => {
-      const [open, setOpen] = React.useState(false);
-      const pendingActionRef = React.useRef<null | {
-        action: () => Promise<void>;
-        resolve: (completed: boolean) => void;
-        reject: (err: unknown) => void;
-      }>(null);
-      return {
-        runFreshAuthAction: async (action: () => Promise<void>) => {
-          try {
-            await action();
-            return true;
-          } catch (err) {
-            if (!isFreshAuthRequiredError(err)) {
-              throw err;
-            }
-            return await new Promise<boolean>((resolve, reject) => {
-              pendingActionRef.current = { action, resolve, reject };
-              setOpen(true);
-            });
-          }
-        },
-        freshAuthModalProps: {
-          open,
-          onCancel: () => {
-            const pending = pendingActionRef.current;
-            pendingActionRef.current = null;
-            pending?.resolve(false);
-            setOpen(false);
-          },
-          onSuccess: async () => {
-            const pending = pendingActionRef.current;
-            pendingActionRef.current = null;
-            if (!pending) return;
-            setOpen(false);
-            try {
-              await pending.action();
-              pending.resolve(true);
-            } catch (err) {
-              pending.reject(err);
-            }
-          },
-        },
-      };
-    },
-  };
-});
-
 jest.mock("@cocalc/frontend/components", () => ({
   A: ({ children, href }: any) => <a href={href}>{children}</a>,
   CopyToClipBoard: ({ value }: any) => <div>{value}</div>,
@@ -172,7 +110,7 @@ describe("SSHPanel", () => {
     });
   });
 
-  it("shows CoCalc CLI install and generated ssh setup command for launchpad projects", async () => {
+  it("shows CoCalc CLI install, browser login, and ssh setup commands for launchpad projects", async () => {
     useHostInfo.mockReturnValue(
       immutable.Map({
         ssh_server: "hub.example.com:2200",
@@ -222,20 +160,15 @@ describe("SSHPanel", () => {
       ),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByText("Generate setup command"));
+    fireEvent.click(screen.getByText("Show setup commands"));
 
-    await waitFor(() => {
-      expect(apiKeys).toHaveBeenCalledWith({
-        action: "create",
-        name: "SSH setup for project-1",
-        expire: expect.any(Date),
-        capabilities: ["project:exec"],
-        allowed_project_ids: ["project-1"],
-      });
-    });
+    expect(apiKeys).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("cocalc --api 'http://localhost' auth login"),
+    ).toBeTruthy();
     expect(
       screen.getByText(
-        "COCALC_API_KEY='sk-test-secret' cocalc --api 'http://localhost' project ssh-config add -w 'project-1'",
+        "cocalc --api 'http://localhost' project ssh-config add -w 'project-1'",
       ),
     ).toBeTruthy();
     expect(screen.getByText("ssh project-1")).toBeTruthy();
@@ -247,21 +180,13 @@ describe("SSHPanel", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("requests fresh auth before retrying ssh setup API key creation", async () => {
+  it("does not require fresh auth before showing ssh setup commands", async () => {
     useHostInfo.mockReturnValue(
       immutable.Map({
         ssh_server: "hub.example.com:2200",
         local_proxy: false,
       }),
     );
-    apiKeys
-      .mockRejectedValueOnce(
-        Object.assign(new Error("fresh auth is required"), {
-          code: "fresh_auth_required",
-        }),
-      )
-      .mockResolvedValueOnce([{ secret: "sk-after-fresh-auth" }]);
-
     render(
       <SSHPanel
         project={
@@ -278,22 +203,12 @@ describe("SSHPanel", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("Generate setup command"));
+    fireEvent.click(screen.getByText("Show setup commands"));
 
-    await waitFor(() => {
-      expect(screen.getByText("Verify fresh auth")).toBeTruthy();
-    });
-    expect(apiKeys).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByText("Verify fresh auth"));
-
-    await waitFor(() => {
-      expect(apiKeys).toHaveBeenCalledTimes(2);
-      expect(
-        screen.getByText(
-          "COCALC_API_KEY='sk-after-fresh-auth' cocalc --api 'http://localhost' project ssh-config add -w 'project-1'",
-        ),
-      ).toBeTruthy();
-    });
+    expect(screen.queryByText("Verify fresh auth")).toBeNull();
+    expect(apiKeys).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("cocalc --api 'http://localhost' auth login"),
+    ).toBeTruthy();
   });
 });
