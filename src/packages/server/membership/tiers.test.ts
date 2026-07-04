@@ -360,7 +360,7 @@ describe("membership change pricing", () => {
     expect(quote.charge).toBe(1440);
   });
 
-  it("quotes continuation of a legacy migration grant as a paid membership", async () => {
+  it("quotes continuation of a legacy migration grant as a free renewal configuration", async () => {
     const account_id = uuid();
     const standardTier = `legacy-standard-${uuid().slice(0, 8)}` as any;
     const basicTier = `legacy-basic-${uuid().slice(0, 8)}` as any;
@@ -408,7 +408,7 @@ describe("membership change pricing", () => {
     expect(sameTierQuote.change).toBe("upgrade");
     expect(sameTierQuote.existing_promo_grant).toBe(true);
     expect(sameTierQuote.refund).toBe(0);
-    expect(sameTierQuote.charge).toBe(216);
+    expect(sameTierQuote.charge).toBe(0);
 
     const downgradeQuote = await computeMembershipChange({
       account_id,
@@ -420,7 +420,7 @@ describe("membership change pricing", () => {
     expect(downgradeQuote.change).toBe("downgrade");
     expect(downgradeQuote.existing_promo_grant).toBe(true);
     expect(downgradeQuote.refund).toBe(0);
-    expect(downgradeQuote.charge).toBe(8);
+    expect(downgradeQuote.charge).toBe(0);
   });
 
   it("bases prorated upgrade credit on the actual paid amount", async () => {

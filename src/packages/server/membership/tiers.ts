@@ -516,7 +516,7 @@ export async function computeMembershipChange({
     refund = proratedSubscriptionRefund(existing);
   }
   const charge = replacingLegacyMigrationGrant
-    ? moneyRound2Up(priceValue)
+    ? toDecimal(0)
     : change == "downgrade"
       ? toDecimal(0)
       : moneyRound2Up(

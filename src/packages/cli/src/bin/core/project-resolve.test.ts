@@ -422,6 +422,76 @@ test("queryProjects falls back to getProjectBay for exact remote UUID reads", as
   ]);
 });
 
+test("queryProjects explains project-scoped API key routing failures", async () => {
+  delete process.env.COCALC_ACCOUNT_PROJECT_INDEX_PROJECT_LIST_READS;
+  const ctx = {
+    apiBaseUrl: "https://cocalc.ai",
+    projectCache: new Map(),
+    hub: {
+      db: {
+        userQuery: async () => ({}),
+      },
+      system: {
+        getProjectBay: async () => {
+          throw Object.assign(
+            new Error(
+              "permission denied publishing to 'hub.account.a3e24fbf-c4b9-429e-8cab-5558052195bb.api' - callHub: subject='hub.account.a3e24fbf-c4b9-429e-8cab-5558052195bb.api', name='system.getProjectBay', code='403'",
+            ),
+            { code: 403 },
+          );
+        },
+      },
+      hosts: {},
+    },
+  } as any;
+
+  await assert.rejects(
+    () =>
+      queryProjects({
+        ctx,
+        project_id: "88888888-8888-4888-8888-888888888888",
+        limit: 1,
+      }),
+    (err: any) => {
+      assert.equal(err.code, 403);
+      assert.match(err.message, /Cannot resolve project/);
+      assert.match(err.message, /project-scoped/);
+      assert.match(err.message, /account-level project routing lookup/);
+      assert.match(err.message, /cocalc --api https:\/\/cocalc\.ai auth login/);
+      assert.match(err.message, /without COCALC_API_KEY/);
+      return true;
+    },
+  );
+});
+
+test("resolveProject explains project-scoped API key routing failures", async () => {
+  delete process.env.COCALC_ACCOUNT_PROJECT_INDEX_PROJECT_LIST_READS;
+  const ctx = {
+    projectCache: new Map(),
+    hub: {
+      db: {
+        userQuery: async () => ({}),
+      },
+      system: {
+        getProjectBay: async () => {
+          throw Object.assign(
+            new Error(
+              "permission denied publishing to 'hub.account.a3e24fbf-c4b9-429e-8cab-5558052195bb.api' - callHub: subject='hub.account.a3e24fbf-c4b9-429e-8cab-5558052195bb.api', name='system.getProjectBay', code='403'",
+            ),
+            { code: 403 },
+          );
+        },
+      },
+      hosts: {},
+    },
+  } as any;
+
+  await assert.rejects(
+    () => resolveProject(ctx, "88888888-8888-4888-8888-888888888888", 60_000),
+    /project-scoped/,
+  );
+});
+
 test("resolveHost accepts an explicit host UUID even when no hosts are visible", async () => {
   const host = await resolveHost(
     {

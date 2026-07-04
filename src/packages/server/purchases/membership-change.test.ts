@@ -257,7 +257,7 @@ describe("membership change payment enforcement", () => {
     expect(activeRows).toEqual([]);
   });
 
-  it("continues a legacy migration grant as a paid membership after the grant", async () => {
+  it("configures legacy migration grant renewal without charging immediately", async () => {
     const grantAccount = uuid();
     const standardTier = `grant-standard-${uuid().slice(0, 8)}` as any;
     const basicTier = `grant-basic-${uuid().slice(0, 8)}` as any;
@@ -299,27 +299,41 @@ describe("membership change payment enforcement", () => {
       targetClass: basicTier,
       interval: "month",
       allowDowngrade: true,
-      paymentAmount: 8,
     });
 
-    expect(result.charge).toBe(8);
-    expect(result.purchase_id).toBeGreaterThan(0);
-    expect(result.subscription_id).toBeGreaterThan(0);
+    expect(result.charge).toBe(0);
+    expect(result.purchase_id).toBeUndefined();
+    expect(result.subscription_id).toBe(grantSubscriptionId);
     const { rows } = await getPool().query(
       `SELECT metadata->>'class' AS class,
+              metadata->>'renewal_class' AS renewal_class,
+              metadata->>'renewal_interval' AS renewal_interval,
+              metadata->>'renewal_configured' AS renewal_configured,
               status,
+              cost,
+              interval,
               current_period_end,
               latest_purchase_id
          FROM subscriptions
         WHERE id=$1`,
       [result.subscription_id],
     );
-    expect(rows[0]?.class).toBe(basicTier);
+    expect(rows[0]?.class).toBe(standardTier);
+    expect(rows[0]?.renewal_class).toBe(basicTier);
+    expect(rows[0]?.renewal_interval).toBe("month");
+    expect(rows[0]?.renewal_configured).toBe("true");
     expect(rows[0]?.status).toBe("active");
-    expect(rows[0]?.latest_purchase_id).toBe(result.purchase_id);
-    expect(new Date(rows[0]?.current_period_end).getTime()).toBeGreaterThan(
-      grantEnd.getTime() + 25 * 24 * 60 * 60 * 1000,
+    expect(Number(rows[0]?.cost)).toBe(8);
+    expect(rows[0]?.interval).toBe("month");
+    expect(rows[0]?.latest_purchase_id).toBeNull();
+    expect(new Date(rows[0]?.current_period_end).getTime()).toBe(
+      grantEnd.getTime(),
     );
+    const { rows: purchaseRows } = await getPool().query(
+      "SELECT COUNT(*)::int AS count FROM purchases WHERE account_id=$1 AND service='membership'",
+      [grantAccount],
+    );
+    expect(purchaseRows[0]?.count).toBe(0);
   });
 
   it("rejects free trials when billing is not ready", async () => {

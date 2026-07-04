@@ -119,9 +119,7 @@ function projectedPeriodEnd({
     quote.existing_promo_grant === true &&
     currentPeriodEnd?.isAfter(dayjs())
   ) {
-    return currentPeriodEnd
-      .add(1, interval === "year" ? "year" : "month")
-      .toDate();
+    return currentPeriodEnd.toDate();
   }
   return dayjs()
     .add(1, interval === "year" ? "year" : "month")
@@ -378,7 +376,7 @@ function MembershipPurchaseModalInner({
             interval,
           )}${
             quote?.existing_promo_grant === true
-              ? ", continues after your current free grant"
+              ? ", first paid renewal after your current free grant"
               : quote?.change === "downgrade"
                 ? ""
                 : quote?.trial_available && quote?.trial_days
@@ -391,6 +389,10 @@ function MembershipPurchaseModalInner({
     quote && quote.change !== "downgrade" && quotePriceValue.gt(0)
       ? formatLongDate(projectedPeriodEnd({ interval, quote }))
       : undefined;
+  const upcomingRenewalLabel =
+    quote?.existing_promo_grant === true
+      ? "First paid renewal"
+      : "Upcoming renewal";
   const confirmChangeLabel =
     quote?.change === "downgrade" ? "Confirm downgrade" : "Confirm change";
   const trialRequiresBillingDetails =
@@ -589,8 +591,8 @@ function MembershipPurchaseModalInner({
                 </>
               ) : upcomingRenewalText ? (
                 <Text>
-                  Upcoming renewal: {formatCompactCurrency(quote.price)} on{" "}
-                  {upcomingRenewalText}, unless canceled.
+                  {upcomingRenewalLabel}: {formatCompactCurrency(quote.price)}{" "}
+                  on {upcomingRenewalText}, unless canceled.
                 </Text>
               ) : null}
             </Space>

@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260630-v1"
+HELPER_SCHEMA_VERSION = "20260704-v1"
 RUNTIME_WRAPPER_VERSION = "20260505-v9"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -931,11 +931,14 @@ def run_cmd(
     check: bool = True,
     as_user: str | None = None,
     env: dict[str, str] | None = None,
+    cwd: str | Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     cmd = args
     if as_user and os.geteuid() == 0 and as_user != "root":
         cmd = ["sudo", "-u", as_user, "-H"] + args
-    log_line(cfg, f"bootstrap: running {desc}: {' '.join(cmd)}")
+    run_cwd = str(cwd) if cwd is not None else None
+    cwd_label = f" cwd={run_cwd}" if run_cwd else ""
+    log_line(cfg, f"bootstrap: running {desc}{cwd_label}: {' '.join(cmd)}")
     result = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -943,6 +946,7 @@ def run_cmd(
         text=True,
         timeout=timeout,
         env=env,
+        cwd=run_cwd,
     )
     if result.stdout:
         for line in result.stdout.splitlines():
@@ -1406,6 +1410,49 @@ def enable_linger(cfg: BootstrapConfig) -> None:
     if shutil.which("loginctl") is None:
         raise RuntimeError("loginctl not available; cannot ensure /run/user")
     run_cmd(cfg, ["loginctl", "enable-linger", cfg.ssh_user], "enable linger")
+
+
+def ensure_owned_runtime_dir(path: Path, uid: int, gid: int) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    os.chown(path, uid, gid)
+    os.chmod(path, 0o700)
+
+
+def ensure_runtime_user_manager(cfg: BootstrapConfig) -> None:
+    user = cfg.ssh_user
+    if not user or user == "root":
+        return
+    pw = pwd.getpwnam(user)
+    uid = pw.pw_uid
+    gid = pw.pw_gid
+    log_line(cfg, f"bootstrap: ensuring runtime manager for {user} uid={uid}")
+    if shutil.which("loginctl") is not None:
+        run_best_effort(
+            cfg,
+            ["loginctl", "enable-linger", user],
+            "enable runtime user linger",
+        )
+    run_dir = Path("/run/user") / str(uid)
+    ensure_owned_runtime_dir(run_dir, uid, gid)
+    if shutil.which("systemctl") is not None:
+        service = f"user@{uid}.service"
+        run_best_effort(
+            cfg,
+            ["systemctl", "reset-failed", service],
+            "reset failed runtime user manager",
+        )
+        run_best_effort(
+            cfg,
+            ["systemctl", "start", service],
+            "start runtime user manager",
+        )
+    ensure_owned_runtime_dir(run_dir, uid, gid)
+    env = read_env_assignments(cfg.env_file)
+    configured_runtime = (
+        env.get("COCALC_PODMAN_RUNTIME_DIR") or env.get("XDG_RUNTIME_DIR") or ""
+    ).strip()
+    if configured_runtime and Path(configured_runtime).is_absolute():
+        ensure_owned_runtime_dir(Path(configured_runtime), uid, gid)
 
 
 def prepare_dirs(cfg: BootstrapConfig) -> None:
@@ -4028,6 +4075,78 @@ read_env_value() {
   fi
 }
 
+runtime_uid() {
+  id -u "${RUNTIME_USER}"
+}
+
+runtime_gid() {
+  id -g "${RUNTIME_USER}"
+}
+
+runtime_user_run_dir() {
+  printf '/run/user/%s\n' "$(runtime_uid)"
+}
+
+podman_runtime_dir() {
+  local value
+  value="$(read_env_value COCALC_PODMAN_RUNTIME_DIR)"
+  if [ -z "${value}" ]; then
+    value="$(read_env_value XDG_RUNTIME_DIR)"
+  fi
+  if [ -n "${value}" ]; then
+    printf '%s\n' "${value}"
+  else
+    runtime_user_run_dir
+  fi
+}
+
+ensure_owned_runtime_dir() {
+  local path="$1" uid gid
+  uid="$(runtime_uid)"
+  gid="$(runtime_gid)"
+  install -d -o "${uid}" -g "${gid}" -m 0700 "${path}"
+  chown "${uid}:${gid}" "${path}"
+  chmod 0700 "${path}"
+}
+
+repair_runtime_environment() {
+  local uid run_dir runtime_dir service
+  uid="$(runtime_uid)"
+  run_dir="/run/user/${uid}"
+  if command -v loginctl >/dev/null 2>&1; then
+    loginctl enable-linger "${RUNTIME_USER}" >/dev/null 2>&1 || true
+  fi
+  ensure_owned_runtime_dir "${run_dir}"
+  if command -v systemctl >/dev/null 2>&1; then
+    service="user@${uid}.service"
+    systemctl reset-failed "${service}" >/dev/null 2>&1 || true
+    systemctl start "${service}" >/dev/null 2>&1 || true
+  fi
+  ensure_owned_runtime_dir "${run_dir}"
+  runtime_dir="$(podman_runtime_dir)"
+  if [ -n "${runtime_dir}" ]; then
+    ensure_owned_runtime_dir "${runtime_dir}"
+  fi
+}
+
+preflight_podman_runtime() {
+  local runtime_dir cgroup_manager
+  if ! command -v podman >/dev/null 2>&1; then
+    echo "podman not found" >&2
+    exit 1
+  fi
+  runtime_dir="$(podman_runtime_dir)"
+  cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
+  if [ -z "${cgroup_manager}" ]; then
+    cgroup_manager="cgroupfs"
+  fi
+  sudo -n -u "${RUNTIME_USER}" -H env \
+    XDG_RUNTIME_DIR="${runtime_dir}" \
+    COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
+    CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
+    podman info >/dev/null
+}
+
 project_pool_cgroup() {
   local value
   value="$(read_env_value COCALC_PROJECT_POOL_CGROUP)"
@@ -4247,17 +4366,23 @@ capture_forensics() {
 
 case "${cmd}" in
   start|ensure)
+    repair_runtime_environment
+    preflight_podman_runtime
     run_daemon "${cmd}" "$@"
     protect_pid
     attach_running_project_processes || true
     ;;
   restart)
+    repair_runtime_environment
+    preflight_podman_runtime
     run_daemon stop "$@" || true
     run_daemon start "$@"
     protect_pid
     attach_running_project_processes || true
     ;;
   protect)
+    repair_runtime_environment
+    preflight_podman_runtime
     protect_pid
     attach_running_project_processes || true
     ;;
@@ -4275,9 +4400,12 @@ case "${cmd}" in
     exit 0
     ;;
   stop)
+    repair_runtime_environment
     run_daemon stop "$@"
     ;;
   status)
+    repair_runtime_environment
+    preflight_podman_runtime
     pid="$(first_running_pid "${PID_FILE}" "${HOST_AGENT_PID_FILE}" || true)"
     if [ -n "${pid}" ]; then
       if [ -r "${PID_FILE}" ] && [ "$(read_pid_file "${PID_FILE}")" = "${pid}" ]; then
@@ -4753,6 +4881,7 @@ exit 0
 
 def start_project_host(cfg: BootstrapConfig) -> None:
     ctl_path = str(project_host_runtime_root(cfg) / "bin" / "ctl")
+    ctl_cwd = runtime_home(cfg)
     # Sanity check: bundle must contain a compiled entrypoint.
     bundle_candidates = [
         Path(cfg.project_host_bundle.current) if cfg.project_host_bundle.current else None,
@@ -4778,14 +4907,23 @@ def start_project_host(cfg: BootstrapConfig) -> None:
         log_line(cfg, f"bootstrap: missing project-host entrypoint (searched: bundle/index.js, main/index.js, dist/main.js) in {roots}")
         log_line(cfg, "bootstrap: project-host bundle appears incomplete; re-run bundle build/publish and re-bootstrap")
         raise RuntimeError("project-host bundle missing entrypoint")
+    ensure_runtime_user_manager(cfg)
     if Path(ctl_path).exists():
-        run_cmd(cfg, [ctl_path, "stop"], "project-host stop", check=False, as_user=cfg.ssh_user)
+        run_cmd(
+            cfg,
+            [ctl_path, "stop"],
+            "project-host stop",
+            check=False,
+            as_user=cfg.ssh_user,
+            cwd=ctl_cwd,
+        )
     result = run_cmd(
         cfg,
         [ctl_path, "start"],
         "project-host start",
         check=False,
         as_user=cfg.ssh_user,
+        cwd=ctl_cwd,
     )
     if result.returncode == 0:
         return
@@ -4801,6 +4939,22 @@ def start_project_host(cfg: BootstrapConfig) -> None:
             [ctl_path, "ensure"],
             "project-host ensure",
             as_user=cfg.ssh_user,
+            cwd=ctl_cwd,
+        )
+        return
+    status = run_cmd(
+        cfg,
+        [ctl_path, "status"],
+        "project-host status after failed start",
+        check=False,
+        as_user=cfg.ssh_user,
+        cwd=ctl_cwd,
+    )
+    if status.returncode == 0:
+        log_line(
+            cfg,
+            "bootstrap: project-host start failed, but status reports running; "
+            "treating the daemon as healthy",
         )
         return
     raise RuntimeError(f"project-host start failed with exit code {result.returncode}")
@@ -4842,6 +4996,7 @@ def run_provision(cfg: BootstrapConfig) -> int:
         enable_userns(cfg)
         ensure_subuids(cfg)
         enable_linger(cfg)
+        ensure_runtime_user_manager(cfg)
         prepare_dirs(cfg)
         setup_btrfs(cfg, image_size_gb)
         setup_shared_scratch(cfg)
@@ -4874,6 +5029,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         configure_podman(cfg)
         verify_runtime_user_contract(cfg)
         write_env(cfg, image_size_gb)
+        ensure_runtime_user_manager(cfg)
         configure_runtime_shell_env(cfg)
         setup_master_conat_token(cfg)
         report_bootstrap_status(cfg, "running", "Downloading CoCalc software bundles")

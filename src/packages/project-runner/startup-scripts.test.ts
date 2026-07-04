@@ -1,4 +1,11 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -40,6 +47,8 @@ describe("writeStartupScripts", () => {
       '"$DROPBEAR" -p ${COCALC_SSHD_PORT:=22} -e -s -a -R',
     );
     expect(script).not.toContain(" -D ");
+
+    rmSync(home, { recursive: true, force: true });
   });
 
   it("probes standard distro sftp-server paths for modern scp support", async () => {
@@ -54,6 +63,8 @@ describe("writeStartupScripts", () => {
     expect(script).toContain("/usr/libexec/openssh/sftp-server");
     expect(script).toContain("mkdir -p /usr/libexec");
     expect(script).toContain('ln -sf "$SFTP_SERVER" /usr/libexec/sftp-server');
+
+    rmSync(home, { recursive: true, force: true });
   });
 
   it("creates a default project startup script template without overwriting it", async () => {
@@ -70,5 +81,23 @@ describe("writeStartupScripts", () => {
     await writeStartupScripts(home);
 
     expect(readFileSync(startupPath, "utf8")).toBe("# custom startup\n");
+
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("writes startup.sh under legacy absolute /home/user .local symlink targets", async () => {
+    const home = mkdtempSync(join(tmpdir(), "cocalc-startup-scripts-"));
+    mkdirSync(join(home, "portable-scripts/.local"), { recursive: true });
+    symlinkSync("/home/user/portable-scripts/.local", join(home, ".local"));
+
+    await writeStartupScripts(home);
+
+    const startup = readFileSync(
+      join(home, "portable-scripts/.local/share/cocalc/startup.sh"),
+      "utf8",
+    );
+    expect(startup).toBe(PROJECT_STARTUP_SCRIPT_TEMPLATE);
+
+    rmSync(home, { recursive: true, force: true });
   });
 });

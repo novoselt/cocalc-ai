@@ -18,6 +18,7 @@ import {
 } from "./rootfs-base";
 import { lroProgress } from "@cocalc/conat/lro/progress";
 import { RefcountLeaseManager } from "@cocalc/util/refcount/lease";
+import { hostPathForProjectPath } from "./project-path";
 
 import getLogger from "@cocalc/backend/logger";
 import { getConatClient } from "./conat-client";
@@ -59,7 +60,10 @@ export function getRootfsMountpoint(project_id: string): string {
 }
 
 export function getImageNamePath(home): string {
-  return join(home, PROJECT_IMAGE_PATH, "current-image.txt");
+  return hostPathForProjectPath(
+    home,
+    join(home, PROJECT_IMAGE_PATH, "current-image.txt"),
+  );
 }
 
 export function getPaths({ home, image, project_id }): {
@@ -69,10 +73,9 @@ export function getPaths({ home, image, project_id }): {
   merged: string;
   imageName: string;
 } {
-  const userOverlays = join(
+  const userOverlays = hostPathForProjectPath(
     home,
-    PROJECT_IMAGE_PATH,
-    imagePathComponent(image),
+    join(home, PROJECT_IMAGE_PATH, imagePathComponent(image)),
   );
   const upperdir = join(userOverlays, "upperdir");
   const workdir = join(userOverlays, "workdir");

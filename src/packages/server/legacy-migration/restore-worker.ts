@@ -99,6 +99,7 @@ type LegacyRestoreRow = {
   artifact_bucket: string | null;
   artifact_key: string;
   artifact_manifest: Record<string, any> | null;
+  disk_mb: number | string | null;
   restore_lro_op_id: string | null;
 };
 
@@ -174,6 +175,14 @@ function restoredProjectDiskQuotaMb(
   const bytes = positiveInteger(restored_bytes);
   if (bytes == null) return;
   return Math.ceil(bytes / 1_000_000) + RESTORED_PROJECT_QUOTA_HEADROOM_MB;
+}
+
+function restoredProjectDiskQuotaMbFromLegacyDiskMb(
+  disk_mb: unknown,
+): number | undefined {
+  const mb = Number(disk_mb);
+  if (!Number.isFinite(mb) || mb <= 0) return;
+  return Math.ceil(mb) + RESTORED_PROJECT_QUOTA_HEADROOM_MB;
 }
 
 function nestedValue(obj: any, path: string[]): unknown {
@@ -422,6 +431,7 @@ async function claimRestoreRows({
                   p.artifact_bucket,
                   p.artifact_key,
                   p.artifact_manifest,
+                  p.disk_mb,
                   i.restore_lro_op_id
         `,
         [
@@ -721,6 +731,53 @@ async function ensureRestoredProjectDiskQuota({
     Math.max(quotaUsedBytes ?? 0, uncompressedBytes ?? 0),
   );
   if (desired == null) return;
+  await setProjectDiskQuotaOverride({
+    row,
+    disk_quota_mb: desired,
+    reason: "Legacy migration restored project storage",
+    metadata: {
+      legacy_project_id: row.legacy_project_id,
+      restored_used_bytes: quotaUsedBytes ?? uncompressedBytes,
+      disk_quota_mb: desired,
+      headroom_mb: RESTORED_PROJECT_QUOTA_HEADROOM_MB,
+    },
+  });
+  return desired;
+}
+
+async function ensurePreRestoreProjectDiskQuota({
+  row,
+}: {
+  row: LegacyRestoreRow;
+}): Promise<number | undefined> {
+  const desired = restoredProjectDiskQuotaMbFromLegacyDiskMb(row.disk_mb);
+  if (desired == null) return;
+  await setProjectDiskQuotaOverride({
+    row,
+    disk_quota_mb: desired,
+    reason: "Legacy migration pre-restore storage",
+    metadata: {
+      legacy_project_id: row.legacy_project_id,
+      legacy_disk_mb: Number(row.disk_mb),
+      disk_quota_mb: desired,
+      headroom_mb: RESTORED_PROJECT_QUOTA_HEADROOM_MB,
+      pre_restore: true,
+    },
+  });
+  return desired;
+}
+
+async function setProjectDiskQuotaOverride({
+  row,
+  disk_quota_mb,
+  reason,
+  metadata,
+}: {
+  row: LegacyRestoreRow;
+  disk_quota_mb: number;
+  reason: string;
+  metadata: Record<string, unknown>;
+}): Promise<void> {
   const ownership = await resolveProjectBay(row.project_id);
   if (ownership == null) {
     throw new Error(`project ${row.project_id} not found`);
@@ -729,18 +786,12 @@ async function ensureRestoredProjectDiskQuota({
     .projectControl(ownership.bay_id)
     .setProjectEntitlementOverride({
       project_id: row.project_id,
-      disk_quota_mb: desired,
-      reason: "Legacy migration restored project storage",
+      disk_quota_mb,
+      reason,
       source: "legacy_migration",
-      metadata: {
-        legacy_project_id: row.legacy_project_id,
-        restored_used_bytes: quotaUsedBytes ?? uncompressedBytes,
-        disk_quota_mb: desired,
-        headroom_mb: RESTORED_PROJECT_QUOTA_HEADROOM_MB,
-      },
+      metadata,
       epoch: ownership.epoch,
     });
-  return desired;
 }
 
 async function createInitialLegacyMigrationBackup({
@@ -900,11 +951,18 @@ async function restoreOne(row: LegacyRestoreRow): Promise<void> {
       bucket,
       key,
     });
+    const preRestoreDiskQuotaMb = await ensurePreRestoreProjectDiskQuota({
+      row,
+    });
     await publishRestoreProgress({
       row,
       phase: "connect",
       message: "connecting to project host",
       progress: 15,
+      detail:
+        preRestoreDiskQuotaMb == null
+          ? undefined
+          : { pre_restore_disk_quota_mb: preRestoreDiskQuotaMb },
     });
     const client = await getProjectFileServerClient({
       project_id: row.project_id,
@@ -962,6 +1020,9 @@ async function restoreOne(row: LegacyRestoreRow): Promise<void> {
       row,
       result: {
         ...restoredResult,
+        ...(preRestoreDiskQuotaMb == null
+          ? {}
+          : { pre_restore_project_disk_quota_mb: preRestoreDiskQuotaMb }),
         ...(diskQuotaMb == null
           ? {}
           : { restored_project_disk_quota_mb: diskQuotaMb }),
@@ -1049,3 +1110,7 @@ export function startLegacyMigrationProjectRestoreWorker({
     clearInterval(timer);
   };
 }
+
+export const __test__ = {
+  restoredProjectDiskQuotaMbFromLegacyDiskMb,
+};
