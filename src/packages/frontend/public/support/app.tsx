@@ -264,7 +264,7 @@ export default function PublicSupportApp({
           <Suspense
             fallback={<PublicSection>Loading community links…</PublicSection>}
           >
-            <CommunityView />
+            <CommunityView config={config} />
           </Suspense>
         ) : null}
       </div>

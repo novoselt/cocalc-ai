@@ -149,7 +149,6 @@ export const PUBLIC_SITEMAP_PATHS = uniquePublicPaths([
     publicPath(`features/${page.slug}`),
   ),
   publicPath("guides"),
-  publicPath("guides/rstudio-project"),
   langPath(),
   ...LOCALE.map((locale) => langPath(locale)),
   publicPath("news"),
@@ -267,9 +266,6 @@ export function getPublicMetadataRouteFromPath(
     if (!parts[1]) {
       return { route: { view: "index" }, section: "guides" };
     }
-    if (parts[1] === "rstudio-project" && parts.length === 2) {
-      return { route: { view: "rstudio-project" }, section: "guides" };
-    }
     return { section: "not-found" };
   }
   if (section === "news") return { section: "news" };
@@ -384,20 +380,10 @@ function featureRouteMetadata(
 }
 
 function guidesRouteMetadata(
-  route: PublicMetadataRoute["route"],
+  _route: PublicMetadataRoute["route"],
   siteName: string,
   options?: PublicRouteMetadataOptions,
 ): PublicRouteMetadata {
-  if (route?.view === "rstudio-project") {
-    return {
-      canonicalPath: publicPath("guides/rstudio-project", options),
-      description:
-        "Create a CoCalc AI project with the RStudio and Jupyter image, launch RStudio Server, and customize the project environment when more packages are needed.",
-      imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
-      title: pageTitle("Create a CoCalc AI Project with RStudio", siteName),
-    };
-  }
-
   return {
     canonicalPath: publicPath("guides", options),
     description:

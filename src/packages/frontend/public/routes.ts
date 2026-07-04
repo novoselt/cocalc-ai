@@ -15,8 +15,6 @@ import type { PublicDocsRoute } from "./docs/routes";
 import { getDocsRouteFromPath } from "./docs/routes";
 import type { PublicFeaturesRoute } from "./features/routes";
 import { getFeaturesRouteFromPath } from "./features/routes";
-import type { PublicGuidesRoute } from "./guides/routes";
-import { getGuidesRouteFromPath } from "./guides/routes";
 import type { PublicLangRoute } from "./lang/routes";
 import { getLangRouteFromPath, parsePublicLangTarget } from "./lang/routes";
 import type { PublicNewsRoute } from "./news/routes";
@@ -36,7 +34,7 @@ export type PublicRoute =
   | { route: PublicAuthRoute; section: "auth" }
   | { route: PublicDocsRoute; section: "docs" }
   | { route: PublicFeaturesRoute; section: "features" }
-  | { route: PublicGuidesRoute; section: "guides" }
+  | { section: "guides" }
   | { route: PublicLangRoute; section: "lang" }
   | { route: PublicNewsRoute; section: "news" }
   | { section: "not-found" }
@@ -92,11 +90,9 @@ export function getPublicRouteFromPath(
   }
 
   if (routeParts[0] === "guides") {
-    const route = getGuidesRouteFromPath(pathname);
-    if (route == null) {
-      return { section: "not-found" };
-    }
-    return { route, section: "guides" };
+    return routeParts.length === 1
+      ? { section: "guides" }
+      : { section: "not-found" };
   }
 
   if (routeParts[0] === "lang" || parsePublicLangTarget(pathname) != null) {
@@ -155,6 +151,7 @@ export function isPublicTarget(target?: string | null): target is string {
   if (url.pathname.split("/").filter(Boolean).includes("auth")) {
     return isPublicAuthRoutePath(url.pathname, url.search);
   }
+  if (/\/guides\/[^/?#]+/.test(target)) return false;
   return /\/(about|auth|invites|sso|redeem|docs|features|guides|lang|news|policies|pricing|products|rootfs|support|[a-z]{2}(-[A-Z]{2})?)(\/|$|\?|#)/.test(
     target,
   );

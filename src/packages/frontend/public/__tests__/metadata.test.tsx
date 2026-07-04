@@ -137,21 +137,6 @@ describe("public route metadata", () => {
     expect(metadata.description).not.toMatch(/notebooks, code, documents/i);
   });
 
-  it("frames the RStudio guide with its own canonical metadata", () => {
-    const metadata = getPublicRouteMetadata(
-      { route: { view: "rstudio-project" }, section: "guides" },
-      { site_name: "CoCalc" },
-    );
-
-    expect(metadata.title).toBe(
-      "Create a CoCalc AI Project with RStudio | CoCalc",
-    );
-    expect(metadata.canonicalPath).toBe("/guides/rstudio-project");
-    expect(metadata.description).toContain("RStudio and Jupyter image");
-    expect(metadata.description).not.toMatch(/\bI\b|\bmy\b|\bwe\b/i);
-    expect(PUBLIC_SITEMAP_PATHS).toContain("/guides/rstudio-project");
-  });
-
   it("can build canonical and image paths below a server base path", () => {
     const metadata = getPublicRouteMetadata(
       productRoute("products-cocalc-star"),
@@ -177,6 +162,7 @@ describe("public route metadata", () => {
     expect(PUBLIC_SITEMAP_PATHS).not.toContain("/features/i18n");
     expect(PUBLIC_SITEMAP_PATHS).toContain("/about/team");
     expect(PUBLIC_SITEMAP_PATHS).toContain("/rootfs");
+    expect(PUBLIC_SITEMAP_PATHS).not.toContain("/guides/rstudio-project");
     expect(PUBLIC_SITEMAP_PATHS).not.toContain("/policies/imprint");
   });
 

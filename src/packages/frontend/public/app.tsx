@@ -101,9 +101,7 @@ function PublicRouteBody({
   }
 
   if (initialRoute.section === "guides") {
-    return (
-      <PublicGuidesApp config={config} initialRoute={initialRoute.route} />
-    );
+    return <PublicGuidesApp config={config} />;
   }
 
   if (initialRoute.section === "lang") {
@@ -221,13 +219,15 @@ export default function PublicApp({
   }, [config, initialRoute.section]);
 
   return (
-    <Suspense fallback={null}>
+    <>
       <PublicRouteHeadMetadata config={resolvedConfig} route={initialRoute} />
-      <PublicRouteBody
-        config={resolvedConfig}
-        initialRoute={initialRoute}
-        redirectToPath={redirectToPath}
-      />
-    </Suspense>
+      <Suspense fallback={null}>
+        <PublicRouteBody
+          config={resolvedConfig}
+          initialRoute={initialRoute}
+          redirectToPath={redirectToPath}
+        />
+      </Suspense>
+    </>
   );
 }

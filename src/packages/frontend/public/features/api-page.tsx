@@ -26,6 +26,7 @@ const { Paragraph, Title } = Typography;
 const EXEC_EXAMPLE = [
   `curl -u "$COCALC_API_KEY:" \\`,
   `  https://cocalc.ai/api/v2/exec \\`,
+  `  -H 'Content-Type: application/json' \\`,
   `  -d '{"project_id": "...", "command": "python3", "args": ["analysis.py"]}'`,
 ].join("\n");
 

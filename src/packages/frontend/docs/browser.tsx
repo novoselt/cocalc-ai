@@ -340,6 +340,13 @@ export function normalizeDocsMarkdownValue(value: string): string {
   return value.replace(/\\`/g, "`");
 }
 
+export function docsSiteProfileFromLocation(): DocsAccess["siteProfile"] {
+  if (typeof window === "undefined") return undefined;
+  return window.location.hostname.toLowerCase() === "cocalc.ai"
+    ? "cocalc-ai"
+    : undefined;
+}
+
 export function docsEntryForInternalHref(href: string): DocsEntry | undefined {
   const raw = `${href ?? ""}`.trim();
   if (!raw) return;
@@ -366,7 +373,11 @@ export function docsEntryForInternalHref(href: string): DocsEntry | undefined {
     return;
   }
   const slug = normalized.replace(/^(?:app-docs|docs)\/?/, "");
-  return getDocsEntry(slug, { includeAdmin: true, includeSignedIn: true });
+  return getDocsEntry(slug, {
+    includeAdmin: true,
+    includeSignedIn: true,
+    siteProfile: docsSiteProfileFromLocation(),
+  });
 }
 
 export function DocsMarkdown({

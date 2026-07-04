@@ -9,6 +9,7 @@ import { Suspense, lazy } from "react";
 import { Button, Empty, Flex, Spin, Typography } from "antd";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import {
+  getPublicDocsAccess,
   getPublicMarketingSiteName,
   getSiteName,
   publicPoliciesUseBuiltin,
@@ -30,6 +31,7 @@ const StaticMarkdown = lazy(
 const { Text } = Typography;
 
 export { getPublicMarketingSiteName };
+export { getPublicDocsAccess };
 export { getSiteName };
 export type { PublicConfig };
 

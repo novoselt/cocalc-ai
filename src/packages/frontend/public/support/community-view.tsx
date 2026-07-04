@@ -11,6 +11,11 @@ import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 
 const { Paragraph } = Typography;
 
+interface CommunityViewConfig {
+  help_email?: string;
+  zendesk?: boolean;
+}
+
 const COMMUNITY_LINKS = [
   {
     title: "GitHub source code",
@@ -31,13 +36,23 @@ const COMMUNITY_LINKS = [
   },
 ] as const;
 
-export default function CommunityView() {
+export default function CommunityView({
+  config = {},
+}: {
+  config?: CommunityViewConfig;
+}) {
+  const helpEmail = config.help_email ?? "help@cocalc.com";
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <Paragraph style={{ margin: 0, fontSize: PUBLIC_TYPE.body }}>
         Use these public channels to follow CoCalc updates and inspect the
         source code. For account, billing, or project-specific help,{" "}
-        <a href={appPath("support/new")}>open a direct support ticket</a>.
+        {config.zendesk ? (
+          <a href={appPath("support/new")}>open a direct support ticket</a>
+        ) : (
+          <a href={`mailto:${helpEmail}`}>contact {helpEmail}</a>
+        )}
+        .
       </Paragraph>
       <PublicGrid columns={3}>
         {COMMUNITY_LINKS.map((item) => (

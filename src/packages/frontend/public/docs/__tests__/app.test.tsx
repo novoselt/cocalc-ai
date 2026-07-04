@@ -109,6 +109,12 @@ describe("public/docs", () => {
     expect(getDocsEntry("admin.users", { includeAdmin: true })?.title).toBe(
       "Manage users as an admin",
     );
+    expect(getDocsEntry("projects.rstudio-project")).toBeUndefined();
+    expect(
+      getDocsEntry("projects.rstudio-project", {
+        siteProfile: "cocalc-ai",
+      })?.title,
+    ).toBe("Create a project with RStudio");
     expect(
       searchDocsEntries("impersonation password reset 2FA", 8, {
         includeAdmin: true,
@@ -179,6 +185,26 @@ describe("public/docs", () => {
     expect(
       screen.queryByRole("link", { name: /Manage users as an admin/ }),
     ).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: /Create a project with RStudio/ }),
+    ).toBeNull();
+  });
+
+  it("renders the cocalc.ai-only RStudio docs page when host-gated", () => {
+    render(
+      <PublicDocsApp
+        config={{ dns: "cocalc.ai", site_name: "CoCalc" }}
+        initialRoute={{
+          slug: "projects/rstudio-project",
+          view: "docs-detail",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Create a project with RStudio" }),
+    ).not.toBeNull();
+    expect(screen.getByText("RStudio and Jupyter")).not.toBeNull();
   });
 
   it("renders public docs as a print-friendly single page", () => {

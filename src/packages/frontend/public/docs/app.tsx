@@ -15,6 +15,7 @@ import {
 import { downloadStandaloneDocsHtml } from "@cocalc/frontend/docs/download-html";
 import {
   appPath,
+  getPublicDocsAccess,
   getPublicMarketingSiteName,
   PublicNextStep,
   type PublicConfig,
@@ -32,6 +33,7 @@ interface PublicDocsAppProps {
 
 function DocsIndex({ config }: { config?: PublicConfig }) {
   const siteName = getPublicMarketingSiteName(config);
+  const docsAccess = getPublicDocsAccess(config);
   const [downloadHtmlBusy, setDownloadHtmlBusy] = useState(false);
 
   useEffect(() => {
@@ -69,11 +71,13 @@ function DocsIndex({ config }: { config?: PublicConfig }) {
             </Paragraph>
           </div>
           <DocsIndexContent
+            docsAccess={docsAccess}
             linkForEntry={(entry) => appPath(docsPath(entry.slug))}
             onDownloadHtml={async () => {
               setDownloadHtmlBusy(true);
               try {
                 await downloadStandaloneDocsHtml({
+                  docsAccess,
                   onBackHref: appPath(docsPath("")),
                 });
               } finally {
@@ -94,6 +98,7 @@ function DocsIndex({ config }: { config?: PublicConfig }) {
 
 function DocsPrint({ config }: { config?: PublicConfig }) {
   const siteName = getPublicMarketingSiteName(config);
+  const docsAccess = getPublicDocsAccess(config);
   const [downloadHtmlBusy, setDownloadHtmlBusy] = useState(false);
 
   useEffect(() => {
@@ -104,12 +109,14 @@ function DocsPrint({ config }: { config?: PublicConfig }) {
     <PublicSectionShell active="docs" config={config}>
       <section>
         <DocsPrintContent
+          docsAccess={docsAccess}
           downloadHtmlBusy={downloadHtmlBusy}
           onBackHref={appPath(docsPath(""))}
           onDownloadHtml={async () => {
             setDownloadHtmlBusy(true);
             try {
               await downloadStandaloneDocsHtml({
+                docsAccess,
                 onBackHref: appPath(docsPath("")),
               });
             } finally {
@@ -176,7 +183,7 @@ export default function PublicDocsApp({
     return <DocsPrint config={config} />;
   }
 
-  const entry = getDocsEntry(initialRoute.slug);
+  const entry = getDocsEntry(initialRoute.slug, getPublicDocsAccess(config));
   if (entry == null) {
     return <DocsNotFound config={config} />;
   }
