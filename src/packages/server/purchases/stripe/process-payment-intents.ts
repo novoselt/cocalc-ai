@@ -35,7 +35,7 @@ import {
 import type { MoneyValue } from "@cocalc/util/money";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import getBalance from "@cocalc/server/purchases/get-balance";
-import getPool from "@cocalc/database/pool";
+import getPool, { getPoolClient } from "@cocalc/database/pool";
 import { recordPaymentIntent } from "./create-payment-intent";
 import purchaseMembershipPackage, {
   purchaseMembershipPackages,
@@ -366,7 +366,11 @@ export default async function processPaymentIntents({
         const id = await processPaymentIntent(paymentIntent);
         if (id) {
           purchase_ids.add(id);
-        } else if (strict && explicitPaymentIntent) {
+        } else if (
+          strict &&
+          explicitPaymentIntent &&
+          paymentIntent.metadata?.processed != "true"
+        ) {
           throw Error(`payment intent ${paymentIntent.id} was not processed`);
         }
       } catch (err) {
@@ -738,183 +742,244 @@ async function setMetadataRecorded(paymentIntent) {
   });
 }
 
-// NOT a critical assumption.  We do NOT assume processPaymentIntent is never run twice at
-// the same time for the same payment, either in the same process or on the cluster.
-// If $n$ attempts to run this happen at once, the createCredit call will succeed for
-// one of them and fail for all others due to the unique index on the invoice_id field.
-// The credit thus gets created at most once, and no items are created except by the
-// thread that created the credit.
+const PAYMENT_INTENT_LOCK_PREFIX = "stripe-payment-intent:";
 
 // reuseInFlight since this function is called pretty aggressively, and we want to avoid calling it twice
 // on the same input at the same time.  That doesn't result in a double transaction, but sends multiple
 // messages out to the user, which is confusing.
 export const processPaymentIntent = reuseInFlight(
   async (paymentIntent): Promise<number | undefined> => {
+    return await withPaymentIntentProcessingLock(
+      paymentIntent,
+      processPaymentIntentUnlocked,
+    );
+  },
+  {
+    createKey: ([paymentIntent]) =>
+      paymentIntent?.id
+        ? `${PAYMENT_INTENT_LOCK_PREFIX}${paymentIntent.id}`
+        : JSON.stringify([paymentIntent]),
+  },
+);
+
+async function withPaymentIntentProcessingLock(
+  paymentIntent,
+  fn: (paymentIntent) => Promise<number | undefined>,
+): Promise<number | undefined> {
+  if (!paymentIntent?.id) {
+    return await fn(paymentIntent);
+  }
+
+  const client = await getPoolClient();
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtext($1))", [
+      `${PAYMENT_INTENT_LOCK_PREFIX}${paymentIntent.id}`,
+    ]);
+
+    // Refresh after acquiring the cluster-wide lock so a second process sees
+    // metadata written by the process that just finished fulfillment.
+    const stripe = await getConn();
+    const originalInvoiceId = paymentIntentInvoiceId(paymentIntent);
+    const latest = await stripe.paymentIntents.retrieve(paymentIntent.id);
+    Object.assign(paymentIntent, latest);
+    if (!paymentIntentInvoiceId(paymentIntent) && originalInvoiceId) {
+      paymentIntent.invoice = originalInvoiceId;
+      paymentIntent.metadata = {
+        ...(paymentIntent.metadata ?? {}),
+        invoice_id: originalInvoiceId,
+      };
+    }
+
     paymentIntent.metadata ??= {};
     if (paymentIntent.metadata.processed == "true") {
       // already done.
+      return paymentIntentCreditId(paymentIntent);
+    }
+    return await fn(paymentIntent);
+  } finally {
+    await client
+      .query("SELECT pg_advisory_unlock(hashtext($1))", [
+        `${PAYMENT_INTENT_LOCK_PREFIX}${paymentIntent.id}`,
+      ])
+      .catch((err) => {
+        logger.debug(
+          `WARNING: unable to unlock payment intent ${paymentIntent.id} -- ${err}`,
+        );
+      });
+    client.release();
+  }
+}
+
+function paymentIntentCreditId(paymentIntent): number | undefined {
+  const creditId = Number.parseInt(
+    `${paymentIntent.metadata?.credit_id ?? ""}`,
+  );
+  return Number.isFinite(creditId) ? creditId : undefined;
+}
+
+async function processPaymentIntentUnlocked(
+  paymentIntent,
+): Promise<number | undefined> {
+  const stripe = await getConn();
+  let invoice;
+  const getInvoice = async () => {
+    const invoiceId = paymentIntentInvoiceId(paymentIntent);
+    if (invoice == null && invoiceId) {
+      try {
+        invoice = await stripe.invoices.retrieve(invoiceId);
+      } catch (err) {
+        if (!isMissingStripeInvoiceError(err)) {
+          throw err;
+        }
+        logger.debug(
+          `WARNING: unable to retrieve optional invoice ${invoiceId} for payment intent ${paymentIntent.id} -- ${err}`,
+        );
+      }
+    }
+    return invoice;
+  };
+  if (
+    !paymentIntent.metadata?.account_id ||
+    !paymentIntent.metadata?.purpose ||
+    !paymentIntent.metadata?.total_excluding_tax_usd
+  ) {
+    invoice = await getInvoice();
+    if (invoice?.metadata != null) {
+      paymentIntent.metadata = {
+        ...invoice.metadata,
+        ...paymentIntent.metadata,
+      };
+    }
+  }
+  let account_id = paymentIntent.metadata.account_id;
+  logger.debug("processPaymentIntent", { id: paymentIntent.id, account_id });
+  const paymentIntentCustomerId = stripeCustomerId(paymentIntent.customer);
+  let expectedCustomerId = paymentIntentCustomerId;
+  if (!account_id) {
+    // this should never happen, but in case it does, we lookup the account_id
+    // in our database, based on the customer id.
+    if (!paymentIntentCustomerId) {
+      logger.debug("processPaymentIntent: missing stripe customer", {
+        payment_intent_id: paymentIntent.id,
+      });
       return;
     }
-    const stripe = await getConn();
-    let invoice;
-    const getInvoice = async () => {
-      const invoiceId = paymentIntentInvoiceId(paymentIntent);
-      if (invoice == null && invoiceId) {
-        try {
-          invoice = await stripe.invoices.retrieve(invoiceId);
-        } catch (err) {
-          if (!isMissingStripeInvoiceError(err)) {
-            throw err;
-          }
-          logger.debug(
-            `WARNING: unable to retrieve optional invoice ${invoiceId} for payment intent ${paymentIntent.id} -- ${err}`,
-          );
-        }
-      }
-      return invoice;
-    };
-    if (
-      !paymentIntent.metadata?.account_id ||
-      !paymentIntent.metadata?.purpose ||
-      !paymentIntent.metadata?.total_excluding_tax_usd
-    ) {
-      invoice = await getInvoice();
-      if (invoice?.metadata != null) {
-        paymentIntent.metadata = {
-          ...invoice.metadata,
-          ...paymentIntent.metadata,
-        };
-      }
-    }
-    let account_id = paymentIntent.metadata.account_id;
-    logger.debug("processPaymentIntent", { id: paymentIntent.id, account_id });
-    const paymentIntentCustomerId = stripeCustomerId(paymentIntent.customer);
-    let expectedCustomerId = paymentIntentCustomerId;
+    account_id = await getAccountIdFromStripeCustomerId(
+      paymentIntentCustomerId,
+    );
     if (!account_id) {
-      // this should never happen, but in case it does, we lookup the account_id
-      // in our database, based on the customer id.
-      if (!paymentIntentCustomerId) {
-        logger.debug("processPaymentIntent: missing stripe customer", {
-          payment_intent_id: paymentIntent.id,
-        });
-        return;
-      }
-      account_id = await getAccountIdFromStripeCustomerId(
-        paymentIntentCustomerId,
+      // no possible way to process this.
+      // This will happen in *test mode* since I use the exact same test credentials with
+      // many unrelated cocalc dev servers and they might all try to process the same payments.
+      logger.debug(
+        "processPaymentIntent: unknown stripe customer",
+        paymentIntent.customer,
       );
-      if (!account_id) {
-        // no possible way to process this.
-        // This will happen in *test mode* since I use the exact same test credentials with
-        // many unrelated cocalc dev servers and they might all try to process the same payments.
-        logger.debug(
-          "processPaymentIntent: unknown stripe customer",
-          paymentIntent.customer,
-        );
-        adminAlert({
-          subject: `Broken payment intent ${paymentIntent.id} that can't be processed - please investigate`,
-          body: `
+      adminAlert({
+        subject: `Broken payment intent ${paymentIntent.id} that can't be processed - please investigate`,
+        body: `
 CoCalc was processing the payment intent with id ${paymentIntent.id}, but the metadata didn't have an
 account_id set (which should impossible) AND the customer for the paymentIntent isn't a known stripe
 customer.  So we don't know what to do with this.  Please manually investigate.
 `,
-        });
-        return;
-      }
-    }
-
-    expectedCustomerId = await getStripeCustomerId({
-      account_id,
-      create: false,
-    });
-    if (!expectedCustomerId) {
-      throw Error("payer does not have a Stripe customer");
-    }
-    expectedCustomerId = await assertPaymentCustomerCanBeUsedForAccount({
-      account_id,
-      expectedCustomerId,
-      paymentIntentCustomerId,
-    });
-    assertPaymentIntentAccountBinding({
-      paymentIntent,
-      account_id,
-      expected_customer_id: expectedCustomerId,
-    });
-
-    // IMPORTANT: There is just no way in general to know directly from the payment intent
-    // and invoice exactly what we were trying to charge the customer!  The problem is that
-    // the invoice (and line items) in some cases (e.g., stripe checkout) is in a non-US currency.
-    // We thus set the metadata to have the total in **US PENNIES** (!). Users can't touch
-    // this metadata, and we depend on it for how much the invoice is worth to us.
-    const total_excluding_tax_usd =
-      paymentIntent.metadata.total_excluding_tax_usd;
-    if (total_excluding_tax_usd == null) {
-      // cannot be processed further.
+      });
       return;
     }
-    const amount = stripeToDecimal(parseInt(total_excluding_tax_usd));
+  }
 
-    if (paymentIntent.status == "canceled") {
-      // This is a payment intent that has definitely failed
-      // forever.  In some cases, we also want to do some
-      // processing.
+  expectedCustomerId = await getStripeCustomerId({
+    account_id,
+    create: false,
+  });
+  if (!expectedCustomerId) {
+    throw Error("payer does not have a Stripe customer");
+  }
+  expectedCustomerId = await assertPaymentCustomerCanBeUsedForAccount({
+    account_id,
+    expectedCustomerId,
+    paymentIntentCustomerId,
+  });
+  assertPaymentIntentAccountBinding({
+    paymentIntent,
+    account_id,
+    expected_customer_id: expectedCustomerId,
+  });
 
-      paymentIntent.metadata.processed = "true";
-      await stripe.paymentIntents.update(paymentIntent.id, {
-        metadata: paymentIntent.metadata,
-      });
+  // IMPORTANT: There is just no way in general to know directly from the payment intent
+  // and invoice exactly what we were trying to charge the customer!  The problem is that
+  // the invoice (and line items) in some cases (e.g., stripe checkout) is in a non-US currency.
+  // We thus set the metadata to have the total in **US PENNIES** (!). Users can't touch
+  // this metadata, and we depend on it for how much the invoice is worth to us.
+  const total_excluding_tax_usd =
+    paymentIntent.metadata.total_excluding_tax_usd;
+  if (total_excluding_tax_usd == null) {
+    // cannot be processed further.
+    return;
+  }
+  const amount = stripeToDecimal(parseInt(total_excluding_tax_usd));
 
-      let result = "we did NOT add credit to your account";
-      try {
-        if (paymentIntent.metadata.purpose == SUBSCRIPTION_RENEWAL) {
-          result = `we did NOT renew subscription (id=${paymentIntent.metadata.subscription_id})`;
-          await processSubscriptionRenewalFailure({
-            account_id,
-            paymentIntent,
-          });
-        } else if (paymentIntent.metadata.purpose == RESUME_SUBSCRIPTION) {
-          result = `we did NOT resume subscription (id=${paymentIntent.metadata.subscription_id})`;
-          await processResumeSubscriptionFailure({
-            account_id,
-            paymentIntent,
-          });
-        } else if (paymentIntent.metadata.purpose == MEMBERSHIP_CHANGE) {
-          result = `the membership change to ${paymentIntent.metadata.membership_class} was not applied`;
-        } else if (
-          paymentIntent.metadata.purpose == MEMBERSHIP_PACKAGE_PURCHASE
-        ) {
-          result = "the membership package purchase was not completed";
-        } else if (paymentIntent.metadata.purpose == TEAM_LICENSE_CHANGE) {
-          result = "the team license change was not completed";
-        } else if (paymentIntent.metadata.purpose == TEAM_LICENSE_RENEWAL) {
-          result = "the team license renewal was not completed";
-          await processTeamLicenseRenewalFailure({
-            account_id,
-            paymentIntent,
-          });
-        } else if (paymentIntent.metadata.purpose?.startsWith("statement-")) {
-          const statement_id = parseInt(
-            paymentIntent.metadata.purpose.split("-")[1],
-          );
-          result = `your monthly statement (id=${statement_id}) is not paid for and you may still owe money`;
-        }
-        send({
-          to_ids: [account_id],
-          subject: `Canceled ${moneyToCurrency(amount)} Payment`,
-          body: `A payment of ${moneyToCurrency(amount)} was canceled, and as a result ${result}.
+  if (paymentIntent.status == "canceled") {
+    // This is a payment intent that has definitely failed
+    // forever.  In some cases, we also want to do some
+    // processing.
+
+    paymentIntent.metadata.processed = "true";
+    await stripe.paymentIntents.update(paymentIntent.id, {
+      metadata: paymentIntent.metadata,
+    });
+
+    let result = "we did NOT add credit to your account";
+    try {
+      if (paymentIntent.metadata.purpose == SUBSCRIPTION_RENEWAL) {
+        result = `we did NOT renew subscription (id=${paymentIntent.metadata.subscription_id})`;
+        await processSubscriptionRenewalFailure({
+          account_id,
+          paymentIntent,
+        });
+      } else if (paymentIntent.metadata.purpose == RESUME_SUBSCRIPTION) {
+        result = `we did NOT resume subscription (id=${paymentIntent.metadata.subscription_id})`;
+        await processResumeSubscriptionFailure({
+          account_id,
+          paymentIntent,
+        });
+      } else if (paymentIntent.metadata.purpose == MEMBERSHIP_CHANGE) {
+        result = `the membership change to ${paymentIntent.metadata.membership_class} was not applied`;
+      } else if (
+        paymentIntent.metadata.purpose == MEMBERSHIP_PACKAGE_PURCHASE
+      ) {
+        result = "the membership package purchase was not completed";
+      } else if (paymentIntent.metadata.purpose == TEAM_LICENSE_CHANGE) {
+        result = "the team license change was not completed";
+      } else if (paymentIntent.metadata.purpose == TEAM_LICENSE_RENEWAL) {
+        result = "the team license renewal was not completed";
+        await processTeamLicenseRenewalFailure({
+          account_id,
+          paymentIntent,
+        });
+      } else if (paymentIntent.metadata.purpose?.startsWith("statement-")) {
+        const statement_id = parseInt(
+          paymentIntent.metadata.purpose.split("-")[1],
+        );
+        result = `your monthly statement (id=${statement_id}) is not paid for and you may still owe money`;
+      }
+      send({
+        to_ids: [account_id],
+        subject: `Canceled ${moneyToCurrency(amount)} Payment`,
+        body: `A payment of ${moneyToCurrency(amount)} was canceled, and as a result ${result}.
 - Payment id: ${paymentIntent.id}
 
 - Your payments: ${await url("settings", "payments")}
 
 - Account Balance: ${moneyToCurrency(
-            moneyRound2Down(toDecimal(await getBalance({ account_id }))),
-          )}
+          moneyRound2Down(toDecimal(await getBalance({ account_id }))),
+        )}
 
 ${await support()}`,
-        });
-        const n = await name(account_id);
-        adminAlert({
-          subject: `User's Payment (paymentIntent = ${paymentIntent.id}) was canceled`,
-          body: `
+      });
+      const n = await name(account_id);
+      adminAlert({
+        subject: `User's Payment (paymentIntent = ${paymentIntent.id}) was canceled`,
+        body: `
 The user ${await name(account_id)} with account_id=${account_id} had a canceled payment intent. We told them
 the consequence is "${result}".  Admins might want to investigate.
 
@@ -922,167 +987,163 @@ the consequence is "${result}".  Admins might want to investigate.
 
 
 `,
-        });
-      } catch (err) {
-        // There basically should never be a case where any of the above fails... but reality.
-        // So communicate this.
-        const body = `You canceled a payment of ${moneyToCurrency(amount)}, so ${result}.  However, cleaning up this resulted in an error.  You may need to contact support.
+      });
+    } catch (err) {
+      // There basically should never be a case where any of the above fails... but reality.
+      // So communicate this.
+      const body = `You canceled a payment of ${moneyToCurrency(amount)}, so ${result}.  However, cleaning up this resulted in an error.  You may need to contact support.
 
 - Account Balance: ${moneyToCurrency(
-          moneyRound2Down(toDecimal(await getBalance({ account_id }))),
-        )}
+        moneyRound2Down(toDecimal(await getBalance({ account_id }))),
+      )}
 
 - ERROR: ${err}
 
 ${await support()}`;
-        send({
-          to_ids: [account_id],
-          subject: `Possible Issue Processing Canceled ${moneyToCurrency(amount)} Payment`,
-          body,
-        });
-        adminAlert({
-          subject: "Issue Processing a Canceled Payment",
-          body: `There was an error processing the cancelation of a payment intent with id ${paymentIntent.id} for the user with account_id=${account_id}.  An admin might want to look into this, since this sort of error should never happen.
+      send({
+        to_ids: [account_id],
+        subject: `Possible Issue Processing Canceled ${moneyToCurrency(amount)} Payment`,
+        body,
+      });
+      adminAlert({
+        subject: "Issue Processing a Canceled Payment",
+        body: `There was an error processing the cancelation of a payment intent with id ${paymentIntent.id} for the user with account_id=${account_id}.  An admin might want to look into this, since this sort of error should never happen.
 
 ## Message sent to user: ${body}`,
-        });
-        throw err;
-      }
-
-      return;
-    }
-
-    invoice = await getInvoice();
-    if (invoice != null) {
-      assertInvoiceAccountBinding({
-        invoice,
-        expected_customer_id: expectedCustomerId,
       });
+      throw err;
     }
 
-    // credit the account.  If the account was already credited for this (e.g.,
-    // by another process doing this at the same time), that should be detected
-    // and is a no-op, due to the invoice_id being unique amount purchases records
-    // for this account (MAKE SURE!).
-    const credit_id = await createCredit({
-      account_id,
-      invoice_id: paymentIntent.id,
-      amount,
-      description: {
-        line_items: getInvoiceLineItems(invoice),
-        description: paymentIntent.description,
-        purpose: paymentIntent.metadata.purpose,
-      },
-      service:
-        paymentIntent.metadata.purpose == AUTO_CREDIT
-          ? "auto-credit"
-          : "credit",
+    return;
+  }
+
+  invoice = await getInvoice();
+  if (invoice != null) {
+    assertInvoiceAccountBinding({
+      invoice,
+      expected_customer_id: expectedCustomerId,
     });
+  }
 
-    // Keep the credit id on the in-memory payment intent, but only mark the
-    // payment intent processed after the intended product change succeeds.
-    // createCredit is idempotent by invoice_id, so failed product processing
-    // can safely be retried without creating duplicate account credit.
-    paymentIntent.metadata.credit_id = credit_id;
+  // credit the account.  If the account was already credited for this (e.g.,
+  // by another process doing this at the same time), that should be detected
+  // and is a no-op, due to the invoice_id being unique amount purchases records
+  // for this account (MAKE SURE!).
+  const credit_id = await createCredit({
+    account_id,
+    invoice_id: paymentIntent.id,
+    amount,
+    description: {
+      line_items: getInvoiceLineItems(invoice),
+      description: paymentIntent.description,
+      purpose: paymentIntent.metadata.purpose,
+    },
+    service:
+      paymentIntent.metadata.purpose == AUTO_CREDIT ? "auto-credit" : "credit",
+  });
 
-    let reason = "add credit to your account";
-    try {
-      if (paymentIntent.metadata.purpose == SUBSCRIPTION_RENEWAL) {
-        reason = `renew a subscription (id=${paymentIntent.metadata.subscription_id})`;
-        await processSubscriptionRenewal({ account_id, paymentIntent, amount });
-      } else if (paymentIntent.metadata.purpose == RESUME_SUBSCRIPTION) {
-        reason = `resume a subscription (id=${paymentIntent.metadata.subscription_id})`;
-        await processResumeSubscription({ account_id, paymentIntent, amount });
-      } else if (paymentIntent.metadata.purpose == MEMBERSHIP_CHANGE) {
-        reason = `change membership to ${paymentIntent.metadata.membership_class}`;
-        await applyMembershipChange({
+  // Keep the credit id on the in-memory payment intent, but only mark the
+  // payment intent processed after the intended product change succeeds.
+  // createCredit is idempotent by invoice_id, so failed product processing
+  // can safely be retried without creating duplicate account credit.
+  paymentIntent.metadata.credit_id = credit_id;
+
+  let reason = "add credit to your account";
+  try {
+    if (paymentIntent.metadata.purpose == SUBSCRIPTION_RENEWAL) {
+      reason = `renew a subscription (id=${paymentIntent.metadata.subscription_id})`;
+      await processSubscriptionRenewal({ account_id, paymentIntent, amount });
+    } else if (paymentIntent.metadata.purpose == RESUME_SUBSCRIPTION) {
+      reason = `resume a subscription (id=${paymentIntent.metadata.subscription_id})`;
+      await processResumeSubscription({ account_id, paymentIntent, amount });
+    } else if (paymentIntent.metadata.purpose == MEMBERSHIP_CHANGE) {
+      reason = `change membership to ${paymentIntent.metadata.membership_class}`;
+      await applyMembershipChange({
+        account_id,
+        targetClass: paymentIntent.metadata.membership_class,
+        interval: paymentIntent.metadata.membership_interval as
+          | "month"
+          | "year",
+        allowDowngrade: paymentIntent.metadata.allow_downgrade === "true",
+        storeVisibleOnly: true,
+        paymentAmount: amount,
+      });
+    } else if (paymentIntent.metadata.purpose == MEMBERSHIP_PACKAGE_PURCHASE) {
+      const products = getMembershipPackageProductsFromMetadata(
+        paymentIntent.metadata,
+      );
+      if (products.length === 1) {
+        const product = await verifyDirectStudentCourseProduct({
           account_id,
-          targetClass: paymentIntent.metadata.membership_class,
-          interval: paymentIntent.metadata.membership_interval as
-            | "month"
-            | "year",
-          allowDowngrade: paymentIntent.metadata.allow_downgrade === "true",
-          storeVisibleOnly: true,
-          paymentAmount: amount,
+          product: products[0],
         });
-      } else if (
-        paymentIntent.metadata.purpose == MEMBERSHIP_PACKAGE_PURCHASE
-      ) {
-        const products = getMembershipPackageProductsFromMetadata(
-          paymentIntent.metadata,
-        );
-        if (products.length === 1) {
-          const product = await verifyDirectStudentCourseProduct({
-            account_id,
-            product: products[0],
-          });
-          reason =
-            product.package_id != null
-              ? `expand membership package ${product.package_id}`
-              : `purchase a ${product.kind} membership package`;
-          const { package_id } = await purchaseMembershipPackage({
-            account_id,
-            fulfillment_id: paymentIntent.id,
-            product,
-            amount,
-          });
-          await assignDirectStudentCoursePackage({
-            account_id,
-            package_id,
-            product,
-          });
-        } else {
-          const verifiedProducts = await verifyDirectStudentCourseProducts({
-            account_id,
-            products,
-          });
-          reason = `purchase ${verifiedProducts.length} membership package changes`;
-          const purchases = await purchaseMembershipPackages({
-            account_id,
-            fulfillment_id: paymentIntent.id,
-            products: verifiedProducts,
-            amount,
-          });
-          for (const [index, product] of verifiedProducts.entries()) {
-            const package_id = purchases[index]?.package_id;
-            if (package_id) {
-              await assignDirectStudentCoursePackage({
-                account_id,
-                package_id,
-                product,
-              });
-            }
+        reason =
+          product.package_id != null
+            ? `expand membership package ${product.package_id}`
+            : `purchase a ${product.kind} membership package`;
+        const { package_id } = await purchaseMembershipPackage({
+          account_id,
+          fulfillment_id: paymentIntent.id,
+          product,
+          amount,
+        });
+        await assignDirectStudentCoursePackage({
+          account_id,
+          package_id,
+          product,
+        });
+      } else {
+        const verifiedProducts = await verifyDirectStudentCourseProducts({
+          account_id,
+          products,
+        });
+        reason = `purchase ${verifiedProducts.length} membership package changes`;
+        const purchases = await purchaseMembershipPackages({
+          account_id,
+          fulfillment_id: paymentIntent.id,
+          products: verifiedProducts,
+          amount,
+        });
+        for (const [index, product] of verifiedProducts.entries()) {
+          const package_id = purchases[index]?.package_id;
+          if (package_id) {
+            await assignDirectStudentCoursePackage({
+              account_id,
+              package_id,
+              product,
+            });
           }
         }
-      } else if (paymentIntent.metadata.purpose == TEAM_LICENSE_CHANGE) {
-        reason = "change your team license";
-        await purchaseTeamLicenseChange({
-          account_id,
-          target_seats: getTeamLicenseTargetSeatsFromMetadata(
-            paymentIntent.metadata,
-          ),
-          amount,
-        });
-      } else if (paymentIntent.metadata.purpose == TEAM_LICENSE_RENEWAL) {
-        reason = `renew team license ${paymentIntent.metadata.team_license_id}`;
-        await processTeamLicenseRenewal({ account_id, paymentIntent, amount });
-      } else if (paymentIntent.metadata.purpose?.startsWith("statement-")) {
-        const statement_id = parseInt(
-          paymentIntent.metadata.purpose.split("-")[1],
-        );
-        reason = `pay balance on monthly statement (id=${statement_id})`;
-        await markStatementPaidByPurchase({
-          account_id,
-          statement_id,
-          credit_id,
-          amount,
-        });
       }
-    } catch (err) {
-      // There basically should never be a case where any of the above fails.  But multiple
-      // transactions happening at once, or bugs, etc. could maybe lead to a case where
-      // cocalc refuses to fully process the transaction.  Communicate this.
-      const body = `
+    } else if (paymentIntent.metadata.purpose == TEAM_LICENSE_CHANGE) {
+      reason = "change your team license";
+      await purchaseTeamLicenseChange({
+        account_id,
+        target_seats: getTeamLicenseTargetSeatsFromMetadata(
+          paymentIntent.metadata,
+        ),
+        amount,
+      });
+    } else if (paymentIntent.metadata.purpose == TEAM_LICENSE_RENEWAL) {
+      reason = `renew team license ${paymentIntent.metadata.team_license_id}`;
+      await processTeamLicenseRenewal({ account_id, paymentIntent, amount });
+    } else if (paymentIntent.metadata.purpose?.startsWith("statement-")) {
+      const statement_id = parseInt(
+        paymentIntent.metadata.purpose.split("-")[1],
+      );
+      reason = `pay balance on monthly statement (id=${statement_id})`;
+      await markStatementPaidByPurchase({
+        account_id,
+        statement_id,
+        credit_id,
+        amount,
+      });
+    }
+  } catch (err) {
+    // There basically should never be a case where any of the above fails.  But multiple
+    // transactions happening at once, or bugs, etc. could maybe lead to a case where
+    // cocalc refuses to fully process the transaction.  Communicate this.
+    const body = `
 You made a payment of ${moneyToCurrency(amount)}, which has been successfully processed by our
 payment processor, and a credit of ${moneyToCurrency(amount)} has been added to your
 account (purchase id=${credit_id}).   You made this payment to ${reason}, but something
@@ -1092,8 +1153,8 @@ Please retry that purchase instead using the credit that is now on your account,
 support if you are concerned (see below).
 
 - Account Balance: ${moneyToCurrency(
-        moneyRound2Down(toDecimal(await getBalance({ account_id }))),
-      )}
+      moneyRound2Down(toDecimal(await getBalance({ account_id }))),
+    )}
 
 - Your payments: ${await url("settings", "payments")}
 
@@ -1101,61 +1162,60 @@ support if you are concerned (see below).
 
 ${await support()}
 `;
-      try {
-        await send({
-          to_ids: [account_id],
-          subject: `Possible Issue Processing ${moneyToCurrency(amount)} Payment`,
-          body,
-        });
-      } catch (messageErr) {
-        logger.debug(
-          `WARNING: unable to send payment processing issue notification for ${paymentIntent.id} -- ${messageErr}`,
-        );
-      }
-      adminAlert({
-        subject: "Issue Processing a User Payment",
-        body: `There was an error processing payment intent id ${paymentIntent.id} for the user with account_id=${account_id}.\n\n## Message sent to user:\n\n${body}`,
-      });
-      throw err;
-    }
-
-    // make metadata so we won't consider this payment intent ever again
-    // NOTE: we are mutating this on purpose so that the paymentIntent
-    // that gets returned, e.g., by getPayments is already up to date with the credit_id!
-    paymentIntent.metadata.processed = "true";
-    await stripe.paymentIntents.update(paymentIntent.id, {
-      metadata: paymentIntent.metadata,
-    });
-
     try {
-      const receipt = {
-        amount,
-        reason,
-        credit_id,
-        balance: moneyRound2Down(toDecimal(await getBalance({ account_id }))),
-        paymentsUrl: await url("settings", "payments"),
-        purchasesUrl: await url("settings", "purchases"),
-        supportUrl: await url("support", "new"),
-      };
-      await sendPaymentSuccessEmail({
-        account_id,
-        subject: paymentSuccessSubject({ amount }),
-        text: paymentSuccessBody(receipt),
-        html: paymentSuccessHtmlBody(receipt),
+      await send({
+        to_ids: [account_id],
+        subject: `Possible Issue Processing ${moneyToCurrency(amount)} Payment`,
+        body,
       });
-    } catch (err) {
+    } catch (messageErr) {
       logger.debug(
-        `WARNING: unable to send payment success notification for ${paymentIntent.id} -- ${err}`,
+        `WARNING: unable to send payment processing issue notification for ${paymentIntent.id} -- ${messageErr}`,
       );
-      adminAlert({
-        subject: "Issue Sending Payment Success Message",
-        body: `There was an error sending the success message for payment intent id ${paymentIntent.id} for the user with account_id=${account_id}.\n\nERROR: ${err}`,
-      });
     }
+    adminAlert({
+      subject: "Issue Processing a User Payment",
+      body: `There was an error processing payment intent id ${paymentIntent.id} for the user with account_id=${account_id}.\n\n## Message sent to user:\n\n${body}`,
+    });
+    throw err;
+  }
 
-    return credit_id;
-  },
-);
+  // make metadata so we won't consider this payment intent ever again
+  // NOTE: we are mutating this on purpose so that the paymentIntent
+  // that gets returned, e.g., by getPayments is already up to date with the credit_id!
+  paymentIntent.metadata.processed = "true";
+  await stripe.paymentIntents.update(paymentIntent.id, {
+    metadata: paymentIntent.metadata,
+  });
+
+  try {
+    const receipt = {
+      amount,
+      reason,
+      credit_id,
+      balance: moneyRound2Down(toDecimal(await getBalance({ account_id }))),
+      paymentsUrl: await url("settings", "payments"),
+      purchasesUrl: await url("settings", "purchases"),
+      supportUrl: await url("support", "new"),
+    };
+    await sendPaymentSuccessEmail({
+      account_id,
+      subject: paymentSuccessSubject({ amount }),
+      text: paymentSuccessBody(receipt),
+      html: paymentSuccessHtmlBody(receipt),
+    });
+  } catch (err) {
+    logger.debug(
+      `WARNING: unable to send payment success notification for ${paymentIntent.id} -- ${err}`,
+    );
+    adminAlert({
+      subject: "Issue Sending Payment Success Message",
+      body: `There was an error sending the success message for payment intent id ${paymentIntent.id} for the user with account_id=${account_id}.\n\nERROR: ${err}`,
+    });
+  }
+
+  return credit_id;
+}
 
 export async function markStatementPaidByPurchase({
   account_id,

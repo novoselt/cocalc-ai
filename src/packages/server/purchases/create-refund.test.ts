@@ -46,6 +46,12 @@ function makeClient() {
 
 function makeStripe() {
   return {
+    charges: {
+      list: jest.fn().mockResolvedValue({ data: [{ id: "ch_123" }] }),
+    },
+    invoicePayments: {
+      list: jest.fn().mockResolvedValue({ data: [] }),
+    },
     invoices: {
       retrieve: jest.fn().mockResolvedValue({ charge: "ch_123" }),
     },
@@ -162,6 +168,124 @@ describe("createRefund", () => {
     expect(client.query).toHaveBeenLastCalledWith("COMMIT");
     expect(mockSend).toHaveBeenCalledWith(
       expect.objectContaining({ to_ids: ["user-1"] }),
+    );
+  });
+
+  it("resolves refundable charge through payment intent metadata invoice_id", async () => {
+    const client = makeClient();
+    client.query
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 10,
+            account_id: "user-1",
+            invoice_id: "pi_123",
+            service: "credit",
+            cost: 25,
+            description: { type: "credit" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const stripe = makeStripe();
+    stripe.paymentIntents.retrieve.mockResolvedValue({
+      id: "pi_123",
+      invoice: null,
+      metadata: { invoice_id: "in_123" },
+    });
+    stripe.invoices.retrieve.mockResolvedValue({
+      id: "in_123",
+      charge: null,
+      payment_intent: null,
+    });
+    stripe.charges.list.mockResolvedValue({ data: [{ id: "ch_from_pi" }] });
+    mockGetTransactionClient.mockResolvedValue(client);
+    mockGetConn.mockResolvedValue(stripe);
+
+    await expect(
+      createRefund({
+        account_id: "admin-1",
+        purchase_id: 10,
+        reason: "requested_by_customer",
+      }),
+    ).resolves.toBe(55);
+
+    expect(stripe.invoices.retrieve).toHaveBeenCalledWith("in_123");
+    expect(stripe.charges.list).toHaveBeenCalledWith({
+      payment_intent: "pi_123",
+      limit: 1,
+    });
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      expect.objectContaining({ charge: "ch_from_pi" }),
+      { idempotencyKey: "cocalc-refund-purchase-10" },
+    );
+  });
+
+  it("resolves refundable charge through Stripe invoice payment records", async () => {
+    const client = makeClient();
+    client.query
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 10,
+            account_id: "user-1",
+            invoice_id: "in_123",
+            service: "credit",
+            cost: 25,
+            description: { type: "credit" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const stripe = makeStripe();
+    stripe.invoices.retrieve.mockResolvedValue({
+      id: "in_123",
+      charge: null,
+      payment_intent: null,
+    });
+    stripe.invoicePayments.list.mockResolvedValue({
+      data: [
+        {
+          is_default: true,
+          payment: {
+            type: "payment_intent",
+            payment_intent: { id: "pi_from_invoice_payment" },
+          },
+          status: "paid",
+        },
+      ],
+    });
+    stripe.charges.list.mockResolvedValue({
+      data: [{ id: "ch_from_invoice" }],
+    });
+    mockGetTransactionClient.mockResolvedValue(client);
+    mockGetConn.mockResolvedValue(stripe);
+
+    await expect(
+      createRefund({
+        account_id: "admin-1",
+        purchase_id: 10,
+        reason: "requested_by_customer",
+      }),
+    ).resolves.toBe(55);
+
+    expect(stripe.invoicePayments.list).toHaveBeenCalledWith({
+      invoice: "in_123",
+      payment: { type: "payment_intent" },
+      limit: 10,
+      expand: ["data.payment.payment_intent"],
+    });
+    expect(stripe.charges.list).toHaveBeenCalledWith({
+      payment_intent: "pi_from_invoice_payment",
+      limit: 1,
+    });
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      expect.objectContaining({ charge: "ch_from_invoice" }),
+      { idempotencyKey: "cocalc-refund-purchase-10" },
     );
   });
 });

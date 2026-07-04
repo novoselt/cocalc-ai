@@ -19,6 +19,7 @@ const mockAssignMembershipPackageSeat = jest.fn();
 const mockVerifyDirectStudentCourseProduct = jest.fn();
 const mockSetStripeCustomerId = jest.fn();
 const mockIsValidAccount = jest.fn();
+const mockGetPoolClient = jest.fn();
 
 jest.mock("@cocalc/server/stripe/connection", () => ({
   __esModule: true,
@@ -84,6 +85,14 @@ jest.mock("@cocalc/server/accounts/is-valid-account", () => ({
   default: (...args: any[]) => mockIsValidAccount(...args),
 }));
 
+jest.mock("@cocalc/database/pool", () => ({
+  __esModule: true,
+  default: jest.fn(() => ({
+    query: jest.fn(),
+  })),
+  getPoolClient: (...args: any[]) => mockGetPoolClient(...args),
+}));
+
 import processPaymentIntents, {
   processAllRecentPaymentIntents,
 } from "./process-payment-intents";
@@ -112,6 +121,10 @@ describe("processPaymentIntents invoice-payment links", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGetPoolClient.mockResolvedValue({
+      query: jest.fn().mockResolvedValue({ rows: [] }),
+      release: jest.fn(),
+    });
     mockGetConn.mockResolvedValue(stripe);
     mockGetStripeCustomerId.mockResolvedValue("cus_123");
     mockCurrentStripeSite.mockResolvedValue("cocalc.ai");
@@ -210,6 +223,65 @@ describe("processPaymentIntents invoice-payment links", () => {
         processed: "true",
       }),
     });
+  });
+
+  it("does not re-run fulfillment when lock refresh sees processed metadata", async () => {
+    stripe.paymentIntents.retrieve
+      .mockResolvedValueOnce({
+        customer: "cus_123",
+        id: "pi_123",
+        invoice: "in_123",
+        metadata: {
+          account_id: "acct-1",
+          allow_downgrade: "true",
+          membership_class: "pro",
+          membership_interval: "month",
+          purpose: MEMBERSHIP_CHANGE,
+          total_excluding_tax_usd: "4666",
+        },
+        status: "succeeded",
+      })
+      .mockResolvedValueOnce({
+        customer: "cus_123",
+        id: "pi_123",
+        invoice: "in_123",
+        metadata: {
+          account_id: "acct-1",
+          credit_id: "101",
+          processed: "true",
+          purpose: MEMBERSHIP_CHANGE,
+          total_excluding_tax_usd: "4666",
+        },
+        status: "succeeded",
+      });
+    const lockClient = {
+      query: jest.fn().mockResolvedValue({ rows: [] }),
+      release: jest.fn(),
+    };
+    mockGetPoolClient.mockResolvedValueOnce(lockClient);
+
+    await expect(
+      processPaymentIntents({
+        account_id: "acct-1",
+        payment_intent_id: "pi_123",
+        strict: true,
+      }),
+    ).resolves.toBe(1);
+
+    expect(lockClient.query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT pg_advisory_lock(hashtext($1))",
+      ["stripe-payment-intent:pi_123"],
+    );
+    expect(lockClient.query).toHaveBeenLastCalledWith(
+      "SELECT pg_advisory_unlock(hashtext($1))",
+      ["stripe-payment-intent:pi_123"],
+    );
+    expect(lockClient.release).toHaveBeenCalled();
+    expect(mockCreateCredit).not.toHaveBeenCalled();
+    expect(mockApplyMembershipChange).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockAdminAlert).not.toHaveBeenCalled();
   });
 
   it("verifies direct student course package products before Stripe fulfillment", async () => {
@@ -462,63 +534,65 @@ describe("processPaymentIntents invoice-payment links", () => {
       metadata: { account_id: "somebody-else" },
     });
     stripe.invoicePayments.list.mockResolvedValue({ data: [] });
-    stripe.paymentIntents.search.mockResolvedValue({
-      data: [
-        {
-          customer: "cus_wrong",
-          id: "pi_bad",
-          metadata: {
-            account_id: "acct-bad",
-            allow_downgrade: "true",
-            membership_class: "pro",
-            membership_interval: "month",
-            purpose: MEMBERSHIP_CHANGE,
-            total_excluding_tax_usd: "500",
-          },
-          status: "succeeded",
+    const paymentIntents = [
+      {
+        customer: "cus_wrong",
+        id: "pi_bad",
+        metadata: {
+          account_id: "acct-bad",
+          allow_downgrade: "true",
+          membership_class: "pro",
+          membership_interval: "month",
+          purpose: MEMBERSHIP_CHANGE,
+          total_excluding_tax_usd: "500",
         },
-        {
-          customer: "cus_foreign",
-          id: "pi_foreign",
-          metadata: {
-            account_id: "acct-foreign",
-            allow_downgrade: "true",
-            cocalc_site: "cocalc.com",
-            membership_class: "pro",
-            membership_interval: "month",
-            purpose: MEMBERSHIP_CHANGE,
-            total_excluding_tax_usd: "500",
-          },
-          status: "succeeded",
+        status: "succeeded",
+      },
+      {
+        customer: "cus_foreign",
+        id: "pi_foreign",
+        metadata: {
+          account_id: "acct-foreign",
+          allow_downgrade: "true",
+          cocalc_site: "cocalc.com",
+          membership_class: "pro",
+          membership_interval: "month",
+          purpose: MEMBERSHIP_CHANGE,
+          total_excluding_tax_usd: "500",
         },
-        {
-          customer: "cus_legacy_foreign",
-          id: "pi_legacy_foreign",
-          metadata: {
-            account_id: "acct-legacy-foreign",
-            allow_downgrade: "true",
-            membership_class: "pro",
-            membership_interval: "month",
-            purpose: MEMBERSHIP_CHANGE,
-            total_excluding_tax_usd: "500",
-          },
-          status: "succeeded",
+        status: "succeeded",
+      },
+      {
+        customer: "cus_legacy_foreign",
+        id: "pi_legacy_foreign",
+        metadata: {
+          account_id: "acct-legacy-foreign",
+          allow_downgrade: "true",
+          membership_class: "pro",
+          membership_interval: "month",
+          purpose: MEMBERSHIP_CHANGE,
+          total_excluding_tax_usd: "500",
         },
-        {
-          customer: "cus_good",
-          id: "pi_good",
-          metadata: {
-            account_id: "acct-good",
-            allow_downgrade: "true",
-            membership_class: "pro",
-            membership_interval: "month",
-            purpose: MEMBERSHIP_CHANGE,
-            total_excluding_tax_usd: "500",
-          },
-          status: "succeeded",
+        status: "succeeded",
+      },
+      {
+        customer: "cus_good",
+        id: "pi_good",
+        metadata: {
+          account_id: "acct-good",
+          allow_downgrade: "true",
+          membership_class: "pro",
+          membership_interval: "month",
+          purpose: MEMBERSHIP_CHANGE,
+          total_excluding_tax_usd: "500",
         },
-      ],
-    });
+        status: "succeeded",
+      },
+    ];
+    stripe.paymentIntents.search.mockResolvedValue({ data: paymentIntents });
+    stripe.paymentIntents.retrieve.mockImplementation(async (id) =>
+      paymentIntents.find((paymentIntent) => paymentIntent.id === id),
+    );
     mockIsValidAccount.mockImplementation(async (account_id) => {
       return account_id !== "acct-legacy-foreign";
     });

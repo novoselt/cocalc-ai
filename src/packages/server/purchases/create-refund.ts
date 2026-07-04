@@ -101,19 +101,38 @@ async function refundCredit({
     if (invoice_id.startsWith("pi_")) {
       paymentIntentId = invoice_id;
       // It's actually a payment intent id, so we have to grab that and get the invoice from there.
-      const intent = await stripe.paymentIntents.retrieve(invoice_id);
-      const intentInvoice = (intent as any).invoice;
-      if (typeof intentInvoice != "string") {
+      const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      const intentInvoice =
+        stripeId((intent as any).invoice) ??
+        stripeMetadataId((intent as any).metadata?.invoice_id) ??
+        (await invoiceIdFromInvoicePayments({
+          stripe,
+          paymentIntentId,
+        }));
+      if (!intentInvoice) {
         throw Error("payment intent does not reference a refundable invoice");
       }
       invoice_id = intentInvoice;
     }
+    if (!invoice_id) {
+      throw Error("payment does not reference a refundable invoice");
+    }
+    const refundableInvoiceId = invoice_id;
 
-    logger.debug("get the invoice_id", invoice_id);
-    const invoice = await stripe.invoices.retrieve(invoice_id);
-    const { charge } = invoice as any;
+    logger.debug("get the invoice_id", refundableInvoiceId);
+    const invoice = await stripe.invoices.retrieve(refundableInvoiceId);
+    if (!paymentIntentId) {
+      paymentIntentId =
+        stripeId((invoice as any).payment_intent) ??
+        (await paymentIntentIdFromInvoicePayments({
+          stripe,
+          invoice_id: refundableInvoiceId,
+        })) ??
+        "";
+    }
+    const charge = await refundChargeId({ stripe, invoice, paymentIntentId });
     logger.debug("got invoice charge = ", { charge });
-    if (!charge || typeof charge != "string") {
+    if (!charge) {
       throw Error(
         "corresponding invoice does not have a charge -- i.e., it was not paid in a way that we can refund.",
       );
@@ -215,4 +234,97 @@ function getExistingRefundPurchaseId(description: unknown): number | undefined {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value == "object" && !Array.isArray(value);
+}
+
+function stripeId(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (isObject(value) && typeof value.id === "string") {
+    return value.id;
+  }
+}
+
+function stripeMetadataId(value: unknown): string | undefined {
+  const id = `${value ?? ""}`.trim();
+  return id || undefined;
+}
+
+function invoicePaymentRecord(records: any[]): any | undefined {
+  return (
+    records.find(({ status, is_default }) => status === "paid" && is_default) ??
+    records.find(({ is_default }) => is_default) ??
+    records.find(({ status }) => status === "paid") ??
+    records[0]
+  );
+}
+
+function paymentIntentIdFromInvoicePayment(record): string | undefined {
+  const payment = record?.payment;
+  if (payment?.type !== "payment_intent") {
+    return;
+  }
+  return stripeId(payment.payment_intent);
+}
+
+async function invoiceIdFromInvoicePayments({
+  stripe,
+  paymentIntentId,
+}: {
+  stripe;
+  paymentIntentId: string;
+}): Promise<string | undefined> {
+  if (!stripe.invoicePayments?.list) {
+    return;
+  }
+  const { data } = await stripe.invoicePayments.list({
+    payment: {
+      type: "payment_intent",
+      payment_intent: paymentIntentId,
+    },
+    limit: 10,
+  });
+  return stripeId(invoicePaymentRecord(data)?.invoice);
+}
+
+async function paymentIntentIdFromInvoicePayments({
+  stripe,
+  invoice_id,
+}: {
+  stripe;
+  invoice_id: string;
+}): Promise<string | undefined> {
+  if (!stripe.invoicePayments?.list) {
+    return;
+  }
+  const { data } = await stripe.invoicePayments.list({
+    invoice: invoice_id,
+    payment: { type: "payment_intent" },
+    limit: 10,
+    expand: ["data.payment.payment_intent"],
+  });
+  return paymentIntentIdFromInvoicePayment(invoicePaymentRecord(data));
+}
+
+async function refundChargeId({
+  stripe,
+  invoice,
+  paymentIntentId,
+}: {
+  stripe;
+  invoice;
+  paymentIntentId?: string;
+}): Promise<string | undefined> {
+  const invoiceCharge = stripeId(invoice?.charge);
+  if (invoiceCharge) {
+    return invoiceCharge;
+  }
+  if (!paymentIntentId || !stripe.charges?.list) {
+    return;
+  }
+  const charges = await stripe.charges.list({
+    payment_intent: paymentIntentId,
+    limit: 1,
+  });
+  return stripeId(charges.data?.[0]);
 }
