@@ -386,6 +386,43 @@ describe("MembershipPurchaseModal", () => {
     ).toBeNull();
   });
 
+  it("shows legacy grant continuation as a future paid renewal", async () => {
+    jest.mocked(getMembershipChangeQuote).mockResolvedValueOnce({
+      allowed: true,
+      change: "upgrade",
+      charge: 0,
+      charge_amount: 0,
+      current_period_end: "2026-08-02T22:32:34.410Z",
+      existing_promo_grant: true,
+      price: 216,
+    } as any);
+
+    render(<MembershipPurchaseModal open onClose={jest.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Standard" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/first paid renewal after your current free grant/i),
+      ).toBeTruthy();
+    });
+    expect(screen.getByText(/First paid renewal: \$216/)).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Pay with Stripe" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm change" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Membership updated.")).toBeTruthy();
+    });
+    expect(applyMembershipChange).toHaveBeenCalledWith({
+      allow_downgrade: true,
+      class: "standard",
+      interval: "year",
+    });
+  });
+
   it("finalizes paid membership changes without showing payment history", async () => {
     jest.mocked(getMembershipChangeQuote).mockResolvedValue({
       allowed: true,
