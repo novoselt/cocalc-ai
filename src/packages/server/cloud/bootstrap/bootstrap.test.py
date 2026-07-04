@@ -52,6 +52,90 @@ def make_cfg(tmpdir: str) -> bootstrap.BootstrapConfig:
     )
 
 
+class ProjectHostStartTest(unittest.TestCase):
+    def make_project_host_cfg(self, tmpdir: str) -> bootstrap.BootstrapConfig:
+        base = Path(tmpdir)
+        runtime_root = base / "runtime"
+        current = runtime_root / "current"
+        (current / "bundle").mkdir(parents=True)
+        (current / "bundle" / "index.js").write_text("", encoding="utf-8")
+        (runtime_root / "bin").mkdir(parents=True)
+        (runtime_root / "bin" / "ctl").write_text("", encoding="utf-8")
+        return replace(
+            make_cfg(tmpdir),
+            project_host_bundle=bootstrap.BundleSpec(
+                "",
+                None,
+                "",
+                str(runtime_root / "bundles"),
+                str(current),
+                str(current),
+                "",
+            ),
+        )
+
+    def test_start_project_host_runs_ctl_from_runtime_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self.make_project_host_cfg(tmpdir)
+            calls = []
+            original_run_cmd = bootstrap.run_cmd
+            original_ensure_runtime_user_manager = bootstrap.ensure_runtime_user_manager
+
+            def fake_run_cmd(_cfg, args, desc, **kwargs):
+                calls.append((args, desc, kwargs))
+                return subprocess.CompletedProcess(args, 0, stdout="")
+
+            try:
+                bootstrap.run_cmd = fake_run_cmd
+                bootstrap.ensure_runtime_user_manager = lambda _cfg: None
+                bootstrap.start_project_host(cfg)
+            finally:
+                bootstrap.run_cmd = original_run_cmd
+                bootstrap.ensure_runtime_user_manager = original_ensure_runtime_user_manager
+
+            self.assertEqual(
+                [call[1] for call in calls],
+                ["project-host stop", "project-host start"],
+            )
+            self.assertEqual(
+                [call[2].get("cwd") for call in calls],
+                [cfg.bootstrap_home, cfg.bootstrap_home],
+            )
+
+    def test_start_project_host_accepts_running_status_after_failed_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self.make_project_host_cfg(tmpdir)
+            calls = []
+            original_run_cmd = bootstrap.run_cmd
+            original_ensure_runtime_user_manager = bootstrap.ensure_runtime_user_manager
+
+            def fake_run_cmd(_cfg, args, desc, **kwargs):
+                calls.append((args, desc, kwargs))
+                code = 1 if desc == "project-host start" else 0
+                return subprocess.CompletedProcess(args, code, stdout="")
+
+            try:
+                bootstrap.run_cmd = fake_run_cmd
+                bootstrap.ensure_runtime_user_manager = lambda _cfg: None
+                bootstrap.start_project_host(cfg)
+            finally:
+                bootstrap.run_cmd = original_run_cmd
+                bootstrap.ensure_runtime_user_manager = original_ensure_runtime_user_manager
+
+            self.assertEqual(
+                [call[1] for call in calls],
+                [
+                    "project-host stop",
+                    "project-host start",
+                    "project-host status after failed start",
+                ],
+            )
+            self.assertEqual(
+                [call[2].get("cwd") for call in calls],
+                [cfg.bootstrap_home, cfg.bootstrap_home, cfg.bootstrap_home],
+            )
+
+
 class BootstrapSharedScratchTest(unittest.TestCase):
     def test_setup_shared_scratch_formats_mounts_and_records_fstab(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

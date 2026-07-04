@@ -931,11 +931,14 @@ def run_cmd(
     check: bool = True,
     as_user: str | None = None,
     env: dict[str, str] | None = None,
+    cwd: str | Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     cmd = args
     if as_user and os.geteuid() == 0 and as_user != "root":
         cmd = ["sudo", "-u", as_user, "-H"] + args
-    log_line(cfg, f"bootstrap: running {desc}: {' '.join(cmd)}")
+    run_cwd = str(cwd) if cwd is not None else None
+    cwd_label = f" cwd={run_cwd}" if run_cwd else ""
+    log_line(cfg, f"bootstrap: running {desc}{cwd_label}: {' '.join(cmd)}")
     result = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -943,6 +946,7 @@ def run_cmd(
         text=True,
         timeout=timeout,
         env=env,
+        cwd=run_cwd,
     )
     if result.stdout:
         for line in result.stdout.splitlines():
@@ -4877,6 +4881,7 @@ exit 0
 
 def start_project_host(cfg: BootstrapConfig) -> None:
     ctl_path = str(project_host_runtime_root(cfg) / "bin" / "ctl")
+    ctl_cwd = runtime_home(cfg)
     # Sanity check: bundle must contain a compiled entrypoint.
     bundle_candidates = [
         Path(cfg.project_host_bundle.current) if cfg.project_host_bundle.current else None,
@@ -4904,13 +4909,21 @@ def start_project_host(cfg: BootstrapConfig) -> None:
         raise RuntimeError("project-host bundle missing entrypoint")
     ensure_runtime_user_manager(cfg)
     if Path(ctl_path).exists():
-        run_cmd(cfg, [ctl_path, "stop"], "project-host stop", check=False, as_user=cfg.ssh_user)
+        run_cmd(
+            cfg,
+            [ctl_path, "stop"],
+            "project-host stop",
+            check=False,
+            as_user=cfg.ssh_user,
+            cwd=ctl_cwd,
+        )
     result = run_cmd(
         cfg,
         [ctl_path, "start"],
         "project-host start",
         check=False,
         as_user=cfg.ssh_user,
+        cwd=ctl_cwd,
     )
     if result.returncode == 0:
         return
@@ -4926,6 +4939,22 @@ def start_project_host(cfg: BootstrapConfig) -> None:
             [ctl_path, "ensure"],
             "project-host ensure",
             as_user=cfg.ssh_user,
+            cwd=ctl_cwd,
+        )
+        return
+    status = run_cmd(
+        cfg,
+        [ctl_path, "status"],
+        "project-host status after failed start",
+        check=False,
+        as_user=cfg.ssh_user,
+        cwd=ctl_cwd,
+    )
+    if status.returncode == 0:
+        log_line(
+            cfg,
+            "bootstrap: project-host start failed, but status reports running; "
+            "treating the daemon as healthy",
         )
         return
     raise RuntimeError(f"project-host start failed with exit code {result.returncode}")
