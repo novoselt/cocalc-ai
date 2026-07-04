@@ -1231,6 +1231,26 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "repair_runtime_environment()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'systemctl start "${service}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'install -d -o "${uid}" -g "${gid}" -m 0700 "${path}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "preflight_podman_runtime()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "podman info >/dev/null",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "capture-forensics)",
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -1958,6 +1978,10 @@ class BootstrapModesTest(unittest.TestCase):
             patch("ensure_runtime_user", lambda _cfg: None)
             patch("ensure_bootstrap_paths", lambda _cfg: None)
             patch("compute_image_size", lambda _cfg: 10)
+            patch("configure_kernel_module_hardening", lambda _cfg: None)
+            patch("configure_kernel_key_limits", lambda _cfg: None)
+            patch("configure_inotify_limits", lambda _cfg: None)
+            patch("configure_journald_limits", lambda _cfg: None)
             patch("install_btrfs_helper", lambda _cfg: None)
             patch("install_privileged_wrappers", lambda _cfg: None)
             patch("ensure_cocalc_mount", lambda _cfg: None)
@@ -1966,6 +1990,7 @@ class BootstrapModesTest(unittest.TestCase):
             patch("configure_podman", lambda _cfg: None)
             patch("verify_runtime_user_contract", lambda _cfg: None)
             patch("write_env", lambda _cfg, _size: None)
+            patch("ensure_runtime_user_manager", lambda _cfg: None)
             patch("configure_runtime_shell_env", lambda _cfg: None)
             patch("setup_master_conat_token", lambda _cfg: None)
             patch("extract_bundle", lambda _cfg, bundle: bundle)
