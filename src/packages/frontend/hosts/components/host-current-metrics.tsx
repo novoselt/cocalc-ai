@@ -44,6 +44,10 @@ type SparklinePoint = {
   tooltip: React.ReactNode;
 };
 
+const HOST_HEARTBEAT_STALE_MS = 3 * 60_000;
+const CURRENT_METRICS_STALE_MS = 3 * 60_000;
+const METRICS_BEHIND_HEARTBEAT_STALE_MS = 90_000;
+
 function formatBytes(value?: number): string | undefined {
   return formatBinaryBytes(value);
 }
@@ -359,13 +363,27 @@ function formatHours(value?: number): string | undefined {
   return `${Math.round(value)}h`;
 }
 
-function getMetricsStaleness(host: Host): {
+export function getMetricsStaleness(
+  host: Host,
+  now: number = Date.now(),
+): {
   stale: boolean;
   message?: string;
 } {
   const collectedAt = parseTimestampMs(host.metrics?.current?.collected_at);
-  if (collectedAt == null) {
-    return { stale: false };
+  const lastSeenAt = parseTimestampMs(host.last_seen);
+  if (lastSeenAt != null && now - lastSeenAt > HOST_HEARTBEAT_STALE_MS) {
+    return {
+      stale: true,
+      message: `The host heartbeat is stale; last seen ${new Date(lastSeenAt).toLocaleString()}. Resource values are from the last reported sample and should not be treated as current pressure.`,
+    };
+  }
+  if (collectedAt == null) return { stale: false };
+  if (now - collectedAt > CURRENT_METRICS_STALE_MS) {
+    return {
+      stale: true,
+      message: `Current metrics were sampled at ${new Date(collectedAt).toLocaleString()}, so these values may no longer reflect the host's current resource pressure.`,
+    };
   }
   const lastActionAt = parseTimestampMs(host.last_action_at);
   if (lastActionAt != null && collectedAt + 5_000 < lastActionAt) {
@@ -375,8 +393,10 @@ function getMetricsStaleness(host: Host): {
       message: `Current metrics were sampled at ${new Date(collectedAt).toLocaleString()}, before the last host action${action} at ${new Date(lastActionAt).toLocaleString()}.`,
     };
   }
-  const lastSeenAt = parseTimestampMs(host.last_seen);
-  if (lastSeenAt != null && lastSeenAt - collectedAt > 90_000) {
+  if (
+    lastSeenAt != null &&
+    lastSeenAt - collectedAt > METRICS_BEHIND_HEARTBEAT_STALE_MS
+  ) {
     return {
       stale: true,
       message:
@@ -569,6 +589,13 @@ function resourceHealth({
   metadataPercent?: number;
   stale?: boolean;
 }): { label: string; tone: ResourceTone; detail: string } {
+  if (stale) {
+    return {
+      label: "Metrics stale",
+      tone: "orange",
+      detail: "Do not treat resource values as current",
+    };
+  }
   const metadataPercentTone = derived
     ? undefined
     : percentTone(metadataPercent);
@@ -593,13 +620,6 @@ function resourceHealth({
     metadataPercentTone === "orange"
   ) {
     return { label: "Watch disk", tone: "orange", detail: "Overall health" };
-  }
-  if (stale) {
-    return {
-      label: "Metrics stale",
-      tone: "orange",
-      detail: "Refresh pending",
-    };
   }
   return { label: "Healthy", tone: "green", detail: "Overall health" };
 }
@@ -1271,8 +1291,12 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
     metadataPercent,
   });
   const metadataColor = RESOURCE_TONES[metadataTone].text;
-  const riskTags = renderDerivedRiskTags(derived);
   const metricsStaleness = getMetricsStaleness(host);
+  const metricTone = metricsStaleness.stale ? "gray" : undefined;
+  const metricColor = metricsStaleness.stale ? COLORS.GRAY_M : undefined;
+  const riskTags = metricsStaleness.stale
+    ? null
+    : renderDerivedRiskTags(derived);
   const health = resourceHealth({
     derived,
     diskPercent,
@@ -1353,7 +1377,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
             label="CPU"
             percent={cpuPercent}
             detail={load ? `load ${load.split(" / ")[0]}` : undefined}
-            color={COLORS.BLUE_D}
+            tone={metricTone}
+            color={metricColor ?? COLORS.BLUE_D}
           />
           <CompactMetricLine
             label="RAM"
@@ -1363,7 +1388,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
                 ? `${memoryUsed} / ${memoryTotal}`
                 : undefined
             }
-            color={COLORS.ANTD_GREEN_D}
+            tone={metricTone}
+            color={metricColor ?? COLORS.ANTD_GREEN_D}
           />
           <CompactMetricLine
             label="Disk"
@@ -1371,7 +1397,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
             detail={
               diskUsed && diskTotal ? `${diskUsed} / ${diskTotal}` : diskTotal
             }
-            color={COLORS.ANTD_ORANGE}
+            tone={metricTone}
+            color={metricColor ?? COLORS.ANTD_ORANGE}
           />
           {sharedScratchConfigured || sharedScratchMeasured ? (
             <CompactMetricLine
@@ -1379,7 +1406,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
               percent={sharedScratchPercent}
               detail={sharedScratchDetail}
               unknownLabel={sharedScratchUnknownLabel}
-              color={COLORS.COCALC_BLUE}
+              tone={metricTone}
+              color={metricColor ?? COLORS.COCALC_BLUE}
             />
           ) : (
             <ScratchNotConfiguredMetric host={host} dense />
@@ -1388,13 +1416,13 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
             <CompactMetricLine
               label="Meta"
               percent={metadataPercent}
-              tone={metadataTone}
+              tone={metricTone ?? metadataTone}
               detail={
                 metadataUsed && metadataTotal
                   ? `${metadataUsed} / ${metadataTotal}`
                   : undefined
               }
-              color={metadataColor}
+              color={metricColor ?? metadataColor}
             />
           ) : null}
           <div
@@ -1434,7 +1462,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
           detail={load ? load : undefined}
           compact
           historyPoints={cpuHistory}
-          color={COLORS.BLUE_D}
+          tone={metricTone}
+          color={metricColor ?? COLORS.BLUE_D}
           icon={<CloudServerOutlined />}
         />
         <MetricBar
@@ -1447,7 +1476,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
           }
           compact
           historyPoints={memoryHistory}
-          color={COLORS.ANTD_GREEN_D}
+          tone={metricTone}
+          color={metricColor ?? COLORS.ANTD_GREEN_D}
           icon={<HddOutlined />}
         />
         <MetricBar
@@ -1458,7 +1488,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
           }
           compact
           historyPoints={diskHistory}
-          color={COLORS.ANTD_ORANGE}
+          tone={metricTone}
+          color={metricColor ?? COLORS.ANTD_ORANGE}
           icon={<DatabaseOutlined />}
         />
         {sharedScratchConfigured || sharedScratchMeasured ? (
@@ -1469,7 +1500,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
             unknownLabel={sharedScratchUnknownLabel}
             compact
             historyPoints={sharedScratchHistory}
-            color={COLORS.COCALC_BLUE}
+            tone={metricTone}
+            color={metricColor ?? COLORS.COCALC_BLUE}
             icon={<DatabaseOutlined />}
           />
         ) : (
@@ -1478,7 +1510,7 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
         <MetricBar
           label="Metadata"
           percent={metadataPercent}
-          tone={metadataTone}
+          tone={metricTone ?? metadataTone}
           detail={
             metadataUsed && metadataTotal
               ? `${metadataUsed} / ${metadataTotal}`
@@ -1486,7 +1518,7 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
           }
           compact
           historyPoints={metadataHistory}
-          color={metadataColor}
+          color={metricColor ?? metadataColor}
           icon={<DatabaseOutlined />}
         />
       </>
@@ -1591,7 +1623,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
           percent={cpuPercent}
           detail={load ? `load ${load}` : undefined}
           historyPoints={cpuHistory}
-          color={COLORS.BLUE_D}
+          tone={metricTone}
+          color={metricColor ?? COLORS.BLUE_D}
           icon={<CloudServerOutlined />}
         />
         <MetricBar
@@ -1603,7 +1636,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
               : undefined
           }
           historyPoints={memoryHistory}
-          color={COLORS.ANTD_GREEN_D}
+          tone={metricTone}
+          color={metricColor ?? COLORS.ANTD_GREEN_D}
           icon={<HddOutlined />}
         />
         <MetricBar
@@ -1613,7 +1647,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
             diskUsed && diskTotal ? `${diskUsed} / ${diskTotal}` : diskTotal
           }
           historyPoints={diskHistory}
-          color={COLORS.ANTD_ORANGE}
+          tone={metricTone}
+          color={metricColor ?? COLORS.ANTD_ORANGE}
           icon={<DatabaseOutlined />}
         />
         {sharedScratchConfigured || sharedScratchMeasured ? (
@@ -1623,7 +1658,8 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
             detail={sharedScratchDetail}
             unknownLabel={sharedScratchUnknownLabel}
             historyPoints={sharedScratchHistory}
-            color={COLORS.COCALC_BLUE}
+            tone={metricTone}
+            color={metricColor ?? COLORS.COCALC_BLUE}
             icon={<DatabaseOutlined />}
           />
         ) : (
@@ -1632,14 +1668,14 @@ export const HostCurrentMetrics: React.FC<HostCurrentMetricsProps> = ({
         <MetricBar
           label="Metadata"
           percent={metadataPercent}
-          tone={metadataTone}
+          tone={metricTone ?? metadataTone}
           detail={
             metadataUsed && metadataTotal
               ? `${metadataUsed} / ${metadataTotal}`
               : undefined
           }
           historyPoints={metadataHistory}
-          color={metadataColor}
+          color={metricColor ?? metadataColor}
           icon={<DatabaseOutlined />}
         />
       </div>
