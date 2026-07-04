@@ -156,6 +156,13 @@ describe("section route parsers", () => {
       section: "docs",
     });
     expect(getPublicRouteFromPath(publicPath("guides"))).toEqual({
+      route: { view: "index" },
+      section: "guides",
+    });
+    expect(
+      getPublicRouteFromPath(publicPath("guides/rstudio-project")),
+    ).toEqual({
+      route: { view: "rstudio-project" },
       section: "guides",
     });
     expect(
@@ -170,6 +177,9 @@ describe("section route parsers", () => {
     expect(getPublicRouteFromPath(publicPath("support/status"))).toEqual({
       section: "not-found",
     });
+    expect(getPublicRouteFromPath(publicPath("guides/unknown"))).toEqual({
+      section: "not-found",
+    });
   });
 
   it("recognizes product routes when booting from a static content entry", () => {
@@ -180,6 +190,7 @@ describe("section route parsers", () => {
     expect(isPublicTarget("/pricing")).toBe(true);
     expect(isPublicTarget("/features/jupyter-notebook")).toBe(true);
     expect(isPublicTarget("/guides")).toBe(true);
+    expect(isPublicTarget("/guides/rstudio-project")).toBe(true);
     expect(isPublicTarget("/docs/projects/project-secrets")).toBe(true);
     expect(isPublicTarget("/rootfs/minimal-jupyter")).toBe(true);
     expect(isPublicTarget("/invites/abc")).toBe(true);
@@ -299,7 +310,7 @@ describe("PublicApp", () => {
     await renderPublicApp(
       <PublicApp
         config={{ site_name: "Launchpad" }}
-        initialRoute={{ section: "guides" }}
+        initialRoute={{ route: { view: "index" }, section: "guides" }}
       />,
     );
 
@@ -317,6 +328,39 @@ describe("PublicApp", () => {
     expect(
       screen.getAllByRole("link", { name: "Browse docs" }).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("renders the RStudio project guide page", async () => {
+    await renderPublicApp(
+      <PublicApp
+        config={{ site_name: "Launchpad" }}
+        initialRoute={{
+          route: { view: "rstudio-project" },
+          section: "guides",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Create a CoCalc AI project with RStudio",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("Select the RStudio and Jupyter image"),
+    ).not.toBeNull();
+    expect(
+      screen.getAllByText(/launch RStudio Server/i).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("link", { name: "Back to guides" }),
+    ).toHaveAttribute("href", "/guides");
+    expect(
+      screen.getByRole("link", { name: "Read rootfs notes" }),
+    ).toHaveAttribute(
+      "href",
+      "https://github.com/sagemathinc/cocalc-ai/blob/main/docs/project-rootfs.md",
+    );
   });
 
   it("uses the stored home-bay origin for public auth bootstrap", async () => {
