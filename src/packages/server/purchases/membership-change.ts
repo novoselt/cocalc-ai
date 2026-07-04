@@ -100,21 +100,55 @@ export async function applyMembershipChange({
     if (isTrial) {
       await assertBillingReady(account_id);
     }
+
+    if (change.existing_promo_grant === true) {
+      if (change.existing_subscription_id == null) {
+        throw Error("legacy migration membership grant was not found");
+      }
+      if (toDecimal(change.price).gt(0)) {
+        await assertBillingReady(account_id);
+      }
+      await configureLegacyMigrationGrantRenewal({
+        account_id,
+        subscription_id: change.existing_subscription_id,
+        targetClass,
+        interval,
+        cost: change.price,
+        client: transaction,
+      });
+      await recordMembershipAnalyticsEvent({
+        event_key: `subscription:${change.existing_subscription_id}:legacy-renewal-configured:${targetClass}:${interval}`,
+        event_type: "membership_changed",
+        account_id,
+        membership_class: targetClass,
+        previous_membership_class: change.existing_class ?? null,
+        source: "subscription",
+        interval,
+        subscription_id: change.existing_subscription_id,
+        amount: 0,
+        period_start: start,
+        period_end: existingEnd,
+        trial_status: "none",
+        client: transaction,
+      });
+      if (useTransaction) {
+        await transaction.query("COMMIT");
+      }
+      return {
+        ...change,
+        subscription_id: change.existing_subscription_id,
+      };
+    }
+
     const end = isTrial
       ? dayjs(start).add(trialDays, "day").toDate()
-      : change.existing_promo_grant === true &&
+      : change.change == "downgrade" &&
           existingEnd != null &&
           existingEnd > start
-        ? dayjs(existingEnd)
-            .add(1, interval == "year" ? "year" : "month")
-            .toDate()
-        : change.change == "downgrade" &&
-            existingEnd != null &&
-            existingEnd > start
-          ? existingEnd
-          : interval == "month"
-            ? dayjs(start).add(1, "month").toDate()
-            : dayjs(start).add(1, "year").toDate();
+        ? existingEnd
+        : interval == "month"
+          ? dayjs(start).add(1, "month").toDate()
+          : dayjs(start).add(1, "year").toDate();
 
     await cancelRenewableMembershipSubscriptions({
       account_id,
@@ -250,6 +284,58 @@ export async function applyMembershipChange({
     if (useTransaction) {
       transaction.release();
     }
+  }
+}
+
+async function configureLegacyMigrationGrantRenewal({
+  account_id,
+  subscription_id,
+  targetClass,
+  interval,
+  cost,
+  client,
+}: {
+  account_id: string;
+  subscription_id: number;
+  targetClass: MembershipClass;
+  interval: "month" | "year";
+  cost: MoneyValue;
+  client: PoolClient;
+}): Promise<void> {
+  const costValue = toDecimal(cost);
+  const configureRenewal = costValue.gt(0);
+  const result = await client.query(
+    `
+    UPDATE subscriptions
+       SET status=$6,
+           canceled_at=CASE WHEN $6='canceled' THEN COALESCE(canceled_at, NOW()) ELSE NULL END,
+           canceled_reason=CASE WHEN $6='canceled' THEN 'Membership renewal canceled' ELSE NULL END,
+           cost=$3,
+           interval=$4,
+           metadata=metadata || $5::jsonb
+     WHERE id=$1
+       AND account_id=$2
+       AND metadata->>'type'='membership'
+       AND metadata->>'source_id'='legacy-migration'
+       AND metadata->>'grant'='true'
+       AND current_period_end >= NOW()
+    `,
+    [
+      subscription_id,
+      account_id,
+      costValue.toNumber(),
+      interval,
+      JSON.stringify({
+        renewal_class: configureRenewal ? targetClass : null,
+        renewal_interval: configureRenewal ? interval : null,
+        renewal_configured: configureRenewal,
+        renewal_configured_at: new Date().toISOString(),
+      }),
+      configureRenewal ? "active" : "canceled",
+    ],
+  );
+  if (result.rowCount != 1) {
+    throw Error("legacy migration membership grant could not be configured");
   }
 }
 
