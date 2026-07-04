@@ -12,11 +12,13 @@ export type DocsAudience =
 
 export type DocsEntryStatus = "draft" | "ready";
 export type DocsProduct = "cocalc" | "plus";
+export type DocsSiteProfile = "cocalc-ai";
 export type DocsVisibility = "public" | "signed-in" | "admin";
 export type DocsAccess = {
   includeAdmin?: boolean;
   includeSignedIn?: boolean;
   product?: DocsProduct;
+  siteProfile?: DocsSiteProfile;
 };
 export type DocsActionParameterType = "project" | "project-host";
 
@@ -122,6 +124,7 @@ export interface DocsEntry {
   lastReviewed: string;
   noActionReason?: string;
   searchKeywords?: string;
+  siteProfiles?: DocsSiteProfile[];
   slug: string;
   status: DocsEntryStatus;
   summary: string;

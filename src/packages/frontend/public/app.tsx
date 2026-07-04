@@ -9,6 +9,7 @@ import { Button, Typography } from "antd";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { getControlPlaneAuthBootstrap } from "@cocalc/frontend/auth/api";
 import { getSiteName, type PublicConfig, PublicSectionShell } from "./common";
+import { PublicRouteHeadMetadata } from "./metadata";
 import type { PublicRoute } from "./routes";
 import { joinUrlPath } from "@cocalc/util/url-path";
 import { publicPath } from "./routes";
@@ -218,12 +219,15 @@ export default function PublicApp({
   }, [config, initialRoute.section]);
 
   return (
-    <Suspense fallback={null}>
-      <PublicRouteBody
-        config={resolvedConfig}
-        initialRoute={initialRoute}
-        redirectToPath={redirectToPath}
-      />
-    </Suspense>
+    <>
+      <PublicRouteHeadMetadata config={resolvedConfig} route={initialRoute} />
+      <Suspense fallback={null}>
+        <PublicRouteBody
+          config={resolvedConfig}
+          initialRoute={initialRoute}
+          redirectToPath={redirectToPath}
+        />
+      </Suspense>
+    </>
   );
 }

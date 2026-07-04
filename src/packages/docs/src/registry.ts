@@ -37,6 +37,16 @@ export function isDocsEntryVisible(
   if (access.product === "plus" && !isPlusDocsEntryId(entry.id)) {
     return false;
   }
+  if (
+    entry.siteProfiles != null &&
+    access.siteProfile != null &&
+    !entry.siteProfiles.includes(access.siteProfile)
+  ) {
+    return false;
+  }
+  if (entry.siteProfiles != null && access.siteProfile == null) {
+    return false;
+  }
   switch (docsEntryVisibility(entry)) {
     case "admin":
       return access.includeAdmin === true;

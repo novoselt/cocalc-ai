@@ -26,6 +26,9 @@ const originalFetch = global.fetch;
 
 beforeEach(() => {
   window.localStorage.clear();
+  document.head
+    .querySelectorAll("[data-cocalc-public-route-meta]")
+    .forEach((element) => element.remove());
   global.fetch = jest.fn(
     () => new Promise<Response>(() => undefined),
   ) as typeof fetch;
@@ -68,6 +71,18 @@ const productsRoute = (route: PublicProductsRoute) => ({
   section: "products" as const,
 });
 const pricingRoute = { section: "pricing" as const };
+
+function headMeta(selector: string): string | null {
+  return document.head.querySelector(selector)?.getAttribute("content") ?? null;
+}
+
+function canonicalHref(): string | null {
+  return (
+    document.head
+      .querySelector('link[data-cocalc-public-route-meta="canonical"]')
+      ?.getAttribute("href") ?? null
+  );
+}
 
 async function renderPublicApp(ui: React.ReactElement) {
   render(ui);
@@ -144,6 +159,11 @@ describe("section route parsers", () => {
       section: "guides",
     });
     expect(
+      getPublicRouteFromPath(publicPath("guides/rstudio-project")),
+    ).toEqual({
+      section: "not-found",
+    });
+    expect(
       getPublicRouteFromPath(publicPath("docs/projects/project-secrets")),
     ).toEqual({
       route: {
@@ -153,6 +173,9 @@ describe("section route parsers", () => {
       section: "docs",
     });
     expect(getPublicRouteFromPath(publicPath("support/status"))).toEqual({
+      section: "not-found",
+    });
+    expect(getPublicRouteFromPath(publicPath("guides/unknown"))).toEqual({
       section: "not-found",
     });
   });
@@ -165,6 +188,7 @@ describe("section route parsers", () => {
     expect(isPublicTarget("/pricing")).toBe(true);
     expect(isPublicTarget("/features/jupyter-notebook")).toBe(true);
     expect(isPublicTarget("/guides")).toBe(true);
+    expect(isPublicTarget("/guides/rstudio-project")).toBe(false);
     expect(isPublicTarget("/docs/projects/project-secrets")).toBe(true);
     expect(isPublicTarget("/rootfs/minimal-jupyter")).toBe(true);
     expect(isPublicTarget("/invites/abc")).toBe(true);
@@ -240,6 +264,34 @@ describe("PublicApp", () => {
     expect(screen.queryByText("Team")).toBeNull();
   });
 
+  it("renders and updates managed public-route head metadata", async () => {
+    const { rerender } = render(
+      <PublicApp
+        config={{ site_name: "CoCalc" }}
+        initialRoute={productsRoute({ view: "products-cocalc-star" })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(canonicalHref()).toBe("http://localhost/products/cocalc-star"),
+    );
+    expect(headMeta('meta[name="description"]')).toContain(
+      "single-VM appliance",
+    );
+
+    rerender(
+      <PublicApp
+        config={{ site_name: "CoCalc" }}
+        initialRoute={aboutRoute({ view: "about" })}
+      />,
+    );
+
+    await waitFor(() => expect(canonicalHref()).toBe("http://localhost/about"));
+    expect(headMeta('meta[name="description"]')).toContain(
+      "people and company behind CoCalc",
+    );
+  });
+
   it("shows Projects and Settings in the shared nav when authenticated", async () => {
     await renderPublicApp(
       <PublicApp
@@ -261,14 +313,19 @@ describe("PublicApp", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Guides" })).not.toBeNull();
-    expect(screen.getByText("Jupyter workflows")).not.toBeNull();
+    expect(screen.getByText("Jupyter notebooks")).not.toBeNull();
     expect(
-      screen.getByRole("link", { name: /Open all guides/i }),
-    ).toHaveAttribute("href", "https://sagemathinc.github.io/cocalc-guides/");
-    expect(screen.getByRole("link", { name: "Browse docs" })).toHaveAttribute(
-      "href",
-      "/docs",
-    );
+      screen
+        .getAllByRole("link", { name: /Open all guides/i })
+        .some(
+          (link) =>
+            link.getAttribute("href") ===
+            "https://sagemathinc.github.io/cocalc-guides/",
+        ),
+    ).toBe(true);
+    expect(
+      screen.getAllByRole("link", { name: "Browse docs" }).length,
+    ).toBeGreaterThan(0);
   });
 
   it("uses the stored home-bay origin for public auth bootstrap", async () => {

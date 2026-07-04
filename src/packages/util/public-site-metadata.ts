@@ -141,6 +141,7 @@ export const PUBLIC_SITEMAP_PATHS = uniquePublicPaths([
   publicPath(""),
   publicPath("about"),
   publicPath("about/events"),
+  publicPath("about/team"),
   ...TEAM_MEMBER_SITEMAP_SLUGS.map((slug) => publicPath(`about/team/${slug}`)),
   publicPath("docs"),
   publicPath("features"),
@@ -153,9 +154,9 @@ export const PUBLIC_SITEMAP_PATHS = uniquePublicPaths([
   publicPath("news"),
   publicPath("policies"),
   ...POLICY_SITEMAP_SLUGS.map((slug) => publicPath(`policies/${slug}`)),
-  publicPath("policies/imprint"),
   publicPath("pricing"),
   ...PRODUCT_SITEMAP_PATHS.map((path) => publicPath(path)),
+  publicPath("rootfs"),
   publicPath("support"),
   publicPath("support/community"),
 ]);
@@ -261,7 +262,12 @@ export function getPublicMetadataRouteFromPath(
       section: "features",
     };
   }
-  if (section === "guides") return { section: "guides" };
+  if (section === "guides") {
+    if (!parts[1]) {
+      return { route: { view: "index" }, section: "guides" };
+    }
+    return { section: "not-found" };
+  }
   if (section === "news") return { section: "news" };
   if (section === "policies") return { section: "policies" };
   if (section === "pricing") return { section: "pricing" };
@@ -373,6 +379,20 @@ function featureRouteMetadata(
   };
 }
 
+function guidesRouteMetadata(
+  _route: PublicMetadataRoute["route"],
+  siteName: string,
+  options?: PublicRouteMetadataOptions,
+): PublicRouteMetadata {
+  return {
+    canonicalPath: publicPath("guides", options),
+    description:
+      "Read CoCalc guides for project workflows, notebooks, teaching, automation, and deployment decisions.",
+    imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
+    title: pageTitle("CoCalc Guides", siteName),
+  };
+}
+
 function authRouteMetadata(
   route: PublicMetadataRoute["route"],
   siteName: string,
@@ -478,13 +498,7 @@ export function getPublicRouteMetadata(
     case "auth":
       return authRouteMetadata(route.route, siteName, options);
     case "guides":
-      return {
-        canonicalPath: publicPath("guides", options),
-        description:
-          "Read CoCalc guides for project workflows, notebooks, teaching, automation, and deployment decisions.",
-        imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
-        title: pageTitle("CoCalc Guides", siteName),
-      };
+      return guidesRouteMetadata(route.route, siteName, options);
     case "docs":
       return {
         canonicalPath: publicPath("docs", options),

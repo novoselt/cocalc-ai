@@ -90,7 +90,9 @@ export function getPublicRouteFromPath(
   }
 
   if (routeParts[0] === "guides") {
-    return { section: "guides" };
+    return routeParts.length === 1
+      ? { section: "guides" }
+      : { section: "not-found" };
   }
 
   if (routeParts[0] === "lang" || parsePublicLangTarget(pathname) != null) {
@@ -149,6 +151,7 @@ export function isPublicTarget(target?: string | null): target is string {
   if (url.pathname.split("/").filter(Boolean).includes("auth")) {
     return isPublicAuthRoutePath(url.pathname, url.search);
   }
+  if (/\/guides\/[^/?#]+/.test(target)) return false;
   return /\/(about|auth|invites|sso|redeem|docs|features|guides|lang|news|policies|pricing|products|rootfs|support|[a-z]{2}(-[A-Z]{2})?)(\/|$|\?|#)/.test(
     target,
   );

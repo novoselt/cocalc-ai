@@ -160,6 +160,10 @@ describe("public route metadata", () => {
     expect(PUBLIC_SITEMAP_PATHS).not.toContain("/features/more-languages");
     expect(PUBLIC_SITEMAP_PATHS).not.toContain("/features/icons");
     expect(PUBLIC_SITEMAP_PATHS).not.toContain("/features/i18n");
+    expect(PUBLIC_SITEMAP_PATHS).toContain("/about/team");
+    expect(PUBLIC_SITEMAP_PATHS).toContain("/rootfs");
+    expect(PUBLIC_SITEMAP_PATHS).not.toContain("/guides/rstudio-project");
+    expect(PUBLIC_SITEMAP_PATHS).not.toContain("/policies/imprint");
   });
 
   it("applies canonical and social tags for the current public route", async () => {
