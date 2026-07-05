@@ -22,6 +22,7 @@ import {
   listQueuedAcpJobs,
   listRunningAcpJobs,
 } from "@cocalc/lite/hub/sqlite/acp-jobs";
+import { listRunningAcpTurnLeases } from "@cocalc/lite/hub/sqlite/acp-turns";
 import { getSoftwareVersions } from "../../software";
 import { getProjectHostConatClient } from "../../runtime-client";
 import { getProjectHostProcessTitle } from "../../process-role";
@@ -50,6 +51,10 @@ const ACP_WORKER_CONTROL_STARTUP_GRACE_MS = Math.max(
 const ACP_WORKER_DB_HEARTBEAT_STALE_MS = Math.max(
   5_000,
   Number(process.env.COCALC_ACP_WORKER_DB_HEARTBEAT_STALE_MS ?? 15_000),
+);
+const ACP_WORKER_DRAIN_TERMINATE_MS = Math.max(
+  30_000,
+  Number(process.env.COCALC_ACP_WORKER_DRAIN_TERMINATE_MS ?? 120_000),
 );
 
 let supervisorStarted = false;
@@ -306,6 +311,56 @@ function workerDatabaseStateProtectsUnresponsiveWorker(
 
 function hasAcpBacklog(): boolean {
   return listQueuedAcpJobs().length > 0 || listRunningAcpJobs().length > 0;
+}
+
+function countRunningJobsForWorker(worker_id: string): number {
+  return listRunningAcpJobs().filter((row) => row.worker_id === worker_id)
+    .length;
+}
+
+function countRunningTurnLeasesForWorker(worker_id: string): number {
+  return listRunningAcpTurnLeases().filter(
+    (row) => row.owner_instance_id === worker_id,
+  ).length;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+export function shouldTerminateOverdueDrainingWorker({
+  worker,
+  status,
+  row,
+  now = Date.now(),
+  drainTerminateMs = ACP_WORKER_DRAIN_TERMINATE_MS,
+}: {
+  worker: WorkerProcessInfo;
+  status?: AcpDaemonStatus;
+  row?: ReturnType<typeof getAcpWorker>;
+  now?: number;
+  drainTerminateMs?: number;
+}): boolean {
+  const state = status?.state ?? row?.state;
+  if (state !== "draining") return false;
+  const exitRequestedAt = numberOrUndefined(
+    status?.exit_requested_at ?? row?.exit_requested_at,
+  );
+  if (exitRequestedAt == null || exitRequestedAt <= 0) return false;
+  if (now - exitRequestedAt < drainTerminateMs) return false;
+  const worker_id = workerIdOf(worker);
+  const runningJobs = Math.max(
+    numberOrUndefined(status?.last_seen_running_jobs) ?? 0,
+    numberOrUndefined(row?.last_seen_running_jobs) ?? 0,
+    worker_id ? countRunningJobsForWorker(worker_id) : 0,
+  );
+  if (runningJobs > 0) return false;
+  const runningTurnLeases = Math.max(
+    numberOrUndefined(status?.running_turn_leases) ?? 0,
+    worker_id ? countRunningTurnLeasesForWorker(worker_id) : 0,
+  );
+  return runningTurnLeases <= 0;
 }
 
 async function getWorkerStatus(
@@ -610,6 +665,24 @@ async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
     const status = workerStatuses.find(
       (entry) => entry.worker.pid === worker.pid,
     )?.status;
+    const row = getAcpWorker(workerIdOf(worker));
+    if (shouldTerminateOverdueDrainingWorker({ worker, status, row })) {
+      logger.warn("terminating overdue draining project-host ACP worker", {
+        pid: worker.pid,
+        worker_id: workerIdOf(worker) || null,
+        bundle_version: workerBundleVersionOf(worker, launch),
+        bundle_path: workerBundlePathOf(worker, launch),
+        state: status?.state ?? row?.state ?? null,
+        last_seen_running_jobs:
+          status?.last_seen_running_jobs ?? row?.last_seen_running_jobs ?? null,
+        running_turn_leases: status?.running_turn_leases ?? null,
+        exit_requested_at:
+          status?.exit_requested_at ?? row?.exit_requested_at ?? null,
+        drain_terminate_ms: ACP_WORKER_DRAIN_TERMINATE_MS,
+      });
+      await terminateWorkerPid(worker.pid);
+      continue;
+    }
     if (
       status == null &&
       isExpectedWorkerProcess(worker, launch) &&

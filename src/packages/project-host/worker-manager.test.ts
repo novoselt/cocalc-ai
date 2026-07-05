@@ -3,12 +3,14 @@ import {
   partitionManageableProjectHostAcpWorkers,
   partitionExpectedProjectHostAcpWorkers,
   planProjectHostAcpWorkerRollout,
+  shouldTerminateOverdueDrainingWorker,
 } from "./hub/acp/worker-manager";
 import { getAcpWorker } from "@cocalc/lite/hub/sqlite/acp-workers";
 import {
   listQueuedAcpJobs,
   listRunningAcpJobs,
 } from "@cocalc/lite/hub/sqlite/acp-jobs";
+import { listRunningAcpTurnLeases } from "@cocalc/lite/hub/sqlite/acp-turns";
 
 jest.mock("@cocalc/lite/hub/sqlite/acp-workers", () => ({
   getAcpWorker: jest.fn(),
@@ -16,6 +18,9 @@ jest.mock("@cocalc/lite/hub/sqlite/acp-workers", () => ({
 jest.mock("@cocalc/lite/hub/sqlite/acp-jobs", () => ({
   listQueuedAcpJobs: jest.fn(() => []),
   listRunningAcpJobs: jest.fn(() => []),
+}));
+jest.mock("@cocalc/lite/hub/sqlite/acp-turns", () => ({
+  listRunningAcpTurnLeases: jest.fn(() => []),
 }));
 
 const mockGetAcpWorker = getAcpWorker as jest.MockedFunction<
@@ -27,6 +32,10 @@ const mockListQueuedAcpJobs = listQueuedAcpJobs as jest.MockedFunction<
 const mockListRunningAcpJobs = listRunningAcpJobs as jest.MockedFunction<
   typeof listRunningAcpJobs
 >;
+const mockListRunningAcpTurnLeases =
+  listRunningAcpTurnLeases as jest.MockedFunction<
+    typeof listRunningAcpTurnLeases
+  >;
 
 beforeEach(() => {
   mockGetAcpWorker.mockReset();
@@ -34,6 +43,8 @@ beforeEach(() => {
   mockListQueuedAcpJobs.mockReturnValue([]);
   mockListRunningAcpJobs.mockReset();
   mockListRunningAcpJobs.mockReturnValue([]);
+  mockListRunningAcpTurnLeases.mockReset();
+  mockListRunningAcpTurnLeases.mockReturnValue([]);
 });
 
 describe("planProjectHostAcpWorkerRollout", () => {
@@ -560,5 +571,102 @@ describe("ACP worker control startup grace", () => {
         cmdline: ["project-host:acp-worker"],
       } as any),
     ).toBe(true);
+  });
+});
+
+describe("overdue draining ACP workers", () => {
+  const worker = {
+    pid: 2001,
+    env: {
+      COCALC_ACP_INSTANCE_ID: "worker-draining",
+    },
+    cmdline: ["project-host:acp-worker"],
+  };
+
+  it("does not terminate before the parent drain deadline", () => {
+    expect(
+      shouldTerminateOverdueDrainingWorker({
+        worker: worker as any,
+        status: {
+          state: "draining",
+          exit_requested_at: 10_000,
+          last_seen_running_jobs: 0,
+          running_turn_leases: 0,
+        } as any,
+        now: 69_999,
+        drainTerminateMs: 60_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("terminates after the deadline when the worker owns no live work", () => {
+    expect(
+      shouldTerminateOverdueDrainingWorker({
+        worker: worker as any,
+        status: {
+          state: "draining",
+          exit_requested_at: 10_000,
+          last_seen_running_jobs: 0,
+          running_turn_leases: 0,
+        } as any,
+        now: 70_000,
+        drainTerminateMs: 60_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("uses database state when the worker control RPC is unavailable", () => {
+    expect(
+      shouldTerminateOverdueDrainingWorker({
+        worker: worker as any,
+        row: {
+          state: "draining",
+          exit_requested_at: 10_000,
+          last_seen_running_jobs: 0,
+        } as any,
+        now: 70_000,
+        drainTerminateMs: 60_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not terminate a worker that still has running jobs", () => {
+    mockListRunningAcpJobs.mockReturnValue([
+      { worker_id: "worker-draining" } as any,
+    ]);
+
+    expect(
+      shouldTerminateOverdueDrainingWorker({
+        worker: worker as any,
+        status: {
+          state: "draining",
+          exit_requested_at: 10_000,
+          last_seen_running_jobs: 0,
+          running_turn_leases: 0,
+        } as any,
+        now: 70_000,
+        drainTerminateMs: 60_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not terminate a worker that still owns a running turn lease", () => {
+    mockListRunningAcpTurnLeases.mockReturnValue([
+      { owner_instance_id: "worker-draining" } as any,
+    ]);
+
+    expect(
+      shouldTerminateOverdueDrainingWorker({
+        worker: worker as any,
+        status: {
+          state: "draining",
+          exit_requested_at: 10_000,
+          last_seen_running_jobs: 0,
+          running_turn_leases: 0,
+        } as any,
+        now: 70_000,
+        drainTerminateMs: 60_000,
+      }),
+    ).toBe(false);
   });
 });
