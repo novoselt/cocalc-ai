@@ -1531,7 +1531,7 @@ export async function main(
         pressure_zone,
         reason,
       });
-      await hubApi.projects.stop({ project_id });
+      await hubApi.projects.stop({ project_id, force });
     },
   });
   const stopReconciler = startReconciler();
