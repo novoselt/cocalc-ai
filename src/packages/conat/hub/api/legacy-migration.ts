@@ -271,6 +271,13 @@ export interface LegacyMigrationAdminAccountSearchResponse {
   total_count: number;
 }
 
+export interface LegacyMigrationAdminProjectAccountCandidate extends Omit<
+  LegacyMigrationAdminAccountSummary,
+  "project_count"
+> {
+  role: "owner" | "collaborator";
+}
+
 export interface LegacyMigrationAdminProjectSummary {
   legacy_project_id: string;
   name?: string | null;
@@ -279,6 +286,7 @@ export interface LegacyMigrationAdminProjectSummary {
   owner_email_address?: string | null;
   owner_display_name?: string | null;
   candidate_legacy_account_ids: string[];
+  candidate_legacy_accounts?: LegacyMigrationAdminProjectAccountCandidate[];
   target_claim_methods: string[];
   last_edited?: Date | string | null;
   last_active?: Date | string | null;
