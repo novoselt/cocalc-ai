@@ -1176,18 +1176,6 @@ ALGIF_AEAD_DISABLE_CONF = (
     'install algif_aead /bin/false\n'
 )
 
-KERNEL_KEYS_LIMITS_CONF = """[kernel]
-keys.maxkeys = 20000
-keys.maxbytes = 25000000
-"""
-
-INOTIFY_LIMITS_CONF = """[fs.inotify]
-max_user_instances = 8192
-max_user_watches = 2097152
-max_queued_events = 65536
-"""
-
-
 def configure_kernel_module_hardening(
     cfg: BootstrapConfig,
     *,
@@ -1208,7 +1196,7 @@ def configure_kernel_key_limits(
     log_line(cfg, "bootstrap: configuring kernel key quotas for rootless containers")
     sysctl_dir.mkdir(parents=True, exist_ok=True)
     conf = sysctl_dir / "60-cocalc-project-host-keyring.conf"
-    conf.write_text(KERNEL_KEYS_LIMITS_CONF, encoding="utf-8")
+    conf.unlink(missing_ok=True)
     run_best_effort(cfg, ["sysctl", "-w", "kernel.keys.maxkeys=20000"], "sysctl kernel.keys.maxkeys")
     run_best_effort(cfg, ["sysctl", "-w", "kernel.keys.maxbytes=25000000"], "sysctl kernel.keys.maxbytes")
 
@@ -1221,7 +1209,7 @@ def configure_inotify_limits(
     log_line(cfg, "bootstrap: configuring inotify limits for project workloads")
     sysctl_dir.mkdir(parents=True, exist_ok=True)
     conf = sysctl_dir / "60-cocalc-project-host-inotify.conf"
-    conf.write_text(INOTIFY_LIMITS_CONF, encoding="utf-8")
+    conf.unlink(missing_ok=True)
     run_best_effort(
         cfg,
         ["sysctl", "-w", "fs.inotify.max_user_instances=8192"],
@@ -1416,6 +1404,10 @@ def ensure_owned_runtime_dir(path: Path, uid: int, gid: int) -> None:
     path.mkdir(parents=True, exist_ok=True)
     os.chown(path, uid, gid)
     os.chmod(path, 0o700)
+
+
+def default_podman_runtime_dir(uid: int) -> str:
+    return f"/run/user/{uid}/cocalc-podman-runtime"
 
 
 def ensure_runtime_user_manager(cfg: BootstrapConfig) -> None:
@@ -3299,7 +3291,7 @@ def configure_podman(cfg: BootstrapConfig) -> None:
         user_config = user_config_root / "containers"
         rootless_root = Path(f"/mnt/cocalc/data/containers/rootless/{cfg.ssh_user}")
         rootless_storage = rootless_root / "storage"
-        rootless_run = rootless_root / "run"
+        rootless_run = Path(f"/run/user/{desired_uid}/containers")
         user_config_root.mkdir(parents=True, exist_ok=True)
         run_best_effort(
             cfg,
@@ -3393,7 +3385,7 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
         )
     uid = pwd.getpwnam(cfg.ssh_user).pw_uid if cfg.ssh_user else None
     if uid is not None:
-        runtime_dir = f"/mnt/cocalc/data/tmp/cocalc-podman-runtime-{uid}"
+        runtime_dir = default_podman_runtime_dir(uid)
         Path(runtime_dir).mkdir(parents=True, exist_ok=True)
         run_best_effort(cfg, ["chown", f"{cfg.ssh_user}:{cfg.ssh_user}", runtime_dir], "chown runtime dir")
         env_assignments["COCALC_PODMAN_RUNTIME_DIR"] = runtime_dir
@@ -3442,7 +3434,7 @@ def runtime_podman_env_lines(cfg: BootstrapConfig) -> list[str]:
         except Exception:
             uid = None
         if uid is not None:
-            runtime_dir = f"/mnt/cocalc/data/tmp/cocalc-podman-runtime-{uid}"
+            runtime_dir = default_podman_runtime_dir(uid)
     if not runtime_dir:
         return []
     return [
@@ -4054,6 +4046,9 @@ run_daemon() {
 }
 
 apply_project_host_sysctls() {
+  rm -f \
+    /etc/sysctl.d/60-cocalc-project-host-keyring.conf \
+    /etc/sysctl.d/60-cocalc-project-host-inotify.conf
   cat > "${SYSCTL_CONFIG_PATH}" <<'SYSCTL'
 # Managed by CoCalc project-host.
 # Keep these limits high enough for many rootless project containers,
@@ -4087,6 +4082,10 @@ runtime_user_run_dir() {
   printf '/run/user/%s\n' "$(runtime_uid)"
 }
 
+default_podman_runtime_dir() {
+  printf '%s/cocalc-podman-runtime\n' "$(runtime_user_run_dir)"
+}
+
 podman_runtime_dir() {
   local value
   value="$(read_env_value COCALC_PODMAN_RUNTIME_DIR)"
@@ -4096,7 +4095,7 @@ podman_runtime_dir() {
   if [ -n "${value}" ]; then
     printf '%s\n' "${value}"
   else
-    runtime_user_run_dir
+    default_podman_runtime_dir
   fi
 }
 
@@ -4123,14 +4122,65 @@ repair_runtime_environment() {
     systemctl start "${service}" >/dev/null 2>&1 || true
   fi
   ensure_owned_runtime_dir "${run_dir}"
+  ensure_owned_runtime_dir "${run_dir}/containers"
   runtime_dir="$(podman_runtime_dir)"
   if [ -n "${runtime_dir}" ]; then
     ensure_owned_runtime_dir "${runtime_dir}"
   fi
 }
 
+podman_info_once() {
+  local runtime_dir="$1" cgroup_manager="$2"
+  sudo -n -u "${RUNTIME_USER}" -H env \
+    XDG_RUNTIME_DIR="${runtime_dir}" \
+    COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
+    CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
+    podman info >/dev/null
+}
+
+podman_runtime_namespace_error() {
+  grep -qiE 'cannot re-exec process to join the existing user namespace|cannot join.*user namespace|invalid internal status' <<< "$1"
+}
+
+project_host_process_running() {
+  first_running_pid "${PID_FILE}" "${HOST_AGENT_PID_FILE}" >/dev/null 2>&1
+}
+
+remove_safe_runtime_dir() {
+  local path="$1" uid run_dir legacy_dir
+  if [ -z "${path}" ]; then
+    return 0
+  fi
+  uid="$(runtime_uid)"
+  run_dir="/run/user/${uid}"
+  legacy_dir="/mnt/cocalc/data/tmp/cocalc-podman-runtime-${uid}"
+  case "${path}" in
+    "${run_dir}/cocalc-podman-runtime"|${legacy_dir})
+      rm -rf --one-file-system "${path}"
+      ;;
+    *)
+      echo "refusing to remove unsafe Podman runtime dir: ${path}" >&2
+      ;;
+  esac
+}
+
+cleanup_podman_runtime_state() {
+  local runtime_dir runroot
+  if project_host_process_running; then
+    echo "project-host is running; refusing to clean Podman runtime state" >&2
+    return 1
+  fi
+  runtime_dir="$(podman_runtime_dir)"
+  remove_safe_runtime_dir "${runtime_dir}"
+  runroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/run"
+  if [ -e "${runroot}" ]; then
+    rm -rf --one-file-system "${runroot}"
+  fi
+  repair_runtime_environment
+}
+
 preflight_podman_runtime() {
-  local runtime_dir cgroup_manager
+  local runtime_dir cgroup_manager output status
   if ! command -v podman >/dev/null 2>&1; then
     echo "podman not found" >&2
     exit 1
@@ -4140,11 +4190,27 @@ preflight_podman_runtime() {
   if [ -z "${cgroup_manager}" ]; then
     cgroup_manager="cgroupfs"
   fi
-  sudo -n -u "${RUNTIME_USER}" -H env \
-    XDG_RUNTIME_DIR="${runtime_dir}" \
-    COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
-    CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-    podman info >/dev/null
+  set +e
+  output="$(podman_info_once "${runtime_dir}" "${cgroup_manager}" 2>&1)"
+  status="$?"
+  set -e
+  if [ "${status}" -eq 0 ]; then
+    return 0
+  fi
+  if podman_runtime_namespace_error "${output}"; then
+    echo "podman info failed with stale user namespace state; cleaning runtime state and retrying once" >&2
+    cleanup_podman_runtime_state || true
+    runtime_dir="$(podman_runtime_dir)"
+    set +e
+    output="$(podman_info_once "${runtime_dir}" "${cgroup_manager}" 2>&1)"
+    status="$?"
+    set -e
+    if [ "${status}" -eq 0 ]; then
+      return 0
+    fi
+  fi
+  printf '%s\n' "${output}" >&2
+  return "${status}"
 }
 
 project_pool_cgroup() {
@@ -4242,7 +4308,7 @@ attach_running_project_processes() {
   configure_project_pool_cgroup
   pid="$(first_running_pid "${PID_FILE}" "${HOST_AGENT_PID_FILE}" || true)"
   attach_pid_to_project_pool "${pid}" || true
-  runtime_dir="$(read_env_value COCALC_PODMAN_RUNTIME_DIR)"
+  runtime_dir="$(podman_runtime_dir)"
   cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
   if [ -z "${cgroup_manager}" ]; then
     cgroup_manager="cgroupfs"
@@ -5026,6 +5092,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         setup_shared_scratch(cfg)
         ensure_btrfs_data(cfg)
         ensure_subuids(cfg)
+        ensure_runtime_user_manager(cfg)
         configure_podman(cfg)
         verify_runtime_user_contract(cfg)
         write_env(cfg, image_size_gb)

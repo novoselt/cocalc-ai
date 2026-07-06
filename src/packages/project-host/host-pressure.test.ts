@@ -17,47 +17,47 @@ describe("host pressure controller helpers", () => {
     expect(
       classifyHostPressure({
         memory_used_percent: 50,
-        memory_available_bytes: 8 * 1024 ** 3,
+        memory_available_bytes: 16 * 1024 ** 3,
       }),
     ).toMatchObject({ zone: "normal" });
     expect(
       classifyHostPressure({
-        memory_used_percent: 86,
-        memory_available_bytes: 8 * 1024 ** 3,
+        memory_used_percent: 76,
+        memory_available_bytes: 32 * 1024 ** 3,
       }),
     ).toMatchObject({ zone: "observe" });
     expect(
       classifyHostPressure({
-        memory_used_percent: 91,
-        memory_available_bytes: 8 * 1024 ** 3,
+        memory_used_percent: 81,
+        memory_available_bytes: 32 * 1024 ** 3,
       }),
     ).toMatchObject({ zone: "pressure" });
     expect(
       classifyHostPressure({
         memory_used_percent: 91,
-        memory_available_bytes: 400 * 1024 ** 2,
+        memory_available_bytes: 32 * 1024 ** 3,
       }),
     ).toMatchObject({ zone: "emergency" });
     expect(
       classifyHostPressure({
         memory_total_bytes: 64 * 1024 ** 3,
-        memory_used_percent: 94,
-        memory_available_bytes: 4 * 1024 ** 3,
+        memory_used_percent: 82,
+        memory_available_bytes: 12 * 1024 ** 3,
       }),
-    ).toMatchObject({ zone: "emergency" });
+    ).toMatchObject({ zone: "pressure" });
     expect(
       classifyHostPressure({
         memory_total_bytes: 64 * 1024 ** 3,
         memory_used_percent: 86,
         memory_available_bytes: 6 * 1024 ** 3,
       }),
-    ).toMatchObject({ zone: "pressure" });
+    ).toMatchObject({ zone: "emergency" });
   });
 
   it("classifies resource pressure only when resource mode is enabled", () => {
     const metrics = {
       memory_used_percent: 20,
-      memory_available_bytes: 8 * 1024 ** 3,
+      memory_available_bytes: 16 * 1024 ** 3,
       kernel_sysctls: {
         targets: {
           "fs.inotify.max_user_instances": 8192,
