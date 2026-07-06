@@ -1,0 +1,46 @@
+/*
+ *  This file is part of CoCalc: Copyright © 2026 Sagemath, Inc.
+ *  License: MS-RSL – see LICENSE.md for details
+ */
+
+import { webapp_client } from "@cocalc/frontend/webapp-client";
+
+export type CourseDirectoryCopySource = {
+  project_id: string;
+  path: string | string[];
+  base_path?: string;
+};
+
+function joinPath(...parts: (string | undefined)[]): string {
+  return parts
+    .filter((part) => part != null && part !== "")
+    .join("/")
+    .replace(/\/+/g, "/")
+    .replace(/\/+$/, "");
+}
+
+export async function courseDirectoryCopySource({
+  project_id,
+  path,
+}: {
+  project_id: string;
+  path: string;
+}): Promise<CourseDirectoryCopySource> {
+  try {
+    const { files } = await webapp_client.project_client.directory_listing({
+      project_id,
+      path,
+      hidden: false,
+    });
+    const childPaths = files
+      .filter((entry) => !entry.name.startsWith("."))
+      .map((entry) => joinPath(path, entry.name));
+    if (childPaths.length) {
+      return { project_id, base_path: path, path: childPaths };
+    }
+  } catch {
+    // Let the copy operation below surface the normal missing-path or
+    // permission error. This helper should only adjust directory semantics.
+  }
+  return { project_id, path };
+}

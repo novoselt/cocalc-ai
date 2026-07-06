@@ -17,6 +17,7 @@ import { exec } from "../../frame-editors/generic/client";
 import { export_student_file_use_times } from "../export/file-use-times";
 import type { ProjectCopyDestination } from "@cocalc/conat/hub/api/projects";
 import { type CourseCopyDestination, waitForCourseCopyLro } from "../copy-lro";
+import { courseDirectoryCopySource } from "../common/copy-source";
 
 export class HandoutsActions {
   private course_actions: CourseActions;
@@ -256,7 +257,10 @@ export class HandoutsActions {
       });
 
       const opts = {
-        src: { project_id: course_project_id, path: src_path },
+        src: await courseDirectoryCopySource({
+          project_id: course_project_id,
+          path: src_path,
+        }),
         dest: {
           project_id: student_project_id,
           path: handout.get("target_path"),
@@ -375,10 +379,10 @@ export class HandoutsActions {
           desc: `Copying handout to ${dests.length} students`,
         });
         const op = await webapp_client.project_client.copyPathBetweenProjects({
-          src: {
+          src: await courseDirectoryCopySource({
             project_id: store.get("course_project_id"),
             path: handout.get("path"),
-          },
+          }),
           dests,
           options: { recursive: true, force: !!overwrite },
         });
