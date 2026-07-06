@@ -290,6 +290,7 @@ async function claimRestoreRows({
          AND i.restore_claimed_until IS NOT NULL
          AND i.restore_claimed_until >= NOW()
          AND i.restore_host_id IS NOT NULL
+         AND COALESCE(i.restore_progress->>'phase', '') <> 'backup'
          AND NOT (
            COALESCE(i.restore_progress->>'phase', '') = 'queued'
            AND i.restore_started IS NOT NULL
@@ -333,6 +334,8 @@ async function claimRestoreRows({
            OR (
              i.restore_status = 'restoring'
              AND (
+               COALESCE(i.restore_progress->>'phase', '') <> 'backup'
+               AND (
                i.restore_claimed_until IS NULL
                OR i.restore_claimed_until < NOW()
                OR (
@@ -343,6 +346,7 @@ async function claimRestoreRows({
                OR (
                  i.restore_claimed_until IS NOT NULL
                  AND i.restore_claimed_until < NOW() + ($3::INT * INTERVAL '1 millisecond')
+               )
                )
              )
            )
@@ -408,6 +412,8 @@ async function claimRestoreRows({
              OR (
                i.restore_status = 'restoring'
                AND (
+                 COALESCE(i.restore_progress->>'phase', '') <> 'backup'
+                 AND (
                  i.restore_claimed_until IS NULL
                  OR i.restore_claimed_until < NOW()
                  OR (
@@ -418,6 +424,7 @@ async function claimRestoreRows({
                  OR (
                    i.restore_claimed_until IS NOT NULL
                    AND i.restore_claimed_until < NOW() + ($6::INT * INTERVAL '1 millisecond')
+                 )
                  )
                )
              )
