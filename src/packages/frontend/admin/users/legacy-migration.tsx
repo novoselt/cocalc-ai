@@ -92,7 +92,11 @@ function AccountIdentity({
       {account.email_address && (
         <Text type="secondary">{account.email_address}</Text>
       )}
-      <Text type="secondary">{account.project_count} visible project(s)</Text>
+      <Text type="secondary">
+        {account.project_count == null
+          ? "Project count not loaded"
+          : `${account.project_count} visible project(s)`}
+      </Text>
     </Space>
   );
 }
@@ -533,7 +537,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
                     onChange={(e) => setAccountQuery(e.target.value)}
                     onSearch={(value) => searchAccounts(value)}
                     enterButton="Search legacy accounts"
-                    placeholder="Search by legacy email, name, provider identity, or legacy account id"
+                    placeholder="Search by legacy email, leading name text, or legacy account id"
                     loading={accountSearching}
                   />
                   <Table
@@ -574,7 +578,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
                     onChange={(e) => setProjectQuery(e.target.value)}
                     onSearch={(value) => searchProjects(value)}
                     enterButton="Search legacy projects"
-                    placeholder="Search by legacy project title, URL name, or legacy project id"
+                    placeholder="Search by leading legacy project title, URL name, or legacy project id"
                     loading={projectSearching}
                   />
                   <Table

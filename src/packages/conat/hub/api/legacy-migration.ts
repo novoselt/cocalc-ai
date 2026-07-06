@@ -254,7 +254,7 @@ export interface LegacyMigrationAdminAccountSummary {
   last_name?: string | null;
   display_name?: string | null;
   last_active?: Date | string | null;
-  project_count: number;
+  project_count?: number | null;
   target_claim_methods: string[];
   support_admin_linked_account_ids: string[];
 }

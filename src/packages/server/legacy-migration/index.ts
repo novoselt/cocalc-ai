@@ -938,7 +938,10 @@ function adminAccountSummary(
     last_name: row.last_name ?? null,
     display_name: row.display_name ?? null,
     last_active: row.last_active ?? null,
-    project_count: Math.max(0, Number(row.project_count ?? 0) || 0),
+    project_count:
+      row.project_count == null
+        ? null
+        : Math.max(0, Number(row.project_count) || 0),
     target_claim_methods: arrayValue(row.target_claim_methods),
     support_admin_linked_account_ids: arrayValue(
       row.support_admin_linked_account_ids,
@@ -1071,15 +1074,7 @@ async function getLegacyAccountLinkSummary({
                 AND support_link.account_id<>$1
               ORDER BY support_link.account_id::TEXT
            ) AS support_admin_linked_account_ids,
-           (
-             SELECT COUNT(*)::INTEGER
-               FROM legacy_migration_projects projects
-              WHERE COALESCE(projects.hidden, false)=false
-                AND (
-                  projects.owner_legacy_account_id=accounts.legacy_account_id
-                  OR COALESCE(projects.legacy_users, '{}'::jsonb) ? accounts.legacy_account_id
-                )
-           ) AS project_count
+           NULL::INTEGER AS project_count
       FROM legacy_migration_account_links linked
       JOIN legacy_migration_accounts accounts
         ON accounts.legacy_account_id=linked.legacy_account_id
@@ -1103,26 +1098,31 @@ export async function adminSearchLegacyAccounts({
   await assertLegacyMigrationEnabled();
   await ensureLegacyMigrationAdminLinkSchema();
   const targetAccountId = requireTargetAccountId(target_account_id);
-  const search = `%${requireSearchQuery(query)}%`;
+  const search = requireSearchQuery(query);
+  const prefixSearch = `${search}%`;
   const n = adminLimitValue(limit, 50, 100);
   const { rows } = await getPool().query<
     LegacyMigrationAdminAccountSummary & {
       project_count: number | string | null;
       target_claim_methods: string[] | null;
       support_admin_linked_account_ids: string[] | null;
-      total_count: number | string | null;
     }
   >(
     `
     WITH matched_accounts AS (
       SELECT accounts.*
         FROM legacy_migration_accounts accounts
-       WHERE lower(accounts.legacy_account_id) LIKE $2
-          OR lower(COALESCE(accounts.email_address, '')) LIKE $2
-          OR lower(COALESCE(accounts.first_name, '')) LIKE $2
-          OR lower(COALESCE(accounts.last_name, '')) LIKE $2
-          OR lower(COALESCE(accounts.display_name, '')) LIKE $2
-          OR lower(COALESCE(accounts.metadata::TEXT, '')) LIKE $2
+       WHERE accounts.legacy_account_id=$2
+          OR accounts.legacy_account_id LIKE $3
+          OR accounts.email_address=$2
+          OR accounts.email_address LIKE $3
+          OR lower(COALESCE(accounts.first_name, '')) LIKE $3
+          OR lower(COALESCE(accounts.last_name, '')) LIKE $3
+          OR lower(COALESCE(accounts.display_name, '')) LIKE $3
+       ORDER BY accounts.last_active DESC NULLS LAST,
+                accounts.email_address,
+                accounts.legacy_account_id
+       LIMIT $4
     )
     SELECT matched_accounts.legacy_account_id,
            matched_accounts.email_address,
@@ -1145,27 +1145,17 @@ export async function adminSearchLegacyAccounts({
                 AND support_link.account_id<>$1
               ORDER BY support_link.account_id::TEXT
            ) AS support_admin_linked_account_ids,
-           (
-             SELECT COUNT(*)::INTEGER
-               FROM legacy_migration_projects projects
-              WHERE COALESCE(projects.hidden, false)=false
-                AND (
-                  projects.owner_legacy_account_id=matched_accounts.legacy_account_id
-                  OR COALESCE(projects.legacy_users, '{}'::jsonb) ? matched_accounts.legacy_account_id
-                )
-           ) AS project_count,
-           COUNT(*) OVER()::INTEGER AS total_count
+           NULL::INTEGER AS project_count
       FROM matched_accounts
      ORDER BY matched_accounts.last_active DESC NULLS LAST,
               lower(COALESCE(matched_accounts.email_address, '')),
               matched_accounts.legacy_account_id
-     LIMIT $3
     `,
-    [targetAccountId, search, n],
+    [targetAccountId, search, prefixSearch, n],
   );
   return {
     accounts: rows.map(adminAccountSummary),
-    total_count: Number(rows[0]?.total_count ?? rows.length) || 0,
+    total_count: rows.length,
   };
 }
 
@@ -1178,15 +1168,26 @@ export async function adminSearchLegacyProjects({
   await ensureLegacyMigrationProjectImportSchema();
   await ensureLegacyMigrationAdminLinkSchema();
   const targetAccountId = requireTargetAccountId(target_account_id);
-  const search = `%${requireSearchQuery(query)}%`;
+  const search = `${requireSearchQuery(query)}%`;
   const n = adminLimitValue(limit, 50, 100);
   const { rows } = await getPool().query<
-    LegacyMigrationAdminProjectSummary &
-      LegacyProjectRow & {
-        total_count: number | string | null;
-      }
+    LegacyMigrationAdminProjectSummary & LegacyProjectRow
   >(
     `
+    WITH matched_projects AS (
+      SELECT projects.*
+        FROM legacy_migration_projects projects
+       WHERE COALESCE(projects.hidden, false)=false
+         AND (
+           lower(projects.legacy_project_id) LIKE $2
+           OR lower(COALESCE(projects.title, '')) LIKE $2
+           OR lower(COALESCE(projects.name, '')) LIKE $2
+         )
+       ORDER BY projects.last_edited DESC NULLS LAST,
+                projects.last_active DESC NULLS LAST,
+                projects.legacy_project_id
+       LIMIT $3
+    )
     SELECT projects.legacy_project_id,
            projects.name,
            projects.title,
@@ -1228,30 +1229,21 @@ export async function adminSearchLegacyProjects({
                FROM legacy_migration_project_import_accounts imported_accounts
               WHERE imported_accounts.legacy_project_id=projects.legacy_project_id
                 AND imported_accounts.account_id=$1
-           ) AS joined,
-           COUNT(*) OVER()::INTEGER AS total_count
-      FROM legacy_migration_projects projects
+           ) AS joined
+      FROM matched_projects projects
       LEFT JOIN legacy_migration_accounts owner
         ON owner.legacy_account_id=projects.owner_legacy_account_id
       LEFT JOIN legacy_migration_project_imports imports
         ON imports.legacy_project_id=projects.legacy_project_id
-     WHERE COALESCE(projects.hidden, false)=false
-       AND (
-         lower(projects.legacy_project_id) LIKE $2
-         OR lower(COALESCE(projects.title, '')) LIKE $2
-         OR lower(COALESCE(projects.name, '')) LIKE $2
-         OR lower(COALESCE(projects.metadata::TEXT, '')) LIKE $2
-       )
      ORDER BY projects.last_edited DESC NULLS LAST,
               projects.last_active DESC NULLS LAST,
               projects.legacy_project_id
-     LIMIT $3
     `,
     [targetAccountId, search, n],
   );
   return {
     projects: rows.map(adminProjectSummary),
-    total_count: Number(rows[0]?.total_count ?? rows.length) || 0,
+    total_count: rows.length,
   };
 }
 
@@ -1261,7 +1253,6 @@ export async function adminListLegacyAccountLinks({
   await assertLegacyMigrationEnabled();
   await ensureLegacyMigrationAdminLinkSchema();
   const targetAccountId = requireTargetAccountId(target_account_id);
-  await ensureVerifiedEmailLinks(targetAccountId);
   const { rows } = await getPool().query<
     LegacyMigrationAdminLinkSummary & {
       project_count: number | string | null;
@@ -1289,15 +1280,7 @@ export async function adminListLegacyAccountLinks({
                 AND support_link.account_id<>$1
               ORDER BY support_link.account_id::TEXT
            ) AS support_admin_linked_account_ids,
-           (
-             SELECT COUNT(*)::INTEGER
-               FROM legacy_migration_projects projects
-              WHERE COALESCE(projects.hidden, false)=false
-                AND (
-                  projects.owner_legacy_account_id=linked.legacy_account_id
-                  OR COALESCE(projects.legacy_users, '{}'::jsonb) ? linked.legacy_account_id
-                )
-           ) AS project_count
+           NULL::INTEGER AS project_count
       FROM legacy_migration_account_links linked
       LEFT JOIN legacy_migration_accounts accounts
         ON accounts.legacy_account_id=linked.legacy_account_id
