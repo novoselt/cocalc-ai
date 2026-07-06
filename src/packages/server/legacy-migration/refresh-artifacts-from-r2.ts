@@ -14,7 +14,7 @@ const DEFAULT_BATCH_SIZE = 2000;
 const DEFAULT_UPDATE_BATCH_SIZE = 50_000;
 const LIST_PAGE_SIZE = 1000;
 
-type Options = {
+export type RefreshArtifactsFromR2Options = {
   bucket: string;
   prefix: string;
   suffix: string;
@@ -36,7 +36,7 @@ type R2Object = {
   lastModified?: string;
 };
 
-type Stats = {
+export type RefreshArtifactsFromR2Stats = {
   pages: number;
   listedObjects: number;
   matchedObjects: number;
@@ -91,16 +91,8 @@ Options:
   process.exit(0);
 }
 
-function parseArgs(argv: string[]): Options {
-  const options: Options = {
-    bucket: DEFAULT_BUCKET,
-    prefix: DEFAULT_PREFIX,
-    suffix: DEFAULT_SUFFIX,
-    batchSize: DEFAULT_BATCH_SIZE,
-    updateBatchSize: DEFAULT_UPDATE_BATCH_SIZE,
-    dryRun: false,
-    markMissingUnavailable: true,
-  };
+function parseArgs(argv: string[]): RefreshArtifactsFromR2Options {
+  const options = defaultRefreshArtifactsFromR2Options();
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") usage();
@@ -168,7 +160,7 @@ function clean(value: unknown): string | undefined {
   return s || undefined;
 }
 
-async function getR2Auth(options: Options) {
+async function getR2Auth(options: RefreshArtifactsFromR2Options) {
   const settings = await getServerSettings();
   const accountId = clean((settings as any).r2_account_id);
   const endpoint =
@@ -233,7 +225,7 @@ function parseListObjectsXml(xml: string): {
 
 function legacyProjectIdFromKey(
   key: string,
-  { prefix, suffix }: Pick<Options, "prefix" | "suffix">,
+  { prefix, suffix }: Pick<RefreshArtifactsFromR2Options, "prefix" | "suffix">,
 ): string | undefined {
   if (!key.startsWith(prefix) || !key.endsWith(suffix)) return undefined;
   const projectId = key.slice(prefix.length, key.length - suffix.length);
@@ -241,7 +233,7 @@ function legacyProjectIdFromKey(
 }
 
 async function* listR2Objects(
-  options: Options,
+  options: RefreshArtifactsFromR2Options,
 ): AsyncGenerator<R2Object[], void> {
   const auth = await getR2Auth(options);
   let continuationToken: string | undefined;
@@ -354,7 +346,7 @@ async function applyAvailableRefresh({
   options,
 }: {
   client: QueryClient;
-  options: Options;
+  options: RefreshArtifactsFromR2Options;
 }): Promise<number> {
   let total = 0;
   let batches = 0;
@@ -420,7 +412,7 @@ async function applyUnavailableRefresh({
   options,
 }: {
   client: QueryClient;
-  options: Options;
+  options: RefreshArtifactsFromR2Options;
 }): Promise<number> {
   if (!options.markMissingUnavailable) return 0;
   let total = 0;
@@ -488,8 +480,10 @@ async function applyAvailabilityRefresh({
   options,
 }: {
   client: QueryClient;
-  options: Options;
-}): Promise<Pick<Stats, "availableRows" | "unavailableRows">> {
+  options: RefreshArtifactsFromR2Options;
+}): Promise<
+  Pick<RefreshArtifactsFromR2Stats, "availableRows" | "unavailableRows">
+> {
   const availableRows = await applyAvailableRefresh({ client, options });
   const unavailableRows = await applyUnavailableRefresh({ client, options });
   return {
@@ -498,9 +492,23 @@ async function applyAvailabilityRefresh({
   };
 }
 
-async function refreshArtifactsFromR2(options: Options): Promise<Stats> {
+export function defaultRefreshArtifactsFromR2Options(): RefreshArtifactsFromR2Options {
+  return {
+    bucket: DEFAULT_BUCKET,
+    prefix: DEFAULT_PREFIX,
+    suffix: DEFAULT_SUFFIX,
+    batchSize: DEFAULT_BATCH_SIZE,
+    updateBatchSize: DEFAULT_UPDATE_BATCH_SIZE,
+    dryRun: false,
+    markMissingUnavailable: true,
+  };
+}
+
+export async function refreshArtifactsFromR2(
+  options: RefreshArtifactsFromR2Options,
+): Promise<RefreshArtifactsFromR2Stats> {
   const client = await pool().connect();
-  const stats: Stats = {
+  const stats: RefreshArtifactsFromR2Stats = {
     pages: 0,
     listedObjects: 0,
     matchedObjects: 0,
@@ -619,13 +627,15 @@ async function main(): Promise<void> {
   }
 }
 
-main()
-  .catch((err) => {
-    console.error(err);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    if (poolUsed) {
-      await getPool().end();
-    }
-  });
+if (require.main === module) {
+  main()
+    .catch((err) => {
+      console.error(err);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      if (poolUsed) {
+        await getPool().end();
+      }
+    });
+}
