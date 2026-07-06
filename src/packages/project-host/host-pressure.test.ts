@@ -38,6 +38,20 @@ describe("host pressure controller helpers", () => {
         memory_available_bytes: 400 * 1024 ** 2,
       }),
     ).toMatchObject({ zone: "emergency" });
+    expect(
+      classifyHostPressure({
+        memory_total_bytes: 64 * 1024 ** 3,
+        memory_used_percent: 94,
+        memory_available_bytes: 4 * 1024 ** 3,
+      }),
+    ).toMatchObject({ zone: "emergency" });
+    expect(
+      classifyHostPressure({
+        memory_total_bytes: 64 * 1024 ** 3,
+        memory_used_percent: 86,
+        memory_available_bytes: 6 * 1024 ** 3,
+      }),
+    ).toMatchObject({ zone: "pressure" });
   });
 
   it("classifies resource pressure only when resource mode is enabled", () => {

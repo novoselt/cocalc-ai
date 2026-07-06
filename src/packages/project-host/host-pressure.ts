@@ -31,11 +31,11 @@ const OBSERVE_MEMORY_USED_PERCENT = clampPercent(
 );
 const PRESSURE_MEMORY_USED_PERCENT = clampPercent(
   process.env.COCALC_PROJECT_HOST_PRESSURE_MEMORY_USED_PERCENT,
-  90,
+  88,
 );
 const EMERGENCY_MEMORY_USED_PERCENT = clampPercent(
   process.env.COCALC_PROJECT_HOST_EMERGENCY_MEMORY_USED_PERCENT,
-  95,
+  93,
 );
 const OBSERVE_MEMORY_AVAILABLE_BYTES = clampNonNegativeInteger(
   process.env.COCALC_PROJECT_HOST_PRESSURE_OBSERVE_MEMORY_AVAILABLE_BYTES,
@@ -48,6 +48,18 @@ const PRESSURE_MEMORY_AVAILABLE_BYTES = clampNonNegativeInteger(
 const EMERGENCY_MEMORY_AVAILABLE_BYTES = clampNonNegativeInteger(
   process.env.COCALC_PROJECT_HOST_EMERGENCY_MEMORY_AVAILABLE_BYTES,
   512 * 1024 ** 2,
+);
+const OBSERVE_MEMORY_AVAILABLE_RATIO = clampRatio(
+  process.env.COCALC_PROJECT_HOST_PRESSURE_OBSERVE_MEMORY_AVAILABLE_RATIO,
+  0.15,
+);
+const PRESSURE_MEMORY_AVAILABLE_RATIO = clampRatio(
+  process.env.COCALC_PROJECT_HOST_PRESSURE_MEMORY_AVAILABLE_RATIO,
+  0.1,
+);
+const EMERGENCY_MEMORY_AVAILABLE_RATIO = clampRatio(
+  process.env.COCALC_PROJECT_HOST_EMERGENCY_MEMORY_AVAILABLE_RATIO,
+  0.06,
 );
 const STARTUP_PROTECTION_MS = Math.max(
   0,
@@ -89,20 +101,23 @@ const PRESSURE_QUARANTINE_STOP_COUNT = Math.max(
 );
 const PRESSURE_SETTLE_MS = Math.max(
   0,
-  Number(process.env.COCALC_PROJECT_HOST_PRESSURE_SETTLE_MS ?? 45_000),
+  Number(process.env.COCALC_PROJECT_HOST_PRESSURE_SETTLE_MS ?? 20_000),
 );
 const EMERGENCY_SETTLE_MS = Math.max(
   0,
-  Number(process.env.COCALC_PROJECT_HOST_EMERGENCY_SETTLE_MS ?? 15_000),
+  Number(process.env.COCALC_PROJECT_HOST_EMERGENCY_SETTLE_MS ?? 5_000),
 );
-const EMERGENCY_MAX_STOPS_PER_CYCLE = Math.max(
+const PRESSURE_MAX_STOPS_PER_CYCLE = clampIntegerRange(
+  process.env.COCALC_PROJECT_HOST_PRESSURE_MAX_STOPS_PER_CYCLE,
+  2,
   1,
-  Math.min(
-    5,
-    Number(
-      process.env.COCALC_PROJECT_HOST_EMERGENCY_MAX_STOPS_PER_CYCLE ?? 2,
-    ) || 2,
-  ),
+  10,
+);
+const EMERGENCY_MAX_STOPS_PER_CYCLE = clampIntegerRange(
+  process.env.COCALC_PROJECT_HOST_EMERGENCY_MAX_STOPS_PER_CYCLE,
+  8,
+  1,
+  20,
 );
 const RECENT_PRESSURE_STOP_WINDOW_MS = 60 * 60_000;
 const RESOURCE_PRESSURE_MODE = resourcePressureMode(
@@ -168,6 +183,17 @@ function clampNonNegativeInteger(value: unknown, fallback: number): number {
   return Math.floor(parsed);
 }
 
+function clampIntegerRange(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
 function clampRatio(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -184,6 +210,15 @@ function parseNonNegativeNumber(value: unknown): number | undefined {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return undefined;
   return parsed;
+}
+
+function memoryAvailableThreshold(
+  fixedBytes: number,
+  totalBytes: number | undefined,
+  ratio: number,
+): number {
+  if (totalBytes == null || totalBytes <= 0 || ratio <= 0) return fixedBytes;
+  return Math.max(fixedBytes, Math.floor(totalBytes * ratio));
 }
 
 function parseRunQuota(run_quota: unknown): Record<string, any> | undefined {
@@ -550,7 +585,23 @@ export function classifyHostPressure(
 ): HostPressureState | undefined {
   if (!metrics) return undefined;
   const usedPercent = parseNonNegativeNumber(metrics.memory_used_percent);
+  const totalBytes = parseNonNegativeNumber(metrics.memory_total_bytes);
   const availableBytes = parseNonNegativeNumber(metrics.memory_available_bytes);
+  const observeAvailableBytes = memoryAvailableThreshold(
+    OBSERVE_MEMORY_AVAILABLE_BYTES,
+    totalBytes,
+    OBSERVE_MEMORY_AVAILABLE_RATIO,
+  );
+  const pressureAvailableBytes = memoryAvailableThreshold(
+    PRESSURE_MEMORY_AVAILABLE_BYTES,
+    totalBytes,
+    PRESSURE_MEMORY_AVAILABLE_RATIO,
+  );
+  const emergencyAvailableBytes = memoryAvailableThreshold(
+    EMERGENCY_MEMORY_AVAILABLE_BYTES,
+    totalBytes,
+    EMERGENCY_MEMORY_AVAILABLE_RATIO,
+  );
   const emergencyReasons: string[] = [];
   const pressureReasons: string[] = [];
   const observeReasons: string[] = [];
@@ -560,37 +611,22 @@ export function classifyHostPressure(
       `memory_used_percent>=${EMERGENCY_MEMORY_USED_PERCENT}`,
     );
   }
-  if (
-    availableBytes != null &&
-    availableBytes <= EMERGENCY_MEMORY_AVAILABLE_BYTES
-  ) {
-    emergencyReasons.push(
-      `memory_available_bytes<=${EMERGENCY_MEMORY_AVAILABLE_BYTES}`,
-    );
+  if (availableBytes != null && availableBytes <= emergencyAvailableBytes) {
+    emergencyReasons.push(`memory_available_bytes<=${emergencyAvailableBytes}`);
   }
   if (usedPercent != null && usedPercent >= PRESSURE_MEMORY_USED_PERCENT) {
     pressureReasons.push(
       `memory_used_percent>=${PRESSURE_MEMORY_USED_PERCENT}`,
     );
   }
-  if (
-    availableBytes != null &&
-    availableBytes <= PRESSURE_MEMORY_AVAILABLE_BYTES
-  ) {
-    pressureReasons.push(
-      `memory_available_bytes<=${PRESSURE_MEMORY_AVAILABLE_BYTES}`,
-    );
+  if (availableBytes != null && availableBytes <= pressureAvailableBytes) {
+    pressureReasons.push(`memory_available_bytes<=${pressureAvailableBytes}`);
   }
   if (usedPercent != null && usedPercent >= OBSERVE_MEMORY_USED_PERCENT) {
     observeReasons.push(`memory_used_percent>=${OBSERVE_MEMORY_USED_PERCENT}`);
   }
-  if (
-    availableBytes != null &&
-    availableBytes <= OBSERVE_MEMORY_AVAILABLE_BYTES
-  ) {
-    observeReasons.push(
-      `memory_available_bytes<=${OBSERVE_MEMORY_AVAILABLE_BYTES}`,
-    );
+  if (availableBytes != null && availableBytes <= observeAvailableBytes) {
+    observeReasons.push(`memory_available_bytes<=${observeAvailableBytes}`);
   }
   if (mode !== "metrics") {
     const resourceFindings = resourcePressureFindings(metrics);
@@ -932,7 +968,9 @@ export function startHostPressureController({
       return;
     }
     const maxStops =
-      classified.zone === "emergency" ? EMERGENCY_MAX_STOPS_PER_CYCLE : 1;
+      classified.zone === "emergency"
+        ? EMERGENCY_MAX_STOPS_PER_CYCLE
+        : PRESSURE_MAX_STOPS_PER_CYCLE;
     let stoppedCount = 0;
     for (const candidate of candidates) {
       const reason = candidateExplanation(candidate);

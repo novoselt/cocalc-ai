@@ -1828,7 +1828,11 @@ export interface Projects {
     service: string;
     stream_name: string;
   }>;
-  stop: (opts: { account_id?: string; project_id: string }) => Promise<void>;
+  stop: (opts: {
+    account_id?: string;
+    project_id: string;
+    force?: boolean;
+  }) => Promise<void>;
   status?: (opts: { account_id?: string; project_id: string }) => Promise<{
     state?: string;
     http_port?: number;
