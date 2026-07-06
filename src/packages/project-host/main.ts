@@ -36,6 +36,7 @@ import {
   ensureViewerFileDownloadReadServer,
   initFileServer,
   initFsServer,
+  listProvisionedProjects,
   PROJECT_HOST_FILE_UPLOAD_WRITE_SERVICE,
 } from "./file-server";
 import { handleProjectHostUpload } from "./upload";
@@ -66,6 +67,7 @@ import { wireHostsApi } from "./hub/hosts";
 import { wireNotificationsApi } from "./hub/notifications";
 import { wireSystemApi } from "./hub/system";
 import { startMasterRegistration } from "./master";
+import { startProvisionedInventoryReporter } from "./master-status";
 import { startReconciler } from "./reconcile";
 import {
   acpAdmissionLimitsFromEffectiveLimits,
@@ -1495,6 +1497,7 @@ export async function main(
   addCatchAll(app);
 
   let stopOnPremTunnel: (() => void) | undefined;
+  let stopProvisionedInventoryReporter: () => void = () => {};
   const publicHttpPort =
     Number(process.env.COCALC_PROJECT_HOST_PUBLIC_HTTP_PORT) || port;
   if (isProjectHostDevGcpReverseTunnelEnabled()) {
@@ -1550,6 +1553,9 @@ export async function main(
       });
     }
     stopRuntimePostureMonitor = startRuntimePostureMonitor();
+    stopProvisionedInventoryReporter = startProvisionedInventoryReporter({
+      listProjectIds: listProvisionedProjects,
+    });
     stopSnapshotBackupMaintenance = startProjectSnapshotBackupMaintenance({
       hostId,
     });
@@ -1580,6 +1586,7 @@ export async function main(
     closed = true;
     persistServer?.close?.();
     fsServer?.close?.();
+    stopProvisionedInventoryReporter();
     projectTouchService?.close?.();
     projectStorageInfoService?.close?.();
     projectDocumentActivityService?.close?.();
