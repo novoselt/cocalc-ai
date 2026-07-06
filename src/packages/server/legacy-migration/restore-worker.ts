@@ -13,6 +13,7 @@ import {
   ensureProjectFileServerClientReady,
   getProjectFileServerClient,
 } from "@cocalc/server/conat/file-server-client";
+import { createBackup as createProjectBackup } from "@cocalc/server/conat/api/project-backups";
 import { materializeRemoteProjectHostTarget } from "@cocalc/server/conat/route-project";
 import { issueSignedObjectDownload } from "@cocalc/server/project-backup/r2";
 import { createLro, touchLro, updateLro } from "@cocalc/server/lro/lro-db";
@@ -69,12 +70,9 @@ const PROJECT_HOST_RESTORE_RPC_TIMEOUT_MS = Math.max(
     3 * 60 * 60 * 1000,
   ),
 );
-const LEGACY_INITIAL_BACKUP_TIMEOUT_MS = Math.max(
-  5 * 60 * 1000,
-  envToInt(
-    "COCALC_LEGACY_PROJECT_INITIAL_BACKUP_TIMEOUT_MS",
-    3 * 60 * 60 * 1000,
-  ),
+const LEGACY_INITIAL_BACKUP_STALE_MS = Math.max(
+  60_000,
+  envToInt("COCALC_LEGACY_PROJECT_INITIAL_BACKUP_STALE_MS", 10 * 60 * 1000),
 );
 const FILE_SERVER_READY_TIMEOUT_MS = 60_000;
 const DEFAULT_LEGACY_PROJECTS_BUCKET = "cocalc-projects";
@@ -796,17 +794,16 @@ async function setProjectDiskQuotaOverride({
 
 async function createInitialLegacyMigrationBackup({
   row,
-  client,
   op_id,
 }: {
   row: LegacyRestoreRow;
-  client: Awaited<ReturnType<typeof getProjectFileServerClient>>;
   op_id: string;
 }): Promise<
   | {
-      status: "created";
-      id: string;
-      time: string;
+      status: "queued";
+      op_id: string;
+      scope_type: "project";
+      scope_id: string;
     }
   | {
       status: "failed";
@@ -824,27 +821,28 @@ async function createInitialLegacyMigrationBackup({
     },
   });
   try {
-    const backup = await withTimeout({
-      timeoutMs: LEGACY_INITIAL_BACKUP_TIMEOUT_MS,
-      message: `legacy migration initial backup timed out after ${LEGACY_INITIAL_BACKUP_TIMEOUT_MS}ms`,
-      promise: client.createBackup({
+    const backup = await createProjectBackup(
+      {
+        account_id: row.owner_account_id,
         project_id: row.project_id,
         tags: LEGACY_INITIAL_BACKUP_TAGS,
+      },
+      {
+        skip_collab_check: true,
+        skip_rootfs_portability_check: true,
         managed_egress_override: "legacy-migration-initial-backup",
-        lro: { op_id, scope_type: "project", scope_id: row.project_id },
-      }),
-    });
+        dedupe_key: `legacy-migration-initial-backup:${row.legacy_project_id}:${op_id}`,
+      },
+    );
     return {
-      status: "created",
-      id: backup.id,
-      time:
-        backup.time instanceof Date
-          ? backup.time.toISOString()
-          : `${backup.time}`,
+      status: "queued",
+      op_id: backup.op_id,
+      scope_type: backup.scope_type,
+      scope_id: backup.scope_id,
     };
   } catch (err) {
     const error = `${err}`.slice(0, 4000);
-    logger.warn("legacy migration initial backup failed", {
+    logger.warn("legacy migration initial backup queue failed", {
       legacy_project_id: row.legacy_project_id,
       project_id: row.project_id,
       err: error,
@@ -901,6 +899,103 @@ async function markFailed({
     row,
     restore_status: "failed",
     restore_error: error,
+  });
+}
+
+async function claimStaleInitialBackupRows({
+  limit,
+}: {
+  limit: number;
+}): Promise<LegacyRestoreRow[]> {
+  if (limit <= 0) return [];
+  await ensureLegacyMigrationRestoreSchema();
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const lock = await client.query<{ acquired: boolean }>(
+      "SELECT pg_try_advisory_xact_lock(hashtext('legacy-migration-project-restore-claim')) AS acquired",
+    );
+    if (lock.rows[0]?.acquired !== true) {
+      await client.query("ROLLBACK");
+      return [];
+    }
+    const recovered = await client.query<LegacyRestoreRow>(
+      `
+      WITH candidates AS (
+        SELECT i.legacy_project_id
+          FROM legacy_migration_project_imports i
+         WHERE i.restore_status='restoring'
+           AND i.project_id IS NOT NULL
+           AND i.owner_account_id IS NOT NULL
+           AND COALESCE(i.restore_progress->>'phase', '') = 'backup'
+           AND NULLIF(i.restore_progress->>'updated_at', '')::TIMESTAMPTZ
+                 < NOW() - ($4::INT * INTERVAL '1 millisecond')
+           AND (
+             i.restore_claimed_until IS NULL
+             OR i.restore_claimed_until < NOW()
+             OR i.restore_claimed_until < NOW() + ($3::INT * INTERVAL '1 millisecond')
+           )
+         ORDER BY i.restore_started ASC NULLS FIRST, i.updated ASC NULLS FIRST
+         FOR UPDATE SKIP LOCKED
+         LIMIT $1
+      )
+      UPDATE legacy_migration_project_imports i
+         SET restore_worker_id=$2,
+             restore_claimed_until=NOW() + ($5::INT * INTERVAL '1 millisecond'),
+             updated=NOW()
+        FROM candidates c
+        JOIN legacy_migration_projects p
+          ON p.legacy_project_id=c.legacy_project_id
+       WHERE i.legacy_project_id=c.legacy_project_id
+       RETURNING i.legacy_project_id,
+                 i.project_id,
+                 i.owner_account_id,
+                 COALESCE(i.restore_host_id::TEXT, '') AS host_id,
+                 p.artifact_bucket,
+                 p.artifact_key,
+                 p.artifact_manifest,
+                 p.disk_mb,
+                 i.restore_lro_op_id
+      `,
+      [
+        limit,
+        WORKER_ID,
+        ABANDONED_CLAIM_THRESHOLD_MS,
+        LEGACY_INITIAL_BACKUP_STALE_MS,
+        LEASE_MS,
+      ],
+    );
+    await client.query("COMMIT");
+    return recovered.rows;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function recoverStaleInitialBackup(row: LegacyRestoreRow): Promise<void> {
+  const op_id = await ensureRestoreLro(row);
+  logger.warn("recovering stale legacy migration initial backup phase", {
+    legacy_project_id: row.legacy_project_id,
+    project_id: row.project_id,
+    op_id,
+  });
+  const initialBackup = await createInitialLegacyMigrationBackup({
+    row,
+    op_id,
+  });
+  await markRestored({
+    row,
+    result: {
+      artifact_bucket: row.artifact_bucket,
+      artifact_key: row.artifact_key,
+      recovered_after_restore: true,
+      recovered_at: new Date().toISOString(),
+      worker_id: WORKER_ID,
+      legacy_initial_backup: initialBackup,
+    },
   });
 }
 
@@ -1013,7 +1108,6 @@ async function restoreOne(row: LegacyRestoreRow): Promise<void> {
     });
     const initialBackup = await createInitialLegacyMigrationBackup({
       row,
-      client,
       op_id,
     });
     await markRestored({
@@ -1045,6 +1139,39 @@ export async function triggerLegacyMigrationProjectRestoreWorker({
   maxParallelPerHost?: number;
 } = {}): Promise<void> {
   if (!(await isLegacyMigrationEnabled())) return;
+  if (inFlight >= maxParallelTotal) return;
+  let staleInitialBackupRows: LegacyRestoreRow[] = [];
+  try {
+    staleInitialBackupRows = await claimStaleInitialBackupRows({
+      limit: Math.max(0, maxParallelTotal - inFlight),
+    });
+  } catch (err) {
+    logger.warn("legacy migration stale initial backup recovery claim failed", {
+      err: `${err}`,
+    });
+  }
+  for (const row of staleInitialBackupRows) {
+    inFlight += 1;
+    void recoverStaleInitialBackup(row)
+      .catch((err) => {
+        logger.warn("legacy migration stale initial backup recovery failed", {
+          legacy_project_id: row.legacy_project_id,
+          project_id: row.project_id,
+          err: `${err}`,
+        });
+      })
+      .finally(() => {
+        inFlight = Math.max(0, inFlight - 1);
+        void triggerLegacyMigrationProjectRestoreWorker({
+          maxParallelTotal,
+          maxParallelPerHost,
+        }).catch((err) => {
+          logger.warn("legacy migration restore follow-up trigger failed", {
+            err: `${err}`,
+          });
+        });
+      });
+  }
   if (inFlight >= maxParallelTotal) return;
   let rows: LegacyRestoreRow[] = [];
   try {

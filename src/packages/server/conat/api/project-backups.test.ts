@@ -257,6 +257,31 @@ describe("project-backups.createBackup", () => {
     });
   });
 
+  it("allows the legacy migration initial backup override to bypass the managed egress preflight", async () => {
+    getManagedProjectEgressPolicyMock.mockResolvedValue({
+      allowed: false,
+      category: "backup-upload",
+    });
+    const { createBackup } = await import("./project-backups");
+
+    await createBackup(
+      {
+        account_id: "acct-1",
+        project_id: "proj-1",
+      },
+      { managed_egress_override: "legacy-migration-initial-backup" },
+    );
+
+    expect(getManagedProjectEgressPolicyMock).not.toHaveBeenCalled();
+    expect(createLroMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          managed_egress_override: "legacy-migration-initial-backup",
+        }),
+      }),
+    );
+  });
+
   it("allows trusted internal callers to bypass the portability guard", async () => {
     const { createBackup } = await import("./project-backups");
 
