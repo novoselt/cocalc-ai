@@ -14,6 +14,10 @@ import { capitalize, path_to_title } from "@cocalc/util/misc";
 import { AddPaymentMethodButton } from "./stripe-payment";
 import { AddressButton } from "./address";
 import { COLORS } from "@cocalc/util/theme";
+import {
+  FreshAuthModal,
+  useFreshAuthAction,
+} from "@cocalc/frontend/auth/fresh-auth";
 
 type PaymentMethod = any;
 
@@ -156,63 +160,72 @@ function PaymentMethodControls({
   paymentMethods,
   setPaymentMethods,
 }) {
+  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
+
   return (
-    <Space>
-      <div style={{ width: "150px", textAlign: "center" }}>
-        {!isDefault ? (
-          <Button
-            disabled={loading}
-            type="text"
-            onClick={async () => {
-              try {
-                setError("");
-                setLoading(true);
-                await setDefaultPaymentMethodUsingApi({
-                  default_payment_method: paymentMethod.id,
+    <>
+      <Space>
+        <div style={{ width: "150px", textAlign: "center" }}>
+          {!isDefault ? (
+            <Button
+              disabled={loading}
+              type="text"
+              onClick={async () => {
+                try {
+                  setError("");
+                  setLoading(true);
+                  await runFreshAuthAction(async () => {
+                    await setDefaultPaymentMethodUsingApi({
+                      default_payment_method: paymentMethod.id,
+                    });
+                    setDefaultPaymentMethod(paymentMethod.id);
+                  });
+                } catch (err) {
+                  setError(`${err}`);
+                } finally {
+                  setLoading(false);
+                }
+              }}
+            >
+              Set as Default
+            </Button>
+          ) : (
+            <b>
+              <Tag color="blue">Default</Tag>
+            </b>
+          )}
+        </div>
+        <Popconfirm
+          title="Are you sure?"
+          description="Deleting this PaymentMethod means it can no longer be used for payments."
+          onConfirm={async () => {
+            try {
+              setError("");
+              setLoading(true);
+              await runFreshAuthAction(async () => {
+                await deletePaymentMethod({
+                  payment_method: paymentMethod.id,
                 });
-                setDefaultPaymentMethod(paymentMethod.id);
-              } catch (err) {
-                setError(`${err}`);
-              } finally {
-                setLoading(false);
-              }
-            }}
-          >
-            Set as Default
+                setPaymentMethods(
+                  paymentMethods.filter((x) => x.id != paymentMethod.id),
+                );
+              });
+            } catch (err) {
+              setError(`${err}`);
+            } finally {
+              setLoading(false);
+            }
+          }}
+          okText="Yes"
+          cancelText="No"
+        >
+          <Button disabled={loading} danger type="text">
+            Delete
           </Button>
-        ) : (
-          <b>
-            <Tag color="blue">Default</Tag>
-          </b>
-        )}
-      </div>
-      <Popconfirm
-        title="Are you sure?"
-        description="Deleting this PaymentMethod means it can no longer be used for payments."
-        onConfirm={async () => {
-          try {
-            setError("");
-            setLoading(true);
-            await deletePaymentMethod({
-              payment_method: paymentMethod.id,
-            });
-            setPaymentMethods(
-              paymentMethods.filter((x) => x.id != paymentMethod.id),
-            );
-          } catch (err) {
-            setError(`${err}`);
-          } finally {
-            setLoading(false);
-          }
-        }}
-        okText="Yes"
-        cancelText="No"
-      >
-        <Button disabled={loading} danger type="text">
-          Delete
-        </Button>
-      </Popconfirm>
-    </Space>
+        </Popconfirm>
+      </Space>
+      <FreshAuthModal {...freshAuthModalProps} />
+    </>
   );
 }
 
