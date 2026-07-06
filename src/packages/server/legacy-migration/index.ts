@@ -626,9 +626,12 @@ function legacyArchiveAvailable(
     "artifact_status" | "artifact_key" | "artifact_manifest"
   >,
 ): boolean {
+  const artifactKey = clean(row.artifact_key);
+  const r2Key = clean(nestedValue(row.artifact_manifest, ["r2_key"]));
   return (
     row.artifact_status === "available" &&
-    !!clean(row.artifact_key) &&
+    !!artifactKey &&
+    r2Key === artifactKey &&
     manifestCompressedBytes(row.artifact_manifest) != null
   );
 }
@@ -3367,6 +3370,7 @@ export async function listProjects({
        OR (
          p.artifact_status='available'
          AND COALESCE(p.artifact_key, '') <> ''
+         AND COALESCE(p.artifact_manifest->>'r2_key', '')=p.artifact_key
          AND p.artifact_manifest IS NOT NULL
          AND (
            p.artifact_manifest ?| ARRAY[
