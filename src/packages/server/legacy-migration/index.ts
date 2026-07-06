@@ -1305,21 +1305,38 @@ export async function adminSearchLegacyProjects({
            projects.disk_mb,
            projects.artifact_status,
            projects.artifact_manifest,
-           imports.project_id,
-           imports.owner_account_id,
-           imports.status,
-           imports.restore_status,
+           active_import_project.project_id,
+           CASE
+             WHEN imports.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN imports.owner_account_id
+             ELSE NULL
+           END AS owner_account_id,
+           CASE
+             WHEN imports.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN imports.status
+             ELSE NULL
+           END AS status,
+           CASE
+             WHEN imports.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN imports.restore_status
+             ELSE NULL
+           END AS restore_status,
            EXISTS (
              SELECT 1
                FROM legacy_migration_project_import_accounts imported_accounts
               WHERE imported_accounts.legacy_project_id=projects.legacy_project_id
                 AND imported_accounts.account_id=$1
+                AND imported_accounts.project_id=imports.project_id
+                AND active_import_project.project_id IS NOT NULL
            ) AS joined
       FROM matched_projects projects
       LEFT JOIN legacy_migration_accounts owner
         ON owner.legacy_account_id=projects.owner_legacy_account_id
       LEFT JOIN legacy_migration_project_imports imports
         ON imports.legacy_project_id=projects.legacy_project_id
+      LEFT JOIN projects active_import_project
+        ON active_import_project.project_id=imports.project_id
+       AND COALESCE(active_import_project.deleted, false)=false
      ORDER BY projects.last_edited DESC NULLS LAST,
               projects.last_active DESC NULLS LAST,
               projects.legacy_project_id
@@ -1681,15 +1698,29 @@ export async function adminListLinkedLegacyProjects({
            projects.disk_mb,
            projects.artifact_status,
            projects.artifact_manifest,
-           imports.project_id,
-           imports.owner_account_id,
-           imports.status,
-           imports.restore_status,
+           active_import_project.project_id,
+           CASE
+             WHEN imports.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN imports.owner_account_id
+             ELSE NULL
+           END AS owner_account_id,
+           CASE
+             WHEN imports.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN imports.status
+             ELSE NULL
+           END AS status,
+           CASE
+             WHEN imports.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN imports.restore_status
+             ELSE NULL
+           END AS restore_status,
            EXISTS (
              SELECT 1
                FROM legacy_migration_project_import_accounts imported_accounts
               WHERE imported_accounts.legacy_project_id=projects.legacy_project_id
                 AND imported_accounts.account_id=$1
+                AND imported_accounts.project_id=imports.project_id
+                AND active_import_project.project_id IS NOT NULL
            ) AS joined,
            COUNT(*) OVER()::INTEGER AS total_count
       FROM matched_projects projects
@@ -1697,6 +1728,9 @@ export async function adminListLinkedLegacyProjects({
         ON owner.legacy_account_id=projects.owner_legacy_account_id
       LEFT JOIN legacy_migration_project_imports imports
         ON imports.legacy_project_id=projects.legacy_project_id
+      LEFT JOIN projects active_import_project
+        ON active_import_project.project_id=imports.project_id
+       AND COALESCE(active_import_project.deleted, false)=false
      ORDER BY projects.last_edited DESC NULLS LAST,
               projects.last_active DESC NULLS LAST,
               projects.legacy_project_id
@@ -3269,30 +3303,67 @@ export async function listProjects({
            p.artifact_status,
            p.artifact_manifest,
            matched.matched_legacy_account_ids,
-           i.project_id,
-           i.owner_account_id,
-           i.status,
-           i.restore_mode,
-           i.restore_status,
-           i.restore_error,
-           i.restore_lro_op_id,
-           i.restore_progress,
-           i.restore_result,
+           active_import_project.project_id,
+           CASE
+             WHEN i.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN i.owner_account_id
+             ELSE NULL
+           END AS owner_account_id,
+           CASE
+             WHEN i.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN i.status
+             ELSE NULL
+           END AS status,
+           CASE
+             WHEN i.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN i.restore_mode
+             ELSE NULL
+           END AS restore_mode,
+           CASE
+             WHEN i.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN i.restore_status
+             ELSE NULL
+           END AS restore_status,
+           CASE
+             WHEN i.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN i.restore_error
+             ELSE NULL
+           END AS restore_error,
+           CASE
+             WHEN i.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN i.restore_lro_op_id
+             ELSE NULL
+           END AS restore_lro_op_id,
+           CASE
+             WHEN i.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN i.restore_progress
+             ELSE NULL
+           END AS restore_progress,
+           CASE
+             WHEN i.project_id IS NULL OR active_import_project.project_id IS NOT NULL
+             THEN i.restore_result
+             ELSE NULL
+           END AS restore_result,
            COUNT(*) OVER()::INTEGER AS total_count,
            EXISTS (
              SELECT 1
                FROM legacy_migration_project_import_accounts a
               WHERE a.legacy_project_id=p.legacy_project_id
                 AND a.account_id=$1
+                AND a.project_id=i.project_id
+                AND active_import_project.project_id IS NOT NULL
            ) AS joined
       FROM legacy_migration_projects p
       JOIN matched
         ON matched.legacy_project_id=p.legacy_project_id
       LEFT JOIN legacy_migration_project_imports i
         ON i.legacy_project_id=p.legacy_project_id
+      LEFT JOIN projects active_import_project
+        ON active_import_project.project_id=i.project_id
+       AND COALESCE(active_import_project.deleted, false)=false
      WHERE (
        $6::BOOLEAN
-       OR i.project_id IS NOT NULL
+       OR active_import_project.project_id IS NOT NULL
        OR (
          p.artifact_status='available'
          AND COALESCE(p.artifact_key, '') <> ''
@@ -3665,9 +3736,14 @@ async function importOneProject({
       restore_status: LegacyMigrationProjectRestoreStatus | null;
       restore_lro_op_id: string | null;
     }>(
-      `SELECT project_id, restore_status, restore_lro_op_id
-         FROM legacy_migration_project_imports
-        WHERE legacy_project_id=$1`,
+      `SELECT active_import_project.project_id,
+              imports.restore_status,
+              imports.restore_lro_op_id
+         FROM legacy_migration_project_imports imports
+         JOIN projects active_import_project
+           ON active_import_project.project_id=imports.project_id
+          AND COALESCE(active_import_project.deleted, false)=false
+        WHERE imports.legacy_project_id=$1`,
       [legacy_project_id],
     );
     const existingProjectId = rows[0]?.project_id;
@@ -3716,6 +3792,7 @@ async function importOneProject({
     VALUES ($1, $2, 'creating', $3, $4, $5, $6, NOW(), NOW())
     ON CONFLICT (legacy_project_id) DO UPDATE
       SET owner_account_id=EXCLUDED.owner_account_id,
+          project_id=NULL,
           status='creating',
           restore_mode=EXCLUDED.restore_mode,
           restore_status=EXCLUDED.restore_status,
@@ -3732,8 +3809,18 @@ async function importOneProject({
           rootfs_image=EXCLUDED.rootfs_image,
           rootfs_image_id=EXCLUDED.rootfs_image_id,
           updated=NOW()
-    WHERE legacy_migration_project_imports.project_id IS NULL
+    WHERE (
+      legacy_migration_project_imports.project_id IS NULL
       AND legacy_migration_project_imports.status = 'failed'
+    ) OR (
+      legacy_migration_project_imports.project_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+          FROM projects active_import_project
+         WHERE active_import_project.project_id=legacy_migration_project_imports.project_id
+           AND COALESCE(active_import_project.deleted, false)=false
+      )
+    )
     RETURNING legacy_project_id
     `,
     [
@@ -3754,9 +3841,16 @@ async function importOneProject({
       restore_mode: LegacyMigrationProjectRestoreMode | null;
       status: string | null;
     }>(
-      `SELECT project_id, restore_mode, restore_status, restore_lro_op_id, status
-         FROM legacy_migration_project_imports
-        WHERE legacy_project_id=$1`,
+      `SELECT active_import_project.project_id,
+              imports.restore_mode,
+              imports.restore_status,
+              imports.restore_lro_op_id,
+              imports.status
+         FROM legacy_migration_project_imports imports
+         LEFT JOIN projects active_import_project
+           ON active_import_project.project_id=imports.project_id
+          AND COALESCE(active_import_project.deleted, false)=false
+        WHERE imports.legacy_project_id=$1`,
       [legacy_project_id],
     );
     const migration = rows[0];
@@ -4063,7 +4157,7 @@ async function importedProjectForAccount({
            p.manifest_key,
            p.artifact_status,
            p.artifact_manifest,
-           i.project_id,
+           active_import_project.project_id,
            i.owner_account_id,
            i.status,
            i.restore_mode,
@@ -4075,6 +4169,9 @@ async function importedProjectForAccount({
       FROM legacy_migration_project_imports i
       JOIN legacy_migration_projects p
         ON p.legacy_project_id=i.legacy_project_id
+      JOIN projects active_import_project
+        ON active_import_project.project_id=i.project_id
+       AND COALESCE(active_import_project.deleted, false)=false
      WHERE i.legacy_project_id=$1
        AND (
          i.owner_account_id=$2
@@ -4083,6 +4180,7 @@ async function importedProjectForAccount({
              FROM legacy_migration_project_import_accounts a
             WHERE a.legacy_project_id=i.legacy_project_id
               AND a.account_id=$2
+              AND a.project_id=i.project_id
          )
        )
      LIMIT 1
