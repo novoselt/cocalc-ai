@@ -226,6 +226,124 @@ can inspect, rebuild, and document the environment with normal terminal tools
 instead of relying on hidden browser state.
 `;
 
+export const OCTAVE_JUPYTER_KERNEL_BODY = String.raw`
+## What this page is for
+
+Use this guide when an existing CoCalc AI project needs GNU Octave in Jupyter.
+It adds Octave as another selectable notebook kernel in that one project.
+Python remains the normal default Jupyter kernel.
+
+This is project-local setup. It does not mean Octave is preinstalled in the
+CoCalc Legacy image, and it is not a RootFS publishing workflow. For many
+projects or a class, an admin-built RootFS image is the longer-term solution,
+but that image should be built through the proper RootFS build path and
+cold-restore validated before publication.
+
+This workflow was tested on 2026-07-04 in fresh CoCalc AI projects using the
+public CoCalc Legacy 2026.06 image. The fresh baseline had no \`octave\` binary
+and no Octave kernelspec. In that test, apt installed GNU Octave 11.1.0 and
+PyPI provided \`octave-kernel\` 1.1.0; exact package versions may change over
+time.
+
+## Install Octave and the Jupyter kernel
+
+Open a project terminal and run:
+
+~~~sh
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends octave gnuplot-nox
+
+python3 -m venv ~/.venvs/octave-kernel
+~/.venvs/octave-kernel/bin/python -m pip install --upgrade pip
+~/.venvs/octave-kernel/bin/python -m pip install --upgrade octave-kernel
+~/.venvs/octave-kernel/bin/python -m octave_kernel install --user --replace
+~~~
+
+The \`octave\` and \`gnuplot-nox\` packages are system packages, so they use
+\`sudo apt-get\`. The \`--no-install-recommends\` option keeps the project
+install smaller.
+
+The \`octave-kernel\` Python package belongs in a project-local virtual
+environment. Avoid installing it into the shared Sage/Python environment with
+\`sudo python3 -m pip install ...\`; that direct command can modify shared
+dependencies used by other tools. The venv-backed kernelspec keeps the kernel
+wrapper isolated while still letting Jupyter launch Octave.
+
+The \`--user --replace\` flags register the kernelspec for the project user and
+make the install command safe to rerun after updating the virtual environment.
+
+## Verify the installation
+
+Run these checks from a project terminal:
+
+~~~sh
+octave --version
+~/.venvs/octave-kernel/bin/python -m pip show octave-kernel
+jupyter kernelspec list
+cat ~/.local/share/jupyter/kernels/octave/kernel.json
+~~~
+
+Expected results:
+
+1. \`jupyter kernelspec list\` includes \`octave\`.
+2. \`kernel.json\` has an \`argv\` beginning with
+   \`/home/user/.venvs/octave-kernel/bin/python\`.
+3. The existing \`python3\` kernel is still present.
+4. Octave is selectable in notebooks, but it is not the default kernel.
+
+## Use Octave in a notebook
+
+Open or create a notebook, use the kernel selector to choose **Octave**, and
+run:
+
+~~~octave
+disp("octave-kernel-ok")
+disp(2 + 2)
+
+graphics_toolkit("gnuplot")
+x = 0:0.1:2*pi;
+plot(x, sin(x));
+~~~
+
+Expected notebook result:
+
+1. The text output includes \`octave-kernel-ok\`.
+2. The numeric output includes \`4\`.
+3. A plot renders.
+4. A warning that the \`gnuplot\` graphics toolkit is discouraged is acceptable
+   in this headless notebook setup.
+
+## Troubleshooting
+
+If the Octave kernel does not appear immediately, refresh the browser tab,
+reopen the notebook, or restart the project so Jupyter reloads kernelspecs.
+
+If plotting works but prints a \`gnuplot\` warning, that warning is acceptable
+for this headless notebook setup.
+
+If the kernel fails, verify that \`octave\` is on \`PATH\` and that the
+kernelspec points at \`~/.venvs/octave-kernel/bin/python\`:
+
+~~~sh
+which octave
+cat ~/.local/share/jupyter/kernels/octave/kernel.json
+~~~
+
+If you previously installed \`octave-kernel\` into the shared Python
+environment, you do not need to repeat that approach. Prefer the venv-backed
+kernelspec above for new projects and repairs.
+
+## Clean up
+
+Remove the kernelspec and virtual environment when the project no longer needs
+Octave notebooks:
+
+~~~sh
+jupyter kernelspec uninstall octave
+rm -rf ~/.venvs/octave-kernel
+~~~
+`;
+
 export const ROOTFS_BODY = String.raw`
 ## What the runtime image controls
 

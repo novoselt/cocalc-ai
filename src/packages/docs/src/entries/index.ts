@@ -77,6 +77,7 @@ const DOCS_ENTRY_IDS = [
   "jupyter.use-jupyter",
   "troubleshooting.jupyter-kernel-terminated",
   "jupyter.custom-kernels",
+  "jupyter.octave-kernel",
   "python.use-python",
   "latex.build-papers",
   "editors.r-markdown",
