@@ -1491,6 +1491,18 @@ async function startAccountLocalService(): Promise<void> {
       await legacyMigration.getFinancialMembershipGrantHomeBay(opts),
     legacyMigrationConfigureFinancialRenewalHomeBay: async (opts) =>
       await legacyMigration.configureFinancialMembershipRenewalHomeBay(opts),
+    legacyMigrationAdminSearchLegacyAccounts: async (opts) =>
+      await legacyMigration.adminSearchLegacyAccounts(opts),
+    legacyMigrationAdminSearchLegacyProjects: async (opts) =>
+      await legacyMigration.adminSearchLegacyProjects(opts),
+    legacyMigrationAdminListLegacyAccountLinks: async (opts) =>
+      await legacyMigration.adminListLegacyAccountLinks(opts),
+    legacyMigrationAdminLinkLegacyAccount: async (opts) =>
+      await legacyMigration.adminLinkLegacyAccount(opts),
+    legacyMigrationAdminUnlinkLegacyAccount: async (opts) =>
+      await legacyMigration.adminUnlinkLegacyAccount(opts),
+    legacyMigrationAdminListLinkedLegacyProjects: async (opts) =>
+      await legacyMigration.adminListLinkedLegacyProjects(opts),
     publicDirectoryShareResolve: async (opts) =>
       await publicDirectoryShares.resolve(opts),
     publicDirectoryShareListProject: async (opts) =>

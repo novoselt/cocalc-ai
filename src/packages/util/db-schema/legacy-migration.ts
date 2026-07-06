@@ -275,6 +275,84 @@ Table({
 });
 
 Table({
+  name: "legacy_migration_account_link_events",
+  rules: {
+    primary_key: "id",
+    pg_indexes: [
+      "account_id",
+      "legacy_account_id",
+      "actor_account_id",
+      "action",
+      "created",
+    ],
+    user_query: {
+      get: {
+        admin: true,
+        fields: {
+          id: null,
+          legacy_account_id: null,
+          account_id: null,
+          actor_account_id: null,
+          action: null,
+          reason: null,
+          support_reference: null,
+          claim_method: null,
+          metadata: null,
+          created: null,
+        },
+      },
+    },
+  },
+  fields: {
+    id: {
+      type: "uuid",
+      desc: "Unique audit event id.",
+    },
+    legacy_account_id: {
+      type: "string",
+      pg_type: "VARCHAR(128)",
+      desc: "Legacy account id affected by this admin support event.",
+    },
+    account_id: {
+      type: "uuid",
+      desc: "CoCalc-ai account whose migration access was affected.",
+      render: { type: "account" },
+    },
+    actor_account_id: {
+      type: "uuid",
+      desc: "Admin account that performed the action.",
+      render: { type: "account" },
+    },
+    action: {
+      type: "string",
+      pg_type: "VARCHAR(32)",
+      desc: "Admin support action, e.g. link or unlink.",
+    },
+    reason: {
+      type: "string",
+      desc: "Human-entered reason for the audited action.",
+    },
+    support_reference: {
+      type: "string",
+      desc: "Optional support ticket or external reference.",
+    },
+    claim_method: {
+      type: "string",
+      pg_type: "VARCHAR(64)",
+      desc: "Link claim method at the time of the event.",
+    },
+    metadata: {
+      type: "map",
+      desc: "Small structured evidence or context for the audited action.",
+    },
+    created: {
+      type: "timestamp",
+      desc: "When this audit event was created.",
+    },
+  },
+});
+
+Table({
   name: "legacy_migration_projects",
   rules: {
     primary_key: "legacy_project_id",
