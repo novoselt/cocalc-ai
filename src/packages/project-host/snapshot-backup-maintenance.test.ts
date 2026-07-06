@@ -106,6 +106,41 @@ describe("snapshot-backup-maintenance", () => {
     });
   });
 
+  it("runs backup maintenance even when snapshot maintenance fails", async () => {
+    listProjectMaintenanceSchedulesMock.mockResolvedValue([
+      {
+        project_id: "proj-1",
+        last_edited: "2026-04-10T22:00:00.000Z",
+        snapshots: {},
+        backups: {},
+        max_snapshots_per_project: 8,
+        max_backups_per_project: 5,
+      },
+    ]);
+    runScheduledSnapshotMaintenanceMock.mockRejectedValue(
+      new Error("snapshot limit"),
+    );
+    const { runProjectSnapshotBackupMaintenanceSweepOnce } =
+      await import("./snapshot-backup-maintenance");
+
+    await runProjectSnapshotBackupMaintenanceSweepOnce({
+      hostId: "host-1",
+    });
+
+    expect(runScheduledSnapshotMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(runScheduledBackupMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(runScheduledBackupMaintenanceMock).toHaveBeenCalledWith({
+      project_id: "proj-1",
+      counts: {
+        frequent: 0,
+        daily: 1,
+        weekly: 3,
+        monthly: 4,
+      },
+      limit: 5,
+    });
+  });
+
   it("starts a repeating timer and can be stopped", () => {
     jest.useFakeTimers();
     process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_SWEEP_MS = "60000";

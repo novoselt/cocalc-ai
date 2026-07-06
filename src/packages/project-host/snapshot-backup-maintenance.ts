@@ -124,19 +124,35 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
         row.snapshots,
       );
       if (!snapshotSchedule.disabled) {
-        await runScheduledSnapshotMaintenance({
-          project_id,
-          counts: scheduleToCounts(snapshotSchedule),
-          limit: row.max_snapshots_per_project ?? undefined,
-        });
+        try {
+          await runScheduledSnapshotMaintenance({
+            project_id,
+            counts: scheduleToCounts(snapshotSchedule),
+            limit: row.max_snapshots_per_project ?? undefined,
+          });
+        } catch (err) {
+          logger.warn("scheduled snapshot maintenance failed", {
+            hostId,
+            project_id,
+            err: `${err}`,
+          });
+        }
       }
       const backupSchedule = mergeSchedule(DEFAULT_BACKUP_COUNTS, row.backups);
       if (!backupSchedule.disabled) {
-        await runScheduledBackupMaintenance({
-          project_id,
-          counts: scheduleToCounts(backupSchedule, { allowFrequent: false }),
-          limit: row.max_backups_per_project ?? undefined,
-        });
+        try {
+          await runScheduledBackupMaintenance({
+            project_id,
+            counts: scheduleToCounts(backupSchedule, { allowFrequent: false }),
+            limit: row.max_backups_per_project ?? undefined,
+          });
+        } catch (err) {
+          logger.warn("scheduled backup maintenance failed", {
+            hostId,
+            project_id,
+            err: `${err}`,
+          });
+        }
       }
     } catch (err) {
       logger.warn("snapshot/backup maintenance failed", {
