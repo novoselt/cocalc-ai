@@ -205,6 +205,9 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
       }
     >
   >({});
+  const [expandedLegacyAccountIds, setExpandedLegacyAccountIds] = useState<
+    string[]
+  >([]);
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   const refreshLinks = async () => {
@@ -369,6 +372,9 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
   };
 
   const loadProjects = async (legacy_account_id: string) => {
+    setExpandedLegacyAccountIds((ids) =>
+      ids.includes(legacy_account_id) ? ids : [...ids, legacy_account_id],
+    );
     setProjectLists((state) => ({
       ...state,
       [legacy_account_id]: { ...state[legacy_account_id], loading: true },
@@ -424,7 +430,13 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
 
   const linkedProjectsPanel = (link: LegacyMigrationAdminLinkSummary) => {
     const state = projectLists[link.legacy_account_id];
-    if (!state) return null;
+    if (!state)
+      return (
+        <Alert
+          type="info"
+          message="Click Load projects to show projects for this legacy account."
+        />
+      );
     if (state.loading)
       return <Alert type="info" message="Loading projects..." />;
     if (state.error) return <Alert type="error" message={state.error} />;
@@ -472,6 +484,9 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
             dataSource={links}
             expandable={{
               expandedRowRender: linkedProjectsPanel,
+              expandedRowKeys: expandedLegacyAccountIds,
+              onExpandedRowsChange: (keys) =>
+                setExpandedLegacyAccountIds(keys.map(String)),
             }}
             columns={[
               {
