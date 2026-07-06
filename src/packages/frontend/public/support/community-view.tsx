@@ -3,11 +3,18 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Button, Flex, Typography } from "antd";
+import { Typography } from "antd";
 
-import { PublicSection } from "@cocalc/frontend/public/layout/shell";
+import { appPath, PublicNextStep } from "@cocalc/frontend/public/common";
+import { PublicCard, PublicGrid } from "@cocalc/frontend/public/layout/shell";
+import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 
-const { Paragraph, Text, Title } = Typography;
+const { Paragraph } = Typography;
+
+interface CommunityViewConfig {
+  help_email?: string;
+  zendesk?: boolean;
+}
 
 const COMMUNITY_LINKS = [
   {
@@ -29,38 +36,38 @@ const COMMUNITY_LINKS = [
   },
 ] as const;
 
-export default function CommunityView() {
+export default function CommunityView({
+  config = {},
+}: {
+  config?: CommunityViewConfig;
+}) {
+  const helpEmail = config.help_email ?? "help@cocalc.com";
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <Paragraph style={{ margin: 0, fontSize: 16 }}>
+      <Paragraph style={{ margin: 0, fontSize: PUBLIC_TYPE.body }}>
         Use these public channels to follow CoCalc updates and inspect the
-        source code. For account, billing, or project-specific help, open a
-        direct support ticket.
+        source code. For account, billing, or project-specific help,{" "}
+        {config.zendesk ? (
+          <a href={appPath("support/new")}>open a direct support ticket</a>
+        ) : (
+          <a href={`mailto:${helpEmail}`}>contact {helpEmail}</a>
+        )}
+        .
       </Paragraph>
-      <div
-        style={{
-          display: "grid",
-          gap: 16,
-          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-        }}
-      >
+      <PublicGrid columns={3}>
         {COMMUNITY_LINKS.map((item) => (
-          <PublicSection key={item.href}>
-            <Text strong type="secondary">
-              COMMUNITY
-            </Text>
-            <Title level={3} style={{ margin: 0 }}>
-              {item.title}
-            </Title>
+          <PublicCard
+            href={item.href}
+            key={item.href}
+            rel="noreferrer"
+            target="_blank"
+            title={item.title}
+          >
             <Paragraph style={{ margin: 0 }}>{item.description}</Paragraph>
-            <Flex wrap gap={8}>
-              <Button type="primary" href={item.href}>
-                Open
-              </Button>
-            </Flex>
-          </PublicSection>
+          </PublicCard>
         ))}
-      </div>
+      </PublicGrid>
+      <PublicNextStep heading="Ready to get started, or need direct help?" />
     </div>
   );
 }

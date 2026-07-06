@@ -17,6 +17,7 @@ import {
   DocsPrintContent,
   DOCS_BROWSER_MUTED_TITLE_STYLE,
   DOCS_BROWSER_PAGE_STYLE,
+  docsSiteProfileFromLocation,
   type DocsBrowserAction,
   type DocsBrowserActionParameters,
 } from "@cocalc/frontend/docs/browser";
@@ -76,7 +77,11 @@ export function DocsPage({ print, slug }: { print?: boolean; slug?: string }) {
   const accountId = `${useTypedRedux("account", "account_id") ?? ""}`.trim();
   const isAdmin = !!useTypedRedux("account", "is_admin");
   const docsAccess = useMemo<DocsAccess>(
-    () => ({ includeAdmin: isAdmin, includeSignedIn: !!accountId }),
+    () => ({
+      includeAdmin: isAdmin,
+      includeSignedIn: !!accountId,
+      siteProfile: docsSiteProfileFromLocation(),
+    }),
     [accountId, isAdmin],
   );
   const docsPrivateState = useDocsPrivateState(accountId);

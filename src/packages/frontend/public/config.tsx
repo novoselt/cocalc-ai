@@ -6,6 +6,7 @@
 import type { ReactNode } from "react";
 import { createContext, useContext } from "react";
 
+import type { DocsAccess } from "@cocalc/docs";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { SITE_NAME } from "@cocalc/util/theme";
 import type { SignupEmailDomainPublicPolicy } from "@cocalc/util/accounts/signup-email-domain-policy";
@@ -20,6 +21,7 @@ export interface PublicConfig {
   cocalc_product?: string;
   cookie_banner_enabled?: boolean;
   cookie_banner_text?: string;
+  dns?: string;
   help_email?: string;
   imprint?: string;
   is_admin?: boolean;
@@ -137,4 +139,25 @@ export function arePublicPoliciesVisible(config?: PublicConfig): boolean {
     getExternalPoliciesUrl(config) != null ||
     getPublicPolicyPages(config) !== "none"
   );
+}
+
+function normalizedPublicHost(host?: string): string {
+  return `${host ?? ""}`.trim().replace(/:\d+$/, "").toLowerCase();
+}
+
+export function isCocalcAiPublicSite(config?: PublicConfig): boolean {
+  const configuredHost = normalizedPublicHost(config?.dns);
+  if (configuredHost) return configuredHost === "cocalc.ai";
+  if (typeof window === "undefined") return false;
+  return normalizedPublicHost(window.location.hostname) === "cocalc.ai";
+}
+
+export function getPublicDocsAccess(config?: PublicConfig): DocsAccess {
+  return {
+    includeAdmin: config?.is_admin === true,
+    includeSignedIn:
+      config?.is_authenticated === true || config?.is_admin === true,
+    product: config?.cocalc_product === "plus" ? "plus" : undefined,
+    siteProfile: isCocalcAiPublicSite(config) ? "cocalc-ai" : undefined,
+  };
 }

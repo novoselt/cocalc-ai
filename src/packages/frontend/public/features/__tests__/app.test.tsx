@@ -85,11 +85,9 @@ describe("PublicFeaturesApp", () => {
         level: 1,
       }),
     ).not.toBeNull();
-    expect(
-      screen.getByText("Codex agent chat where the project already lives."),
-    ).not.toBeNull();
-    expect(screen.getByText("One AI path")).not.toBeNull();
-    expect(screen.getByText("Create account")).not.toBeNull();
+    expect(screen.getByText("Codex where the work happens.")).not.toBeNull();
+    expect(screen.getByText("Run an agent turn in order.")).not.toBeNull();
+    expect(screen.getAllByText("Create account").length).toBeGreaterThan(0);
   });
 
   it("uses projects as the ai CTA for authenticated users", () => {
@@ -357,6 +355,24 @@ describe("PublicFeaturesApp", () => {
     expect(screen.getByText("Start with a board or deck")).not.toBeNull();
   });
 
+  it("renders the richer api feature page", () => {
+    render(
+      <PublicFeaturesApp
+        config={{ help_email: "help@example.com", site_name: "Launchpad" }}
+        initialRoute={{ slug: "api", view: "detail" }}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Drive your projects, notebooks, and terminals from your own code",
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("A documented route, not fragile UI scripts"),
+    ).not.toBeNull();
+  });
+
   it.each([
     {
       slug: "sage",
@@ -375,8 +391,9 @@ describe("PublicFeaturesApp", () => {
     },
     {
       slug: "octave",
-      title: "Run Octave in notebooks, scripts, and terminals.",
-      section: "A browser-based path for MATLAB-style teaching and scripts.",
+      title:
+        "Run GNU Octave with notebooks, .m files, and shared numerical work.",
+      section: "Run reproducible Octave work without local setup drift.",
     },
     {
       slug: "slides",

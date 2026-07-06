@@ -13,6 +13,7 @@ import {
   PROJECT_SECRETS_BODY,
   PUBLISH_FILES_BODY,
   PUBLISH_ROOTFS_BODY,
+  RSTUDIO_PROJECT_BODY,
   ROOTFS_BODY,
   TASKS_BODY,
 } from "../content";
@@ -188,6 +189,33 @@ export const PROJECTS_ENTRIES: DocsEntry[] = [
     summary:
       "Choose, customize, and reuse the Linux software stack for a project.",
     title: "Project images",
+  },
+  {
+    actions: [
+      {
+        description: "Open the top-level Projects page.",
+        executable: true,
+        id: "projects.create.open",
+        label: "Open projects",
+      },
+    ],
+    audiences: ["researchers", "students", "teams"],
+    body: RSTUDIO_PROJECT_BODY.trim(),
+    category: "Projects",
+    id: "projects.rstudio-project",
+    image: docsIcon(
+      "/public/docs/runtime-image-09add8c9.webp",
+      "A layered project image that defines a project's software stack",
+    ),
+    lastReviewed: "2026-07-04",
+    searchKeywords:
+      "rstudio rstudio server r jupyter project image rootfs tidyverse",
+    siteProfiles: ["cocalc-ai"],
+    slug: "projects/rstudio-project",
+    status: "ready",
+    summary:
+      "Create a CoCalc AI project with the RStudio and Jupyter image, then launch RStudio Server.",
+    title: "Create a project with RStudio",
   },
   {
     actions: [

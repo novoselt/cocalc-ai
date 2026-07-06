@@ -115,6 +115,56 @@ environment, or host placement. For the short creation flow, see
 [Create a project](/docs/projects/create-project).
 `;
 
+export const RSTUDIO_PROJECT_BODY = String.raw`
+## What this page is for
+
+Use this page when you want an RStudio Server workspace on CoCalc AI. The
+workflow assumes the hosted CoCalc AI site has a published project image that
+includes RStudio and Jupyter.
+
+For generic runtime-image setup, see [Project images](/docs/projects/runtime-image).
+
+## Create the project
+
+1. Open the **Projects** page.
+2. Choose **Create Project**.
+3. Give the project a clear name, such as \`R project\` or the name of the
+   analysis.
+4. Select the **RStudio and Jupyter** software image.
+5. Create and open the project.
+6. Wait for the project runtime to start.
+7. Launch **RStudio Server** from the project app/runtime controls.
+
+The selected software image controls the starting runtime. It can include
+RStudio, Jupyter, terminals, LaTeX, and libraries for the work the project
+needs.
+
+## Keep the work together
+
+Project files stay together: R scripts, notebooks, data, rendered output, and
+notes all live in one collaborative workspace. Add collaborators only when they
+should share access to the same files, terminals, notebooks, and app sessions.
+
+## Install more packages when needed
+
+Install R packages from RStudio or an R shell:
+
+~~~r
+install.packages("tidyverse")
+~~~
+
+Install system libraries from a project terminal when needed:
+
+~~~bash
+sudo apt-get update
+sudo apt-get install -y libcurl4-openssl-dev
+~~~
+
+Runtime changes are project-specific unless they are baked into a reusable
+project image. If the same environment should be reused by other projects, use
+the project image publishing workflow instead of repeating manual setup.
+`;
+
 export const PUBLISH_FILES_BODY = String.raw`
 ## What file publishing is for
 

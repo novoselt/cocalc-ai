@@ -109,6 +109,39 @@ describe("public/docs", () => {
     expect(getDocsEntry("admin.users", { includeAdmin: true })?.title).toBe(
       "Manage users as an admin",
     );
+    expect(getDocsEntry("projects.rstudio-project")).toBeUndefined();
+    expect(
+      getDocsEntry("projects.rstudio-project", {
+        siteProfile: "cocalc-ai",
+      })?.title,
+    ).toBe("Create a project with RStudio");
+    expect(getDocsEntry("jupyter.octave-kernel")).toBeUndefined();
+    expect(
+      searchDocsEntries("octave jupyter kernel matlab gnuplot").map(
+        (entry) => entry.id,
+      ),
+    ).not.toContain("jupyter.octave-kernel");
+    const octaveKernel = getDocsEntry("jupyter.octave-kernel", {
+      siteProfile: "cocalc-ai",
+    });
+    expect(octaveKernel?.title).toBe("Install the Octave Jupyter kernel");
+    expect(octaveKernel?.category).toBe("Jupyter");
+    expect(octaveKernel?.slug).toBe("jupyter/install-octave-kernel");
+    expect(octaveKernel?.body).toContain(
+      "Python remains the normal default Jupyter kernel",
+    );
+    expect(octaveKernel?.body).toMatch(
+      /does not mean Octave is preinstalled in the\s+CoCalc Legacy image/,
+    );
+    expect(octaveKernel?.body).toContain("not a RootFS publishing workflow");
+    expect(octaveKernel?.body).not.toMatch(
+      /SECURITY_DENY|rootfs-shell-missing|6f21c231|f9b09f79/i,
+    );
+    expect(
+      searchDocsEntries("octave jupyter kernel matlab gnuplot", 8, {
+        siteProfile: "cocalc-ai",
+      }).map((entry) => entry.id)[0],
+    ).toBe("jupyter.octave-kernel");
     expect(
       searchDocsEntries("impersonation password reset 2FA", 8, {
         includeAdmin: true,
@@ -179,6 +212,64 @@ describe("public/docs", () => {
     expect(
       screen.queryByRole("link", { name: /Manage users as an admin/ }),
     ).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: /Create a project with RStudio/ }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("link", {
+        name: /Install the Octave Jupyter kernel/,
+      }),
+    ).toBeNull();
+  });
+
+  it("renders the cocalc.ai-only RStudio docs page when host-gated", () => {
+    render(
+      <PublicDocsApp
+        config={{ dns: "cocalc.ai", site_name: "CoCalc" }}
+        initialRoute={{
+          slug: "projects/rstudio-project",
+          view: "docs-detail",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Create a project with RStudio" }),
+    ).not.toBeNull();
+    expect(screen.getByText("RStudio and Jupyter")).not.toBeNull();
+  });
+
+  it("renders the cocalc.ai-only Octave kernel docs page when host-gated", () => {
+    expect(
+      listDocsEntries({ siteProfile: "cocalc-ai" }).map((entry) => entry.id),
+    ).toContain("jupyter.octave-kernel");
+
+    render(
+      <PublicDocsApp
+        config={{ dns: "cocalc.ai", site_name: "CoCalc" }}
+        initialRoute={{
+          slug: "jupyter/install-octave-kernel",
+          view: "docs-detail",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Install the Octave Jupyter kernel",
+      }),
+    ).not.toBeNull();
+    expect(screen.getByText(/project-local setup/)).not.toBeNull();
+    expect(
+      screen.getAllByText(/--no-install-recommends/).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/Octave is selectable in notebooks/),
+    ).not.toBeNull();
+    expect(screen.getByTestId("docs-markdown").textContent).toMatch(
+      /gnuplot\s+graphics toolkit is discouraged/,
+    );
+    expect(screen.queryByText(/SECURITY_DENY/)).toBeNull();
   });
 
   it("renders public docs as a print-friendly single page", () => {
