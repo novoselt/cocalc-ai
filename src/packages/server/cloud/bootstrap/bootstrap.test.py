@@ -388,6 +388,13 @@ class BootstrapKernelKeyLimitsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
             calls: list[tuple[list[str], str]] = []
+            stale_conf = (
+                Path(tmpdir) / "sysctl.d" / "60-cocalc-project-host-keyring.conf"
+            )
+            stale_conf.parent.mkdir(parents=True)
+            stale_conf.write_text(
+                "[kernel]\nkeys.maxkeys = 100\n", encoding="utf-8"
+            )
 
             original = bootstrap.run_best_effort
             bootstrap.run_best_effort = (
@@ -401,10 +408,7 @@ class BootstrapKernelKeyLimitsTest(unittest.TestCase):
                 bootstrap.run_best_effort = original
 
             conf = Path(tmpdir) / "sysctl.d" / "60-cocalc-project-host-keyring.conf"
-            self.assertEqual(
-                conf.read_text(encoding="utf-8"),
-                "[kernel]\nkeys.maxkeys = 20000\nkeys.maxbytes = 25000000\n",
-            )
+            self.assertFalse(conf.exists())
             self.assertEqual(
                 calls,
                 [
@@ -425,6 +429,13 @@ class BootstrapInotifyLimitsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
             calls: list[tuple[list[str], str]] = []
+            stale_conf = (
+                Path(tmpdir) / "sysctl.d" / "60-cocalc-project-host-inotify.conf"
+            )
+            stale_conf.parent.mkdir(parents=True)
+            stale_conf.write_text(
+                "[fs.inotify]\nmax_user_instances = 100\n", encoding="utf-8"
+            )
 
             original = bootstrap.run_best_effort
             bootstrap.run_best_effort = (
@@ -438,13 +449,7 @@ class BootstrapInotifyLimitsTest(unittest.TestCase):
                 bootstrap.run_best_effort = original
 
             conf = Path(tmpdir) / "sysctl.d" / "60-cocalc-project-host-inotify.conf"
-            self.assertEqual(
-                conf.read_text(encoding="utf-8"),
-                "[fs.inotify]\n"
-                "max_user_instances = 8192\n"
-                "max_user_watches = 2097152\n"
-                "max_queued_events = 65536\n",
-            )
+            self.assertFalse(conf.exists())
             self.assertEqual(
                 calls,
                 [
@@ -635,6 +640,7 @@ class BootstrapRootlessPodmanResetTest(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
+            runtime_uid, _runtime_gid = bootstrap.resolve_runtime_user_identity(cfg)
             recorded = []
             removed = []
             writes = []
@@ -677,17 +683,26 @@ class BootstrapRootlessPodmanResetTest(unittest.TestCase):
             )
             self.assertIn(
                 (
-                    str(Path(tmpdir) / "home" / ".config" / "containers" / "containers.conf"),
+                    str(
+                        Path(tmpdir)
+                        / "home"
+                        / ".config"
+                        / "containers"
+                        / "containers.conf"
+                    ),
                     '[engine]\ncgroup_manager = "cgroupfs"\n',
                 ),
                 writes,
             )
             self.assertIn(
                 (
-                    ["chown", "missing-runtime-user:missing-runtime-user",
-                     "/mnt/cocalc/data/containers/rootless/missing-runtime-user",
-                     "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage",
-                     "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run"],
+                    [
+                        "chown",
+                        "missing-runtime-user:missing-runtime-user",
+                        "/mnt/cocalc/data/containers/rootless/missing-runtime-user",
+                        "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage",
+                        f"/run/user/{runtime_uid}/containers",
+                    ],
                     "chown rootless podman path roots",
                 ),
                 recorded,
@@ -1028,6 +1043,7 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
     def test_configure_podman_chowns_rootless_storage_children(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
+            runtime_uid, _runtime_gid = bootstrap.resolve_runtime_user_identity(cfg)
             recorded = []
             writes = []
 
@@ -1100,7 +1116,7 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
                         "missing-runtime-user:missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage",
-                        "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run",
+                        f"/run/user/{runtime_uid}/containers",
                     ],
                     "chown rootless podman path roots",
                 ),
@@ -1319,6 +1335,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "default_podman_runtime_dir()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'ensure_owned_runtime_dir "${run_dir}/containers"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 'systemctl start "${service}"',
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -1331,8 +1355,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "podman info >/dev/null",
+                "cleanup_podman_runtime_state()",
                 rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "cannot re-exec process to join the existing user namespace",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "podman info >/dev/null", rootctl.read_text(encoding="utf-8")
             )
             self.assertIn(
                 "capture-forensics)",
@@ -1344,6 +1375,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn(
                 "fs.inotify.max_user_instances = 8192",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "/etc/sysctl.d/60-cocalc-project-host-inotify.conf",
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
