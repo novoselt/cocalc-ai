@@ -72,6 +72,7 @@ import {
   STUDENT_SUBDIR,
 } from "./consts";
 import { DUE_DATE_FILENAME } from "../common/consts";
+import { courseDirectoryCopySource } from "../common/copy-source";
 import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import type {
   CourseAssignmentPatchDestination,
@@ -1118,7 +1119,10 @@ ${details}
         desc: `Copying files to ${student_name}'s project`,
       });
       const opts = {
-        src: { project_id: store.get("course_project_id"), path: src_path },
+        src: await courseDirectoryCopySource({
+          project_id: store.get("course_project_id"),
+          path: src_path,
+        }),
         dest: {
           project_id: student_project_id,
           path: this.assignment_path(assignment, "target_path"),
@@ -1338,7 +1342,10 @@ ${details}
           desc: `Copying assignment to ${dests.length} students`,
         });
         const op = await webapp_client.project_client.copyPathBetweenProjects({
-          src: { project_id: store.get("course_project_id"), path: src_path },
+          src: await courseDirectoryCopySource({
+            project_id: store.get("course_project_id"),
+            path: src_path,
+          }),
           dests,
           options: { recursive: true, force: !!overwrite },
         });
