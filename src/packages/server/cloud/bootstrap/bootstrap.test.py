@@ -640,7 +640,6 @@ class BootstrapRootlessPodmanResetTest(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
-            runtime_uid, _runtime_gid = bootstrap.resolve_runtime_user_identity(cfg)
             recorded = []
             removed = []
             writes = []
@@ -701,7 +700,7 @@ class BootstrapRootlessPodmanResetTest(unittest.TestCase):
                         "missing-runtime-user:missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage",
-                        f"/run/user/{runtime_uid}/containers",
+                        "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run",
                     ],
                     "chown rootless podman path roots",
                 ),
@@ -1043,7 +1042,6 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
     def test_configure_podman_chowns_rootless_storage_children(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
-            runtime_uid, _runtime_gid = bootstrap.resolve_runtime_user_identity(cfg)
             recorded = []
             writes = []
 
@@ -1116,7 +1114,7 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
                         "missing-runtime-user:missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage",
-                        f"/run/user/{runtime_uid}/containers",
+                        "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run",
                     ],
                     "chown rootless podman path roots",
                 ),

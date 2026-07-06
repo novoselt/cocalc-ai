@@ -1407,7 +1407,7 @@ def ensure_owned_runtime_dir(path: Path, uid: int, gid: int) -> None:
 
 
 def default_podman_runtime_dir(uid: int) -> str:
-    return f"/run/user/{uid}/cocalc-podman-runtime"
+    return f"/mnt/cocalc/data/tmp/cocalc-podman-runtime-{uid}"
 
 
 def ensure_runtime_user_manager(cfg: BootstrapConfig) -> None:
@@ -3291,7 +3291,7 @@ def configure_podman(cfg: BootstrapConfig) -> None:
         user_config = user_config_root / "containers"
         rootless_root = Path(f"/mnt/cocalc/data/containers/rootless/{cfg.ssh_user}")
         rootless_storage = rootless_root / "storage"
-        rootless_run = Path(f"/run/user/{desired_uid}/containers")
+        rootless_run = rootless_root / "run"
         user_config_root.mkdir(parents=True, exist_ok=True)
         run_best_effort(
             cfg,
@@ -4083,7 +4083,7 @@ runtime_user_run_dir() {
 }
 
 default_podman_runtime_dir() {
-  printf '%s/cocalc-podman-runtime\n' "$(runtime_user_run_dir)"
+  printf '/mnt/cocalc/data/tmp/cocalc-podman-runtime-%s\n' "$(runtime_uid)"
 }
 
 podman_runtime_dir() {

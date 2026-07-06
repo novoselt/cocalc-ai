@@ -71,6 +71,9 @@ jest.mock("./money", () => () => null);
 jest.mock("./admin-membership", () => ({
   AdminMembership: () => null,
 }));
+jest.mock("./legacy-migration", () => ({
+  LegacyMigrationAdmin: () => null,
+}));
 
 jest.mock("@cocalc/frontend/purchases/managed-egress-history", () => ({
   ManagedEgressHistoryButton: ({ buttonText, user_account_id }: any) => (
