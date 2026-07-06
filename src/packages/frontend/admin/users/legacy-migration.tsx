@@ -31,6 +31,7 @@ import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type {
   LegacyMigrationAdminAccountSummary,
   LegacyMigrationAdminLinkSummary,
+  LegacyMigrationAdminProjectAccountCandidate,
   LegacyMigrationAdminProjectSummary,
 } from "@cocalc/conat/hub/api/legacy-migration";
 
@@ -49,6 +50,20 @@ function formatDiskMb(value?: number | null): string {
 function renderDate(value?: Date | string | null) {
   if (!value) return <Text type="secondary">unknown</Text>;
   return <TimeAgo date={value} />;
+}
+
+function legacyAccountDisplayName(
+  account: Pick<
+    LegacyMigrationAdminAccountSummary,
+    "display_name" | "first_name" | "last_name" | "email_address"
+  >,
+): string {
+  return (
+    account.display_name ||
+    [account.first_name, account.last_name].filter(Boolean).join(" ") ||
+    account.email_address ||
+    "No legacy name/email"
+  );
 }
 
 function AccountIdentity({
@@ -83,12 +98,7 @@ function AccountIdentity({
           <Tag color="orange">support-linked elsewhere</Tag>
         )}
       </Space>
-      <Text>
-        {account.display_name ||
-          [account.first_name, account.last_name].filter(Boolean).join(" ") ||
-          account.email_address ||
-          "No legacy name/email"}
-      </Text>
+      <Text>{legacyAccountDisplayName(account)}</Text>
       {account.email_address && (
         <Text type="secondary">{account.email_address}</Text>
       )}
@@ -99,6 +109,24 @@ function AccountIdentity({
       </Text>
     </Space>
   );
+}
+
+function projectCandidateAccounts(
+  project: LegacyMigrationAdminProjectSummary,
+): LegacyMigrationAdminProjectAccountCandidate[] {
+  const candidates = project.candidate_legacy_accounts;
+  if (candidates != null && candidates.length > 0) {
+    return candidates;
+  }
+  return project.candidate_legacy_account_ids.map((legacy_account_id) => ({
+    legacy_account_id,
+    role:
+      legacy_account_id === project.owner_legacy_account_id
+        ? "owner"
+        : "collaborator",
+    target_claim_methods: [],
+    support_admin_linked_account_ids: [],
+  }));
 }
 
 function ProjectsTable({
@@ -205,6 +233,9 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
       }
     >
   >({});
+  const [expandedLegacyAccountIds, setExpandedLegacyAccountIds] = useState<
+    string[]
+  >([]);
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   const refreshLinks = async () => {
@@ -369,6 +400,9 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
   };
 
   const loadProjects = async (legacy_account_id: string) => {
+    setExpandedLegacyAccountIds((ids) =>
+      ids.includes(legacy_account_id) ? ids : [...ids, legacy_account_id],
+    );
     setProjectLists((state) => ({
       ...state,
       [legacy_account_id]: { ...state[legacy_account_id], loading: true },
@@ -424,7 +458,13 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
 
   const linkedProjectsPanel = (link: LegacyMigrationAdminLinkSummary) => {
     const state = projectLists[link.legacy_account_id];
-    if (!state) return null;
+    if (!state)
+      return (
+        <Alert
+          type="info"
+          message="Click Load projects to show projects for this legacy account."
+        />
+      );
     if (state.loading)
       return <Alert type="info" message="Loading projects..." />;
     if (state.error) return <Alert type="error" message={state.error} />;
@@ -472,6 +512,9 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
             dataSource={links}
             expandable={{
               expandedRowRender: linkedProjectsPanel,
+              expandedRowKeys: expandedLegacyAccountIds,
+              onExpandedRowsChange: (keys) =>
+                setExpandedLegacyAccountIds(keys.map(String)),
             }}
             columns={[
               {
@@ -607,29 +650,68 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
                         key: "candidates",
                         render: (_, project) => (
                           <Space direction="vertical" size={4}>
-                            {project.candidate_legacy_account_ids.map((id) => (
-                              <Button
-                                key={id}
-                                size="small"
-                                disabled={
-                                  project.target_claim_methods.length > 0
-                                }
-                                onClick={() =>
-                                  openLink({
-                                    legacy_account_id: id,
-                                    label: project.title,
-                                    evidence: {
-                                      kind: "project-search",
-                                      query: projectQuery.trim(),
-                                      legacy_project_id:
-                                        project.legacy_project_id,
-                                    },
-                                  })
-                                }
-                              >
-                                Link {shortId(id)}
-                              </Button>
-                            ))}
+                            {projectCandidateAccounts(project).map(
+                              (candidate) => (
+                                <Space
+                                  key={candidate.legacy_account_id}
+                                  direction="vertical"
+                                  size={0}
+                                >
+                                  <Space wrap>
+                                    <Button
+                                      size="small"
+                                      disabled={
+                                        project.target_claim_methods.length > 0
+                                      }
+                                      onClick={() =>
+                                        openLink({
+                                          legacy_account_id:
+                                            candidate.legacy_account_id,
+                                          label:
+                                            legacyAccountDisplayName(
+                                              candidate,
+                                            ) || project.title,
+                                          evidence: {
+                                            kind: "project-search",
+                                            query: projectQuery.trim(),
+                                            legacy_project_id:
+                                              project.legacy_project_id,
+                                          },
+                                        })
+                                      }
+                                    >
+                                      Link{" "}
+                                      {shortId(candidate.legacy_account_id)}
+                                    </Button>
+                                    <Tag>{candidate.role}</Tag>
+                                    {candidate.target_claim_methods.map(
+                                      (method) => (
+                                        <Tag key={method} color="green">
+                                          {method}
+                                        </Tag>
+                                      ),
+                                    )}
+                                    {candidate.support_admin_linked_account_ids
+                                      .length > 0 && (
+                                      <Tag color="orange">
+                                        support-linked elsewhere
+                                      </Tag>
+                                    )}
+                                  </Space>
+                                  <Text>
+                                    {legacyAccountDisplayName(candidate)}
+                                  </Text>
+                                  {candidate.email_address && (
+                                    <Text type="secondary">
+                                      {candidate.email_address}
+                                    </Text>
+                                  )}
+                                  <Text code>
+                                    {candidate.legacy_account_id}
+                                  </Text>
+                                </Space>
+                              ),
+                            )}
                             {project.target_claim_methods.length > 0 && (
                               <Tag color="green">
                                 Already linked through{" "}

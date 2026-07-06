@@ -38,6 +38,15 @@ let resendTimer: NodeJS.Timeout | undefined;
 let masterClient: Client | undefined;
 let pendingInventory: { project_ids: string[]; checked_at: number } | null =
   null;
+const DEFAULT_PROVISIONED_INVENTORY_INTERVAL_MS = 5 * 60 * 1000;
+
+function provisionedInventoryIntervalMs(): number {
+  const raw = Number(process.env.COCALC_PROJECT_HOST_INVENTORY_INTERVAL_MS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_PROVISIONED_INVENTORY_INTERVAL_MS;
+  }
+  return Math.max(60_000, Math.floor(raw));
+}
 
 async function deleteProjectDataLocal(project_id: string) {
   try {
@@ -138,6 +147,53 @@ export function queueProvisionedInventory(project_ids: string[]) {
   reportProvisionedInventory().catch((err) =>
     logger.debug("reportProvisionedInventory failed", { err }),
   );
+}
+
+export function startProvisionedInventoryReporter({
+  listProjectIds,
+  intervalMs = provisionedInventoryIntervalMs(),
+}: {
+  listProjectIds: () => Promise<string[]> | string[];
+  intervalMs?: number;
+}): () => void {
+  let closed = false;
+  let running = false;
+  const report = async () => {
+    if (closed || running) return;
+    running = true;
+    try {
+      const project_ids = Array.from(
+        new Set(
+          (await listProjectIds())
+            .map((project_id) => `${project_id ?? ""}`.trim())
+            .filter(Boolean),
+        ),
+      );
+      queueProvisionedInventory(project_ids);
+    } catch (err) {
+      logger.warn("provisioned inventory report skipped", { err: `${err}` });
+    } finally {
+      running = false;
+    }
+  };
+  void report();
+  const timer = setInterval(() => void report(), intervalMs);
+  timer.unref();
+  return () => {
+    closed = true;
+    clearInterval(timer);
+  };
+}
+
+export function resetMasterStatusForTests(): void {
+  if (resendTimer) {
+    clearInterval(resendTimer);
+    resendTimer = undefined;
+  }
+  statusClient = undefined;
+  hostInfo = undefined;
+  masterClient = undefined;
+  pendingInventory = null;
 }
 
 async function reportProvisionedInventory() {
