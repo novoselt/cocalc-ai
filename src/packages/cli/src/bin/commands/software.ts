@@ -1540,8 +1540,8 @@ async function smokeHttpChecks({
   for (const [check, path] of [
     ["homepage", "/"],
     ["static app shell", "/static/app.html"],
+    ["static public shell", "/static/public.html"],
     ["webapp favicon", "/webapp/favicon.ico"],
-    ["auth bootstrap", "/api/v2/auth/bootstrap"],
   ] as const) {
     checks.push(
       await runTimedSmokeCheck(

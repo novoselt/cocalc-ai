@@ -147,9 +147,11 @@ async function handleBackupOp(op: LroSummary): Promise<void> {
   const managed_egress_override =
     input.managed_egress_override === "admin-host-drain"
       ? ("admin-host-drain" as ManagedBackupEgressOverride)
-      : input.managed_egress_override === "admin-site-migration"
-        ? ("admin-site-migration" as ManagedBackupEgressOverride)
-        : undefined;
+      : input.managed_egress_override === "legacy-migration-initial-backup"
+        ? ("legacy-migration-initial-backup" as ManagedBackupEgressOverride)
+        : input.managed_egress_override === "admin-site-migration"
+          ? ("admin-site-migration" as ManagedBackupEgressOverride)
+          : undefined;
   const limit = Number.isFinite(Number(input.limit))
     ? Math.max(0, Math.floor(Number(input.limit)))
     : DEFAULT_MAX_BACKUPS_PER_PROJECT;
