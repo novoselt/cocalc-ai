@@ -60,6 +60,7 @@ import type {
   LegacyMigrationAdminLinkSummary,
   LegacyMigrationAdminProjectSearchOptions,
   LegacyMigrationAdminProjectSearchResponse,
+  LegacyMigrationAdminProjectAccountCandidate,
   LegacyMigrationAdminProjectSummary,
   LegacyMigrationAdminUnlinkLegacyAccountOptions,
   LegacyMigrationAdminUnlinkLegacyAccountResponse,
@@ -965,10 +966,41 @@ function adminLinkSummary(
   };
 }
 
+function adminProjectAccountCandidates(
+  value: unknown,
+): LegacyMigrationAdminProjectAccountCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((candidate) => {
+      const record = asRecord(candidate);
+      const legacyAccountId = clean(record.legacy_account_id);
+      if (!legacyAccountId) return undefined;
+      const summary: LegacyMigrationAdminProjectAccountCandidate = {
+        legacy_account_id: legacyAccountId,
+        email_address: normalizeEmail(record.email_address) || null,
+        first_name: clean(record.first_name),
+        last_name: clean(record.last_name),
+        display_name: clean(record.display_name),
+        last_active: record.last_active ?? null,
+        role: record.role === "owner" ? "owner" : "collaborator",
+        target_claim_methods: arrayValue(record.target_claim_methods),
+        support_admin_linked_account_ids: arrayValue(
+          record.support_admin_linked_account_ids,
+        ),
+      };
+      return summary;
+    })
+    .filter(
+      (candidate): candidate is LegacyMigrationAdminProjectAccountCandidate =>
+        candidate != null,
+    );
+}
+
 function adminProjectSummary(
   row: LegacyMigrationAdminProjectSummary &
     LegacyProjectRow & {
       candidate_legacy_account_ids?: string[] | null;
+      candidate_legacy_accounts?: unknown;
       target_claim_methods?: string[] | null;
       owner_email_address?: string | null;
       owner_display_name?: string | null;
@@ -983,6 +1015,9 @@ function adminProjectSummary(
     owner_email_address: normalizeEmail(row.owner_email_address) || null,
     owner_display_name: row.owner_display_name ?? null,
     candidate_legacy_account_ids: arrayValue(row.candidate_legacy_account_ids),
+    candidate_legacy_accounts: adminProjectAccountCandidates(
+      row.candidate_legacy_accounts,
+    ),
     target_claim_methods: arrayValue(row.target_claim_methods),
     last_edited: row.last_edited ?? null,
     last_active: row.last_active ?? null,
@@ -1205,6 +1240,56 @@ export async function adminSearchLegacyProjects({
               WHERE COALESCE(ids.legacy_account_id, '') <> ''
               ORDER BY ids.legacy_account_id
            ) AS candidate_legacy_account_ids,
+           COALESCE((
+             SELECT jsonb_agg(
+               jsonb_build_object(
+                 'legacy_account_id', candidate.legacy_account_id,
+                 'email_address', candidate_account.email_address,
+                 'first_name', candidate_account.first_name,
+                 'last_name', candidate_account.last_name,
+                 'display_name', candidate_account.display_name,
+                 'last_active', candidate_account.last_active,
+                 'role',
+                   CASE WHEN candidate.is_owner THEN 'owner' ELSE 'collaborator' END,
+                 'target_claim_methods',
+                   to_jsonb(ARRAY(
+                     SELECT DISTINCT COALESCE(target_link.claim_method, '')
+                       FROM legacy_migration_account_links target_link
+                      WHERE target_link.legacy_account_id=candidate.legacy_account_id
+                        AND target_link.account_id=$1
+                      ORDER BY COALESCE(target_link.claim_method, '')
+                   )),
+                 'support_admin_linked_account_ids',
+                   to_jsonb(ARRAY(
+                     SELECT DISTINCT support_link.account_id::TEXT
+                       FROM legacy_migration_account_links support_link
+                      WHERE support_link.legacy_account_id=candidate.legacy_account_id
+                        AND support_link.claim_method='support-admin'
+                        AND support_link.account_id<>$1
+                      ORDER BY support_link.account_id::TEXT
+                   ))
+               )
+               ORDER BY CASE WHEN candidate.is_owner THEN 0 ELSE 1 END,
+                        lower(COALESCE(candidate_account.email_address, '')),
+                        candidate.legacy_account_id
+             )
+               FROM (
+                 SELECT ids.legacy_account_id,
+                        BOOL_OR(ids.is_owner) AS is_owner
+                   FROM (
+                     SELECT projects.owner_legacy_account_id AS legacy_account_id,
+                            true AS is_owner
+                     UNION ALL
+                     SELECT users.key AS legacy_account_id,
+                            false AS is_owner
+                       FROM jsonb_object_keys(COALESCE(projects.legacy_users, '{}'::jsonb)) AS users(key)
+                   ) ids
+                  WHERE COALESCE(ids.legacy_account_id, '') <> ''
+                  GROUP BY ids.legacy_account_id
+               ) candidate
+          LEFT JOIN legacy_migration_accounts candidate_account
+                 ON candidate_account.legacy_account_id=candidate.legacy_account_id
+           ), '[]'::jsonb) AS candidate_legacy_accounts,
            ARRAY(
              SELECT DISTINCT COALESCE(target_link.claim_method, '')
                FROM legacy_migration_account_links target_link
@@ -1531,6 +1616,56 @@ export async function adminListLinkedLegacyProjects({
               WHERE COALESCE(ids.legacy_account_id, '') <> ''
               ORDER BY ids.legacy_account_id
            ) AS candidate_legacy_account_ids,
+           COALESCE((
+             SELECT jsonb_agg(
+               jsonb_build_object(
+                 'legacy_account_id', candidate.legacy_account_id,
+                 'email_address', candidate_account.email_address,
+                 'first_name', candidate_account.first_name,
+                 'last_name', candidate_account.last_name,
+                 'display_name', candidate_account.display_name,
+                 'last_active', candidate_account.last_active,
+                 'role',
+                   CASE WHEN candidate.is_owner THEN 'owner' ELSE 'collaborator' END,
+                 'target_claim_methods',
+                   to_jsonb(ARRAY(
+                     SELECT DISTINCT COALESCE(target_link.claim_method, '')
+                       FROM legacy_migration_account_links target_link
+                      WHERE target_link.legacy_account_id=candidate.legacy_account_id
+                        AND target_link.account_id=$1
+                      ORDER BY COALESCE(target_link.claim_method, '')
+                   )),
+                 'support_admin_linked_account_ids',
+                   to_jsonb(ARRAY(
+                     SELECT DISTINCT support_link.account_id::TEXT
+                       FROM legacy_migration_account_links support_link
+                      WHERE support_link.legacy_account_id=candidate.legacy_account_id
+                        AND support_link.claim_method='support-admin'
+                        AND support_link.account_id<>$1
+                      ORDER BY support_link.account_id::TEXT
+                   ))
+               )
+               ORDER BY CASE WHEN candidate.is_owner THEN 0 ELSE 1 END,
+                        lower(COALESCE(candidate_account.email_address, '')),
+                        candidate.legacy_account_id
+             )
+               FROM (
+                 SELECT ids.legacy_account_id,
+                        BOOL_OR(ids.is_owner) AS is_owner
+                   FROM (
+                     SELECT projects.owner_legacy_account_id AS legacy_account_id,
+                            true AS is_owner
+                     UNION ALL
+                     SELECT users.key AS legacy_account_id,
+                            false AS is_owner
+                       FROM jsonb_object_keys(COALESCE(projects.legacy_users, '{}'::jsonb)) AS users(key)
+                   ) ids
+                  WHERE COALESCE(ids.legacy_account_id, '') <> ''
+                  GROUP BY ids.legacy_account_id
+               ) candidate
+          LEFT JOIN legacy_migration_accounts candidate_account
+                 ON candidate_account.legacy_account_id=candidate.legacy_account_id
+           ), '[]'::jsonb) AS candidate_legacy_accounts,
            ARRAY(
              SELECT DISTINCT COALESCE(target_link.claim_method, '')
                FROM legacy_migration_account_links target_link
