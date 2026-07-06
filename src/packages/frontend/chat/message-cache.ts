@@ -191,6 +191,92 @@ export class ChatMessageCache extends EventEmitter {
     return undefined;
   }
 
+  private messageDateMs(message?: PlainChatMessage): number {
+    const value = dateValue(message as any)?.valueOf();
+    return typeof value === "number" && Number.isFinite(value)
+      ? value
+      : Number.POSITIVE_INFINITY;
+  }
+
+  private isExplicitThreadRoot(message?: PlainChatMessage): boolean {
+    return !!message && !parentMessageId(message);
+  }
+
+  // Corrupt or old chat files can have rootless/cyclic parent graphs; index
+  // them by the earliest message so the thread remains visible and selectable.
+  private shouldReplaceThreadRoot({
+    current,
+    candidate,
+  }: {
+    current?: PlainChatMessage;
+    candidate: PlainChatMessage;
+  }): boolean {
+    if (!current) return true;
+    const candidateIsRoot = this.isExplicitThreadRoot(candidate);
+    const currentIsRoot = this.isExplicitThreadRoot(current);
+    if (candidateIsRoot) return true;
+    if (currentIsRoot) return false;
+    const candidateMs = this.messageDateMs(candidate);
+    const currentMs = this.messageDateMs(current);
+    if (candidateMs !== currentMs) return candidateMs < currentMs;
+    const candidateId = `${this.getMessageId(candidate) ?? ""}`;
+    const currentId = `${this.getMessageId(current) ?? ""}`;
+    return candidateId.localeCompare(currentId) < 0;
+  }
+
+  private setThreadRootMapping({
+    threadKeyByThreadId,
+    message,
+    messageKey,
+  }: {
+    threadKeyByThreadId: Map<string, string>;
+    message?: PlainChatMessage;
+    messageKey?: string;
+  }): void {
+    const threadId = message ? this.getThreadId(message) : undefined;
+    if (!threadId) return;
+    if (messageKey) {
+      threadKeyByThreadId.set(threadId, messageKey);
+    } else {
+      threadKeyByThreadId.delete(threadId);
+    }
+  }
+
+  private stableThreadRootMessage(message: PlainChatMessage): PlainChatMessage {
+    try {
+      return JSON.parse(JSON.stringify(message)) as PlainChatMessage;
+    } catch {
+      return { ...message };
+    }
+  }
+
+  private rebuildThreadRoot({
+    thread,
+    messageMap,
+    threadKeyByThreadId,
+  }: {
+    thread: ThreadIndexEntry;
+    messageMap: Map<string, PlainChatMessage>;
+    threadKeyByThreadId: Map<string, string>;
+  }): void {
+    let bestKey: string | undefined;
+    let best: PlainChatMessage | undefined;
+    for (const key of thread.messageKeys) {
+      const candidate = messageMap.get(key);
+      if (!candidate) continue;
+      if (!best || this.shouldReplaceThreadRoot({ current: best, candidate })) {
+        best = candidate;
+        bestKey = key;
+      }
+    }
+    thread.rootMessage = best ? this.stableThreadRootMessage(best) : undefined;
+    this.setThreadRootMapping({
+      threadKeyByThreadId,
+      message: best,
+      messageKey: bestKey,
+    });
+  }
+
   private toArray<T>(value: T[] | { toJS?: () => T[] } | undefined): T[] {
     if (Array.isArray(value)) return value;
     if (typeof (value as any)?.toJS === "function") {
@@ -273,9 +359,18 @@ export class ChatMessageCache extends EventEmitter {
     if (d && d.valueOf() > thread.newestTime) {
       thread.newestTime = d.valueOf();
     }
-    if (!parentMessageId(message)) {
+    if (
+      this.shouldReplaceThreadRoot({
+        current: thread.rootMessage,
+        candidate: message,
+      })
+    ) {
       thread.rootMessage = message;
-      threadKeyByThreadId.set(threadKey, messageKey);
+      this.setThreadRootMapping({
+        threadKeyByThreadId,
+        message,
+        messageKey,
+      });
     }
   }
 
@@ -292,23 +387,25 @@ export class ChatMessageCache extends EventEmitter {
     if (!thread) return;
     thread.messageKeys.delete(messageKey);
     thread.messageCount = thread.messageKeys.size;
-    if (
-      !parentMessageId(message) &&
-      thread.rootMessage?.date === message.date
-    ) {
+    if (thread.messageCount === 0) {
+      draft.delete(threadKey);
+      const threadId = this.getThreadId(message);
+      if (threadId && threadKeyByThreadId.get(threadId) === messageKey) {
+        threadKeyByThreadId.delete(threadId);
+      }
+      return;
+    }
+    if (thread.rootMessage?.date === message.date) {
       thread.rootMessage = undefined;
       const threadId = this.getThreadId(message);
       if (threadId && threadKeyByThreadId.get(threadId) === messageKey) {
         threadKeyByThreadId.delete(threadId);
       }
-    }
-    if (thread.messageCount === 0) {
-      draft.delete(threadKey);
-      const threadId = this.getThreadId(message);
-      if (threadId && threadKeyByThreadId.get(threadId) === threadKey) {
-        threadKeyByThreadId.delete(threadId);
-      }
-      return;
+      this.rebuildThreadRoot({
+        thread,
+        messageMap,
+        threadKeyByThreadId,
+      });
     }
     const msgDate = dateValue(message);
     if (msgDate && msgDate.valueOf() === thread.newestTime) {

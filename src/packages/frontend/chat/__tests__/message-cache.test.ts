@@ -212,6 +212,79 @@ describe("ChatMessageCache message_id index", () => {
     cache.dispose();
   });
 
+  it("indexes rootless cyclic threads using a fallback root", async () => {
+    const userDate = "2026-07-06T18:48:29.493Z";
+    const assistantDate = "2026-07-06T18:48:37.499Z";
+    const threadId = "rootless-thread";
+    const rows = [
+      {
+        event: "chat",
+        sender_id: "gpt-5.5",
+        date: assistantDate,
+        message_id: "assistant-1",
+        thread_id: threadId,
+        parent_message_id: "user-1",
+        history: [],
+      },
+      {
+        event: "chat",
+        sender_id: "user-1",
+        date: userDate,
+        message_id: "user-1",
+        thread_id: threadId,
+        parent_message_id: "assistant-1",
+        history: [],
+      },
+    ];
+    const syncdb = new MockSyncdb(rows);
+    const cache = new ChatMessageCache(syncdb as any);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const entry = cache.getThreadIndex().get(threadId);
+    const fallbackRootKey = `${new Date(userDate).valueOf()}`;
+    expect(entry?.messageCount).toBe(2);
+    expect(entry?.rootMessage?.message_id).toBe("user-1");
+    expect(cache.getThreadKeyByThreadId(threadId)).toBe(fallbackRootKey);
+    cache.dispose();
+  });
+
+  it("recomputes fallback roots when rootless thread rows change", async () => {
+    const firstDate = "2026-07-06T18:48:29.493Z";
+    const secondDate = "2026-07-06T18:48:37.499Z";
+    const threadId = "rootless-thread-updates";
+    const first = {
+      event: "chat",
+      sender_id: "user-1",
+      date: firstDate,
+      message_id: "first",
+      thread_id: threadId,
+      parent_message_id: "second",
+      history: [],
+    };
+    const second = {
+      event: "chat",
+      sender_id: "gpt-5.5",
+      date: secondDate,
+      message_id: "second",
+      thread_id: threadId,
+      parent_message_id: "first",
+      history: [],
+    };
+    const syncdb = new MockSyncdb([first, second]);
+    const cache = new ChatMessageCache(syncdb as any);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    syncdb.replaceRows([second]);
+    syncdb.emit("change", new Set([first]));
+
+    const entry = cache.getThreadIndex().get(threadId);
+    const secondDateKey = `${new Date(secondDate).valueOf()}`;
+    expect(entry?.messageCount).toBe(1);
+    expect(entry?.rootMessage?.message_id).toBe("second");
+    expect(cache.getThreadKeyByThreadId(threadId)).toBe(secondDateKey);
+    cache.dispose();
+  });
+
   it("drops thread_id mapping when the thread root is removed", async () => {
     const rootDate = "2026-01-04T00:00:00.000Z";
     const rows = [
