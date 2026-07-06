@@ -366,7 +366,7 @@ async function applyAvailableRefresh({
                artifact_key=r.artifact_key,
                artifact_status='available',
                artifact_manifest=jsonb_strip_nulls(
-                 COALESCE(p.artifact_manifest, '{}'::jsonb)
+                 (COALESCE(p.artifact_manifest, '{}'::jsonb) - 'r2_missing')
                  || jsonb_build_object(
                       'artifact_bytes', r.artifact_bytes,
                       'compressed_bytes', r.artifact_bytes,
