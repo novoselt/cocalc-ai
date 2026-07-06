@@ -48,6 +48,21 @@ import type {
   LegacyMigrationApplyFinancialHomeBayResponse,
   LegacyMigrationApplyFinancialOptions,
   LegacyMigrationApplyFinancialResponse,
+  LegacyMigrationAdminAccountSearchOptions,
+  LegacyMigrationAdminAccountSearchResponse,
+  LegacyMigrationAdminAccountSummary,
+  LegacyMigrationAdminLinkedProjectsOptions,
+  LegacyMigrationAdminLinkedProjectsResponse,
+  LegacyMigrationAdminLinkLegacyAccountOptions,
+  LegacyMigrationAdminLinkLegacyAccountResponse,
+  LegacyMigrationAdminLinksOptions,
+  LegacyMigrationAdminLinksResponse,
+  LegacyMigrationAdminLinkSummary,
+  LegacyMigrationAdminProjectSearchOptions,
+  LegacyMigrationAdminProjectSearchResponse,
+  LegacyMigrationAdminProjectSummary,
+  LegacyMigrationAdminUnlinkLegacyAccountOptions,
+  LegacyMigrationAdminUnlinkLegacyAccountResponse,
   LegacyMigrationConfigureFinancialRenewalHomeBayOptions,
   LegacyMigrationConfigureFinancialRenewalOptions,
   LegacyMigrationConfigureFinancialRenewalResponse,
@@ -71,6 +86,7 @@ import type {
   LegacyMigrationRetryProjectRestoreResponse,
 } from "@cocalc/conat/hub/api/legacy-migration";
 
+import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { assertLegacyMigrationEnabled } from "./enabled";
 import { moneyRound2Up, moneyToDbString, toDecimal } from "@cocalc/util/money";
@@ -113,8 +129,11 @@ type AccountEmailRow = {
 type LegacyAccountRow = {
   legacy_account_id: string;
   email_address: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
   display_name: string | null;
   stripe_customer_id: string | null;
+  last_active?: Date | string | null;
 };
 
 type AccountPrimaryEmailStatus = {
@@ -124,6 +143,7 @@ type AccountPrimaryEmailStatus = {
 
 type LegacyProjectRow = {
   legacy_project_id: string;
+  name?: string | null;
   title: string | null;
   description: string | null;
   owner_legacy_account_id: string | null;
@@ -159,6 +179,7 @@ type LegacyPublicPathRawRecord = {
 let importSchemaReady: Promise<void> | undefined;
 let financialSchemaReady: Promise<void> | undefined;
 let rawRecordsSchemaReady: Promise<void> | undefined;
+let adminLinkSchemaReady: Promise<void> | undefined;
 
 async function ensureLegacyMigrationProjectImportSchema(): Promise<void> {
   importSchemaReady ??= (async () => {
@@ -255,6 +276,46 @@ async function ensureLegacyMigrationFinancialSchema(): Promise<void> {
     `);
   })();
   await financialSchemaReady;
+}
+
+async function ensureLegacyMigrationAdminLinkSchema(): Promise<void> {
+  adminLinkSchemaReady ??= (async () => {
+    await getPool().query(`
+      CREATE TABLE IF NOT EXISTS legacy_migration_account_link_events (
+        id UUID PRIMARY KEY,
+        legacy_account_id VARCHAR(128) NOT NULL,
+        account_id UUID NOT NULL,
+        actor_account_id UUID NOT NULL,
+        action VARCHAR(32) NOT NULL,
+        reason TEXT NOT NULL,
+        support_reference TEXT,
+        claim_method VARCHAR(64),
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await getPool().query(`
+      CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_account_id_idx
+        ON legacy_migration_account_link_events(account_id)
+    `);
+    await getPool().query(`
+      CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_legacy_account_id_idx
+        ON legacy_migration_account_link_events(legacy_account_id)
+    `);
+    await getPool().query(`
+      CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_actor_account_id_idx
+        ON legacy_migration_account_link_events(actor_account_id)
+    `);
+    await getPool().query(`
+      CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_action_idx
+        ON legacy_migration_account_link_events(action)
+    `);
+    await getPool().query(`
+      CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_created_idx
+        ON legacy_migration_account_link_events(created)
+    `);
+  })();
+  await adminLinkSchemaReady;
 }
 
 async function ensureLegacyMigrationRawRecordsSchema(): Promise<void> {
@@ -809,6 +870,765 @@ async function legacyAccounts(
     match_method: row.match_method ?? null,
     gmail_canonical_email: normalizeEmail(row.gmail_canonical_email) || null,
   }));
+}
+
+function adminLimitValue(value: unknown, defaultLimit = 50, max = 250): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return defaultLimit;
+  return Math.min(max, Math.floor(n));
+}
+
+function requireSearchQuery(query: unknown): string {
+  const value = `${query ?? ""}`.trim().toLowerCase();
+  if (value.length < 2) {
+    throw new Error("search query must contain at least 2 characters");
+  }
+  return value;
+}
+
+function requireTargetAccountId(target_account_id: unknown): string {
+  const value = `${target_account_id ?? ""}`.trim();
+  if (!isValidUUID(value)) {
+    throw new Error("target_account_id must be a valid account id");
+  }
+  return value;
+}
+
+function requireActorAccountId(account_id: unknown): string {
+  const value = `${account_id ?? ""}`.trim();
+  if (!isValidUUID(value)) {
+    throw new Error("account_id must be a valid admin account id");
+  }
+  return value;
+}
+
+function requireLegacyAccountId(legacy_account_id: unknown): string {
+  const value = `${legacy_account_id ?? ""}`.trim();
+  if (!value) {
+    throw new Error("legacy_account_id is required");
+  }
+  return value;
+}
+
+function requireAuditReason(reason: unknown): string {
+  const value = `${reason ?? ""}`.trim();
+  if (!value) {
+    throw new Error("reason is required");
+  }
+  return value;
+}
+
+function arrayValue(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((x) => `${x}`).filter((x) => x.length > 0)
+    : [];
+}
+
+function adminAccountSummary(
+  row: LegacyMigrationAdminAccountSummary & {
+    project_count?: number | string | null;
+    target_claim_methods?: string[] | null;
+    support_admin_linked_account_ids?: string[] | null;
+  },
+): LegacyMigrationAdminAccountSummary {
+  return {
+    legacy_account_id: row.legacy_account_id,
+    email_address: normalizeEmail(row.email_address) || null,
+    first_name: row.first_name ?? null,
+    last_name: row.last_name ?? null,
+    display_name: row.display_name ?? null,
+    last_active: row.last_active ?? null,
+    project_count: Math.max(0, Number(row.project_count ?? 0) || 0),
+    target_claim_methods: arrayValue(row.target_claim_methods),
+    support_admin_linked_account_ids: arrayValue(
+      row.support_admin_linked_account_ids,
+    ),
+  };
+}
+
+function adminLinkSummary(
+  row: LegacyMigrationAdminLinkSummary & {
+    project_count?: number | string | null;
+    target_claim_methods?: string[] | null;
+    support_admin_linked_account_ids?: string[] | null;
+  },
+): LegacyMigrationAdminLinkSummary {
+  return {
+    ...adminAccountSummary(row),
+    claim_method: row.claim_method,
+    metadata: row.metadata ?? null,
+    created: row.created ?? null,
+    updated: row.updated ?? null,
+  };
+}
+
+function adminProjectSummary(
+  row: LegacyMigrationAdminProjectSummary &
+    LegacyProjectRow & {
+      candidate_legacy_account_ids?: string[] | null;
+      target_claim_methods?: string[] | null;
+      owner_email_address?: string | null;
+      owner_display_name?: string | null;
+      name?: string | null;
+    },
+): LegacyMigrationAdminProjectSummary {
+  return {
+    legacy_project_id: row.legacy_project_id,
+    name: row.name ?? null,
+    title: projectTitle(row),
+    owner_legacy_account_id: row.owner_legacy_account_id ?? null,
+    owner_email_address: normalizeEmail(row.owner_email_address) || null,
+    owner_display_name: row.owner_display_name ?? null,
+    candidate_legacy_account_ids: arrayValue(row.candidate_legacy_account_ids),
+    target_claim_methods: arrayValue(row.target_claim_methods),
+    last_edited: row.last_edited ?? null,
+    last_active: row.last_active ?? null,
+    disk_mb: nonnegativeNumber(row.disk_mb),
+    artifact_status: row.artifact_status ?? null,
+    artifact_bytes: manifestCompressedBytes(row.artifact_manifest) ?? null,
+    project_id: row.project_id ?? null,
+    owner_account_id: row.owner_account_id ?? null,
+    import_status:
+      row.status === "creating" || row.status === "failed"
+        ? row.status
+        : row.project_id
+          ? "imported"
+          : "not-imported",
+    restore_status: row.restore_status ?? null,
+    joined: !!row.joined,
+  };
+}
+
+async function verifyTargetAccountExists(target_account_id: string) {
+  if (await getClusterAccountById(target_account_id)) return;
+  const { rows } = await getPool().query(
+    `
+    SELECT 1
+      FROM accounts
+     WHERE account_id=$1
+       AND COALESCE(deleted, false)=false
+     LIMIT 1
+    `,
+    [target_account_id],
+  );
+  if (rows.length === 0) {
+    throw new Error(`target account ${target_account_id} was not found`);
+  }
+}
+
+async function verifyLegacyAccountExists(legacy_account_id: string) {
+  const { rows } = await getPool().query(
+    `
+    SELECT 1
+      FROM legacy_migration_accounts
+     WHERE legacy_account_id=$1
+     LIMIT 1
+    `,
+    [legacy_account_id],
+  );
+  if (rows.length === 0) {
+    throw new Error(`legacy account ${legacy_account_id} was not found`);
+  }
+}
+
+async function getLegacyAccountLinkSummary({
+  target_account_id,
+  legacy_account_id,
+}: {
+  target_account_id: string;
+  legacy_account_id: string;
+}): Promise<LegacyMigrationAdminLinkSummary> {
+  const { rows } = await getPool().query<
+    LegacyMigrationAdminLinkSummary & {
+      project_count: number | string | null;
+      target_claim_methods: string[] | null;
+      support_admin_linked_account_ids: string[] | null;
+    }
+  >(
+    `
+    SELECT accounts.legacy_account_id,
+           accounts.email_address,
+           accounts.first_name,
+           accounts.last_name,
+           accounts.display_name,
+           accounts.last_active,
+           linked.claim_method,
+           linked.metadata,
+           linked.created,
+           linked.updated,
+           ARRAY(
+             SELECT DISTINCT COALESCE(target_link.claim_method, '')
+               FROM legacy_migration_account_links target_link
+              WHERE target_link.legacy_account_id=accounts.legacy_account_id
+                AND target_link.account_id=$1
+              ORDER BY COALESCE(target_link.claim_method, '')
+           ) AS target_claim_methods,
+           ARRAY(
+             SELECT DISTINCT support_link.account_id::TEXT
+               FROM legacy_migration_account_links support_link
+              WHERE support_link.legacy_account_id=accounts.legacy_account_id
+                AND support_link.claim_method='support-admin'
+                AND support_link.account_id<>$1
+              ORDER BY support_link.account_id::TEXT
+           ) AS support_admin_linked_account_ids,
+           (
+             SELECT COUNT(*)::INTEGER
+               FROM legacy_migration_projects projects
+              WHERE COALESCE(projects.hidden, false)=false
+                AND (
+                  projects.owner_legacy_account_id=accounts.legacy_account_id
+                  OR COALESCE(projects.legacy_users, '{}'::jsonb) ? accounts.legacy_account_id
+                )
+           ) AS project_count
+      FROM legacy_migration_account_links linked
+      JOIN legacy_migration_accounts accounts
+        ON accounts.legacy_account_id=linked.legacy_account_id
+     WHERE linked.account_id=$1
+       AND linked.legacy_account_id=$2
+     LIMIT 1
+    `,
+    [target_account_id, legacy_account_id],
+  );
+  if (rows[0] == null) {
+    throw new Error("legacy account link was not found");
+  }
+  return adminLinkSummary(rows[0]);
+}
+
+export async function adminSearchLegacyAccounts({
+  target_account_id,
+  query,
+  limit,
+}: LegacyMigrationAdminAccountSearchOptions): Promise<LegacyMigrationAdminAccountSearchResponse> {
+  await assertLegacyMigrationEnabled();
+  await ensureLegacyMigrationAdminLinkSchema();
+  const targetAccountId = requireTargetAccountId(target_account_id);
+  const search = `%${requireSearchQuery(query)}%`;
+  const n = adminLimitValue(limit, 50, 100);
+  const { rows } = await getPool().query<
+    LegacyMigrationAdminAccountSummary & {
+      project_count: number | string | null;
+      target_claim_methods: string[] | null;
+      support_admin_linked_account_ids: string[] | null;
+      total_count: number | string | null;
+    }
+  >(
+    `
+    WITH matched_accounts AS (
+      SELECT accounts.*
+        FROM legacy_migration_accounts accounts
+       WHERE lower(accounts.legacy_account_id) LIKE $2
+          OR lower(COALESCE(accounts.email_address, '')) LIKE $2
+          OR lower(COALESCE(accounts.first_name, '')) LIKE $2
+          OR lower(COALESCE(accounts.last_name, '')) LIKE $2
+          OR lower(COALESCE(accounts.display_name, '')) LIKE $2
+          OR lower(COALESCE(accounts.metadata::TEXT, '')) LIKE $2
+    )
+    SELECT matched_accounts.legacy_account_id,
+           matched_accounts.email_address,
+           matched_accounts.first_name,
+           matched_accounts.last_name,
+           matched_accounts.display_name,
+           matched_accounts.last_active,
+           ARRAY(
+             SELECT DISTINCT COALESCE(target_link.claim_method, '')
+               FROM legacy_migration_account_links target_link
+              WHERE target_link.legacy_account_id=matched_accounts.legacy_account_id
+                AND target_link.account_id=$1
+              ORDER BY COALESCE(target_link.claim_method, '')
+           ) AS target_claim_methods,
+           ARRAY(
+             SELECT DISTINCT support_link.account_id::TEXT
+               FROM legacy_migration_account_links support_link
+              WHERE support_link.legacy_account_id=matched_accounts.legacy_account_id
+                AND support_link.claim_method='support-admin'
+                AND support_link.account_id<>$1
+              ORDER BY support_link.account_id::TEXT
+           ) AS support_admin_linked_account_ids,
+           (
+             SELECT COUNT(*)::INTEGER
+               FROM legacy_migration_projects projects
+              WHERE COALESCE(projects.hidden, false)=false
+                AND (
+                  projects.owner_legacy_account_id=matched_accounts.legacy_account_id
+                  OR COALESCE(projects.legacy_users, '{}'::jsonb) ? matched_accounts.legacy_account_id
+                )
+           ) AS project_count,
+           COUNT(*) OVER()::INTEGER AS total_count
+      FROM matched_accounts
+     ORDER BY matched_accounts.last_active DESC NULLS LAST,
+              lower(COALESCE(matched_accounts.email_address, '')),
+              matched_accounts.legacy_account_id
+     LIMIT $3
+    `,
+    [targetAccountId, search, n],
+  );
+  return {
+    accounts: rows.map(adminAccountSummary),
+    total_count: Number(rows[0]?.total_count ?? rows.length) || 0,
+  };
+}
+
+export async function adminSearchLegacyProjects({
+  target_account_id,
+  query,
+  limit,
+}: LegacyMigrationAdminProjectSearchOptions): Promise<LegacyMigrationAdminProjectSearchResponse> {
+  await assertLegacyMigrationEnabled();
+  await ensureLegacyMigrationProjectImportSchema();
+  await ensureLegacyMigrationAdminLinkSchema();
+  const targetAccountId = requireTargetAccountId(target_account_id);
+  const search = `%${requireSearchQuery(query)}%`;
+  const n = adminLimitValue(limit, 50, 100);
+  const { rows } = await getPool().query<
+    LegacyMigrationAdminProjectSummary &
+      LegacyProjectRow & {
+        total_count: number | string | null;
+      }
+  >(
+    `
+    SELECT projects.legacy_project_id,
+           projects.name,
+           projects.title,
+           projects.owner_legacy_account_id,
+           owner.email_address AS owner_email_address,
+           owner.display_name AS owner_display_name,
+           ARRAY(
+             SELECT DISTINCT ids.legacy_account_id
+               FROM (
+                 SELECT projects.owner_legacy_account_id AS legacy_account_id
+                 UNION
+                 SELECT users.key AS legacy_account_id
+                   FROM jsonb_object_keys(COALESCE(projects.legacy_users, '{}'::jsonb)) AS users(key)
+               ) ids
+              WHERE COALESCE(ids.legacy_account_id, '') <> ''
+              ORDER BY ids.legacy_account_id
+           ) AS candidate_legacy_account_ids,
+           ARRAY(
+             SELECT DISTINCT COALESCE(target_link.claim_method, '')
+               FROM legacy_migration_account_links target_link
+              WHERE target_link.account_id=$1
+                AND (
+                  target_link.legacy_account_id=projects.owner_legacy_account_id
+                  OR COALESCE(projects.legacy_users, '{}'::jsonb) ? target_link.legacy_account_id
+                )
+              ORDER BY COALESCE(target_link.claim_method, '')
+           ) AS target_claim_methods,
+           projects.last_edited,
+           projects.last_active,
+           projects.disk_mb,
+           projects.artifact_status,
+           projects.artifact_manifest,
+           imports.project_id,
+           imports.owner_account_id,
+           imports.status,
+           imports.restore_status,
+           EXISTS (
+             SELECT 1
+               FROM legacy_migration_project_import_accounts imported_accounts
+              WHERE imported_accounts.legacy_project_id=projects.legacy_project_id
+                AND imported_accounts.account_id=$1
+           ) AS joined,
+           COUNT(*) OVER()::INTEGER AS total_count
+      FROM legacy_migration_projects projects
+      LEFT JOIN legacy_migration_accounts owner
+        ON owner.legacy_account_id=projects.owner_legacy_account_id
+      LEFT JOIN legacy_migration_project_imports imports
+        ON imports.legacy_project_id=projects.legacy_project_id
+     WHERE COALESCE(projects.hidden, false)=false
+       AND (
+         lower(projects.legacy_project_id) LIKE $2
+         OR lower(COALESCE(projects.title, '')) LIKE $2
+         OR lower(COALESCE(projects.name, '')) LIKE $2
+         OR lower(COALESCE(projects.metadata::TEXT, '')) LIKE $2
+       )
+     ORDER BY projects.last_edited DESC NULLS LAST,
+              projects.last_active DESC NULLS LAST,
+              projects.legacy_project_id
+     LIMIT $3
+    `,
+    [targetAccountId, search, n],
+  );
+  return {
+    projects: rows.map(adminProjectSummary),
+    total_count: Number(rows[0]?.total_count ?? rows.length) || 0,
+  };
+}
+
+export async function adminListLegacyAccountLinks({
+  target_account_id,
+}: LegacyMigrationAdminLinksOptions): Promise<LegacyMigrationAdminLinksResponse> {
+  await assertLegacyMigrationEnabled();
+  await ensureLegacyMigrationAdminLinkSchema();
+  const targetAccountId = requireTargetAccountId(target_account_id);
+  await ensureVerifiedEmailLinks(targetAccountId);
+  const { rows } = await getPool().query<
+    LegacyMigrationAdminLinkSummary & {
+      project_count: number | string | null;
+      target_claim_methods: string[] | null;
+      support_admin_linked_account_ids: string[] | null;
+    }
+  >(
+    `
+    SELECT accounts.legacy_account_id,
+           accounts.email_address,
+           accounts.first_name,
+           accounts.last_name,
+           accounts.display_name,
+           accounts.last_active,
+           linked.claim_method,
+           linked.metadata,
+           linked.created,
+           linked.updated,
+           ARRAY[COALESCE(linked.claim_method, '')] AS target_claim_methods,
+           ARRAY(
+             SELECT DISTINCT support_link.account_id::TEXT
+               FROM legacy_migration_account_links support_link
+              WHERE support_link.legacy_account_id=linked.legacy_account_id
+                AND support_link.claim_method='support-admin'
+                AND support_link.account_id<>$1
+              ORDER BY support_link.account_id::TEXT
+           ) AS support_admin_linked_account_ids,
+           (
+             SELECT COUNT(*)::INTEGER
+               FROM legacy_migration_projects projects
+              WHERE COALESCE(projects.hidden, false)=false
+                AND (
+                  projects.owner_legacy_account_id=linked.legacy_account_id
+                  OR COALESCE(projects.legacy_users, '{}'::jsonb) ? linked.legacy_account_id
+                )
+           ) AS project_count
+      FROM legacy_migration_account_links linked
+      LEFT JOIN legacy_migration_accounts accounts
+        ON accounts.legacy_account_id=linked.legacy_account_id
+     WHERE linked.account_id=$1
+     ORDER BY linked.claim_method,
+              lower(COALESCE(accounts.email_address, '')),
+              linked.legacy_account_id
+    `,
+    [targetAccountId],
+  );
+  return { links: rows.map(adminLinkSummary) };
+}
+
+export async function adminLinkLegacyAccount({
+  account_id,
+  target_account_id,
+  legacy_account_id,
+  reason,
+  support_reference,
+  evidence,
+}: LegacyMigrationAdminLinkLegacyAccountOptions): Promise<LegacyMigrationAdminLinkLegacyAccountResponse> {
+  await assertLegacyMigrationEnabled();
+  await ensureLegacyMigrationAdminLinkSchema();
+  const actorAccountId = requireActorAccountId(account_id);
+  const targetAccountId = requireTargetAccountId(target_account_id);
+  const legacyAccountId = requireLegacyAccountId(legacy_account_id);
+  const auditReason = requireAuditReason(reason);
+  await verifyTargetAccountExists(targetAccountId);
+  await verifyLegacyAccountExists(legacyAccountId);
+
+  const otherSupportLinks = await getPool().query<{ account_id: string }>(
+    `
+    SELECT account_id::TEXT AS account_id
+      FROM legacy_migration_account_links
+     WHERE legacy_account_id=$1
+       AND claim_method='support-admin'
+       AND account_id<>$2
+     ORDER BY account_id::TEXT
+    `,
+    [legacyAccountId, targetAccountId],
+  );
+  if (otherSupportLinks.rows.length > 0) {
+    throw new Error(
+      `legacy account is already support-linked to ${otherSupportLinks.rows
+        .map((row) => row.account_id)
+        .join(", ")}`,
+    );
+  }
+
+  const metadata = {
+    reason: auditReason,
+    support_reference: clean(support_reference) ?? null,
+    created_by: actorAccountId,
+    evidence:
+      evidence != null && typeof evidence === "object" ? evidence : undefined,
+  };
+  const client = await getTransactionClient();
+  try {
+    await client.query(
+      `
+      INSERT INTO legacy_migration_account_links
+        (legacy_account_id, account_id, claim_method, metadata, created, updated)
+      VALUES ($1, $2, 'support-admin', $3::jsonb, NOW(), NOW())
+      ON CONFLICT (legacy_account_id, account_id)
+      DO UPDATE SET claim_method='support-admin',
+                    metadata=legacy_migration_account_links.metadata || EXCLUDED.metadata,
+                    updated=NOW()
+      `,
+      [legacyAccountId, targetAccountId, metadata],
+    );
+    await client.query(
+      `
+      INSERT INTO legacy_migration_account_link_events
+        (id, legacy_account_id, account_id, actor_account_id, action, reason,
+         support_reference, claim_method, metadata, created)
+      VALUES ($1, $2, $3, $4, 'link', $5, $6, 'support-admin', $7::jsonb, NOW())
+      `,
+      [
+        randomUUID(),
+        legacyAccountId,
+        targetAccountId,
+        actorAccountId,
+        auditReason,
+        clean(support_reference) ?? null,
+        metadata,
+      ],
+    );
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const allOtherLinks = await getPool().query<{ account_id: string }>(
+    `
+    SELECT DISTINCT account_id::TEXT AS account_id
+      FROM legacy_migration_account_links
+     WHERE legacy_account_id=$1
+       AND account_id<>$2
+     ORDER BY account_id::TEXT
+    `,
+    [legacyAccountId, targetAccountId],
+  );
+  const warnings =
+    allOtherLinks.rows.length > 0
+      ? [
+          `legacy account also has automatic links to ${allOtherLinks.rows
+            .map((row) => row.account_id)
+            .join(", ")}`,
+        ]
+      : [];
+  return {
+    link: await getLegacyAccountLinkSummary({
+      target_account_id: targetAccountId,
+      legacy_account_id: legacyAccountId,
+    }),
+    warnings,
+  };
+}
+
+export async function adminUnlinkLegacyAccount({
+  account_id,
+  target_account_id,
+  legacy_account_id,
+  reason,
+  support_reference,
+}: LegacyMigrationAdminUnlinkLegacyAccountOptions): Promise<LegacyMigrationAdminUnlinkLegacyAccountResponse> {
+  await assertLegacyMigrationEnabled();
+  await ensureLegacyMigrationAdminLinkSchema();
+  const actorAccountId = requireActorAccountId(account_id);
+  const targetAccountId = requireTargetAccountId(target_account_id);
+  const legacyAccountId = requireLegacyAccountId(legacy_account_id);
+  const auditReason = requireAuditReason(reason);
+  const client = await getTransactionClient();
+  try {
+    const existing = await client.query<{
+      claim_method: string | null;
+      metadata: Record<string, any> | null;
+    }>(
+      `
+      SELECT claim_method, metadata
+        FROM legacy_migration_account_links
+       WHERE legacy_account_id=$1
+         AND account_id=$2
+       FOR UPDATE
+      `,
+      [legacyAccountId, targetAccountId],
+    );
+    const row = existing.rows[0];
+    if (row == null) {
+      await client.query("COMMIT");
+      return { removed: false };
+    }
+    if (row.claim_method !== "support-admin") {
+      throw new Error(
+        `only support-admin links can be unlinked here; found ${row.claim_method}`,
+      );
+    }
+    await client.query(
+      `
+      INSERT INTO legacy_migration_account_link_events
+        (id, legacy_account_id, account_id, actor_account_id, action, reason,
+         support_reference, claim_method, metadata, created)
+      VALUES ($1, $2, $3, $4, 'unlink', $5, $6, $7, $8::jsonb, NOW())
+      `,
+      [
+        randomUUID(),
+        legacyAccountId,
+        targetAccountId,
+        actorAccountId,
+        auditReason,
+        clean(support_reference) ?? null,
+        row.claim_method,
+        {
+          previous_metadata: row.metadata ?? {},
+        },
+      ],
+    );
+    await client.query(
+      `
+      DELETE FROM legacy_migration_account_links
+       WHERE legacy_account_id=$1
+         AND account_id=$2
+      `,
+      [legacyAccountId, targetAccountId],
+    );
+    await client.query("COMMIT");
+    return { removed: true };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function adminListLinkedLegacyProjects({
+  account_id,
+  target_account_id,
+  legacy_account_id,
+  limit,
+}: LegacyMigrationAdminLinkedProjectsOptions): Promise<LegacyMigrationAdminLinkedProjectsResponse> {
+  await assertLegacyMigrationEnabled();
+  await ensureLegacyMigrationProjectImportSchema();
+  await ensureLegacyMigrationAdminLinkSchema();
+  const actorAccountId = requireActorAccountId(account_id);
+  const targetAccountId = requireTargetAccountId(target_account_id);
+  const legacyAccountId = requireLegacyAccountId(legacy_account_id);
+  const n = adminLimitValue(limit, 100, 250);
+  const { rows } = await getPool().query<
+    LegacyMigrationAdminProjectSummary &
+      LegacyProjectRow & {
+        total_count: number | string | null;
+      }
+  >(
+    `
+    WITH active_link AS (
+      SELECT *
+        FROM legacy_migration_account_links
+       WHERE account_id=$1
+         AND legacy_account_id=$2
+       LIMIT 1
+    ),
+    matched_projects AS (
+      SELECT projects.*
+        FROM legacy_migration_projects projects
+        JOIN active_link
+          ON projects.owner_legacy_account_id=active_link.legacy_account_id
+          OR COALESCE(projects.legacy_users, '{}'::jsonb) ? active_link.legacy_account_id
+       WHERE COALESCE(projects.hidden, false)=false
+    )
+    SELECT projects.legacy_project_id,
+           projects.name,
+           projects.title,
+           projects.owner_legacy_account_id,
+           owner.email_address AS owner_email_address,
+           owner.display_name AS owner_display_name,
+           ARRAY(
+             SELECT DISTINCT ids.legacy_account_id
+               FROM (
+                 SELECT projects.owner_legacy_account_id AS legacy_account_id
+                 UNION
+                 SELECT users.key AS legacy_account_id
+                   FROM jsonb_object_keys(COALESCE(projects.legacy_users, '{}'::jsonb)) AS users(key)
+               ) ids
+              WHERE COALESCE(ids.legacy_account_id, '') <> ''
+              ORDER BY ids.legacy_account_id
+           ) AS candidate_legacy_account_ids,
+           ARRAY(
+             SELECT DISTINCT COALESCE(target_link.claim_method, '')
+               FROM legacy_migration_account_links target_link
+              WHERE target_link.account_id=$1
+                AND (
+                  target_link.legacy_account_id=projects.owner_legacy_account_id
+                  OR COALESCE(projects.legacy_users, '{}'::jsonb) ? target_link.legacy_account_id
+                )
+              ORDER BY COALESCE(target_link.claim_method, '')
+           ) AS target_claim_methods,
+           projects.last_edited,
+           projects.last_active,
+           projects.disk_mb,
+           projects.artifact_status,
+           projects.artifact_manifest,
+           imports.project_id,
+           imports.owner_account_id,
+           imports.status,
+           imports.restore_status,
+           EXISTS (
+             SELECT 1
+               FROM legacy_migration_project_import_accounts imported_accounts
+              WHERE imported_accounts.legacy_project_id=projects.legacy_project_id
+                AND imported_accounts.account_id=$1
+           ) AS joined,
+           COUNT(*) OVER()::INTEGER AS total_count
+      FROM matched_projects projects
+      LEFT JOIN legacy_migration_accounts owner
+        ON owner.legacy_account_id=projects.owner_legacy_account_id
+      LEFT JOIN legacy_migration_project_imports imports
+        ON imports.legacy_project_id=projects.legacy_project_id
+     ORDER BY projects.last_edited DESC NULLS LAST,
+              projects.last_active DESC NULLS LAST,
+              projects.legacy_project_id
+     LIMIT $3
+    `,
+    [targetAccountId, legacyAccountId, n],
+  );
+  if (
+    rows.length > 0 ||
+    (await getLegacyAccountLinkExists(targetAccountId, legacyAccountId))
+  ) {
+    await getPool().query(
+      `
+      INSERT INTO legacy_migration_account_link_events
+        (id, legacy_account_id, account_id, actor_account_id, action, reason,
+         claim_method, metadata, created)
+      VALUES ($1, $2, $3, $4, 'search-projects',
+              'Admin loaded linked legacy projects', NULL, $5::jsonb, NOW())
+      `,
+      [
+        randomUUID(),
+        legacyAccountId,
+        targetAccountId,
+        actorAccountId,
+        { limit: n, returned: rows.length },
+      ],
+    );
+  }
+  return {
+    projects: rows.map(adminProjectSummary),
+    total_count: Number(rows[0]?.total_count ?? rows.length) || 0,
+    limit: n,
+  };
+}
+
+async function getLegacyAccountLinkExists(
+  target_account_id: string,
+  legacy_account_id: string,
+): Promise<boolean> {
+  const { rows } = await getPool().query(
+    `
+    SELECT 1
+      FROM legacy_migration_account_links
+     WHERE account_id=$1
+       AND legacy_account_id=$2
+     LIMIT 1
+    `,
+    [target_account_id, legacy_account_id],
+  );
+  return rows.length > 0;
 }
 
 function numberValue(value: unknown): number {

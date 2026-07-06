@@ -31,6 +31,7 @@ import {
   ManagedEgressTopProjectsSummary,
 } from "@cocalc/frontend/purchases/managed-egress-history";
 import { AccountStatusTags } from "../account-status-tags";
+import { LegacyMigrationAdmin } from "./legacy-migration";
 
 interface State {
   projects: boolean;
@@ -41,6 +42,7 @@ interface State {
   password: boolean;
   ban: boolean;
   membership: boolean;
+  migration: boolean;
 }
 
 type More =
@@ -51,7 +53,8 @@ type More =
   | "impersonate"
   | "password"
   | "ban"
-  | "membership";
+  | "membership"
+  | "migration";
 
 export function UserResult({
   display_name,
@@ -82,6 +85,7 @@ export function UserResult({
     password: false,
     ban: false,
     membership: false,
+    migration: false,
   });
 
   const renderCreated = () => {
@@ -196,6 +200,7 @@ export function UserResult({
             {renderMoreLink("purchases")}
             {renderMoreLink("egress")}
             {renderMoreLink("membership")}
+            {renderMoreLink("migration")}
           </Space>
           {state.impersonate && (
             <Impersonate account_id={account_id} display_name={userName} />
@@ -272,6 +277,7 @@ export function UserResult({
               <AdminMembership account_id={account_id} />
             </Card>
           )}
+          {state.migration && <LegacyMigrationAdmin account_id={account_id} />}
         </div>
       )}
     </Card>

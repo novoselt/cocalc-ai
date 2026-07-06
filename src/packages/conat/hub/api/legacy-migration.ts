@@ -247,6 +247,122 @@ export interface LegacyMigrationConfigureFinancialRenewalResponse {
   membership_renewal_configured: boolean;
 }
 
+export interface LegacyMigrationAdminAccountSummary {
+  legacy_account_id: string;
+  email_address?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  display_name?: string | null;
+  last_active?: Date | string | null;
+  project_count: number;
+  target_claim_methods: string[];
+  support_admin_linked_account_ids: string[];
+}
+
+export interface LegacyMigrationAdminAccountSearchOptions {
+  account_id?: string;
+  target_account_id: string;
+  query: string;
+  limit?: number;
+}
+
+export interface LegacyMigrationAdminAccountSearchResponse {
+  accounts: LegacyMigrationAdminAccountSummary[];
+  total_count: number;
+}
+
+export interface LegacyMigrationAdminProjectSummary {
+  legacy_project_id: string;
+  name?: string | null;
+  title: string;
+  owner_legacy_account_id?: string | null;
+  owner_email_address?: string | null;
+  owner_display_name?: string | null;
+  candidate_legacy_account_ids: string[];
+  target_claim_methods: string[];
+  last_edited?: Date | string | null;
+  last_active?: Date | string | null;
+  disk_mb?: number | null;
+  artifact_status?: string | null;
+  artifact_bytes?: number | null;
+  project_id?: string | null;
+  owner_account_id?: string | null;
+  import_status: LegacyMigrationProjectImportStatus;
+  restore_status?: LegacyMigrationProjectRestoreStatus | null;
+  joined?: boolean;
+}
+
+export interface LegacyMigrationAdminProjectSearchOptions {
+  account_id?: string;
+  target_account_id: string;
+  query: string;
+  limit?: number;
+}
+
+export interface LegacyMigrationAdminProjectSearchResponse {
+  projects: LegacyMigrationAdminProjectSummary[];
+  total_count: number;
+}
+
+export interface LegacyMigrationAdminLinkSummary extends LegacyMigrationAdminAccountSummary {
+  claim_method: string;
+  metadata?: Record<string, any> | null;
+  created?: Date | string | null;
+  updated?: Date | string | null;
+}
+
+export interface LegacyMigrationAdminLinksOptions {
+  account_id?: string;
+  target_account_id: string;
+}
+
+export interface LegacyMigrationAdminLinksResponse {
+  links: LegacyMigrationAdminLinkSummary[];
+}
+
+export interface LegacyMigrationAdminLinkLegacyAccountOptions {
+  account_id?: string;
+  target_account_id: string;
+  legacy_account_id: string;
+  reason: string;
+  support_reference?: string;
+  evidence?: Record<string, unknown>;
+  browser_id?: string | null;
+  session_hash?: string | null;
+}
+
+export interface LegacyMigrationAdminLinkLegacyAccountResponse {
+  link: LegacyMigrationAdminLinkSummary;
+  warnings: string[];
+}
+
+export interface LegacyMigrationAdminUnlinkLegacyAccountOptions {
+  account_id?: string;
+  target_account_id: string;
+  legacy_account_id: string;
+  reason: string;
+  support_reference?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+}
+
+export interface LegacyMigrationAdminUnlinkLegacyAccountResponse {
+  removed: boolean;
+}
+
+export interface LegacyMigrationAdminLinkedProjectsOptions {
+  account_id?: string;
+  target_account_id: string;
+  legacy_account_id: string;
+  limit?: number;
+}
+
+export interface LegacyMigrationAdminLinkedProjectsResponse {
+  projects: LegacyMigrationAdminProjectSummary[];
+  total_count: number;
+  limit: number;
+}
+
 export interface LegacyMigration {
   listProjects: (
     opts?: LegacyMigrationListProjectsOptions,
@@ -266,6 +382,24 @@ export interface LegacyMigration {
   configureFinancialMembershipRenewal: (
     opts?: LegacyMigrationConfigureFinancialRenewalOptions,
   ) => Promise<LegacyMigrationConfigureFinancialRenewalResponse>;
+  adminSearchLegacyAccounts: (
+    opts: LegacyMigrationAdminAccountSearchOptions,
+  ) => Promise<LegacyMigrationAdminAccountSearchResponse>;
+  adminSearchLegacyProjects: (
+    opts: LegacyMigrationAdminProjectSearchOptions,
+  ) => Promise<LegacyMigrationAdminProjectSearchResponse>;
+  adminListLegacyAccountLinks: (
+    opts: LegacyMigrationAdminLinksOptions,
+  ) => Promise<LegacyMigrationAdminLinksResponse>;
+  adminLinkLegacyAccount: (
+    opts: LegacyMigrationAdminLinkLegacyAccountOptions,
+  ) => Promise<LegacyMigrationAdminLinkLegacyAccountResponse>;
+  adminUnlinkLegacyAccount: (
+    opts: LegacyMigrationAdminUnlinkLegacyAccountOptions,
+  ) => Promise<LegacyMigrationAdminUnlinkLegacyAccountResponse>;
+  adminListLinkedLegacyProjects: (
+    opts: LegacyMigrationAdminLinkedProjectsOptions,
+  ) => Promise<LegacyMigrationAdminLinkedProjectsResponse>;
 }
 
 export const legacyMigration = {
@@ -275,4 +409,10 @@ export const legacyMigration = {
   previewFinancialMigration: authFirstRequireAccount,
   applyFinancialMigration: authFirstRequireAccount,
   configureFinancialMembershipRenewal: authFirstRequireAccount,
+  adminSearchLegacyAccounts: authFirstRequireAccount,
+  adminSearchLegacyProjects: authFirstRequireAccount,
+  adminListLegacyAccountLinks: authFirstRequireAccount,
+  adminLinkLegacyAccount: authFirstRequireAccount,
+  adminUnlinkLegacyAccount: authFirstRequireAccount,
+  adminListLinkedLegacyProjects: authFirstRequireAccount,
 } as const;

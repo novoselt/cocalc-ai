@@ -82,6 +82,18 @@ import type {
   LegacyMigrationApplyFinancialHomeBayOptions,
   LegacyMigrationApplyFinancialHomeBayResponse,
   LegacyMigrationApplyFinancialResponse,
+  LegacyMigrationAdminAccountSearchOptions,
+  LegacyMigrationAdminAccountSearchResponse,
+  LegacyMigrationAdminLinkedProjectsOptions,
+  LegacyMigrationAdminLinkedProjectsResponse,
+  LegacyMigrationAdminLinkLegacyAccountOptions,
+  LegacyMigrationAdminLinkLegacyAccountResponse,
+  LegacyMigrationAdminLinksOptions,
+  LegacyMigrationAdminLinksResponse,
+  LegacyMigrationAdminProjectSearchOptions,
+  LegacyMigrationAdminProjectSearchResponse,
+  LegacyMigrationAdminUnlinkLegacyAccountOptions,
+  LegacyMigrationAdminUnlinkLegacyAccountResponse,
   LegacyMigrationConfigureFinancialRenewalHomeBayOptions,
   LegacyMigrationConfigureFinancialRenewalResponse,
   LegacyMigrationFinancialMembershipGrantHomeBayOptions,
@@ -2220,6 +2232,12 @@ export type AccountLocalMethod =
   | "legacy-migration-apply-financial-home-bay"
   | "legacy-migration-get-financial-membership-grant-home-bay"
   | "legacy-migration-configure-financial-renewal-home-bay"
+  | "legacy-migration-admin-search-legacy-accounts"
+  | "legacy-migration-admin-search-legacy-projects"
+  | "legacy-migration-admin-list-legacy-account-links"
+  | "legacy-migration-admin-link-legacy-account"
+  | "legacy-migration-admin-unlink-legacy-account"
+  | "legacy-migration-admin-list-linked-legacy-projects"
   | "public-directory-share-resolve"
   | "public-directory-share-list-project"
   | "public-directory-share-create"
@@ -3427,6 +3445,24 @@ export interface InterBayAccountLocalApi {
   legacyMigrationConfigureFinancialRenewalHomeBay: (
     opts: LegacyMigrationConfigureFinancialRenewalHomeBayOptions,
   ) => Promise<LegacyMigrationConfigureFinancialRenewalResponse>;
+  legacyMigrationAdminSearchLegacyAccounts: (
+    opts: LegacyMigrationAdminAccountSearchOptions,
+  ) => Promise<LegacyMigrationAdminAccountSearchResponse>;
+  legacyMigrationAdminSearchLegacyProjects: (
+    opts: LegacyMigrationAdminProjectSearchOptions,
+  ) => Promise<LegacyMigrationAdminProjectSearchResponse>;
+  legacyMigrationAdminListLegacyAccountLinks: (
+    opts: LegacyMigrationAdminLinksOptions,
+  ) => Promise<LegacyMigrationAdminLinksResponse>;
+  legacyMigrationAdminLinkLegacyAccount: (
+    opts: LegacyMigrationAdminLinkLegacyAccountOptions,
+  ) => Promise<LegacyMigrationAdminLinkLegacyAccountResponse>;
+  legacyMigrationAdminUnlinkLegacyAccount: (
+    opts: LegacyMigrationAdminUnlinkLegacyAccountOptions,
+  ) => Promise<LegacyMigrationAdminUnlinkLegacyAccountResponse>;
+  legacyMigrationAdminListLinkedLegacyProjects: (
+    opts: LegacyMigrationAdminLinkedProjectsOptions,
+  ) => Promise<LegacyMigrationAdminLinkedProjectsResponse>;
   publicDirectoryShareResolve: (
     opts: ResolvePublicDirectoryShareOptions,
   ) => Promise<ResolvedPublicDirectoryShare>;
@@ -6033,6 +6069,64 @@ export function createInterBayAccountLocalClient({
         method: "legacy-migration-configure-financial-renewal-home-bay",
       }),
     });
+  const legacyMigrationAdminSearchLegacyAccountsClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationAdminSearchLegacyAccounts">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-admin-search-legacy-accounts",
+    }),
+  });
+  const legacyMigrationAdminSearchLegacyProjectsClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationAdminSearchLegacyProjects">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-admin-search-legacy-projects",
+    }),
+  });
+  const legacyMigrationAdminListLegacyAccountLinksClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationAdminListLegacyAccountLinks">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-admin-list-legacy-account-links",
+    }),
+  });
+  const legacyMigrationAdminLinkLegacyAccountClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationAdminLinkLegacyAccount">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-admin-link-legacy-account",
+    }),
+  });
+  const legacyMigrationAdminUnlinkLegacyAccountClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationAdminUnlinkLegacyAccount">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-admin-unlink-legacy-account",
+    }),
+  });
+  const legacyMigrationAdminListLinkedLegacyProjectsClient =
+    createServiceClient<
+      Pick<
+        InterBayAccountLocalApi,
+        "legacyMigrationAdminListLinkedLegacyProjects"
+      >
+    >({
+      ...serviceClientOptions({ client, timeout }),
+      subject: accountLocalSubject({
+        dest_bay,
+        method: "legacy-migration-admin-list-linked-legacy-projects",
+      }),
+    });
   const publicDirectoryShareResolveClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "publicDirectoryShareResolve">
   >({
@@ -6395,6 +6489,30 @@ export function createInterBayAccountLocalClient({
       ),
     legacyMigrationConfigureFinancialRenewalHomeBay: async (opts) =>
       await legacyMigrationConfigureFinancialRenewalHomeBayClient.legacyMigrationConfigureFinancialRenewalHomeBay(
+        opts,
+      ),
+    legacyMigrationAdminSearchLegacyAccounts: async (opts) =>
+      await legacyMigrationAdminSearchLegacyAccountsClient.legacyMigrationAdminSearchLegacyAccounts(
+        opts,
+      ),
+    legacyMigrationAdminSearchLegacyProjects: async (opts) =>
+      await legacyMigrationAdminSearchLegacyProjectsClient.legacyMigrationAdminSearchLegacyProjects(
+        opts,
+      ),
+    legacyMigrationAdminListLegacyAccountLinks: async (opts) =>
+      await legacyMigrationAdminListLegacyAccountLinksClient.legacyMigrationAdminListLegacyAccountLinks(
+        opts,
+      ),
+    legacyMigrationAdminLinkLegacyAccount: async (opts) =>
+      await legacyMigrationAdminLinkLegacyAccountClient.legacyMigrationAdminLinkLegacyAccount(
+        opts,
+      ),
+    legacyMigrationAdminUnlinkLegacyAccount: async (opts) =>
+      await legacyMigrationAdminUnlinkLegacyAccountClient.legacyMigrationAdminUnlinkLegacyAccount(
+        opts,
+      ),
+    legacyMigrationAdminListLinkedLegacyProjects: async (opts) =>
+      await legacyMigrationAdminListLinkedLegacyProjectsClient.legacyMigrationAdminListLinkedLegacyProjects(
         opts,
       ),
     publicDirectoryShareResolve: async (opts) =>
@@ -7747,6 +7865,96 @@ export function createInterBayAccountLocalHandler({
       impl: {
         legacyMigrationConfigureFinancialRenewalHomeBay: async (opts) =>
           await impl.legacyMigrationConfigureFinancialRenewalHomeBay(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationAdminSearchLegacyAccounts">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-admin-search-legacy-accounts",
+      }),
+      impl: {
+        legacyMigrationAdminSearchLegacyAccounts: async (opts) =>
+          await impl.legacyMigrationAdminSearchLegacyAccounts(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationAdminSearchLegacyProjects">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-admin-search-legacy-projects",
+      }),
+      impl: {
+        legacyMigrationAdminSearchLegacyProjects: async (opts) =>
+          await impl.legacyMigrationAdminSearchLegacyProjects(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<
+        InterBayAccountLocalApi,
+        "legacyMigrationAdminListLegacyAccountLinks"
+      >
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-admin-list-legacy-account-links",
+      }),
+      impl: {
+        legacyMigrationAdminListLegacyAccountLinks: async (opts) =>
+          await impl.legacyMigrationAdminListLegacyAccountLinks(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationAdminLinkLegacyAccount">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-admin-link-legacy-account",
+      }),
+      impl: {
+        legacyMigrationAdminLinkLegacyAccount: async (opts) =>
+          await impl.legacyMigrationAdminLinkLegacyAccount(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationAdminUnlinkLegacyAccount">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-admin-unlink-legacy-account",
+      }),
+      impl: {
+        legacyMigrationAdminUnlinkLegacyAccount: async (opts) =>
+          await impl.legacyMigrationAdminUnlinkLegacyAccount(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<
+        InterBayAccountLocalApi,
+        "legacyMigrationAdminListLinkedLegacyProjects"
+      >
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-admin-list-linked-legacy-projects",
+      }),
+      impl: {
+        legacyMigrationAdminListLinkedLegacyProjects: async (opts) =>
+          await impl.legacyMigrationAdminListLinkedLegacyProjects(opts),
       },
     }),
     createServiceHandler<

@@ -270,6 +270,7 @@ export const TABLE_OWNERSHIP = {
       "global_config_versions",
       "hub_servers",
       "instances",
+      "legacy_migration_account_link_events",
       "legacy_migration_account_links",
       "legacy_migration_accounts",
       "legacy_migration_financial_claims",
