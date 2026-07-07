@@ -349,6 +349,7 @@ async function applyAvailableRefresh({
   options: RefreshArtifactsFromR2Options;
 }): Promise<number> {
   let total = 0;
+  let checked = 0;
   let batches = 0;
   while (true) {
     const { rows } = await client.query<UpdateBatchResult>(
@@ -382,6 +383,18 @@ async function applyAvailableRefresh({
           JOIN candidates c
             ON c.legacy_project_id=r.legacy_project_id
          WHERE p.legacy_project_id=r.legacy_project_id
+           AND (
+             p.artifact_bucket IS DISTINCT FROM $1::text
+             OR p.artifact_key IS DISTINCT FROM r.artifact_key
+             OR p.artifact_status IS DISTINCT FROM 'available'
+             OR p.artifact_manifest IS NULL
+             OR COALESCE(p.artifact_manifest->>'r2_missing', '')='true'
+             OR p.artifact_manifest->>'artifact_bytes' IS DISTINCT FROM r.artifact_bytes::text
+             OR p.artifact_manifest->>'compressed_bytes' IS DISTINCT FROM r.artifact_bytes::text
+             OR p.artifact_manifest->>'r2_bucket' IS DISTINCT FROM $1::text
+             OR p.artifact_manifest->>'r2_key' IS DISTINCT FROM r.artifact_key
+             OR p.artifact_manifest->>'r2_etag' IS DISTINCT FROM r.etag
+           )
         RETURNING 1
       ),
       marked AS (
@@ -399,10 +412,11 @@ async function applyAvailableRefresh({
     );
     const result = rows[0] ?? { candidates: 0, updated: 0 };
     if (result.candidates === 0) return total;
+    checked += result.marked ?? result.candidates;
     total += result.updated;
     batches += 1;
     console.log(
-      `${options.dryRun ? "would mark" : "marked"} ${total.toLocaleString()} project(s) available (${batches.toLocaleString()} batch(es))`,
+      `${options.dryRun ? "would update" : "updated"} ${total.toLocaleString()} changed project(s) available after checking ${checked.toLocaleString()} archive(s) (${batches.toLocaleString()} batch(es))`,
     );
   }
 }

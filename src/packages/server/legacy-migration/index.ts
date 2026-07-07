@@ -181,6 +181,70 @@ let importSchemaReady: Promise<void> | undefined;
 let financialSchemaReady: Promise<void> | undefined;
 let rawRecordsSchemaReady: Promise<void> | undefined;
 let adminLinkSchemaReady: Promise<void> | undefined;
+let lookupIndexesReady: Promise<void> | undefined;
+let rawRecordIndexesReady: Promise<void> | undefined;
+
+async function ensureLegacyMigrationLookupIndexes(): Promise<void> {
+  lookupIndexesReady ??= (async () => {
+    await getPool().query(`
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_accounts_lower_email_address_idx
+        ON legacy_migration_accounts((lower(email_address)))
+        WHERE COALESCE(email_address, '') <> ''
+    `);
+    await getPool().query(`
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_accounts_gmail_canonical_email_idx
+        ON legacy_migration_accounts((
+          replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'
+        ))
+        WHERE COALESCE(email_address, '') <> ''
+          AND split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
+    `);
+    await getPool().query(`
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_projects_owner_legacy_account_id_idx
+        ON legacy_migration_projects(owner_legacy_account_id)
+    `);
+    await getPool().query(`
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_projects_legacy_users_gin_idx
+        ON legacy_migration_projects USING GIN (legacy_users)
+    `);
+  })();
+  await lookupIndexesReady;
+}
+
+async function ensureLegacyMigrationRawRecordIndexes(): Promise<void> {
+  rawRecordIndexesReady ??= (async () => {
+    await getPool().query(`
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_source_legacy_account_id_idx
+        ON legacy_migration_raw_records(source, (payload->>'legacy_account_id'))
+    `);
+    await getPool().query(`
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_site_license_account_idx
+        ON legacy_migration_raw_records((
+          COALESCE(payload#>>'{info,purchased,account_id}', payload->'managers'->>0)
+        ))
+        WHERE source='site_licenses'
+    `);
+    await getPool().query(`
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_stripe_customer_idx
+        ON legacy_migration_raw_records((payload->>'stripe_customer_id'))
+        WHERE source='stripe_subscriptions'
+    `);
+    await getPool().query(`
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_lower_customer_email_idx
+        ON legacy_migration_raw_records((lower(payload->>'customer_email')))
+        WHERE source='stripe_subscriptions'
+    `);
+    await getPool().query(`
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_gmail_customer_email_idx
+        ON legacy_migration_raw_records((
+          replace(split_part(split_part(lower(payload->>'customer_email'), '@', 1), '+', 1), '.', '')
+        ))
+        WHERE source='stripe_subscriptions'
+          AND split_part(lower(payload->>'customer_email'), '@', 2) IN ('gmail.com', 'googlemail.com')
+    `);
+  })();
+  await rawRecordIndexesReady;
+}
 
 async function ensureLegacyMigrationProjectImportSchema(): Promise<void> {
   importSchemaReady ??= (async () => {
@@ -210,6 +274,7 @@ async function ensureLegacyMigrationProjectImportSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS legacy_migration_project_imports_restore_lro_op_id_idx
         ON legacy_migration_project_imports(restore_lro_op_id)
     `);
+    await ensureLegacyMigrationLookupIndexes();
   })();
   await importSchemaReady;
 }
@@ -238,6 +303,7 @@ async function ensureLegacyMigrationFinancialSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS legacy_migration_raw_records_updated_idx
         ON legacy_migration_raw_records(updated)
     `);
+    await ensureLegacyMigrationRawRecordIndexes();
     await getPool().query(`
       CREATE TABLE IF NOT EXISTS legacy_migration_financial_claims (
         legacy_account_id VARCHAR(128) PRIMARY KEY,
@@ -338,6 +404,7 @@ async function ensureLegacyMigrationRawRecordsSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS legacy_migration_raw_records_updated_idx
         ON legacy_migration_raw_records(updated)
     `);
+      await ensureLegacyMigrationRawRecordIndexes();
     });
   await rawRecordsSchemaReady;
 }
@@ -745,36 +812,54 @@ async function unverifiedLegacyEmailMatches(account_id: string): Promise<{
   const { email, verified } = await accountPrimaryEmailStatus(account_id);
   if (!email || verified) return { email, matches: [] };
   const gmailCanonical = gmailCanonicalEmail(email);
+  await ensureLegacyMigrationLookupIndexes();
   const { rows } = await getPool().query<LegacyMigrationMatchedAccount>(
     `
-    WITH candidates AS (
+    WITH matches AS (
       SELECT legacy_account_id,
              email_address,
              display_name,
              lower(email_address) AS exact_email,
-             CASE
-               WHEN split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
-                 THEN replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'
-               ELSE NULL
-             END AS gmail_canonical_email,
-             last_active
+             NULL::TEXT AS gmail_canonical_email,
+             last_active,
+             'exact-email' AS match_method,
+             0 AS priority
         FROM legacy_migration_accounts
        WHERE COALESCE(email_address, '') <> ''
+         AND lower(email_address)=$1
+      UNION ALL
+      SELECT legacy_account_id,
+             email_address,
+             display_name,
+             lower(email_address) AS exact_email,
+             replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'
+               AS gmail_canonical_email,
+             last_active,
+             'gmail-canonical' AS match_method,
+             1 AS priority
+        FROM legacy_migration_accounts
+       WHERE $2::TEXT IS NOT NULL
+         AND COALESCE(email_address, '') <> ''
+         AND split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
+         AND replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'=$2::TEXT
+    ),
+    deduped AS (
+      SELECT DISTINCT ON (legacy_account_id)
+             legacy_account_id,
+             email_address,
+             display_name,
+             match_method,
+             gmail_canonical_email,
+             last_active
+        FROM matches
+       ORDER BY legacy_account_id, priority
     )
     SELECT legacy_account_id,
            email_address,
            display_name,
-           CASE
-             WHEN exact_email=$1 THEN 'exact-email'
-             ELSE 'gmail-canonical'
-           END AS match_method,
+           match_method,
            gmail_canonical_email
-      FROM candidates
-     WHERE exact_email=$1
-        OR (
-          $2::TEXT IS NOT NULL
-          AND gmail_canonical_email=$2::TEXT
-        )
+      FROM deduped
      ORDER BY last_active DESC NULLS LAST,
               legacy_account_id
     `,
@@ -802,19 +887,40 @@ async function ensureVerifiedEmailLinks(account_id: string): Promise<void> {
         .filter((email): email is string => email != null),
     ),
   );
+  await ensureLegacyMigrationLookupIndexes();
   await getPool().query(
     `
-    WITH candidates AS (
+    WITH matches AS (
       SELECT legacy_account_id,
              email_address,
              lower(email_address) AS exact_email,
-             CASE
-               WHEN split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
-                 THEN replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'
-               ELSE NULL
-             END AS gmail_canonical_email
+             NULL::TEXT AS gmail_canonical_email,
+             'exact-email' AS match_method,
+             0 AS priority
         FROM legacy_migration_accounts
        WHERE COALESCE(email_address, '') <> ''
+         AND lower(email_address)=ANY($2::TEXT[])
+      UNION ALL
+      SELECT legacy_account_id,
+             email_address,
+             lower(email_address) AS exact_email,
+             replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'
+               AS gmail_canonical_email,
+             'gmail-canonical' AS match_method,
+             1 AS priority
+        FROM legacy_migration_accounts
+       WHERE COALESCE(email_address, '') <> ''
+         AND split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
+         AND replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'=ANY($3::TEXT[])
+    ),
+    deduped AS (
+      SELECT DISTINCT ON (legacy_account_id)
+             legacy_account_id,
+             email_address,
+             match_method,
+             gmail_canonical_email
+        FROM matches
+       ORDER BY legacy_account_id, priority
     )
     INSERT INTO legacy_migration_account_links
       (legacy_account_id, account_id, claim_method, metadata, created, updated)
@@ -823,23 +929,14 @@ async function ensureVerifiedEmailLinks(account_id: string): Promise<void> {
            'verified-email',
            jsonb_build_object(
              'email_address', email_address,
-             'match_method',
-             CASE
-               WHEN exact_email=ANY($2::TEXT[]) THEN 'exact-email'
-               ELSE 'gmail-canonical'
-             END,
+             'match_method', match_method,
              'gmail_canonical_email', gmail_canonical_email
            ),
            NOW(),
            NOW()
-      FROM candidates
-     WHERE exact_email=ANY($2::TEXT[])
-        OR (
-          gmail_canonical_email IS NOT NULL
-          AND gmail_canonical_email=ANY($3::TEXT[])
-        )
+      FROM deduped
     ON CONFLICT (legacy_account_id, account_id)
-    DO UPDATE SET updated=NOW()
+    DO NOTHING
     `,
     [account_id, emails, gmailCanonicalEmails],
   );
@@ -3264,17 +3361,29 @@ export async function listProjects({
   const maxDiskMb = nonnegativeNumber(max_disk_mb);
   const { rows } = await getPool().query<LegacyProjectRow>(
     `
-    WITH matched AS (
+    WITH linked AS (
+      SELECT unnest($1::TEXT[]) AS legacy_account_id
+    ),
+    matched_rows AS (
       SELECT p.legacy_project_id,
-             ARRAY_AGG(DISTINCT linked.legacy_account_id ORDER BY linked.legacy_account_id)
+             linked.legacy_account_id
+        FROM linked
+        JOIN legacy_migration_projects p
+          ON p.owner_legacy_account_id=linked.legacy_account_id
+      UNION ALL
+      SELECT p.legacy_project_id,
+             linked.legacy_account_id
+        FROM linked
+        JOIN legacy_migration_projects p
+          ON p.legacy_users ? linked.legacy_account_id
+    ),
+    matched AS (
+      SELECT matched_rows.legacy_project_id,
+             ARRAY_AGG(DISTINCT matched_rows.legacy_account_id ORDER BY matched_rows.legacy_account_id)
                AS matched_legacy_account_ids
-        FROM legacy_migration_projects p
-        JOIN legacy_migration_account_links linked
-          ON linked.account_id=$1
-         AND (
-           p.owner_legacy_account_id=linked.legacy_account_id
-           OR COALESCE(p.legacy_users, '{}'::jsonb) ? linked.legacy_account_id
-         )
+        FROM matched_rows
+        JOIN legacy_migration_projects p
+          ON p.legacy_project_id=matched_rows.legacy_project_id
        WHERE ($2::BOOLEAN OR COALESCE(p.hidden, false)=false)
          AND (
            NOT $3::BOOLEAN
@@ -3285,10 +3394,10 @@ export async function listProjects({
            $5::DOUBLE PRECISION IS NULL
            OR p.disk_mb <= $5::DOUBLE PRECISION
          )
-       GROUP BY p.legacy_project_id
+       GROUP BY matched_rows.legacy_project_id
       HAVING (
         $2::BOOLEAN
-        OR NOT BOOL_OR(COALESCE(p.legacy_users->linked.legacy_account_id->>'hide', '')='true')
+        OR NOT BOOL_OR(COALESCE(p.legacy_users->matched_rows.legacy_account_id->>'hide', '')='true')
       )
     )
     SELECT p.legacy_project_id,
@@ -3352,7 +3461,7 @@ export async function listProjects({
              SELECT 1
                FROM legacy_migration_project_import_accounts a
               WHERE a.legacy_project_id=p.legacy_project_id
-                AND a.account_id=$1
+                AND a.account_id=$8
                 AND a.project_id=i.project_id
                 AND active_import_project.project_id IS NOT NULL
            ) AS joined
@@ -3392,13 +3501,14 @@ export async function listProjects({
      LIMIT $7
     `,
     [
-      account_id,
+      legacy_account_ids,
       !!include_hidden,
       useSearch,
       search,
       maxDiskMb,
       !!include_not_available,
       limitValue(limit),
+      account_id,
     ],
   );
   return {
