@@ -826,6 +826,7 @@ export interface Host {
   owner_spend_limit_state?: "ok" | "at_risk" | "stopped_limit_exceeded";
   can_start?: boolean;
   can_place?: boolean;
+  online?: boolean;
   reason_unavailable?: string;
   starred?: boolean;
   funding_mode?: HostFundingMode;

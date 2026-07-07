@@ -1712,7 +1712,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
       {connectorOnline ? "Connector online" : "Connector offline"}
     </Tag>
   ) : null;
-  const hostOnline = !!host && isHostOnline(host.last_seen);
+  const hostOnline = !!host && isHostOnline(host.last_seen, host.online);
   const showOnlineTag = host?.status === "running" && hostOnline;
   const showStaleTag = host?.status === "running" && !hostOnline;
   const showSpinner = host ? isHostTransitioning(host.status) : false;
@@ -1799,11 +1799,11 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
   const onlineTag =
     host && !host.deleted ? (
       showOnlineTag ? (
-        <Tooltip title={getHostOnlineTooltip(host.last_seen)}>
+        <Tooltip title={getHostOnlineTooltip(host.last_seen, host.online)}>
           <Tag color="green">online</Tag>
         </Tooltip>
       ) : showStaleTag ? (
-        <Tooltip title={getHostOnlineTooltip(host.last_seen)}>
+        <Tooltip title={getHostOnlineTooltip(host.last_seen, host.online)}>
           <Tag color="default">offline</Tag>
         </Tooltip>
       ) : null

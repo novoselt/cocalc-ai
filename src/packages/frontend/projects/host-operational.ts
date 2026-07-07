@@ -1,6 +1,6 @@
 import { COMPUTE_STATES } from "@cocalc/util/compute-states";
 
-const HOST_ONLINE_WINDOW_MS = 2 * 60 * 1000;
+const HOST_ONLINE_WINDOW_MS = 10 * 60 * 1000;
 
 type HostInfoLike = {
   get?: (key: string) => any;

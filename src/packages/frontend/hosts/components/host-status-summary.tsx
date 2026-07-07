@@ -138,9 +138,9 @@ function connectionLabel(host: Host): React.ReactNode {
 
 function ConnectionTag({ host }: { host: Host }) {
   if (host.status !== "running") return null;
-  const online = isHostOnline(host.last_seen);
+  const online = isHostOnline(host.last_seen, host.online);
   return (
-    <Tooltip title={getHostOnlineTooltip(host.last_seen)}>
+    <Tooltip title={getHostOnlineTooltip(host.last_seen, host.online)}>
       <Tag color={online ? "green" : "orange"} style={COMPACT_TAG_STYLE}>
         {online ? "online" : "offline"}
       </Tag>
@@ -924,8 +924,14 @@ function DetailsPopover({
               <DetailRow
                 icon={<WifiOutlined />}
                 label="Connectivity"
-                value={isHostOnline(host.last_seen) ? "Online" : "Offline"}
-                tone={isHostOnline(host.last_seen) ? "green" : "orange"}
+                value={
+                  isHostOnline(host.last_seen, host.online)
+                    ? "Online"
+                    : "Offline"
+                }
+                tone={
+                  isHostOnline(host.last_seen, host.online) ? "green" : "orange"
+                }
               />
               <DetailRow
                 icon={<ClockCircleOutlined />}
