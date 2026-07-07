@@ -65,7 +65,9 @@ import {
 import { assertProjectCreationAllowed } from "@cocalc/server/launch/kill-switches";
 
 const log = getLogger("server:projects:create");
-const HOST_ONLINE_WINDOW_MS = 2 * 60 * 1000;
+// Project placement must react quickly to dead hosts; do not use UI heartbeat
+// grace windows here.
+const HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS = 2 * 60 * 1000;
 const PROJECT_RUNTIME_SLOT_TTL_MS = 30 * 60 * 1000;
 const STAR_DEFAULT_ROOTFS_IMAGE_ID = "official-cocalc-star-rootfs";
 // Explicit host placement provisions the workspace on the target host during
@@ -149,7 +151,7 @@ function isHostRunningAndOnline(row: any): {
   if (!Number.isFinite(lastSeenMs)) {
     return { ok: false, reason: "invalid heartbeat timestamp" };
   }
-  if (Date.now() - lastSeenMs > HOST_ONLINE_WINDOW_MS) {
+  if (Date.now() - lastSeenMs > HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS) {
     return { ok: false, reason: "heartbeat is stale" };
   }
   return { ok: true };

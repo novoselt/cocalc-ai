@@ -4028,6 +4028,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 cmd="${1:-ensure}"
 shift || true
+cd /
 RUNTIME_ROOT="__RUNTIME_ROOT__"
 RUNTIME_USER="__RUNTIME_USER__"
 RUNTIME_BIN="$RUNTIME_ROOT/bin/project-host"
@@ -4042,6 +4043,7 @@ SYSCTL_CONFIG_PATH="/etc/sysctl.d/90-cocalc-project-host.conf"
 HELPER_SCHEMA_VERSION="__HELPER_SCHEMA_VERSION__"
 
 run_daemon() {
+  cd /
   sudo -n -u "${RUNTIME_USER}" -H "${RUNTIME_BIN}" daemon "$@"
 }
 
@@ -4601,6 +4603,7 @@ exec python3 "{bootstrap_py}" --bootstrap-dir "{bootstrap_dir}" --only tools_bun
                 'if [ "$(id -un)" = "$RUNTIME_USER" ]; then\n'
                 '  exec "$RUNTIME_SCRIPT" "$@"\n'
                 "fi\n"
+                "cd /\n"
                 'exec sudo -n -u "$RUNTIME_USER" -H "$RUNTIME_SCRIPT" "$@"\n'
             )
             target = admin_bin / name

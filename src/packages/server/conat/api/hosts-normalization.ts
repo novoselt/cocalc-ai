@@ -62,7 +62,10 @@ import {
 } from "@cocalc/server/cloud/spot-restore";
 import { observedHostAgentFromMetadata } from "./hosts-runtime-observation";
 
-const HOST_ONLINE_WINDOW_MS = 2 * 60 * 1000;
+// This gates placement, recovery, and runtime management. Keep it short; the
+// operator UI uses its own display grace so false stale dashboards do not delay
+// real host repair or spot replacement.
+const HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS = 2 * 60 * 1000;
 const HOST_RUNNING_STATUSES = new Set(["running", "active"]);
 const HOST_BILLING_ENFORCEMENT_STATES = new Set<HostBillingEnforcementState>([
   "ok",
@@ -352,7 +355,7 @@ export function computeHostOperationalAvailability(row: any): {
     };
   }
 
-  const online = Date.now() - seenMs <= HOST_ONLINE_WINDOW_MS;
+  const online = Date.now() - seenMs <= HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS;
   if (!online) {
     return {
       operational: false,
@@ -392,6 +395,7 @@ export function parseRow(
     owner_spend_limit_state?: Host["owner_spend_limit_state"];
     can_start?: boolean;
     can_place?: boolean;
+    online?: boolean;
     reason_unavailable?: string;
     backup_status?: HostBackupStatus;
     starred?: boolean;
@@ -406,6 +410,7 @@ export function parseRow(
   } = {},
 ): Host {
   const metadata = row.metadata ?? {};
+  const availability = computeHostOperationalAvailability(row);
   const software = metadata.software ?? {};
   const parsePositiveInt = (value: unknown): number | undefined => {
     const parsed = Number(value);
@@ -1248,7 +1253,10 @@ export function parseRow(
       metadata.billing?.owner_spend_limit_status?.state,
     can_start: opts.can_start,
     can_place: opts.can_place,
-    reason_unavailable: opts.reason_unavailable,
+    online: opts.online ?? availability.online,
+    reason_unavailable:
+      opts.reason_unavailable ??
+      (availability.operational ? undefined : availability.reason_unavailable),
     starred: opts.starred,
     funding_mode: hostFundingModeFromMetadata(metadata),
     billing_enforcement: hostBillingEnforcementFromMetadata(metadata),

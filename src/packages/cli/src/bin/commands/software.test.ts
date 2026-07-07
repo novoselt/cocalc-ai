@@ -19,6 +19,9 @@ import type { SoftwareR2Client } from "../core/software/remote-store";
 type CapturedRun = {
   command: string;
   args: string[];
+  options?: {
+    timeoutMs?: number;
+  };
 };
 
 type CapturedOutputRun = CapturedRun & {
@@ -96,7 +99,13 @@ function makeDeps({
     }),
     repoRoot: () => resolvedRepoRoot,
     runCommand: async (command, args, options) => {
-      runs?.push({ command, args });
+      runs?.push({
+        command,
+        args,
+        ...(options?.timeoutMs
+          ? { options: { timeoutMs: options.timeoutMs } }
+          : {}),
+      });
       let bundle = command === "pnpm" ? args.at(-1) : undefined;
       const artifactId =
         options?.env?.COCALC_SOFTWARE_ARTIFACT_ID ??
@@ -300,6 +309,7 @@ function createProgram(deps: SoftwareCommandDeps): Command {
   program.exitOverride();
   program.option("--json", "output machine-readable JSON");
   program.option("--output <format>", "output format", "table");
+  program.option("--timeout <duration>", "global timeout", "600s");
   program.option("-q, --quiet", "suppress human-formatted success output");
   registerSoftwareCommand(program, deps);
   return program;
@@ -3896,7 +3906,7 @@ test("software smoke hub also runs Rocket host route health", async () => {
   ]);
 
   assert.equal(runs.length, 1);
-  assert.deepEqual(runs[0].args.slice(-7), [
+  assert.deepEqual(runs[0].args.slice(-13), [
     "--profile",
     "prod",
     "rocket",
@@ -3904,7 +3914,83 @@ test("software smoke hub also runs Rocket host route health", async () => {
     "host-routes",
     "--api",
     "https://cocalc.ai",
+    "--host-limit",
+    "1",
+    "--request-timeout-ms",
+    "15000",
+    "--rpc-timeout",
+    "15s",
   ]);
+});
+
+test("software smoke hub times out Rocket host route health", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-smoke-hub-timeout-"));
+  const runs: CapturedRun[] = [];
+  const deps = makeDeps({
+    localStore: join(dir, "store"),
+    fetch: async () => ({ ok: true, status: 200 }) as Response,
+  });
+  deps.runCommand = async (command, args, options) => {
+    runs.push({
+      command,
+      args,
+      options: { timeoutMs: options?.timeoutMs },
+    });
+    return 124;
+  };
+  const program = createProgram(deps);
+
+  await assert.rejects(
+    async () =>
+      await program.parseAsync([
+        "node",
+        "test",
+        "--quiet",
+        "software",
+        "smoke",
+        "hub",
+        "prod",
+        "--check-timeout-ms",
+        "1234",
+      ]),
+    /rocket health host-routes timed out after 1234ms/,
+  );
+  assert.equal(runs[0]?.options?.timeoutMs, 1234);
+});
+
+test("software smoke accepts numeric global timeout as deprecated smoke timeout", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-smoke-hub-global-timeout-"));
+  const runs: CapturedRun[] = [];
+  const deps = makeDeps({
+    localStore: join(dir, "store"),
+    fetch: async () => ({ ok: true, status: 200 }) as Response,
+  });
+  deps.runCommand = async (command, args, options) => {
+    runs.push({
+      command,
+      args,
+      options: { timeoutMs: options?.timeoutMs },
+    });
+    return 124;
+  };
+  const program = createProgram(deps);
+
+  await assert.rejects(
+    async () =>
+      await program.parseAsync([
+        "node",
+        "test",
+        "--quiet",
+        "software",
+        "smoke",
+        "hub",
+        "prod",
+        "--timeout",
+        "2345",
+      ]),
+    /rocket health host-routes timed out after 2345ms/,
+  );
+  assert.equal(runs[0]?.options?.timeoutMs, 2345);
 });
 
 test("software smoke cli validates public release channel artifact", async () => {

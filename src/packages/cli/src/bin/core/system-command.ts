@@ -32,15 +32,31 @@ export async function runCommand(
   options: {
     stdio?: "inherit" | "pipe";
     env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
   } = {},
 ): Promise<number> {
   return await new Promise((resolve, reject) => {
+    let timedOut = false;
+    let timeout: NodeJS.Timeout | undefined;
+    let killTimeout: NodeJS.Timeout | undefined;
     const child = spawn(command, args, {
       stdio: options.stdio ?? "inherit",
       env: options.env ?? process.env,
     });
+    const timeoutMs = options.timeoutMs;
+    if (timeoutMs != null && timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        killTimeout = setTimeout(() => child.kill("SIGKILL"), 5000);
+      }, timeoutMs);
+    }
     child.on("error", reject);
-    child.on("close", (code) => resolve(code ?? 1));
+    child.on("close", (code) => {
+      if (timeout) clearTimeout(timeout);
+      if (killTimeout) clearTimeout(killTimeout);
+      resolve(timedOut ? 124 : (code ?? 1));
+    });
   });
 }
 

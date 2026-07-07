@@ -17,7 +17,11 @@ import type {
 const TABLE = "project_host_availability_events";
 const DEFAULT_WINDOW_DAYS = 30;
 const MAX_WINDOW_DAYS = 370;
-const HOST_ONLINE_WINDOW_MS = 2 * 60 * 1000;
+// Availability history is for operator-facing uptime charts. Give it a wider
+// grace window so transient control-plane/notification stalls do not create
+// false outage bars. Placement, recovery, and start/upgrade decisions use the
+// stricter 2 minute operational heartbeat window in hosts-normalization.ts.
+const HOST_AVAILABILITY_HEARTBEAT_GRACE_MS = 10 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const RECONCILE_NUDGE_CATEGORIES = new Set<HostAvailabilityCategory>([
@@ -310,7 +314,8 @@ export function classifyHostAvailabilitySnapshot(
   const status = `${row.status ?? ""}`.trim();
   const lastSeen = normalizeDate(row.last_seen);
   const heartbeatFresh =
-    !!lastSeen && Date.now() - lastSeen.getTime() < HOST_ONLINE_WINDOW_MS;
+    !!lastSeen &&
+    Date.now() - lastSeen.getTime() < HOST_AVAILABILITY_HEARTBEAT_GRACE_MS;
   const base = {
     host_id: row.id,
     source,
