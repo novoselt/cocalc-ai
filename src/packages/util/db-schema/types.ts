@@ -300,6 +300,11 @@ export interface TableSchema<F extends Fields> {
   virtual?: string | true; // Must be another table name or true
   external?: boolean; // if true, this is an external table, so do not sync the schema
   pg_indexes?: string[];
+  pg_custom_indexes?: {
+    name: string;
+    query: string;
+    unique?: boolean;
+  }[];
   pg_unique_indexes?: string[];
   crm_indexes?: string[]; // pg_indexes are not used by the CRM data; you must specify any indexing of the CRM data explicitly here
   user_query?: UserOrProjectQuery<F>;
