@@ -478,6 +478,17 @@ function LegacyProjectImportModal({
     }
   }
 
+  const imageMissing = !draft.rootfs_image.trim();
+  const importDisabledReason = !project
+    ? "Legacy project details are still loading."
+    : !archiveAvailable(project)
+      ? "The archived files for this legacy project are not available yet."
+      : rootfsLoading
+        ? "Image choices are still loading."
+        : imageMissing
+          ? "Choose an image to enable Import and Open."
+          : undefined;
+
   return (
     <Modal
       open={open}
@@ -488,11 +499,8 @@ function LegacyProjectImportModal({
       confirmLoading={importing}
       onOk={() => void importAndOpen()}
       okButtonProps={{
-        disabled:
-          !project ||
-          !archiveAvailable(project) ||
-          rootfsLoading ||
-          !draft.rootfs_image.trim(),
+        disabled: !!importDisabledReason,
+        title: importDisabledReason,
       }}
       destroyOnHidden
     >
@@ -518,13 +526,15 @@ function LegacyProjectImportModal({
           />
         ) : null}
         <Space direction="vertical" size={6} style={{ width: "100%" }}>
-          <Text strong>Image</Text>
+          <Text strong>Image required</Text>
           <Select
             showSearch
+            placeholder="Choose an image for the restored project"
             loading={rootfsLoading}
             disabled={importing || rootfsLoading}
             value={draft.rootfs_image_id ?? draft.rootfs_image}
             optionFilterProp="data-search"
+            status={!rootfsLoading && imageMissing ? "error" : undefined}
             style={{ width: "100%" }}
             popupMatchSelectWidth={false}
             onChange={(value) => {
@@ -556,6 +566,18 @@ function LegacyProjectImportModal({
               </Select.Option>
             ))}
           </Select>
+          {imageMissing ? (
+            <Alert
+              showIcon
+              type="warning"
+              message={
+                rootfsLoading
+                  ? "Loading image choices..."
+                  : "Choose an image to enable Import and Open."
+              }
+              description="The image determines the software environment for the new restored project."
+            />
+          ) : null}
         </Space>
         <SelectNewHost
           disabled={importing}
@@ -678,6 +700,16 @@ function LegacyProjectBulkImportModal({
     }
   }
 
+  const imageMissing = !draft.rootfs_image.trim();
+  const restoreDisabledReason =
+    projects.length === 0
+      ? "Select one or more ready legacy projects first."
+      : rootfsLoading
+        ? "Image choices are still loading."
+        : imageMissing
+          ? "Choose an image to enable Restore selected."
+          : undefined;
+
   return (
     <Modal
       open={open}
@@ -688,8 +720,8 @@ function LegacyProjectBulkImportModal({
       confirmLoading={importing}
       onOk={() => void importSelected()}
       okButtonProps={{
-        disabled:
-          projects.length === 0 || rootfsLoading || !draft.rootfs_image.trim(),
+        disabled: !!restoreDisabledReason,
+        title: restoreDisabledReason,
       }}
       destroyOnHidden
     >
@@ -711,13 +743,15 @@ function LegacyProjectBulkImportModal({
           />
         ) : null}
         <Space direction="vertical" size={6} style={{ width: "100%" }}>
-          <Text strong>Image</Text>
+          <Text strong>Image required</Text>
           <Select
             showSearch
+            placeholder="Choose an image for the restored projects"
             loading={rootfsLoading}
             disabled={importing || rootfsLoading}
             value={draft.rootfs_image_id ?? draft.rootfs_image}
             optionFilterProp="data-search"
+            status={!rootfsLoading && imageMissing ? "error" : undefined}
             style={{ width: "100%" }}
             popupMatchSelectWidth={false}
             onChange={(value) => {
@@ -749,6 +783,18 @@ function LegacyProjectBulkImportModal({
               </Select.Option>
             ))}
           </Select>
+          {imageMissing ? (
+            <Alert
+              showIcon
+              type="warning"
+              message={
+                rootfsLoading
+                  ? "Loading image choices..."
+                  : "Choose an image to enable Restore selected."
+              }
+              description="The image determines the software environment for each new restored project."
+            />
+          ) : null}
         </Space>
         <SelectNewHost
           disabled={importing}
