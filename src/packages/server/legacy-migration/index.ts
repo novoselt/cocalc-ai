@@ -3376,6 +3376,7 @@ export async function listProjects({
         FROM linked
         JOIN legacy_migration_projects p
           ON p.legacy_users ? linked.legacy_account_id
+       WHERE p.legacy_users ?| $1::TEXT[]
     ),
     matched AS (
       SELECT matched_rows.legacy_project_id,
