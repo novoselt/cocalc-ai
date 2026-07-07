@@ -14,7 +14,7 @@ import {
 const logger = getLogger("server:legacy-migration:artifact-refresh");
 
 const LOCK_KEY = "legacy_migration_artifact_refresh";
-const DEFAULT_INTERVAL_MS = 60 * 60_000;
+const DEFAULT_INTERVAL_MS = 24 * 60 * 60_000;
 
 let timer: NodeJS.Timeout | undefined;
 let running = false;

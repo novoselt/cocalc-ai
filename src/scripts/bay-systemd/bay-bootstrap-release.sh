@@ -159,6 +159,15 @@ set_env_var() {
   rm -f "$tmp"
 }
 
+set_env_var_single_quoted() {
+  local target="$1"
+  local name="$2"
+  local value="$3"
+  local quoted
+  quoted="'${value//\'/\'\\\'\'}'"
+  set_env_var "$target" "$name" "$quoted"
+}
+
 random_secret() {
   openssl rand -hex 32
 }
@@ -793,6 +802,9 @@ COCALC_BAY_POSTGRES_DATA_DIR=${BAY_ROOT}/postgres
 COCALC_BAY_POSTGRES_SOCKET_DIR=${BAY_ROOT}/run/postgres
 COCALC_BAY_POSTGRES_DB=${BAY_USER}
 COCALC_BAY_POSTGRES_USER=${BAY_USER}
+COCALC_BAY_POSTGRES_MAX_WAL_SIZE=8GB
+COCALC_BAY_POSTGRES_SHARED_BUFFERS=1GB
+COCALC_BAY_POSTGRES_EFFECTIVE_CACHE_SIZE=8GB
 
 COCALC_BAY_PERSIST_HOST=127.0.0.1
 COCALC_BAY_PERSIST_PORT=${PERSIST_PORT}
@@ -834,7 +846,7 @@ PGDATABASE=${BAY_USER}
 COCALC_DB=postgres
 CONAT_SERVER=http://127.0.0.1:${ROUTER_PORT}
 
-COCALC_BAY_POSTGRES_CMD='${POSTGRES_BIN} -D "\$COCALC_BAY_POSTGRES_DATA_DIR" -k "\$COCALC_BAY_POSTGRES_SOCKET_DIR" -h "\$COCALC_BAY_POSTGRES_HOST" -p "\$COCALC_BAY_POSTGRES_PORT"'
+COCALC_BAY_POSTGRES_CMD='${POSTGRES_BIN} -D "\$COCALC_BAY_POSTGRES_DATA_DIR" -k "\$COCALC_BAY_POSTGRES_SOCKET_DIR" -h "\$COCALC_BAY_POSTGRES_HOST" -p "\$COCALC_BAY_POSTGRES_PORT" -c max_wal_size="\$COCALC_BAY_POSTGRES_MAX_WAL_SIZE" -c shared_buffers="\$COCALC_BAY_POSTGRES_SHARED_BUFFERS" -c effective_cache_size="\$COCALC_BAY_POSTGRES_EFFECTIVE_CACHE_SIZE"'
 EOF
   if [[ -n "$PUBLIC_URL" ]]; then
     set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_PUBLIC_URL" "$PUBLIC_URL"
@@ -846,6 +858,10 @@ EOF
   set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_FRONTDOOR_PORT" "9400"
   set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_FRONTDOOR_HEALTH_PATH" "/_cocalc/frontdoor/healthz"
   set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_FRONTDOOR_DRAIN_FILE" "${BAY_ROOT}/state/frontdoor-drain-workers"
+  set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_POSTGRES_MAX_WAL_SIZE" "8GB"
+  set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_POSTGRES_SHARED_BUFFERS" "1GB"
+  set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_POSTGRES_EFFECTIVE_CACHE_SIZE" "8GB"
+  set_env_var_single_quoted "${ENV_DIR}/bay.env" "COCALC_BAY_POSTGRES_CMD" "${POSTGRES_BIN} -D \"\$COCALC_BAY_POSTGRES_DATA_DIR\" -k \"\$COCALC_BAY_POSTGRES_SOCKET_DIR\" -h \"\$COCALC_BAY_POSTGRES_HOST\" -p \"\$COCALC_BAY_POSTGRES_PORT\" -c max_wal_size=\"\$COCALC_BAY_POSTGRES_MAX_WAL_SIZE\" -c shared_buffers=\"\$COCALC_BAY_POSTGRES_SHARED_BUFFERS\" -c effective_cache_size=\"\$COCALC_BAY_POSTGRES_EFFECTIVE_CACHE_SIZE\""
   if [[ -z "$PROJECT_HOST_SOFTWARE_BASE_URL" && -n "$PUBLIC_URL" ]]; then
     PROJECT_HOST_SOFTWARE_BASE_URL="${PUBLIC_URL%/}/software"
   fi
