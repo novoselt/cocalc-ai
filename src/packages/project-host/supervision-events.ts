@@ -9,6 +9,7 @@ import path from "node:path";
 export type HealthCheckDiagnostic = {
   url: string;
   ok: boolean;
+  ready?: boolean;
   status?: number;
   body?: string;
   error?: string;
