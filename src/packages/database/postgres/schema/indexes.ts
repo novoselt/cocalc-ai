@@ -30,6 +30,13 @@ export function createIndexesQueries(
     query = possiblyAddParens(query);
     queries.push({ name, query, unique: false });
   }
+  for (const index of schema.pg_custom_indexes ?? []) {
+    queries.push({
+      name: index.name,
+      query: possiblyAddParens(index.query.trim()),
+      unique: !!index.unique,
+    });
+  }
   const w = schema.pg_unique_indexes ?? [];
   for (let query of w) {
     query = query.trim();

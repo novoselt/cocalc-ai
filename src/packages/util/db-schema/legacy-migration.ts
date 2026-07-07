@@ -16,6 +16,20 @@ Table({
       "email_address_verified",
       "updated",
     ],
+    pg_custom_indexes: [
+      {
+        name: "legacy_migration_accounts_lower_email_address_idx",
+        query: "(lower(email_address)) WHERE COALESCE(email_address, '') <> ''",
+      },
+      {
+        name: "legacy_migration_accounts_gmail_canonical_email_idx",
+        query: `(
+          replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'
+        )
+        WHERE COALESCE(email_address, '') <> ''
+          AND split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')`,
+      },
+    ],
     user_query: {
       get: {
         admin: true,
@@ -363,6 +377,12 @@ Table({
       "last_edited",
       "disk_mb",
       "updated",
+    ],
+    pg_custom_indexes: [
+      {
+        name: "legacy_migration_projects_legacy_users_gin_idx",
+        query: "USING GIN (legacy_users)",
+      },
     ],
     user_query: {
       get: {
