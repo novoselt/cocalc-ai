@@ -184,14 +184,25 @@ let adminLinkSchemaReady: Promise<void> | undefined;
 let lookupIndexesReady: Promise<void> | undefined;
 let rawRecordIndexesReady: Promise<void> | undefined;
 
+function resetSchemaPromiseOnFailure<T>(
+  promise: Promise<T>,
+  reset: () => void,
+): Promise<T> {
+  return promise.catch((err) => {
+    reset();
+    throw err;
+  });
+}
+
 async function ensureLegacyMigrationLookupIndexes(): Promise<void> {
-  lookupIndexesReady ??= (async () => {
-    await getPool().query(`
+  lookupIndexesReady ??= resetSchemaPromiseOnFailure(
+    (async () => {
+      await getPool().query(`
       CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_accounts_lower_email_address_idx
         ON legacy_migration_accounts((lower(email_address)))
         WHERE COALESCE(email_address, '') <> ''
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_accounts_gmail_canonical_email_idx
         ON legacy_migration_accounts((
           replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'
@@ -199,42 +210,47 @@ async function ensureLegacyMigrationLookupIndexes(): Promise<void> {
         WHERE COALESCE(email_address, '') <> ''
           AND split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_projects_owner_legacy_account_id_idx
         ON legacy_migration_projects(owner_legacy_account_id)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_projects_legacy_users_gin_idx
         ON legacy_migration_projects USING GIN (legacy_users)
     `);
-  })();
+    })(),
+    () => {
+      lookupIndexesReady = undefined;
+    },
+  );
   await lookupIndexesReady;
 }
 
 async function ensureLegacyMigrationRawRecordIndexes(): Promise<void> {
-  rawRecordIndexesReady ??= (async () => {
-    await getPool().query(`
+  rawRecordIndexesReady ??= resetSchemaPromiseOnFailure(
+    (async () => {
+      await getPool().query(`
       CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_source_legacy_account_id_idx
         ON legacy_migration_raw_records(source, (payload->>'legacy_account_id'))
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_site_license_account_idx
         ON legacy_migration_raw_records((
           COALESCE(payload#>>'{info,purchased,account_id}', payload->'managers'->>0)
         ))
         WHERE source='site_licenses'
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_stripe_customer_idx
         ON legacy_migration_raw_records((payload->>'stripe_customer_id'))
         WHERE source='stripe_subscriptions'
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_lower_customer_email_idx
         ON legacy_migration_raw_records((lower(payload->>'customer_email')))
         WHERE source='stripe_subscriptions'
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_gmail_customer_email_idx
         ON legacy_migration_raw_records((
           replace(split_part(split_part(lower(payload->>'customer_email'), '@', 1), '+', 1), '.', '')
@@ -242,13 +258,18 @@ async function ensureLegacyMigrationRawRecordIndexes(): Promise<void> {
         WHERE source='stripe_subscriptions'
           AND split_part(lower(payload->>'customer_email'), '@', 2) IN ('gmail.com', 'googlemail.com')
     `);
-  })();
+    })(),
+    () => {
+      rawRecordIndexesReady = undefined;
+    },
+  );
   await rawRecordIndexesReady;
 }
 
 async function ensureLegacyMigrationProjectImportSchema(): Promise<void> {
-  importSchemaReady ??= (async () => {
-    await getPool().query(`
+  importSchemaReady ??= resetSchemaPromiseOnFailure(
+    (async () => {
+      await getPool().query(`
       ALTER TABLE legacy_migration_project_imports
         ADD COLUMN IF NOT EXISTS restore_mode VARCHAR(32),
         ADD COLUMN IF NOT EXISTS restore_attempts INTEGER,
@@ -261,35 +282,40 @@ async function ensureLegacyMigrationProjectImportSchema(): Promise<void> {
         ADD COLUMN IF NOT EXISTS restore_progress JSONB,
         ADD COLUMN IF NOT EXISTS restore_result JSONB
     `);
-    await getPool().query(`
+      await getPool().query(`
       ALTER TABLE legacy_migration_projects
         ADD COLUMN IF NOT EXISTS name TEXT,
         ADD COLUMN IF NOT EXISTS disk_mb DOUBLE PRECISION
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_projects_disk_mb_idx
         ON legacy_migration_projects(disk_mb)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_project_imports_restore_lro_op_id_idx
         ON legacy_migration_project_imports(restore_lro_op_id)
     `);
-    await ensureLegacyMigrationLookupIndexes();
-  })();
+      await ensureLegacyMigrationLookupIndexes();
+    })(),
+    () => {
+      importSchemaReady = undefined;
+    },
+  );
   await importSchemaReady;
 }
 
 async function ensureLegacyMigrationFinancialSchema(): Promise<void> {
-  financialSchemaReady ??= (async () => {
-    await getPool().query(`
+  financialSchemaReady ??= resetSchemaPromiseOnFailure(
+    (async () => {
+      await getPool().query(`
       ALTER TABLE legacy_migration_accounts
         ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(128)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_accounts_stripe_customer_id_idx
         ON legacy_migration_accounts(stripe_customer_id)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE TABLE IF NOT EXISTS legacy_migration_raw_records (
         source VARCHAR(64) NOT NULL,
         legacy_id TEXT NOT NULL,
@@ -299,12 +325,12 @@ async function ensureLegacyMigrationFinancialSchema(): Promise<void> {
         PRIMARY KEY (source, legacy_id)
       )
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_raw_records_updated_idx
         ON legacy_migration_raw_records(updated)
     `);
-    await ensureLegacyMigrationRawRecordIndexes();
-    await getPool().query(`
+      await ensureLegacyMigrationRawRecordIndexes();
+      await getPool().query(`
       CREATE TABLE IF NOT EXISTS legacy_migration_financial_claims (
         legacy_account_id VARCHAR(128) PRIMARY KEY,
         account_id UUID NOT NULL,
@@ -321,33 +347,38 @@ async function ensureLegacyMigrationFinancialSchema(): Promise<void> {
         updated TIMESTAMP NOT NULL DEFAULT NOW()
       )
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_financial_claims_account_id_idx
         ON legacy_migration_financial_claims(account_id)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_financial_claims_status_idx
         ON legacy_migration_financial_claims(status)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_financial_claims_credit_purchase_id_idx
         ON legacy_migration_financial_claims(credit_purchase_id)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_financial_claims_subscription_id_idx
         ON legacy_migration_financial_claims(subscription_id)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_financial_claims_updated_idx
         ON legacy_migration_financial_claims(updated)
     `);
-  })();
+    })(),
+    () => {
+      financialSchemaReady = undefined;
+    },
+  );
   await financialSchemaReady;
 }
 
 async function ensureLegacyMigrationAdminLinkSchema(): Promise<void> {
-  adminLinkSchemaReady ??= (async () => {
-    await getPool().query(`
+  adminLinkSchemaReady ??= resetSchemaPromiseOnFailure(
+    (async () => {
+      await getPool().query(`
       CREATE TABLE IF NOT EXISTS legacy_migration_account_link_events (
         id UUID PRIMARY KEY,
         legacy_account_id VARCHAR(128) NOT NULL,
@@ -361,34 +392,39 @@ async function ensureLegacyMigrationAdminLinkSchema(): Promise<void> {
         created TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_account_id_idx
         ON legacy_migration_account_link_events(account_id)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_legacy_account_id_idx
         ON legacy_migration_account_link_events(legacy_account_id)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_actor_account_id_idx
         ON legacy_migration_account_link_events(actor_account_id)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_action_idx
         ON legacy_migration_account_link_events(action)
     `);
-    await getPool().query(`
+      await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_account_link_events_created_idx
         ON legacy_migration_account_link_events(created)
     `);
-  })();
+    })(),
+    () => {
+      adminLinkSchemaReady = undefined;
+    },
+  );
   await adminLinkSchemaReady;
 }
 
 async function ensureLegacyMigrationRawRecordsSchema(): Promise<void> {
-  rawRecordsSchemaReady ??= getPool()
-    .query(
-      `
+  rawRecordsSchemaReady ??= resetSchemaPromiseOnFailure(
+    getPool()
+      .query(
+        `
     CREATE TABLE IF NOT EXISTS legacy_migration_raw_records (
       source VARCHAR(64) NOT NULL,
       legacy_id TEXT NOT NULL,
@@ -398,14 +434,18 @@ async function ensureLegacyMigrationRawRecordsSchema(): Promise<void> {
       PRIMARY KEY (source, legacy_id)
     )
   `,
-    )
-    .then(async () => {
-      await getPool().query(`
+      )
+      .then(async () => {
+        await getPool().query(`
       CREATE INDEX IF NOT EXISTS legacy_migration_raw_records_updated_idx
         ON legacy_migration_raw_records(updated)
     `);
-      await ensureLegacyMigrationRawRecordIndexes();
-    });
+        await ensureLegacyMigrationRawRecordIndexes();
+      }),
+    () => {
+      rawRecordsSchemaReady = undefined;
+    },
+  );
   await rawRecordsSchemaReady;
 }
 
