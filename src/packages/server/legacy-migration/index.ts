@@ -184,6 +184,27 @@ let adminLinkSchemaReady: Promise<void> | undefined;
 let lookupIndexesReady: Promise<void> | undefined;
 let rawRecordIndexesReady: Promise<void> | undefined;
 
+type IndexStatusRow = {
+  relname: string;
+  indisvalid: boolean;
+  indisready: boolean;
+};
+
+const LEGACY_MIGRATION_LOOKUP_INDEXES = [
+  "legacy_migration_accounts_lower_email_address_idx",
+  "legacy_migration_accounts_gmail_canonical_email_idx",
+  "legacy_migration_projects_owner_legacy_account_id_idx",
+  "legacy_migration_projects_legacy_users_gin_idx",
+] as const;
+
+const LEGACY_MIGRATION_RAW_RECORD_INDEXES = [
+  "legacy_migration_raw_records_source_legacy_account_id_idx",
+  "legacy_migration_raw_records_site_license_account_idx",
+  "legacy_migration_raw_records_stripe_customer_idx",
+  "legacy_migration_raw_records_lower_customer_email_idx",
+  "legacy_migration_raw_records_gmail_customer_email_idx",
+] as const;
+
 function resetSchemaPromiseOnFailure<T>(
   promise: Promise<T>,
   reset: () => void,
@@ -194,31 +215,45 @@ function resetSchemaPromiseOnFailure<T>(
   });
 }
 
+async function validateLegacyMigrationIndexes({
+  kind,
+  names,
+}: {
+  kind: string;
+  names: readonly string[];
+}): Promise<void> {
+  const { rows } = await getPool().query<IndexStatusRow>(
+    `
+      SELECT i.relname, ix.indisvalid, ix.indisready
+        FROM pg_class i
+        JOIN pg_index ix ON ix.indexrelid=i.oid
+       WHERE i.relname=ANY($1::TEXT[])
+    `,
+    [names],
+  );
+  const ready = new Set(
+    rows
+      .filter(({ indisvalid, indisready }) => indisvalid && indisready)
+      .map(({ relname }) => relname),
+  );
+  const missingOrInvalid = names.filter((name) => !ready.has(name));
+  if (missingOrInvalid.length === 0) return;
+  logger.warn(
+    "legacy migration index prerequisites are missing or invalid; run bay scaffold/reconcile or a manual database migration",
+    {
+      kind,
+      missing_or_invalid: missingOrInvalid,
+      observed: rows,
+    },
+  );
+}
+
 async function ensureLegacyMigrationLookupIndexes(): Promise<void> {
   lookupIndexesReady ??= resetSchemaPromiseOnFailure(
-    (async () => {
-      await getPool().query(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_accounts_lower_email_address_idx
-        ON legacy_migration_accounts((lower(email_address)))
-        WHERE COALESCE(email_address, '') <> ''
-    `);
-      await getPool().query(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_accounts_gmail_canonical_email_idx
-        ON legacy_migration_accounts((
-          replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'
-        ))
-        WHERE COALESCE(email_address, '') <> ''
-          AND split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')
-    `);
-      await getPool().query(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_projects_owner_legacy_account_id_idx
-        ON legacy_migration_projects(owner_legacy_account_id)
-    `);
-      await getPool().query(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_projects_legacy_users_gin_idx
-        ON legacy_migration_projects USING GIN (legacy_users)
-    `);
-    })(),
+    validateLegacyMigrationIndexes({
+      kind: "lookup",
+      names: LEGACY_MIGRATION_LOOKUP_INDEXES,
+    }),
     () => {
       lookupIndexesReady = undefined;
     },
@@ -228,37 +263,10 @@ async function ensureLegacyMigrationLookupIndexes(): Promise<void> {
 
 async function ensureLegacyMigrationRawRecordIndexes(): Promise<void> {
   rawRecordIndexesReady ??= resetSchemaPromiseOnFailure(
-    (async () => {
-      await getPool().query(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_source_legacy_account_id_idx
-        ON legacy_migration_raw_records(source, (payload->>'legacy_account_id'))
-    `);
-      await getPool().query(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_site_license_account_idx
-        ON legacy_migration_raw_records((
-          COALESCE(payload#>>'{info,purchased,account_id}', payload->'managers'->>0)
-        ))
-        WHERE source='site_licenses'
-    `);
-      await getPool().query(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_stripe_customer_idx
-        ON legacy_migration_raw_records((payload->>'stripe_customer_id'))
-        WHERE source='stripe_subscriptions'
-    `);
-      await getPool().query(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_lower_customer_email_idx
-        ON legacy_migration_raw_records((lower(payload->>'customer_email')))
-        WHERE source='stripe_subscriptions'
-    `);
-      await getPool().query(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS legacy_migration_raw_records_gmail_customer_email_idx
-        ON legacy_migration_raw_records((
-          replace(split_part(split_part(lower(payload->>'customer_email'), '@', 1), '+', 1), '.', '')
-        ))
-        WHERE source='stripe_subscriptions'
-          AND split_part(lower(payload->>'customer_email'), '@', 2) IN ('gmail.com', 'googlemail.com')
-    `);
-    })(),
+    validateLegacyMigrationIndexes({
+      kind: "raw-record",
+      names: LEGACY_MIGRATION_RAW_RECORD_INDEXES,
+    }),
     () => {
       rawRecordIndexesReady = undefined;
     },
