@@ -196,13 +196,23 @@ function heartbeatAgeMs(lastSeen: unknown): number | undefined {
   return Math.max(0, Date.now() - new Date(value).getTime());
 }
 
-function scrubHostRow(row: Record<string, unknown>): Record<string, unknown> {
-  const metadata = { ...((row.metadata as Record<string, unknown>) ?? {}) };
-  for (const key of Object.keys(metadata)) {
-    if (/token|secret|password|private/i.test(key)) {
-      metadata[key] = "[REDACTED]";
-    }
+function redactSensitiveMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSensitiveMetadata(item));
   }
+  if (value == null || typeof value !== "object") {
+    return value;
+  }
+  const redacted: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    redacted[key] = /token|secret|password|private/i.test(key)
+      ? "[REDACTED]"
+      : redactSensitiveMetadata(item);
+  }
+  return redacted;
+}
+
+function scrubHostRow(row: Record<string, unknown>): Record<string, unknown> {
   return {
     id: row.id,
     name: row.name,
@@ -218,8 +228,8 @@ function scrubHostRow(row: Record<string, unknown>): Record<string, unknown> {
     created: normalizeDateString(row.created) ?? null,
     updated: normalizeDateString(row.updated) ?? null,
     deletion_protection: row.deletion_protection,
-    capacity: row.capacity ?? {},
-    metadata,
+    capacity: redactSensitiveMetadata(row.capacity ?? {}),
+    metadata: redactSensitiveMetadata(row.metadata ?? {}),
   };
 }
 
