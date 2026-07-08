@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
+import { ensureProjectHostMetricsSamplesSchema } from "@cocalc/database/postgres/project-host-metrics";
 import { createLro, ensureLroSchema } from "@cocalc/server/lro/lro-db";
 import adminAlert from "@cocalc/server/messages/admin-alert";
 import type {
@@ -44,6 +45,16 @@ const RUNNING_STALE_REPAIR_SUPPRESS_MS = Math.max(
   ),
 );
 const PRESSURE_ALERT_LIMIT = 25;
+const PRESSURE_ALERT_STALE_EVALUATION_MS = Math.max(
+  5 * 60_000,
+  Number(
+    process.env.COCALC_HOST_PRESSURE_ALERT_STALE_EVALUATION_MS ?? 30 * 60_000,
+  ),
+);
+const PRESSURE_ALERT_FRESH_METRICS_MS = Math.max(
+  60_000,
+  Number(process.env.COCALC_HOST_PRESSURE_ALERT_FRESH_METRICS_MS ?? 5 * 60_000),
+);
 const RECONCILE_NUDGE_CATEGORIES = new Set<HostAvailabilityCategory>([
   "host_stale",
   "provider_offline",
@@ -100,6 +111,10 @@ type RunningStaleHostRow = ProjectHostAvailabilitySnapshot & {
 
 type HostPressureAlertRow = ProjectHostAvailabilitySnapshot & {
   public_url?: string | null;
+  metric_collected_at?: Date | string | null;
+  metric_memory_used_percent?: number | string | null;
+  metric_memory_available_bytes?: number | string | null;
+  metric_running_project_count?: number | string | null;
   pressure_zone: "pressure" | "emergency";
   pressure_action_status: "no_candidates" | "stop_failed";
   pressure_reason?: string;
@@ -691,8 +706,28 @@ function pressureAlertHostName(row: HostPressureAlertRow): string {
   return metadataName || row.id;
 }
 
+function numericValue(value: unknown): number | undefined {
+  if (value == null) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function timestampMs(value: unknown): number | undefined {
+  if (value == null) return undefined;
+  const time =
+    value instanceof Date ? value.getTime() : new Date(`${value}`).getTime();
+  return Number.isFinite(time) ? time : undefined;
+}
+
 function pressureAlertRow(
-  row: ProjectHostAvailabilitySnapshot & { public_url?: string | null },
+  row: ProjectHostAvailabilitySnapshot & {
+    public_url?: string | null;
+    metric_collected_at?: Date | string | null;
+    metric_memory_used_percent?: number | string | null;
+    metric_memory_available_bytes?: number | string | null;
+    metric_running_project_count?: number | string | null;
+  },
+  now = Date.now(),
 ): HostPressureAlertRow | undefined {
   const pressure = row.metadata?.pressure ?? {};
   const zone = `${pressure.zone ?? ""}`.trim();
@@ -700,6 +735,36 @@ function pressureAlertRow(
   if (zone !== "pressure" && zone !== "emergency") return undefined;
   if (actionStatus !== "no_candidates" && actionStatus !== "stop_failed") {
     return undefined;
+  }
+  const evaluatedAtMs = numericValue(pressure.evaluated_at_ms);
+  if (
+    evaluatedAtMs != null &&
+    now - evaluatedAtMs > PRESSURE_ALERT_STALE_EVALUATION_MS
+  ) {
+    return undefined;
+  }
+  const metricCollectedAtMs = timestampMs(row.metric_collected_at);
+  if (
+    metricCollectedAtMs != null &&
+    now - metricCollectedAtMs <= PRESSURE_ALERT_FRESH_METRICS_MS
+  ) {
+    const usedPercent = numericValue(row.metric_memory_used_percent);
+    const runningProjects = numericValue(row.metric_running_project_count);
+    const reason = `${pressure.last_action_reason ?? pressure.reason ?? ""}`;
+    const isMemoryPressureReason =
+      reason.includes("memory_used_percent") ||
+      reason.includes("memory_available_bytes");
+    if (isMemoryPressureReason && usedPercent != null && usedPercent < 80) {
+      return undefined;
+    }
+    if (
+      actionStatus === "no_candidates" &&
+      runningProjects === 0 &&
+      usedPercent != null &&
+      usedPercent < 80
+    ) {
+      return undefined;
+    }
   }
   return {
     ...row,
@@ -741,16 +806,38 @@ function formatHostPressureAlertBody(rows: HostPressureAlertRow[]): string {
 }
 
 async function getHostPressureAlertRows(): Promise<HostPressureAlertRow[]> {
+  await ensureProjectHostMetricsSamplesSchema();
   const { rows } = await pool().query<
     ProjectHostAvailabilitySnapshot & { public_url?: string | null }
   >(
     `
-      SELECT id, status, deleted, last_seen, metadata, public_url
-      FROM project_hosts
-      WHERE deleted IS NULL
-        AND status = 'running'
-        AND metadata ? 'pressure'
-      ORDER BY last_seen DESC NULLS LAST
+      SELECT
+        h.id,
+        h.status,
+        h.deleted,
+        h.last_seen,
+        h.metadata,
+        h.public_url,
+        m.collected_at AS metric_collected_at,
+        m.memory_used_percent AS metric_memory_used_percent,
+        m.memory_available_bytes AS metric_memory_available_bytes,
+        m.running_project_count AS metric_running_project_count
+      FROM project_hosts h
+      LEFT JOIN LATERAL (
+        SELECT
+          collected_at,
+          memory_used_percent,
+          memory_available_bytes,
+          running_project_count
+        FROM project_host_metrics_samples
+        WHERE host_id = h.id
+        ORDER BY collected_at DESC
+        LIMIT 1
+      ) m ON true
+      WHERE h.deleted IS NULL
+        AND h.status = 'running'
+        AND h.metadata ? 'pressure'
+      ORDER BY h.last_seen DESC NULLS LAST
       LIMIT 1000
     `,
   );

@@ -115,6 +115,78 @@ describe("classifyHostAvailabilitySnapshot", () => {
     expect(_test.formatHostPressureAlertBody([row!])).toContain("asia-1");
   });
 
+  it("ignores stale host pressure actions when recent metrics are normal", () => {
+    const now = 2_000_000;
+    expect(
+      _test.pressureAlertRow(
+        {
+          id: "99838afd-80f3-4e5b-96b8-7aff05ba9452",
+          status: "running",
+          metric_collected_at: new Date(now - 60_000),
+          metric_memory_used_percent: 25.7,
+          metric_running_project_count: 0,
+          metadata: {
+            name: "small-dedicated-host",
+            pressure: {
+              zone: "pressure",
+              evaluated_at_ms: now - 60_000,
+              last_action_status: "no_candidates",
+              last_action_reason: "memory_used_percent>=80",
+            },
+          },
+        },
+        now,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps recent unresolved pressure actions when metrics still show pressure", () => {
+    const now = 2_000_000;
+    const row = _test.pressureAlertRow(
+      {
+        id: "pressure-host",
+        status: "running",
+        metric_collected_at: new Date(now - 60_000),
+        metric_memory_used_percent: 86,
+        metric_running_project_count: 0,
+        metadata: {
+          pressure: {
+            zone: "pressure",
+            evaluated_at_ms: now - 60_000,
+            last_action_status: "no_candidates",
+            last_action_reason: "memory_used_percent>=80",
+          },
+        },
+      },
+      now,
+    );
+
+    expect(row).toMatchObject({
+      pressure_zone: "pressure",
+      pressure_action_status: "no_candidates",
+    });
+  });
+
+  it("ignores old unresolved pressure evaluations", () => {
+    const now = 2_000_000;
+    expect(
+      _test.pressureAlertRow(
+        {
+          id: "old-pressure-host",
+          status: "running",
+          metadata: {
+            pressure: {
+              zone: "pressure",
+              evaluated_at_ms: now - 31 * 60_000,
+              last_action_status: "no_candidates",
+            },
+          },
+        },
+        now,
+      ),
+    ).toBeUndefined();
+  });
+
   it("ignores healthy pressure states", () => {
     expect(
       _test.pressureAlertRow({

@@ -834,6 +834,13 @@ export function startHostPressureController({
     }
   };
 
+  const clearLastAction = () => {
+    lastActionAtMs = undefined;
+    lastActionProjectId = undefined;
+    lastActionStatus = undefined;
+    lastActionReason = undefined;
+  };
+
   const publishState = ({
     zone,
     reason,
@@ -873,10 +880,14 @@ export function startHostPressureController({
       resourcePressureMode,
     });
     if (!classified) {
+      clearLastAction();
+      pressureSinceMs = undefined;
+      settleUntilMs = 0;
       currentState = undefined;
       return;
     }
     if (classified.zone === "normal") {
+      clearLastAction();
       pressureSinceMs = undefined;
       settleUntilMs = 0;
       publishState({
