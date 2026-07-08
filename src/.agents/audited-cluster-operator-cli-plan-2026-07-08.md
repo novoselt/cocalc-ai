@@ -737,18 +737,32 @@ This would have materially improved the recent incident workflow:
 - host online/offline false positives
 - legacy migration/restore stuck investigations
 
-## Open Questions
+## Resolved Decisions
 
-- Should ordinary read-only host logs require fresh auth, or only sensitive
-  components and grep patterns?
-- Should host log access be served by host-agent immediately, or should we ship
-  a project-host implementation first and migrate later?
-- How much process command-line data is acceptable to expose by default?
-- Should failed automatic remediations suppress future attempts for the full
-  suppression window, or should they trigger a different fallback remediation?
-- Should alert remediation summaries link directly to LRO audit records?
-- Should the CLI support `--follow` for logs, or keep the first version
-  snapshot-only?
+- Ordinary read-only host logs do not require fresh auth. They should still
+  require admin/operator permission and produce audit records. Fresh auth is
+  much more important for write operations and for explicitly sensitive log
+  components if those are added later.
+- Host log access should be served by host-agent immediately. Recent incidents
+  repeatedly involved cases where host-agent was the stable control point while
+  project-host itself was unhealthy, stale, or being rolled.
+- Process command-line data is acceptable to expose by default in operator
+  diagnostics. CoCalc services should not pass secrets on process command
+  lines. Keep redaction anyway as defense-in-depth, but do not over-redact away
+  the useful debugging signal.
+- The first host log command should be snapshot-only. `--follow` is mainly a
+  human convenience and is not required for Codex or incident-window
+  reconstruction.
+
+## Deferred Decisions
+
+- Failed automatic remediation retry policy is contextual. Some failures should
+  suppress repeated attempts, while others should trigger a different fallback
+  remediation. Decide this per remediation type when implementing repair
+  actions.
+- Alert remediation summaries should probably link to LRO/audit records, but
+  the exact UX should be decided when implementing `admin bay alerts` and the
+  admin alert UI.
 
 ## Success Criteria
 
@@ -758,4 +772,3 @@ This would have materially improved the recent incident workflow:
 - Commands work cross-bay by id without assuming the local bay is authoritative.
 - A Codex agent can run read-only diagnostics safely with explicit reasons.
 - Break-glass SSH remains available but is no longer the normal workflow.
-
