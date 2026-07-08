@@ -17,6 +17,7 @@ import type {
   AdminDataViewExport,
   AdminDataViewInput,
 } from "@cocalc/conat/hub/api/admin-data-explorer";
+import type { AdminDbDiagnostic } from "@cocalc/conat/hub/api/admin-db";
 import { ADMIN_DATA_EXPLORER_STARTER_VIEWS } from "@cocalc/conat/hub/api/admin-data-explorer";
 import {
   ADMIN_DATA_EXPLORER_SQL_DEFAULT_LIMIT,
@@ -131,6 +132,20 @@ async function readAdminDataSqlInput({
     throw new Error("provide SQL with --query or --file");
   }
   return sql;
+}
+
+async function readAdminDbSqlInput({
+  sql,
+  file,
+}: {
+  sql?: string;
+  file?: string;
+}): Promise<string> {
+  const raw = sql != null ? `${sql}` : file ? await readFile(file, "utf8") : "";
+  if (!raw.trim()) {
+    throw new Error("provide SQL with --sql or --file");
+  }
+  return raw;
 }
 
 type MembershipTierRow = {
@@ -958,6 +973,9 @@ export function registerAdminCommand(
   const adminDataAudit = adminData
     .command("audit")
     .description("Admin Data Explorer audit trail");
+  const adminDb = admin
+    .command("db")
+    .description("audited admin database diagnostics and read-only SQL");
   const adminSettings = admin
     .command("settings")
     .description("admin site settings inspection");
@@ -978,6 +996,69 @@ export function registerAdminCommand(
       throw new Error(`unable to resolve account for '${identifier}'`);
     }
     return userAccountId;
+  }
+
+  function adminDbCommonOptions(command: Command): Command {
+    return command
+      .option("--bay <bay-id>", "target bay id; defaults to the current bay")
+      .option("--limit <n>", "server-enforced max rows", "200")
+      .option("--timeout-ms <n>", "server-side statement timeout", "15000")
+      .option("--lock-timeout-ms <n>", "server-side lock timeout", "1000")
+      .option("--max-bytes <n>", "max serialized response bytes", "2097152");
+  }
+
+  function adminDbRequestOptions(opts: {
+    bay?: string;
+    limit?: string;
+    timeoutMs?: string;
+    lockTimeoutMs?: string;
+    maxBytes?: string;
+  }) {
+    return {
+      bay_id: opts.bay?.trim() || undefined,
+      limit: parsePositiveIntegerOption({
+        name: "--limit",
+        value: opts.limit,
+        fallback: 200,
+        max: 5000,
+      }),
+      statement_timeout_ms: parsePositiveIntegerOption({
+        name: "--timeout-ms",
+        value: opts.timeoutMs,
+        fallback: 15000,
+        max: 120000,
+      }),
+      lock_timeout_ms: parsePositiveIntegerOption({
+        name: "--lock-timeout-ms",
+        value: opts.lockTimeoutMs,
+        fallback: 1000,
+        max: 10000,
+      }),
+      max_bytes: parsePositiveIntegerOption({
+        name: "--max-bytes",
+        value: opts.maxBytes,
+        fallback: 2 * 1024 * 1024,
+        max: 10 * 1024 * 1024,
+      }),
+    };
+  }
+
+  async function runAdminDbDiagnostic({
+    ctx,
+    diagnostic,
+    opts,
+    params,
+  }: {
+    ctx: any;
+    diagnostic: AdminDbDiagnostic;
+    opts: any;
+    params?: Record<string, unknown>;
+  }) {
+    return await ctx.hub.adminDb.diagnostic({
+      ...adminDbRequestOptions(opts),
+      diagnostic,
+      params,
+    });
   }
 
   admin
@@ -1066,6 +1147,240 @@ export function registerAdminCommand(
         return wide ? result : result.settings.map(formatSiteSettingRow);
       });
     });
+
+  adminDbCommonOptions(
+    adminDb
+      .command("query")
+      .description("run audited read-only operator SQL (admin fresh-auth)")
+      .option("--sql <sql>", "SQL query text")
+      .option("--file <path>", "read SQL from a file")
+      .requiredOption("--reason <reason>", "human-readable reason for audit"),
+  ).action(
+    async (
+      opts: {
+        sql?: string;
+        file?: string;
+        reason?: string;
+        bay?: string;
+        limit?: string;
+        timeoutMs?: string;
+        lockTimeoutMs?: string;
+        maxBytes?: string;
+      },
+      command: Command,
+    ) => {
+      await withContext(command, "admin db query", async (ctx) => {
+        return await ctx.hub.adminDb.query({
+          ...adminDbRequestOptions(opts),
+          sql: await readAdminDbSqlInput(opts),
+          reason: opts.reason,
+        });
+      });
+    },
+  );
+
+  adminDbCommonOptions(
+    adminDb
+      .command("host-query")
+      .description(
+        "run audited read-only SQL against a project-host SQLite database (admin fresh-auth)",
+      )
+      .requiredOption("--host-id <uuid>", "target project-host id")
+      .option("--sql <sql>", "SQL query text")
+      .option("--file <path>", "read SQL from a file")
+      .requiredOption("--reason <reason>", "human-readable reason for audit"),
+  ).action(
+    async (
+      opts: {
+        hostId?: string;
+        sql?: string;
+        file?: string;
+        reason?: string;
+        bay?: string;
+        limit?: string;
+        timeoutMs?: string;
+        lockTimeoutMs?: string;
+        maxBytes?: string;
+      },
+      command: Command,
+    ) => {
+      await withContext(command, "admin db host-query", async (ctx) => {
+        return await ctx.hub.adminDb.queryHost({
+          ...adminDbRequestOptions(opts),
+          host_id: opts.hostId,
+          sql: await readAdminDbSqlInput(opts),
+          reason: opts.reason,
+        });
+      });
+    },
+  );
+
+  adminDbCommonOptions(
+    adminDb
+      .command("exec")
+      .description(
+        "run audited operator SQL write mode; rolls back unless --commit is set",
+      )
+      .option("--sql <sql>", "SQL statement text")
+      .option("--file <path>", "read SQL from a file")
+      .requiredOption("--reason <reason>", "human-readable reason for audit")
+      .requiredOption("--write", "acknowledge write-mode execution")
+      .option("--commit", "commit instead of rolling back", false),
+  ).action(
+    async (
+      opts: {
+        sql?: string;
+        file?: string;
+        reason?: string;
+        write?: boolean;
+        commit?: boolean;
+        bay?: string;
+        limit?: string;
+        timeoutMs?: string;
+        lockTimeoutMs?: string;
+        maxBytes?: string;
+      },
+      command: Command,
+    ) => {
+      await withContext(command, "admin db exec", async (ctx) => {
+        return await ctx.hub.adminDb.exec({
+          ...adminDbRequestOptions(opts),
+          sql: await readAdminDbSqlInput(opts),
+          reason: opts.reason,
+          write: opts.write === true,
+          commit: opts.commit === true,
+        });
+      });
+    },
+  );
+
+  adminDbCommonOptions(
+    adminDb.command("activity").description("show active database sessions"),
+  ).action(async (opts: any, command: Command) => {
+    await withContext(command, "admin db activity", async (ctx) => {
+      return await runAdminDbDiagnostic({
+        ctx,
+        diagnostic: "activity",
+        opts,
+      });
+    });
+  });
+
+  adminDbCommonOptions(
+    adminDb.command("locks").description("show blocked database lock waiters"),
+  ).action(async (opts: any, command: Command) => {
+    await withContext(command, "admin db locks", async (ctx) => {
+      return await runAdminDbDiagnostic({ ctx, diagnostic: "locks", opts });
+    });
+  });
+
+  adminDbCommonOptions(
+    adminDb.command("table-sizes").description("show largest database tables"),
+  ).action(async (opts: any, command: Command) => {
+    await withContext(command, "admin db table-sizes", async (ctx) => {
+      return await runAdminDbDiagnostic({
+        ctx,
+        diagnostic: "table-sizes",
+        opts,
+      });
+    });
+  });
+
+  adminDbCommonOptions(
+    adminDb
+      .command("lro")
+      .description("show long-running operation rows")
+      .option("--op-id <uuid>", "specific operation id")
+      .option("--kind <kind>", "operation kind")
+      .option("--status <status>", "operation status")
+      .option("--scope-type <type>", "scope type")
+      .option("--scope-id <uuid>", "scope id")
+      .option("--window-minutes <n>", "updated lookback window", "1440"),
+  ).action(async (opts: any, command: Command) => {
+    await withContext(command, "admin db lro", async (ctx) => {
+      return await runAdminDbDiagnostic({
+        ctx,
+        diagnostic: "lro",
+        opts,
+        params: {
+          op_id: opts.opId,
+          kind: opts.kind,
+          status: opts.status,
+          scope_type: opts.scopeType,
+          scope_id: opts.scopeId,
+          window_seconds:
+            parsePositiveIntegerOption({
+              name: "--window-minutes",
+              value: opts.windowMinutes,
+              fallback: 1440,
+              max: 30 * 24 * 60,
+            }) * 60,
+        },
+      });
+    });
+  });
+
+  adminDbCommonOptions(
+    adminDb
+      .command("backup-health")
+      .description("show project backup recency and backup index state")
+      .option("--project-id <uuid>", "specific project id"),
+  ).action(async (opts: any, command: Command) => {
+    await withContext(command, "admin db backup-health", async (ctx) => {
+      return await runAdminDbDiagnostic({
+        ctx,
+        diagnostic: "backup-health",
+        opts,
+        params: { project_id: opts.projectId },
+      });
+    });
+  });
+
+  adminDbCommonOptions(
+    adminDb
+      .command("host-health")
+      .description("show project-host heartbeat and capacity state")
+      .option("--host-id <uuid>", "specific host id"),
+  ).action(async (opts: any, command: Command) => {
+    await withContext(command, "admin db host-health", async (ctx) => {
+      return await runAdminDbDiagnostic({
+        ctx,
+        diagnostic: "host-health",
+        opts,
+        params: { host_id: opts.hostId },
+      });
+    });
+  });
+
+  adminDbCommonOptions(
+    adminDb
+      .command("project")
+      .description("show one project control-plane row")
+      .requiredOption("--project-id <uuid>", "project id"),
+  ).action(async (opts: any, command: Command) => {
+    await withContext(command, "admin db project", async (ctx) => {
+      return await runAdminDbDiagnostic({
+        ctx,
+        diagnostic: "project",
+        opts,
+        params: { project_id: opts.projectId },
+      });
+    });
+  });
+
+  adminDbCommonOptions(
+    adminDb
+      .command("migration-health")
+      .description("show legacy migration aggregate health"),
+  ).action(async (opts: any, command: Command) => {
+    await withContext(command, "admin db migration-health", async (ctx) => {
+      return await runAdminDbDiagnostic({
+        ctx,
+        diagnostic: "migration-health",
+        opts,
+      });
+    });
+  });
 
   adminData
     .command("datasets")

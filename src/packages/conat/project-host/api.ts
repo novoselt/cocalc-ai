@@ -194,6 +194,22 @@ export interface HostBackupExecutionStatus {
   config_source?: "env-legacy" | "db-override";
 }
 
+export interface HostSqliteQueryRequest {
+  sql: string;
+  limit?: number;
+  max_bytes?: number;
+}
+
+export interface HostSqliteQueryResponse {
+  duration_ms: number;
+  fields: Array<{ name: string }>;
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
+  result_bytes: number;
+  executed_sql: string;
+}
+
 export type ManagedComponentKind =
   | "project-host"
   | "conat-router"
@@ -461,6 +477,9 @@ export interface HostControlApi {
     public_key: string;
   }) => Promise<HostSshAuthorizedKeysResponse & { removed: boolean }>;
   getBackupExecutionStatus: () => Promise<HostBackupExecutionStatus>;
+  querySqlite: (
+    opts: HostSqliteQueryRequest,
+  ) => Promise<HostSqliteQueryResponse>;
   invalidateBackupConfig: (opts?: { project_id?: string }) => Promise<{
     ok: true;
   }>;

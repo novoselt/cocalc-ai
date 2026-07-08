@@ -46,6 +46,7 @@ import * as lro from "./lro";
 import * as agent from "./agent";
 import * as notifications from "./notifications";
 import * as adminData from "./admin-data-explorer";
+import * as adminDb from "./admin-db";
 import * as aiSessions from "./ai-sessions";
 import * as legacyMigration from "./legacy-migration";
 import * as publicDirectoryShares from "./public-directory-shares";
@@ -84,6 +85,7 @@ export const hubApi: HubApi = {
   agent,
   notifications,
   adminData,
+  adminDb,
   aiSessions,
   legacyMigration,
   publicDirectoryShares,

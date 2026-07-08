@@ -64,12 +64,14 @@ export async function get({
   scope_type,
   scope_id,
   client,
+  bootstrapRetry,
 }: {
   op_id?: string;
   stream_name?: string;
   scope_type: LroScopeType;
   scope_id?: string;
   client?: Client;
+  bootstrapRetry?: boolean;
 }): Promise<DStream<LroEvent>> {
   const name = stream_name ?? (op_id ? lroStreamName(op_id) : "");
   if (!name) {
@@ -87,6 +89,7 @@ export async function get({
     name,
     ephemeral: true,
     config: LRO_STREAM_CONFIG,
+    ...(bootstrapRetry === undefined ? {} : { bootstrapRetry }),
   });
 }
 
@@ -237,6 +240,7 @@ export async function waitForCompletion({
           scope_type,
           scope_id,
           client: resolvedClient,
+          bootstrapRetry: getSummary == null,
         });
         if (done) {
           opened.close();

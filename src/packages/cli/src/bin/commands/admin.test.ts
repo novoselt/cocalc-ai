@@ -19,11 +19,13 @@ function adminDeps(overrides: Record<string, any> = {}) {
           system: {},
           messages: {},
           db: {},
+          adminDb: {},
         },
       };
       Object.assign(ctx.hub.system, overrides.system ?? {});
       Object.assign(ctx.hub.messages, overrides.messages ?? {});
       Object.assign(ctx.hub.db, overrides.db ?? {});
+      Object.assign(ctx.hub.adminDb, overrides.adminDb ?? {});
       return await fn(ctx);
     },
     resolveAccountByIdentifier: async (_ctx: unknown, identifier: string) => ({
@@ -38,6 +40,191 @@ function adminDeps(overrides: Record<string, any> = {}) {
       ),
   };
 }
+
+test("admin db query forwards audited read-only SQL options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminDb: {
+        query: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-1", rows: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "db",
+    "query",
+    "--sql",
+    "select now()",
+    "--reason",
+    "incident check",
+    "--bay",
+    "prod-bay-0",
+    "--limit",
+    "25",
+    "--timeout-ms",
+    "5000",
+    "--lock-timeout-ms",
+    "250",
+    "--max-bytes",
+    "100000",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    bay_id: "prod-bay-0",
+    limit: 25,
+    statement_timeout_ms: 5000,
+    lock_timeout_ms: 250,
+    max_bytes: 100000,
+    sql: "select now()",
+    reason: "incident check",
+  });
+});
+
+test("admin db lro forwards diagnostic filters", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminDb: {
+        diagnostic: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-2", rows: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "db",
+    "lro",
+    "--op-id",
+    "11111111-1111-4111-8111-111111111111",
+    "--kind",
+    "project-start",
+    "--status",
+    "failed",
+    "--window-minutes",
+    "30",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    bay_id: undefined,
+    limit: 200,
+    statement_timeout_ms: 15000,
+    lock_timeout_ms: 1000,
+    max_bytes: 2097152,
+    diagnostic: "lro",
+    params: {
+      op_id: "11111111-1111-4111-8111-111111111111",
+      kind: "project-start",
+      status: "failed",
+      scope_type: undefined,
+      scope_id: undefined,
+      window_seconds: 1800,
+    },
+  });
+});
+
+test("admin db host-query forwards audited project-host SQLite options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminDb: {
+        queryHost: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-host-1", rows: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "db",
+    "host-query",
+    "--host-id",
+    "11111111-1111-4111-8111-111111111111",
+    "--sql",
+    "select table_name, count(*) from data group by table_name",
+    "--reason",
+    "host sqlite incident check",
+    "--limit",
+    "50",
+    "--timeout-ms",
+    "10000",
+    "--max-bytes",
+    "500000",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    bay_id: undefined,
+    limit: 50,
+    statement_timeout_ms: 10000,
+    lock_timeout_ms: 1000,
+    max_bytes: 500000,
+    host_id: "11111111-1111-4111-8111-111111111111",
+    sql: "select table_name, count(*) from data group by table_name",
+    reason: "host sqlite incident check",
+  });
+});
+
+test("admin db exec forwards audited write options with rollback default", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminDb: {
+        exec: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-3", committed: opts.commit };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "db",
+    "exec",
+    "--write",
+    "--sql",
+    "update accounts set banned=false where account_id='11111111-1111-4111-8111-111111111111'",
+    "--reason",
+    "incident repair dry run",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    bay_id: undefined,
+    limit: 200,
+    statement_timeout_ms: 15000,
+    lock_timeout_ms: 1000,
+    max_bytes: 2097152,
+    sql: "update accounts set banned=false where account_id='11111111-1111-4111-8111-111111111111'",
+    reason: "incident repair dry run",
+    write: true,
+    commit: false,
+  });
+});
 
 test("admin entitlement-override get resolves a user and fetches override", async () => {
   let capturedArgs: any;

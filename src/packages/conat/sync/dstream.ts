@@ -71,6 +71,7 @@ export interface DStreamOptions {
   noAutosave?: boolean;
   ephemeral?: boolean;
   sync?: boolean;
+  bootstrapRetry?: boolean;
 
   noCache?: boolean;
   noInventory?: boolean;

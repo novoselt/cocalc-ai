@@ -183,6 +183,7 @@ export interface CoreStreamOptions {
   client?: Client;
 
   noCache?: boolean;
+  bootstrapRetry?: boolean;
 
   // the name of the cluster of persistence servers to use -- this is
   // by default SERVICE from conat/persist/util.ts.  Set it to something
@@ -287,6 +288,7 @@ export class CoreStream<T = any> extends EventEmitter {
   private listenGeneration = 0;
   private restartingChangefeed = false;
   private recoveryRegistration?: RegisteredRecoverableResource;
+  private readonly bootstrapRetry: boolean;
 
   constructor({
     name,
@@ -301,6 +303,7 @@ export class CoreStream<T = any> extends EventEmitter {
     client,
     service,
     initPhaseReporter,
+    bootstrapRetry = true,
   }: CoreStreamOptions) {
     super();
     logger.debug("constructor", name);
@@ -320,6 +323,7 @@ export class CoreStream<T = any> extends EventEmitter {
     };
     this._start_seq = start_seq;
     this._start_checkpoint = start_checkpoint;
+    this.bootstrapRetry = bootstrapRetry;
     this.pendingConfigOptions = config;
     this.initPhaseReporter = initPhaseReporter;
     this.recoveryRegistration = this.client.recoveryScheduler.registerResource({
@@ -455,7 +459,7 @@ export class CoreStream<T = any> extends EventEmitter {
       start_checkpoint: this._start_checkpoint,
       noEmit: true,
       includeConfig: !this.hasPendingConfigChanges(),
-      retry: true,
+      retry: this.bootstrapRetry,
     });
     if (!this.hasPendingConfigChanges() && bootstrap.config != null) {
       this.currentConfig = bootstrap.config;

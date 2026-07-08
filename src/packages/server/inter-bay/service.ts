@@ -2545,6 +2545,8 @@ async function startHostControlService(): Promise<void> {
       ).removeHostSshAuthorizedKey(remove),
     getBackupExecutionStatus: async ({ host_id }) =>
       await (await getHostClient(host_id, 30_000)).getBackupExecutionStatus(),
+    querySqlite: async ({ host_id, query }) =>
+      await (await getHostClient(host_id, 30_000)).querySqlite(query),
     invalidateBackupConfig: async ({ host_id, invalidate }) =>
       await (
         await getHostClient(host_id, 30_000)
