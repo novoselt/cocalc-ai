@@ -18,6 +18,10 @@ import type {
   AdminDataViewInput,
 } from "@cocalc/conat/hub/api/admin-data-explorer";
 import type { AdminDbDiagnostic } from "@cocalc/conat/hub/api/admin-db";
+import {
+  HOST_RUNTIME_LOG_SOURCES,
+  type HostRuntimeLogSource,
+} from "@cocalc/conat/project-host/api";
 import { ADMIN_DATA_EXPLORER_STARTER_VIEWS } from "@cocalc/conat/hub/api/admin-data-explorer";
 import {
   ADMIN_DATA_EXPLORER_SQL_DEFAULT_LIMIT,
@@ -976,6 +980,9 @@ export function registerAdminCommand(
   const adminDb = admin
     .command("db")
     .description("audited admin database diagnostics and read-only SQL");
+  const adminHost = admin
+    .command("host")
+    .description("audited project-host diagnostics");
   const adminSettings = admin
     .command("settings")
     .description("admin site settings inspection");
@@ -1061,6 +1068,26 @@ export function registerAdminCommand(
     });
   }
 
+  function adminHostLogRequestOptions(opts: {
+    tail?: string;
+    maxBytes?: string;
+  }) {
+    return {
+      lines: parsePositiveIntegerOption({
+        name: "--tail",
+        value: opts.tail,
+        fallback: 200,
+        max: 5000,
+      }),
+      max_bytes: parsePositiveIntegerOption({
+        name: "--max-bytes",
+        value: opts.maxBytes,
+        fallback: 512 * 1024,
+        max: 2 * 1024 * 1024,
+      }),
+    };
+  }
+
   admin
     .command("search <query>")
     .description(
@@ -1126,6 +1153,61 @@ export function registerAdminCommand(
               created: row.created ?? null,
             };
           });
+        });
+      },
+    );
+
+  adminHost
+    .command("logs")
+    .description("fetch bounded, audited project-host runtime logs")
+    .requiredOption("--host-id <uuid>", "target project-host id")
+    .option("--tail <n>", "number of log lines", "200")
+    .option(
+      "--source <source>",
+      `log source: ${HOST_RUNTIME_LOG_SOURCES.join(", ")}`,
+    )
+    .option("--grep <text>", "server-side substring filter")
+    .option("--max-bytes <n>", "max response bytes", "524288")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        opts: {
+          hostId?: string;
+          tail?: string;
+          source?: string;
+          grep?: string;
+          maxBytes?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host logs", async (ctx) => {
+          const sourceRaw = `${opts.source ?? ""}`.trim();
+          if (
+            sourceRaw &&
+            !HOST_RUNTIME_LOG_SOURCES.includes(
+              sourceRaw as HostRuntimeLogSource,
+            )
+          ) {
+            throw new Error(
+              `--source must be one of: ${HOST_RUNTIME_LOG_SOURCES.join(", ")}`,
+            );
+          }
+          const result = await ctx.hub.adminHost.logs({
+            ...adminHostLogRequestOptions(opts),
+            host_id: opts.hostId,
+            source: sourceRaw ? (sourceRaw as HostRuntimeLogSource) : undefined,
+            grep: opts.grep,
+            reason: opts.reason,
+          });
+          if (!ctx.globals?.json && ctx.globals?.output !== "json") {
+            process.stdout.write(result.text ?? "");
+            if (result.text && !result.text.endsWith("\n")) {
+              process.stdout.write("\n");
+            }
+            return null;
+          }
+          return result;
         });
       },
     );

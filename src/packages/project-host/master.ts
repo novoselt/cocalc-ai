@@ -262,6 +262,18 @@ function normalizeLogLines(value?: number): number {
   return Math.max(1, Math.min(5000, Math.floor(n)));
 }
 
+function redactRuntimeLogText(text: string): string {
+  return text
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [REDACTED]")
+    .replace(
+      /\b(COCALC_(?:API_KEY|BEARER_TOKEN|PROJECT_TOKEN|SECRET)\s*=\s*)\S+/g,
+      "$1[REDACTED]",
+    )
+    .replace(/("(?:access_)?token"\s*:\s*")[^"]+"/gi, '$1[REDACTED]"')
+    .replace(/("(?:api_)?key"\s*:\s*")[^"]+"/gi, '$1[REDACTED]"')
+    .replace(/("(?:password|secret)"\s*:\s*")[^"]+"/gi, '$1[REDACTED]"');
+}
+
 function keyIdentity(line: string): string {
   const parts = line.trim().split(/\s+/);
   if (parts.length < 2) return "";
@@ -500,7 +512,7 @@ async function readRuntimeLogTail(
       return {
         source: "journalctl:cocalc-cloudflared.service",
         lines: tailLines,
-        text,
+        text: redactRuntimeLogText(text),
       };
     } catch (err) {
       try {
@@ -508,7 +520,7 @@ async function readRuntimeLogTail(
         return {
           source: "journalctl:cocalc-cloudflared.service",
           lines: tailLines,
-          text,
+          text: redactRuntimeLogText(text),
         };
       } catch (sudoErr) {
         logger.warn("failed to read runtime log", {
@@ -523,7 +535,11 @@ async function readRuntimeLogTail(
   const logPath = runtimeLogPath(source);
   try {
     const text = await runTail("tail", ["-n", String(tailLines), logPath]);
-    return { source: logPath, lines: tailLines, text };
+    return {
+      source: logPath,
+      lines: tailLines,
+      text: redactRuntimeLogText(text),
+    };
   } catch (err) {
     try {
       const text = await runTail("sudo", [
@@ -533,7 +549,11 @@ async function readRuntimeLogTail(
         String(tailLines),
         logPath,
       ]);
-      return { source: logPath, lines: tailLines, text };
+      return {
+        source: logPath,
+        lines: tailLines,
+        text: redactRuntimeLogText(text),
+      };
     } catch (sudoErr) {
       logger.warn("failed to read runtime log", {
         log_path: logPath,

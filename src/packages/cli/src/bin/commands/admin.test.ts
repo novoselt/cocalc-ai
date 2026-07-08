@@ -20,12 +20,14 @@ function adminDeps(overrides: Record<string, any> = {}) {
           messages: {},
           db: {},
           adminDb: {},
+          adminHost: {},
         },
       };
       Object.assign(ctx.hub.system, overrides.system ?? {});
       Object.assign(ctx.hub.messages, overrides.messages ?? {});
       Object.assign(ctx.hub.db, overrides.db ?? {});
       Object.assign(ctx.hub.adminDb, overrides.adminDb ?? {});
+      Object.assign(ctx.hub.adminHost, overrides.adminHost ?? {});
       return await fn(ctx);
     },
     resolveAccountByIdentifier: async (_ctx: unknown, identifier: string) => ({
@@ -85,6 +87,59 @@ test("admin db query forwards audited read-only SQL options", async () => {
     lock_timeout_ms: 250,
     max_bytes: 100000,
     sql: "select now()",
+    reason: "incident check",
+  });
+});
+
+test("admin host logs forwards audited bounded log options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        logs: async (opts: any) => {
+          capturedArgs = opts;
+          return {
+            audit_id: "audit-host-1",
+            host_id: opts.host_id,
+            source: "host-agent",
+            lines: opts.lines,
+            text: "",
+            result_bytes: 0,
+            truncated: false,
+          };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "logs",
+    "--host-id",
+    "11111111-1111-4111-8111-111111111111",
+    "--source",
+    "host-agent",
+    "--tail",
+    "50",
+    "--grep",
+    "reconcile",
+    "--max-bytes",
+    "4096",
+    "--reason",
+    "incident check",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    lines: 50,
+    max_bytes: 4096,
+    host_id: "11111111-1111-4111-8111-111111111111",
+    source: "host-agent",
+    grep: "reconcile",
     reason: "incident check",
   });
 });
