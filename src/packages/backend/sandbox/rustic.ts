@@ -65,6 +65,7 @@ export interface RusticOptions {
   repo?: string;
   timeout?: number;
   maxSize?: number;
+  nice?: number;
   safeAbsPath?: (path: string) => Promise<string>;
   host?: string;
   cwd?: string;
@@ -86,6 +87,7 @@ export default async function rustic(
     env,
     onStdoutLine,
     onStderrLine,
+    nice,
   } = options;
 
   const common = getCommonArgs(repo);
@@ -96,8 +98,10 @@ export default async function rustic(
   const cwd = await safeAbsPath?.(cwdArg);
 
   const run = async (sanitizedArgs: string[]) => {
+    const { cmd, prefixArgs } = rusticCommand(nice);
     return await exec({
-      cmd: rusticPath,
+      cmd,
+      prefixArgs,
       cwd,
       safety: [...common, args[0], ...sanitizedArgs],
       maxSize,
@@ -207,6 +211,17 @@ export default async function rustic(
     default:
       throw Error(`subcommand not allowed: ${args[0]}`);
   }
+}
+
+function rusticCommand(nice?: number): { cmd: string; prefixArgs: string[] } {
+  const priority = Math.floor(Number(nice));
+  if (!Number.isFinite(priority) || priority <= 0) {
+    return { cmd: rusticPath, prefixArgs: [] };
+  }
+  return {
+    cmd: "/usr/bin/nice",
+    prefixArgs: ["-n", `${Math.min(priority, 19)}`, rusticPath],
+  };
 }
 
 const whitelist = {

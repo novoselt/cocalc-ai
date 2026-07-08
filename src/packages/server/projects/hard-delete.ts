@@ -29,6 +29,7 @@ const log = getLogger("server:projects:hard-delete");
 
 const RUSTIC_TIMEOUT_MS = 2 * 60 * 1000;
 const RUSTIC_FORGET_BATCH_SIZE = 100;
+const RUSTIC_NICE = 15;
 const DEFAULT_BACKUP_RETENTION_DAYS = 7;
 const MAX_BACKUP_RETENTION_DAYS = 365;
 let deletedProjectsSchemaReady: Promise<void> | undefined;
@@ -340,6 +341,7 @@ async function forgetAllSnapshotsForHost({
       host,
       timeout: RUSTIC_TIMEOUT_MS,
       maxSize: 20_000_000,
+      nice: RUSTIC_NICE,
     }),
   );
   let snapshots: any[] = [];
@@ -361,6 +363,7 @@ async function forgetAllSnapshotsForHost({
         repo,
         host,
         timeout: RUSTIC_TIMEOUT_MS,
+        nice: RUSTIC_NICE,
       }),
     );
   }

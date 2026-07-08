@@ -67,6 +67,32 @@ describe("rustic TOML fast path", () => {
     ).not.toContain("repoinfo");
   });
 
+  test("optional nice priority wraps rustic command", async () => {
+    execMock.mockResolvedValueOnce(ok("[]"));
+
+    await rustic(["snapshots", "--json"], {
+      repo: "/tmp/project-repo-nice.toml",
+      host: "project-1",
+      nice: 15,
+    });
+
+    expect(execMock).toHaveBeenCalledTimes(1);
+    expect(execMock.mock.calls[0][0].cmd).toBe("/usr/bin/nice");
+    expect(execMock.mock.calls[0][0].prefixArgs).toEqual([
+      "-n",
+      "15",
+      "/mock/rustic",
+    ]);
+    expect(execMock.mock.calls[0][0].safety).toEqual([
+      "-P",
+      "/tmp/project-repo-nice",
+      "snapshots",
+      "--json",
+      "--filter-host",
+      "project-1",
+    ]);
+  });
+
   test("backup initializes TOML repo only after a missing-repo error", async () => {
     execMock
       .mockResolvedValueOnce(fail("No repository config file found"))
