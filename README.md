@@ -111,6 +111,30 @@ Useful architecture docs:
 
 Also note that `src/.agents/` contains many working design docs and implementation plans. Those files are valuable, but some describe target state or active rollout work rather than fully shipped behavior.
 
+## CoCalc-AI And Kubernetes
+
+CoCalc-AI borrows some useful operational ideas from Kubernetes, but it is not a Kubernetes-native application and does not require Kubernetes to run.
+
+The similarities are mostly conceptual:
+
+- CoCalc has a control plane that authorizes users, routes requests, schedules work, tracks health, and records operational state.
+- Project hosts are analogous to worker nodes: they run user workloads, own local runtime state, report heartbeats, expose metrics, and need safe rollout/repair workflows.
+- Operators need Kubernetes-like primitives: describe an object, view bounded logs, inspect events, see resource pressure, roll out software, retry failed long-running operations, and drain or repair capacity.
+- The system benefits from declarative desired state, durable operations, health checks, automated reconciliation, and audited operator actions.
+
+The differences are more important:
+
+- CoCalc-AI is built around **bays**, not one central Kubernetes cluster. A bay is a regional control-plane and database unit. Launchpad is the one-bay case; Rocket is the multi-bay scale-out form.
+- A production deployment is globally distributed across regions and can span multiple clouds. A project host belongs to exactly one bay, but users may connect from anywhere.
+- Users connect directly to project hosts for steady-state project traffic such as files, terminals, Jupyter, app servers, browser sessions, and Codex app-server traffic. The hub/bay control plane authorizes and routes, but it should not proxy normal project data-plane traffic.
+- Ingress is therefore deliberately distributed. Each project host has its own public routing/tunnel surface instead of all project traffic entering through one central ingress controller.
+- Runtime management uses a mix of systemd services, custom CoCalc services, Conat RPC, host-local SQLite, Postgres, cloud-provider APIs, Cloudflare tunnels, btrfs, rootless Podman, and project-specific runtime processes.
+- CoCalc-AI does not primarily deploy core services as OCI images. Most CoCalc components are built as `ncc` JavaScript bundles and installed/rolled out as software artifacts. OCI/rootfs/container tooling is used for project runtimes and related isolation, but it is not the main packaging model for the control plane or project-host daemon stack.
+- Project hosts run customer workloads and customer-facing services. Operational tooling must account for user-visible sessions, project storage, backups, snapshots, SSH, app servers, and long-lived compute processes.
+- The normal deployment target is VM/systemd friendly. Kubernetes can be a future packaging or operations target for some environments, but correctness should not depend on Kubernetes APIs or cluster-specific service discovery.
+
+The practical rule is: use Kubernetes as inspiration for operator ergonomics, not as the required substrate. CoCalc-AI should expose `describe`, `logs`, `events`, `top`, rollout, reconcile, and drain-style operations through audited CoCalc APIs and the `cocalc` CLI, whether the underlying deployment is a single VM, a VM fleet, or a Kubernetes-backed installation.
+
 ## Repository Layout
 
 Top-level:
