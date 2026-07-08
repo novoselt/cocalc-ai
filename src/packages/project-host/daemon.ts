@@ -47,6 +47,11 @@ const PODMAN_STALE_STATE_PATTERNS = [
   'try resetting the pause process with "podman system migrate"',
   "could not find any running process",
 ];
+const PODMAN_RUNTIME_NAMESPACE_ERROR_PATTERNS = [
+  /cannot re-exec process to join the existing user namespace/i,
+  /cannot join .*user namespace/i,
+  /invalid internal status/i,
+];
 const FORENSICS_DIR = "forensics";
 const DEFAULT_PROJECT_HOST_ROOTCTL =
   "/usr/local/sbin/cocalc-project-host-rootctl";
@@ -1320,8 +1325,13 @@ function combinedSpawnOutput(
 
 function isPodmanStalePauseState(output: string): boolean {
   const normalized = output.toLowerCase();
-  return PODMAN_STALE_STATE_PATTERNS.every((pattern) =>
-    normalized.includes(pattern),
+  return (
+    PODMAN_STALE_STATE_PATTERNS.every((pattern) =>
+      normalized.includes(pattern),
+    ) ||
+    PODMAN_RUNTIME_NAMESPACE_ERROR_PATTERNS.some((pattern) =>
+      pattern.test(output),
+    )
   );
 }
 

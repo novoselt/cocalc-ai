@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 
 import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
+import { createLro, ensureLroSchema } from "@cocalc/server/lro/lro-db";
+import adminAlert from "@cocalc/server/messages/admin-alert";
 import type {
   HostAvailabilityCategory,
   HostAvailabilityEvent,
@@ -22,8 +24,26 @@ const MAX_WINDOW_DAYS = 370;
 // false outage bars. Placement, recovery, and start/upgrade decisions use the
 // stricter 2 minute operational heartbeat window in hosts-normalization.ts.
 const HOST_AVAILABILITY_HEARTBEAT_GRACE_MS = 10 * 60 * 1000;
+const HOST_RUNNING_STALE_ALERT_MS = Math.max(
+  60_000,
+  Number(process.env.COCALC_HOST_RUNNING_STALE_ALERT_MS ?? 5 * 60_000),
+);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 60 * 1000;
+const STALE_ALERT_LIMIT = 25;
+const HOST_RECONCILE_LRO_KIND = "host-reconcile-software";
+const RUNNING_STALE_REPAIR_LIMIT = Math.max(
+  0,
+  Math.floor(Number(process.env.COCALC_HOST_RUNNING_STALE_REPAIR_LIMIT ?? 3)) ||
+    0,
+);
+const RUNNING_STALE_REPAIR_SUPPRESS_MS = Math.max(
+  5 * 60_000,
+  Number(
+    process.env.COCALC_HOST_RUNNING_STALE_REPAIR_SUPPRESS_MS ?? 30 * 60_000,
+  ),
+);
+const PRESSURE_ALERT_LIMIT = 25;
 const RECONCILE_NUDGE_CATEGORIES = new Set<HostAvailabilityCategory>([
   "host_stale",
   "provider_offline",
@@ -69,6 +89,20 @@ type ProjectHostAvailabilitySnapshot = {
   deleted?: Date | string | null;
   last_seen?: Date | string | null;
   metadata?: Record<string, any> | null;
+};
+
+type RunningStaleHostRow = ProjectHostAvailabilitySnapshot & {
+  public_url?: string | null;
+  internal_url?: string | null;
+  owner_account_id?: string | null;
+  stale_ms: number;
+};
+
+type HostPressureAlertRow = ProjectHostAvailabilitySnapshot & {
+  public_url?: string | null;
+  pressure_zone: "pressure" | "emergency";
+  pressure_action_status: "no_candidates" | "stop_failed";
+  pressure_reason?: string;
 };
 
 function pool() {
@@ -484,6 +518,256 @@ export async function reconcileCurrentHostAvailability({
   return rows.length;
 }
 
+function staleHostName(row: RunningStaleHostRow): string {
+  const metadataName =
+    `${row.metadata?.name ?? row.metadata?.display_name ?? ""}`.trim();
+  return metadataName || row.id;
+}
+
+function formatStaleDuration(ms: number): string {
+  const normalized = Number(ms);
+  const minutes = Math.max(
+    1,
+    Math.floor((Number.isFinite(normalized) ? normalized : 0) / 60_000),
+  );
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h${remainder}m` : `${hours}h`;
+}
+
+function formatRunningStaleHostAlertBody(rows: RunningStaleHostRow[]): string {
+  return [
+    `${rows.length} project host${rows.length === 1 ? " is" : "s are"} marked running but not reporting heartbeats for at least ${formatStaleDuration(HOST_RUNNING_STALE_ALERT_MS)}.`,
+    "",
+    "This indicates a VM/provider state that is up while the project-host app is not connected to the hub, or a control-plane heartbeat observation problem.",
+    "",
+    `Automatic remediation: up to ${RUNNING_STALE_REPAIR_LIMIT} deduped host reconcile job${RUNNING_STALE_REPAIR_LIMIT === 1 ? "" : "s"} will be requested per maintenance tick, with a ${formatStaleDuration(RUNNING_STALE_REPAIR_SUPPRESS_MS)} per-host suppression window.`,
+    "",
+    "Hosts:",
+    "",
+    ...rows
+      .slice(0, STALE_ALERT_LIMIT)
+      .map((row) =>
+        [
+          `- ${staleHostName(row)}`,
+          `host_id=${row.id}`,
+          `stale>=${formatStaleDuration(HOST_RUNNING_STALE_ALERT_MS)}`,
+          row.public_url ? `url=${row.public_url}` : undefined,
+        ]
+          .filter((part) => part != null)
+          .join(" "),
+      ),
+    rows.length > STALE_ALERT_LIMIT
+      ? `- ... ${rows.length - STALE_ALERT_LIMIT} more`
+      : undefined,
+  ]
+    .filter((line) => line != null)
+    .join("\n");
+}
+
+async function getRunningStaleHosts(): Promise<RunningStaleHostRow[]> {
+  const { rows } = await pool().query<RunningStaleHostRow>(
+    `
+      SELECT
+        id,
+        status,
+        deleted,
+        last_seen,
+        metadata,
+        public_url,
+        internal_url,
+        metadata ->> 'owner' AS owner_account_id,
+        GREATEST(
+          0,
+          FLOOR(EXTRACT(EPOCH FROM (NOW() - COALESCE(last_seen, to_timestamp(0)))) * 1000)
+        )::bigint AS stale_ms
+      FROM project_hosts
+      WHERE deleted IS NULL
+        AND status = 'running'
+        AND COALESCE(last_seen, to_timestamp(0)) < NOW() - ($1::double precision * INTERVAL '1 millisecond')
+      ORDER BY last_seen ASC NULLS FIRST
+      LIMIT $2
+    `,
+    [HOST_RUNNING_STALE_ALERT_MS, STALE_ALERT_LIMIT + 1],
+  );
+  return rows;
+}
+
+function ownerAccountId(row: RunningStaleHostRow): string | undefined {
+  return (
+    `${row.owner_account_id ?? row.metadata?.owner ?? ""}`.trim() || undefined
+  );
+}
+
+async function recentRunningStaleRepairExists(
+  host_id: string,
+): Promise<boolean> {
+  await ensureLroSchema();
+  const { rows } = await pool().query(
+    `
+      SELECT 1
+      FROM long_running_operations
+      WHERE scope_type='host'
+        AND scope_id=$1
+        AND kind=$2
+        AND dedupe_key=$3
+        AND updated_at > NOW() - ($4::double precision * INTERVAL '1 millisecond')
+      LIMIT 1
+    `,
+    [
+      host_id,
+      HOST_RECONCILE_LRO_KIND,
+      `${HOST_RECONCILE_LRO_KIND}:${host_id}`,
+      RUNNING_STALE_REPAIR_SUPPRESS_MS,
+    ],
+  );
+  return rows.length > 0;
+}
+
+async function enqueueRunningStaleHostRepairs(
+  rows: RunningStaleHostRow[],
+): Promise<number> {
+  if (RUNNING_STALE_REPAIR_LIMIT <= 0) return 0;
+  let queued = 0;
+  for (const row of rows.slice(0, RUNNING_STALE_REPAIR_LIMIT)) {
+    const account_id = ownerAccountId(row);
+    if (!account_id) {
+      logger.warn("skipping stale-running host repair without owner", {
+        host_id: row.id,
+      });
+      continue;
+    }
+    try {
+      if (await recentRunningStaleRepairExists(row.id)) {
+        continue;
+      }
+      await createLro({
+        kind: HOST_RECONCILE_LRO_KIND,
+        scope_type: "host",
+        scope_id: row.id,
+        created_by: account_id,
+        routing: "hub",
+        input: {
+          id: row.id,
+          account_id,
+          reason: "running_stale_heartbeat",
+          source: "host_availability_maintenance",
+        },
+        dedupe_key: `${HOST_RECONCILE_LRO_KIND}:${row.id}`,
+        status: "queued",
+      });
+      queued += 1;
+    } catch (err) {
+      logger.warn("failed to enqueue stale-running host repair", {
+        host_id: row.id,
+        err: `${err}`,
+      });
+    }
+  }
+  return queued;
+}
+
+export async function runRunningStaleHostAlertCheck(): Promise<number> {
+  const rows = await getRunningStaleHosts();
+  if (!rows.length) return 0;
+  const repairCount = await enqueueRunningStaleHostRepairs(rows);
+  await adminAlert({
+    subject: "Running project hosts are not reporting",
+    body: formatRunningStaleHostAlertBody(rows),
+    dedupMinutes: 30,
+  });
+  if (repairCount) {
+    logger.warn("enqueued stale-running host reconcile repairs", {
+      count: repairCount,
+    });
+  }
+  return rows.length;
+}
+
+function pressureAlertHostName(row: HostPressureAlertRow): string {
+  const metadataName =
+    `${row.metadata?.name ?? row.metadata?.display_name ?? ""}`.trim();
+  return metadataName || row.id;
+}
+
+function pressureAlertRow(
+  row: ProjectHostAvailabilitySnapshot & { public_url?: string | null },
+): HostPressureAlertRow | undefined {
+  const pressure = row.metadata?.pressure ?? {};
+  const zone = `${pressure.zone ?? ""}`.trim();
+  const actionStatus = `${pressure.last_action_status ?? ""}`.trim();
+  if (zone !== "pressure" && zone !== "emergency") return undefined;
+  if (actionStatus !== "no_candidates" && actionStatus !== "stop_failed") {
+    return undefined;
+  }
+  return {
+    ...row,
+    pressure_zone: zone,
+    pressure_action_status: actionStatus,
+    pressure_reason:
+      `${pressure.last_action_reason ?? pressure.reason ?? ""}`.trim() ||
+      undefined,
+  };
+}
+
+function formatHostPressureAlertBody(rows: HostPressureAlertRow[]): string {
+  return [
+    `${rows.length} project host${rows.length === 1 ? " has" : "s have"} unresolved host-local pressure actions.`,
+    "",
+    "This means the host is under memory/resource pressure but the automatic pressure controller either could not find a project to stop or failed to stop one.",
+    "",
+    "Hosts:",
+    "",
+    ...rows
+      .slice(0, PRESSURE_ALERT_LIMIT)
+      .map((row) =>
+        [
+          `- ${pressureAlertHostName(row)}`,
+          `host_id=${row.id}`,
+          `zone=${row.pressure_zone}`,
+          `action=${row.pressure_action_status}`,
+          row.public_url ? `url=${row.public_url}` : undefined,
+        ]
+          .filter((part) => part != null)
+          .join(" "),
+      ),
+    rows.length > PRESSURE_ALERT_LIMIT
+      ? "- ... more hosts not shown"
+      : undefined,
+  ]
+    .filter((line) => line != null)
+    .join("\n");
+}
+
+async function getHostPressureAlertRows(): Promise<HostPressureAlertRow[]> {
+  const { rows } = await pool().query<
+    ProjectHostAvailabilitySnapshot & { public_url?: string | null }
+  >(
+    `
+      SELECT id, status, deleted, last_seen, metadata, public_url
+      FROM project_hosts
+      WHERE deleted IS NULL
+        AND status = 'running'
+        AND metadata ? 'pressure'
+      ORDER BY last_seen DESC NULLS LAST
+      LIMIT 1000
+    `,
+  );
+  return rows.map(pressureAlertRow).filter((row) => row != null);
+}
+
+export async function runHostPressureAlertCheck(): Promise<number> {
+  const rows = await getHostPressureAlertRows();
+  if (!rows.length) return 0;
+  await adminAlert({
+    subject: "Project hosts have unresolved pressure actions",
+    body: formatHostPressureAlertBody(rows),
+    dedupMinutes: 30,
+  });
+  return rows.length;
+}
+
 export function startHostAvailabilityMaintenance({
   interval_ms = DEFAULT_MAINTENANCE_INTERVAL_MS,
 }: { interval_ms?: number } = {}): void {
@@ -492,7 +776,19 @@ export function startHostAvailabilityMaintenance({
   const run = async () => {
     try {
       const count = await reconcileCurrentHostAvailability();
+      const staleRunning = await runRunningStaleHostAlertCheck();
+      const pressureProblems = await runHostPressureAlertCheck();
       logger.debug("host availability maintenance complete", { count });
+      if (staleRunning) {
+        logger.warn("running project hosts are not reporting", {
+          count: staleRunning,
+        });
+      }
+      if (pressureProblems) {
+        logger.warn("project hosts have unresolved pressure actions", {
+          count: pressureProblems,
+        });
+      }
     } catch (err) {
       logger.warn("host availability maintenance failed", { err: `${err}` });
     }
@@ -710,3 +1006,10 @@ export async function annotateHostAvailabilityEvent({
   if (!rows[0]) throw Error("availability event not found");
   return serializeRow(rows[0]);
 }
+
+export const _test = {
+  formatHostPressureAlertBody,
+  formatRunningStaleHostAlertBody,
+  formatStaleDuration,
+  pressureAlertRow,
+};

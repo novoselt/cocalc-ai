@@ -1960,4 +1960,12 @@ describe("project-host daemon stop", () => {
     );
     expect(spawnSpy).toHaveBeenCalled();
   });
+
+  it("recognizes rootless podman namespace errors as stale runtime state", () => {
+    expect(
+      __test__.isPodmanStalePauseState(
+        "Error: cannot re-exec process to join the existing user namespace",
+      ),
+    ).toBe(true);
+  });
 });

@@ -105,6 +105,18 @@ const registrationTokensIndexRows = createIndexesQueries(
 
 const registrationTokensPrimaryKeyRows = [{ name: "token" }];
 
+describe("custom index generation", () => {
+  it("wraps non-function expression indexes in expression parentheses", () => {
+    const index = createIndexesQueries(SCHEMA.legacy_migration_accounts).find(
+      ({ name }) =>
+        name === "legacy_migration_accounts_gmail_canonical_email_idx",
+    );
+
+    expect(index?.query.trimStart().startsWith("((")).toBe(true);
+    expect(index?.query).toContain("|| '@gmail.com'");
+  });
+});
+
 function createMockClient(options: {
   tableName: string;
   columnRows: ColumnRow[];

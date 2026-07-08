@@ -105,15 +105,19 @@ jest.mock("./route-project", () => ({
   notifyProjectHostUpdate: jest.fn(async () => undefined),
 }));
 
-jest.mock("@cocalc/backend/logger", () => ({
-  __esModule: true,
-  default: () => ({
+jest.mock("@cocalc/backend/logger", () => {
+  const getLogger = jest.fn(() => ({
     info: jest.fn(),
     debug: jest.fn(),
     warn: jest.fn(),
     silly: jest.fn(),
-  }),
-}));
+  }));
+  return {
+    __esModule: true,
+    default: getLogger,
+    getLogger,
+  };
+});
 
 jest.mock("@cocalc/conat/project-host/api", () => ({
   createHostRegistryService: jest.fn(async ({ impl }) => impl),
