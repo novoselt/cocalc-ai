@@ -77,10 +77,31 @@ export interface AdminHostEventsResponse {
   truncated: boolean;
 }
 
+export interface AdminHostTopRequest {
+  host?: string;
+  host_id?: string;
+  window_minutes?: number;
+  max_points?: number;
+  reason?: string;
+}
+
+export interface AdminHostTopResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  window_minutes: number;
+  point_count: number;
+  current?: Record<string, unknown>;
+  derived?: Record<string, unknown>;
+  growth?: Record<string, unknown>;
+  points?: Record<string, unknown>[];
+}
+
 export const adminHost = {
   describe: authFirstRequireAccount,
   events: authFirstRequireAccount,
   logs: authFirstRequireAccount,
+  top: authFirstRequireAccount,
 };
 
 export interface AdminHostApi {
@@ -89,4 +110,5 @@ export interface AdminHostApi {
   ) => Promise<AdminHostDescribeResponse>;
   events: (opts: AdminHostEventsRequest) => Promise<AdminHostEventsResponse>;
   logs: (opts: AdminHostLogsRequest) => Promise<AdminHostLogsResponse>;
+  top: (opts: AdminHostTopRequest) => Promise<AdminHostTopResponse>;
 }

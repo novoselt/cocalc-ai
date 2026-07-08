@@ -5,6 +5,7 @@
 
 import { createHash } from "crypto";
 import getPool from "@cocalc/database/pool";
+import { loadProjectHostMetricsHistory } from "@cocalc/database/postgres/project-host-metrics";
 import centralLog from "@cocalc/database/postgres/central-log";
 import getLogger from "@cocalc/backend/logger";
 import isAdmin from "@cocalc/server/accounts/is-admin";
@@ -18,6 +19,8 @@ import type {
   AdminHostEventsResponse,
   AdminHostLogsRequest,
   AdminHostLogsResponse,
+  AdminHostTopRequest,
+  AdminHostTopResponse,
 } from "@cocalc/conat/hub/api/admin-host";
 
 type AdminAuthOpts = {
@@ -34,6 +37,10 @@ const DEFAULT_RECENT_LIMIT = 10;
 const MAX_RECENT_LIMIT = 50;
 const DEFAULT_EVENTS_WINDOW_MINUTES = 24 * 60;
 const MAX_EVENTS_WINDOW_MINUTES = 7 * 24 * 60;
+const DEFAULT_METRICS_WINDOW_MINUTES = 60;
+const MAX_METRICS_WINDOW_MINUTES = 7 * 24 * 60;
+const DEFAULT_METRICS_POINTS = 60;
+const MAX_METRICS_POINTS = 240;
 
 function pool() {
   return getPool();
@@ -120,7 +127,7 @@ async function recordAudit({
 }: {
   audit_id: string;
   account_id: string;
-  mode: "describe" | "events" | "logs";
+  mode: "describe" | "events" | "logs" | "top";
   host_id: string;
   source?: string;
   lines?: number;
@@ -514,6 +521,82 @@ export async function events({
       audit_id,
       account_id: accountId,
       mode: "events",
+      host_id: hostId,
+      reason,
+      duration_ms: Date.now() - started,
+      error: err,
+    });
+    throw err;
+  }
+}
+
+export async function top({
+  account_id,
+  host,
+  host_id,
+  window_minutes,
+  max_points,
+  reason,
+}: AdminAuthOpts & AdminHostTopRequest): Promise<AdminHostTopResponse> {
+  const accountId = await requireAdminAccount({ account_id });
+  const audit_id = uuid();
+  const row = await resolveHost({ host, host_id });
+  const hostId = `${row.id}`;
+  const windowMinutes = normalizePositiveInt({
+    value: window_minutes,
+    fallback: DEFAULT_METRICS_WINDOW_MINUTES,
+    max: MAX_METRICS_WINDOW_MINUTES,
+  });
+  const maxPoints = normalizePositiveInt({
+    value: max_points,
+    fallback: DEFAULT_METRICS_POINTS,
+    max: MAX_METRICS_POINTS,
+  });
+  await recordAudit({
+    audit_id,
+    account_id: accountId,
+    mode: "top",
+    host_id: hostId,
+    reason,
+  });
+  const started = Date.now();
+  try {
+    const history = (
+      await loadProjectHostMetricsHistory({
+        host_ids: [hostId],
+        window_minutes: windowMinutes,
+        max_points: maxPoints,
+      })
+    ).get(hostId);
+    const result: AdminHostTopResponse = {
+      audit_id,
+      host_id: hostId,
+      server_time: new Date().toISOString(),
+      window_minutes: history?.window_minutes ?? windowMinutes,
+      point_count: history?.point_count ?? 0,
+      current: history?.points?.[history.points.length - 1] as
+        | Record<string, unknown>
+        | undefined,
+      derived: history?.derived as Record<string, unknown> | undefined,
+      growth: history?.growth as Record<string, unknown> | undefined,
+      points: history?.points as Record<string, unknown>[] | undefined,
+    };
+    await recordAudit({
+      audit_id,
+      account_id: accountId,
+      mode: "top",
+      host_id: hostId,
+      reason,
+      duration_ms: Date.now() - started,
+      result_bytes: Buffer.byteLength(JSON.stringify(result), "utf8"),
+      truncated: (history?.points?.length ?? 0) >= maxPoints,
+    });
+    return result;
+  } catch (err) {
+    await recordAudit({
+      audit_id,
+      account_id: accountId,
+      mode: "top",
       host_id: hostId,
       reason,
       duration_ms: Date.now() - started,

@@ -1227,6 +1227,43 @@ export function registerAdminCommand(
     );
 
   adminHost
+    .command("top <host>")
+    .description("show audited project-host resource metrics")
+    .option("--window-minutes <n>", "metrics lookback window", "60")
+    .option("--max-points <n>", "max history points", "60")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: {
+          windowMinutes?: string;
+          maxPoints?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host top", async (ctx) => {
+          return await ctx.hub.adminHost.top({
+            host,
+            window_minutes: parsePositiveIntegerOption({
+              name: "--window-minutes",
+              value: opts.windowMinutes,
+              fallback: 60,
+              max: 7 * 24 * 60,
+            }),
+            max_points: parsePositiveIntegerOption({
+              name: "--max-points",
+              value: opts.maxPoints,
+              fallback: 60,
+              max: 240,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
     .command("logs")
     .description("fetch bounded, audited project-host runtime logs")
     .requiredOption("--host-id <uuid>", "target project-host id")

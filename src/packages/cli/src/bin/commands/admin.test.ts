@@ -219,6 +219,44 @@ test("admin host events forwards timeline options", async () => {
   });
 });
 
+test("admin host top forwards metrics options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        top: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-host-4", point_count: 0 };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "top",
+    "montreal-1",
+    "--window-minutes",
+    "120",
+    "--max-points",
+    "20",
+    "--reason",
+    "pressure check",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    host: "montreal-1",
+    window_minutes: 120,
+    max_points: 20,
+    reason: "pressure check",
+  });
+});
+
 test("admin db lro forwards diagnostic filters", async () => {
   let capturedArgs: any;
   const program = new Command();
