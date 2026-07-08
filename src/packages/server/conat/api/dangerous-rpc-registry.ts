@@ -28,6 +28,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     reason:
       "admin-only curated read-only database diagnostics with server-side caps",
   },
+  "adminDb.exec": {
+    decision: "fresh-auth-required",
+    reason: "audited operator SQL write mode against operational data",
+  },
   "adminDb.query": {
     decision: "fresh-auth-required",
     reason: "raw read-only operator SQL against operational data",
@@ -51,6 +55,11 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "adminData.runView": {
     decision: "fresh-auth-required",
     reason: "Admin Data Explorer saved view execution against operational data",
+  },
+  "agent.execute": {
+    decision: "fresh-auth-not-required",
+    reason:
+      "agent action execution uses normal account/project authorization and action confirmation",
   },
   "agent.run": {
     decision: "fresh-auth-not-required",
@@ -453,6 +462,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-not-required",
     reason:
       "collaborator-authorized cancellation of an in-project durable RootFS build",
+  },
+  "projects.exec": {
+    decision: "fresh-auth-not-required",
+    reason: "collaborator-authorized project code execution",
   },
   "projects.clearAdminProjectEntitlementOverride": {
     decision: "fresh-auth-required",

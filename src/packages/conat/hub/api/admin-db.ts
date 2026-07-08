@@ -22,10 +22,13 @@ export interface AdminDbField {
 
 export interface AdminDbExecuteRequest {
   bay_id?: string;
+  mode?: "query" | "diagnostic" | "write";
   sql?: string;
   diagnostic?: AdminDbDiagnostic;
   params?: Record<string, unknown>;
   reason?: string;
+  write?: boolean;
+  commit?: boolean;
   limit?: number;
   max_bytes?: number;
   statement_timeout_ms?: number;
@@ -36,8 +39,9 @@ export interface AdminDbExecuteResponse {
   audit_id: string;
   bay_id: string;
   server_time: string;
-  mode: "query" | "diagnostic";
+  mode: "query" | "diagnostic" | "write";
   diagnostic?: AdminDbDiagnostic;
+  committed?: boolean;
   duration_ms: number;
   fields: AdminDbField[];
   rows: unknown[][];
@@ -50,9 +54,11 @@ export interface AdminDbExecuteResponse {
 export const adminDb = {
   query: authFirstRequireAccount,
   diagnostic: authFirstRequireAccount,
+  exec: authFirstRequireAccount,
 };
 
 export interface AdminDbApi {
   query: (opts: AdminDbExecuteRequest) => Promise<AdminDbExecuteResponse>;
   diagnostic: (opts: AdminDbExecuteRequest) => Promise<AdminDbExecuteResponse>;
+  exec: (opts: AdminDbExecuteRequest) => Promise<AdminDbExecuteResponse>;
 }

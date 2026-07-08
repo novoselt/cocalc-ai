@@ -1180,6 +1180,45 @@ export function registerAdminCommand(
   );
 
   adminDbCommonOptions(
+    adminDb
+      .command("exec")
+      .description(
+        "run audited operator SQL write mode; rolls back unless --commit is set",
+      )
+      .option("--sql <sql>", "SQL statement text")
+      .option("--file <path>", "read SQL from a file")
+      .requiredOption("--reason <reason>", "human-readable reason for audit")
+      .requiredOption("--write", "acknowledge write-mode execution")
+      .option("--commit", "commit instead of rolling back", false),
+  ).action(
+    async (
+      opts: {
+        sql?: string;
+        file?: string;
+        reason?: string;
+        write?: boolean;
+        commit?: boolean;
+        bay?: string;
+        limit?: string;
+        timeoutMs?: string;
+        lockTimeoutMs?: string;
+        maxBytes?: string;
+      },
+      command: Command,
+    ) => {
+      await withContext(command, "admin db exec", async (ctx) => {
+        return await ctx.hub.adminDb.exec({
+          ...adminDbRequestOptions(opts),
+          sql: await readAdminDbSqlInput(opts),
+          reason: opts.reason,
+          write: opts.write === true,
+          commit: opts.commit === true,
+        });
+      });
+    },
+  );
+
+  adminDbCommonOptions(
     adminDb.command("activity").description("show active database sessions"),
   ).action(async (opts: any, command: Command) => {
     await withContext(command, "admin db activity", async (ctx) => {

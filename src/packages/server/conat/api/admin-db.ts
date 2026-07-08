@@ -229,11 +229,12 @@ async function recordAudit({
   duration_ms,
   row_count,
   result_bytes,
+  committed,
   error,
 }: {
   audit_id: string;
   account_id: string;
-  mode: "query" | "diagnostic";
+  mode: "query" | "diagnostic" | "write";
   diagnostic?: AdminDbDiagnostic;
   reason?: string;
   bay_id: string;
@@ -241,6 +242,7 @@ async function recordAudit({
   duration_ms?: number;
   row_count?: number;
   result_bytes?: number;
+  committed?: boolean;
   error?: unknown;
 }) {
   try {
@@ -258,6 +260,7 @@ async function recordAudit({
         duration_ms,
         row_count,
         result_bytes,
+        committed,
         error: error == null ? null : `${error}`,
       },
     });
@@ -297,6 +300,23 @@ function truncateRows({
     bytes: Buffer.byteLength(encoded, "utf8"),
     truncated,
   };
+}
+
+function rowsFromResult({
+  fields,
+  rows,
+}: {
+  fields: { name: string }[];
+  rows: Record<string, unknown>[];
+}): unknown[][] {
+  return rows.map((row) => fields.map((field) => row[field.name]));
+}
+
+function fieldsFromResult(fields: { name: string; dataTypeID: number }[]) {
+  return fields.map((field) => ({
+    name: field.name,
+    data_type_id: field.dataTypeID,
+  }));
 }
 
 function diagnosticParams({
@@ -360,21 +380,84 @@ async function runReadOnlySql({
     await client.query("COMMIT");
     const overLimit = result.rows.length > limit;
     const limited = overLimit ? result.rows.slice(0, limit) : result.rows;
-    const rows = limited.map((row) =>
-      result.fields.map((field) => row[field.name]),
-    );
+    const rows = rowsFromResult({ fields: result.fields, rows: limited });
     const truncated = truncateRows({ rows, maxBytes });
     return {
       duration_ms: Date.now() - started,
-      fields: result.fields.map((field) => ({
-        name: field.name,
-        data_type_id: field.dataTypeID,
-      })),
+      fields: fieldsFromResult(result.fields),
       rows: truncated.rows,
       row_count: truncated.rows.length,
       result_bytes: truncated.bytes,
       truncated: overLimit || truncated.truncated,
       executed_sql: executedSql,
+    };
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // ignore rollback errors
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+function rejectWriteControlSql(sql: string): void {
+  if (sql.includes(";")) {
+    throw new Error("admin DB write mode supports exactly one SQL statement");
+  }
+  if (/\b(begin|commit|rollback|savepoint|release\s+savepoint)\b/i.test(sql)) {
+    throw new Error(
+      "transaction control is not allowed in admin DB write mode",
+    );
+  }
+}
+
+async function runWriteSql({
+  sql,
+  commit,
+  maxBytes,
+  statementTimeoutMs,
+  lockTimeoutMs,
+}: {
+  sql: string;
+  commit: boolean;
+  maxBytes: number;
+  statementTimeoutMs: number;
+  lockTimeoutMs: number;
+}): Promise<
+  Omit<AdminDbExecuteResponse, "audit_id" | "bay_id" | "server_time" | "mode">
+> {
+  const client: PoolClient = await getPool().connect();
+  const started = Date.now();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `SET LOCAL statement_timeout = '${statementTimeoutMs}ms'`,
+    );
+    await client.query(`SET LOCAL lock_timeout = '${lockTimeoutMs}ms'`);
+    await client.query(
+      "SET LOCAL idle_in_transaction_session_timeout = '30000ms'",
+    );
+    await client.query("SET LOCAL search_path = public");
+    const result = await client.query(sql);
+    if (commit) {
+      await client.query("COMMIT");
+    } else {
+      await client.query("ROLLBACK");
+    }
+    const rows = rowsFromResult({ fields: result.fields, rows: result.rows });
+    const truncated = truncateRows({ rows, maxBytes });
+    return {
+      duration_ms: Date.now() - started,
+      fields: fieldsFromResult(result.fields),
+      rows: truncated.rows,
+      row_count: result.rowCount ?? truncated.rows.length,
+      result_bytes: truncated.bytes,
+      truncated: truncated.truncated,
+      executed_sql: sql,
+      committed: commit,
     };
   } catch (err) {
     try {
@@ -521,4 +604,94 @@ export async function diagnostic({
     account_id: accountId,
     mode: "diagnostic",
   });
+}
+
+export async function exec({
+  account_id,
+  ...opts
+}: AdminAuthOpts & AdminDbExecuteRequest): Promise<AdminDbExecuteResponse> {
+  const accountId = await requireFreshAdmin({ account_id, ...opts });
+  if (!opts.write) {
+    throw new Error("--write is required for admin DB write mode");
+  }
+  if (!opts.reason?.trim()) {
+    throw new Error("--reason is required for admin DB write mode");
+  }
+  const audit_id = uuid();
+  const localBay = assertLocalBay(opts.bay_id);
+  const rawSql = opts.sql;
+  if (!rawSql) {
+    throw new Error("SQL is required");
+  }
+  const normalizedSql = trimTrailingSemicolon(rawSql);
+  rejectClearlyUnsafeSql(normalizedSql);
+  rejectWriteControlSql(normalizedSql);
+  const maxBytes = normalizePositiveInt({
+    value: opts.max_bytes,
+    fallback: DEFAULT_MAX_BYTES,
+    max: MAX_MAX_BYTES,
+  });
+  const statementTimeoutMs = normalizePositiveInt({
+    value: opts.statement_timeout_ms,
+    fallback: DEFAULT_STATEMENT_TIMEOUT_MS,
+    max: MAX_STATEMENT_TIMEOUT_MS,
+  });
+  const lockTimeoutMs = normalizePositiveInt({
+    value: opts.lock_timeout_ms,
+    fallback: DEFAULT_LOCK_TIMEOUT_MS,
+    max: MAX_LOCK_TIMEOUT_MS,
+  });
+  const commit = opts.commit === true;
+  await recordAudit({
+    audit_id,
+    account_id: accountId,
+    mode: "write",
+    reason: opts.reason,
+    bay_id: localBay,
+    sql: normalizedSql,
+    committed: false,
+  });
+  const started = Date.now();
+  try {
+    const result = await runWriteSql({
+      sql: normalizedSql,
+      commit,
+      maxBytes,
+      statementTimeoutMs,
+      lockTimeoutMs,
+    });
+    await recordAudit({
+      audit_id,
+      account_id: accountId,
+      mode: "write",
+      reason: opts.reason,
+      bay_id: localBay,
+      sql: normalizedSql,
+      duration_ms: result.duration_ms,
+      row_count: result.row_count,
+      result_bytes: result.result_bytes,
+      committed: commit,
+    });
+    return {
+      audit_id,
+      bay_id: localBay,
+      server_time: new Date().toISOString(),
+      mode: "write",
+      ...result,
+      committed: commit,
+    };
+  } catch (err) {
+    await recordAudit({
+      audit_id,
+      account_id: accountId,
+      mode: "write",
+      reason: opts.reason,
+      bay_id: localBay,
+      sql: normalizedSql,
+      duration_ms: Date.now() - started,
+      committed: false,
+      error: err,
+    });
+    throw err;
+  }
 }

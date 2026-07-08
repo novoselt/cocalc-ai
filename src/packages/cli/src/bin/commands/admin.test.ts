@@ -138,6 +138,47 @@ test("admin db lro forwards diagnostic filters", async () => {
   });
 });
 
+test("admin db exec forwards audited write options with rollback default", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminDb: {
+        exec: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-3", committed: opts.commit };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "db",
+    "exec",
+    "--write",
+    "--sql",
+    "update accounts set banned=false where account_id='11111111-1111-4111-8111-111111111111'",
+    "--reason",
+    "incident repair dry run",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    bay_id: undefined,
+    limit: 200,
+    statement_timeout_ms: 15000,
+    lock_timeout_ms: 1000,
+    max_bytes: 2097152,
+    sql: "update accounts set banned=false where account_id='11111111-1111-4111-8111-111111111111'",
+    reason: "incident repair dry run",
+    write: true,
+    commit: false,
+  });
+});
+
 test("admin entitlement-override get resolves a user and fetches override", async () => {
   let capturedArgs: any;
   const program = new Command();

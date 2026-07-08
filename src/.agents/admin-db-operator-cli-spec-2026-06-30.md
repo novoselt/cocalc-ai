@@ -161,6 +161,12 @@ Properties:
 This mode should not pretend to be fully safe. The protection is explicit
 operator intent, bounded execution, default rollback, and auditability.
 
+The first write-mode implementation should intentionally support a single SQL
+statement per run. Operators can still use `--file`, but transaction control
+statements and multi-statement scripts should be rejected until a later
+break-glass workflow exists. This keeps rollback/commit semantics clear and
+keeps audit records easy to reason about.
+
 ### Break-Glass
 
 Break-glass mode is for rare cases where the guarded write mode is too
@@ -498,6 +504,11 @@ This phase reduces the need for raw SQL.
 
 This phase replaces most production repair SSH sessions.
 
+An initial implementation can ship before the site setting if it is admin-only,
+fresh-auth gated, single-statement only, rolls back by default, and writes a
+complete central-log audit trail. A dedicated site setting and audit table
+should still be added before expanding write-mode scope.
+
 ### Phase 4: Break-Glass
 
 - Add disabled-by-default break-glass mode.
@@ -552,3 +563,19 @@ auditable operator path.
 Write mode should follow after Phase 1 is deployed and exercised. It is still
 important, but the read-only path has higher immediate ROI and lower deployment
 risk.
+
+## Project-Host SQLite Extension
+
+Project hosts also have local SQLite databases, but they should not be folded
+directly into the bay-local Postgres executor.
+
+Recommended direction:
+
+- Add a separate `cocalc admin host-db ...` or `cocalc admin db host-sql ...`
+  surface.
+- Route through a host-targeted project-host admin RPC, not hub-side SSH.
+- Start read-only with explicit `--host-id`, strict timeouts, row/byte caps,
+  and audit records that include host id and database path/name.
+- Add write mode only after the bay Postgres write path has proven safe.
+- Keep project data-plane concerns separate; this should inspect host-local
+  operational SQLite state, not proxy user project data through the hub.
