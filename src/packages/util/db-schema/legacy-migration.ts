@@ -23,9 +23,9 @@ Table({
       },
       {
         name: "legacy_migration_accounts_gmail_canonical_email_idx",
-        query: `(
+        query: `((
           replace(split_part(split_part(lower(email_address), '@', 1), '+', 1), '.', '') || '@gmail.com'
-        )
+        ))
         WHERE COALESCE(email_address, '') <> ''
           AND split_part(lower(email_address), '@', 2) IN ('gmail.com', 'googlemail.com')`,
       },
