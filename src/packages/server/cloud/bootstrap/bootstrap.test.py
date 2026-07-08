@@ -1357,6 +1357,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "project_host_app_running()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "project-host app is running; refusing to clean Podman runtime state",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "cannot re-exec process to join the existing user namespace",
                 rootctl.read_text(encoding="utf-8"),
             )

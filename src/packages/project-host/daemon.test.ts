@@ -1,5 +1,6 @@
 import * as childProcess from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -108,6 +109,30 @@ describe("project-host daemon stop", () => {
     expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
     expect(killSpy).not.toHaveBeenCalledWith(4242, "SIGKILL");
     expect(fs.existsSync(pidPath)).toBe(false);
+  });
+
+  it("treats a ready:false health payload as unhealthy", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, ready: false }));
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (address == null || typeof address === "string") {
+        throw new Error("expected server to listen on a TCP port");
+      }
+      process.env.HOST = "127.0.0.1";
+      process.env.PORT = String(address.port);
+
+      expect(__test__.checkHealthSync(process.env)).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 
   it("escalates to SIGKILL when SIGTERM does not stop the daemon", () => {
