@@ -497,28 +497,33 @@ async function readRuntimeLogTail(
     }
     return String(stdout ?? "");
   };
-  if (source === "cloudflared") {
-    const args = [
-      "-u",
-      "cocalc-cloudflared.service",
-      "-o",
-      "cat",
-      "-n",
-      String(tailLines),
-      "--no-pager",
-    ];
+
+  const runJournal = async ({
+    label,
+    args,
+    fallbackArgs,
+  }: {
+    label: string;
+    args: string[];
+    fallbackArgs?: string[];
+  }) => {
+    const common = ["-o", "cat", "-n", String(tailLines), "--no-pager"];
+    const fullArgs = [...args, ...common];
     try {
-      const text = await runTail("journalctl", args);
+      const text = await runTail("journalctl", fullArgs);
       return {
-        source: "journalctl:cocalc-cloudflared.service",
+        source: label,
         lines: tailLines,
         text: redactRuntimeLogText(text),
       };
     } catch (err) {
       try {
-        const text = await runTail("sudo", ["-n", "journalctl", ...args]);
+        const retryArgs = fallbackArgs
+          ? [...fallbackArgs, ...common]
+          : fullArgs;
+        const text = await runTail("sudo", ["-n", "journalctl", ...retryArgs]);
         return {
-          source: "journalctl:cocalc-cloudflared.service",
+          source: label,
           lines: tailLines,
           text: redactRuntimeLogText(text),
         };
@@ -531,6 +536,44 @@ async function readRuntimeLogTail(
         throw new Error(`failed to read runtime log '${source}': ${sudoErr}`);
       }
     }
+  };
+
+  if (source === "cloudflared") {
+    return await runJournal({
+      label: "journalctl:cocalc-cloudflared.service",
+      args: ["-u", "cocalc-cloudflared.service"],
+    });
+  }
+  if (source === "sshd") {
+    return await runJournal({
+      label: "journalctl:ssh.service",
+      args: ["-u", "ssh.service"],
+      fallbackArgs: ["-u", "sshd.service"],
+    });
+  }
+  if (source === "kernel") {
+    return await runJournal({
+      label: "journalctl:kernel",
+      args: ["-k"],
+    });
+  }
+  if (source === "podman") {
+    return await runJournal({
+      label: "journalctl:podman",
+      args: ["-t", "podman", "-t", "pasta"],
+    });
+  }
+  if (source === "btrfs") {
+    return await runJournal({
+      label: "journalctl:kernel:btrfs",
+      args: ["-k", "--grep", "btrfs|BTRFS"],
+    });
+  }
+  if (source === "systemd") {
+    return await runJournal({
+      label: "journalctl:systemd",
+      args: ["-u", "systemd-sysctl.service", "-u", "snapd.service"],
+    });
   }
   const logPath = runtimeLogPath(source);
   try {
