@@ -441,6 +441,16 @@ describe("project-backup", () => {
         return { rows: [bucketRow(params?.[0])] };
       }
       if (
+        sql.includes("FROM information_schema.columns") &&
+        sql.includes("table_name='projects'")
+      ) {
+        return {
+          rows: (params?.[0] ?? []).map((column_name: string) => ({
+            column_name,
+          })),
+        };
+      }
+      if (
         sql.includes("ALTER TABLE projects") &&
         sql.includes("ADD COLUMN IF NOT EXISTS last_")
       ) {
