@@ -18,6 +18,10 @@ import type {
   AdminDataViewInput,
 } from "@cocalc/conat/hub/api/admin-data-explorer";
 import type { AdminDbDiagnostic } from "@cocalc/conat/hub/api/admin-db";
+import {
+  HOST_RUNTIME_LOG_SOURCES,
+  type HostRuntimeLogSource,
+} from "@cocalc/conat/project-host/api";
 import { ADMIN_DATA_EXPLORER_STARTER_VIEWS } from "@cocalc/conat/hub/api/admin-data-explorer";
 import {
   ADMIN_DATA_EXPLORER_SQL_DEFAULT_LIMIT,
@@ -976,6 +980,9 @@ export function registerAdminCommand(
   const adminDb = admin
     .command("db")
     .description("audited admin database diagnostics and read-only SQL");
+  const adminHost = admin
+    .command("host")
+    .description("audited project-host diagnostics");
   const adminSettings = admin
     .command("settings")
     .description("admin site settings inspection");
@@ -1061,6 +1068,26 @@ export function registerAdminCommand(
     });
   }
 
+  function adminHostLogRequestOptions(opts: {
+    tail?: string;
+    maxBytes?: string;
+  }) {
+    return {
+      lines: parsePositiveIntegerOption({
+        name: "--tail",
+        value: opts.tail,
+        fallback: 200,
+        max: 5000,
+      }),
+      max_bytes: parsePositiveIntegerOption({
+        name: "--max-bytes",
+        value: opts.maxBytes,
+        fallback: 512 * 1024,
+        max: 2 * 1024 * 1024,
+      }),
+    };
+  }
+
   admin
     .command("search <query>")
     .description(
@@ -1126,6 +1153,266 @@ export function registerAdminCommand(
               created: row.created ?? null,
             };
           });
+        });
+      },
+    );
+
+  adminHost
+    .command("describe <host>")
+    .description("show audited project-host operational summary")
+    .option("--recent-limit <n>", "recent LRO/event rows", "10")
+    .option("--no-live", "skip live project-host control RPCs")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: {
+          recentLimit?: string;
+          live?: boolean;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host describe", async (ctx) => {
+          return await ctx.hub.adminHost.describe({
+            host,
+            recent_limit: parsePositiveIntegerOption({
+              name: "--recent-limit",
+              value: opts.recentLimit,
+              fallback: 10,
+              max: 50,
+            }),
+            include_live: opts.live !== false,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("events <host>")
+    .description("show audited project-host incident timeline")
+    .option("--since-minutes <n>", "lookback window in minutes", "1440")
+    .option("--limit <n>", "max timeline events", "100")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: {
+          sinceMinutes?: string;
+          limit?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host events", async (ctx) => {
+          return await ctx.hub.adminHost.events({
+            host,
+            since_minutes: parsePositiveIntegerOption({
+              name: "--since-minutes",
+              value: opts.sinceMinutes,
+              fallback: 24 * 60,
+              max: 7 * 24 * 60,
+            }),
+            limit: parsePositiveIntegerOption({
+              name: "--limit",
+              value: opts.limit,
+              fallback: 100,
+              max: 1000,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("top <host>")
+    .description("show audited project-host resource metrics")
+    .option("--window-minutes <n>", "metrics lookback window", "60")
+    .option("--max-points <n>", "max history points", "60")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: {
+          windowMinutes?: string;
+          maxPoints?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host top", async (ctx) => {
+          return await ctx.hub.adminHost.top({
+            host,
+            window_minutes: parsePositiveIntegerOption({
+              name: "--window-minutes",
+              value: opts.windowMinutes,
+              fallback: 60,
+              max: 7 * 24 * 60,
+            }),
+            max_points: parsePositiveIntegerOption({
+              name: "--max-points",
+              value: opts.maxPoints,
+              fallback: 60,
+              max: 240,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("ps <host>")
+    .description("show audited project-host process snapshot")
+    .option("--limit <n>", "max process rows", "50")
+    .option("--sort <rss|cpu>", "sort by rss or cpu", "rss")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: { limit?: string; sort?: string; reason?: string },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host ps", async (ctx) => {
+          const sort = `${opts.sort ?? "rss"}`.trim();
+          if (sort !== "rss" && sort !== "cpu") {
+            throw new Error("--sort must be one of: rss, cpu");
+          }
+          return await ctx.hub.adminHost.ps({
+            host,
+            limit: parsePositiveIntegerOption({
+              name: "--limit",
+              value: opts.limit,
+              fallback: 50,
+              max: 500,
+            }),
+            sort,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("net <host>")
+    .description("show audited project-host network socket snapshot")
+    .option("--limit <n>", "max socket rows", "100")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: { limit?: string; reason?: string },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host net", async (ctx) => {
+          return await ctx.hub.adminHost.net({
+            host,
+            limit: parsePositiveIntegerOption({
+              name: "--limit",
+              value: opts.limit,
+              fallback: 100,
+              max: 500,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("filesystem <host>")
+    .description("show audited project-host filesystem snapshot")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (host: string, opts: { reason?: string }, command: Command) => {
+        await withContext(command, "admin host filesystem", async (ctx) => {
+          return await ctx.hub.adminHost.filesystem({
+            host,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("podman <host>")
+    .description("show audited project-host podman snapshot")
+    .option("--limit <n>", "max container rows", "100")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: { limit?: string; reason?: string },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host podman", async (ctx) => {
+          return await ctx.hub.adminHost.podman({
+            host,
+            limit: parsePositiveIntegerOption({
+              name: "--limit",
+              value: opts.limit,
+              fallback: 100,
+              max: 500,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("logs")
+    .description("fetch bounded, audited project-host runtime logs")
+    .requiredOption("--host-id <uuid>", "target project-host id")
+    .option("--tail <n>", "number of log lines", "200")
+    .option(
+      "--source <source>",
+      `log source: ${HOST_RUNTIME_LOG_SOURCES.join(", ")}`,
+    )
+    .option("--grep <text>", "server-side substring filter")
+    .option("--max-bytes <n>", "max response bytes", "524288")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        opts: {
+          hostId?: string;
+          tail?: string;
+          source?: string;
+          grep?: string;
+          maxBytes?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host logs", async (ctx) => {
+          const sourceRaw = `${opts.source ?? ""}`.trim();
+          if (
+            sourceRaw &&
+            !HOST_RUNTIME_LOG_SOURCES.includes(
+              sourceRaw as HostRuntimeLogSource,
+            )
+          ) {
+            throw new Error(
+              `--source must be one of: ${HOST_RUNTIME_LOG_SOURCES.join(", ")}`,
+            );
+          }
+          const result = await ctx.hub.adminHost.logs({
+            ...adminHostLogRequestOptions(opts),
+            host_id: opts.hostId,
+            source: sourceRaw ? (sourceRaw as HostRuntimeLogSource) : undefined,
+            grep: opts.grep,
+            reason: opts.reason,
+          });
+          if (!ctx.globals?.json && ctx.globals?.output !== "json") {
+            process.stdout.write(result.text ?? "");
+            if (result.text && !result.text.endsWith("\n")) {
+              process.stdout.write("\n");
+            }
+            return null;
+          }
+          return result;
         });
       },
     );

@@ -16,6 +16,7 @@ import { type AgentApi, agent } from "./agent";
 import { type Notifications, notifications } from "./notifications";
 import { type AdminData, adminData } from "./admin-data-explorer";
 import { type AdminDbApi, adminDb } from "./admin-db";
+import { type AdminHostApi, adminHost } from "./admin-host";
 import { type AiSessionsApi, aiSessions } from "./ai-sessions";
 import { type LegacyMigration, legacyMigration } from "./legacy-migration";
 import {
@@ -40,6 +41,7 @@ export interface HubApi {
   notifications: Notifications;
   adminData: AdminData;
   adminDb: AdminDbApi;
+  adminHost: AdminHostApi;
   aiSessions: AiSessionsApi;
   legacyMigration: LegacyMigration;
   publicDirectoryShares: PublicDirectoryShares;
@@ -62,6 +64,7 @@ const HubApiStructure = {
   notifications,
   adminData,
   adminDb,
+  adminHost,
   aiSessions,
   legacyMigration,
   publicDirectoryShares,
