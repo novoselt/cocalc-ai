@@ -1,0 +1,66 @@
+{
+  "id": "cocalc/sagemath-pip",
+  "version": 1,
+  "description": "Install wheel-first SageMath from Sagelite into a compact Python virtual environment, configure pip for the Sagelite wheel index, and expose Sage/Python/Jupyter commands.",
+  "timeout": 7200,
+  "inputs": {
+    "prefix": { "type": "string", "default": "/opt/sagemath-pip" },
+    "python": { "type": "string", "default": "/usr/bin/python3.14" },
+    "package": { "type": "string", "default": "sagelite==10.9.post8" },
+    "extra_index_url": {
+      "type": "string",
+      "default": "https://sagelite.sagemath.org/dev/simple/"
+    },
+    "configure_system_pip": { "type": "string", "default": "true" },
+    "install_optional_wheel_ready": { "type": "string", "default": "false" },
+    "optional_package": {
+      "type": "string",
+      "default": "sagelite[optional-wheel-ready]==10.9.post8"
+    },
+    "install_apt_packages": { "type": "string", "default": "true" },
+    "apt_packages": {
+      "type": "array",
+      "default": ["ca-certificates", "git", "python3-venv"]
+    },
+    "python_kernel_name": { "type": "string", "default": "python3" },
+    "owner_uid": { "type": "string", "default": "2001" },
+    "owner_gid": { "type": "string", "default": "2001" }
+  },
+  "run": { "shell": "bash", "script": "install.sh" },
+  "verify": { "shell": "bash", "script": "verify.sh" },
+  "contributes": {
+    "metadata": {
+      "family": "sagemath",
+      "default_jupyter_kernel": "sagemath",
+      "tags": ["sagemath", "sagelite", "pip", "jupyter", "normaliz"]
+    },
+    "theme": {
+      "icon": "calculator",
+      "color": "#ffffff",
+      "accent_color": "#2563eb"
+    },
+    "content": {
+      "version": 1,
+      "title": "SageMath Pip",
+      "subtitle": "Wheel-first SageMath from Sagelite with Sage/Python Jupyter kernels.",
+      "highlights": [
+        "Sagelite 10.9.post8",
+        "CPython 3.14 by default",
+        "Sage and Python Jupyter kernels",
+        "Normaliz/PyNormaliz available from wheels"
+      ],
+      "actions": [
+        {
+          "kind": "external-link",
+          "label": "Sagelite developer preview",
+          "url": "https://github.com/sagemathinc/sagelite/blob/develop/SAGELITE.md#developer-preview"
+        },
+        {
+          "kind": "external-link",
+          "label": "Report Sagelite feedback",
+          "url": "https://github.com/sagemathinc/sagelite/issues"
+        }
+      ]
+    }
+  }
+}

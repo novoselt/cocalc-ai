@@ -1,0 +1,46 @@
+version: 1
+name: sagemath-pip
+
+builder:
+  run_quota:
+    disk_quota: 12000
+
+steps:
+  - uses: cocalc/sagemath-pip
+    with:
+      python: /usr/bin/python3.14
+      package: sagelite==10.9.post8
+      extra_index_url: https://sagelite.sagemath.org/dev/simple/
+      prefix: /opt/sagemath-pip
+      configure_system_pip: "true"
+    timeout: 7200
+
+verify:
+  - command -v sage
+  - command -v python
+  - command -v pip
+  - command -v jupyter
+  - sage --version
+  - sage -c 'from sage.all import ZZ; assert ZZ(2) + ZZ(2) == 4'
+  - python -c 'from sage.all import ZZ; assert ZZ(19).is_prime()'
+  - sage -python -c 'import PyNormaliz'
+  - sage -c 'from sage.all import Polyhedron; P = Polyhedron(vertices=[(0,0),(1,0),(0,1)], backend="normaliz"); assert P.n_vertices() == 3'
+  - pip config debug 2>/dev/null | grep -F https://sagelite.sagemath.org/dev/simple/
+  - jupyter kernelspec list | grep -qi sagemath
+  - jupyter kernelspec list | grep -q python3
+
+publish:
+  label: SageMath Pip
+  slug: sagemath-pip
+  description: Wheel-first SageMath from Sagelite with Sage Python, Sage/Python Jupyter kernels, and pip configured for the Sagelite wheel index.
+  family: sagemath
+  version: "10.9.post8"
+  channel: preview
+  default_jupyter_kernel: sagemath
+  visibility: public
+  tags:
+    - sagemath
+    - sagelite
+    - pip
+    - jupyter
+    - normaliz
