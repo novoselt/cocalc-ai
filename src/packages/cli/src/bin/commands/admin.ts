@@ -1264,6 +1264,105 @@ export function registerAdminCommand(
     );
 
   adminHost
+    .command("ps <host>")
+    .description("show audited project-host process snapshot")
+    .option("--limit <n>", "max process rows", "50")
+    .option("--sort <rss|cpu>", "sort by rss or cpu", "rss")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: { limit?: string; sort?: string; reason?: string },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host ps", async (ctx) => {
+          const sort = `${opts.sort ?? "rss"}`.trim();
+          if (sort !== "rss" && sort !== "cpu") {
+            throw new Error("--sort must be one of: rss, cpu");
+          }
+          return await ctx.hub.adminHost.ps({
+            host,
+            limit: parsePositiveIntegerOption({
+              name: "--limit",
+              value: opts.limit,
+              fallback: 50,
+              max: 500,
+            }),
+            sort,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("net <host>")
+    .description("show audited project-host network socket snapshot")
+    .option("--limit <n>", "max socket rows", "100")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: { limit?: string; reason?: string },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host net", async (ctx) => {
+          return await ctx.hub.adminHost.net({
+            host,
+            limit: parsePositiveIntegerOption({
+              name: "--limit",
+              value: opts.limit,
+              fallback: 100,
+              max: 500,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("filesystem <host>")
+    .description("show audited project-host filesystem snapshot")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (host: string, opts: { reason?: string }, command: Command) => {
+        await withContext(command, "admin host filesystem", async (ctx) => {
+          return await ctx.hub.adminHost.filesystem({
+            host,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("podman <host>")
+    .description("show audited project-host podman snapshot")
+    .option("--limit <n>", "max container rows", "100")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: { limit?: string; reason?: string },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host podman", async (ctx) => {
+          return await ctx.hub.adminHost.podman({
+            host,
+            limit: parsePositiveIntegerOption({
+              name: "--limit",
+              value: opts.limit,
+              fallback: 100,
+              max: 500,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
     .command("logs")
     .description("fetch bounded, audited project-host runtime logs")
     .requiredOption("--host-id <uuid>", "target project-host id")

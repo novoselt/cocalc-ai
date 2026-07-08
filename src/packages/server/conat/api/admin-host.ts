@@ -17,8 +17,16 @@ import type {
   AdminHostEvent,
   AdminHostEventsRequest,
   AdminHostEventsResponse,
+  AdminHostFilesystemRequest,
+  AdminHostFilesystemResponse,
   AdminHostLogsRequest,
   AdminHostLogsResponse,
+  AdminHostNetworkRequest,
+  AdminHostNetworkResponse,
+  AdminHostPodmanRequest,
+  AdminHostPodmanResponse,
+  AdminHostProcessRequest,
+  AdminHostProcessResponse,
   AdminHostTopRequest,
   AdminHostTopResponse,
 } from "@cocalc/conat/hub/api/admin-host";
@@ -127,7 +135,15 @@ async function recordAudit({
 }: {
   audit_id: string;
   account_id: string;
-  mode: "describe" | "events" | "logs" | "top";
+  mode:
+    | "describe"
+    | "events"
+    | "filesystem"
+    | "logs"
+    | "net"
+    | "podman"
+    | "ps"
+    | "top";
   host_id: string;
   source?: string;
   lines?: number;
@@ -604,6 +620,159 @@ export async function top({
     });
     throw err;
   }
+}
+
+async function runLiveHostDiagnostic<T>({
+  account_id,
+  host,
+  host_id,
+  mode,
+  reason,
+  timeout = 30_000,
+  run,
+}: {
+  account_id?: string;
+  host?: string;
+  host_id?: string;
+  mode: "filesystem" | "net" | "podman" | "ps";
+  reason?: string;
+  timeout?: number;
+  run: (
+    client: Awaited<ReturnType<typeof getRoutedHostControlClient>>,
+  ) => Promise<T>;
+}): Promise<{
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  snapshot: T;
+}> {
+  const accountId = await requireAdminAccount({ account_id });
+  const audit_id = uuid();
+  const row = await resolveHost({ host, host_id });
+  const hostId = `${row.id}`;
+  await recordAudit({
+    audit_id,
+    account_id: accountId,
+    mode,
+    host_id: hostId,
+    reason,
+  });
+  const started = Date.now();
+  try {
+    const client = await getRoutedHostControlClient({
+      host_id: hostId,
+      timeout,
+      fresh: true,
+    });
+    const snapshot = await run(client);
+    const result = {
+      audit_id,
+      host_id: hostId,
+      server_time: new Date().toISOString(),
+      snapshot,
+    };
+    await recordAudit({
+      audit_id,
+      account_id: accountId,
+      mode,
+      host_id: hostId,
+      reason,
+      duration_ms: Date.now() - started,
+      result_bytes: Buffer.byteLength(JSON.stringify(result), "utf8"),
+      truncated: false,
+    });
+    return result;
+  } catch (err) {
+    await recordAudit({
+      audit_id,
+      account_id: accountId,
+      mode,
+      host_id: hostId,
+      reason,
+      duration_ms: Date.now() - started,
+      error: err,
+    });
+    throw err;
+  }
+}
+
+export async function ps({
+  account_id,
+  host,
+  host_id,
+  limit,
+  sort,
+  reason,
+}: AdminAuthOpts & AdminHostProcessRequest): Promise<AdminHostProcessResponse> {
+  return await runLiveHostDiagnostic({
+    account_id,
+    host,
+    host_id,
+    mode: "ps",
+    reason,
+    run: async (client) =>
+      await client.getProcessSnapshot({
+        limit,
+        sort,
+      }),
+  });
+}
+
+export async function net({
+  account_id,
+  host,
+  host_id,
+  limit,
+  reason,
+}: AdminAuthOpts & AdminHostNetworkRequest): Promise<AdminHostNetworkResponse> {
+  return await runLiveHostDiagnostic({
+    account_id,
+    host,
+    host_id,
+    mode: "net",
+    reason,
+    run: async (client) =>
+      await client.getNetworkSnapshot({
+        limit,
+      }),
+  });
+}
+
+export async function filesystem({
+  account_id,
+  host,
+  host_id,
+  reason,
+}: AdminAuthOpts &
+  AdminHostFilesystemRequest): Promise<AdminHostFilesystemResponse> {
+  return await runLiveHostDiagnostic({
+    account_id,
+    host,
+    host_id,
+    mode: "filesystem",
+    reason,
+    run: async (client) => await client.getFilesystemSnapshot(),
+  });
+}
+
+export async function podman({
+  account_id,
+  host,
+  host_id,
+  limit,
+  reason,
+}: AdminAuthOpts & AdminHostPodmanRequest): Promise<AdminHostPodmanResponse> {
+  return await runLiveHostDiagnostic({
+    account_id,
+    host,
+    host_id,
+    mode: "podman",
+    reason,
+    run: async (client) =>
+      await client.getPodmanSnapshot({
+        limit,
+      }),
+  });
 }
 
 export async function logs({

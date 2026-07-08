@@ -9,6 +9,11 @@ import {
   createHostRegistryClient,
   createHostControlService,
   type HostControlApi,
+  type HostDiagnosticCommandOutput,
+  type HostFilesystemSnapshotResponse,
+  type HostNetworkSnapshotResponse,
+  type HostPodmanSnapshotResponse,
+  type HostProcessSnapshotResponse,
   type HostProjectStopPolicyRow,
   type HostRuntimeLogSource,
 } from "@cocalc/conat/project-host/api";
@@ -262,6 +267,12 @@ function normalizeLogLines(value?: number): number {
   return Math.max(1, Math.min(5000, Math.floor(n)));
 }
 
+function normalizeSnapshotLimit(value?: number, fallback = 50): number {
+  const n = Number(value ?? fallback);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(500, Math.floor(n)));
+}
+
 function redactRuntimeLogText(text: string): string {
   return text
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [REDACTED]")
@@ -272,6 +283,29 @@ function redactRuntimeLogText(text: string): string {
     .replace(/("(?:access_)?token"\s*:\s*")[^"]+"/gi, '$1[REDACTED]"')
     .replace(/("(?:api_)?key"\s*:\s*")[^"]+"/gi, '$1[REDACTED]"')
     .replace(/("(?:password|secret)"\s*:\s*")[^"]+"/gi, '$1[REDACTED]"');
+}
+
+function truncateDiagnosticText(text: string, maxBytes = 512 * 1024) {
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes <= maxBytes) {
+    return { text, truncated: false };
+  }
+  const buffer = Buffer.from(text, "utf8");
+  return {
+    text: `[truncated to last ${maxBytes} bytes]\n${buffer.subarray(buffer.length - maxBytes).toString("utf8")}`,
+    truncated: true,
+  };
+}
+
+function limitLines(
+  text: string,
+  limit: number,
+): { text: string; truncated: boolean } {
+  const lines = text.split(/\r?\n/);
+  if (lines.length <= limit) {
+    return { text, truncated: false };
+  }
+  return { text: lines.slice(0, limit).join("\n"), truncated: true };
 }
 
 function keyIdentity(line: string): string {
@@ -630,6 +664,161 @@ async function runPodmanCommand(
     err_on_exit: false,
   });
   return result;
+}
+
+async function runDiagnosticCommand({
+  command,
+  args,
+  timeout = 15,
+  env,
+  sudoFallback = false,
+  maxBytes,
+  lineLimit,
+}: {
+  command: string;
+  args: string[];
+  timeout?: number;
+  env?: NodeJS.ProcessEnv;
+  sudoFallback?: boolean;
+  maxBytes?: number;
+  lineLimit?: number;
+}): Promise<HostDiagnosticCommandOutput> {
+  let result = await executeCode({
+    command,
+    args,
+    timeout,
+    env,
+    err_on_exit: false,
+  });
+  let executedCommand = command;
+  let executedArgs = args;
+  if (result.exit_code !== 0 && sudoFallback) {
+    result = await executeCode({
+      command: "sudo",
+      args: ["-n", command, ...args],
+      timeout,
+      env,
+      err_on_exit: false,
+    });
+    executedCommand = "sudo";
+    executedArgs = ["-n", command, ...args];
+  }
+  const limitedStdout =
+    lineLimit == null
+      ? { text: String(result.stdout ?? ""), truncated: false }
+      : limitLines(String(result.stdout ?? ""), lineLimit);
+  const cappedStdout = truncateDiagnosticText(
+    redactRuntimeLogText(limitedStdout.text),
+    maxBytes,
+  );
+  const cappedStderr = truncateDiagnosticText(
+    redactRuntimeLogText(String(result.stderr ?? "")),
+    Math.min(maxBytes ?? 64 * 1024, 64 * 1024),
+  );
+  return {
+    command: executedCommand,
+    args: executedArgs,
+    stdout: cappedStdout.text,
+    stderr: cappedStderr.text || undefined,
+    exit_code: result.exit_code ?? 0,
+    truncated:
+      limitedStdout.truncated ||
+      cappedStdout.truncated ||
+      cappedStderr.truncated,
+  };
+}
+
+async function readProcessSnapshot({
+  limit,
+  sort,
+}: {
+  limit?: number;
+  sort?: "rss" | "cpu";
+} = {}): Promise<HostProcessSnapshotResponse> {
+  const normalizedLimit = normalizeSnapshotLimit(limit);
+  const normalizedSort = sort === "cpu" ? "cpu" : "rss";
+  const sortField = normalizedSort === "cpu" ? "-pcpu" : "-rss";
+  return {
+    limit: normalizedLimit,
+    sort: normalizedSort,
+    output: await runDiagnosticCommand({
+      command: "ps",
+      args: [
+        "-eo",
+        "pid,ppid,user,stat,pcpu,pmem,rss,vsz,etime,comm,args",
+        `--sort=${sortField}`,
+      ],
+      lineLimit: normalizedLimit + 1,
+    }),
+  };
+}
+
+async function readNetworkSnapshot({
+  limit,
+}: { limit?: number } = {}): Promise<HostNetworkSnapshotResponse> {
+  const normalizedLimit = normalizeSnapshotLimit(limit);
+  return {
+    limit: normalizedLimit,
+    summary: await runDiagnosticCommand({
+      command: "ss",
+      args: ["-s"],
+      sudoFallback: true,
+    }),
+    sockets: await runDiagnosticCommand({
+      command: "ss",
+      args: ["-tulpnH"],
+      sudoFallback: true,
+      lineLimit: normalizedLimit,
+    }),
+  };
+}
+
+async function readFilesystemSnapshot(): Promise<HostFilesystemSnapshotResponse> {
+  const btrfsMount = process.env.COCALC_FILE_SERVER_MOUNTPOINT || "/mnt/cocalc";
+  const response: HostFilesystemSnapshotResponse = {
+    df: await runDiagnosticCommand({
+      command: "df",
+      args: ["-B1", "-T", "/", "/mnt/cocalc", "/mnt/cocalc/data"],
+    }),
+    findmnt: await runDiagnosticCommand({
+      command: "findmnt",
+      args: ["--json", "--bytes", "--target", btrfsMount],
+    }),
+  };
+  response.btrfs_usage = await runDiagnosticCommand({
+    command: "btrfs",
+    args: ["filesystem", "usage", "-b", btrfsMount],
+    sudoFallback: true,
+  });
+  return response;
+}
+
+async function readPodmanSnapshot({
+  limit,
+}: { limit?: number } = {}): Promise<HostPodmanSnapshotResponse> {
+  const normalizedLimit = normalizeSnapshotLimit(limit);
+  return {
+    limit: normalizedLimit,
+    info: await runDiagnosticCommand({
+      command: "podman",
+      args: ["info", "--format", "json"],
+      env: podmanEnv(),
+      sudoFallback: true,
+    }),
+    containers: await runDiagnosticCommand({
+      command: "podman",
+      args: ["ps", "-a", "--format", "json"],
+      env: podmanEnv(),
+      sudoFallback: true,
+      lineLimit: normalizedLimit,
+    }),
+    system_df: await runDiagnosticCommand({
+      command: "podman",
+      args: ["system", "df", "--format", "json"],
+      env: podmanEnv(),
+      sudoFallback: true,
+    }),
+  };
 }
 
 async function runTailCommand(
@@ -1144,6 +1333,18 @@ export async function startMasterRegistration({
     },
     async getRuntimeLog({ lines, source }) {
       return await readRuntimeLogTail(source, lines);
+    },
+    async getProcessSnapshot(opts) {
+      return await readProcessSnapshot(opts);
+    },
+    async getNetworkSnapshot(opts) {
+      return await readNetworkSnapshot(opts);
+    },
+    async getFilesystemSnapshot() {
+      return await readFilesystemSnapshot();
+    },
+    async getPodmanSnapshot(opts) {
+      return await readPodmanSnapshot(opts);
     },
     async getProjectRuntimeLog({ project_id, lines }) {
       return await readProjectRuntimeLogTail(project_id, lines);

@@ -4,7 +4,13 @@
  */
 
 import { authFirstRequireAccount } from "./util";
-import type { HostRuntimeLogSource } from "@cocalc/conat/project-host/api";
+import type {
+  HostFilesystemSnapshotResponse,
+  HostNetworkSnapshotResponse,
+  HostPodmanSnapshotResponse,
+  HostProcessSnapshotResponse,
+  HostRuntimeLogSource,
+} from "@cocalc/conat/project-host/api";
 
 export interface AdminHostLogsRequest {
   host_id: string;
@@ -97,10 +103,70 @@ export interface AdminHostTopResponse {
   points?: Record<string, unknown>[];
 }
 
+export interface AdminHostProcessRequest {
+  host?: string;
+  host_id?: string;
+  limit?: number;
+  sort?: "rss" | "cpu";
+  reason?: string;
+}
+
+export interface AdminHostProcessResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  snapshot: HostProcessSnapshotResponse;
+}
+
+export interface AdminHostNetworkRequest {
+  host?: string;
+  host_id?: string;
+  limit?: number;
+  reason?: string;
+}
+
+export interface AdminHostNetworkResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  snapshot: HostNetworkSnapshotResponse;
+}
+
+export interface AdminHostFilesystemRequest {
+  host?: string;
+  host_id?: string;
+  reason?: string;
+}
+
+export interface AdminHostFilesystemResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  snapshot: HostFilesystemSnapshotResponse;
+}
+
+export interface AdminHostPodmanRequest {
+  host?: string;
+  host_id?: string;
+  limit?: number;
+  reason?: string;
+}
+
+export interface AdminHostPodmanResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  snapshot: HostPodmanSnapshotResponse;
+}
+
 export const adminHost = {
   describe: authFirstRequireAccount,
   events: authFirstRequireAccount,
+  filesystem: authFirstRequireAccount,
   logs: authFirstRequireAccount,
+  net: authFirstRequireAccount,
+  podman: authFirstRequireAccount,
+  ps: authFirstRequireAccount,
   top: authFirstRequireAccount,
 };
 
@@ -109,6 +175,12 @@ export interface AdminHostApi {
     opts: AdminHostDescribeRequest,
   ) => Promise<AdminHostDescribeResponse>;
   events: (opts: AdminHostEventsRequest) => Promise<AdminHostEventsResponse>;
+  filesystem: (
+    opts: AdminHostFilesystemRequest,
+  ) => Promise<AdminHostFilesystemResponse>;
   logs: (opts: AdminHostLogsRequest) => Promise<AdminHostLogsResponse>;
+  net: (opts: AdminHostNetworkRequest) => Promise<AdminHostNetworkResponse>;
+  podman: (opts: AdminHostPodmanRequest) => Promise<AdminHostPodmanResponse>;
+  ps: (opts: AdminHostProcessRequest) => Promise<AdminHostProcessResponse>;
   top: (opts: AdminHostTopRequest) => Promise<AdminHostTopResponse>;
 }

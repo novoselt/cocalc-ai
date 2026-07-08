@@ -2509,6 +2509,14 @@ async function startHostControlService(): Promise<void> {
       ).unmountSharedScratch(unmount),
     getRuntimeLog: async ({ host_id, get }) =>
       await (await getHostClient(host_id, 30_000)).getRuntimeLog(get),
+    getProcessSnapshot: async ({ host_id, get }) =>
+      await (await getHostClient(host_id, 30_000)).getProcessSnapshot(get),
+    getNetworkSnapshot: async ({ host_id, get }) =>
+      await (await getHostClient(host_id, 30_000)).getNetworkSnapshot(get),
+    getFilesystemSnapshot: async ({ host_id }) =>
+      await (await getHostClient(host_id, 30_000)).getFilesystemSnapshot(),
+    getPodmanSnapshot: async ({ host_id, get }) =>
+      await (await getHostClient(host_id, 30_000)).getPodmanSnapshot(get),
     getProjectRuntimeLog: async ({ host_id, get }) =>
       await (await getHostClient(host_id, 30_000)).getProjectRuntimeLog(get),
     startRootfsBuild: async ({ host_id, start }) =>

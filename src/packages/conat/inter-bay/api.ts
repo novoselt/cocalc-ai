@@ -2086,6 +2086,10 @@ export type HostControlMethod =
   | "grow-shared-scratch"
   | "unmount-shared-scratch"
   | "get-runtime-log"
+  | "get-process-snapshot"
+  | "get-network-snapshot"
+  | "get-filesystem-snapshot"
+  | "get-podman-snapshot"
   | "get-project-runtime-log"
   | "start-rootfs-build"
   | "get-rootfs-build-status"
@@ -3002,6 +3006,21 @@ export interface InterBayHostControlApi {
     host_id: string;
     get: HostControlArg<"getRuntimeLog">;
   }) => Promise<HostRuntimeLogResponse>;
+  getProcessSnapshot: (opts: {
+    host_id: string;
+    get?: HostControlArg<"getProcessSnapshot">;
+  }) => Promise<Awaited<ReturnType<HostControlApi["getProcessSnapshot"]>>>;
+  getNetworkSnapshot: (opts: {
+    host_id: string;
+    get?: HostControlArg<"getNetworkSnapshot">;
+  }) => Promise<Awaited<ReturnType<HostControlApi["getNetworkSnapshot"]>>>;
+  getFilesystemSnapshot: (opts: {
+    host_id: string;
+  }) => Promise<Awaited<ReturnType<HostControlApi["getFilesystemSnapshot"]>>>;
+  getPodmanSnapshot: (opts: {
+    host_id: string;
+    get?: HostControlArg<"getPodmanSnapshot">;
+  }) => Promise<Awaited<ReturnType<HostControlApi["getPodmanSnapshot"]>>>;
   getProjectRuntimeLog: (opts: {
     host_id: string;
     get: HostControlArg<"getProjectRuntimeLog">;
@@ -3757,6 +3776,10 @@ const HOST_CONTROL_METHOD_SPECS = [
   { name: "growSharedScratch", method: "grow-shared-scratch" },
   { name: "unmountSharedScratch", method: "unmount-shared-scratch" },
   { name: "getRuntimeLog", method: "get-runtime-log" },
+  { name: "getProcessSnapshot", method: "get-process-snapshot" },
+  { name: "getNetworkSnapshot", method: "get-network-snapshot" },
+  { name: "getFilesystemSnapshot", method: "get-filesystem-snapshot" },
+  { name: "getPodmanSnapshot", method: "get-podman-snapshot" },
   { name: "getProjectRuntimeLog", method: "get-project-runtime-log" },
   { name: "startRootfsBuild", method: "start-rootfs-build" },
   { name: "getRootfsBuildStatus", method: "get-rootfs-build-status" },

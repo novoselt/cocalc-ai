@@ -54,6 +54,53 @@ export interface HostRuntimeLogResponse {
   text: string;
 }
 
+export interface HostDiagnosticCommandOutput {
+  command: string;
+  args: string[];
+  stdout: string;
+  stderr?: string;
+  exit_code: number;
+  truncated: boolean;
+}
+
+export interface HostProcessSnapshotRequest {
+  limit?: number;
+  sort?: "rss" | "cpu";
+}
+
+export interface HostProcessSnapshotResponse {
+  limit: number;
+  sort: "rss" | "cpu";
+  output: HostDiagnosticCommandOutput;
+}
+
+export interface HostNetworkSnapshotRequest {
+  limit?: number;
+}
+
+export interface HostNetworkSnapshotResponse {
+  limit: number;
+  summary: HostDiagnosticCommandOutput;
+  sockets: HostDiagnosticCommandOutput;
+}
+
+export interface HostFilesystemSnapshotResponse {
+  df: HostDiagnosticCommandOutput;
+  findmnt: HostDiagnosticCommandOutput;
+  btrfs_usage?: HostDiagnosticCommandOutput;
+}
+
+export interface HostPodmanSnapshotRequest {
+  limit?: number;
+}
+
+export interface HostPodmanSnapshotResponse {
+  limit: number;
+  info: HostDiagnosticCommandOutput;
+  containers: HostDiagnosticCommandOutput;
+  system_df?: HostDiagnosticCommandOutput;
+}
+
 export const HOST_RUNTIME_LOG_SOURCES = [
   "project-host",
   "conat-router",
@@ -442,6 +489,16 @@ export interface HostControlApi {
     lines?: number;
     source?: HostRuntimeLogSource;
   }) => Promise<HostRuntimeLogResponse>;
+  getProcessSnapshot: (
+    opts?: HostProcessSnapshotRequest,
+  ) => Promise<HostProcessSnapshotResponse>;
+  getNetworkSnapshot: (
+    opts?: HostNetworkSnapshotRequest,
+  ) => Promise<HostNetworkSnapshotResponse>;
+  getFilesystemSnapshot: () => Promise<HostFilesystemSnapshotResponse>;
+  getPodmanSnapshot: (
+    opts?: HostPodmanSnapshotRequest,
+  ) => Promise<HostPodmanSnapshotResponse>;
   getProjectRuntimeLog: (opts: {
     project_id: string;
     lines?: number;

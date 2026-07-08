@@ -257,6 +257,146 @@ test("admin host top forwards metrics options", async () => {
   });
 });
 
+test("admin host ps forwards process snapshot options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        ps: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-host-5", snapshot: {} };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "ps",
+    "montreal-1",
+    "--limit",
+    "25",
+    "--sort",
+    "cpu",
+    "--reason",
+    "process check",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    host: "montreal-1",
+    limit: 25,
+    sort: "cpu",
+    reason: "process check",
+  });
+});
+
+test("admin host net forwards network snapshot options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        net: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-host-6", snapshot: {} };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "net",
+    "montreal-1",
+    "--limit",
+    "80",
+    "--reason",
+    "socket check",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    host: "montreal-1",
+    limit: 80,
+    reason: "socket check",
+  });
+});
+
+test("admin host filesystem forwards filesystem snapshot options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        filesystem: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-host-7", snapshot: {} };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "filesystem",
+    "montreal-1",
+    "--reason",
+    "disk check",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    host: "montreal-1",
+    reason: "disk check",
+  });
+});
+
+test("admin host podman forwards podman snapshot options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        podman: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-host-8", snapshot: {} };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "podman",
+    "montreal-1",
+    "--limit",
+    "12",
+    "--reason",
+    "podman check",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    host: "montreal-1",
+    limit: 12,
+    reason: "podman check",
+  });
+});
+
 test("admin db lro forwards diagnostic filters", async () => {
   let capturedArgs: any;
   const program = new Command();
