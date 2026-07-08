@@ -268,8 +268,8 @@ async function loadProjectCounts(
   const { rows } = await pool().query(
     `SELECT
        count(*)::int AS total,
-       count(*) FILTER (WHERE state='running')::int AS running,
-       count(*) FILTER (WHERE state='stopped')::int AS stopped,
+       count(*) FILTER (WHERE COALESCE(state->>'state', '')='running')::int AS running,
+       count(*) FILTER (WHERE COALESCE(state->>'state', '')='stopped')::int AS stopped,
        count(*) FILTER (WHERE provisioned IS TRUE)::int AS provisioned,
        count(*) FILTER (WHERE provisioned IS NOT TRUE)::int AS not_provisioned
      FROM projects
