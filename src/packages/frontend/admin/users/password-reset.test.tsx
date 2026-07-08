@@ -12,19 +12,21 @@ const mockRunFreshAuthAction = jest.fn(async (action: () => Promise<void>) => {
 
 jest.mock("antd", () => ({
   Alert: ({ message }: any) => <div>{message}</div>,
+  Button: ({ children, icon, onClick, disabled }: any) => (
+    <button type="button" disabled={disabled} onClick={onClick}>
+      {icon}
+      {children}
+    </button>
+  ),
   Popconfirm: ({ children, onConfirm }: any) => {
     const React = require("react");
     return React.cloneElement(children, { onClick: onConfirm });
   },
   Space: ({ children }: any) => <div>{children}</div>,
-}));
-
-jest.mock("@cocalc/frontend/antd-bootstrap", () => ({
-  Button: ({ children, onClick, disabled }: any) => (
-    <button type="button" disabled={disabled} onClick={onClick}>
-      {children}
-    </button>
-  ),
+  Tag: ({ children }: any) => <span>{children}</span>,
+  Typography: {
+    Title: ({ children }: any) => <div>{children}</div>,
+  },
 }));
 
 jest.mock("@cocalc/frontend/components", () => ({
@@ -140,6 +142,42 @@ describe("PasswordReset profile actions", () => {
       });
     });
     expect(screen.getByText("ada@example.com is now verified.")).toBeTruthy();
+    expect(screen.getByText("Verified")).toBeTruthy();
+  });
+
+  it("shows the current email verification status", () => {
+    render(
+      <PasswordReset
+        account_id="acct-1"
+        email_address="ada@example.com"
+        email_address_verified={false}
+      />,
+    );
+
+    expect(screen.getByText("Not verified")).toBeTruthy();
+    expect(screen.getByText("Admin-verify email address")).toBeEnabled();
+  });
+
+  it("does not treat unknown email verification status as unverified", () => {
+    render(
+      <PasswordReset account_id="acct-1" email_address="ada@example.com" />,
+    );
+
+    expect(screen.getByText("Verification status unknown")).toBeTruthy();
+    expect(screen.getByText("Admin-verify email address")).toBeEnabled();
+  });
+
+  it("disables admin email verification when the address is already verified", () => {
+    render(
+      <PasswordReset
+        account_id="acct-1"
+        email_address="ada@example.com"
+        email_address_verified={true}
+      />,
+    );
+
+    expect(screen.getByText("Verified")).toBeTruthy();
+    expect(screen.getByText("Admin-verify email address")).toBeDisabled();
   });
 
   it("fresh-auth wraps admin two-factor removal", async () => {

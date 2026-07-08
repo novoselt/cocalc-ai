@@ -1,5 +1,4 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { UserResult } from "./user";
 
 jest.mock("@cocalc/frontend/components", () => ({
   Icon: () => null,
@@ -42,7 +41,12 @@ jest.mock("./impersonate", () => ({
 }));
 
 jest.mock("./password-reset", () => ({
-  PasswordReset: () => null,
+  PasswordReset: ({ email_address_verified }: any) => (
+    <div>
+      password-reset-email-status:
+      {email_address_verified == null ? "unknown" : `${email_address_verified}`}
+    </div>
+  ),
 }));
 
 jest.mock("./admin-role", () => ({
@@ -86,6 +90,8 @@ jest.mock("@cocalc/frontend/purchases/managed-egress-history", () => ({
     <div>{`top-projects-summary:${user_account_id}`}</div>
   ),
 }));
+
+const { UserResult } = require("./user");
 
 describe("UserResult egress entry points", () => {
   it("shows direct egress history and expandable egress details", () => {
@@ -149,5 +155,50 @@ describe("UserResult egress entry points", () => {
     fireEvent.click(screen.getByText(/Grace Hopper/));
     fireEvent.click(screen.getByText("Profile"));
     expect(screen.getByText("admin-role-current")).toBeTruthy();
+  });
+
+  it("passes email verification status to profile actions", () => {
+    render(
+      <UserResult
+        first_name="Ada"
+        last_name="Lovelace"
+        email_address="ada@example.com"
+        email_address_verified={true}
+        account_id="acct-1"
+        banned={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(/Ada Lovelace/));
+    fireEvent.click(screen.getByText("Profile"));
+
+    expect(screen.getByText("password-reset-email-status:true")).toBeTruthy();
+  });
+
+  it("opens at most one expandable admin section", () => {
+    render(
+      <UserResult
+        first_name="Ada"
+        last_name="Lovelace"
+        email_address="ada@example.com"
+        account_id="acct-1"
+        banned={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(/Ada Lovelace/));
+    fireEvent.click(screen.getByText("Profile"));
+    expect(
+      screen.getByText("password-reset-email-status:unknown"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Egress"));
+    expect(
+      screen.queryByText("password-reset-email-status:unknown"),
+    ).toBeNull();
+    expect(screen.getByText("recent-egress-summary:acct-1")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Egress"));
+    expect(screen.queryByText("recent-egress-summary:acct-1")).toBeNull();
   });
 });

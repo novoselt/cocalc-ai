@@ -2,6 +2,7 @@
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import CloudflareConfigWizard from "./cloudflare-config-wizard";
+import { webapp_client } from "@cocalc/frontend/webapp-client";
 
 jest.mock(
   "./assets/cloudflare-api-token.png",
@@ -16,17 +17,13 @@ jest.mock("@cocalc/frontend/components", () => ({
   Icon: () => null,
 }));
 
-jest.mock("@cocalc/frontend/editors/slate/static-markdown", () => ({
-  __esModule: true,
-  default: ({ value }) => <div>{value}</div>,
-}));
-
 jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
     conat_client: {
       hub: {
         system: {
           testR2Credentials: jest.fn(),
+          testCloudflareVisitorLocationHeaders: jest.fn(),
         },
       },
     },
@@ -59,34 +56,96 @@ describe("CloudflareConfigWizard", () => {
     (window.getComputedStyle as jest.Mock).mockRestore();
   });
 
-  it("explains that visitor-header checks use the current running server config", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("explains that diagnostics use saved settings", () => {
     render(
       <CloudflareConfigWizard
         open
         onClose={() => {}}
-        data={baseData}
+        data={{ ...baseData, r2_bucket_prefix: "cocalc" }}
         isSet={{ project_hosts_cloudflare_tunnel_api_token: true }}
         onApply={() => {}}
       />,
     );
 
-    expect(
-      screen.getByText("Step 8 - Post-save diagnostics"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Step 8 - Diagnostics")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "These tests use the saved, currently running configuration.",
+        "Settings saved. Test visitor location headers and R2 backup credentials.",
       ),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: "Test Current Visitor Location Headers",
+        name: "Test Visitor Location Headers",
       }),
     ).toBeEnabled();
+    const buttons = screen
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+    expect(buttons.indexOf("Test Visitor Location Headers")).toBeLessThan(
+      buttons.indexOf("Test R2 Backup Credentials"),
+    );
+  });
+
+  it("disables apply when there are no draft changes", () => {
+    render(
+      <CloudflareConfigWizard
+        open
+        onClose={() => {}}
+        data={{
+          ...baseData,
+          r2_access_key_id: "r2-access-key",
+          r2_bucket_prefix: "cocalc",
+        }}
+        isSet={{
+          project_hosts_cloudflare_tunnel_api_token: true,
+          r2_api_token: true,
+          r2_secret_access_key: true,
+        }}
+        onApply={() => {}}
+      />,
+    );
+
     expect(
-      screen.getAllByText(/cloudflared has successfully set up the tunnel/i)
-        .length,
-    ).toBeGreaterThanOrEqual(1);
+      screen.getByRole("button", { name: "Apply Settings" }),
+    ).toBeDisabled();
+  });
+
+  it("enables apply when an existing install needs the default R2 bucket prefix saved", async () => {
+    const onApply = jest.fn(async () => {});
+    render(
+      <CloudflareConfigWizard
+        open
+        onClose={() => {}}
+        data={{
+          ...baseData,
+          r2_access_key_id: "r2-access-key",
+          r2_bucket_prefix: "",
+        }}
+        isSet={{
+          project_hosts_cloudflare_tunnel_api_token: true,
+          r2_api_token: true,
+          r2_secret_access_key: true,
+        }}
+        onApply={onApply}
+      />,
+    );
+
+    const apply = screen.getByRole("button", { name: "Apply Settings" });
+    expect(apply).toBeEnabled();
+
+    await act(async () => {
+      fireEvent.click(apply);
+    });
+
+    expect(onApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        r2_bucket_prefix: "cocalc",
+      }),
+    );
   });
 
   it("disables the visitor-header check while Cloudflare runtime changes are only in draft", () => {
@@ -94,7 +153,7 @@ describe("CloudflareConfigWizard", () => {
       <CloudflareConfigWizard
         open
         onClose={() => {}}
-        data={baseData}
+        data={{ ...baseData, r2_bucket_prefix: "cocalc" }}
         isSet={{ project_hosts_cloudflare_tunnel_api_token: true }}
         onApply={() => {}}
       />,
@@ -106,22 +165,26 @@ describe("CloudflareConfigWizard", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Test Current Visitor Location Headers",
+        name: "Test Visitor Location Headers",
       }),
     ).toBeDisabled();
     expect(
-      screen.getByText(
+      screen.queryByText(
         "Save and apply Cloudflare tunnel settings before testing visitor headers.",
       ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Apply settings before testing."),
     ).toBeInTheDocument();
   });
 
   it("saves the external domain as the canonical public DNS setting", async () => {
     const onApply = jest.fn(async () => {});
+    const onClose = jest.fn();
     render(
       <CloudflareConfigWizard
         open
-        onClose={() => {}}
+        onClose={onClose}
         data={baseData}
         isSet={{
           project_hosts_cloudflare_tunnel_api_token: true,
@@ -143,6 +206,57 @@ describe("CloudflareConfigWizard", () => {
       expect.objectContaining({
         dns: "cocalc.example.edu",
       }),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "Settings applied and saved. You can now run diagnostics.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("tests visitor location headers through the saved public domain diagnostic", async () => {
+    const testLocationHeaders = webapp_client.conat_client.hub.system
+      .testCloudflareVisitorLocationHeaders as jest.Mock;
+    testLocationHeaders.mockResolvedValue({
+      ok: true,
+      url: "https://cocalc.example.edu/customize",
+      missing: [],
+      details: {
+        country: "US",
+        region: "California",
+        regionCode: "CA",
+        city: "San Francisco",
+        continent: "NA",
+        timezone: "America/Los_Angeles",
+        latitude: "37.7749",
+        longitude: "-122.4194",
+      },
+    });
+    render(
+      <CloudflareConfigWizard
+        open
+        onClose={() => {}}
+        data={{ ...baseData, r2_bucket_prefix: "cocalc" }}
+        isSet={{ project_hosts_cloudflare_tunnel_api_token: true }}
+        onApply={() => {}}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Test Visitor Location Headers",
+        }),
+      );
+    });
+
+    expect(testLocationHeaders).toHaveBeenCalledWith({});
+    expect(
+      screen.getByText("Public domain location headers are present"),
+    ).toBeInTheDocument();
+    expect(document.body).toHaveTextContent(
+      "https://cocalc.example.edu/customize",
     );
   });
 });

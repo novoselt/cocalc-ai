@@ -3,10 +3,10 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Alert, Popconfirm, Space } from "antd";
+import type { ReactNode } from "react";
+import { Alert, Button, Popconfirm, Space, Tag, Typography } from "antd";
 
 import { useState } from "@cocalc/frontend/app-framework";
-import { Button } from "@cocalc/frontend/antd-bootstrap";
 import {
   CopyToClipBoard,
   Icon,
@@ -19,15 +19,42 @@ import {
 import { webapp_client } from "../../webapp-client";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 
+const { Title } = Typography;
+
 interface Props {
   account_id: string;
   email_address: string;
+  email_address_verified?: boolean;
 }
 
-export function PasswordReset({ account_id, email_address }: Props) {
+function ProfileActionSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <Space vertical>
+      <Title level={5} style={{ margin: 0 }}>
+        {title}
+      </Title>
+      {children}
+    </Space>
+  );
+}
+
+export function PasswordReset({
+  account_id,
+  email_address,
+  email_address_verified,
+}: Props) {
   const [error, setError] = useState<string | undefined>(undefined);
   const [running, setRunning] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [emailVerified, setEmailVerified] = useState<boolean | undefined>(
+    email_address_verified,
+  );
   const [disablingTwoFactor, setDisablingTwoFactor] = useState(false);
   const [link, setLink] = useState<string | undefined>(undefined);
   const [verifyMessage, setVerifyMessage] = useState<string | undefined>(
@@ -79,6 +106,7 @@ export function PasswordReset({ account_id, email_address }: Props) {
             ? `${result.email_address} was already verified.`
             : `${result.email_address} is now verified.`,
         );
+        setEmailVerified(true);
       });
     } catch (err) {
       setError(`${err}`);
@@ -119,7 +147,6 @@ export function PasswordReset({ account_id, email_address }: Props) {
     }
     return (
       <ErrorDisplay
-        style={{ margin: "15px 0" }}
         error={error}
         onClose={() => {
           setError(undefined);
@@ -128,28 +155,109 @@ export function PasswordReset({ account_id, email_address }: Props) {
     );
   }
 
-  function renderPasswordResetLink() {
-    if (!link) return;
+  function renderPasswordResetSection() {
     return (
-      <div style={{ marginTop: "15px" }}>
-        Send this somehow to{" "}
-        <a
-          href={`mailto:${email_address}`}
-          target="_blank"
-          rel="noopener noreferrer"
+      <ProfileActionSection title="Password Reset">
+        {email_address ? (
+          <>
+            <Button
+              disabled={running}
+              icon={
+                <Icon name={running ? "sync" : "lock-open"} spin={running} />
+              }
+              onClick={() => {
+                void requestPasswordReset();
+              }}
+            >
+              Request Password Reset Link...
+            </Button>
+            {link && (
+              <Space wrap>
+                Send <CopyToClipBoard value={link} /> to{" "}
+                <CopyToClipBoard value={email_address} />
+              </Space>
+            )}
+          </>
+        ) : (
+          "User does not have an email address set, so password reset does not make sense."
+        )}
+      </ProfileActionSection>
+    );
+  }
+
+  function renderEmailVerificationSection() {
+    const emailVerificationLabel =
+      emailVerified == null
+        ? "Verification status unknown"
+        : emailVerified
+          ? "Verified"
+          : "Not verified";
+    return (
+      <ProfileActionSection title="Email Verification">
+        {email_address ? (
+          <Space>
+            <Tag
+              color={
+                emailVerified == null
+                  ? undefined
+                  : emailVerified
+                    ? "green"
+                    : "orange"
+              }
+            >
+              {emailVerificationLabel}
+            </Tag>
+            <Button
+              disabled={verifying || emailVerified === true}
+              icon={
+                <Icon name={verifying ? "sync" : "check"} spin={verifying} />
+              }
+              onClick={() => {
+                void verifyEmailAddress();
+              }}
+            >
+              Admin-verify email address
+            </Button>
+          </Space>
+        ) : (
+          "User does not have an email address set, so email verification does not make sense."
+        )}
+      </ProfileActionSection>
+    );
+  }
+
+  function renderTwoFactorRecoverySection() {
+    return (
+      <ProfileActionSection title="Two-Factor Authentication Recovery">
+        <Popconfirm
+          title="Remove all 2FA methods for this account?"
+          description="Only do this after independently verifying the user's identity."
+          okText="Remove 2FA"
+          okButtonProps={{ danger: true }}
+          disabled={disablingTwoFactor}
+          onConfirm={() => {
+            void disableTwoFactor();
+          }}
         >
-          {email_address}
-        </a>
-        .
-        <div style={{ marginTop: "10px" }}>
-          <CopyToClipBoard value={link} />
-        </div>
-      </div>
+          <Button
+            danger
+            disabled={disablingTwoFactor}
+            icon={
+              <Icon
+                name={disablingTwoFactor ? "sync" : "lock-open"}
+                spin={disablingTwoFactor}
+              />
+            }
+          >
+            Remove 2FA from account...
+          </Button>
+        </Popconfirm>
+      </ProfileActionSection>
     );
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="large" style={{ width: "100%" }}>
       {renderError()}
       {verifyMessage ? (
         <Alert type="success" showIcon message={verifyMessage} />
@@ -157,74 +265,9 @@ export function PasswordReset({ account_id, email_address }: Props) {
       {twoFactorMessage ? (
         <Alert type="success" showIcon message={twoFactorMessage} />
       ) : undefined}
-      <div>
-        <b>Password Reset:</b>
-        {email_address ? (
-          <>
-            <div style={{ marginTop: "10px" }}>
-              <Button
-                disabled={running}
-                onClick={() => {
-                  void requestPasswordReset();
-                }}
-              >
-                <Icon name={running ? "sync" : "lock-open"} spin={running} />{" "}
-                Request Password Reset Link...
-              </Button>
-            </div>
-            {renderPasswordResetLink()}
-          </>
-        ) : (
-          <div style={{ marginTop: "10px" }}>
-            User does not have an email address set, so password reset does not
-            make sense.
-          </div>
-        )}
-      </div>
-      <div>
-        <b>Email Verification:</b>
-        {email_address ? (
-          <div style={{ marginTop: "10px" }}>
-            <Button
-              disabled={verifying}
-              onClick={() => {
-                void verifyEmailAddress();
-              }}
-            >
-              <Icon name={verifying ? "sync" : "check"} spin={verifying} />{" "}
-              Admin-verify email address
-            </Button>
-          </div>
-        ) : (
-          <div style={{ marginTop: "10px" }}>
-            User does not have an email address set, so email verification does
-            not make sense.
-          </div>
-        )}
-      </div>
-      <div>
-        <b>Two-Factor Authentication Recovery:</b>
-        <div style={{ marginTop: "10px" }}>
-          <Popconfirm
-            title="Remove all 2FA methods for this account?"
-            description="Only do this after independently verifying the user's identity."
-            okText="Remove 2FA"
-            okButtonProps={{ danger: true }}
-            disabled={disablingTwoFactor}
-            onConfirm={() => {
-              void disableTwoFactor();
-            }}
-          >
-            <Button bsStyle="danger" disabled={disablingTwoFactor}>
-              <Icon
-                name={disablingTwoFactor ? "sync" : "lock-open"}
-                spin={disablingTwoFactor}
-              />{" "}
-              Remove 2FA from account...
-            </Button>
-          </Popconfirm>
-        </div>
-      </div>
+      {renderPasswordResetSection()}
+      {renderEmailVerificationSection()}
+      {renderTwoFactorRecoverySection()}
       <FreshAuthModal {...freshAuthModalProps} />
     </Space>
   );
