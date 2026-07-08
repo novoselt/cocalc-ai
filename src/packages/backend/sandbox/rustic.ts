@@ -198,11 +198,16 @@ export default async function rustic(
       return await runWithTomlInitFallback([...options, snapshot, destination]);
     }
     case "forget": {
-      if (args.length == 2 && !args[1].startsWith("-")) {
-        // delete exactly id
-        const snapshot = args[1];
-        await assertValidSnapshot({ snapshot, host, repo });
-        return await runWithTomlInitFallback([snapshot]);
+      const snapshots = args.slice(1);
+      if (
+        snapshots.length > 0 &&
+        snapshots.every((arg) => !arg.startsWith("-"))
+      ) {
+        // Delete one or more exact snapshot ids.
+        for (const snapshot of snapshots) {
+          await assertValidSnapshot({ snapshot, host, repo });
+        }
+        return await runWithTomlInitFallback(snapshots);
       }
       // delete several defined by rules.
       const options = parseAndValidateOptions(args.slice(1), whitelist.forget);

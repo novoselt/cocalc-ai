@@ -40,6 +40,10 @@ function fail(stderr: string): ExecOutput {
   };
 }
 
+function snapshotsJson(...snapshots: any[]): string {
+  return JSON.stringify([{ snapshots }]);
+}
+
 describe("rustic TOML fast path", () => {
   beforeEach(() => {
     execMock.mockReset();
@@ -90,6 +94,42 @@ describe("rustic TOML fast path", () => {
       "--json",
       "--filter-host",
       "project-1",
+    ]);
+  });
+
+  test("forget accepts multiple exact snapshot ids", async () => {
+    const snapshot1 =
+      "1111111111111111111111111111111111111111111111111111111111111111";
+    const snapshot2 =
+      "2222222222222222222222222222222222222222222222222222222222222222";
+    execMock
+      .mockResolvedValueOnce(
+        ok(snapshotsJson({ id: snapshot1, hostname: "project-1" })),
+      )
+      .mockResolvedValueOnce(
+        ok(snapshotsJson({ id: snapshot2, hostname: "project-1" })),
+      )
+      .mockResolvedValueOnce(ok(""));
+
+    await rustic(["forget", snapshot1, snapshot2], {
+      repo: "/tmp/project-repo-forget.toml",
+      host: "project-1",
+      nice: 15,
+    });
+
+    expect(execMock).toHaveBeenCalledTimes(3);
+    expect(execMock.mock.calls[2][0].cmd).toBe("/usr/bin/nice");
+    expect(execMock.mock.calls[2][0].prefixArgs).toEqual([
+      "-n",
+      "15",
+      "/mock/rustic",
+    ]);
+    expect(execMock.mock.calls[2][0].safety).toEqual([
+      "-P",
+      "/tmp/project-repo-forget",
+      "forget",
+      snapshot1,
+      snapshot2,
     ]);
   });
 
