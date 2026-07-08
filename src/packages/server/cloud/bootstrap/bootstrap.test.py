@@ -1365,6 +1365,18 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "doctor()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "project-host app",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "project-host host-agent",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "cannot re-exec process to join the existing user namespace",
                 rootctl.read_text(encoding="utf-8"),
             )

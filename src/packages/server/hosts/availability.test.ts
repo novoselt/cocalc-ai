@@ -3,7 +3,7 @@
  *  License: MS-RSL - see LICENSE.md for details
  */
 
-import { classifyHostAvailabilitySnapshot } from "./availability";
+import { _test, classifyHostAvailabilitySnapshot } from "./availability";
 
 describe("classifyHostAvailabilitySnapshot", () => {
   it("treats a healthy standard fallback host as online", () => {
@@ -56,5 +56,39 @@ describe("classifyHostAvailabilitySnapshot", () => {
 
     expect(observation.state).toBe("recovering");
     expect(observation.category).toBe("spot_interruption");
+  });
+
+  it("treats a running host with stale heartbeats as unavailable", () => {
+    const observation = classifyHostAvailabilitySnapshot({
+      id: "12869982-da11-495e-9914-ee784ee8d5a8",
+      status: "running",
+      last_seen: new Date(Date.now() - 11 * 60_000).toISOString(),
+      metadata: {
+        desired_state: "running",
+      },
+    });
+
+    expect(observation.state).toBe("unavailable");
+    expect(observation.planned).toBe(false);
+    expect(observation.category).toBe("host_stale");
+    expect(observation.summary).toBe(
+      "Host is running at the provider but not reporting.",
+    );
+  });
+
+  it("formats running-but-stale host alert bodies", () => {
+    expect(_test.formatStaleDuration(125 * 60_000)).toBe("2h5m");
+    expect(
+      _test.formatRunningStaleHostAlertBody([
+        {
+          id: "12869982-da11-495e-9914-ee784ee8d5a8",
+          status: "running",
+          stale_ms: 6 * 60_000,
+          metadata: { name: "montreal-1" },
+          public_url:
+            "https://host-12869982-da11-495e-9914-ee784ee8d5a8.cocalc.ai",
+        },
+      ]),
+    ).toContain("montreal-1");
   });
 });

@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260708-v1"
+HELPER_SCHEMA_VERSION = "20260708-v2"
 RUNTIME_WRAPPER_VERSION = "20260505-v9"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -3887,8 +3887,11 @@ case "${cmd}" in
       exit 1
     fi
     ;;
+  doctor)
+    exec sudo -n "${rootctl}" doctor "$@"
+    ;;
   *)
-    echo "usage: ${0} {start|stop|restart|ensure|status}" >&2
+    echo "usage: ${0} {start|stop|restart|ensure|status|doctor}" >&2
     exit 2
     ;;
 esac
@@ -4434,6 +4437,56 @@ capture_forensics() {
   exit "${status}"
 }
 
+doctor_pid_status() {
+  local label="$1" file="$2" pid=""
+  pid="$(read_pid_file "${file}" || true)"
+  if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+    printf '%s: running pid=%s\n' "${label}" "${pid}"
+    return 0
+  fi
+  if [ -n "${pid}" ]; then
+    printf '%s: stale pid=%s file=%s\n' "${label}" "${pid}" "${file}"
+  else
+    printf '%s: missing file=%s\n' "${label}" "${file}"
+  fi
+  return 1
+}
+
+doctor() {
+  local status=0 runtime_dir cgroup_manager output
+  printf 'helper_schema_version: %s\n' "${HELPER_SCHEMA_VERSION}"
+  printf 'runtime_user: %s uid=%s gid=%s\n' "${RUNTIME_USER}" "$(runtime_uid)" "$(runtime_gid)"
+  if mountpoint -q /mnt/cocalc; then
+    printf 'mount /mnt/cocalc: mounted\n'
+  else
+    printf 'mount /mnt/cocalc: not-mounted\n'
+    status=1
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet "user@$(runtime_uid).service"; then
+      printf 'user@%s.service: active\n' "$(runtime_uid)"
+    else
+      printf 'user@%s.service: inactive\n' "$(runtime_uid)"
+      status=1
+    fi
+  fi
+  doctor_pid_status "project-host app" "${PID_FILE}" || status=1
+  doctor_pid_status "project-host host-agent" "${HOST_AGENT_PID_FILE}" || status=1
+  runtime_dir="$(podman_runtime_dir)"
+  cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
+  if [ -z "${cgroup_manager}" ]; then
+    cgroup_manager="cgroupfs"
+  fi
+  printf 'podman_runtime_dir: %s\n' "${runtime_dir}"
+  output="$(podman_info_once "${runtime_dir}" "${cgroup_manager}" 2>&1)" || {
+    printf 'podman info: failed\n%s\n' "${output}"
+    status=1
+    return "${status}"
+  }
+  printf 'podman info: ok\n'
+  return "${status}"
+}
+
 case "${cmd}" in
   start|ensure)
     repair_runtime_environment
@@ -4488,8 +4541,11 @@ case "${cmd}" in
       exit 1
     fi
     ;;
+  doctor)
+    doctor
+    ;;
   *)
-    echo "usage: ${0} {start|stop|restart|ensure|status|protect|capture-forensics|apply-sysctls|noop}" >&2
+    echo "usage: ${0} {start|stop|restart|ensure|status|doctor|protect|capture-forensics|apply-sysctls|noop}" >&2
     exit 2
     ;;
 esac
