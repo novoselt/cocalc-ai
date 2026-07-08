@@ -1,0 +1,169 @@
+{
+  "id": "cocalc/sagemath-full",
+  "version": 1,
+  "description": "Build SageMath from source with Sage/Python Jupyter kernels and a best-effort set of optional Sage packages.",
+  "timeout": 172800,
+  "inputs": {
+    "method": { "type": "string", "default": "source" },
+    "version": { "type": "string", "default": "10.9" },
+    "source_url": {
+      "type": "string",
+      "default": "https://github.com/sagemath/sage.git"
+    },
+    "build_dir": { "type": "string", "default": "/tmp/cocalc-sagemath-build" },
+    "jobs": { "type": "string", "default": "auto" },
+    "clean_build_dir": { "type": "string", "default": "true" },
+    "install_recommended_apt_packages": { "type": "string", "default": "true" },
+    "install_sagetex": { "type": "string", "default": "true" },
+    "priority_optional_packages": {
+      "type": "array",
+      "default": ["normaliz", "pynormaliz"]
+    },
+    "optional_packages": {
+      "type": "array",
+      "default": [
+        "4ti2",
+        "admcycles",
+        "benzene",
+        "biopython",
+        "bliss",
+        "buckygen",
+        "coxeter3",
+        "csdp",
+        "cunningham_tables",
+        "d3js",
+        "database_cremona_ellcurve",
+        "database_cubic_hecke",
+        "database_jones_numfield",
+        "database_knotinfo",
+        "database_kohel",
+        "database_mutation_class",
+        "database_odlyzko_zeta",
+        "database_symbolic_data",
+        "debugpy",
+        "dot2tex",
+        "dsdp",
+        "e_antic",
+        "ecos_python",
+        "fricas",
+        "frobby",
+        "gap_jupyter",
+        "gap_packages",
+        "gitpython",
+        "igraph",
+        "ipympl",
+        "jupyterlab",
+        "kenzo",
+        "kissat",
+        "libnauty",
+        "libogg",
+        "libsemigroups",
+        "lrslib",
+        "mathics",
+        "mcqd",
+        "meataxe",
+        "mpfrcx",
+        "msolve",
+        "nibabel",
+        "notedown",
+        "onetbb",
+        "osqp_python",
+        "papilo",
+        "pari_elldata",
+        "pari_galpol",
+        "pari_nftables",
+        "pari_seadata",
+        "perl_term_readline_gnu",
+        "phitigra",
+        "plantri",
+        "pybtex",
+        "pycosat",
+        "pycryptosat",
+        "pysingular",
+        "pytest",
+        "pytest_mock",
+        "python_build",
+        "python_igraph",
+        "pyx",
+        "qdldl_python",
+        "rubiks",
+        "saclib",
+        "sage_sws2rst",
+        "scip",
+        "scip_sdp",
+        "singular_jupyter",
+        "sirocco",
+        "slabbe",
+        "soplex",
+        "sqlalchemy",
+        "tdlib",
+        "texlive",
+        "texttable",
+        "topcom"
+      ]
+    },
+    "x86_64_optional_packages": {
+      "type": "array",
+      "default": ["cbc", "glucose", "latte_int", "lidia", "snappy", "tides"]
+    },
+    "optional_manifest": {
+      "type": "string",
+      "default": "/opt/cocalc-sagemath-full/optional-packages.json"
+    },
+    "optional_log_dir": {
+      "type": "string",
+      "default": "/opt/cocalc-sagemath-full/logs"
+    },
+    "packages": {
+      "type": "array",
+      "default": ["sagemath", "sagemath-jupyter"]
+    },
+    "prefix": { "type": "string", "default": "/usr/local/sage" },
+    "micromamba_prefix": { "type": "string", "default": "/opt/micromamba" },
+    "conda_packages": { "type": "array", "default": ["sage"] },
+    "owner_uid": { "type": "string", "default": "2001" },
+    "owner_gid": { "type": "string", "default": "2001" }
+  },
+  "run": { "shell": "bash", "script": "../sagemath/install.sh" },
+  "verify": { "shell": "bash", "script": "verify.sh" },
+  "contributes": {
+    "metadata": {
+      "family": "sagemath",
+      "default_jupyter_kernel": "sagemath",
+      "tags": ["sagemath", "math", "jupyter", "optional-packages", "normaliz"]
+    },
+    "theme": {
+      "icon": "calculator",
+      "color": "#ffffff",
+      "accent_color": "#0f766e"
+    },
+    "content": {
+      "version": 1,
+      "title": "SageMath Full",
+      "subtitle": "SageMath built from source with a best-effort collection of optional Sage packages.",
+      "highlights": [
+        "SageMath 10.9",
+        "Sage and Python Jupyter kernels",
+        "Best-effort optional Sage packages",
+        "Normaliz and PyNormaliz smoke tests"
+      ],
+      "actions": [
+        {
+          "kind": "external-link",
+          "label": "SageMath optional packages",
+          "url": "https://doc.sagemath.org/html/en/reference/spkg/#optional-packages"
+        },
+        {
+          "kind": "open-file",
+          "label": "Open optional package manifest",
+          "path": "/opt/cocalc-sagemath-full/optional-packages.json"
+        },
+        {
+          "kind": "browse",
+          "label": "Browse optional package logs",
+          "path": "/opt/cocalc-sagemath-full/logs"
+        }
+      ]
+    }
+  }
+}

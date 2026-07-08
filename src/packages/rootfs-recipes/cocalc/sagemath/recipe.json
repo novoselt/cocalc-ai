@@ -15,6 +15,17 @@
     "clean_build_dir": { "type": "string", "default": "true" },
     "install_recommended_apt_packages": { "type": "string", "default": "true" },
     "install_sagetex": { "type": "string", "default": "true" },
+    "priority_optional_packages": { "type": "array", "default": [] },
+    "optional_packages": { "type": "array", "default": [] },
+    "x86_64_optional_packages": { "type": "array", "default": [] },
+    "optional_manifest": {
+      "type": "string",
+      "default": "/opt/cocalc-sagemath-full/optional-packages.json"
+    },
+    "optional_log_dir": {
+      "type": "string",
+      "default": "/opt/cocalc-sagemath-full/logs"
+    },
     "packages": {
       "type": "array",
       "default": ["sagemath", "sagemath-jupyter"]

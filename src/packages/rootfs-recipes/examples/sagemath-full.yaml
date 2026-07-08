@@ -1,0 +1,45 @@
+version: 1
+name: sagemath-full
+
+builder:
+  run_quota:
+    disk_quota: 90000
+
+steps:
+  - uses: cocalc/sagemath-full
+    with:
+      method: source
+      version: "10.9"
+      prefix: /usr/local/sage
+      jobs: auto
+    timeout: 172800
+
+verify:
+  - command -v sage
+  - command -v python
+  - command -v pip
+  - command -v jupyter
+  - sage --version
+  - sage -c 'from sage.all import ZZ; assert ZZ(2) + ZZ(2) == 4'
+  - python -c 'from sage.all import ZZ; assert ZZ(19).is_prime()'
+  - jupyter kernelspec list | grep -qi sagemath
+  - jupyter kernelspec list | grep -q python3
+  - test -s /opt/cocalc-sagemath-full/optional-packages.json
+  - sage -python -c 'import PyNormaliz'
+  - sage -c 'from sage.geometry.polyhedron.constructor import Polyhedron; P = Polyhedron(vertices=[(0,0),(1,0),(0,1)], backend="normaliz"); assert P.n_vertices() == 3'
+
+publish:
+  label: SageMath Full
+  slug: sagemath-full
+  description: SageMath built from source with Sage Python, Sage/Python Jupyter kernels, and a best-effort collection of optional Sage packages including Normaliz/PyNormaliz verification.
+  family: sagemath
+  version: "10.9-full"
+  channel: stable
+  default_jupyter_kernel: sagemath
+  visibility: public
+  tags:
+    - sagemath
+    - math
+    - jupyter
+    - optional-packages
+    - normaliz

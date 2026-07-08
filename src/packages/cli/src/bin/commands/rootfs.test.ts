@@ -732,6 +732,7 @@ test("rootfs recipe ls lists bundled examples and modules", () => {
   assert.ok(result.examples.some((recipe) => recipe.name === "cocalc-base"));
   assert.ok(result.examples.some((recipe) => recipe.name === "code-server"));
   assert.ok(result.examples.some((recipe) => recipe.name === "ml-pytorch-gpu"));
+  assert.ok(result.examples.some((recipe) => recipe.name === "sagemath-full"));
   assert.ok(result.examples.some((recipe) => recipe.name === "webdev"));
   assert.ok(
     result.modules.some((module) => module.id === "cocalc/code-server"),
@@ -740,6 +741,9 @@ test("rootfs recipe ls lists bundled examples and modules", () => {
     result.modules.some((module) => module.id === "cocalc/jupyter-python"),
   );
   assert.ok(result.modules.some((module) => module.id === "cocalc/latex"));
+  assert.ok(
+    result.modules.some((module) => module.id === "cocalc/sagemath-full"),
+  );
   assert.ok(result.modules.some((module) => module.id === "cocalc/webdev"));
   assert.ok(result.modules.some((module) => module.id === "cocalc/apt"));
 });
@@ -748,6 +752,7 @@ test("rootfs recipe ls parses embedded bundled examples", () => {
   const result = listRootfsRecipes();
   assert.ok(result.examples.some((recipe) => recipe.name === "cocalc-base"));
   assert.ok(result.examples.some((recipe) => recipe.name === "webdev"));
+  assert.ok(result.examples.some((recipe) => recipe.name === "sagemath-full"));
   assert.ok(
     result.examples.some((recipe) => recipe.name === "cocalc-cambridge"),
   );
@@ -875,6 +880,53 @@ test("rootfs recipe explain parses bundled webdev recipe", async () => {
   assert.ok(
     harness.captured.steps[0].contributes.content.highlights.includes(
       "System-wide pnpm and yarn",
+    ),
+  );
+});
+
+test("rootfs recipe explain parses bundled sagemath-full recipe", async () => {
+  const harness = rootfsDeps();
+  const program = new Command();
+  registerRootfsCommand(program, harness.deps as any);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "rootfs",
+    "recipe",
+    "explain",
+    "sagemath-full",
+  ]);
+
+  assert.equal(harness.captured.recipe, "sagemath-full");
+  assert.equal(harness.captured.steps[0].uses, "cocalc/sagemath-full");
+  assert.deepEqual(
+    harness.captured.steps[0].inputs.priority_optional_packages,
+    ["normaliz", "pynormaliz"],
+  );
+  assert.equal(harness.captured.publish.slug, "sagemath-full");
+});
+
+test("rootfs recipe explain treats bundled sagemath-full module as a one-step recipe", async () => {
+  const harness = rootfsDeps();
+  const program = new Command();
+  registerRootfsCommand(program, harness.deps as any);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "rootfs",
+    "recipe",
+    "explain",
+    "cocalc/sagemath-full",
+  ]);
+
+  assert.equal(harness.captured.recipe, "cocalc/sagemath-full");
+  assert.equal(harness.captured.steps.length, 1);
+  assert.equal(harness.captured.steps[0].uses, "cocalc/sagemath-full");
+  assert.ok(
+    harness.captured.steps[0].contributes.content.highlights.includes(
+      "Best-effort optional Sage packages",
     ),
   );
 });
@@ -1091,6 +1143,37 @@ test("rootfs recipe run --dry-run prints expanded runnable shell script", async 
   } finally {
     process.stdout.write = oldWrite;
     rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("rootfs recipe run --dry-run expands bundled modules that reuse sibling scripts", async () => {
+  const oldWrite = process.stdout.write;
+  let stdout = "";
+  try {
+    process.stdout.write = ((chunk: any) => {
+      stdout += String(chunk);
+      return true;
+    }) as any;
+    const program = new Command();
+    registerRootfsCommand(program, rootfsDeps().deps as any);
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "rootfs",
+      "recipe",
+      "run",
+      "cocalc/sagemath-full",
+      "--dry-run",
+    ]);
+
+    assert.match(stdout, /# Step 1: cocalc\/sagemath-full/);
+    assert.match(stdout, /PRIORITY_OPTIONAL_PACKAGES='normaliz pynormaliz'/);
+    assert.match(stdout, /Installing best-effort optional Sage packages/);
+    assert.match(stdout, /sage-normaliz-polyhedron/);
+    assert.match(stdout, /# Step 1 verify: cocalc\/sagemath-full/);
+  } finally {
+    process.stdout.write = oldWrite;
   }
 });
 
