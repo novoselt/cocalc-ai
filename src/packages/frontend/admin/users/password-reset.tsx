@@ -52,8 +52,8 @@ export function PasswordReset({
   const [error, setError] = useState<string | undefined>(undefined);
   const [running, setRunning] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  const [emailVerified, setEmailVerified] = useState(
-    email_address_verified === true,
+  const [emailVerified, setEmailVerified] = useState<boolean | undefined>(
+    email_address_verified,
   );
   const [disablingTwoFactor, setDisablingTwoFactor] = useState(false);
   const [link, setLink] = useState<string | undefined>(undefined);
@@ -186,15 +186,29 @@ export function PasswordReset({
   }
 
   function renderEmailVerificationSection() {
+    const emailVerificationLabel =
+      emailVerified == null
+        ? "Verification status unknown"
+        : emailVerified
+          ? "Verified"
+          : "Not verified";
     return (
       <ProfileActionSection title="Email Verification">
         {email_address ? (
           <Space>
-            <Tag color={emailVerified ? "green" : "orange"}>
-              {emailVerified ? "Verified" : "Not verified"}
+            <Tag
+              color={
+                emailVerified == null
+                  ? undefined
+                  : emailVerified
+                    ? "green"
+                    : "orange"
+              }
+            >
+              {emailVerificationLabel}
             </Tag>
             <Button
-              disabled={verifying || emailVerified}
+              disabled={verifying || emailVerified === true}
               icon={
                 <Icon name={verifying ? "sync" : "check"} spin={verifying} />
               }

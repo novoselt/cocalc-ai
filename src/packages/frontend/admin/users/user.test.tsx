@@ -1,5 +1,4 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { UserResult } from "./user";
 
 jest.mock("@cocalc/frontend/components", () => ({
   Icon: () => null,
@@ -80,14 +79,6 @@ jest.mock("./legacy-migration", () => ({
   LegacyMigrationAdmin: () => null,
 }));
 
-jest.mock(
-  "./legacy-migration",
-  () => ({
-    LegacyMigrationAdmin: () => null,
-  }),
-  { virtual: true },
-);
-
 jest.mock("@cocalc/frontend/purchases/managed-egress-history", () => ({
   ManagedEgressHistoryButton: ({ buttonText, user_account_id }: any) => (
     <button>{`${buttonText}:${user_account_id}`}</button>
@@ -99,6 +90,8 @@ jest.mock("@cocalc/frontend/purchases/managed-egress-history", () => ({
     <div>{`top-projects-summary:${user_account_id}`}</div>
   ),
 }));
+
+const { UserResult } = require("./user");
 
 describe("UserResult egress entry points", () => {
   it("shows direct egress history and expandable egress details", () => {

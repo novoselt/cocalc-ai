@@ -312,13 +312,13 @@ export default function CompareFeaturePage({
     subject: "CoCalc fit evaluation",
     title: "Talk with CoCalc about fit",
   });
-  const trustHref = builtinPolicyPath(config, "trust");
-  const nextRoutes = trustHref
+  const hasBuiltinTrustPage = !!builtinPolicyPath(config, "trust");
+  const nextRoutes = hasBuiltinTrustPage
     ? [
         ...NEXT_ROUTES,
         {
           body: "Security and privacy context for evaluating CoCalc.",
-          href: trustHref,
+          href: "policies/trust",
           label: "Review trust and compliance",
           title: "Trust and compliance",
         },

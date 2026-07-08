@@ -158,6 +158,15 @@ describe("PasswordReset profile actions", () => {
     expect(screen.getByText("Admin-verify email address")).toBeEnabled();
   });
 
+  it("does not treat unknown email verification status as unverified", () => {
+    render(
+      <PasswordReset account_id="acct-1" email_address="ada@example.com" />,
+    );
+
+    expect(screen.getByText("Verification status unknown")).toBeTruthy();
+    expect(screen.getByText("Admin-verify email address")).toBeEnabled();
+  });
+
   it("disables admin email verification when the address is already verified", () => {
     render(
       <PasswordReset
