@@ -71,6 +71,10 @@ Curated diagnostics:
 cocalc admin db activity --bay prod-bay-0
 cocalc admin db locks --bay prod-bay-0
 cocalc admin db table-sizes --bay prod-bay-0
+cocalc admin db lro --op-id 8de802d1-8264-4e7a-be11-b4f6dbd686ce
+cocalc admin db host-health --bay prod-bay-0
+cocalc admin db backup-health --project-id 52d00914-04c1-4c7a-83d6-69240c2570f1
+cocalc admin db migration-health --window 2h
 cocalc admin db central-log --event service_admission_denied --window 10m
 cocalc admin db service-denials --window 10m
 ```
@@ -360,10 +364,30 @@ Initial commands:
 - `account`: safe account summary by account id or email.
 - `project`: safe project summary by project id.
 - `host`: safe host summary by host id.
+- `lro`: one operation by op id, or recent operations filtered by kind,
+  status, scope, and time window.
+- `backup-health`: project backup recency, recent backup LROs, backup index
+  status, and hard-delete backup purge backlog.
+- `host-health`: host heartbeat freshness, online/offline interpretation,
+  pressure/action state, assigned/running project counts, and capacity summary.
+- `migration-health`: legacy migration queue/import/restore state, stale
+  restoring operations, and recent failures.
 
 These commands can be implemented as named diagnostics that call the same
 backend executor with checked SQL templates and typed parameters. They should be
 fast, capped, and usable without remembering schema details.
+
+For incident response, the first implementation should prioritize diagnostics
+that directly match recent outage classes:
+
+- LRO lookups, because several investigations needed to prove whether a stream
+  or UI was stale while the durable operation row was already terminal.
+- Backup health, because missing backups are high severity and hard to inspect
+  safely without raw SQL.
+- Host health, because "host offline but VM running" needs a fast, bay-aware
+  check.
+- Migration health, because legacy migration wedging is user-visible and often
+  cross-cuts LROs, project rows, and migration tables.
 
 ## Admin Data Explorer Relationship
 
@@ -450,7 +474,8 @@ Operational tests:
 - Add server-side read-only executor.
 - Add audit table or central-log-backed audit records.
 - Add `cocalc admin db query`.
-- Add `activity`, `locks`, and `table-sizes` diagnostics.
+- Add `activity`, `locks`, `table-sizes`, `lro`, `backup-health`,
+  `host-health`, `project`, and `migration-health` diagnostics.
 
 This phase replaces many SSH read-only investigations.
 
@@ -513,10 +538,17 @@ The smallest useful version is:
 - `cocalc admin db activity`
 - `cocalc admin db locks`
 - `cocalc admin db table-sizes`
-- `cocalc admin db exec --write`, rollback by default
-- `cocalc admin db exec --write --commit`
+- `cocalc admin db lro --op-id ...`
+- `cocalc admin db backup-health [--project-id ...]`
+- `cocalc admin db host-health [--host-id ...]`
+- `cocalc admin db project --project-id ...`
+- `cocalc admin db migration-health`
 - audit records for every operation
 
 That is enough to move routine production database investigation and targeted
-repair from "SSH and cross fingers" to an authenticated, bay-aware, auditable
-operator path.
+read-only triage from "SSH and cross fingers" to an authenticated, bay-aware,
+auditable operator path.
+
+Write mode should follow after Phase 1 is deployed and exercised. It is still
+important, but the read-only path has higher immediate ROI and lower deployment
+risk.
