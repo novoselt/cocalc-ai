@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260708-v1"
+HELPER_SCHEMA_VERSION = "20260708-v2"
 RUNTIME_WRAPPER_VERSION = "20260505-v9"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -3404,6 +3404,14 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
             str(DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB),
         ),
     )
+    env_assignments.setdefault(
+        "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS",
+        existing_env.get("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS", "1"),
+    )
+    env_assignments.setdefault(
+        "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC",
+        existing_env.get("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC", "5"),
+    )
     if cfg.image_size_gb_raw == "auto":
         env_assignments["COCALC_BTRFS_IMAGE_AUTO"] = "1"
         env_assignments["COCALC_BTRFS_IMAGE_GB"] = str(image_size_gb)
@@ -3887,8 +3895,11 @@ case "${cmd}" in
       exit 1
     fi
     ;;
+  doctor)
+    exec sudo -n "${rootctl}" doctor "$@"
+    ;;
   *)
-    echo "usage: ${0} {start|stop|restart|ensure|status}" >&2
+    echo "usage: ${0} {start|stop|restart|ensure|status|doctor}" >&2
     exit 2
     ;;
 esac
@@ -4434,6 +4445,56 @@ capture_forensics() {
   exit "${status}"
 }
 
+doctor_pid_status() {
+  local label="$1" file="$2" pid=""
+  pid="$(read_pid_file "${file}" || true)"
+  if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+    printf '%s: running pid=%s\n' "${label}" "${pid}"
+    return 0
+  fi
+  if [ -n "${pid}" ]; then
+    printf '%s: stale pid=%s file=%s\n' "${label}" "${pid}" "${file}"
+  else
+    printf '%s: missing file=%s\n' "${label}" "${file}"
+  fi
+  return 1
+}
+
+doctor() {
+  local status=0 runtime_dir cgroup_manager output
+  printf 'helper_schema_version: %s\n' "${HELPER_SCHEMA_VERSION}"
+  printf 'runtime_user: %s uid=%s gid=%s\n' "${RUNTIME_USER}" "$(runtime_uid)" "$(runtime_gid)"
+  if mountpoint -q /mnt/cocalc; then
+    printf 'mount /mnt/cocalc: mounted\n'
+  else
+    printf 'mount /mnt/cocalc: not-mounted\n'
+    status=1
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet "user@$(runtime_uid).service"; then
+      printf 'user@%s.service: active\n' "$(runtime_uid)"
+    else
+      printf 'user@%s.service: inactive\n' "$(runtime_uid)"
+      status=1
+    fi
+  fi
+  doctor_pid_status "project-host app" "${PID_FILE}" || status=1
+  doctor_pid_status "project-host host-agent" "${HOST_AGENT_PID_FILE}" || status=1
+  runtime_dir="$(podman_runtime_dir)"
+  cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
+  if [ -z "${cgroup_manager}" ]; then
+    cgroup_manager="cgroupfs"
+  fi
+  printf 'podman_runtime_dir: %s\n' "${runtime_dir}"
+  output="$(podman_info_once "${runtime_dir}" "${cgroup_manager}" 2>&1)" || {
+    printf 'podman info: failed\n%s\n' "${output}"
+    status=1
+    return "${status}"
+  }
+  printf 'podman info: ok\n'
+  return "${status}"
+}
+
 case "${cmd}" in
   start|ensure)
     repair_runtime_environment
@@ -4488,8 +4549,11 @@ case "${cmd}" in
       exit 1
     fi
     ;;
+  doctor)
+    doctor
+    ;;
   *)
-    echo "usage: ${0} {start|stop|restart|ensure|status|protect|capture-forensics|apply-sysctls|noop}" >&2
+    echo "usage: ${0} {start|stop|restart|ensure|status|doctor|protect|capture-forensics|apply-sysctls|noop}" >&2
     exit 2
     ;;
 esac
@@ -4636,12 +4700,86 @@ def configure_autostart(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: configuring project-host autostart")
     runtime_root = project_host_runtime_root(cfg)
     watchdog_log = "/mnt/cocalc/data/logs/project-host-watchdog.log"
+    watchdog_lock = "/mnt/cocalc/data/tmp/project-host-watchdog.lock"
+    watchdog_command = (
+        "mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; "
+        f"flock -n {watchdog_lock} {runtime_root}/bin/ctl ensure "
+        f">> {watchdog_log} 2>&1"
+    )
+    watchdog_service = f"""[Unit]
+Description=CoCalc project-host watchdog
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsMountPoint=/mnt/cocalc
+
+[Service]
+Type=oneshot
+User={cfg.ssh_user}
+Group={cfg.ssh_user}
+WorkingDirectory=/
+ExecStart=/bin/bash -lc "{watchdog_command}"
+TimeoutStartSec=180
+"""
+    watchdog_timer = """[Unit]
+Description=Run CoCalc project-host watchdog every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Persistent=true
+Unit=cocalc-project-host-watchdog.service
+
+[Install]
+WantedBy=timers.target
+"""
+    boot_service = f"""[Unit]
+Description=Start CoCalc project-host after boot
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsMountPoint=/mnt/cocalc
+
+[Service]
+Type=oneshot
+User={cfg.ssh_user}
+Group={cfg.ssh_user}
+WorkingDirectory=/
+ExecStart={runtime_root}/bin/start-project-host
+TimeoutStartSec=360
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
+    Path("/etc/systemd/system/cocalc-project-host-watchdog.service").write_text(
+        watchdog_service, encoding="utf-8"
+    )
+    Path("/etc/systemd/system/cocalc-project-host-watchdog.timer").write_text(
+        watchdog_timer, encoding="utf-8"
+    )
+    Path("/etc/systemd/system/cocalc-project-host-start.service").write_text(
+        boot_service, encoding="utf-8"
+    )
+    os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.service", 0o644)
+    os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.timer", 0o644)
+    os.chmod("/etc/systemd/system/cocalc-project-host-start.service", 0o644)
+    run_best_effort(cfg, ["systemctl", "daemon-reload"], "reload systemd")
+    run_best_effort(
+        cfg,
+        ["systemctl", "enable", "cocalc-project-host-start.service"],
+        "enable project-host boot service",
+    )
+    run_best_effort(
+        cfg,
+        ["systemctl", "enable", "--now", "cocalc-project-host-watchdog.timer"],
+        "enable project-host watchdog timer",
+    )
+
     cron_lines = [
         f"@reboot {cfg.ssh_user} /bin/bash -lc '{runtime_root}/bin/start-project-host'",
         (
             f"* * * * * {cfg.ssh_user} /bin/bash -lc "
-            f"'if mountpoint -q /mnt/cocalc; then mkdir -p /mnt/cocalc/data/logs; "
-            f"{runtime_root}/bin/ctl ensure >> {watchdog_log} 2>&1; fi'"
+            f"'if mountpoint -q /mnt/cocalc; then {watchdog_command}; fi'"
         ),
     ]
     Path("/etc/cron.d/cocalc-project-host").write_text(

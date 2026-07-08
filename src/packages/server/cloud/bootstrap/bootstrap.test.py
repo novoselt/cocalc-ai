@@ -1365,6 +1365,18 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "doctor()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "project-host app",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "project-host host-agent",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "cannot re-exec process to join the existing user namespace",
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -1445,6 +1457,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text,
             )
             self.assertIn("COCALC_PROJECT_POOL_MEMORY_RESERVE_MB=4096", text)
+            self.assertIn("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS=1", text)
+            self.assertIn(
+                "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC=5", text
+            )
             local_env_text = env_path.with_name("project-host.local.env").read_text(
                 encoding="utf-8"
             )
@@ -1595,7 +1611,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("nvm install 20", script)
             self.assertIn("nvm alias default 20", script)
 
-    def test_configure_autostart_only_writes_cron_and_enables_service(self) -> None:
+    def test_configure_autostart_installs_systemd_watchdog_and_cron_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
             runtime_root = Path(tmpdir) / "runtime-root"
@@ -1630,11 +1646,62 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                     "/etc/cron.d/cocalc-project-host",
                     (
                         f"@reboot {cfg.ssh_user} /bin/bash -lc '{runtime_root}/bin/start-project-host'\n"
-                        f"* * * * * {cfg.ssh_user} /bin/bash -lc 'if mountpoint -q /mnt/cocalc; then mkdir -p /mnt/cocalc/data/logs; {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1; fi'\n"
+                        f"* * * * * {cfg.ssh_user} /bin/bash -lc 'if mountpoint -q /mnt/cocalc; then mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; flock -n /mnt/cocalc/data/tmp/project-host-watchdog.lock {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1; fi'\n"
                     ),
                     "utf-8",
                 ),
                 writes,
+            )
+            written = {path: data for path, data, _ in writes}
+            self.assertIn(
+                "/etc/systemd/system/cocalc-project-host-watchdog.service",
+                written,
+            )
+            self.assertIn(
+                f'ExecStart=/bin/bash -lc "mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; flock -n /mnt/cocalc/data/tmp/project-host-watchdog.lock {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1"',
+                written["/etc/systemd/system/cocalc-project-host-watchdog.service"],
+            )
+            self.assertIn(
+                "/etc/systemd/system/cocalc-project-host-watchdog.timer",
+                written,
+            )
+            self.assertIn(
+                "OnUnitActiveSec=1min",
+                written["/etc/systemd/system/cocalc-project-host-watchdog.timer"],
+            )
+            self.assertIn(
+                "/etc/systemd/system/cocalc-project-host-start.service",
+                written,
+            )
+            self.assertIn(
+                f"ExecStart={runtime_root}/bin/start-project-host",
+                written["/etc/systemd/system/cocalc-project-host-start.service"],
+            )
+            self.assertIn(
+                (
+                    ["systemctl", "daemon-reload"],
+                    "reload systemd",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    ["systemctl", "enable", "cocalc-project-host-start.service"],
+                    "enable project-host boot service",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "systemctl",
+                        "enable",
+                        "--now",
+                        "cocalc-project-host-watchdog.timer",
+                    ],
+                    "enable project-host watchdog timer",
+                ),
+                recorded,
             )
             self.assertIn(
                 (
