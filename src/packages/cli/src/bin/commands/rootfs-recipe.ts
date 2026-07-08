@@ -7,7 +7,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, join, posix, resolve } from "node:path";
 
 import type { ExecuteCodeOutput } from "@cocalc/util/types/execute-code";
 
@@ -1603,7 +1603,7 @@ function loadRecipeModule(id: string, moduleDir: string): LoadedModule {
       dir: builtinRecipePath(id),
       module,
       readFile: (relativePath) =>
-        readBuiltinRecipeFile(`${id}/${relativePath}`),
+        readBuiltinRecipeFile(posix.normalize(`${id}/${relativePath}`)),
     };
   }
   const dir = join(moduleDir, ...id.split("/"));

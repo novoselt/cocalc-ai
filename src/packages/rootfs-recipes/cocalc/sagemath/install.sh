@@ -23,6 +23,11 @@ jobs="${JOBS:-auto}"
 clean_build_dir="${CLEAN_BUILD_DIR:-true}"
 install_recommended_apt_packages="${INSTALL_RECOMMENDED_APT_PACKAGES:-true}"
 install_sagetex="${INSTALL_SAGETEX:-true}"
+priority_optional_packages="${PRIORITY_OPTIONAL_PACKAGES:-}"
+optional_packages="${OPTIONAL_PACKAGES:-}"
+x86_64_optional_packages="${X86_64_OPTIONAL_PACKAGES:-}"
+optional_manifest="${OPTIONAL_MANIFEST:-/opt/cocalc-sagemath-full/optional-packages.json}"
+optional_log_dir="${OPTIONAL_LOG_DIR:-/opt/cocalc-sagemath-full/logs}"
 micromamba_prefix="${MICROMAMBA_PREFIX:-/opt/micromamba}"
 conda_packages="${CONDA_PACKAGES:-sage}"
 owner_uid="${OWNER_UID:-2001}"
@@ -90,6 +95,268 @@ apt_install_available() {
   if [ "${#packages[@]}" -gt 0 ]; then
     run_noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
   fi
+}
+
+has_optional_packages() {
+  [ -n "$priority_optional_packages$optional_packages$x86_64_optional_packages" ]
+}
+
+record_optional_result() {
+  local package="$1"
+  local group="$2"
+  local install_status="$3"
+  local install_log_path="$4"
+  local install_exit_code="$5"
+  local smoke_status="$6"
+  local smoke_kind="$7"
+  local smoke_log_path="$8"
+  local smoke_exit_code="$9"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$package" \
+    "$group" \
+    "$install_status" \
+    "$install_log_path" \
+    "$install_exit_code" \
+    "$smoke_status" \
+    "$smoke_kind" \
+    "$smoke_log_path" \
+    "$smoke_exit_code" >>"$optional_manifest.tmp"
+}
+
+run_python_smoke() {
+  local sage_bin="$1"
+  local package="$2"
+  local import_name="$3"
+  local log_path="$4"
+  "$sage_bin" -python - "$import_name" >"$log_path" 2>&1 <<'PY'
+import importlib
+import sys
+
+name = sys.argv[1]
+module = importlib.import_module(name)
+print(f"imported {name} from {getattr(module, '__file__', '(built-in)')}")
+PY
+}
+
+run_sage_smoke() {
+  local sage_bin="$1"
+  local script="$2"
+  local log_path="$3"
+  "$sage_bin" -c "$script" >"$log_path" 2>&1
+}
+
+run_command_smoke() {
+  local command="$1"
+  local log_path="$2"
+  bash -lc "$command" >"$log_path" 2>&1
+}
+
+run_metadata_smoke() {
+  local sage_bin="$1"
+  local prefix="$2"
+  local package="$3"
+  local log_path="$4"
+  "$sage_bin" --package properties "$package" >"$log_path" 2>&1
+  {
+    echo
+    echo "Installed package records:"
+    find "$prefix/local/var/lib/sage/installed" -maxdepth 1 -type f -name "${package}*" -print
+  } >>"$log_path" 2>&1
+  find "$prefix/local/var/lib/sage/installed" -maxdepth 1 -type f -name "${package}*" | grep -q .
+}
+
+smoke_optional_package() {
+  local package="$1"
+  local sage_bin="$2"
+  local log_path="$optional_log_dir/${package}.smoke.log"
+  local smoke_kind="metadata"
+  local exit_code
+
+  set +e
+  case "$package" in
+    admcycles) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" admcycles "$log_path" ;;
+    biopython) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" Bio "$log_path" ;;
+    debugpy) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" debugpy "$log_path" ;;
+    dot2tex) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" dot2tex "$log_path" ;;
+    ecos_python) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" ecos "$log_path" ;;
+    gitpython) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" git "$log_path" ;;
+    igraph | python_igraph) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" igraph "$log_path" ;;
+    ipympl) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" ipympl "$log_path" ;;
+    jupyterlab) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" jupyterlab "$log_path" ;;
+    mathics) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" mathics "$log_path" ;;
+    nibabel) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" nibabel "$log_path" ;;
+    normaliz) smoke_kind="sage-normaliz-polyhedron"; run_sage_smoke "$sage_bin" 'from sage.geometry.polyhedron.constructor import Polyhedron; P = Polyhedron(vertices=[(0,0),(1,0),(0,1)], backend="normaliz"); assert P.n_vertices() == 3; print(P)' "$log_path" ;;
+    notedown) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" notedown "$log_path" ;;
+    osqp_python) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" osqp "$log_path" ;;
+    pybtex) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" pybtex "$log_path" ;;
+    pycosat) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" pycosat "$log_path" ;;
+    pycryptosat) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" pycryptosat "$log_path" ;;
+    pynormaliz) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" PyNormaliz "$log_path" ;;
+    pytest) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" pytest "$log_path" ;;
+    pytest_mock) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" pytest_mock "$log_path" ;;
+    python_build) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" build "$log_path" ;;
+    pyx) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" pyx "$log_path" ;;
+    qdldl_python) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" qdldl "$log_path" ;;
+    slabbe) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" slabbe "$log_path" ;;
+    snappy) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" snappy "$log_path" ;;
+    sqlalchemy) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" sqlalchemy "$log_path" ;;
+    texttable) smoke_kind="python-import"; run_python_smoke "$sage_bin" "$package" texttable "$log_path" ;;
+    gap_jupyter) smoke_kind="jupyter-kernelspec"; run_command_smoke "jupyter kernelspec list | grep -qi gap" "$log_path" ;;
+    singular_jupyter) smoke_kind="jupyter-kernelspec"; run_command_smoke "jupyter kernelspec list | grep -qi singular" "$log_path" ;;
+    fricas) smoke_kind="command"; run_command_smoke "command -v fricas" "$log_path" ;;
+    *) smoke_kind="metadata"; run_metadata_smoke "$sage_bin" "$prefix" "$package" "$log_path" ;;
+  esac
+  exit_code="$?"
+  set -e
+
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'passed\t%s\t%s\t0\n' "$smoke_kind" "$log_path"
+  else
+    printf 'failed\t%s\t%s\t%s\n' "$smoke_kind" "$log_path" "$exit_code"
+  fi
+  return 0
+}
+
+install_optional_package() {
+  local package="$1"
+  local group="$2"
+  local sage_bin="$3"
+  local make_jobs="$4"
+  local log_path
+
+  log_path="$optional_log_dir/${package}.log"
+  log "Installing optional Sage package ${package} (${group})"
+  if MAKE="make -j${make_jobs}" "$sage_bin" -i "$package" >"$log_path" 2>&1; then
+    log "Installed optional Sage package ${package}"
+    local smoke_result
+    local smoke_status
+    local smoke_kind
+    local smoke_log_path
+    local smoke_exit_code
+    smoke_result="$(smoke_optional_package "$package" "$sage_bin")"
+    IFS=$'\t' read -r smoke_status smoke_kind smoke_log_path smoke_exit_code <<<"$smoke_result"
+    record_optional_result "$package" "$group" installed "$log_path" 0 "$smoke_status" "$smoke_kind" "$smoke_log_path" "$smoke_exit_code"
+    if [ "$smoke_status" = "passed" ]; then
+      log "Smoke test passed for optional Sage package ${package} (${smoke_kind})"
+    else
+      log "Smoke test failed for optional Sage package ${package} (${smoke_kind}); continuing"
+      tail -n 40 "$smoke_log_path" || true
+    fi
+    return 0
+  fi
+
+  local exit_code="$?"
+  record_optional_result "$package" "$group" failed "$log_path" "$exit_code" skipped install-failed "" 0
+  log "Optional Sage package ${package} failed with exit code ${exit_code}; continuing"
+  tail -n 40 "$log_path" || true
+  return 0
+}
+
+install_optional_group() {
+  local group="$1"
+  local sage_bin="$2"
+  local make_jobs="$3"
+  shift 3
+  local package
+
+  for package in "$@"; do
+    if [ -z "$package" ]; then
+      continue
+    fi
+    install_optional_package "$package" "$group" "$sage_bin" "$make_jobs"
+  done
+}
+
+write_optional_manifest() {
+  $SUDO mkdir -p "$(dirname "$optional_manifest")"
+  if [ ! -f "$optional_manifest.tmp" ]; then
+    : >"$optional_manifest.tmp"
+  fi
+  python3 - "$optional_manifest.tmp" "$optional_manifest" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+entries = []
+for line in source.read_text().splitlines():
+    if not line.strip():
+        continue
+    (
+        package,
+        group,
+        install_status,
+        install_log_path,
+        install_exit_code,
+        smoke_status,
+        smoke_kind,
+        smoke_log_path,
+        smoke_exit_code,
+    ) = line.split("\t", 8)
+    entries.append(
+        {
+            "package": package,
+            "group": group,
+            "install_status": install_status,
+            "install_log_path": install_log_path,
+            "install_exit_code": int(install_exit_code),
+            "smoke_status": smoke_status,
+            "smoke_kind": smoke_kind,
+            "smoke_log_path": smoke_log_path,
+            "smoke_exit_code": int(smoke_exit_code),
+        }
+    )
+
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text(
+    json.dumps(
+        {
+            "version": 1,
+            "installed": [entry for entry in entries if entry["install_status"] == "installed"],
+            "install_failed": [entry for entry in entries if entry["install_status"] == "failed"],
+            "smoke_passed": [entry for entry in entries if entry["smoke_status"] == "passed"],
+            "smoke_failed": [entry for entry in entries if entry["smoke_status"] == "failed"],
+            "entries": entries,
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n"
+)
+PY
+  rm -f "$optional_manifest.tmp"
+}
+
+install_sage_optionals() {
+  local sage_bin="$1"
+  local make_jobs="$2"
+  local arch
+
+  if ! has_optional_packages; then
+    return
+  fi
+
+  log "Installing best-effort optional Sage packages"
+  $SUDO mkdir -p "$optional_log_dir"
+  $SUDO chown -R "$(id -u):$(id -g)" "$(dirname "$optional_manifest")"
+  : >"$optional_manifest.tmp"
+
+  install_optional_group priority "$sage_bin" "$make_jobs" $priority_optional_packages
+  install_optional_group default "$sage_bin" "$make_jobs" $optional_packages
+
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64 | amd64)
+      install_optional_group x86_64 "$sage_bin" "$make_jobs" $x86_64_optional_packages
+      ;;
+    *)
+      log "Skipping x86_64-only optional Sage packages on architecture ${arch}: ${x86_64_optional_packages}"
+      ;;
+  esac
+
+  write_optional_manifest
+  log "Wrote optional Sage package manifest to ${optional_manifest}"
 }
 
 install_apt_sage() {
@@ -272,6 +539,8 @@ PY
     "$sage_bin" -p sagetex || log "sagetex install failed; continuing"
   fi
 
+  install_sage_optionals "$sage_bin" "$make_jobs"
+
   log "Cleaning SageMath build artifacts"
   rm -rf \
     "$prefix/.git" \
@@ -291,6 +560,10 @@ PY
   $SUDO rm -rf /var/lib/apt/lists/*
   $SUDO chown -R "$owner_uid:$owner_gid" "$prefix"
   $SUDO chmod -R u+rwX,go+rX "$prefix"
+  if has_optional_packages; then
+    $SUDO chown -R "$owner_uid:$owner_gid" "$(dirname "$optional_manifest")"
+    $SUDO chmod -R u+rwX,go+rX "$(dirname "$optional_manifest")"
+  fi
 }
 
 case "$method" in
