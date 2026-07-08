@@ -3404,6 +3404,14 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
             str(DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB),
         ),
     )
+    env_assignments.setdefault(
+        "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS",
+        existing_env.get("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS", "1"),
+    )
+    env_assignments.setdefault(
+        "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC",
+        existing_env.get("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC", "5"),
+    )
     if cfg.image_size_gb_raw == "auto":
         env_assignments["COCALC_BTRFS_IMAGE_AUTO"] = "1"
         env_assignments["COCALC_BTRFS_IMAGE_GB"] = str(image_size_gb)
@@ -4692,12 +4700,86 @@ def configure_autostart(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: configuring project-host autostart")
     runtime_root = project_host_runtime_root(cfg)
     watchdog_log = "/mnt/cocalc/data/logs/project-host-watchdog.log"
+    watchdog_lock = "/mnt/cocalc/data/tmp/project-host-watchdog.lock"
+    watchdog_command = (
+        "mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; "
+        f"flock -n {watchdog_lock} {runtime_root}/bin/ctl ensure "
+        f">> {watchdog_log} 2>&1"
+    )
+    watchdog_service = f"""[Unit]
+Description=CoCalc project-host watchdog
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsMountPoint=/mnt/cocalc
+
+[Service]
+Type=oneshot
+User={cfg.ssh_user}
+Group={cfg.ssh_user}
+WorkingDirectory=/
+ExecStart=/bin/bash -lc "{watchdog_command}"
+TimeoutStartSec=180
+"""
+    watchdog_timer = """[Unit]
+Description=Run CoCalc project-host watchdog every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Persistent=true
+Unit=cocalc-project-host-watchdog.service
+
+[Install]
+WantedBy=timers.target
+"""
+    boot_service = f"""[Unit]
+Description=Start CoCalc project-host after boot
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsMountPoint=/mnt/cocalc
+
+[Service]
+Type=oneshot
+User={cfg.ssh_user}
+Group={cfg.ssh_user}
+WorkingDirectory=/
+ExecStart={runtime_root}/bin/start-project-host
+TimeoutStartSec=360
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
+    Path("/etc/systemd/system/cocalc-project-host-watchdog.service").write_text(
+        watchdog_service, encoding="utf-8"
+    )
+    Path("/etc/systemd/system/cocalc-project-host-watchdog.timer").write_text(
+        watchdog_timer, encoding="utf-8"
+    )
+    Path("/etc/systemd/system/cocalc-project-host-start.service").write_text(
+        boot_service, encoding="utf-8"
+    )
+    os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.service", 0o644)
+    os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.timer", 0o644)
+    os.chmod("/etc/systemd/system/cocalc-project-host-start.service", 0o644)
+    run_best_effort(cfg, ["systemctl", "daemon-reload"], "reload systemd")
+    run_best_effort(
+        cfg,
+        ["systemctl", "enable", "cocalc-project-host-start.service"],
+        "enable project-host boot service",
+    )
+    run_best_effort(
+        cfg,
+        ["systemctl", "enable", "--now", "cocalc-project-host-watchdog.timer"],
+        "enable project-host watchdog timer",
+    )
+
     cron_lines = [
         f"@reboot {cfg.ssh_user} /bin/bash -lc '{runtime_root}/bin/start-project-host'",
         (
             f"* * * * * {cfg.ssh_user} /bin/bash -lc "
-            f"'if mountpoint -q /mnt/cocalc; then mkdir -p /mnt/cocalc/data/logs; "
-            f"{runtime_root}/bin/ctl ensure >> {watchdog_log} 2>&1; fi'"
+            f"'if mountpoint -q /mnt/cocalc; then {watchdog_command}; fi'"
         ),
     ]
     Path("/etc/cron.d/cocalc-project-host").write_text(
