@@ -85,6 +85,11 @@ describe("lro client explicit routing", () => {
     ).resolves.toBe(summary);
 
     expect(stream.close).toHaveBeenCalled();
+    expect(client.sync.dstream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrapRetry: false,
+      }),
+    );
   });
 
   it("can finish from a durable summary fallback when stream open fails", async () => {
@@ -113,6 +118,11 @@ describe("lro client explicit routing", () => {
         getSummary: jest.fn(async () => summary),
       }),
     ).resolves.toBe(summary);
+    expect(client.sync.dstream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrapRetry: false,
+      }),
+    );
   });
 
   it("can finish from a durable summary fallback when stream open hangs", async () => {
@@ -139,5 +149,10 @@ describe("lro client explicit routing", () => {
         getSummary: jest.fn(async () => summary),
       }),
     ).resolves.toBe(summary);
+    expect(client.sync.dstream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrapRetry: false,
+      }),
+    );
   });
 });
