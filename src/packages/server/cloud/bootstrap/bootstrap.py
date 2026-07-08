@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260704-v1"
+HELPER_SCHEMA_VERSION = "20260708-v1"
 RUNTIME_WRAPPER_VERSION = "20260505-v9"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -4144,8 +4144,10 @@ podman_runtime_namespace_error() {
   grep -qiE 'cannot re-exec process to join the existing user namespace|cannot join.*user namespace|invalid internal status' <<< "$1"
 }
 
-project_host_process_running() {
-  first_running_pid "${PID_FILE}" "${HOST_AGENT_PID_FILE}" >/dev/null 2>&1
+project_host_app_running() {
+  local pid
+  pid="$(read_pid_file "${PID_FILE}")"
+  [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null
 }
 
 remove_safe_runtime_dir() {
@@ -4168,8 +4170,8 @@ remove_safe_runtime_dir() {
 
 cleanup_podman_runtime_state() {
   local runtime_dir runroot
-  if project_host_process_running; then
-    echo "project-host is running; refusing to clean Podman runtime state" >&2
+  if project_host_app_running; then
+    echo "project-host app is running; refusing to clean Podman runtime state" >&2
     return 1
   fi
   runtime_dir="$(podman_runtime_dir)"
