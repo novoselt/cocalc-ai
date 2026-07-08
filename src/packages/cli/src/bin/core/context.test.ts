@@ -27,6 +27,33 @@ test("createHubApiForContext exposes the notifications hub group", async () => {
   ]);
 });
 
+test("createHubApiForContext exposes the adminDb hub group", async () => {
+  const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
+  const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
+    calls.push({ name, args, timeout });
+    return { audit_id: "audit-1", rows: [] } as T;
+  });
+
+  const result = await hub.adminDb.diagnostic({
+    diagnostic: "lro",
+    params: { kind: "host-reconcile-software" },
+  });
+
+  assert.deepEqual(result, { audit_id: "audit-1", rows: [] });
+  assert.deepEqual(calls, [
+    {
+      name: "adminDb.diagnostic",
+      args: [
+        {
+          diagnostic: "lro",
+          params: { kind: "host-reconcile-software" },
+        },
+      ],
+      timeout: undefined,
+    },
+  ]);
+});
+
 test("createHubApiForContext forwards explicit per-call timeout", async () => {
   const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
   const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
