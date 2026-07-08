@@ -144,6 +144,81 @@ test("admin host logs forwards audited bounded log options", async () => {
   });
 });
 
+test("admin host describe forwards summary options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        describe: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-host-2", host_id: "host-1" };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "describe",
+    "montreal-1",
+    "--recent-limit",
+    "7",
+    "--no-live",
+    "--reason",
+    "incident review",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    host: "montreal-1",
+    recent_limit: 7,
+    include_live: false,
+    reason: "incident review",
+  });
+});
+
+test("admin host events forwards timeline options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        events: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-host-3", events: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "events",
+    "montreal-1",
+    "--since-minutes",
+    "360",
+    "--limit",
+    "25",
+    "--reason",
+    "incident timeline",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    host: "montreal-1",
+    since_minutes: 360,
+    limit: 25,
+    reason: "incident timeline",
+  });
+});
+
 test("admin db lro forwards diagnostic filters", async () => {
   let capturedArgs: any;
   const program = new Command();

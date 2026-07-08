@@ -1158,6 +1158,75 @@ export function registerAdminCommand(
     );
 
   adminHost
+    .command("describe <host>")
+    .description("show audited project-host operational summary")
+    .option("--recent-limit <n>", "recent LRO/event rows", "10")
+    .option("--no-live", "skip live project-host control RPCs")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: {
+          recentLimit?: string;
+          live?: boolean;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host describe", async (ctx) => {
+          return await ctx.hub.adminHost.describe({
+            host,
+            recent_limit: parsePositiveIntegerOption({
+              name: "--recent-limit",
+              value: opts.recentLimit,
+              fallback: 10,
+              max: 50,
+            }),
+            include_live: opts.live !== false,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
+    .command("events <host>")
+    .description("show audited project-host incident timeline")
+    .option("--since-minutes <n>", "lookback window in minutes", "1440")
+    .option("--limit <n>", "max timeline events", "100")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: {
+          sinceMinutes?: string;
+          limit?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin host events", async (ctx) => {
+          return await ctx.hub.adminHost.events({
+            host,
+            since_minutes: parsePositiveIntegerOption({
+              name: "--since-minutes",
+              value: opts.sinceMinutes,
+              fallback: 24 * 60,
+              max: 7 * 24 * 60,
+            }),
+            limit: parsePositiveIntegerOption({
+              name: "--limit",
+              value: opts.limit,
+              fallback: 100,
+              max: 1000,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminHost
     .command("logs")
     .description("fetch bounded, audited project-host runtime logs")
     .requiredOption("--host-id <uuid>", "target project-host id")

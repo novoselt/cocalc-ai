@@ -27,10 +27,66 @@ export interface AdminHostLogsResponse {
   truncated: boolean;
 }
 
+export interface AdminHostDescribeRequest {
+  host?: string;
+  host_id?: string;
+  recent_limit?: number;
+  include_live?: boolean;
+  reason?: string;
+}
+
+export interface AdminHostEvent {
+  timestamp: string;
+  category:
+    | "availability"
+    | "lro"
+    | "heartbeat"
+    | "host-record"
+    | "operator_action";
+  summary: string;
+  details?: Record<string, unknown>;
+}
+
+export interface AdminHostDescribeResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  host: Record<string, unknown>;
+  heartbeat_age_ms?: number;
+  project_counts: Record<string, number>;
+  recent_lros: Record<string, unknown>[];
+  availability_events: Record<string, unknown>[];
+  host_agent_status?: Record<string, unknown>;
+  managed_components?: Record<string, unknown>[];
+  live_errors?: string[];
+}
+
+export interface AdminHostEventsRequest {
+  host?: string;
+  host_id?: string;
+  since_minutes?: number;
+  limit?: number;
+  reason?: string;
+}
+
+export interface AdminHostEventsResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  events: AdminHostEvent[];
+  truncated: boolean;
+}
+
 export const adminHost = {
+  describe: authFirstRequireAccount,
+  events: authFirstRequireAccount,
   logs: authFirstRequireAccount,
 };
 
 export interface AdminHostApi {
+  describe: (
+    opts: AdminHostDescribeRequest,
+  ) => Promise<AdminHostDescribeResponse>;
+  events: (opts: AdminHostEventsRequest) => Promise<AdminHostEventsResponse>;
   logs: (opts: AdminHostLogsRequest) => Promise<AdminHostLogsResponse>;
 }
