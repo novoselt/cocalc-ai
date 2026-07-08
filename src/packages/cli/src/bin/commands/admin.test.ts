@@ -138,6 +138,53 @@ test("admin db lro forwards diagnostic filters", async () => {
   });
 });
 
+test("admin db host-query forwards audited project-host SQLite options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminDb: {
+        queryHost: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-host-1", rows: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "db",
+    "host-query",
+    "--host-id",
+    "11111111-1111-4111-8111-111111111111",
+    "--sql",
+    "select table_name, count(*) from data group by table_name",
+    "--reason",
+    "host sqlite incident check",
+    "--limit",
+    "50",
+    "--timeout-ms",
+    "10000",
+    "--max-bytes",
+    "500000",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    bay_id: undefined,
+    limit: 50,
+    statement_timeout_ms: 10000,
+    lock_timeout_ms: 1000,
+    max_bytes: 500000,
+    host_id: "11111111-1111-4111-8111-111111111111",
+    sql: "select table_name, count(*) from data group by table_name",
+    reason: "host sqlite incident check",
+  });
+});
+
 test("admin db exec forwards audited write options with rollback default", async () => {
   let capturedArgs: any;
   const program = new Command();

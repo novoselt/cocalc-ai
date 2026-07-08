@@ -83,6 +83,7 @@ import { rolloutManagedComponents } from "./managed-component-rollout";
 import { readHostAgentState } from "./host-agent-state";
 import { recordProjectHostRpcTraffic } from "./rpc-traffic-audit";
 import { upsertProjectStopPolicy } from "./sqlite/stop-policy";
+import { querySqlite } from "./sqlite/admin-query";
 import { startHostPressureController } from "./host-pressure";
 import {
   cancelRootfsBuild as cancelRootfsBuildOnHost,
@@ -1206,6 +1207,9 @@ export async function startMasterRegistration({
     },
     async getBackupExecutionStatus() {
       return await getBackupExecutionStatus();
+    },
+    async querySqlite(opts) {
+      return querySqlite(opts);
     },
     async invalidateBackupConfig({ project_id } = {}) {
       await invalidateBackupConfig(project_id);

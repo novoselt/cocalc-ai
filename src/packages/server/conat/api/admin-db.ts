@@ -10,7 +10,8 @@ import centralLog from "@cocalc/database/postgres/central-log";
 import getLogger from "@cocalc/backend/logger";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
-import { uuid } from "@cocalc/util/misc";
+import { isValidUUID, uuid } from "@cocalc/util/misc";
+import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 import type {
   AdminDbDiagnostic,
   AdminDbExecuteRequest,
@@ -225,6 +226,7 @@ async function recordAudit({
   diagnostic,
   reason,
   bay_id,
+  host_id,
   sql,
   duration_ms,
   row_count,
@@ -234,10 +236,11 @@ async function recordAudit({
 }: {
   audit_id: string;
   account_id: string;
-  mode: "query" | "diagnostic" | "write";
+  mode: "query" | "diagnostic" | "write" | "host-query";
   diagnostic?: AdminDbDiagnostic;
   reason?: string;
   bay_id: string;
+  host_id?: string;
   sql?: string;
   duration_ms?: number;
   row_count?: number;
@@ -255,6 +258,7 @@ async function recordAudit({
         diagnostic,
         reason: reason ?? null,
         bay_id,
+        host_id: host_id ?? null,
         sql_sha256: sql ? sqlHash(sql) : null,
         sql_text: sql ?? null,
         duration_ms,
@@ -576,6 +580,101 @@ async function executeReadOnly({
   }
 }
 
+async function executeHostQuery({
+  account_id,
+  bay_id,
+  host_id,
+  sql,
+  reason,
+  limit,
+  max_bytes,
+  statement_timeout_ms,
+}: AdminDbExecuteRequest & {
+  account_id: string;
+}): Promise<AdminDbExecuteResponse> {
+  const audit_id = uuid();
+  const localBay = assertLocalBay(bay_id);
+  const hostId = `${host_id ?? ""}`.trim();
+  if (!isValidUUID(hostId)) {
+    throw new Error("--host-id must be a valid project-host id");
+  }
+  if (!sql) {
+    throw new Error("SQL is required");
+  }
+  const normalizedSql = trimTrailingSemicolon(sql);
+  rejectClearlyUnsafeSql(normalizedSql);
+  const normalizedLimit = normalizePositiveInt({
+    value: limit,
+    fallback: DEFAULT_LIMIT,
+    max: 1000,
+  });
+  const maxBytes = normalizePositiveInt({
+    value: max_bytes,
+    fallback: DEFAULT_MAX_BYTES,
+    max: 5 * 1024 * 1024,
+  });
+  const timeoutMs = normalizePositiveInt({
+    value: statement_timeout_ms,
+    fallback: DEFAULT_STATEMENT_TIMEOUT_MS,
+    max: 30_000,
+  });
+  await recordAudit({
+    audit_id,
+    account_id,
+    mode: "host-query",
+    reason,
+    bay_id: localBay,
+    host_id: hostId,
+    sql: normalizedSql,
+  });
+  const started = Date.now();
+  try {
+    const hostClient = await getRoutedHostControlClient({
+      host_id: hostId,
+      timeout: timeoutMs + 5_000,
+      fresh: true,
+    });
+    const result = await hostClient.querySqlite({
+      sql: normalizedSql,
+      limit: normalizedLimit,
+      max_bytes: maxBytes,
+    });
+    await recordAudit({
+      audit_id,
+      account_id,
+      mode: "host-query",
+      reason,
+      bay_id: localBay,
+      host_id: hostId,
+      sql: normalizedSql,
+      duration_ms: result.duration_ms,
+      row_count: result.row_count,
+      result_bytes: result.result_bytes,
+    });
+    return {
+      audit_id,
+      bay_id: localBay,
+      host_id: hostId,
+      server_time: new Date().toISOString(),
+      mode: "host-query",
+      ...result,
+    };
+  } catch (err) {
+    await recordAudit({
+      audit_id,
+      account_id,
+      mode: "host-query",
+      reason,
+      bay_id: localBay,
+      host_id: hostId,
+      sql: normalizedSql,
+      duration_ms: Date.now() - started,
+      error: err,
+    });
+    throw err;
+  }
+}
+
 export async function query({
   account_id,
   ...opts
@@ -588,6 +687,20 @@ export async function query({
     ...opts,
     account_id: accountId,
     mode: "query",
+  });
+}
+
+export async function queryHost({
+  account_id,
+  ...opts
+}: AdminAuthOpts & AdminDbExecuteRequest): Promise<AdminDbExecuteResponse> {
+  const accountId = await requireFreshAdmin({ account_id, ...opts });
+  if (!opts.reason?.trim()) {
+    throw new Error("--reason is required for raw project-host SQLite SQL");
+  }
+  return await executeHostQuery({
+    ...opts,
+    account_id: accountId,
   });
 }
 

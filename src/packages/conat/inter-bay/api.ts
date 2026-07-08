@@ -2100,6 +2100,7 @@ export type HostControlMethod =
   | "add-host-ssh-authorized-key"
   | "remove-host-ssh-authorized-key"
   | "get-backup-execution-status"
+  | "query-sqlite"
   | "invalidate-backup-config"
   | "get-managed-component-status"
   | "get-installed-runtime-artifacts"
@@ -3054,6 +3055,10 @@ export interface InterBayHostControlApi {
   getBackupExecutionStatus: (opts: {
     host_id: string;
   }) => Promise<HostBackupExecutionStatus>;
+  querySqlite: (opts: {
+    host_id: string;
+    query: HostControlArg<"querySqlite">;
+  }) => Promise<Awaited<ReturnType<HostControlApi["querySqlite"]>>>;
   invalidateBackupConfig: (opts: {
     host_id: string;
     invalidate?: HostControlArg<"invalidateBackupConfig">;
@@ -3774,6 +3779,10 @@ const HOST_CONTROL_METHOD_SPECS = [
   {
     name: "getBackupExecutionStatus",
     method: "get-backup-execution-status",
+  },
+  {
+    name: "querySqlite",
+    method: "query-sqlite",
   },
   {
     name: "invalidateBackupConfig",

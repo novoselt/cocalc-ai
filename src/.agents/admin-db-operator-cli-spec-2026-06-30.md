@@ -569,13 +569,21 @@ risk.
 Project hosts also have local SQLite databases, but they should not be folded
 directly into the bay-local Postgres executor.
 
-Recommended direction:
+Implemented Phase 1 shape:
 
-- Add a separate `cocalc admin host-db ...` or `cocalc admin db host-sql ...`
-  surface.
+- Add `cocalc admin db host-query --host-id ... --sql ... --reason ...`.
 - Route through a host-targeted project-host admin RPC, not hub-side SSH.
-- Start read-only with explicit `--host-id`, strict timeouts, row/byte caps,
-  and audit records that include host id and database path/name.
+- Keep hub-side fresh admin auth and central audit records.
+- Include host id, bay id, SQL hash/text, reason, duration, row count, byte
+  count, and failure details in audit records.
+- Start read-only with explicit `--host-id`, single-statement enforcement,
+  `SELECT`/`WITH` only, row/byte caps, and short RPC timeout.
+- Route cross-bay host ids through the existing inter-bay host-control bridge.
 - Add write mode only after the bay Postgres write path has proven safe.
 - Keep project data-plane concerns separate; this should inspect host-local
   operational SQLite state, not proxy user project data through the hub.
+
+The first implementation intentionally does not expose SQLite write mode.
+Node's synchronous SQLite API also does not provide the same reliable
+statement-timeout boundary as Postgres, so operators should keep host queries
+small and prefer known indexed lookups or aggregate diagnostics.

@@ -36,6 +36,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "raw read-only operator SQL against operational data",
   },
+  "adminDb.queryHost": {
+    decision: "fresh-auth-required",
+    reason: "raw read-only operator SQL against project-host SQLite data",
+  },
   "adminData.deleteView": {
     decision: "fresh-auth-required",
     reason: "Admin Data Explorer shared view deletion",

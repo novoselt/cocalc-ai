@@ -1181,6 +1181,42 @@ export function registerAdminCommand(
 
   adminDbCommonOptions(
     adminDb
+      .command("host-query")
+      .description(
+        "run audited read-only SQL against a project-host SQLite database (admin fresh-auth)",
+      )
+      .requiredOption("--host-id <uuid>", "target project-host id")
+      .option("--sql <sql>", "SQL query text")
+      .option("--file <path>", "read SQL from a file")
+      .requiredOption("--reason <reason>", "human-readable reason for audit"),
+  ).action(
+    async (
+      opts: {
+        hostId?: string;
+        sql?: string;
+        file?: string;
+        reason?: string;
+        bay?: string;
+        limit?: string;
+        timeoutMs?: string;
+        lockTimeoutMs?: string;
+        maxBytes?: string;
+      },
+      command: Command,
+    ) => {
+      await withContext(command, "admin db host-query", async (ctx) => {
+        return await ctx.hub.adminDb.queryHost({
+          ...adminDbRequestOptions(opts),
+          host_id: opts.hostId,
+          sql: await readAdminDbSqlInput(opts),
+          reason: opts.reason,
+        });
+      });
+    },
+  );
+
+  adminDbCommonOptions(
+    adminDb
       .command("exec")
       .description(
         "run audited operator SQL write mode; rolls back unless --commit is set",

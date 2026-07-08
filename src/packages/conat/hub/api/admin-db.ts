@@ -22,7 +22,8 @@ export interface AdminDbField {
 
 export interface AdminDbExecuteRequest {
   bay_id?: string;
-  mode?: "query" | "diagnostic" | "write";
+  host_id?: string;
+  mode?: "query" | "diagnostic" | "write" | "host-query";
   sql?: string;
   diagnostic?: AdminDbDiagnostic;
   params?: Record<string, unknown>;
@@ -38,8 +39,9 @@ export interface AdminDbExecuteRequest {
 export interface AdminDbExecuteResponse {
   audit_id: string;
   bay_id: string;
+  host_id?: string;
   server_time: string;
-  mode: "query" | "diagnostic" | "write";
+  mode: "query" | "diagnostic" | "write" | "host-query";
   diagnostic?: AdminDbDiagnostic;
   committed?: boolean;
   duration_ms: number;
@@ -55,10 +57,12 @@ export const adminDb = {
   query: authFirstRequireAccount,
   diagnostic: authFirstRequireAccount,
   exec: authFirstRequireAccount,
+  queryHost: authFirstRequireAccount,
 };
 
 export interface AdminDbApi {
   query: (opts: AdminDbExecuteRequest) => Promise<AdminDbExecuteResponse>;
   diagnostic: (opts: AdminDbExecuteRequest) => Promise<AdminDbExecuteResponse>;
   exec: (opts: AdminDbExecuteRequest) => Promise<AdminDbExecuteResponse>;
+  queryHost: (opts: AdminDbExecuteRequest) => Promise<AdminDbExecuteResponse>;
 }
