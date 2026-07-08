@@ -7,6 +7,11 @@ import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
 
 const logger = getLogger("server:projects:change-tracking");
+const CHANGE_TRACKING_COLUMNS = [
+  { name: "last_changed", definition: "TIMESTAMP" },
+  { name: "last_changed_generation", definition: "BIGINT" },
+  { name: "last_backup_generation", definition: "BIGINT" },
+] as const;
 
 type Queryable = {
   query: (sql: string, params?: any[]) => Promise<any>;
@@ -21,18 +26,22 @@ export async function ensureProjectChangeTrackingColumns(
     return ensurePromise;
   }
   ensurePromise = (async () => {
-    await db.query(
-      `ALTER TABLE projects
-         ADD COLUMN IF NOT EXISTS last_changed TIMESTAMP`,
+    const { rows } = await db.query(
+      `
+        SELECT column_name
+          FROM information_schema.columns
+         WHERE table_name='projects'
+           AND column_name=ANY($1::TEXT[])
+      `,
+      [CHANGE_TRACKING_COLUMNS.map(({ name }) => name)],
     );
-    await db.query(
-      `ALTER TABLE projects
-         ADD COLUMN IF NOT EXISTS last_changed_generation BIGINT`,
+    const existing = new Set(
+      (rows as { column_name: string }[]).map(({ column_name }) => column_name),
     );
-    await db.query(
-      `ALTER TABLE projects
-         ADD COLUMN IF NOT EXISTS last_backup_generation BIGINT`,
-    );
+    for (const { name, definition } of CHANGE_TRACKING_COLUMNS) {
+      if (existing.has(name)) continue;
+      await db.query(`ALTER TABLE projects ADD COLUMN ${name} ${definition}`);
+    }
   })().catch((err) => {
     ensurePromise = undefined;
     logger.warn("failed to ensure project change-tracking columns", { err });

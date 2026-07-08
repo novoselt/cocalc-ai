@@ -33,7 +33,7 @@ export function isHostTransitioning(status?: string): boolean {
   );
 }
 
-export const HOST_ONLINE_WINDOW_MS = 2 * 60 * 1000;
+export const HOST_ONLINE_WINDOW_MS = 10 * 60 * 1000;
 const HOST_ONLINE_WINDOW_MINUTES = Math.floor(HOST_ONLINE_WINDOW_MS / 60000);
 
 const STATUS_TOOLTIP: Record<string, string> = {
@@ -62,7 +62,8 @@ const ONLINE_TOOLTIP = {
     `No heartbeat in the last ${minutes} minutes; host may be running but is not reporting.`,
 };
 
-export function isHostOnline(lastSeen?: string): boolean {
+export function isHostOnline(lastSeen?: string, online?: boolean): boolean {
+  if (typeof online === "boolean") return online;
   if (!lastSeen) return false;
   const ts = Date.parse(lastSeen);
   if (Number.isNaN(ts)) return false;
@@ -95,11 +96,14 @@ export function getHostStatusTooltip(
   return `${base} (Last reported ${age}.)`;
 }
 
-export function getHostOnlineTooltip(lastSeen?: string): string {
+export function getHostOnlineTooltip(
+  lastSeen?: string,
+  online?: boolean,
+): string {
   if (!lastSeen) return ONLINE_TOOLTIP.noHeartbeat;
   const ts = Date.parse(lastSeen);
   if (Number.isNaN(ts)) return ONLINE_TOOLTIP.invalidTimestamp;
-  if (isHostOnline(lastSeen)) {
+  if (isHostOnline(lastSeen, online)) {
     return ONLINE_TOOLTIP.recent(HOST_ONLINE_WINDOW_MINUTES);
   }
   return ONLINE_TOOLTIP.stale(HOST_ONLINE_WINDOW_MINUTES);

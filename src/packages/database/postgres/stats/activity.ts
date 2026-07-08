@@ -8,6 +8,11 @@ import { touchAccount } from "../account/management";
 import { appendProjectOutboxEventForProject } from "../project-events-outbox";
 
 const ensuredChangeTracking = new WeakSet<PostgreSQL>();
+const CHANGE_TRACKING_COLUMNS = [
+  { name: "last_changed", definition: "TIMESTAMP" },
+  { name: "last_changed_generation", definition: "BIGINT" },
+  { name: "last_backup_generation", definition: "BIGINT" },
+] as const;
 
 export interface TouchProjectOptions {
   project_id: string;
@@ -27,18 +32,21 @@ async function ensureProjectChangeTrackingColumns(
   if (ensuredChangeTracking.has(db)) {
     return;
   }
-  await db.async_query({
-    query:
-      "ALTER TABLE projects ADD COLUMN IF NOT EXISTS last_changed TIMESTAMP",
+  const { rows } = await db.async_query<{ column_name: string }>({
+    query: `
+      SELECT column_name
+        FROM information_schema.columns
+       WHERE table_name='projects'
+         AND column_name IN ('last_changed', 'last_changed_generation', 'last_backup_generation')
+    `,
   });
-  await db.async_query({
-    query:
-      "ALTER TABLE projects ADD COLUMN IF NOT EXISTS last_changed_generation BIGINT",
-  });
-  await db.async_query({
-    query:
-      "ALTER TABLE projects ADD COLUMN IF NOT EXISTS last_backup_generation BIGINT",
-  });
+  const existing = new Set(rows.map(({ column_name }) => column_name));
+  for (const { name, definition } of CHANGE_TRACKING_COLUMNS) {
+    if (existing.has(name)) continue;
+    await db.async_query({
+      query: `ALTER TABLE projects ADD COLUMN ${name} ${definition}`,
+    });
+  }
   ensuredChangeTracking.add(db);
 }
 

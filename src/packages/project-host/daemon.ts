@@ -1209,7 +1209,8 @@ function inspectHealthUrlSync(url: string): HealthCheckDiagnostic {
     "            payload = json.loads(body) if body else {}",
     "        except Exception:",
     "            payload = {}",
-    "        result['ok'] = response.status == 200 and payload.get('ok') is not False",
+    "        result['ready'] = payload.get('ready')",
+    "        result['ok'] = response.status == 200 and payload.get('ok') is not False and payload.get('ready') is not False",
     "except Exception as err:",
     "    result['error'] = f'{type(err).__name__}: {err}'",
     "print(json.dumps(result))",
@@ -1225,6 +1226,7 @@ function inspectHealthUrlSync(url: string): HealthCheckDiagnostic {
     return {
       url,
       ok: result.status === 0 && parsed.ok === true,
+      ready: parsed.ready,
       status: parsed.status,
       body: parsed.body,
       error:

@@ -4806,30 +4806,31 @@ export async function getBackups({
 > {
   if (indexed_only) {
     try {
+      const backupsById = new Map<
+        string,
+        {
+          id: string;
+          time: Date;
+          summary: { [key: string]: string | number };
+        }
+      >();
       const directIndexStore = await getBackupIndexStoreConfig(
         project_id,
       ).catch(() => null);
       if (directIndexStore) {
         const records = await getRemoteProjectBackupIndexes(project_id);
-        const complete = records
+        for (const backup of records
           .filter((record) => record.status === "complete")
           .map((record) => ({
             id: record.backup_id,
             time: new Date(record.backup_time),
             summary: {},
-          }))
-          .sort((a, b) => a.time.valueOf() - b.time.valueOf());
-        if (complete.length > 0) {
-          return complete;
+          }))) {
+          backupsById.set(backup.id, backup);
         }
       }
       await syncBackupIndexCache(project_id);
       const manifest = await loadBackupIndexManifest(project_id);
-      const backups: {
-        id: string;
-        time: Date;
-        summary: { [key: string]: string | number };
-      }[] = [];
       for (const entry of Object.values(manifest.entries)) {
         if (!entry?.file) continue;
         const dbPath = join(backupIndexDir(project_id), entry.file);
@@ -4848,11 +4849,16 @@ export async function getBackups({
             ? new Date(meta.backup_time)
             : null;
           if (!backupId || !backupTime) continue;
-          backups.push({ id: backupId, time: backupTime, summary: {} });
+          backupsById.set(backupId, {
+            id: backupId,
+            time: backupTime,
+            summary: {},
+          });
         } finally {
           db.close();
         }
       }
+      const backups = Array.from(backupsById.values());
       backups.sort((a, b) => a.time.valueOf() - b.time.valueOf());
       return backups;
     } catch (err) {

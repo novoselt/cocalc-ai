@@ -131,6 +131,7 @@ async function assertManagedBackupAllowed({
 }): Promise<void> {
   if (
     managed_egress_override === "admin-host-drain" ||
+    managed_egress_override === "legacy-migration-initial-backup" ||
     managed_egress_override === "admin-site-migration"
   ) {
     return;

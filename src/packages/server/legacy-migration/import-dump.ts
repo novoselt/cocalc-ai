@@ -430,6 +430,21 @@ async function requeueSkippedRestoresWithArtifacts(
        AND i.restore_status='skipped'
        AND COALESCE(p.artifact_status, '')='available'
        AND COALESCE(p.artifact_key, '') <> ''
+       AND COALESCE(p.artifact_manifest->>'r2_key', '')=p.artifact_key
+       AND (
+         p.artifact_manifest ?| ARRAY[
+           'compressed_bytes',
+           'compressed_size_bytes',
+           'artifact_bytes',
+           'object_bytes',
+           'r2_bytes'
+         ]
+         OR COALESCE((p.artifact_manifest->'archive') ?| ARRAY[
+           'compressed_bytes',
+           'object_bytes'
+         ], false)
+         OR COALESCE((p.artifact_manifest->'artifact') ? 'bytes', false)
+       )
     `,
     [ids],
   );

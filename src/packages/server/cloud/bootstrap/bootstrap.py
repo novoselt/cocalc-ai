@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260704-v1"
+HELPER_SCHEMA_VERSION = "20260708-v1"
 RUNTIME_WRAPPER_VERSION = "20260505-v9"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -1407,7 +1407,7 @@ def ensure_owned_runtime_dir(path: Path, uid: int, gid: int) -> None:
 
 
 def default_podman_runtime_dir(uid: int) -> str:
-    return f"/run/user/{uid}/cocalc-podman-runtime"
+    return f"/mnt/cocalc/data/tmp/cocalc-podman-runtime-{uid}"
 
 
 def ensure_runtime_user_manager(cfg: BootstrapConfig) -> None:
@@ -3291,7 +3291,7 @@ def configure_podman(cfg: BootstrapConfig) -> None:
         user_config = user_config_root / "containers"
         rootless_root = Path(f"/mnt/cocalc/data/containers/rootless/{cfg.ssh_user}")
         rootless_storage = rootless_root / "storage"
-        rootless_run = Path(f"/run/user/{desired_uid}/containers")
+        rootless_run = rootless_root / "run"
         user_config_root.mkdir(parents=True, exist_ok=True)
         run_best_effort(
             cfg,
@@ -4028,6 +4028,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 cmd="${1:-ensure}"
 shift || true
+cd /
 RUNTIME_ROOT="__RUNTIME_ROOT__"
 RUNTIME_USER="__RUNTIME_USER__"
 RUNTIME_BIN="$RUNTIME_ROOT/bin/project-host"
@@ -4042,6 +4043,7 @@ SYSCTL_CONFIG_PATH="/etc/sysctl.d/90-cocalc-project-host.conf"
 HELPER_SCHEMA_VERSION="__HELPER_SCHEMA_VERSION__"
 
 run_daemon() {
+  cd /
   sudo -n -u "${RUNTIME_USER}" -H "${RUNTIME_BIN}" daemon "$@"
 }
 
@@ -4083,7 +4085,7 @@ runtime_user_run_dir() {
 }
 
 default_podman_runtime_dir() {
-  printf '%s/cocalc-podman-runtime\n' "$(runtime_user_run_dir)"
+  printf '/mnt/cocalc/data/tmp/cocalc-podman-runtime-%s\n' "$(runtime_uid)"
 }
 
 podman_runtime_dir() {
@@ -4142,8 +4144,10 @@ podman_runtime_namespace_error() {
   grep -qiE 'cannot re-exec process to join the existing user namespace|cannot join.*user namespace|invalid internal status' <<< "$1"
 }
 
-project_host_process_running() {
-  first_running_pid "${PID_FILE}" "${HOST_AGENT_PID_FILE}" >/dev/null 2>&1
+project_host_app_running() {
+  local pid
+  pid="$(read_pid_file "${PID_FILE}")"
+  [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null
 }
 
 remove_safe_runtime_dir() {
@@ -4166,8 +4170,8 @@ remove_safe_runtime_dir() {
 
 cleanup_podman_runtime_state() {
   local runtime_dir runroot
-  if project_host_process_running; then
-    echo "project-host is running; refusing to clean Podman runtime state" >&2
+  if project_host_app_running; then
+    echo "project-host app is running; refusing to clean Podman runtime state" >&2
     return 1
   fi
   runtime_dir="$(podman_runtime_dir)"
@@ -4601,6 +4605,7 @@ exec python3 "{bootstrap_py}" --bootstrap-dir "{bootstrap_dir}" --only tools_bun
                 'if [ "$(id -un)" = "$RUNTIME_USER" ]; then\n'
                 '  exec "$RUNTIME_SCRIPT" "$@"\n'
                 "fi\n"
+                "cd /\n"
                 'exec sudo -n -u "$RUNTIME_USER" -H "$RUNTIME_SCRIPT" "$@"\n'
             )
             target = admin_bin / name

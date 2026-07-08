@@ -52,6 +52,30 @@ function renderDate(value?: Date | string | null) {
   return <TimeAgo date={value} />;
 }
 
+function archiveAvailable(
+  project: LegacyMigrationAdminProjectSummary,
+): boolean {
+  return (
+    project.artifact_status === "available" &&
+    typeof project.artifact_bytes === "number" &&
+    Number.isFinite(project.artifact_bytes)
+  );
+}
+
+function ArchiveStatusTag({
+  project,
+}: {
+  project: LegacyMigrationAdminProjectSummary;
+}) {
+  if (archiveAvailable(project)) {
+    return <Tag color="green">R2 archive available</Tag>;
+  }
+  if (project.artifact_status === "available") {
+    return <Tag color="red">R2 archive unavailable</Tag>;
+  }
+  return <Tag>{project.artifact_status ?? "unknown archive"}</Tag>;
+}
+
 function legacyAccountDisplayName(
   account: Pick<
     LegacyMigrationAdminAccountSummary,
@@ -185,7 +209,7 @@ function ProjectsTable({
           key: "status",
           render: (_, project) => (
             <Space wrap>
-              <Tag>{project.artifact_status ?? "unknown archive"}</Tag>
+              <ArchiveStatusTag project={project} />
               <Tag>{project.import_status}</Tag>
               {project.restore_status && <Tag>{project.restore_status}</Tag>}
               {project.joined && <Tag color="green">joined</Tag>}
@@ -736,7 +760,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
                         key: "status",
                         render: (_, project) => (
                           <Space wrap>
-                            <Tag>{project.artifact_status ?? "unknown"}</Tag>
+                            <ArchiveStatusTag project={project} />
                             <Tag>{project.import_status}</Tag>
                           </Space>
                         ),

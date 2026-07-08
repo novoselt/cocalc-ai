@@ -18,6 +18,7 @@ import { startRootfsPublishLroWorker } from "@cocalc/server/projects/rootfs-publ
 import { startRestoreLroWorker } from "@cocalc/server/projects/restore-worker";
 import { startHostLroWorker } from "@cocalc/server/hosts/start-worker";
 import { startLegacyMigrationProjectRestoreWorker } from "@cocalc/server/legacy-migration/restore-worker";
+import { startLegacyMigrationArtifactRefreshMaintenance } from "@cocalc/server/legacy-migration/artifact-refresh-maintenance";
 import { isLaunchpadProduct } from "@cocalc/server/launchpad/mode";
 import { startRootfsReleaseGcMaintenance } from "@cocalc/server/rootfs/gc-maintenance";
 import { startRootfsScanMaintenance } from "@cocalc/server/rootfs/scan-maintenance";
@@ -115,13 +116,11 @@ export async function initConatApi() {
   startRestoreLroWorker();
   if (isPrimaryBayWorker()) {
     startLegacyMigrationProjectRestoreWorker();
+    startLegacyMigrationArtifactRefreshMaintenance();
   } else {
-    logger.info(
-      "legacy migration project restore worker skipped on non-primary bay worker",
-      {
-        worker_id: process.env.COCALC_BAY_WORKER_ID,
-      },
-    );
+    logger.info("legacy migration workers skipped on non-primary bay worker", {
+      worker_id: process.env.COCALC_BAY_WORKER_ID,
+    });
   }
   startHostLroWorker();
   startAccountProjectIndexProjectionMaintenance();

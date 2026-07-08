@@ -83,6 +83,7 @@ export type SoftwareCommandDeps = {
     options?: {
       stdio?: "inherit" | "pipe";
       env?: NodeJS.ProcessEnv;
+      timeoutMs?: number;
     },
   ) => Promise<number>;
   runCommandOutput?: (
@@ -140,6 +141,7 @@ type SmokeOptions = {
   api?: string;
   remote?: string;
   host?: string;
+  checkTimeoutMs?: string;
   timeout?: string;
 };
 
@@ -1442,12 +1444,37 @@ function parseLimit(raw: string | undefined): number {
   return value;
 }
 
-function parseTimeoutMs(raw: string | undefined): number {
+function parseTimeoutMs(raw: string | undefined, option = "--timeout"): number {
   const value = raw == null || raw.trim() === "" ? 15_000 : Number(raw);
   if (!Number.isFinite(value) || value <= 0) {
-    throw new Error("--timeout must be a positive number of milliseconds");
+    throw new Error(`${option} must be a positive number of milliseconds`);
   }
   return Math.max(1, Math.floor(value));
+}
+
+function resolveSmokeTimeoutMs({
+  opts,
+  command,
+}: {
+  opts: SmokeOptions;
+  command: Command;
+}): number {
+  if (opts.checkTimeoutMs != null || opts.timeout != null) {
+    return parseTimeoutMs(
+      opts.checkTimeoutMs ?? opts.timeout,
+      "--check-timeout-ms",
+    );
+  }
+  const globals = command.optsWithGlobals() as { timeout?: unknown };
+  const globalTimeout = `${globals.timeout ?? ""}`.trim();
+  if (globalTimeout && /^\d+$/.test(globalTimeout)) {
+    return parseTimeoutMs(globalTimeout, "--check-timeout-ms");
+  }
+  return parseTimeoutMs(undefined, "--check-timeout-ms");
+}
+
+function smokeRpcTimeout(timeoutMs: number): string {
+  return `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`;
 }
 
 function formatDurationMs(ms: number): string {
@@ -1540,8 +1567,8 @@ async function smokeHttpChecks({
   for (const [check, path] of [
     ["homepage", "/"],
     ["static app shell", "/static/app.html"],
+    ["static public shell", "/static/public.html"],
     ["webapp favicon", "/webapp/favicon.ico"],
-    ["auth bootstrap", "/api/v2/auth/bootstrap"],
   ] as const) {
     checks.push(
       await runTimedSmokeCheck(
@@ -4500,7 +4527,14 @@ Supported deploy/smoke components:
     .option("--api <url>", "site API URL")
     .option("--remote <ssh-target>", "bay SSH target")
     .option("--host <host>", "representative project host id or name")
-    .option("--timeout <ms>", "per HTTP check timeout in milliseconds", "15000")
+    .option(
+      "--check-timeout-ms <ms>",
+      "per smoke check timeout in milliseconds",
+    )
+    .option(
+      "--timeout <ms>",
+      "deprecated alias for --check-timeout-ms; prefer --check-timeout-ms to avoid the global CLI --timeout option",
+    )
     .action(
       async (
         componentArg: string,
@@ -4529,7 +4563,7 @@ Supported deploy/smoke components:
           );
         }
         const startedAt = deps.now?.() ?? new Date();
-        const timeoutMs = parseTimeoutMs(opts.timeout);
+        const timeoutMs = resolveSmokeTimeoutMs({ opts, command });
         if (releaseSmokeTarget) {
           const checks = await smokeReleaseChannelChecks({
             component,
@@ -4632,13 +4666,25 @@ Supported deploy/smoke components:
                     "host-routes",
                     "--api",
                     target.api!,
+                    "--host-limit",
+                    "1",
+                    "--request-timeout-ms",
+                    `${timeoutMs}`,
+                    "--rpc-timeout",
+                    smokeRpcTimeout(timeoutMs),
                   ],
                   {
                     stdio: "inherit",
                     env: deps.env ?? process.env,
+                    timeoutMs,
                   },
                 );
                 if (code !== 0) {
+                  if (code === 124) {
+                    throw new Error(
+                      `rocket health host-routes timed out after ${timeoutMs}ms`,
+                    );
+                  }
                   throw new Error(
                     `rocket health host-routes failed with exit status ${code}`,
                   );
