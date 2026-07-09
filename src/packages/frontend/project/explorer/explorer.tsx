@@ -53,7 +53,7 @@ import useListing, {
   sortListingEntries,
   type SortField,
 } from "@cocalc/frontend/project/listing/use-listing";
-import useProjectActionsFilesystem from "@cocalc/frontend/project/listing/use-project-actions-fs";
+import { useProjectActionsFilesystemWithRefresh } from "@cocalc/frontend/project/listing/use-project-actions-fs";
 import useBackupsListing, {
   isBackupsPath,
 } from "@cocalc/frontend/project/listing/use-backups";
@@ -274,7 +274,10 @@ export function Explorer({ isVisible = true }: { isVisible?: boolean }) {
       DEFAULT_ACTIVE_FILE_SORT,
   );
 
-  const fs = useProjectActionsFilesystem({ actions, project_id });
+  const { fs, refreshFs } = useProjectActionsFilesystemWithRefresh({
+    actions,
+    project_id,
+  });
   const inBackupsPath = isBackupsPath(effective_current_path);
   const inSnapshotsPath = isSnapshotsPath(effective_current_path);
   const homePath =
@@ -319,6 +322,7 @@ export function Explorer({ isVisible = true }: { isVisible?: boolean }) {
     fs: inBackupsPath ? null : fs,
     path: filesystemListingPath,
     watch: !readOnlyViewer,
+    refreshFs,
     debugContext: publicShareListingDebugContext,
   });
   const {

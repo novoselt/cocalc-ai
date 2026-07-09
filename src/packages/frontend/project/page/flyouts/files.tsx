@@ -52,7 +52,7 @@ import { FilesSelectedControls } from "./files-controls";
 import { FilesHeader } from "./files-header";
 import { fileItemStyle } from "./utils";
 import useListing from "@cocalc/frontend/project/listing/use-listing";
-import useProjectActionsFilesystem from "@cocalc/frontend/project/listing/use-project-actions-fs";
+import { useProjectActionsFilesystemWithRefresh } from "@cocalc/frontend/project/listing/use-project-actions-fs";
 import useBackupsListing, {
   isBackupsPath,
 } from "@cocalc/frontend/project/listing/use-backups";
@@ -268,7 +268,10 @@ export function FilesFlyout({
     path: effective_current_path,
     homePath,
   });
-  const fs = useProjectActionsFilesystem({ actions, project_id });
+  const { fs, refreshFs } = useProjectActionsFilesystemWithRefresh({
+    actions,
+    project_id,
+  });
   const {
     listing: directoryListing,
     error: listingError,
@@ -276,6 +279,7 @@ export function FilesFlyout({
   } = useListing({
     fs: inBackupsPath ? null : fs,
     path: listingPath,
+    refreshFs,
   });
   const {
     listing: backupsListing,
