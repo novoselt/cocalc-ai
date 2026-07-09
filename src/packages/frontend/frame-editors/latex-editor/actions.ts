@@ -486,7 +486,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       this.knitr,
       this.output_directory,
     );
-    this.set_build_command(default_cmd);
+    this.setState({ build_command: fromJS(default_cmd) });
     return default_cmd;
   }
 
