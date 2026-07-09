@@ -704,13 +704,15 @@ export function FileListing({
 
   const triggerFileAction = useCallback(
     (fullPath: string, action: FileAction) => {
+      const selectedPaths = checked_files.has(fullPath)
+        ? checked_files.toArray()
+        : [fullPath];
       triggerProjectFileAction({
         actions,
         action,
         path: fullPath,
-        multiple:
-          checked_files.size > 1 ||
-          (checked_files.size > 0 && checked_files.has(fullPath)),
+        multiple: selectedPaths.length > 1,
+        selectedPaths,
       });
     },
     [actions, checked_files],
@@ -726,7 +728,7 @@ export function FileListing({
       }
 
       const multiple =
-        checked_files.size > 1 || checked_files.has(record.fullPath);
+        checked_files.has(record.fullPath) && checked_files.size > 1;
       const items: NonNullable<MenuProps["items"]> = [
         {
           key: "open",
@@ -955,9 +957,15 @@ export function FileListing({
         onContextMenu: (e: React.MouseEvent) => {
           e.preventDefault();
           const items = buildContextMenu(record);
-          if ((items?.length ?? 0) > 0) {
-            setContextMenu({ items, x: e.clientX, y: e.clientY });
+          if ((items?.length ?? 0) === 0) {
+            return;
           }
+          if (!checked_files.has(record.fullPath)) {
+            actions.set_all_files_unchecked();
+            actions.set_file_checked(record.fullPath, true);
+          }
+          actions.set_most_recent_file_click(record.fullPath);
+          setContextMenu({ items, x: e.clientX, y: e.clientY });
         },
         style: {
           cursor: "pointer",
@@ -978,6 +986,7 @@ export function FileListing({
       file_search,
       readOnly,
       checked_files,
+      actions,
       handleRowClick,
       buildContextMenu,
     ],
