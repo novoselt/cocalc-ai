@@ -82,7 +82,8 @@ def find_string(key, default=""):
 m = re.search(r'"private_key"\s*:\s*"(.*?)"\s*,\s*"client_email"', raw, re.S)
 if not m:
     raise SystemExit("missing private_key")
-private_key = m.group(1).replace("\\n", "\n")
+private_key = re.sub(r"\\\s*n", "\n", m.group(1))
+private_key = private_key.replace("\\n", "\n")
 lines = private_key.splitlines()
 if lines and lines[0].startswith("-----BEGIN"):
     body = "".join(lines[1:-1])
