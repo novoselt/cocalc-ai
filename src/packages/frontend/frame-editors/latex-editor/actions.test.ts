@@ -1,4 +1,4 @@
-import { Map } from "immutable";
+import { List, Map } from "immutable";
 import { Actions } from "./actions";
 import { EventEmitter } from "events";
 
@@ -50,6 +50,68 @@ describe("LaTeX persisted source change builds", () => {
 });
 
 describe("LaTeX initial build", () => {
+  it("saves explicit build command changes to the aux syncdb file", () => {
+    const syncdb = {
+      set: jest.fn(),
+      commit: jest.fn(),
+      save_to_disk: jest.fn(async () => undefined),
+    };
+    const actions: any = Object.create(Actions.prototype);
+    actions._syncdb = syncdb;
+    actions._state = "open";
+    actions.isClosed = () => false;
+    actions.is_read_only_preview = () => false;
+    actions.path = "a.tex";
+    actions.setState = jest.fn();
+    actions.set_error = jest.fn();
+
+    actions.set_build_command("pdflatex a.tex");
+
+    expect(syncdb.set).toHaveBeenCalledWith({
+      key: "build_command",
+      value: "pdflatex a.tex",
+    });
+    expect(syncdb.commit).toHaveBeenCalled();
+    expect(syncdb.save_to_disk).toHaveBeenCalled();
+    expect(actions.setState).toHaveBeenCalledWith({
+      build_command: "pdflatex a.tex",
+    });
+  });
+
+  it("does not persist the fallback default build command", () => {
+    const syncdb = {
+      set: jest.fn(),
+      commit: jest.fn(),
+    };
+    const actions: any = Object.create(Actions.prototype);
+    actions._syncdb = syncdb;
+    actions.path = "paper.tex";
+    actions.knitr = false;
+    actions.output_directory = "build-dir";
+    actions.engine_config = undefined;
+    actions.setState = jest.fn();
+
+    const command = (actions as any).set_default_build_command();
+
+    expect(command).toEqual([
+      "latexmk",
+      "-pdf",
+      "-f",
+      "-g",
+      "-bibtex",
+      "-deps",
+      "-synctex=1",
+      "-interaction=nonstopmode",
+      "-output-directory=build-dir",
+      "paper.tex",
+    ]);
+    expect(actions.setState).toHaveBeenCalledWith({
+      build_command: List(command),
+    });
+    expect(syncdb.set).not.toHaveBeenCalled();
+    expect(syncdb.commit).not.toHaveBeenCalled();
+  });
+
   it("waits for the source syncstring before deciding whether to build on open", async () => {
     const syncstring = new EventEmitter() as any;
     let syncState = "loading";
