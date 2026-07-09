@@ -30,6 +30,12 @@ sudo ./src/scripts/legacy-migration/archive_to_r2.py \
   --limit 10
 ```
 
+The default compression is `zstd -3 --long=27 -T0`, which favors migration
+throughput over maximum compression. Use `--zstd-level` and `--zstd-threads` to
+tune worker shape. For one worker per VM, `--zstd-threads 0` lets zstd use the
+available CPUs during the final tar/compress phase. If multiple workers share a
+VM, cap each worker with `--zstd-threads` to avoid CPU oversubscription.
+
 The script writes a JSON result line per project and writes a sidecar to:
 
 ```text

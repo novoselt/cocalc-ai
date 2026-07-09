@@ -445,11 +445,11 @@ for rel in sys.argv[2:]:
     root_run_no_check(["find", str(root), "-type", "f", "-name", "*.tmp", "-delete"], capture_output=True)
 
 
-def tar_zstd(root: Path, artifact: Path, zstd_level: int, zstd_long: int) -> None:
+def tar_zstd(root: Path, artifact: Path, zstd_level: int, zstd_long: int, zstd_threads: int) -> None:
     if artifact.exists():
         artifact.unlink()
     tar_cmd = " ".join(shlex.quote(x) for x in root_argv(["tar", "-S", "-cf", "-", "-C", str(root), "."]))
-    cmd = f"{tar_cmd} | zstd -{zstd_level} --long={zstd_long} -T0 -q -o {shlex.quote(str(artifact))}"
+    cmd = f"{tar_cmd} | zstd -{zstd_level} --long={zstd_long} -T{zstd_threads} -q -o {shlex.quote(str(artifact))}"
     run_shell(cmd)
     if artifact.stat().st_size < MIN_ARTIFACT_BYTES:
         raise RuntimeError(f"artifact is suspiciously tiny: {artifact.stat().st_size} bytes")
@@ -484,6 +484,8 @@ class ArchiveMigrator:
             "namespace": namespace,
             "archive_url": archive_url,
             "r2_key": r2_key,
+            "zstd_level": self.args.zstd_level,
+            "zstd_threads": self.args.zstd_threads,
             "started_at": now_iso(),
             "worker": "archive_to_r2.py",
         }
@@ -529,7 +531,7 @@ class ArchiveMigrator:
                 zfs_target = f"{self.args.pool}/restore-{project_id}"
 
             cleanup_excludes(out_dir)
-            tar_zstd(out_dir, artifact, self.args.zstd_level, self.args.zstd_long)
+            tar_zstd(out_dir, artifact, self.args.zstd_level, self.args.zstd_long, self.args.zstd_threads)
             result.update(method_info)
             result["artifact_bytes"] = artifact.stat().st_size
             if not self.args.dry_run:
@@ -600,12 +602,19 @@ def main() -> None:
     parser.add_argument("--workdir", default="/var/tmp/archive-to-r2")
     parser.add_argument("--pool", default="archive2r2")
     parser.add_argument("--pool-size", default="300G")
-    parser.add_argument("--zstd-level", type=int, default=10)
+    parser.add_argument("--zstd-level", type=int, default=3)
     parser.add_argument("--zstd-long", type=int, default=27)
+    parser.add_argument("--zstd-threads", type=int, default=0, help="zstd -T value; 0 means auto")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
+    if not 1 <= args.zstd_level <= 22:
+        raise SystemExit("--zstd-level must be between 1 and 22")
+    if not 10 <= args.zstd_long <= 31:
+        raise SystemExit("--zstd-long must be between 10 and 31")
+    if args.zstd_threads < 0:
+        raise SystemExit("--zstd-threads must be nonnegative")
 
     require_tools(["tar", "zstd", "rclone", "bup", "lz4"])
     if not (shutil.which("gsutil") or shutil.which("gcloud")):
