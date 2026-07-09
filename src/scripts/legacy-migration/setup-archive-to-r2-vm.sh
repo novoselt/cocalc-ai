@@ -19,7 +19,6 @@ $SUDO apt-get install -y \
   lz4 \
   python3 \
   python3-venv \
-  rclone \
   tmux \
   zfsutils-linux \
   zstd
@@ -35,6 +34,27 @@ if ! command -v gcloud >/dev/null 2>&1; then
 fi
 
 $SUDO modprobe zfs || true
+
+TMP_RCLONE="$(mktemp -d)"
+trap 'rm -rf "$TMP_RCLONE"' EXIT
+curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+  -o "$TMP_RCLONE/rclone-current-linux-amd64.zip"
+python3 - "$TMP_RCLONE" <<'PY'
+import pathlib
+import shutil
+import sys
+import zipfile
+
+tmp = pathlib.Path(sys.argv[1])
+with zipfile.ZipFile(tmp / "rclone-current-linux-amd64.zip") as z:
+    z.extractall(tmp / "extract")
+for path in (tmp / "extract").glob("rclone-*-linux-amd64/rclone"):
+    shutil.copy2(path, tmp / "rclone")
+    break
+else:
+    raise SystemExit("rclone binary not found in archive")
+PY
+$SUDO install -m 0755 "$TMP_RCLONE/rclone" /usr/local/bin/rclone
 
 echo "archive-to-r2 VM setup complete"
 echo "Check tools:"
