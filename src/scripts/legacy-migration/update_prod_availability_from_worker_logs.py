@@ -217,7 +217,15 @@ def main() -> int:
                     "chunk_index": chunk_index,
                 }
             )
-            if proc.returncode != 0:
+            parsed: dict[str, Any] | None = None
+            if response_path.exists() and response_path.stat().st_size > 0:
+                try:
+                    parsed = parse_response(response_path)
+                except Exception:
+                    parsed = None
+            if proc.returncode != 0 and not (
+                parsed is not None and parsed.get("committed") is True
+            ):
                 state_path.write_text(
                     json.dumps(
                         {
@@ -233,12 +241,14 @@ def main() -> int:
                     )
                 )
                 return proc.returncode
-            parsed = parse_response(response_path)
+            if parsed is None:
+                parsed = parse_response(response_path)
             rec = {
                 "ok": True,
                 "chunk_index": chunk_index,
                 "chunk_rows": len(rows),
                 "elapsed_s": round(time.time() - started_chunk, 3),
+                "cli_returncode": proc.returncode,
                 **parsed,
             }
             results.write(json.dumps(rec, sort_keys=True) + "\n")
