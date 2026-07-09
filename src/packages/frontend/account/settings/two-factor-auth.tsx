@@ -56,6 +56,8 @@ type SetupState = {
   otpauth_url: string;
 };
 
+const TWO_FACTOR_DOCS_URL = "/app-docs/account/two-factor-authentication";
+
 function RecoveryCodesBlock({ codes }: { codes: string[] }) {
   if (!codes.length) return null;
   const text = codes.join("\n");
@@ -245,6 +247,12 @@ export default function TwoFactorAuthSetting({ showHeader = true }: Props) {
   const content = (
     <>
       <Flex vertical gap="middle">
+        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+          CoCalc supports authenticator codes and passkeys.{" "}
+          <Typography.Link href={TWO_FACTOR_DOCS_URL}>
+            Learn about CoCalc two-factor authentication.
+          </Typography.Link>
+        </Typography.Paragraph>
         {error ? <Alert type="error" showIcon title={error} /> : undefined}
         {loading ? (
           <Alert type="info" showIcon title="Loading security status..." />

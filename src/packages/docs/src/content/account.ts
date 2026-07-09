@@ -54,11 +54,11 @@ CoCalc supports two second-factor methods:
 | Method | What it is | When to use it |
 | :-- | :-- | :-- |
 | Authenticator app codes | A rotating 6-digit code from an app such as Google Authenticator, 1Password, Authy, Microsoft Authenticator, or another TOTP app. | Use this when you want a portable method that works across browsers and devices. |
-| Passkeys | WebAuthn credentials backed by your browser, operating system, hardware security key, phone, or password manager. | Use this when you want phishing-resistant approval with a device prompt, fingerprint, face unlock, PIN, or hardware key. |
+| Passkeys | WebAuthn credentials backed by your browser, operating system, hardware security key, phone, or password manager. | Use this when you want phishing-resistant approval that is much less tedious than typing a 6-digit code: approve with a device prompt, fingerprint, face unlock, PIN, or hardware key. |
 
 You may configure either method, or both. Having both is useful: a passkey is
-fast and phishing-resistant, while an authenticator app gives you a broadly
-compatible fallback.
+fast, phishing-resistant, and avoids repeatedly finding and typing short-lived
+codes, while an authenticator app gives you a broadly compatible fallback.
 
 ## How CoCalc uses fresh authentication
 

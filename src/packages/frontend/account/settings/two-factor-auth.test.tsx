@@ -61,6 +61,18 @@ describe("TwoFactorAuthSetting", () => {
     });
   });
 
+  it("links to the two-factor authentication docs", async () => {
+    render(<TwoFactorAuthSetting />);
+
+    const link = await screen.findByRole("link", {
+      name: "Learn about CoCalc two-factor authentication.",
+    });
+    expect(link).toHaveAttribute(
+      "href",
+      "/app-docs/account/two-factor-authentication",
+    );
+  });
+
   it("requires fresh auth before starting authenticator app setup", async () => {
     render(<TwoFactorAuthSetting />);
 
