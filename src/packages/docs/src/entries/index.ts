@@ -42,6 +42,7 @@ const ENTRY_BY_ID = new Map(ENTRY_GROUPS.map((entry) => [entry.id, entry]));
 
 const DOCS_ENTRY_IDS = [
   "account.settings",
+  "account.two-factor-authentication",
   "billing.settings",
   "account.migrating-from-cocalc-com",
   "admin.overview",

@@ -316,6 +316,16 @@ function validateSignedIn(): string | true {
 }
 
 function selectAccountSettings(page: SettingsPageType): void {
+  selectAccountSettingsWithHash({ page });
+}
+
+function selectAccountSettingsWithHash({
+  hash = "",
+  page,
+}: {
+  hash?: string;
+  page: SettingsPageType;
+}): void {
   const route: AccountSettingsRoute = { page };
   const pageActions = redux.getActions("page") as
     | {
@@ -333,7 +343,7 @@ function selectAccountSettings(page: SettingsPageType): void {
   void pageActions?.set_active_tab?.("account", false);
   accountActions?.setState?.({ active_page: page });
   if (typeof window !== "undefined") {
-    set_url_with_search(getSettingsUrlPath(route), "");
+    set_url_with_search(getSettingsUrlPath(route), "", hash);
   }
 }
 
@@ -805,6 +815,20 @@ const DOCS_APP_ACTIONS: Record<string, DocsAppAction> = {
         page: "profile",
         projectId,
       }),
+  },
+  "account.security.open": {
+    id: "account.security.open",
+    isAvailable: validateSignedIn,
+    run: ({ projectId }) => {
+      selectAccountSettingsWithHash({ hash: "#security", page: "profile" });
+      return {
+        action_id: "account.security.open",
+        opened: true,
+        panel: "profile",
+        project_id: projectId,
+        tab: "account",
+      };
+    },
   },
   "account.ssh-keys.open": {
     id: "account.ssh-keys.open",

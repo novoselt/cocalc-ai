@@ -319,6 +319,7 @@ function liveUiAssertionForAction({
     const settingsPaths: Partial<Record<DocsActionId, string>> = {
       "account.membership.open": "/settings/membership",
       "account.profile.open": "/settings/profile",
+      "account.security.open": "/settings/profile",
       "account.ssh-keys.open": "/settings/keys",
       "billing.payment-methods.open": "/settings/payment-methods",
       "billing.statements.open": "/settings/statements",

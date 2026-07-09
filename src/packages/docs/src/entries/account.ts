@@ -5,7 +5,11 @@
 
 import type { DocsEntry } from "../types";
 import { docsIcon } from "../helpers";
-import { ACCOUNT_SETTINGS_BODY, BILLING_SETTINGS_BODY } from "../content";
+import {
+  ACCOUNT_SETTINGS_BODY,
+  BILLING_SETTINGS_BODY,
+  TWO_FACTOR_AUTHENTICATION_BODY,
+} from "../content";
 
 export const ACCOUNT_ENTRIES: DocsEntry[] = [
   {
@@ -37,6 +41,33 @@ export const ACCOUNT_ENTRIES: DocsEntry[] = [
     summary:
       "Manage profile, identity, account metadata, preferences, API keys, and SSH keys.",
     title: "Manage account settings",
+    visibility: "signed-in",
+  },
+  {
+    actions: [
+      {
+        description: "Open Account Settings -> Profile -> Security.",
+        executable: true,
+        id: "account.security.open",
+        label: "Open security settings",
+      },
+    ],
+    audiences: ["agents", "instructors", "researchers", "students", "teams"],
+    body: TWO_FACTOR_AUTHENTICATION_BODY.trim(),
+    category: "Account and billing",
+    id: "account.two-factor-authentication",
+    image: docsIcon(
+      "/public/docs/two-factor-authentication.svg",
+      "CoCalc security flow with Google sign-in, authenticator codes, passkeys, and fresh 2FA checks",
+    ),
+    lastReviewed: "2026-07-09",
+    searchKeywords:
+      "two-factor authentication 2fa mfa passkey passkeys authenticator app totp google sso fresh auth dedicated hosts create host computer server security",
+    slug: "account/two-factor-authentication",
+    status: "ready",
+    summary:
+      "Configure CoCalc 2FA with authenticator codes or passkeys, and understand why it is separate from Google SSO 2FA.",
+    title: "Set up two-factor authentication",
     visibility: "signed-in",
   },
   {
