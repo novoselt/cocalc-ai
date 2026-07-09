@@ -34,6 +34,7 @@ import {
   TableOfContentsEntry,
   TableOfContentsEntryList,
 } from "@cocalc/frontend/components";
+import { saveToDiskWithFileServerRetry } from "@cocalc/frontend/frame-editors/base-editor/actions-base";
 import {
   Actions as BaseActions,
   CodeEditorState,
@@ -1891,7 +1892,23 @@ export class Actions extends BaseActions<LatexEditorState> {
     // surprised it wouldn't generate a feedback loop)!
     this._syncdb.set({ key: "build_command", value: command });
     this._syncdb.commit();
+    this.save_build_command_config_to_disk();
     this.setState({ build_command: fromJS(command) });
+  }
+
+  private save_build_command_config_to_disk(): void {
+    const syncdb = this._syncdb;
+    if (syncdb == null) return;
+    void saveToDiskWithFileServerRetry({
+      save: () => syncdb.save_to_disk(),
+      shouldRetry: () => this._state !== "closed" && !this.isClosed(),
+    }).catch((err) => {
+      if (this._state !== "closed") {
+        this.set_error(
+          `Error saving LaTeX build command for '${this.path}' -- ${err}`,
+        );
+      }
+    });
   }
 
   // if id is given, switch that frame to edit the given path;

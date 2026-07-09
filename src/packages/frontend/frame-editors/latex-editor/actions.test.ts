@@ -50,6 +50,34 @@ describe("LaTeX persisted source change builds", () => {
 });
 
 describe("LaTeX initial build", () => {
+  it("saves explicit build command changes to the aux syncdb file", () => {
+    const syncdb = {
+      set: jest.fn(),
+      commit: jest.fn(),
+      save_to_disk: jest.fn(async () => undefined),
+    };
+    const actions: any = Object.create(Actions.prototype);
+    actions._syncdb = syncdb;
+    actions._state = "open";
+    actions.isClosed = () => false;
+    actions.is_read_only_preview = () => false;
+    actions.path = "a.tex";
+    actions.setState = jest.fn();
+    actions.set_error = jest.fn();
+
+    actions.set_build_command("pdflatex a.tex");
+
+    expect(syncdb.set).toHaveBeenCalledWith({
+      key: "build_command",
+      value: "pdflatex a.tex",
+    });
+    expect(syncdb.commit).toHaveBeenCalled();
+    expect(syncdb.save_to_disk).toHaveBeenCalled();
+    expect(actions.setState).toHaveBeenCalledWith({
+      build_command: "pdflatex a.tex",
+    });
+  });
+
   it("does not persist the fallback default build command", () => {
     const syncdb = {
       set: jest.fn(),
