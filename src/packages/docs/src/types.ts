@@ -33,6 +33,7 @@ export interface DocsActionParameter {
 export type DocsActionId =
   | "account.membership.open"
   | "account.profile.open"
+  | "account.security.open"
   | "account.ssh-keys.open"
   | "billing.payment-methods.open"
   | "billing.statements.open"

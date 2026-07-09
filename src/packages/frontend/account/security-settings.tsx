@@ -46,33 +46,35 @@ export function SecuritySettings({
   });
 
   return (
-    <SettingBox title="Security" icon="lock">
-      <Flex vertical gap="middle">
-        <Flex align="flex-start" justify="space-between" gap="small" wrap>
-          <Flex flex={1}>
-            {email_address ? (
-              <PasswordSetting
-                runFreshAuthAction={runFreshAuthAction}
-                showLabel={false}
-              />
-            ) : undefined}
+    <div id="security">
+      <SettingBox title="Security" icon="lock">
+        <Flex vertical gap="middle">
+          <Flex align="flex-start" justify="space-between" gap="small" wrap>
+            <Flex flex={1}>
+              {email_address ? (
+                <PasswordSetting
+                  runFreshAuthAction={runFreshAuthAction}
+                  showLabel={false}
+                />
+              ) : undefined}
+            </Flex>
+            <DeleteAccountButton
+              confirm={async () => {
+                try {
+                  await runFreshAuthAction(async () => {
+                    await actions().delete_account();
+                  });
+                } catch (err) {
+                  ugly_error(err);
+                }
+              }}
+              requiredText={userName}
+            />
           </Flex>
-          <DeleteAccountButton
-            confirm={async () => {
-              try {
-                await runFreshAuthAction(async () => {
-                  await actions().delete_account();
-                });
-              } catch (err) {
-                ugly_error(err);
-              }
-            }}
-            requiredText={userName}
-          />
+          <TwoFactorAuthSetting showHeader={false} />
         </Flex>
-        <TwoFactorAuthSetting showHeader={false} />
-      </Flex>
-      <FreshAuthModal {...freshAuthModalProps} />
-    </SettingBox>
+        <FreshAuthModal {...freshAuthModalProps} />
+      </SettingBox>
+    </div>
   );
 }

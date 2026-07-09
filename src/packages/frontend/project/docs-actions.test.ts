@@ -264,9 +264,34 @@ describe("project docs actions", () => {
     expect(mockSetAccountState).toHaveBeenCalledWith({
       active_page: "profile",
     });
-    expect(mockSetUrlWithSearch).toHaveBeenCalledWith("/settings/profile", "");
+    expect(mockSetUrlWithSearch).toHaveBeenCalledWith(
+      "/settings/profile",
+      "",
+      "",
+    );
     expect(profile).toMatchObject({
       action_id: "account.profile.open",
+      opened: true,
+      panel: "profile",
+      tab: "account",
+    });
+
+    const security = await revealDocsAction({
+      actionId: "account.security.open",
+      projectId: "project-1",
+    });
+
+    expect(mockSetPageActiveTab).toHaveBeenCalledWith("account", false);
+    expect(mockSetAccountState).toHaveBeenCalledWith({
+      active_page: "profile",
+    });
+    expect(mockSetUrlWithSearch).toHaveBeenCalledWith(
+      "/settings/profile",
+      "",
+      "#security",
+    );
+    expect(security).toMatchObject({
+      action_id: "account.security.open",
       opened: true,
       panel: "profile",
       tab: "account",
@@ -282,6 +307,7 @@ describe("project docs actions", () => {
     });
     expect(mockSetUrlWithSearch).toHaveBeenLastCalledWith(
       "/settings/payment-methods",
+      "",
       "",
     );
     expect(paymentMethods).toMatchObject({
