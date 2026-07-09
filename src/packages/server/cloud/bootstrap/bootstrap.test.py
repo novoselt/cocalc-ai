@@ -1494,6 +1494,27 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 env_path.read_text(encoding="utf-8"),
             )
 
+    def test_write_env_migrates_legacy_project_pool_reserve_from_env_lines_to_auto(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = replace(
+                make_cfg(tmpdir),
+                ssh_user="",
+                env_lines=[
+                    f"COCALC_PROJECT_POOL_MEMORY_RESERVE_MB={bootstrap.LEGACY_PROJECT_POOL_MEMORY_RESERVE_MB}"
+                ],
+            )
+            env_path = Path(cfg.env_file)
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+
+            bootstrap.write_env(cfg, 10)
+
+            self.assertIn(
+                f"COCALC_PROJECT_POOL_MEMORY_RESERVE_MB={bootstrap.DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB}",
+                env_path.read_text(encoding="utf-8"),
+            )
+
     def test_write_env_creates_prev_backup_before_replacing_managed_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = replace(

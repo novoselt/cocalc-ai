@@ -3484,9 +3484,16 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
             DEFAULT_PROJECT_POOL_CGROUP,
         ),
     )
-    env_assignments.setdefault(
-        "COCALC_PROJECT_POOL_MEMORY_RESERVE_MB",
-        project_pool_memory_reserve_env_value(existing_env),
+    env_assignments["COCALC_PROJECT_POOL_MEMORY_RESERVE_MB"] = (
+        project_pool_memory_reserve_env_value(
+            {
+                **existing_env,
+                "COCALC_PROJECT_POOL_MEMORY_RESERVE_MB": env_assignments.get(
+                    "COCALC_PROJECT_POOL_MEMORY_RESERVE_MB",
+                    existing_env.get("COCALC_PROJECT_POOL_MEMORY_RESERVE_MB", ""),
+                ),
+            }
+        )
     )
     env_assignments.setdefault(
         "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS",
