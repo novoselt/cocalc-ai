@@ -58,7 +58,59 @@ PY
 $SUDO install -m 0755 "$TMP_RCLONE/rclone" /usr/local/bin/rclone
 
 if [[ -n "$GCS_KEY_FILE" ]]; then
-  $SUDO gcloud auth activate-service-account --key-file="$GCS_KEY_FILE"
+  if ! $SUDO gcloud auth activate-service-account --key-file="$GCS_KEY_FILE"; then
+    NORMALIZED_KEY="$(mktemp)"
+    python3 - "$GCS_KEY_FILE" "$NORMALIZED_KEY" <<'PY'
+import json
+import re
+import sys
+import textwrap
+
+src, dst = sys.argv[1], sys.argv[2]
+raw = open(src, encoding="utf-8").read()
+
+
+def find_string(key, default=""):
+    m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"([^"\n\r]*)"', raw)
+    if not m:
+        if default != "":
+            return default
+        raise SystemExit(f"missing {key}")
+    return m.group(1)
+
+
+m = re.search(r'"private_key"\s*:\s*"(.*?)"\s*,\s*"client_email"', raw, re.S)
+if not m:
+    raise SystemExit("missing private_key")
+private_key = m.group(1).replace("\\n", "\n")
+lines = private_key.splitlines()
+if lines and lines[0].startswith("-----BEGIN"):
+    body = "".join(lines[1:-1])
+    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+    body = "".join(ch for ch in body if ch in allowed)
+    private_key = lines[0] + "\n" + "\n".join(textwrap.wrap(body, 64)) + "\n" + lines[-1] + "\n"
+elif not private_key.endswith("\n"):
+    private_key += "\n"
+
+obj = {
+    "type": find_string("type", "service_account"),
+    "project_id": find_string("project_id"),
+    "private_key_id": find_string("private_key_id", ""),
+    "private_key": private_key,
+    "client_email": find_string("client_email"),
+    "client_id": find_string("client_id", ""),
+    "auth_uri": find_string("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+    "token_uri": find_string("token_uri", "https://oauth2.googleapis.com/token"),
+    "auth_provider_x509_cert_url": find_string("auth_provider_x509_cert_url", "https://www.googleapis.com/oauth2/v1/certs"),
+    "client_x509_cert_url": find_string("client_x509_cert_url", ""),
+    "universe_domain": find_string("universe_domain", "googleapis.com"),
+}
+with open(dst, "w", encoding="utf-8") as f:
+    json.dump(obj, f)
+PY
+    $SUDO gcloud auth activate-service-account --key-file="$NORMALIZED_KEY"
+    rm -f "$NORMALIZED_KEY"
+  fi
 fi
 
 echo "archive-to-r2 VM setup complete"
