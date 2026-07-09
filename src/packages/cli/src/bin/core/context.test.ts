@@ -27,6 +27,60 @@ test("createHubApiForContext exposes the notifications hub group", async () => {
   ]);
 });
 
+test("createHubApiForContext exposes the adminDb hub group", async () => {
+  const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
+  const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
+    calls.push({ name, args, timeout });
+    return { audit_id: "audit-1", rows: [] } as T;
+  });
+
+  const result = await hub.adminDb.diagnostic({
+    diagnostic: "lro",
+    params: { kind: "host-reconcile-software" },
+  });
+
+  assert.deepEqual(result, { audit_id: "audit-1", rows: [] });
+  assert.deepEqual(calls, [
+    {
+      name: "adminDb.diagnostic",
+      args: [
+        {
+          diagnostic: "lro",
+          params: { kind: "host-reconcile-software" },
+        },
+      ],
+      timeout: undefined,
+    },
+  ]);
+});
+
+test("createHubApiForContext exposes the adminHost hub group", async () => {
+  const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
+  const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
+    calls.push({ name, args, timeout });
+    return { audit_id: "audit-host-1", text: "" } as T;
+  });
+
+  const result = await hub.adminHost.logs({
+    host_id: "11111111-1111-4111-8111-111111111111",
+    source: "host-agent",
+  });
+
+  assert.deepEqual(result, { audit_id: "audit-host-1", text: "" });
+  assert.deepEqual(calls, [
+    {
+      name: "adminHost.logs",
+      args: [
+        {
+          host_id: "11111111-1111-4111-8111-111111111111",
+          source: "host-agent",
+        },
+      ],
+      timeout: undefined,
+    },
+  ]);
+});
+
 test("createHubApiForContext forwards explicit per-call timeout", async () => {
   const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
   const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {

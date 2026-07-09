@@ -69,6 +69,14 @@ export async function getRoutedHostControlClient({
         await bridge.unmountSharedScratch({ host_id, unmount }),
       getRuntimeLog: async (get) =>
         await bridge.getRuntimeLog({ host_id, get }),
+      getProcessSnapshot: async (get) =>
+        await bridge.getProcessSnapshot({ host_id, get }),
+      getNetworkSnapshot: async (get) =>
+        await bridge.getNetworkSnapshot({ host_id, get }),
+      getFilesystemSnapshot: async () =>
+        await bridge.getFilesystemSnapshot({ host_id }),
+      getPodmanSnapshot: async (get) =>
+        await bridge.getPodmanSnapshot({ host_id, get }),
       getProjectRuntimeLog: async (get) =>
         await bridge.getProjectRuntimeLog({ host_id, get }),
       startRootfsBuild: async (start) =>
