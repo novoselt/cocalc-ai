@@ -355,6 +355,31 @@ describe("useFiles", () => {
     expect(refreshFs).toHaveBeenCalledTimes(1);
   });
 
+  it("requests a fresh filesystem client after a failed project-host fetch", async () => {
+    const refreshFs = jest.fn();
+    (withTimeout as jest.Mock).mockRejectedValue(
+      new TypeError("Failed to fetch"),
+    );
+    const listing = {
+      files: {},
+      on: jest.fn(),
+      close: jest.fn(),
+    };
+    const fs = {
+      getListing: jest.fn().mockResolvedValue({ files: {} }),
+      listing: jest.fn().mockResolvedValue(listing),
+    };
+
+    useFilesForTestWithOptions({
+      fs,
+      path: "/failed-fetch-snapshot",
+      refreshFs,
+    });
+    await flushEffects();
+
+    expect(refreshFs).toHaveBeenCalledTimes(1);
+  });
+
   it("requests a fresh filesystem client after a closed watcher failure", async () => {
     const refreshFs = jest.fn();
     (withTimeout as jest.Mock).mockImplementation(

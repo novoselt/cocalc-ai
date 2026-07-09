@@ -49,6 +49,12 @@ describe("shouldShowWrongAccountListingError", () => {
         message: 'once: timeout of 4000ms waiting for "info"',
       }),
     ).toBe(false);
+    expect(
+      shouldShowWrongAccountListingError({
+        code: "403",
+        message: "Failed to fetch",
+      }),
+    ).toBe(false);
   });
 
   it("returns false when no listing error is present", () => {
@@ -83,6 +89,9 @@ describe("getUserFacingListingError", () => {
         new Error('once: timeout of 4000ms waiting for "info"'),
       ),
     ).toBe(
+      "The project connection closed while the file listing was loading. Please wait a moment.",
+    );
+    expect(getUserFacingListingError(new TypeError("Failed to fetch"))).toBe(
       "The project connection closed while the file listing was loading. Please wait a moment.",
     );
   });

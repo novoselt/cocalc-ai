@@ -8,11 +8,16 @@ import { type FilesystemClient } from "@cocalc/conat/files/fs";
 export function isRecoverableFilesystemClientError(err: unknown): boolean {
   const message = `${err}`.toLowerCase();
   return (
+    (message.includes("once: timeout") &&
+      (message.includes('waiting for "info"') ||
+        message.includes("waiting for 'info'") ||
+        message.includes("waiting for info"))) ||
     message.includes("closed") ||
     message.includes("disconnected") ||
     message.includes("connection closed") ||
     message.includes("socket has been disconnected") ||
     message.includes("not connected") ||
+    message.includes("failed to fetch") ||
     message.includes("file server not initialized") ||
     message.includes("unable to route") ||
     message.includes("project-host") ||
