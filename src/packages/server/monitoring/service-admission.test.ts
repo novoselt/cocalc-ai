@@ -31,8 +31,14 @@ describe("service admission monitoring", () => {
     queryMock.mockResolvedValue({
       rows: [
         {
+          surface: "conat-typed-service",
+          denial_limit: "COCALC_CONAT_SERVICE_MAX_PARALLEL_ACTIVE",
           source: "fast-rpc-handler",
           key: "inter-bay-directory",
+          account_id: null,
+          project_id: null,
+          sample_subject: "inter-bay.directory",
+          sample_reason: "typed service is busy",
           count: 719,
           first_time: "2026-06-29T21:04:10.861Z",
           last_time: "2026-06-29T21:04:10.990Z",
@@ -40,8 +46,14 @@ describe("service admission monitoring", () => {
           max_maximum: 128,
         },
         {
+          surface: "hub-conat-api",
+          denial_limit: "COCALC_HUB_CONAT_API_MAX_ACTIVE",
           source: "hub-api",
           key: "hosts.resolveHostConnection",
+          account_id: "account-1",
+          project_id: null,
+          sample_subject: "hub.host.api",
+          sample_reason: "hub api server is busy",
           count: 350,
           first_time: "2026-06-29T21:04:10.928Z",
           last_time: "2026-06-29T21:04:10.965Z",
@@ -72,6 +84,16 @@ describe("service admission monitoring", () => {
     expect(adminAlertMock).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.stringContaining("span=129ms"),
+      }),
+    );
+    expect(adminAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining("account=account-1"),
+      }),
+    );
+    expect(adminAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining("subject=hub.host.api"),
       }),
     );
   });

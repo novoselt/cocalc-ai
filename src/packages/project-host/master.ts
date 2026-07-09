@@ -683,25 +683,42 @@ async function runDiagnosticCommand({
   maxBytes?: number;
   lineLimit?: number;
 }): Promise<HostDiagnosticCommandOutput> {
-  let result = await executeCode({
-    command,
-    args,
-    timeout,
-    env,
-    err_on_exit: false,
-  });
   let executedCommand = command;
   let executedArgs = args;
-  if (result.exit_code !== 0 && sudoFallback) {
+  let result: { stdout: string; stderr: string; exit_code: number };
+  try {
     result = await executeCode({
-      command: "sudo",
-      args: ["-n", command, ...args],
+      command,
+      args,
       timeout,
       env,
       err_on_exit: false,
     });
+  } catch (err) {
+    return diagnosticCommandError({
+      command: executedCommand,
+      args: executedArgs,
+      err,
+    });
+  }
+  if (result.exit_code !== 0 && sudoFallback) {
     executedCommand = "sudo";
     executedArgs = ["-n", command, ...args];
+    try {
+      result = await executeCode({
+        command: executedCommand,
+        args: executedArgs,
+        timeout,
+        env,
+        err_on_exit: false,
+      });
+    } catch (err) {
+      return diagnosticCommandError({
+        command: executedCommand,
+        args: executedArgs,
+        err,
+      });
+    }
   }
   const limitedStdout =
     lineLimit == null
@@ -725,6 +742,25 @@ async function runDiagnosticCommand({
       limitedStdout.truncated ||
       cappedStdout.truncated ||
       cappedStderr.truncated,
+  };
+}
+
+function diagnosticCommandError({
+  command,
+  args,
+  err,
+}: {
+  command: string;
+  args: string[];
+  err: unknown;
+}): HostDiagnosticCommandOutput {
+  return {
+    command,
+    args,
+    stdout: "",
+    stderr: redactRuntimeLogText(`${err}`),
+    exit_code: -1,
+    truncated: false,
   };
 }
 
