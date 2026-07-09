@@ -44,7 +44,7 @@ UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.I,
 )
-STREAM_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}--[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.(?:lz4|zfs)$")
+STREAM_RE = re.compile(r"^[^/]+--[^/]+\.(?:lz4|zfs)$")
 
 ROOT_EXCLUDES = [
     ".conda",
@@ -237,7 +237,7 @@ def r2_upload_promote(config: dict[str, str], artifact: Path, key: str) -> None:
 
 
 def parse_stream_filename(name: str) -> dict[str, Any]:
-    base = name.rsplit("/", 1)[-1].split(".", 1)[0]
+    base = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
     start, end = base.split("--", 1)
     return {"start": start, "end": end, "name": name}
 
