@@ -148,6 +148,7 @@ describe("ACP sqlite database", () => {
       bundle_path: "/bundle",
       pid: 123,
       state: "active",
+      last_queue_progress_at: 0,
     });
   });
 });
