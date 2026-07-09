@@ -68,6 +68,11 @@ def now_iso() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
 
 
+def record_timing(result: dict[str, Any], key: str, start: float) -> None:
+    timings = result.setdefault("timings_s", {})
+    timings[key] = round(time.time() - start, 3)
+
+
 def run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess:
     log("+", " ".join(shlex.quote(x) for x in argv))
     return subprocess.run(argv, check=True, text=True, **kw)
@@ -501,11 +506,16 @@ class ArchiveMigrator:
             "started_at": now_iso(),
             "worker": "archive_to_r2.py",
         }
+        stage = time.time()
         existing = r2_size(self.r2, r2_key)
+        record_timing(result, "r2_stat", stage)
         if existing is not None and not self.args.force:
             result.update(status="skipped_exists", artifact_bytes=existing, finished_at=now_iso(), duration_s=round(time.time() - t0, 3))
             return result
-        if not gcs_exists(archive_url):
+        stage = time.time()
+        archive_exists = gcs_exists(archive_url)
+        record_timing(result, "gcs_stat", stage)
+        if not archive_exists:
             result.update(status="no_archive", finished_at=now_iso(), duration_s=round(time.time() - t0, 3))
             return result
 
@@ -519,13 +529,18 @@ class ArchiveMigrator:
         zfs_target = ""
         method_info: dict[str, Any] = {}
         try:
+            stage = time.time()
             bup_ok, bup_extract_err = extract_bup(archive_url, project_id, project_work)
+            record_timing(result, "extract_bup", stage)
             if bup_ok:
                 try:
                     bup_dir = project_work / f"project-{project_id}" / "bup"
+                    stage = time.time()
                     method_info = restore_bup(bup_dir, out_dir)
+                    record_timing(result, "restore_bup", stage)
                     rm_tree(project_work / f"project-{project_id}")
                 except Exception as err:
+                    record_timing(result, "restore_bup_failed", stage)
                     result["bup_error"] = str(err)[-2000:]
                     log(project_id, "bup failed; falling back to zfs")
                     rm_tree(out_dir)
@@ -534,27 +549,41 @@ class ArchiveMigrator:
                 result["bup_error"] = f"no bup in archive: {bup_extract_err[-1000:]}"
 
             if not method_info:
+                stage = time.time()
                 self.ensure_pool()
+                record_timing(result, "ensure_pool", stage)
+                stage = time.time()
                 streams = extract_streams(archive_url, project_id, streams_dir)
+                record_timing(result, "extract_streams", stage)
                 if not streams:
                     raise RuntimeError("archive contains no usable bup repo and no lz4/zfs streams")
+                stage = time.time()
                 method_info = restore_zfs(streams_dir, out_dir, self.args.pool, project_id)
+                record_timing(result, "restore_zfs", stage)
                 zfs_mounted = True
                 zfs_target = f"{self.args.pool}/restore-{project_id}"
 
+            stage = time.time()
             cleanup_excludes(out_dir)
+            record_timing(result, "cleanup_excludes", stage)
+            stage = time.time()
             tar_zstd(out_dir, artifact, self.args.zstd_level, self.args.zstd_long, self.args.zstd_threads)
+            record_timing(result, "tar_zstd", stage)
             result.update(method_info)
             result["artifact_bytes"] = artifact.stat().st_size
             if not self.args.dry_run:
+                stage = time.time()
                 r2_upload_promote(self.r2, artifact, r2_key)
+                record_timing(result, "r2_upload", stage)
                 result["uploaded"] = True
             else:
                 result["uploaded"] = False
             result.update(status="done", finished_at=now_iso(), duration_s=round(time.time() - t0, 3))
             if not self.args.dry_run:
                 try:
+                    stage = time.time()
                     r2_write_json(self.r2, sidecar_key, result)
+                    record_timing(result, "r2_sidecar", stage)
                     result["sidecar_uploaded"] = True
                 except Exception as err:
                     result["sidecar_uploaded"] = False
