@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260708-v2"
+HELPER_SCHEMA_VERSION = "20260709-v1"
 RUNTIME_WRAPPER_VERSION = "20260505-v9"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -52,7 +52,10 @@ PROJECT_HOST_RUNTIME_UID = 2000
 PROJECT_HOST_RUNTIME_GID = 2000
 HOST_CRITICAL_OOM_SCORE_ADJ = -900
 DEFAULT_PROJECT_POOL_CGROUP = "/sys/fs/cgroup/cocalc-project-pool"
-DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB = 3072
+LEGACY_PROJECT_POOL_MEMORY_RESERVE_MB = 3072
+DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB = "auto"
+DYNAMIC_PROJECT_POOL_MEMORY_RESERVE_MIN_MB = 3072
+DYNAMIC_PROJECT_POOL_MEMORY_RESERVE_MAX_MB = 8192
 MIN_PROJECT_POOL_MEMORY_MB = 1024
 NVIDIA_CDI_PODMAN4_VERSION = "0.5.0"
 PROJECT_HOST_RUNTIME_SUBID_RANGES = (
@@ -542,6 +545,13 @@ def read_env_assignments(path: str | Path) -> dict[str, str]:
         key, value = parsed
         env[key] = value
     return env
+
+
+def project_pool_memory_reserve_env_value(existing_env: dict[str, str]) -> str:
+    existing = existing_env.get("COCALC_PROJECT_POOL_MEMORY_RESERVE_MB", "").strip()
+    if existing and existing != str(LEGACY_PROJECT_POOL_MEMORY_RESERVE_MB):
+        return existing
+    return str(DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB)
 
 
 def render_env_text(lines: list[str]) -> str:
@@ -2089,12 +2099,70 @@ if [ "$#" -lt 1 ]; then
 fi
 cmd="$1"
 shift
+PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 
 deny() {
   local code="$1"
   local detail="$2"
   echo "SECURITY_DENY code=${code} detail=${detail}" >&2
   exit 2
+}
+
+is_project_uuid() {
+  echo "$1" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+}
+
+project_pool_cgroup_storage() {
+  local pool="${COCALC_PROJECT_POOL_CGROUP:-${PROJECT_POOL_CGROUP_DEFAULT}}"
+  case "$pool" in
+    /sys/fs/cgroup/cocalc-project-pool|/sys/fs/cgroup/cocalc-project-pool/*)
+      printf '%s\n' "$pool"
+      ;;
+    *)
+      deny "project-pool-cgroup-not-allowed" "$pool"
+      ;;
+  esac
+}
+
+attach_pid_to_project_pool_storage() {
+  local pid="$1" pool="$2"
+  if [ -z "$pid" ] || ! echo "$pid" | grep -Eq '^[0-9]+$' || ! kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  printf '%s\n' "$pid" > "$pool/cgroup.procs"
+}
+
+attach_pid_tree_to_project_pool_storage() {
+  local root_pid="$1" pool="$2" pending pid child
+  if [ -z "$root_pid" ] || ! kill -0 "$root_pid" 2>/dev/null; then
+    return 0
+  fi
+  pending="$root_pid"
+  while [ -n "$pending" ]; do
+    pid="${pending%% *}"
+    if [ "$pending" = "$pid" ]; then
+      pending=""
+    else
+      pending="${pending#* }"
+    fi
+    attach_pid_to_project_pool_storage "$pid" "$pool" || true
+    while IFS= read -r child; do
+      [ -n "$child" ] || continue
+      pending="${pending:+${pending} }${child}"
+    done < <(ps -eo pid=,ppid= | awk -v parent="$pid" '$2 == parent {print $1}')
+  done
+}
+
+find_project_conmon_pids() {
+  local project_id="$1" name="project-$1"
+  ps -eo pid=,args= | awk -v name="$name" '
+    /(^|\\/)conmon([[:space:]]|$)/ &&
+    $0 !~ /--exec-attach/ &&
+    $0 !~ /--exec-process-spec/ &&
+    index($0, " -n " name " ") > 0 {
+      print $1
+    }
+  '
 }
 
 allow_path() {
@@ -2208,6 +2276,22 @@ escape_overlay_path() {
 }
 
 case "$cmd" in
+  attach-project-cgroup)
+    if [ "$#" -lt 1 ]; then
+      echo "usage: cocalc-runtime-storage attach-project-cgroup <project-id>..." >&2
+      exit 2
+    fi
+    pool="$(project_pool_cgroup_storage)"
+    mkdir -p "$pool"
+    for project_id in "$@"; do
+      if ! is_project_uuid "$project_id"; then
+        deny "project-id-invalid" "$project_id"
+      fi
+      while IFS= read -r conmon_pid; do
+        attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
+      done < <(find_project_conmon_pids "$project_id")
+    done
+    ;;
   btrfs)
     check_args "$@"
     exec /usr/bin/btrfs "$@"
@@ -3233,6 +3317,9 @@ if ! echo "$lines" | grep -Eq '^[0-9]+$'; then
 fi
 exec /bin/journalctl -u "$service" -o cat -f -n "$lines"
 """
+    storage_wrapper = storage_wrapper.replace(
+        "__PROJECT_POOL_CGROUP__", DEFAULT_PROJECT_POOL_CGROUP
+    )
     wrappers = {
         "/usr/local/sbin/cocalc-runtime-storage": storage_wrapper,
         "/usr/local/sbin/cocalc-mount-data": mount_wrapper,
@@ -3399,10 +3486,7 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
     )
     env_assignments.setdefault(
         "COCALC_PROJECT_POOL_MEMORY_RESERVE_MB",
-        existing_env.get(
-            "COCALC_PROJECT_POOL_MEMORY_RESERVE_MB",
-            str(DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB),
-        ),
+        project_pool_memory_reserve_env_value(existing_env),
     )
     env_assignments.setdefault(
         "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS",
@@ -4049,6 +4133,8 @@ OOM_ADJ="${COCALC_PROJECT_HOST_OOM_SCORE_ADJ:__OOM_ADJ_LITERAL__}"
 ENV_FILE="/etc/cocalc/project-host.env"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_POOL_MEMORY_RESERVE_MB_DEFAULT="__PROJECT_POOL_MEMORY_RESERVE_MB__"
+PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB="__PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB__"
+PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MAX_MB="__PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MAX_MB__"
 MIN_PROJECT_POOL_MEMORY_MB="__MIN_PROJECT_POOL_MEMORY_MB__"
 SYSCTL_CONFIG_PATH="/etc/sysctl.d/90-cocalc-project-host.conf"
 HELPER_SCHEMA_VERSION="__HELPER_SCHEMA_VERSION__"
@@ -4239,15 +4325,35 @@ project_pool_cgroup() {
 }
 
 project_pool_memory_max_bytes() {
-  local reserve_mb total_kb total_bytes reserve_bytes min_pool_bytes pool_bytes
+  local reserve_mb total_kb total_mb total_bytes reserve_bytes min_pool_bytes pool_bytes max_dynamic min_dynamic
   reserve_mb="$(read_env_value COCALC_PROJECT_POOL_MEMORY_RESERVE_MB)"
-  if ! echo "${reserve_mb}" | grep -Eq '^[0-9]+$'; then
-    reserve_mb="${PROJECT_POOL_MEMORY_RESERVE_MB_DEFAULT}"
-  fi
   total_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
   if ! echo "${total_kb}" | grep -Eq '^[0-9]+$'; then
     printf '%s\n' "max"
     return
+  fi
+  total_mb="$((total_kb / 1024))"
+  if [ -z "${reserve_mb}" ] || [ "${reserve_mb}" = "auto" ]; then
+    min_dynamic="${PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB}"
+    max_dynamic="${PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MAX_MB}"
+    reserve_mb="$((total_mb / 8))"
+    if [ "${reserve_mb}" -lt "${min_dynamic}" ]; then
+      reserve_mb="${min_dynamic}"
+    fi
+    if [ "${reserve_mb}" -gt "${max_dynamic}" ]; then
+      reserve_mb="${max_dynamic}"
+    fi
+    if [ "$((total_mb - reserve_mb))" -lt "${MIN_PROJECT_POOL_MEMORY_MB}" ]; then
+      reserve_mb="$((total_mb - MIN_PROJECT_POOL_MEMORY_MB))"
+      if [ "${reserve_mb}" -lt 0 ]; then
+        reserve_mb=0
+      fi
+    fi
+  elif ! echo "${reserve_mb}" | grep -Eq '^[0-9]+$'; then
+    reserve_mb="${PROJECT_POOL_MEMORY_RESERVE_MB_DEFAULT}"
+    if [ "${reserve_mb}" = "auto" ]; then
+      reserve_mb="${PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB}"
+    fi
   fi
   total_bytes="$((total_kb * 1024))"
   reserve_bytes="$((reserve_mb * 1024 * 1024))"
@@ -4267,12 +4373,23 @@ project_pool_memory_max_bytes() {
   printf '%s\n' "${pool_bytes}"
 }
 
+project_pool_memory_high_bytes() {
+  local max_bytes="$1"
+  if ! echo "${max_bytes}" | grep -Eq '^[0-9]+$'; then
+    printf '%s\n' "max"
+    return
+  fi
+  printf '%s\n' "$((max_bytes * 95 / 100))"
+}
+
 configure_project_pool_cgroup() {
-  local pool max_bytes
+  local pool max_bytes high_bytes
   pool="$(project_pool_cgroup)"
   mkdir -p "${pool}"
   max_bytes="$(project_pool_memory_max_bytes)"
+  high_bytes="$(project_pool_memory_high_bytes "${max_bytes}")"
   printf '%s\n' "${max_bytes}" > "${pool}/memory.max"
+  printf '%s\n' "${high_bytes}" > "${pool}/memory.high"
 }
 
 attach_pid_to_project_pool() {
@@ -4283,6 +4400,27 @@ attach_pid_to_project_pool() {
   fi
   pool="$(project_pool_cgroup)"
   printf '%s\n' "${pid}" > "${pool}/cgroup.procs"
+}
+
+attach_pid_tree_to_project_pool() {
+  local root_pid="$1" pending pid child
+  if [ -z "${root_pid}" ] || ! kill -0 "${root_pid}" 2>/dev/null; then
+    return 0
+  fi
+  pending="${root_pid}"
+  while [ -n "${pending}" ]; do
+    pid="${pending%% *}"
+    if [ "${pending}" = "${pid}" ]; then
+      pending=""
+    else
+      pending="${pending#* }"
+    fi
+    attach_pid_to_project_pool "${pid}" || true
+    while IFS= read -r child; do
+      [ -n "${child}" ] || continue
+      pending="${pending:+${pending} }${child}"
+    done < <(ps -eo pid=,ppid= | awk -v parent="${pid}" '$2 == parent {print $1}')
+  done
 }
 
 read_pid_file() {
@@ -4319,10 +4457,8 @@ protect_pid() {
 }
 
 attach_running_project_processes() {
-  local runtime_dir cgroup_manager cid line project_pid conmon_pid pid
+  local runtime_dir cgroup_manager cid line project_pid conmon_pid
   configure_project_pool_cgroup
-  pid="$(first_running_pid "${PID_FILE}" "${HOST_AGENT_PID_FILE}" || true)"
-  attach_pid_to_project_pool "${pid}" || true
   runtime_dir="$(podman_runtime_dir)"
   cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
   if [ -z "${cgroup_manager}" ]; then
@@ -4342,8 +4478,8 @@ attach_running_project_processes() {
     )"
     project_pid="$(printf '%s\n' "${line}" | awk '{print $1}')"
     conmon_pid="$(printf '%s\n' "${line}" | awk '{print $2}')"
-    attach_pid_to_project_pool "${project_pid}" || true
-    attach_pid_to_project_pool "${conmon_pid}" || true
+    attach_pid_tree_to_project_pool "${conmon_pid}" || true
+    attach_pid_tree_to_project_pool "${project_pid}" || true
   done < <(
     sudo -n -u "${RUNTIME_USER}" -H env \
       XDG_RUNTIME_DIR="${runtime_dir}" \
@@ -4570,6 +4706,14 @@ esac
     rootctl = rootctl.replace(
         "__PROJECT_POOL_MEMORY_RESERVE_MB__",
         str(DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB),
+    )
+    rootctl = rootctl.replace(
+        "__PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB__",
+        str(DYNAMIC_PROJECT_POOL_MEMORY_RESERVE_MIN_MB),
+    )
+    rootctl = rootctl.replace(
+        "__PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MAX_MB__",
+        str(DYNAMIC_PROJECT_POOL_MEMORY_RESERVE_MAX_MB),
     )
     rootctl = rootctl.replace(
         "__MIN_PROJECT_POOL_MEMORY_MB__",

@@ -1325,6 +1325,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                f'PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB="{bootstrap.DYNAMIC_PROJECT_POOL_MEMORY_RESERVE_MIN_MB}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                f'PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MAX_MB="{bootstrap.DYNAMIC_PROJECT_POOL_MEMORY_RESERVE_MAX_MB}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 f'HELPER_SCHEMA_VERSION="{bootstrap.HELPER_SCHEMA_VERSION}"',
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -1467,6 +1475,23 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("# Local project-host overrides.", local_env_text)
             self.assertIn(
                 "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS=1", local_env_text
+            )
+
+    def test_write_env_migrates_legacy_project_pool_reserve_to_auto(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = replace(make_cfg(tmpdir), ssh_user="")
+            env_path = Path(cfg.env_file)
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            env_path.write_text(
+                f"COCALC_PROJECT_POOL_MEMORY_RESERVE_MB={bootstrap.LEGACY_PROJECT_POOL_MEMORY_RESERVE_MB}\n",
+                encoding="utf-8",
+            )
+
+            bootstrap.write_env(cfg, 10)
+
+            self.assertIn(
+                f"COCALC_PROJECT_POOL_MEMORY_RESERVE_MB={bootstrap.DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB}",
+                env_path.read_text(encoding="utf-8"),
             )
 
     def test_write_env_creates_prev_backup_before_replacing_managed_env(self) -> None:
