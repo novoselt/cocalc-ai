@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+
 import getLogger from "@cocalc/backend/logger";
 import { createHostStatusClient } from "@cocalc/conat/project-host/api";
 import {
@@ -18,6 +20,10 @@ const DEFAULT_ACTIVE_DAYS = 2;
 const DEFAULT_SWEEP_MS = 15 * 60 * 1000;
 const DEFAULT_PARALLELISM = 4;
 const DEFAULT_INITIAL_DELAY_MS = DEFAULT_SWEEP_MS;
+const GIB = 1024 ** 3;
+const DEFAULT_MEMORY_AVAILABLE_RATIO = 0.25;
+const DEFAULT_MEMORY_AVAILABLE_MIN_BYTES = 2 * GIB;
+const DEFAULT_MEMORY_AVAILABLE_MAX_BYTES = 16 * GIB;
 
 const inFlightProjects = new Set<string>();
 
@@ -34,6 +40,85 @@ function parseNonNegativeInteger(value: string | undefined, fallback: number) {
 function parseBoolean(value: string | undefined): boolean {
   const normalized = `${value ?? ""}`.trim().toLowerCase();
   return ["1", "true", "yes", "on"].includes(normalized);
+}
+
+function parseRatio(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 && parsed < 1
+    ? parsed
+    : fallback;
+}
+
+function parseMeminfo(text: string):
+  | {
+      totalBytes: number;
+      availableBytes: number;
+    }
+  | undefined {
+  let totalKb: number | undefined;
+  let availableKb: number | undefined;
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/^(MemTotal|MemAvailable):\s+(\d+)\s+kB$/);
+    if (!match) continue;
+    const value = Number(match[2]);
+    if (!Number.isFinite(value) || value < 0) continue;
+    if (match[1] === "MemTotal") totalKb = value;
+    if (match[1] === "MemAvailable") availableKb = value;
+  }
+  if (totalKb == null || availableKb == null || totalKb <= 0) {
+    return undefined;
+  }
+  return {
+    totalBytes: totalKb * 1024,
+    availableBytes: availableKb * 1024,
+  };
+}
+
+function memoryMaintenanceThresholdBytes(totalBytes: number): number {
+  const ratio = parseRatio(
+    process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_MIN_MEMORY_AVAILABLE_RATIO,
+    DEFAULT_MEMORY_AVAILABLE_RATIO,
+  );
+  const minBytes = parseNonNegativeInteger(
+    process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_MIN_MEMORY_AVAILABLE_BYTES,
+    DEFAULT_MEMORY_AVAILABLE_MIN_BYTES,
+  );
+  const maxBytes = parseNonNegativeInteger(
+    process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_MAX_MEMORY_AVAILABLE_BYTES,
+    DEFAULT_MEMORY_AVAILABLE_MAX_BYTES,
+  );
+  const ratioBytes = Math.floor(totalBytes * ratio);
+  return Math.min(Math.max(minBytes, ratioBytes), maxBytes);
+}
+
+function shouldSkipForMemoryPressure(
+  meminfoText = fs.readFileSync("/proc/meminfo", "utf8"),
+):
+  | {
+      skip: false;
+      availableBytes?: number;
+      thresholdBytes?: number;
+    }
+  | {
+      skip: true;
+      availableBytes: number;
+      thresholdBytes: number;
+    } {
+  const memory = parseMeminfo(meminfoText);
+  if (!memory) return { skip: false };
+  const thresholdBytes = memoryMaintenanceThresholdBytes(memory.totalBytes);
+  if (memory.availableBytes < thresholdBytes) {
+    return {
+      skip: true,
+      availableBytes: memory.availableBytes,
+      thresholdBytes,
+    };
+  }
+  return {
+    skip: false,
+    availableBytes: memory.availableBytes,
+    thresholdBytes,
+  };
 }
 
 function mergeSchedule(
@@ -83,6 +168,15 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
 }: {
   hostId: string;
 }) {
+  const memoryGuard = shouldSkipForMemoryPressure();
+  if (memoryGuard.skip) {
+    logger.info("skipping snapshot/backup maintenance under memory pressure", {
+      hostId,
+      memory_available_bytes: memoryGuard.availableBytes,
+      threshold_bytes: memoryGuard.thresholdBytes,
+    });
+    return;
+  }
   const client = getMasterConatClient();
   if (!client) {
     logger.debug("skipping maintenance sweep without master conat client");
@@ -227,3 +321,8 @@ export function startProjectSnapshotBackupMaintenance({
     }
   };
 }
+
+export const _test = {
+  parseMeminfo,
+  shouldSkipForMemoryPressure,
+};

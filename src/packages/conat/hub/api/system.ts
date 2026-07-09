@@ -752,6 +752,8 @@ export interface ServiceAdmissionDenialSummary {
   sample_path?: string | null;
   sample_key?: string | null;
   sample_reason?: string | null;
+  sample_browser_id?: string | null;
+  sample_socket_id?: string | null;
 }
 
 export interface ServiceAdmissionDenialReport {

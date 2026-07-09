@@ -317,6 +317,8 @@ type InboundAdmissionRecord = {
   lastLogged: number;
 };
 
+type InboundAdmissionDimension = "socket" | "identity" | "socket-event";
+
 type ClusterInterestPeer = {
   socket: any;
   clusterName: string;
@@ -350,6 +352,8 @@ export class ConatServer extends EventEmitter {
   private inboundAdmissionBySocket: Map<string, InboundAdmissionRecord> =
     new Map();
   private inboundAdmissionByIdentity: Map<string, InboundAdmissionRecord> =
+    new Map();
+  private inboundAdmissionBySocketEvent: Map<string, InboundAdmissionRecord> =
     new Map();
   private inboundAdmissionDeniedCount = 0;
   private inboundIdentityAdmissionDeniedCount = 0;
@@ -631,6 +635,9 @@ export class ConatServer extends EventEmitter {
       ? this.configuredMaxInboundEventsPerIdentityWindow
       : getServiceAdmissionLimit("conat_inbound_events_per_identity_window");
 
+  private maxSubscriptionRequestsPerSocketWindow = (): number =>
+    getServiceAdmissionLimit("conat_subscriptions_requests_per_socket_window");
+
   private inboundEventWindowMs = (): number =>
     this.explicitInboundEventWindowMs
       ? this.configuredInboundEventWindowMs
@@ -649,6 +656,8 @@ export class ConatServer extends EventEmitter {
       "inbound-event-window:limit": this.maxInboundEventsPerSocketWindow(),
       "inbound-identity-event-window:limit":
         this.maxInboundEventsPerIdentityWindow(),
+      "inbound-subscriptions-window:limit":
+        this.maxSubscriptionRequestsPerSocketWindow(),
       "inbound-event-window:ms": this.inboundEventWindowMs(),
     };
   };
@@ -731,6 +740,7 @@ export class ConatServer extends EventEmitter {
     this.authFailuresByAddress.clear();
     this.inboundAdmissionBySocket.clear();
     this.inboundAdmissionByIdentity.clear();
+    this.inboundAdmissionBySocketEvent.clear();
     ConatServer.testInstances.delete(this);
   };
 
@@ -827,6 +837,25 @@ export class ConatServer extends EventEmitter {
     return this.maxInboundEventsPerSocketWindow();
   };
 
+  private inboundAdmissionLimitEnvName = (
+    dimension: InboundAdmissionDimension,
+  ): string => {
+    switch (dimension) {
+      case "identity":
+        return serviceAdmissionLimitEnvName(
+          "conat_inbound_events_per_identity_window",
+        );
+      case "socket-event":
+        return serviceAdmissionLimitEnvName(
+          "conat_subscriptions_requests_per_socket_window",
+        );
+      case "socket":
+        return serviceAdmissionLimitEnvName(
+          "conat_inbound_events_per_socket_window",
+        );
+    }
+  };
+
   private pruneInboundAdmission = (now: number) => {
     const windowMs = this.inboundEventWindowMs();
     if (now - this.lastInboundAdmissionPrune < windowMs) {
@@ -847,6 +876,7 @@ export class ConatServer extends EventEmitter {
     };
     prune(this.inboundAdmissionBySocket);
     prune(this.inboundAdmissionByIdentity);
+    prune(this.inboundAdmissionBySocketEvent);
   };
 
   private denyInboundEvent = ({
@@ -863,7 +893,7 @@ export class ConatServer extends EventEmitter {
     event: string;
     record: InboundAdmissionRecord;
     now: number;
-    dimension: "socket" | "identity";
+    dimension: InboundAdmissionDimension;
     key: string;
     limit: number;
     respond?: (response: {
@@ -878,18 +908,12 @@ export class ConatServer extends EventEmitter {
       this.inboundAdmissionDeniedCount += 1;
     }
     const retryMs = Math.max(1_000, record.blockedUntil - now);
-    const user = this.stats[socket.id]?.user;
+    const stats = this.stats[socket.id];
+    const user = stats?.user;
     recordServiceAdmissionDenial({
       surface: "conat-socket",
       source: dimension,
-      limit:
-        dimension === "identity"
-          ? serviceAdmissionLimitEnvName(
-              "conat_inbound_events_per_identity_window",
-            )
-          : serviceAdmissionLimitEnvName(
-              "conat_inbound_events_per_socket_window",
-            ),
+      limit: this.inboundAdmissionLimitEnvName(dimension),
       current: record.count,
       maximum: limit,
       reason: "high-rate Conat socket event stream",
@@ -897,6 +921,9 @@ export class ConatServer extends EventEmitter {
         typeof user?.account_id === "string" ? user.account_id : undefined,
       project_id:
         typeof user?.project_id === "string" ? user.project_id : undefined,
+      browser_id:
+        typeof stats?.browser_id === "string" ? stats.browser_id : undefined,
+      socket_id: socket.id,
       subject: event,
       key,
     });
@@ -940,7 +967,7 @@ export class ConatServer extends EventEmitter {
     event: string;
     records: Map<string, InboundAdmissionRecord>;
     key: string;
-    dimension: "socket" | "identity";
+    dimension: InboundAdmissionDimension;
     limit: number;
     now: number;
     respond?: (response: {
@@ -977,18 +1004,12 @@ export class ConatServer extends EventEmitter {
     }
     record.count += 1;
     if (record.count <= limit) {
-      const user = this.stats[socket.id]?.user;
+      const stats = this.stats[socket.id];
+      const user = stats?.user;
       recordServiceAdmissionNearLimit({
         surface: "conat-socket",
         source: dimension,
-        limit:
-          dimension === "identity"
-            ? serviceAdmissionLimitEnvName(
-                "conat_inbound_events_per_identity_window",
-              )
-            : serviceAdmissionLimitEnvName(
-                "conat_inbound_events_per_socket_window",
-              ),
+        limit: this.inboundAdmissionLimitEnvName(dimension),
         current: record.count,
         maximum: limit,
         reason: "Conat socket event stream is near capacity",
@@ -996,6 +1017,9 @@ export class ConatServer extends EventEmitter {
           typeof user?.account_id === "string" ? user.account_id : undefined,
         project_id:
           typeof user?.project_id === "string" ? user.project_id : undefined,
+        browser_id:
+          typeof stats?.browser_id === "string" ? stats.browser_id : undefined,
+        socket_id: socket.id,
         subject: event,
         key,
       });
@@ -1029,6 +1053,22 @@ export class ConatServer extends EventEmitter {
   }): boolean => {
     const now = Date.now();
     this.pruneInboundAdmission(now);
+    if (
+      event === "subscriptions" &&
+      this.inboundSocketLimit(socket) < Number.MAX_SAFE_INTEGER &&
+      !this.admitInboundRecord({
+        socket,
+        event,
+        records: this.inboundAdmissionBySocketEvent,
+        key: `${socket.id}:${event}`,
+        dimension: "socket-event",
+        limit: this.maxSubscriptionRequestsPerSocketWindow(),
+        now,
+        respond,
+      })
+    ) {
+      return false;
+    }
     if (
       !this.admitInboundRecord({
         socket,
@@ -1582,6 +1622,7 @@ export class ConatServer extends EventEmitter {
       delete this.sockets[socket.id];
       delete this.stats[socket.id];
       this.inboundAdmissionBySocket.delete(socket.id);
+      this.inboundAdmissionBySocketEvent.delete(`${socket.id}:subscriptions`);
     });
 
     this.stats[socket.id] = {
@@ -1661,6 +1702,7 @@ export class ConatServer extends EventEmitter {
       delete this.sockets[socket.id];
       delete this.stats[socket.id];
       this.inboundAdmissionBySocket.delete(socket.id);
+      this.inboundAdmissionBySocketEvent.delete(`${socket.id}:subscriptions`);
       if (added) {
         this.usage.delete(user);
       }

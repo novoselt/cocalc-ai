@@ -2548,7 +2548,22 @@ async function getAcpAdmissionDenialReport0({
   const { rows } = await getPool().query(
     `
       WITH filtered AS (
-        SELECT "time", value
+        SELECT
+          "time",
+          value,
+          CASE
+            WHEN (value->>'count') ~ '^[0-9]+$'
+            THEN GREATEST((value->>'count')::int, 1)
+            ELSE 1
+          END AS event_count,
+          CASE
+            WHEN NULLIF(value->>'first_time', '') IS NULL THEN "time"
+            ELSE (value->>'first_time')::timestamptz
+          END AS first_event_time,
+          CASE
+            WHEN NULLIF(value->>'last_time', '') IS NULL THEN "time"
+            ELSE (value->>'last_time')::timestamptz
+          END AS last_event_time
         FROM central_log
         WHERE ${conditions.join(" AND ")}
       )
@@ -2624,6 +2639,8 @@ function parseServiceDenialSummaryRow(
     sample_path: row.sample_path || null,
     sample_key: row.sample_key || null,
     sample_reason: row.sample_reason || null,
+    sample_browser_id: row.sample_browser_id || null,
+    sample_socket_id: row.sample_socket_id || null,
   };
 }
 
@@ -2776,7 +2793,22 @@ async function getServiceAdmissionDenialReport0({
   const { rows } = await getPool().query(
     `
       WITH filtered AS (
-        SELECT "time", value
+        SELECT
+          "time",
+          value,
+          CASE
+            WHEN (value->>'count') ~ '^[0-9]+$'
+            THEN GREATEST((value->>'count')::int, 1)
+            ELSE 1
+          END AS event_count,
+          CASE
+            WHEN NULLIF(value->>'first_time', '') IS NULL THEN "time"
+            ELSE (value->>'first_time')::timestamptz
+          END AS first_event_time,
+          CASE
+            WHEN NULLIF(value->>'last_time', '') IS NULL THEN "time"
+            ELSE (value->>'last_time')::timestamptz
+          END AS last_event_time
         FROM central_log
         WHERE ${conditions.join(" AND ")}
       )
@@ -2787,9 +2819,9 @@ async function getServiceAdmissionDenialReport0({
         COALESCE(NULLIF(value->>'surface', ''), 'unknown') AS surface,
         COALESCE(NULLIF(value->>'limit', ''), 'unknown') AS denial_limit,
         COALESCE(NULLIF(value->>'source', ''), 'unknown') AS source,
-        COUNT(*)::int AS count,
-        MIN("time") AS first_time,
-        MAX("time") AS last_time,
+        SUM(event_count)::int AS count,
+        MIN(first_event_time) AS first_time,
+        MAX(last_event_time) AS last_time,
         MAX(
           CASE
             WHEN (value->>'current') ~ '^[0-9]+$'
@@ -2807,10 +2839,12 @@ async function getServiceAdmissionDenialReport0({
         MAX(NULLIF(value->>'subject', '')) AS sample_subject,
         MAX(NULLIF(value->>'path', '')) AS sample_path,
         MAX(NULLIF(value->>'key', '')) AS sample_key,
-        MAX(NULLIF(value->>'reason', '')) AS sample_reason
+        MAX(NULLIF(value->>'reason', '')) AS sample_reason,
+        MAX(NULLIF(value->>'browser_id', '')) AS sample_browser_id,
+        MAX(NULLIF(value->>'socket_id', '')) AS sample_socket_id
       FROM filtered
       GROUP BY host_id, account_id, project_id, surface, denial_limit, source
-      HAVING COUNT(*) >= $${minCountParam}
+      HAVING SUM(event_count) >= $${minCountParam}
       ORDER BY count DESC, last_time DESC
       LIMIT $${limitParam}
     `,

@@ -11,6 +11,7 @@ export type ServiceAdmissionLimitKey =
   | "conat_max_connections_per_hub_user"
   | "conat_inbound_events_per_socket_window"
   | "conat_inbound_events_per_identity_window"
+  | "conat_subscriptions_requests_per_socket_window"
   | "conat_inbound_event_window_ms"
   | "conat_inbound_event_block_ms"
   | "app_proxy_max_active_websockets_total"
@@ -55,6 +56,10 @@ const DEFINITIONS: Record<ServiceAdmissionLimitKey, LimitDefinition> = {
   conat_inbound_events_per_identity_window: {
     env: "COCALC_CONAT_MAX_INBOUND_EVENTS_PER_IDENTITY_WINDOW",
     fallback: 50_000,
+  },
+  conat_subscriptions_requests_per_socket_window: {
+    env: "COCALC_CONAT_MAX_SUBSCRIPTIONS_REQUESTS_PER_SOCKET_WINDOW",
+    fallback: 120,
   },
   conat_inbound_event_window_ms: {
     env: "COCALC_CONAT_INBOUND_EVENT_WINDOW_MS",
