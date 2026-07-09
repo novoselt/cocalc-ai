@@ -506,18 +506,29 @@ class ArchiveMigrator:
             "started_at": now_iso(),
             "worker": "archive_to_r2.py",
         }
-        stage = time.time()
-        existing = r2_size(self.r2, r2_key)
-        record_timing(result, "r2_stat", stage)
-        if existing is not None and not self.args.force:
-            result.update(status="skipped_exists", artifact_bytes=existing, finished_at=now_iso(), duration_s=round(time.time() - t0, 3))
-            return result
-        stage = time.time()
-        archive_exists = gcs_exists(archive_url)
-        record_timing(result, "gcs_stat", stage)
-        if not archive_exists:
-            result.update(status="no_archive", finished_at=now_iso(), duration_s=round(time.time() - t0, 3))
-            return result
+        if not self.args.skip_r2_stat:
+            stage = time.time()
+            existing = r2_size(self.r2, r2_key)
+            record_timing(result, "r2_stat", stage)
+            if existing is not None and not self.args.force:
+                result.update(
+                    status="skipped_exists",
+                    artifact_bytes=existing,
+                    finished_at=now_iso(),
+                    duration_s=round(time.time() - t0, 3),
+                )
+                return result
+        else:
+            result["r2_stat_skipped"] = True
+        if not self.args.skip_gcs_stat:
+            stage = time.time()
+            archive_exists = gcs_exists(archive_url)
+            record_timing(result, "gcs_stat", stage)
+            if not archive_exists:
+                result.update(status="no_archive", finished_at=now_iso(), duration_s=round(time.time() - t0, 3))
+                return result
+        else:
+            result["gcs_stat_skipped"] = True
 
         project_work = Path(self.args.workdir) / project_id
         rm_tree(project_work)
@@ -646,6 +657,8 @@ def main() -> None:
     parser.add_argument("--zstd-level", type=int, default=3)
     parser.add_argument("--zstd-long", type=int, default=27)
     parser.add_argument("--zstd-threads", type=int, default=0, help="zstd -T value; 0 means auto")
+    parser.add_argument("--skip-gcs-stat", action="store_true", help="trust the input worklist and skip per-project GCS existence checks")
+    parser.add_argument("--skip-r2-stat", action="store_true", help="trust the input worklist and skip per-project R2 final-object checks")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep", action="store_true")

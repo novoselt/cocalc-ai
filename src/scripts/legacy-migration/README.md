@@ -46,6 +46,12 @@ tune worker shape. For one worker per VM, `--zstd-threads 0` lets zstd use the
 available CPUs during the final tar/compress phase. If multiple workers share a
 VM, cap each worker with `--zstd-threads` to avoid CPU oversubscription.
 
+For production shards generated from a fresh `GCS archive inventory - R2 final
+object inventory` worklist, use `--skip-gcs-stat --skip-r2-stat` to avoid two
+extra remote metadata calls per project. Do not use those flags for ad hoc or
+hand-written project ID lists; the safe default checks both sides and skips
+already-uploaded final objects.
+
 The script writes a JSON result line per project and writes a sidecar to:
 
 ```text
