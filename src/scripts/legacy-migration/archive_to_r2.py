@@ -105,18 +105,18 @@ def require_tools(names: list[str]) -> None:
 
 
 def gcs_cat_command(url: str) -> str:
-    if shutil.which("gsutil"):
-        return f"gsutil cat {shlex.quote(url)}"
     if shutil.which("gcloud"):
         return f"gcloud storage cat {shlex.quote(url)}"
+    if shutil.which("gsutil"):
+        return f"gsutil cat {shlex.quote(url)}"
     raise SystemExit("need either gsutil or gcloud on PATH for GCS reads")
 
 
 def gcs_ls_command(url: str) -> list[str]:
-    if shutil.which("gsutil"):
-        return ["gsutil", "-q", "stat", url]
     if shutil.which("gcloud"):
         return ["gcloud", "storage", "ls", url]
+    if shutil.which("gsutil"):
+        return ["gsutil", "-q", "stat", url]
     raise SystemExit("need either gsutil or gcloud on PATH for GCS reads")
 
 
