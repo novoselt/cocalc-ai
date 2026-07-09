@@ -18,21 +18,28 @@ export function triggerFileAction({
   action,
   path,
   multiple,
+  selectedPaths,
   activateFilesTab = false,
 }: {
   actions?: ProjectActionLike | null;
   action: FileAction;
   path: string;
   multiple: boolean;
+  selectedPaths?: string[];
   activateFilesTab?: boolean;
 }): void {
   if (!actions) return;
+  const paths = selectedPaths?.length ? selectedPaths : [path];
   if (!multiple && typeof actions.showFileActionPanel === "function") {
+    if (selectedPaths != null) {
+      actions.set_all_files_unchecked();
+      actions.set_file_list_checked(paths);
+    }
     actions.showFileActionPanel({ path, action });
     return;
   }
   actions.set_all_files_unchecked();
-  actions.set_file_list_checked([path]);
+  actions.set_file_list_checked(paths);
   if (activateFilesTab) {
     actions.set_active_tab?.("files");
   }
