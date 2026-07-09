@@ -9,6 +9,7 @@ if [[ "${EUID}" -ne 0 ]]; then
 else
   SUDO=
 fi
+GCS_KEY_FILE="${1:-}"
 
 $SUDO apt-get update
 $SUDO apt-get install -y \
@@ -55,6 +56,10 @@ else:
     raise SystemExit("rclone binary not found in archive")
 PY
 $SUDO install -m 0755 "$TMP_RCLONE/rclone" /usr/local/bin/rclone
+
+if [[ -n "$GCS_KEY_FILE" ]]; then
+  $SUDO gcloud auth activate-service-account --key-file="$GCS_KEY_FILE"
+fi
 
 echo "archive-to-r2 VM setup complete"
 echo "Check tools:"

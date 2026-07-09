@@ -117,7 +117,19 @@ def gcs_ls_command(url: str) -> list[str]:
 
 def gcs_exists(url: str) -> bool:
     proc = subprocess.run(gcs_ls_command(url), capture_output=True, text=True)
-    return proc.returncode == 0
+    if proc.returncode == 0:
+        return True
+    output = f"{proc.stdout}\n{proc.stderr}"
+    missing_markers = (
+        "404",
+        "No URLs matched",
+        "One or more URLs matched no objects",
+        "not found",
+        "Not Found",
+    )
+    if any(marker in output for marker in missing_markers):
+        return False
+    raise RuntimeError(f"GCS archive stat failed for {url}: {output[-2000:]}")
 
 
 def parse_env_file(path: str | None) -> dict[str, str]:

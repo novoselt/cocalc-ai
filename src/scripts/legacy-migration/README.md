@@ -21,6 +21,16 @@ file-backed ZFS pool, and exports that filesystem instead.
 Run it on a VM with `bup`, `lz4`, `zstd`, `rclone`, `zfsutils-linux`, and either
 `gsutil` or `gcloud`.
 
+Bootstrap a fresh Ubuntu VM with:
+
+```bash
+sudo ./src/scripts/legacy-migration/setup-archive-to-r2-vm.sh \
+  /run/secrets/cocalc/cocalc-legacy-gcs-readonly.json
+```
+
+The optional key path activates the read-only GCS service account for root,
+which matters because the recovery worker usually runs with `sudo`.
+
 Example:
 
 ```bash
