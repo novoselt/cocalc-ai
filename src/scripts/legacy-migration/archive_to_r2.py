@@ -35,6 +35,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -199,15 +200,24 @@ def r2_size(config: dict[str, str], key: str) -> int | None:
 
 
 def r2_write_json(config: dict[str, str], key: str, payload: dict[str, Any]) -> None:
-    proc = subprocess.run(
-        ["rclone", "rcat", f"r2:{config['bucket']}/{key}"],
-        env=rclone_env(config),
-        input=json.dumps(payload, sort_keys=True) + "\n",
-        text=True,
-        capture_output=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"rclone rcat sidecar failed: {(proc.stderr or '')[:300]}")
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        f.write(json.dumps(payload, sort_keys=True) + "\n")
+        tmp = f.name
+    try:
+        run(
+            [
+                "rclone",
+                "copyto",
+                "--header-upload",
+                "Content-Type: application/json",
+                tmp,
+                f"r2:{config['bucket']}/{key}",
+                "-q",
+            ],
+            env=rclone_env(config),
+        )
+    finally:
+        os.unlink(tmp)
 
 
 def r2_upload_promote(config: dict[str, str], artifact: Path, key: str) -> None:
@@ -529,7 +539,12 @@ class ArchiveMigrator:
                 result["uploaded"] = False
             result.update(status="done", finished_at=now_iso(), duration_s=round(time.time() - t0, 3))
             if not self.args.dry_run:
-                r2_write_json(self.r2, sidecar_key, result)
+                try:
+                    r2_write_json(self.r2, sidecar_key, result)
+                    result["sidecar_uploaded"] = True
+                except Exception as err:
+                    result["sidecar_uploaded"] = False
+                    result["sidecar_error"] = str(err)[-2000:]
             return result
         except Exception as err:
             result.update(status="error", error=str(err)[-4000:], finished_at=now_iso(), duration_s=round(time.time() - t0, 3))
