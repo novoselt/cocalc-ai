@@ -18,8 +18,14 @@ const TOP_KEYS = 8;
 let alertMaintenanceStarted = false;
 
 type ServiceAdmissionDenialRow = {
+  surface: string;
+  denial_limit: string;
   source: string;
   key: string;
+  account_id: string | null;
+  project_id: string | null;
+  sample_subject: string | null;
+  sample_reason: string | null;
   count: number;
   first_time: Date | string;
   last_time: Date | string;
@@ -33,11 +39,33 @@ async function getRecentServiceAdmissionDenials(): Promise<
   const { rows } = await getPool().query<ServiceAdmissionDenialRow>(
     `
       SELECT
+        COALESCE(NULLIF(value->>'surface', ''), 'unknown') AS surface,
+        COALESCE(NULLIF(value->>'limit', ''), 'unknown') AS denial_limit,
         COALESCE(NULLIF(value->>'source', ''), 'unknown') AS source,
         COALESCE(NULLIF(value->>'key', ''), 'unknown') AS key,
-        COUNT(*)::int AS count,
-        MIN("time") AS first_time,
-        MAX("time") AS last_time,
+        NULLIF(value->>'account_id', '') AS account_id,
+        NULLIF(value->>'project_id', '') AS project_id,
+        MAX(NULLIF(value->>'subject', '')) AS sample_subject,
+        MAX(NULLIF(value->>'reason', '')) AS sample_reason,
+        SUM(
+          CASE
+            WHEN (value->>'count') ~ '^[0-9]+$'
+            THEN GREATEST((value->>'count')::int, 1)
+            ELSE 1
+          END
+        )::int AS count,
+        MIN(
+          CASE
+            WHEN NULLIF(value->>'first_time', '') IS NULL THEN "time"
+            ELSE (value->>'first_time')::timestamptz
+          END
+        ) AS first_time,
+        MAX(
+          CASE
+            WHEN NULLIF(value->>'last_time', '') IS NULL THEN "time"
+            ELSE (value->>'last_time')::timestamptz
+          END
+        ) AS last_time,
         MAX(
           CASE
             WHEN (value->>'current') ~ '^[0-9]+$'
@@ -55,7 +83,7 @@ async function getRecentServiceAdmissionDenials(): Promise<
       FROM central_log
       WHERE event = 'service_admission_denied'
         AND "time" >= NOW() - ($1::int * INTERVAL '1 minute')
-      GROUP BY source, key
+      GROUP BY surface, denial_limit, source, key, account_id, project_id
       ORDER BY count DESC, last_time DESC
       LIMIT $2
     `,
@@ -73,13 +101,21 @@ function formatRow(row: ServiceAdmissionDenialRow): string {
       : `${row.last_time}`;
   return [
     `- ${row.key}`,
+    `surface=${row.surface}`,
+    `limit=${row.denial_limit}`,
     `source=${row.source}`,
+    row.account_id ? `account=${row.account_id}` : undefined,
+    row.project_id ? `project=${row.project_id}` : undefined,
+    row.sample_subject ? `subject=${row.sample_subject}` : undefined,
     `count=${row.count}`,
     `active/max=${row.max_current}/${row.max_maximum}`,
     firstMs != null && lastMs != null
       ? `span=${formatDuration(Math.max(0, lastMs - firstMs))}`
       : undefined,
     `last=${lastTime}`,
+    row.sample_reason
+      ? `reason=${JSON.stringify(row.sample_reason)}`
+      : undefined,
   ]
     .filter((part) => part != null)
     .join(" ");

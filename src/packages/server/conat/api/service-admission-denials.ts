@@ -44,11 +44,21 @@ async function recordServiceAdmissionEventLocal(
       host_id: optionalString(normalized.host_id, 80),
       account_id: optionalString(normalized.account_id, 80),
       project_id: optionalString(normalized.project_id, 80),
+      browser_id: optionalString(normalized.browser_id, 80),
+      socket_id: optionalString(normalized.socket_id, 120),
       subject: optionalString(normalized.subject, 512),
       path: optionalString(normalized.path, 1024),
       key: optionalString(normalized.key, 256),
       current: normalized.current,
       maximum: normalized.maximum,
+      count: normalized.count ?? 1,
+      suppressed_count: normalized.suppressed_count ?? 0,
+      first_time: new Date(
+        normalized.first_time ?? normalized.time ?? Date.now(),
+      ).toISOString(),
+      last_time: new Date(
+        normalized.last_time ?? normalized.time ?? Date.now(),
+      ).toISOString(),
       time: new Date(normalized.time ?? Date.now()).toISOString(),
     },
   });
