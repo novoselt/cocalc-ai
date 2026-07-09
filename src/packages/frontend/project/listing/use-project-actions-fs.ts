@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { redux } from "@cocalc/frontend/app-framework";
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
@@ -13,6 +13,7 @@ import { useFsWithRefresh } from "./use-fs";
 type ProjectActionsWithFilesystem =
   | {
       fs?: () => FilesystemClient;
+      clearFilesystemClient?: () => void;
     }
   | null
   | undefined;
@@ -24,14 +25,26 @@ export default function useProjectActionsFilesystem({
   actions: ProjectActionsWithFilesystem;
   project_id: string;
 }): FilesystemClient | null {
+  return useProjectActionsFilesystemWithRefresh({ actions, project_id }).fs;
+}
+
+export function useProjectActionsFilesystemWithRefresh({
+  actions,
+  project_id,
+}: {
+  actions: ProjectActionsWithFilesystem;
+  project_id: string;
+}): { fs: FilesystemClient | null; refreshFs: () => void } {
   const { projectAccess, publicDirectoryShare } = useProjectContext();
   const readOnlyViewer = projectAccess.role === "viewer";
-  const restrictedFs = useFsWithRefresh({
-    project_id,
-    share_id: publicDirectoryShare?.id,
-    viewer: !publicDirectoryShare && readOnlyViewer ? true : undefined,
-    enabled: publicDirectoryShare != null || readOnlyViewer,
-  }).fs;
+  const { fs: restrictedFs, refreshFs: refreshRestrictedFs } = useFsWithRefresh(
+    {
+      project_id,
+      share_id: publicDirectoryShare?.id,
+      viewer: !publicDirectoryShare && readOnlyViewer ? true : undefined,
+      enabled: publicDirectoryShare != null || readOnlyViewer,
+    },
+  );
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
   const [retry, setRetry] = useState(0);
@@ -56,6 +69,20 @@ export default function useProjectActionsFilesystem({
     return fs;
   }, [project_id, publicDirectoryShare, readOnlyViewer, retry, restrictedFs]);
 
+  const refreshFs = useCallback(() => {
+    if (publicDirectoryShare || readOnlyViewer) {
+      refreshRestrictedFs();
+      return;
+    }
+    const source =
+      actionsRef.current?.fs != null
+        ? actionsRef.current
+        : redux.getProjectActions(project_id);
+    source?.clearFilesystemClient?.();
+    ref.current = null;
+    setRetry((value) => value + 1);
+  }, [project_id, publicDirectoryShare, readOnlyViewer, refreshRestrictedFs]);
+
   useEffect(() => {
     if (fs != null) {
       return;
@@ -64,5 +91,5 @@ export default function useProjectActionsFilesystem({
     return () => clearTimeout(timer);
   }, [fs, project_id, retry]);
 
-  return fs;
+  return { fs, refreshFs };
 }

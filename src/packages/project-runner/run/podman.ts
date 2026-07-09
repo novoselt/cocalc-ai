@@ -96,6 +96,7 @@ const RESTORE_RPC_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const STOP_RM_TIMEOUT_S = 10;
 const STOP_RM_PODMAN_TERM_S = 5;
 const STOP_INSPECT_TIMEOUT_S = 10;
+const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
 const STOP_FORCE_KILL_SETTLE_MS = 250;
 const START_RUNNING_CHECK_TIMEOUT_MS = 5000;
 const START_RUNNING_CHECK_INTERVAL_MS = 250;
@@ -843,6 +844,35 @@ async function inspectContainerPids(name: string): Promise<number[]> {
       ]),
     ),
   ];
+}
+
+async function attachProjectToCgroup(project_id: string): Promise<void> {
+  try {
+    const result = await executeCode({
+      command: "sudo",
+      args: [
+        "-n",
+        "/usr/local/sbin/cocalc-runtime-storage",
+        "attach-project-cgroup",
+        project_id,
+      ],
+      timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
+      err_on_exit: false,
+    });
+    const exitCode = Number((result as any)?.exit_code ?? 0);
+    if (exitCode !== 0) {
+      logger.warn("start: failed to attach project container to cgroup", {
+        project_id,
+        exit_code: exitCode,
+        stderr: `${(result as any)?.stderr ?? ""}`.trim(),
+      });
+    }
+  } catch (err) {
+    logger.warn("start: failed to attach project container to cgroup", {
+      project_id,
+      err: `${err}`,
+    });
+  }
 }
 
 function tryKillPid(pid: number, signal: NodeJS.Signals): void {
@@ -1843,6 +1873,7 @@ export async function start({
         `project container ${name} exited before reporting a running state${detail ? `\n${detail}` : ""}`,
       );
     }
+    await attachProjectToCgroup(project_id);
 
     report({
       type: "start-project",

@@ -43,6 +43,7 @@ function isTransientProjectHostListingError(error: unknown): boolean {
     message === "error: closed" ||
     message.includes("connection closed") ||
     message.includes("socket has been disconnected") ||
+    message.includes("failed to fetch") ||
     message.includes("disconnected") ||
     message.includes("failed to sign in") ||
     message.includes("missing project-host bearer token") ||

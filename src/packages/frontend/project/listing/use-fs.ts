@@ -45,6 +45,7 @@ function isRetryableProjectFsError(err: unknown): boolean {
     message.includes("missing project-host bearer token") ||
     message.includes("no subscribers matching") ||
     message.includes("timeout") ||
+    message.includes("failed to fetch") ||
     message.includes("unable to route") ||
     message.includes("unable to connect routed project-host client") ||
     message.includes("host routing info unavailable") ||
