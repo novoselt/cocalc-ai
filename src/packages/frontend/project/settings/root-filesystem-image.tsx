@@ -181,6 +181,8 @@ export default function RootFilesystemImage({
     useState<RootfsConfigExport | null>(null);
   const [rootfsConfigImportProjectPath, setRootfsConfigImportProjectPath] =
     useState<string>("");
+  const [rootfsCatalogConfigSourceId, setRootfsCatalogConfigSourceId] =
+    useState<string>("");
   const [
     rootfsConfigImportProjectLoading,
     setRootfsConfigImportProjectLoading,
@@ -542,6 +544,17 @@ export default function RootFilesystemImage({
         })),
     [publishSourceEntry?.id, catalogRootfsImages],
   );
+  const rootfsConfigCatalogSourceOptions = useMemo(
+    () =>
+      catalogRootfsImages.map((entry) => {
+        const label = rootfsCatalogConfigSourceLabel(entry);
+        return {
+          value: entry.id,
+          label,
+        };
+      }),
+    [catalogRootfsImages],
+  );
   const publishContentInput = useMemo(
     () => rootfsContentDraftToInput(publishContentDraft),
     [publishContentDraft],
@@ -678,6 +691,7 @@ export default function RootFilesystemImage({
       hidden: currentEntry?.hidden ?? false,
     });
     setPublishContentDraft(rootfsContentManifestToDraft(currentEntry?.content));
+    setRootfsCatalogConfigSourceId("");
     setPublishOpen(true);
   }
 
@@ -985,6 +999,22 @@ export default function RootFilesystemImage({
     } finally {
       setRootfsConfigImportProjectLoading(false);
     }
+  }
+
+  function importRootfsConfigCatalogEntry(entryId?: string): void {
+    const sourceId = `${entryId ?? ""}`.trim();
+    setRootfsCatalogConfigSourceId(sourceId);
+    if (!sourceId) return;
+
+    const entry = catalogRootfsImages.find((entry) => entry.id === sourceId);
+    if (!entry) {
+      message.error("Could not find that published image in the catalog.");
+      return;
+    }
+
+    const candidate = rootfsConfigExportFromCatalogEntry(entry);
+    setRootfsConfigImportCandidate(candidate);
+    setRootfsConfigImportOptions(rootfsConfigImportOptionsFor(candidate));
   }
 
   function applyRootfsConfigImport(): void {
@@ -2529,6 +2559,21 @@ export default function RootFilesystemImage({
                             Import JSON
                           </Button>
                         </Space>
+                        <Select
+                          allowClear
+                          showSearch
+                          loading={catalogRootfsLoading}
+                          optionFilterProp="label"
+                          options={rootfsConfigCatalogSourceOptions}
+                          value={rootfsCatalogConfigSourceId || undefined}
+                          onChange={importRootfsConfigCatalogEntry}
+                          placeholder="Import config from a visible published image"
+                          style={{
+                            marginTop: 10,
+                            maxWidth: 720,
+                            width: "100%",
+                          }}
+                        />
                         <Space.Compact
                           style={{
                             marginTop: 10,
@@ -2557,8 +2602,10 @@ export default function RootFilesystemImage({
                           type="secondary"
                           style={{ marginTop: 10, marginBottom: 0 }}
                         >
-                          Import updates this draft only. Save or publish to
-                          update the image catalog entry.
+                          Import updates this draft only. Catalog imports copy
+                          metadata, theme, and discovery actions from a visible
+                          published image, while keeping the current live image
+                          as the publish source.
                         </Paragraph>
                       </RuntimePanel>
                       <RootfsContentManifestBuilder
@@ -2862,7 +2909,7 @@ export default function RootFilesystemImage({
             <Alert
               type="info"
               showIcon
-              message="Choose which parts of this JSON config to import."
+              message="Choose which parts of this image config to import."
               description="Import changes this draft only. Save or publish to update the image catalog metadata."
             />
             <Checkbox
@@ -3244,6 +3291,44 @@ function rootfsConfigMetadataFromPublishDraft(
     visibility: draft.visibility,
     tags: parseRootfsTagString(draft.tags),
   };
+}
+
+function rootfsConfigExportFromCatalogEntry(
+  entry: RootfsImageEntry,
+): RootfsConfigExport {
+  return {
+    kind: ROOTFS_CONFIG_EXPORT_KIND,
+    version: ROOTFS_CONFIG_EXPORT_VERSION,
+    exported_at: new Date().toISOString(),
+    metadata: rootfsConfigMetadataFromCatalogEntry(entry),
+    theme: entry.theme,
+    content: entry.content,
+  };
+}
+
+function rootfsConfigMetadataFromCatalogEntry(
+  entry: RootfsImageEntry,
+): RootfsConfigExportMetadata {
+  return {
+    label: entry.label,
+    slug: entry.slug?.trim() || undefined,
+    description: entry.description,
+    family: entry.family?.trim() || undefined,
+    version: entry.version?.trim() || undefined,
+    channel: entry.channel?.trim() || undefined,
+    supersedes_image_id: entry.id,
+    default_jupyter_kernel: entry.default_jupyter_kernel?.trim() || undefined,
+    visibility: entry.visibility,
+    tags: normalizeRootfsTags(entry.tags ?? []),
+  };
+}
+
+function rootfsCatalogConfigSourceLabel(entry: RootfsImageEntry): string {
+  const details = [entry.version, entry.channel, entry.slug]
+    .map((value) => value?.trim())
+    .filter(Boolean);
+  const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
+  return `${entry.label || entry.image}${suffix}`;
 }
 
 function rootfsPublicLandingPath({
