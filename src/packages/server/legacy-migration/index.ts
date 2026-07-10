@@ -4632,8 +4632,8 @@ async function remediationProjectForAccount({
        AND COALESCE(active_import_project.deleted, false)=false
      WHERE i.project_id=$1
        AND (
-         i.owner_account_id=$2
-         OR COALESCE(active_import_project.users, '{}'::jsonb) ? $2
+         i.owner_account_id=$2::uuid
+         OR COALESCE(active_import_project.users, '{}'::jsonb) ? $2::text
        )
      LIMIT 1
     `,
