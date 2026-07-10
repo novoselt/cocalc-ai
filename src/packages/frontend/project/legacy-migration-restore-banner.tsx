@@ -856,6 +856,24 @@ export function LegacyMigrationRestoreBanner({
       </>
     );
   }
+  if (legacyProjectId && remediationError) {
+    return (
+      <Alert
+        showIcon
+        type="error"
+        message="Unable to check final legacy archive status"
+        description={
+          <Space direction="vertical">
+            <Text>
+              This project was restored from cocalc.com, but CoCalc could not
+              check whether a newer final archive is available.
+            </Text>
+            <Text code>{remediationError}</Text>
+          </Space>
+        }
+      />
+    );
+  }
   if (!legacyProjectId) return null;
   if (restoreIssueDismissed && failed) return null;
 
