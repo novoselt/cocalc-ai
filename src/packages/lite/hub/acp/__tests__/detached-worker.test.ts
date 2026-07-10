@@ -67,6 +67,7 @@ jest.mock("@cocalc/project/logger", () => {
   };
 });
 jest.mock("../../sqlite/acp-turns", () => ({
+  countRunningAcpTurnLeasesForWorker: jest.fn(() => 0),
   startAcpTurnLease: jest.fn(),
   heartbeatAcpTurnLease: jest.fn(),
   finalizeAcpTurnLease: jest.fn(),

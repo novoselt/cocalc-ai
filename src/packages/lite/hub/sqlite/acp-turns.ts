@@ -259,6 +259,23 @@ export function listRunningAcpTurnLeases({
   return db.prepare(query).all(...params) as AcpTurnLeaseRow[];
 }
 
+export function countRunningAcpTurnLeasesForWorker(
+  owner_instance_id: string,
+): number {
+  ensureInit();
+  const ownerId = `${owner_instance_id ?? ""}`.trim();
+  if (!ownerId) return 0;
+  const row = getAcpDatabase()
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM ${TABLE}
+       WHERE state = 'running'
+         AND owner_instance_id = ?`,
+    )
+    .get(ownerId) as { count?: number } | undefined;
+  return Number(row?.count ?? 0) || 0;
+}
+
 export function listRecentTerminalAcpTurnLeases({
   sinceMs,
   limit,

@@ -84,6 +84,7 @@ jest.mock("../../sqlite/acp-queue", () => ({
   clearAcpPayloads: jest.fn(),
 }));
 jest.mock("../../sqlite/acp-turns", () => ({
+  countRunningAcpTurnLeasesForWorker: jest.fn(() => 0),
   startAcpTurnLease: jest.fn(),
   heartbeatAcpTurnLease: jest.fn(),
   finalizeAcpTurnLease: jest.fn(),
@@ -697,7 +698,7 @@ describe("ChatStreamWriter", () => {
     (writer as any).dispose?.(true);
   });
 
-  it("finalizes the lease as error when terminal chat save times out", async () => {
+  it("finalizes the lease as completed when verified terminal summary save times out", async () => {
     const { syncdb, setCurrent } = makeFakeSyncDB();
     setCurrent({
       get: (key: string) => (key === "generating" ? true : undefined),
@@ -728,13 +729,12 @@ describe("ChatStreamWriter", () => {
       seq: 0,
     } as AcpStreamMessage);
 
-    expect(writer.getTerminalState()).toBe("error");
+    expect(writer.getTerminalState()).toBe("completed");
     expect((turns.finalizeAcpTurnLease as any).mock.calls).toEqual(
       expect.arrayContaining([
         [
           expect.objectContaining({
-            state: "error",
-            reason: expect.stringContaining("Project storage"),
+            state: "completed",
           }),
         ],
       ]),
