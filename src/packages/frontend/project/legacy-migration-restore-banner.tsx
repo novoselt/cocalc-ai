@@ -537,7 +537,6 @@ export function LegacyMigrationRestoreBanner({
   }, [remediationSessionKey]);
 
   useEffect(() => {
-    if (!legacyProjectId) return;
     let canceled = false;
     async function loadRemediation() {
       setRemediationLoading(true);
@@ -560,7 +559,7 @@ export function LegacyMigrationRestoreBanner({
     return () => {
       canceled = true;
     };
-  }, [legacyProjectId, project_id]);
+  }, [project_id]);
 
   useEffect(() => {
     if (
@@ -711,7 +710,6 @@ export function LegacyMigrationRestoreBanner({
     setRemediationDismissOpen(false);
   }
 
-  if (!legacyProjectId) return null;
   if (
     remediation?.needs_remediation &&
     !remediation.dismissed_forever &&
@@ -858,6 +856,7 @@ export function LegacyMigrationRestoreBanner({
       </>
     );
   }
+  if (!legacyProjectId) return null;
   if (restoreIssueDismissed && failed) return null;
 
   async function reopenProject() {
