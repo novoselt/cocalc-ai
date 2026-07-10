@@ -179,6 +179,21 @@ describe("useFs", () => {
     expect(result).toBe(fs);
   });
 
+  it("retries failed project-host fetches and recovers", async () => {
+    const fs = { readdir: jest.fn() } as any;
+    projectFs
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(fs);
+
+    useFsForTest("project-fetch");
+    await flushEffects();
+
+    const result = useFsForTest("project-fetch");
+    expect(projectFs).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(1000);
+    expect(result).toBe(fs);
+  });
+
   it("does not retry non-retryable projectFs failures", async () => {
     projectFs.mockRejectedValueOnce(new Error("permission denied"));
 

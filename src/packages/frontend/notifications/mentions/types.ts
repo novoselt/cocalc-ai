@@ -29,6 +29,7 @@ export type MentionInfo = TypedMap<{
   action_link?: string;
   action_label?: string;
   severity?: string;
+  notification_reason?: "mention" | "thread_follow";
   action?: "email" | "ignore";
   error?: string;
   description?: string;

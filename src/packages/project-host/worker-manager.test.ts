@@ -7,6 +7,7 @@ import {
 } from "./hub/acp/worker-manager";
 import { getAcpWorker } from "@cocalc/lite/hub/sqlite/acp-workers";
 import {
+  decodeAcpJobRequest,
   listQueuedAcpJobs,
   listRunningAcpJobs,
 } from "@cocalc/lite/hub/sqlite/acp-jobs";
@@ -16,6 +17,7 @@ jest.mock("@cocalc/lite/hub/sqlite/acp-workers", () => ({
   getAcpWorker: jest.fn(),
 }));
 jest.mock("@cocalc/lite/hub/sqlite/acp-jobs", () => ({
+  decodeAcpJobRequest: jest.fn((row) => JSON.parse(row.request_json ?? "{}")),
   listQueuedAcpJobs: jest.fn(() => []),
   listRunningAcpJobs: jest.fn(() => []),
 }));
@@ -32,6 +34,9 @@ const mockListQueuedAcpJobs = listQueuedAcpJobs as jest.MockedFunction<
 const mockListRunningAcpJobs = listRunningAcpJobs as jest.MockedFunction<
   typeof listRunningAcpJobs
 >;
+const mockDecodeAcpJobRequest = decodeAcpJobRequest as jest.MockedFunction<
+  typeof decodeAcpJobRequest
+>;
 const mockListRunningAcpTurnLeases =
   listRunningAcpTurnLeases as jest.MockedFunction<
     typeof listRunningAcpTurnLeases
@@ -43,6 +48,10 @@ beforeEach(() => {
   mockListQueuedAcpJobs.mockReturnValue([]);
   mockListRunningAcpJobs.mockReset();
   mockListRunningAcpJobs.mockReturnValue([]);
+  mockDecodeAcpJobRequest.mockClear();
+  mockDecodeAcpJobRequest.mockImplementation((row) =>
+    JSON.parse(row.request_json ?? "{}"),
+  );
   mockListRunningAcpTurnLeases.mockReset();
   mockListRunningAcpTurnLeases.mockReturnValue([]);
 });
@@ -484,6 +493,7 @@ describe("ACP worker control startup grace", () => {
       started_at: 1_000,
       last_heartbeat_at: 92_000,
       last_seen_running_jobs: 1,
+      last_queue_progress_at: 92_000,
     });
 
     expect(
@@ -509,6 +519,7 @@ describe("ACP worker control startup grace", () => {
       started_at: 1_000,
       last_heartbeat_at: 70_000,
       last_seen_running_jobs: 0,
+      last_queue_progress_at: 70_000,
     });
 
     expect(
@@ -522,7 +533,7 @@ describe("ACP worker control startup grace", () => {
     ).toBe(false);
   });
 
-  it("protects an unresponsive worker with running jobs even when its heartbeat is stale", () => {
+  it("protects an unresponsive worker with a running turn lease even when its heartbeat is stale", () => {
     jest.spyOn(Date, "now").mockReturnValue(100_000);
     mockGetAcpWorker.mockReturnValue({
       worker_id: "worker-current",
@@ -534,7 +545,14 @@ describe("ACP worker control startup grace", () => {
       started_at: 1_000,
       last_heartbeat_at: 70_000,
       last_seen_running_jobs: 1,
+      last_queue_progress_at: 70_000,
     });
+    mockListRunningAcpJobs.mockReturnValue([
+      { worker_id: "worker-current" } as any,
+    ]);
+    mockListRunningAcpTurnLeases.mockReturnValue([
+      { owner_instance_id: "worker-current" } as any,
+    ]);
 
     expect(
       __test__.workerDatabaseStateProtectsUnresponsiveWorker({
@@ -547,7 +565,7 @@ describe("ACP worker control startup grace", () => {
     ).toBe(true);
   });
 
-  it("protects an unresponsive worker while ACP backlog exists", () => {
+  it("protects an unresponsive worker while ACP backlog is inside the stall grace period", () => {
     jest.spyOn(Date, "now").mockReturnValue(100_000);
     mockGetAcpWorker.mockReturnValue({
       worker_id: "worker-current",
@@ -559,8 +577,11 @@ describe("ACP worker control startup grace", () => {
       started_at: 1_000,
       last_heartbeat_at: 70_000,
       last_seen_running_jobs: 0,
+      last_queue_progress_at: 70_000,
     });
-    mockListQueuedAcpJobs.mockReturnValue([{} as any]);
+    mockListQueuedAcpJobs.mockReturnValue([
+      { updated_at: 95_000, created_at: 95_000 } as any,
+    ]);
 
     expect(
       __test__.workerDatabaseStateProtectsUnresponsiveWorker({
@@ -571,6 +592,178 @@ describe("ACP worker control startup grace", () => {
         cmdline: ["project-host:acp-worker"],
       } as any),
     ).toBe(true);
+  });
+
+  it("protects an unresponsive worker with fresh queue progress despite backlog", () => {
+    jest.spyOn(Date, "now").mockReturnValue(100_000);
+    mockGetAcpWorker.mockReturnValue({
+      worker_id: "worker-current",
+      host_id: "host-1",
+      bundle_version: "current",
+      bundle_path: "/opt/cocalc/project-host/bundles/current",
+      pid: 1007,
+      state: "active",
+      started_at: 1_000,
+      last_heartbeat_at: 98_000,
+      last_seen_running_jobs: 1,
+      last_queue_progress_at: 70_000,
+    });
+    mockListRunningAcpJobs.mockReturnValue([
+      {
+        worker_id: "worker-current",
+        updated_at: 80_000,
+        created_at: 80_000,
+      } as any,
+    ]);
+    mockListQueuedAcpJobs.mockReturnValue([
+      { updated_at: 80_000, created_at: 80_000 } as any,
+    ]);
+
+    expect(
+      __test__.workerDatabaseStateProtectsUnresponsiveWorker({
+        pid: 1007,
+        env: {
+          COCALC_ACP_INSTANCE_ID: "worker-current",
+        },
+        cmdline: ["project-host:acp-worker"],
+      } as any),
+    ).toBe(true);
+  });
+
+  it("does not protect an unresponsive worker when stale backlog has no queue progress", () => {
+    jest.spyOn(Date, "now").mockReturnValue(200_000);
+    mockGetAcpWorker.mockReturnValue({
+      worker_id: "worker-current",
+      host_id: "host-1",
+      bundle_version: "current",
+      bundle_path: "/opt/cocalc/project-host/bundles/current",
+      pid: 1008,
+      state: "active",
+      started_at: 1_000,
+      last_heartbeat_at: 195_000,
+      last_seen_running_jobs: 1,
+      last_queue_progress_at: 50_000,
+    });
+    mockListRunningAcpJobs.mockReturnValue([
+      {
+        worker_id: "worker-current",
+        updated_at: 50_000,
+        created_at: 50_000,
+      } as any,
+    ]);
+
+    expect(
+      __test__.workerDatabaseStateProtectsUnresponsiveWorker(
+        {
+          pid: 1008,
+          env: {
+            COCALC_ACP_INSTANCE_ID: "worker-current",
+          },
+          cmdline: ["project-host:acp-worker"],
+        } as any,
+        200_000,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("queue-stalled ACP workers", () => {
+  const worker = {
+    pid: 1101,
+    env: {
+      COCALC_ACP_INSTANCE_ID: "worker-stalled",
+      COCALC_PROJECT_HOST_ACP_WORKER_STARTED_AT: "1000",
+    },
+    cmdline: ["project-host:acp-worker"],
+  };
+
+  it("terminates stale backlog when the worker has no live turn lease and no queue progress", () => {
+    mockListQueuedAcpJobs.mockReturnValue([
+      { updated_at: 10_000, created_at: 10_000 } as any,
+    ]);
+
+    expect(
+      __test__.shouldTerminateQueueStalledWorker({
+        worker: worker as any,
+        status: {
+          worker_id: "worker-stalled",
+          started_at: 1_000,
+          last_queue_progress_at: 10_000,
+          running_turn_leases: 0,
+        } as any,
+        now: 200_000,
+        stallMs: 60_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not terminate while backlog is still inside the stall grace period", () => {
+    mockListQueuedAcpJobs.mockReturnValue([
+      { updated_at: 170_000, created_at: 170_000 } as any,
+    ]);
+
+    expect(
+      __test__.shouldTerminateQueueStalledWorker({
+        worker: worker as any,
+        status: {
+          worker_id: "worker-stalled",
+          started_at: 1_000,
+          last_queue_progress_at: 10_000,
+          running_turn_leases: 0,
+        } as any,
+        now: 200_000,
+        stallMs: 60_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not terminate a worker that owns a live running turn lease", () => {
+    mockListQueuedAcpJobs.mockReturnValue([
+      { updated_at: 10_000, created_at: 10_000 } as any,
+    ]);
+    mockListRunningAcpTurnLeases.mockReturnValue([
+      { owner_instance_id: "worker-stalled" } as any,
+    ]);
+
+    expect(
+      __test__.shouldTerminateQueueStalledWorker({
+        worker: worker as any,
+        status: {
+          worker_id: "worker-stalled",
+          started_at: 1_000,
+          last_queue_progress_at: 10_000,
+          running_turn_leases: 0,
+        } as any,
+        now: 200_000,
+        stallMs: 60_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not terminate a worker that is running a queued command job without a turn lease", () => {
+    mockListRunningAcpJobs.mockReturnValue([
+      {
+        op_id: "command-job",
+        worker_id: "worker-stalled",
+        updated_at: 10_000,
+        created_at: 10_000,
+        request_json: JSON.stringify({ request_kind: "command" }),
+      } as any,
+    ]);
+
+    expect(
+      __test__.shouldTerminateQueueStalledWorker({
+        worker: worker as any,
+        status: {
+          worker_id: "worker-stalled",
+          started_at: 1_000,
+          last_queue_progress_at: 10_000,
+          running_turn_leases: 0,
+        } as any,
+        now: 200_000,
+        stallMs: 60_000,
+      }),
+    ).toBe(false);
   });
 });
 

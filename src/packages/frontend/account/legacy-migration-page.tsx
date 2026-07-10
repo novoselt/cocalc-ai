@@ -11,6 +11,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popover,
   Select,
   Space,
   Switch,
@@ -40,6 +41,7 @@ import {
   latestRootfsVersionEntries,
   renderRootfsCatalogOption,
 } from "@cocalc/frontend/rootfs/catalog-ui";
+import openSupportTab from "@cocalc/frontend/support/open";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { R2_REGION_LABELS } from "@cocalc/util/consts";
 import {
@@ -148,6 +150,88 @@ function matchedAccountTitle(account: LegacyMigrationMatchedAccount): string {
       : "",
   ].filter(Boolean);
   return parts.join("\n");
+}
+
+function legacyMigrationSupportBody(emailAddress: string): string {
+  return [
+    "I need help linking a legacy cocalc.com account to my CoCalc.ai account.",
+    emailAddress
+      ? `My current CoCalc.ai account email is ${emailAddress}.`
+      : "My current CoCalc.ai account does not have an email address set.",
+    "The legacy cocalc.com account may have used another email address or sign-in identity.",
+  ].join("\n\n");
+}
+
+function openLegacyMigrationSupport(emailAddress: string): void {
+  openSupportTab({
+    subject: "Legacy cocalc.com account linking help",
+    body: legacyMigrationSupportBody(emailAddress),
+  });
+}
+
+function SupportLink({ emailAddress }: { emailAddress: string }) {
+  return (
+    <Button
+      onClick={() => openLegacyMigrationSupport(emailAddress)}
+      size="small"
+      style={{ height: "auto", padding: 0 }}
+      type="link"
+    >
+      contact support
+    </Button>
+  );
+}
+
+function matchedAccountsForDisplay(
+  legacyAccounts: LegacyMigrationMatchedAccount[],
+  legacyAccountIds: string[],
+): LegacyMigrationMatchedAccount[] {
+  if (legacyAccounts.length > 0) return legacyAccounts;
+  return legacyAccountIds.map((legacy_account_id) => ({ legacy_account_id }));
+}
+
+function MatchedLegacyAccounts({
+  legacyAccounts,
+  legacyAccountIds,
+}: {
+  legacyAccounts: LegacyMigrationMatchedAccount[];
+  legacyAccountIds: string[];
+}) {
+  const accounts = matchedAccountsForDisplay(legacyAccounts, legacyAccountIds);
+  const renderTag = (account: LegacyMigrationMatchedAccount) => (
+    <Tag key={account.legacy_account_id} title={matchedAccountTitle(account)}>
+      {matchedAccountLabel(account)}
+    </Tag>
+  );
+
+  if (accounts.length <= 2) {
+    return (
+      <Space wrap size={[4, 4]}>
+        {accounts.map(renderTag)}
+      </Space>
+    );
+  }
+
+  return (
+    <Space wrap size={[4, 4]}>
+      {accounts.slice(0, 2).map(renderTag)}
+      <Popover
+        content={
+          <div style={{ maxHeight: 320, maxWidth: 520, overflow: "auto" }}>
+            <Space wrap size={[4, 4]}>
+              {accounts.map(renderTag)}
+            </Space>
+          </div>
+        }
+        title="Matched legacy cocalc.com accounts"
+        trigger="click"
+      >
+        <Button size="small">
+          Show all {accounts.length.toLocaleString()} addresses
+        </Button>
+      </Popover>
+    </Space>
+  );
 }
 
 function restoreProgressText(
@@ -309,7 +393,7 @@ function projectStatusTag(project: LegacyMigrationProjectSummary) {
   }
   if (status === "restoring") return <Tag color="blue">Restoring</Tag>;
   if (status === "failed") return <Tag color="red">Failed</Tag>;
-  if (status === "not-available") return <Tag>Not yet available</Tag>;
+  if (status === "not-available") return <Tag>Unavailable</Tag>;
   if (project.project_id) return <Tag color="green">Imported</Tag>;
   return <Tag color="gold">Ready to restore</Tag>;
 }
@@ -443,9 +527,7 @@ function LegacyProjectImportModal({
   async function importAndOpen() {
     if (!project) return;
     if (!archiveAvailable(project)) {
-      setError(
-        "The archived files for this legacy project are not available yet.",
-      );
+      setError("No recoverable archive is available for this legacy project.");
       return;
     }
     if (!draft.rootfs_image.trim()) {
@@ -482,7 +564,7 @@ function LegacyProjectImportModal({
   const importDisabledReason = !project
     ? "Legacy project details are still loading."
     : !archiveAvailable(project)
-      ? "The archived files for this legacy project are not available yet."
+      ? "No recoverable archive is available for this legacy project."
       : rootfsLoading
         ? "Image choices are still loading."
         : imageMissing
@@ -513,7 +595,7 @@ function LegacyProjectImportModal({
             description={
               archiveAvailable(project)
                 ? `This will create a CoCalc project, open it immediately, and restore files from the legacy archive in the background. Last known disk use: ${formatDiskMb(project.disk_mb)}. Archived size: ${formatBytes(project.artifact_bytes)}.`
-                : "The archived files for this project are not available yet, so it cannot be imported without creating a blank project."
+                : "No recoverable archive is available for this legacy project, so it cannot be imported."
             }
           />
         ) : null}
@@ -995,7 +1077,7 @@ export function LegacyMigrationPage() {
     }
     if (!archiveAvailable(project)) {
       void message.error(
-        "The archived files for this legacy project are not available yet.",
+        "No recoverable archive is available for this legacy project.",
       );
       return;
     }
@@ -1228,7 +1310,7 @@ export function LegacyMigrationPage() {
           title={
             projectActionAvailable(project)
               ? undefined
-              : "Archived files for this legacy project are not available yet."
+              : "No recoverable archive is available for this legacy project."
           }
           type={project.project_id ? "default" : "primary"}
         >
@@ -1304,9 +1386,8 @@ export function LegacyMigrationPage() {
               </Text>
               <Text type="secondary">
                 Open a legacy project to restore its files. Large projects may
-                take a few minutes; projects marked <Tag>Not yet available</Tag>{" "}
-                are known to the migration system but their archive has not been
-                uploaded yet.
+                take a few minutes; projects marked <Tag>Unavailable</Tag> do
+                not have a recoverable archive and cannot be restored.
               </Text>
               <Text type="secondary">
                 Billing credit and legacy memberships are handled in{" "}
@@ -1333,6 +1414,25 @@ export function LegacyMigrationPage() {
           {legacyMigrationPageMessage ? (
             <Alert showIcon type="info" message={legacyMigrationPageMessage} />
           ) : null}
+          <Alert
+            showIcon
+            type="warning"
+            message="Important limitations"
+            description={
+              <Space direction="vertical" size={4}>
+                <span>
+                  Legacy TimeTravel and edit history from cocalc.com are not
+                  available in restored CoCalc.ai projects. Restores contain the
+                  latest archived project files only.
+                </span>
+                <span>
+                  Legacy blobs and uploaded images referenced by old notebooks
+                  or documents are not restored yet. We are working to make
+                  those attachments available soon.
+                </span>
+              </Space>
+            }
+          />
           {!emailVerificationRequired ? (
             <Space wrap size={[8, 8]}>
               <Tag color="blue">
@@ -1340,7 +1440,7 @@ export function LegacyMigrationPage() {
               </Tag>
               <Tag color="gold">{projectStats.ready} ready</Tag>
               <Tag color="green">{projectStats.restored} restored</Tag>
-              <Tag>{projectStats["not-available"]} not yet available</Tag>
+              <Tag>{projectStats["not-available"]} unavailable</Tag>
               {projectStats.restoring ? (
                 <Tag color="blue">{projectStats.restoring} restoring</Tag>
               ) : null}
@@ -1381,9 +1481,7 @@ export function LegacyMigrationPage() {
               <Select.Option value="ready">Ready to restore</Select.Option>
               <Select.Option value="restoring">Restoring</Select.Option>
               <Select.Option value="restored">Restored</Select.Option>
-              <Select.Option value="not-available">
-                Not yet available
-              </Select.Option>
+              <Select.Option value="not-available">Unavailable</Select.Option>
               <Select.Option value="failed">Failed</Select.Option>
             </Select>
             <Checkbox
@@ -1396,7 +1494,7 @@ export function LegacyMigrationPage() {
               checked={includeNotAvailable}
               onChange={(event) => setIncludeNotAvailable(event.target.checked)}
             >
-              Include not yet available
+              Include unavailable
             </Checkbox>
             <InputNumber
               min={0}
@@ -1457,7 +1555,8 @@ export function LegacyMigrationPage() {
                   >
                     profile settings
                   </InternalRouteLink>
-                  , then refresh this page. Contact support if your legacy
+                  , then refresh this page.{" "}
+                  <SupportLink emailAddress={emailAddress} /> if your legacy
                   account used another identity.
                 </span>
               }
@@ -1471,21 +1570,10 @@ export function LegacyMigrationPage() {
                   {state.legacyAccountIds.length === 1 ? "" : "s"} by verified
                   email:
                 </Text>
-                <Space wrap size={[4, 4]}>
-                  {(state.legacyAccounts.length > 0
-                    ? state.legacyAccounts
-                    : state.legacyAccountIds.map((legacy_account_id) => ({
-                        legacy_account_id,
-                      }))
-                  ).map((account) => (
-                    <Tag
-                      key={account.legacy_account_id}
-                      title={matchedAccountTitle(account)}
-                    >
-                      {matchedAccountLabel(account)}
-                    </Tag>
-                  ))}
-                </Space>
+                <MatchedLegacyAccounts
+                  legacyAccounts={state.legacyAccounts}
+                  legacyAccountIds={state.legacyAccountIds}
+                />
                 <Text type="secondary">
                   If you want to also include projects associated with a
                   different email address, change your email address in{" "}
@@ -1495,7 +1583,9 @@ export function LegacyMigrationPage() {
                   >
                     profile settings
                   </InternalRouteLink>
-                  , verify it, then come back to this page.
+                  , verify it, then come back to this page, or{" "}
+                  <SupportLink emailAddress={emailAddress} /> if the legacy
+                  account cannot be matched by your current verified email.
                 </Text>
                 <Text type="secondary">
                   Showing the{" "}

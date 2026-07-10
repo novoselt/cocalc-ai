@@ -70,6 +70,7 @@ describe("account_notification_index projector", () => {
     path?: string;
     display_path?: string;
     created_at?: string;
+    notification_reason?: "mention" | "thread_follow";
   }) {
     const path = opts?.path ?? "work/chat.chat";
     return await createNotificationEventGraph({
@@ -83,6 +84,7 @@ describe("account_notification_index projector", () => {
       payload_json: {
         description: opts?.description ?? "initial mention",
         priority: "normal",
+        notification_reason: opts?.notification_reason ?? "mention",
       },
       created_at: opts?.created_at ?? "2026-04-04T00:00:00.000Z",
       targets: [
@@ -93,6 +95,7 @@ describe("account_notification_index projector", () => {
           summary_json: {
             description: opts?.description ?? "initial mention",
             path,
+            notification_reason: opts?.notification_reason ?? "mention",
             ...(opts?.display_path ? { display_path: opts.display_path } : {}),
           },
         },
@@ -129,6 +132,26 @@ describe("account_notification_index projector", () => {
       [LOCAL_ACCOUNT_ID],
     );
     expect(indexRows.rows).toHaveLength(0);
+  });
+
+  it("uses chat reply subject copy for followed-thread notifications", async () => {
+    await seedAccounts();
+    await appendMentionOutboxRow({
+      notification_reason: "thread_follow",
+      description: "New reply in a chat thread you follow.",
+      path: "work/chat.chat",
+    });
+
+    await drainAccountNotificationIndexProjection({
+      bay_id: LOCAL_BAY_ID,
+      limit: 10,
+      dry_run: false,
+    });
+
+    const { rows } = await getPool().query(
+      "SELECT subject FROM notification_email_outbox",
+    );
+    expect(rows).toEqual([{ subject: "CoCalc chat reply in work/chat.chat" }]);
   });
 
   it("reports unpublished notification projector lag and per-type counts", async () => {
@@ -189,10 +212,10 @@ describe("account_notification_index projector", () => {
       expect.objectContaining({
         notification_id: NOTIFICATION_ID,
         project_id: PROJECT_ID,
-        summary: {
+        summary: expect.objectContaining({
           description: "initial mention",
           path: "work/chat.chat",
-        },
+        }),
         read_state: {},
       }),
     );
@@ -255,10 +278,10 @@ describe("account_notification_index projector", () => {
     ).resolves.toEqual([
       expect.objectContaining({
         notification_id: NOTIFICATION_ID,
-        summary: {
+        summary: expect.objectContaining({
           description: "updated mention summary",
           path: "work/chat.chat",
-        },
+        }),
         read_state: {
           read: true,
         },

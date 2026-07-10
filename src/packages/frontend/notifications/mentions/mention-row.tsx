@@ -46,8 +46,10 @@ export function MentionRow(props: Props) {
     target,
     description,
     fragment_id,
+    notification_reason,
   } = mention.toJS();
   const shownPath = display_path || path;
+  const isThreadFollowNotification = notification_reason === "thread_follow";
 
   const [clicked, setClicked] = useState(false);
 
@@ -132,7 +134,16 @@ export function MentionRow(props: Props) {
         <strong>
           <User account_id={source} user_map={user_map} />
         </strong>{" "}
-        mentioned you in the file <code>{shownPath}</code> in the project{" "}
+        {isThreadFollowNotification ? (
+          <>
+            replied in the chat <code>{shownPath}</code> in the project{" "}
+          </>
+        ) : (
+          <>
+            mentioned you in the file <code>{shownPath}</code> in the
+            project{" "}
+          </>
+        )}
         <ProjectTitle project_id={project_id} />.
         {description ? (
           <StaticMarkdown

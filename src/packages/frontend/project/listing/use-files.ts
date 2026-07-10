@@ -436,6 +436,7 @@ export function isRetryableListingError(err: unknown): boolean {
     isStaleFilesystemClientError(err) ||
     message.includes("timeout") ||
     message.includes("timed out") ||
+    message.includes("failed to fetch") ||
     message.includes("retry in about") ||
     message.includes("failed to sign in") ||
     message.includes("missing project-host bearer token") ||
@@ -456,6 +457,7 @@ export function isStaleFilesystemClientError(err: unknown): boolean {
     message === "error: closed" ||
     message.includes("connection closed") ||
     message.includes("socket has been disconnected") ||
+    message.includes("failed to fetch") ||
     message.includes("disconnected")
   );
 }

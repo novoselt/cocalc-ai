@@ -10,11 +10,14 @@ const mark = jest.fn();
 const markMany = jest.fn();
 const respondAccessRequest = jest.fn();
 const listAccessRequests = jest.fn();
+const getEditorActions = jest.fn();
+const setThreadNotificationMuted = jest.fn();
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
   redux: {
     getProjectActions: () => ({ open_file }),
     getActions: () => ({ mark, markMany }),
+    getEditorActions: (...args: any[]) => getEditorActions(...args),
   },
 }));
 
@@ -59,6 +62,9 @@ describe("NotificationRow", () => {
     open_file.mockReset();
     mark.mockReset();
     markMany.mockReset();
+    getEditorActions.mockReset();
+    setThreadNotificationMuted.mockReset();
+    setThreadNotificationMuted.mockReturnValue(true);
     respondAccessRequest.mockReset();
     respondAccessRequest.mockResolvedValue(undefined);
     listAccessRequests.mockReset();
@@ -269,5 +275,42 @@ describe("NotificationRow", () => {
     expect(screen.queryByText("Approve collaborator")).toBeNull();
     expect(screen.queryByText("Deny")).toBeNull();
     expect(respondAccessRequest).not.toHaveBeenCalled();
+  });
+
+  it("mutes followed chat thread notifications from the notification row", async () => {
+    getEditorActions.mockReturnValue({ setThreadNotificationMuted });
+    render(
+      <NotificationRow
+        id="notice-1"
+        user_map={{}}
+        mention={
+          fromJS({
+            kind: "mention",
+            project_id: "11111111-1111-4111-8111-111111111111",
+            path: "work/chat.chat",
+            source: "source-1",
+            target: "acct-1",
+            time: new Date("2026-05-07T00:00:00.000Z"),
+            description: "New reply",
+            fragment_id: "chat=1234&thread=thread-1",
+            notification_reason: "thread_follow",
+            users: { "acct-1": { read: false, saved: false } },
+          }) as any
+        }
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Mute this chat"));
+
+    await waitFor(() =>
+      expect(setThreadNotificationMuted).toHaveBeenCalledWith("thread-1", true),
+    );
+    expect(getEditorActions).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      "work/chat.chat",
+    );
+    expect(mark).toHaveBeenCalledWith(expect.anything(), "notice-1", "read");
+    expect(open_file).not.toHaveBeenCalled();
+    expect(await screen.findByText("Chat muted")).toBeInTheDocument();
   });
 });

@@ -96,6 +96,7 @@ function buildNotificationMention(
     action_link: summary.action_link,
     action_label: summary.action_label,
     severity: summary.severity,
+    notification_reason: summary.notification_reason,
     description: summary.description,
     fragment_id: summary.fragment_id,
     thread_id: summary.thread_id,

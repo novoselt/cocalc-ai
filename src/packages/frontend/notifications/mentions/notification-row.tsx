@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Alert, Button, Modal, Space, Tag } from "antd";
+import { Alert, Button, Modal, Space, Tag, message as antdMessage } from "antd";
 import { useEffect, useState } from "react";
 
 import { A } from "@cocalc/frontend/components";
@@ -54,6 +54,10 @@ interface Props {
   user_map: any;
 }
 
+type ChatNotificationActions = {
+  setThreadNotificationMuted?: (threadKey: string, muted: boolean) => boolean;
+};
+
 function severityIcon(severity?: string): IconName {
   switch (severity) {
     case "error":
@@ -94,8 +98,10 @@ export function NotificationRow(props: Props) {
     action_link,
     action_label,
     severity,
+    notification_reason,
   } = mention.toJS();
   const shownPath = display_path || path;
+  const isThreadFollowNotification = notification_reason === "thread_follow";
   const fragmentId = Fragment.decode(fragment_id);
   const is_read = mention.getIn(["users", target, "read"]);
 
@@ -128,6 +134,10 @@ export function NotificationRow(props: Props) {
     useState<ProjectAccessRequestStatus | null>(null);
   const [checkingAccessRequestStatus, setCheckingAccessRequestStatus] =
     useState<boolean>(false);
+  const [mutingThreadNotifications, setMutingThreadNotifications] =
+    useState(false);
+  const [threadNotificationsMuted, setThreadNotificationsMuted] =
+    useState(false);
   const isProjectAccessRequestNotice =
     kind === "account_notice" &&
     notice_type === "project_access_request" &&
@@ -157,6 +167,68 @@ export function NotificationRow(props: Props) {
       fragmentId,
     });
     markReadState("read");
+  }
+
+  function getChatNotificationActions(): ChatNotificationActions | undefined {
+    if (!project_id || !path) return undefined;
+    try {
+      const actions = (redux as any).getEditorActions?.(project_id, path);
+      if (typeof actions?.setThreadNotificationMuted === "function") {
+        return actions;
+      }
+    } catch (_err) {
+      // The project or editor may not be open yet; the caller can open it below.
+    }
+    return undefined;
+  }
+
+  async function waitForChatNotificationActions(): Promise<
+    ChatNotificationActions | undefined
+  > {
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const actions = getChatNotificationActions();
+      if (actions != null) return actions;
+    }
+    return undefined;
+  }
+
+  async function muteThreadNotifications(e): Promise<void> {
+    e.preventDefault();
+    e.stopPropagation();
+    const thread_id =
+      typeof fragmentId?.thread === "string" ? fragmentId.thread.trim() : "";
+    if (!project_id || !path || !thread_id) {
+      antdMessage.error("Unable to identify this chat thread.");
+      return;
+    }
+    setMutingThreadNotifications(true);
+    try {
+      let actions = getChatNotificationActions();
+      if (actions == null) {
+        redux.getProjectActions(project_id).open_file({
+          path,
+          chat: true,
+          fragmentId,
+        });
+        actions = await waitForChatNotificationActions();
+      }
+      if (
+        actions?.setThreadNotificationMuted == null ||
+        !actions.setThreadNotificationMuted(thread_id, true)
+      ) {
+        throw Error("Unable to mute this chat thread.");
+      }
+      setThreadNotificationsMuted(true);
+      markReadState("read");
+      antdMessage.success(
+        "Muted this chat. You can follow it again from the chat thread menu.",
+      );
+    } catch (err) {
+      antdMessage.error(err instanceof Error ? err.message : `${err}`);
+    } finally {
+      setMutingThreadNotifications(false);
+    }
   }
 
   function renderActionLink() {
@@ -400,7 +472,16 @@ export function NotificationRow(props: Props) {
         <strong>
           <User account_id={source} user_map={user_map} />
         </strong>{" "}
-        mentioned you in the file <code>{shownPath}</code> in the project{" "}
+        {isThreadFollowNotification ? (
+          <>
+            replied in the chat <code>{shownPath}</code> in the project{" "}
+          </>
+        ) : (
+          <>
+            mentioned you in the file <code>{shownPath}</code> in the
+            project{" "}
+          </>
+        )}
         <ProjectTitle project_id={project_id} />.
         {description ? (
           <StaticMarkdown
@@ -414,6 +495,21 @@ export function NotificationRow(props: Props) {
           <br />
         )}
         <Icon name={"comment"} /> <TimeAgo date={time.getTime()} />
+        {isThreadFollowNotification ? (
+          <>
+            <br />
+            <Button
+              size="small"
+              type="link"
+              onClick={muteThreadNotifications}
+              loading={mutingThreadNotifications}
+              disabled={threadNotificationsMuted}
+              style={{ paddingLeft: 0 }}
+            >
+              {threadNotificationsMuted ? "Chat muted" : "Mute this chat"}
+            </Button>
+          </>
+        ) : null}
       </>
     );
   }

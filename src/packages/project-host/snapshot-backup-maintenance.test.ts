@@ -141,6 +141,47 @@ describe("snapshot-backup-maintenance", () => {
     });
   });
 
+  it("skips maintenance when host memory is below the dynamic threshold", async () => {
+    const { _test, runProjectSnapshotBackupMaintenanceSweepOnce } =
+      await import("./snapshot-backup-maintenance");
+
+    expect(
+      _test.shouldSkipForMemoryPressure(
+        "MemTotal:       65536000 kB\nMemAvailable:    6291456 kB\n",
+      ),
+    ).toMatchObject({
+      skip: true,
+      availableBytes: 6 * 1024 ** 3,
+      thresholdBytes: 16_777_216_000,
+    });
+    expect(
+      _test.shouldSkipForMemoryPressure(
+        "MemTotal:       65536000 kB\nMemAvailable:   20971520 kB\n",
+      ),
+    ).toMatchObject({
+      skip: false,
+      availableBytes: 20 * 1024 ** 3,
+      thresholdBytes: 16_777_216_000,
+    });
+
+    const readFileSyncSpy = jest
+      .spyOn(require("node:fs"), "readFileSync")
+      .mockReturnValue(
+        "MemTotal:       65536000 kB\nMemAvailable:    6291456 kB\n",
+      );
+    try {
+      await runProjectSnapshotBackupMaintenanceSweepOnce({
+        hostId: "host-1",
+      });
+    } finally {
+      readFileSyncSpy.mockRestore();
+    }
+
+    expect(listProjectMaintenanceSchedulesMock).not.toHaveBeenCalled();
+    expect(runScheduledSnapshotMaintenanceMock).not.toHaveBeenCalled();
+    expect(runScheduledBackupMaintenanceMock).not.toHaveBeenCalled();
+  });
+
   it("starts a repeating timer and can be stopped", () => {
     jest.useFakeTimers();
     process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_SWEEP_MS = "60000";

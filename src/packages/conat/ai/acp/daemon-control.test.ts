@@ -30,7 +30,8 @@ describe("acp daemon control", () => {
       started_at: 1,
       last_heartbeat_at: 2,
       last_seen_running_jobs: 3,
-      running_turn_leases: 4,
+      last_queue_progress_at: 4,
+      running_turn_leases: 5,
       exit_requested_at: null,
       stop_reason: null,
     }));
@@ -80,7 +81,8 @@ describe("acp daemon control", () => {
       started_at: 1,
       last_heartbeat_at: 2,
       last_seen_running_jobs: 3,
-      running_turn_leases: 4,
+      last_queue_progress_at: 4,
+      running_turn_leases: 5,
       exit_requested_at: null,
       stop_reason: null,
     }));

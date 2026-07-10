@@ -17,5 +17,6 @@ type MetricKey =
   | "inbound-identity-deny:count"
   | "inbound-event-window:limit"
   | "inbound-identity-event-window:limit"
+  | "inbound-subscriptions-window:limit"
   | "inbound-event-window:ms";
 export type Metrics = { [K in MetricKey]?: number };

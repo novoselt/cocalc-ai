@@ -39,7 +39,11 @@ import {
   verifyClusterAccountSignInPassword,
 } from "@cocalc/server/inter-bay/accounts";
 import { verifyLocalSignInPassword } from "@cocalc/server/auth/verify-sign-in-password";
+import getPool from "@cocalc/database/pool";
 import isPost from "@cocalc/http-api/lib/api/is-post";
+
+export const LEGACY_ACCOUNT_REQUIRES_NEW_ACCOUNT_CODE =
+  "legacy_account_requires_new_account";
 
 export default async function signIn(req: Request, res: Response) {
   if (!isPost(req, res)) {
@@ -88,7 +92,7 @@ export default async function signIn(req: Request, res: Response) {
       });
       return;
     }
-    res.json({ error: getSignInErrorMessage(err, { requiresToken }) });
+    res.json(await getSignInErrorPayload(err, { email, requiresToken }));
     recordFail(email, req.ip);
     return;
   }
@@ -133,6 +137,24 @@ export default async function signIn(req: Request, res: Response) {
   });
 }
 
+async function getSignInErrorPayload(
+  err: unknown,
+  opts: { email: string; requiresToken: boolean },
+): Promise<{ error: string; code?: string }> {
+  const error = getSignInErrorMessage(err, opts);
+  if (
+    !opts.requiresToken &&
+    signInErrorIsMissingAccount(err) &&
+    (await legacyAccountExistsForEmail(opts.email))
+  ) {
+    return {
+      error,
+      code: LEGACY_ACCOUNT_REQUIRES_NEW_ACCOUNT_CODE,
+    };
+  }
+  return { error };
+}
+
 function getSignInErrorMessage(
   err: unknown,
   opts: { requiresToken: boolean },
@@ -161,6 +183,34 @@ function getSignInErrorMessage(
     return message;
   }
   return "Problem signing into account.";
+}
+
+function signInErrorIsMissingAccount(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  return message.startsWith("no account with email address");
+}
+
+async function legacyAccountExistsForEmail(email: string): Promise<boolean> {
+  const normalized = `${email ?? ""}`.trim().toLowerCase();
+  if (!normalized) return false;
+  try {
+    const { rows } = await getPool().query<{ exists: boolean }>(
+      `
+      SELECT EXISTS (
+        SELECT 1
+          FROM legacy_migration_accounts
+         WHERE email_address=$1
+         LIMIT 1
+      ) AS exists
+      `,
+      [normalized],
+    );
+    return rows[0]?.exists === true;
+  } catch {
+    // Sign-in must not fail just because the legacy migration table is absent
+    // or temporarily unavailable.
+    return false;
+  }
 }
 
 function getSecondFactorChallengeErrorMessage(err: unknown): string {

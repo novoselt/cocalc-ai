@@ -20,6 +20,7 @@ export interface ChatRoomThreadMenuProps {
   isAI?: boolean;
   isAutomation?: boolean;
   isCodexThread?: boolean;
+  notificationMuted?: boolean;
   threadColor?: string;
   threadIcon?: string;
   openAppearanceModal: (
@@ -66,6 +67,7 @@ export function ChatRoomThreadMenu({
   isAI = false,
   isAutomation = false,
   isCodexThread = false,
+  notificationMuted = false,
   threadColor,
   threadIcon,
   openAppearanceModal,
@@ -125,6 +127,10 @@ export function ChatRoomThreadMenu({
       {
         key: isPinned ? "unpin" : "pin",
         label: isPinned ? "Unpin chat" : "Pin chat",
+      },
+      {
+        key: notificationMuted ? "follow-notifications" : "mute-notifications",
+        label: notificationMuted ? "Follow chat" : "Mute chat",
       },
       {
         key: "archive",
@@ -194,6 +200,21 @@ export function ChatRoomThreadMenu({
           return;
         }
         antdMessage.success(pinned ? "Chat pinned." : "Chat unpinned.");
+      } else if (
+        key === "follow-notifications" ||
+        key === "mute-notifications"
+      ) {
+        const muted = key === "mute-notifications";
+        if (!actions?.setThreadNotificationMuted) {
+          antdMessage.error("Chat notification settings are not available.");
+          return;
+        }
+        const success = actions.setThreadNotificationMuted(threadKey, muted);
+        if (!success) {
+          antdMessage.error("Unable to update chat notification settings.");
+          return;
+        }
+        antdMessage.success(muted ? "Chat muted." : "Following chat.");
       } else if (key === "export") {
         openExportModal({
           scope: "current-thread",

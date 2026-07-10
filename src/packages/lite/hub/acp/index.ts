@@ -553,11 +553,26 @@ type DetachedWorkerContext = {
   started_at?: number;
   last_heartbeat_at?: number;
   last_seen_running_jobs?: number;
+  last_queue_progress_at?: number;
   exit_requested_at?: number | null;
   stop_reason?: string | null;
 };
 
 let currentDetachedWorkerContext: DetachedWorkerContext | null = null;
+
+function noteDetachedWorkerQueueProgress(): void {
+  const context = currentDetachedWorkerContext;
+  if (!context) return;
+  const now = Date.now();
+  context.last_queue_progress_at = now;
+  heartbeatAcpWorker({
+    worker_id: context.worker_id,
+    pid: process.pid,
+    state: context.state,
+    last_seen_running_jobs: countRunningAcpJobsForWorker(context.worker_id),
+    last_queue_progress_at: now,
+  });
+}
 
 function liteUseDetachedAcpWorker(): boolean {
   const value = `${process.env.COCALC_LITE_ACP_DETACHED_WORKER ?? ""}`
@@ -598,6 +613,7 @@ function projectHostWorkerContextFromEnv(): DetachedWorkerContext | null {
     started_at: 0,
     last_heartbeat_at: 0,
     last_seen_running_jobs: 0,
+    last_queue_progress_at: 0,
     exit_requested_at: requestedState === "draining" ? Date.now() : null,
     stop_reason: null,
   };
@@ -4797,6 +4813,7 @@ export async function recoverOrphanedRunningAcpJobsWithoutLease(
             : (terminalTurn.reason ?? recoveryReason),
         worker_id: job.worker_id ?? undefined,
       });
+      noteDetachedWorkerQueueProgress();
       recovered += 1;
       continue;
     }
@@ -4827,6 +4844,7 @@ export async function recoverOrphanedRunningAcpJobsWithoutLease(
       error: recoveryReason,
       worker_id: job.worker_id ?? undefined,
     });
+    noteDetachedWorkerQueueProgress();
     const requeued = getAcpJob({
       project_id: job.project_id,
       path: job.path,
@@ -5206,6 +5224,7 @@ export async function runDetachedAcpQueueWorker(
     workerContext.started_at = now;
     workerContext.last_heartbeat_at = now;
     workerContext.last_seen_running_jobs = 0;
+    workerContext.last_queue_progress_at = now;
     workerContext.exit_requested_at ??=
       workerContext.state === "draining" ? now : null;
   }
@@ -5255,6 +5274,10 @@ export async function runDetachedAcpQueueWorker(
         currentDetachedWorkerContext.last_heartbeat_at ?? Date.now(),
       last_seen_running_jobs:
         currentDetachedWorkerContext.last_seen_running_jobs ?? 0,
+      last_queue_progress_at:
+        currentDetachedWorkerContext.last_queue_progress_at ??
+        currentDetachedWorkerContext.started_at ??
+        Date.now(),
       running_turn_leases: runningTurnLeases,
       exit_requested_at: currentDetachedWorkerContext.exit_requested_at ?? null,
       stop_reason: currentDetachedWorkerContext.stop_reason ?? null,
@@ -5302,6 +5325,8 @@ export async function runDetachedAcpQueueWorker(
       pid: process.pid,
       state: nextState,
       last_seen_running_jobs: runningJobs,
+      last_queue_progress_at:
+        currentDetachedWorkerContext.last_queue_progress_at ?? null,
     });
     if (
       shouldStopDetachedWorkerForDrain({
@@ -5332,6 +5357,8 @@ export async function runDetachedAcpQueueWorker(
         started_at: workerContext.started_at ?? Date.now(),
         last_heartbeat_at: workerContext.last_heartbeat_at ?? Date.now(),
         last_seen_running_jobs: 0,
+        last_queue_progress_at:
+          workerContext.last_queue_progress_at ?? Date.now(),
         exit_requested_at: workerContext.exit_requested_at ?? null,
         stopped_at: null,
         stop_reason: null,
@@ -5428,14 +5455,14 @@ export async function runDetachedAcpQueueWorker(
               autoResume: true,
             });
           }
-          await recoverOrphanedRunningAcpJobsWithoutLease({
-            client,
-            recoveryReason:
-              workerContext != null
-                ? "ACP worker stopped unexpectedly"
-                : "ACP worker stopped before turn startup",
-          });
         }
+        await recoverOrphanedRunningAcpJobsWithoutLease({
+          client,
+          recoveryReason:
+            workerContext != null
+              ? "ACP worker stopped unexpectedly"
+              : "ACP worker stopped before turn startup",
+        });
       }
       const hasWork =
         listQueuedAcpJobs().length > 0 || listRunningAcpJobs().length > 0;
@@ -7534,7 +7561,12 @@ async function pumpQueuedAcpJobsForThread({
     if (!job) {
       return;
     }
-    await runQueuedAcpJob(job);
+    noteDetachedWorkerQueueProgress();
+    try {
+      await runQueuedAcpJob(job);
+    } finally {
+      noteDetachedWorkerQueueProgress();
+    }
   }
 }
 

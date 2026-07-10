@@ -34,6 +34,7 @@ describe("heartbeatAcpWorker", () => {
       started_at: 1000,
       last_heartbeat_at: 1000,
       last_seen_running_jobs: 0,
+      last_queue_progress_at: 1000,
       exit_requested_at: null,
       stopped_at: null,
       stop_reason: null,
@@ -64,6 +65,7 @@ describe("heartbeatAcpWorker", () => {
       started_at: 1000,
       last_heartbeat_at: 1000,
       last_seen_running_jobs: 0,
+      last_queue_progress_at: 1000,
       exit_requested_at: 2000,
       stopped_at: null,
       stop_reason: null,
@@ -77,5 +79,38 @@ describe("heartbeatAcpWorker", () => {
 
     expect(after?.state).toBe("draining");
     expect(after?.exit_requested_at).toBe(2000);
+  });
+
+  it("records queue progress independently from worker heartbeat", () => {
+    upsertAcpWorker({
+      worker_id: "worker-3",
+      host_id: "host-1",
+      bundle_version: "bundle-1",
+      bundle_path: "/bundle",
+      pid: 123,
+      state: "active",
+      started_at: 1000,
+      last_heartbeat_at: 1000,
+      last_seen_running_jobs: 0,
+      last_queue_progress_at: 1000,
+      exit_requested_at: null,
+      stopped_at: null,
+      stop_reason: null,
+    });
+
+    const afterHeartbeat = heartbeatAcpWorker({
+      worker_id: "worker-3",
+      state: "active",
+      last_seen_running_jobs: 1,
+    });
+    expect(afterHeartbeat?.last_queue_progress_at).toBe(1000);
+
+    const afterProgress = heartbeatAcpWorker({
+      worker_id: "worker-3",
+      state: "active",
+      last_seen_running_jobs: 1,
+      last_queue_progress_at: 3000,
+    });
+    expect(afterProgress?.last_queue_progress_at).toBe(3000);
   });
 });

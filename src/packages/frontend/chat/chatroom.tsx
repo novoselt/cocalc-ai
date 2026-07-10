@@ -2184,6 +2184,12 @@ export function ChatPanel({
           selectedThread.isAI &&
           isCodexModelName(`${selectedThreadMetadata?.agent_model ?? ""}`)
         }
+        notificationMuted={
+          !!(
+            account_id &&
+            selectedThreadMetadata?.notification_muted?.includes(account_id)
+          )
+        }
         threadColor={selectedThread.threadColor}
         threadIcon={selectedThread.threadIcon}
         openAppearanceModal={
@@ -2602,6 +2608,7 @@ export function ChatPanel({
         sidebarContent={
           <ChatRoomSidebarContent
             actions={actions}
+            accountId={account_id}
             acpState={acpState}
             isCompact={isCompact}
             selectedThreadKey={selectedThreadKey}
