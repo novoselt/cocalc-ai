@@ -1490,6 +1490,24 @@ export async function moveProjectToHost(
       "backup-region cutover requires starting the destination project",
     );
   }
+  if (
+    context.project_host_id &&
+    context.project_host_id === context.dest_host_id &&
+    (!context.backup_region_cutover ||
+      context.project_region === context.dest_region)
+  ) {
+    progress({
+      step: "done",
+      message: "project is already on the requested host",
+      detail: { host_id: context.dest_host_id },
+      progress: 100,
+    });
+    log.info("moveProjectToHost skipped same-host move", {
+      project_id: context.project_id,
+      host_id: context.dest_host_id,
+    });
+    return;
+  }
   await assertPortableProjectRootfs({
     project_id: context.project_id,
     operation: "move",

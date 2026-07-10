@@ -22,6 +22,7 @@ import { setProjectLabels } from "@cocalc/server/projects/labels";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
 import {
+  LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSE_CUTOFF,
   LEGACY_PROJECT_RESTORE_LRO_KIND,
   LEGACY_RESTORE_ERROR_LABEL,
   LEGACY_RESTORE_LRO_LABEL,
@@ -329,6 +330,10 @@ async function claimRestoreRows({
          AND COALESCE(i.restore_mode, 'full') = 'full'
          AND COALESCE(p.artifact_key, '') <> ''
          AND COALESCE(p.artifact_status, '') = 'available'
+         AND GREATEST(
+               COALESCE(p.last_edited::TIMESTAMPTZ, '-infinity'::TIMESTAMPTZ),
+               COALESCE(p.last_active::TIMESTAMPTZ, '-infinity'::TIMESTAMPTZ)
+             ) < $4::TIMESTAMPTZ
          AND (
            i.restore_status = 'pending'
            OR (
@@ -354,7 +359,12 @@ async function claimRestoreRows({
        ORDER BY i.updated ASC NULLS FIRST, i.legacy_project_id
        LIMIT $1
       `,
-      [candidateWindow, PRE_START_STALE_MS, ABANDONED_CLAIM_THRESHOLD_MS],
+      [
+        candidateWindow,
+        PRE_START_STALE_MS,
+        ABANDONED_CLAIM_THRESHOLD_MS,
+        LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSE_CUTOFF,
+      ],
     );
 
     const claimed: LegacyRestoreRow[] = [];
@@ -407,6 +417,10 @@ async function claimRestoreRows({
            AND COALESCE(i.restore_mode, 'full') = 'full'
            AND COALESCE(p.artifact_key, '') <> ''
            AND COALESCE(p.artifact_status, '') = 'available'
+           AND GREATEST(
+                 COALESCE(p.last_edited::TIMESTAMPTZ, '-infinity'::TIMESTAMPTZ),
+                 COALESCE(p.last_active::TIMESTAMPTZ, '-infinity'::TIMESTAMPTZ)
+               ) < $7::TIMESTAMPTZ
            AND (
              i.restore_status = 'pending'
              OR (
@@ -446,6 +460,7 @@ async function claimRestoreRows({
           hostId,
           PRE_START_STALE_MS,
           ABANDONED_CLAIM_THRESHOLD_MS,
+          LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSE_CUTOFF,
         ],
       );
       const row = updated.rows[0];

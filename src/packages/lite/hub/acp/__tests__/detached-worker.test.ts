@@ -8,6 +8,7 @@ import {
   isProjectAcpStorageError,
   recoverCurrentWorkerStuckAcpTurns,
   recoverDetachedWorkerStartupState,
+  shouldCompleteAcpTurnAfterTerminalStorageFailure,
   shouldStopDetachedWorkerForDrain,
   shouldStopDetachedWorkerForIdle,
   shouldExitAcpWorkerAfterHeartbeatFailure,
@@ -1282,6 +1283,54 @@ describe("isFatalAcpWorkerStorageError", () => {
     expect(isFatalAcpWorkerStorageError(new Error("network timeout"))).toBe(
       false,
     );
+  });
+});
+
+describe("shouldCompleteAcpTurnAfterTerminalStorageFailure", () => {
+  it("completes verified summary turns after terminal storage timeouts", () => {
+    expect(
+      shouldCompleteAcpTurnAfterTerminalStorageFailure({
+        err: Object.assign(new Error("terminal storage timed out"), {
+          code: "ACP_TERMINAL_STORAGE_TIMEOUT",
+        }),
+        phase: "terminal-summary",
+        finishedBy: "summary",
+        terminalRowAlreadyPersisted: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not hide real storage failures or unverified terminal rows", () => {
+    expect(
+      shouldCompleteAcpTurnAfterTerminalStorageFailure({
+        err: Object.assign(new Error("database or disk is full"), {
+          code: "SQLITE_FULL",
+        }),
+        phase: "terminal-summary",
+        finishedBy: "summary",
+        terminalRowAlreadyPersisted: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldCompleteAcpTurnAfterTerminalStorageFailure({
+        err: Object.assign(new Error("terminal storage timed out"), {
+          code: "ACP_TERMINAL_STORAGE_TIMEOUT",
+        }),
+        phase: "terminal-summary",
+        finishedBy: "summary",
+        terminalRowAlreadyPersisted: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldCompleteAcpTurnAfterTerminalStorageFailure({
+        err: Object.assign(new Error("terminal storage timed out"), {
+          code: "ACP_TERMINAL_STORAGE_TIMEOUT",
+        }),
+        phase: "terminal-error",
+        finishedBy: "error",
+        terminalRowAlreadyPersisted: true,
+      }),
+    ).toBe(false);
   });
 });
 

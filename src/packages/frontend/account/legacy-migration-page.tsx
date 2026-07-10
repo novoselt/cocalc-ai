@@ -45,8 +45,10 @@ import openSupportTab from "@cocalc/frontend/support/open";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { R2_REGION_LABELS } from "@cocalc/util/consts";
 import {
+  LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSED_MESSAGE,
   LEGACY_RESTORE_FILE_FAILURE_REPORT_LIMIT,
   OTHER_SETTINGS_LEGACY_MIGRATION_PROJECTS_BUTTON,
+  legacyProjectArchiveRefreshPaused,
   legacyRestoreMissingArchiveEntriesFromError,
 } from "@cocalc/util/legacy-migration";
 import type {
@@ -349,6 +351,9 @@ function showRestoreIssueDetails(project: LegacyMigrationProjectSummary): void {
 function projectStatusFilter(
   project: LegacyMigrationProjectSummary,
 ): Exclude<LegacyProjectStatusFilter, "all"> {
+  if (legacyProjectArchiveRefreshPaused(project)) {
+    return "not-available";
+  }
   if (
     project.import_status === "failed" ||
     (project.restore_status === "failed" &&
@@ -378,6 +383,9 @@ function projectStatusFilter(
 }
 
 function projectStatusTag(project: LegacyMigrationProjectSummary) {
+  if (legacyProjectArchiveRefreshPaused(project)) {
+    return <Tag color="orange">Refresh in progress</Tag>;
+  }
   const status = projectStatusFilter(project);
   if (
     project.restore_status === "failed" &&
@@ -424,6 +432,7 @@ async function openProject(project_id: string): Promise<void> {
 
 function archiveAvailable(project: LegacyMigrationProjectSummary): boolean {
   return (
+    !legacyProjectArchiveRefreshPaused(project) &&
     project.artifact_status === "available" &&
     !!project.artifact_key &&
     typeof project.artifact_bytes === "number" &&
@@ -434,7 +443,10 @@ function archiveAvailable(project: LegacyMigrationProjectSummary): boolean {
 function projectActionAvailable(
   project: LegacyMigrationProjectSummary,
 ): boolean {
-  return !!project.project_id || archiveAvailable(project);
+  if (project.project_id) {
+    return !!project.joined || !legacyProjectArchiveRefreshPaused(project);
+  }
+  return archiveAvailable(project);
 }
 
 function bulkRestoreSelectable(
@@ -445,6 +457,15 @@ function bulkRestoreSelectable(
     project.import_status !== "creating" &&
     archiveAvailable(project)
   );
+}
+
+function legacyProjectUnavailableReason(
+  project: LegacyMigrationProjectSummary,
+): string {
+  if (legacyProjectArchiveRefreshPaused(project)) {
+    return LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSED_MESSAGE;
+  }
+  return "No recoverable archive is available for this legacy project.";
 }
 
 function ignoreProjectRowClick(target: EventTarget | null): boolean {
@@ -527,7 +548,7 @@ function LegacyProjectImportModal({
   async function importAndOpen() {
     if (!project) return;
     if (!archiveAvailable(project)) {
-      setError("No recoverable archive is available for this legacy project.");
+      setError(legacyProjectUnavailableReason(project));
       return;
     }
     if (!draft.rootfs_image.trim()) {
@@ -564,7 +585,7 @@ function LegacyProjectImportModal({
   const importDisabledReason = !project
     ? "Legacy project details are still loading."
     : !archiveAvailable(project)
-      ? "No recoverable archive is available for this legacy project."
+      ? legacyProjectUnavailableReason(project)
       : rootfsLoading
         ? "Image choices are still loading."
         : imageMissing
@@ -590,12 +611,18 @@ function LegacyProjectImportModal({
         {project ? (
           <Alert
             showIcon
-            type={archiveAvailable(project) ? "info" : "error"}
+            type={
+              archiveAvailable(project)
+                ? "info"
+                : legacyProjectArchiveRefreshPaused(project)
+                  ? "warning"
+                  : "error"
+            }
             message={project.title}
             description={
               archiveAvailable(project)
                 ? `This will create a CoCalc project, open it immediately, and restore files from the legacy archive in the background. Last known disk use: ${formatDiskMb(project.disk_mb)}. Archived size: ${formatBytes(project.artifact_bytes)}.`
-                : "No recoverable archive is available for this legacy project, so it cannot be imported."
+                : legacyProjectUnavailableReason(project)
             }
           />
         ) : null}
@@ -1076,9 +1103,7 @@ export function LegacyMigrationPage() {
       return;
     }
     if (!archiveAvailable(project)) {
-      void message.error(
-        "No recoverable archive is available for this legacy project.",
-      );
+      void message.error(legacyProjectUnavailableReason(project));
       return;
     }
     setImportProject(project);
@@ -1310,15 +1335,19 @@ export function LegacyMigrationPage() {
           title={
             projectActionAvailable(project)
               ? undefined
-              : "No recoverable archive is available for this legacy project."
+              : legacyProjectUnavailableReason(project)
           }
           type={project.project_id ? "default" : "primary"}
         >
           {project.project_id
-            ? "Open"
+            ? project.joined || !legacyProjectArchiveRefreshPaused(project)
+              ? "Open"
+              : "Refreshing"
             : archiveAvailable(project)
               ? "Restore and Open"
-              : "Unavailable"}
+              : legacyProjectArchiveRefreshPaused(project)
+                ? "Refreshing"
+                : "Unavailable"}
         </Button>
       ),
     },
@@ -1338,6 +1367,9 @@ export function LegacyMigrationPage() {
   const verificationEmail = state.emailVerificationEmail || emailAddress;
   const showEmailVerificationRequired =
     emailVerificationRequired || state.emailVerificationRequired;
+  const refreshPausedProjectCount = state.projects.filter((project) =>
+    legacyProjectArchiveRefreshPaused(project),
+  ).length;
   const emailVerificationPrompt = (
     <span>
       {verificationEmail ? (
@@ -1386,8 +1418,10 @@ export function LegacyMigrationPage() {
               </Text>
               <Text type="secondary">
                 Open a legacy project to restore its files. Large projects may
-                take a few minutes; projects marked <Tag>Unavailable</Tag> do
-                not have a recoverable archive and cannot be restored.
+                take a few minutes. Projects marked{" "}
+                <Tag>Refresh in progress</Tag> are temporarily paused while we
+                rebuild recent archives, and projects marked{" "}
+                <Tag>Unavailable</Tag> do not have a recoverable archive.
               </Text>
               <Text type="secondary">
                 Billing credit and legacy memberships are handled in{" "}
@@ -1413,6 +1447,16 @@ export function LegacyMigrationPage() {
           </Space>
           {legacyMigrationPageMessage ? (
             <Alert showIcon type="info" message={legacyMigrationPageMessage} />
+          ) : null}
+          {refreshPausedProjectCount > 0 ? (
+            <Alert
+              showIcon
+              type="warning"
+              message="Recent legacy project restores are temporarily paused"
+              description={`${refreshPausedProjectCount.toLocaleString()} project${
+                refreshPausedProjectCount === 1 ? "" : "s"
+              } in this list had cocalc.com activity on or after June 18, 2026. We are refreshing those archives from the final cocalc.com backup before allowing restore, so users do not restore stale files.`}
+            />
           ) : null}
           <Alert
             showIcon
