@@ -41,7 +41,7 @@ from typing import Any
 
 STATE_SCHEMA_VERSION = 1
 HELPER_SCHEMA_VERSION = "20260710-v1"
-RUNTIME_WRAPPER_VERSION = "20260505-v9"
+RUNTIME_WRAPPER_VERSION = "20260710-v10"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
 BUNDLE_RETENTION_COUNT = 3
@@ -2112,6 +2112,8 @@ fi
 cmd="$1"
 shift
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
+STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"
+STORAGE_CGROUP_CPU_MAX="100000 100000"
 
 deny() {
   local code="$1"
@@ -2134,6 +2136,21 @@ project_pool_cgroup_storage() {
       deny "project-pool-cgroup-not-allowed" "$pool"
       ;;
   esac
+}
+
+project_storage_cgroup() {
+  printf '%s\n' "${STORAGE_CGROUP_DEFAULT}"
+}
+
+configure_project_storage_cgroup() {
+  local pool="$1"
+  if [ -w /sys/fs/cgroup/cgroup.subtree_control ]; then
+    printf '+cpu\n' > /sys/fs/cgroup/cgroup.subtree_control || true
+  fi
+  mkdir -p "$pool"
+  if [ -w "${pool}/cpu.max" ]; then
+    printf '%s\n' "${STORAGE_CGROUP_CPU_MAX}" > "${pool}/cpu.max" || true
+  fi
 }
 
 attach_pid_to_project_pool_storage() {
@@ -3190,8 +3207,8 @@ PY' bash "$tree"
       echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} pid=${existing_pid}" >&2
       exit 75
     fi
-    pool="$(project_pool_cgroup_storage)"
-    mkdir -p "$pool"
+    pool="$(project_storage_cgroup)"
+    configure_project_storage_cgroup "$pool"
     attach_pid_to_project_pool_storage "$$" "$pool" || true
     if [ -x /opt/cocalc/tools/current/bees ]; then
       exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /opt/cocalc/tools/current/bees "$@"
@@ -4962,6 +4979,7 @@ User={cfg.ssh_user}
 Group={cfg.ssh_user}
 WorkingDirectory=/
 ExecStart=/bin/bash -lc "{watchdog_command}"
+KillMode=process
 TimeoutStartSec=180
 """
     watchdog_timer = """[Unit]
