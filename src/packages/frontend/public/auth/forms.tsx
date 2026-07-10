@@ -452,9 +452,12 @@ function normalizedEmailAddress(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function signInErrorIsMissingAccount(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : `${err ?? ""}`;
-  return message.includes("no account with email address");
+function signInErrorIsLegacyMissingAccount(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    (err as { code?: unknown }).code === "legacy_account_requires_new_account"
+  );
 }
 
 function validInitialEmail(email?: string): string {
@@ -705,7 +708,7 @@ export function PublicSignInForm({
     } catch (err) {
       if (
         showLegacyMigrationNotice &&
-        signInErrorIsMissingAccount(err) &&
+        signInErrorIsLegacyMissingAccount(err) &&
         validInitialEmail(email)
       ) {
         createAccountFromSignIn(true);
