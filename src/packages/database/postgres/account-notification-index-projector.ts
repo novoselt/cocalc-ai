@@ -280,6 +280,9 @@ function notificationEmailSubject(opts: {
     const path = `${
       summary.display_path ?? summary.path ?? opts.payload.source_path ?? ""
     }`.trim();
+    if (summary.notification_reason === "thread_follow") {
+      return path ? `CoCalc chat reply in ${path}` : "CoCalc chat reply";
+    }
     return path ? `CoCalc mention in ${path}` : "CoCalc mention";
   }
   return "CoCalc notification";

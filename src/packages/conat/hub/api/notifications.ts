@@ -4,6 +4,7 @@ import type { Configuration } from "@cocalc/conat/persist/storage";
 export type NotificationPriority = "low" | "normal" | "high";
 export type NotificationSeverity = "info" | "warning" | "error";
 export type NotificationInboxState = "all" | "unread" | "saved" | "archived";
+export type MentionNotificationReason = "mention" | "thread_follow";
 
 export interface CreateMentionNotificationOptions {
   account_id?: string;
@@ -15,6 +16,7 @@ export interface CreateMentionNotificationOptions {
   description: string;
   priority?: NotificationPriority;
   stable_source_id?: string;
+  notification_reason?: MentionNotificationReason;
 }
 
 export interface CreatedNotificationTargetInfo {

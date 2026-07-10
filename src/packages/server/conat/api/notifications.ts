@@ -28,6 +28,7 @@ import type {
   ListNotificationsOptions,
   MarkNotificationReadOptions,
   MarkNotificationReadResult,
+  MentionNotificationReason,
   NotificationCountsResult,
   NotificationListRow,
   NotificationPriority,
@@ -173,6 +174,16 @@ function normalizePriority(value?: string): NotificationPriority {
   return priority as NotificationPriority;
 }
 
+function normalizeMentionNotificationReason(
+  value?: string,
+): MentionNotificationReason {
+  const reason = `${value ?? "mention"}`.trim();
+  if (!["mention", "thread_follow"].includes(reason)) {
+    throw Error(`invalid mention notification reason '${value ?? ""}'`);
+  }
+  return reason as MentionNotificationReason;
+}
+
 function normalizeSeverity(value?: string): NotificationSeverity {
   const severity = `${value ?? ""}`.trim();
   if (!["info", "warning", "error"].includes(severity)) {
@@ -263,6 +274,9 @@ export async function createMention(
   const source_path = requireNonEmptyString(opts.source_path, "source_path");
   const description = requireNonEmptyString(opts.description, "description");
   const priority = normalizePriority(opts.priority);
+  const notification_reason = normalizeMentionNotificationReason(
+    opts.notification_reason,
+  );
   const actor_account_id = account_id;
   const target_account_ids = normalizeTargetAccountIds({
     target_account_ids: opts.target_account_ids,
@@ -300,6 +314,7 @@ export async function createMention(
         description,
         priority,
         stable_source_id,
+        notification_reason,
       },
     }),
     buildTargets: async (targetHomeBays) =>
@@ -324,6 +339,7 @@ export async function createMention(
           actor_account_id,
           priority,
           stable_source_id,
+          notification_reason,
         },
       })),
   });
