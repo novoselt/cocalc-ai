@@ -89,12 +89,35 @@ export function inferAppBasePath(pathname?: string): string {
   return trimmed || "/";
 }
 
+// When the hub serves the public shell at a clean URL (e.g. /docs/a/b), it
+// injects <base href="<basePath>/static/"> so the shell's relative script
+// URLs resolve correctly. That tag is the authoritative serve-time base path
+// signal, so prefer it over inferring from the pathname.
+export function inferBasePathFromBaseElement(): string | undefined {
+  if (typeof document === "undefined") return;
+  const href = document.querySelector("base")?.getAttribute("href");
+  if (!href) return;
+  let pathname: string;
+  try {
+    pathname = new URL(href, window.location.href).pathname;
+  } catch {
+    return;
+  }
+  const suffix = "/static/";
+  if (!pathname.endsWith(suffix)) return;
+  return pathname.slice(0, -suffix.length) || "/";
+}
+
 function init(): string {
   if (process.env.BASE_PATH) {
     // This is used by next.js.
     return process.env.BASE_PATH;
   }
   if (typeof window != "undefined" && typeof window.location != "undefined") {
+    const fromBaseElement = inferBasePathFromBaseElement();
+    if (fromBaseElement != null) {
+      return fromBaseElement;
+    }
     // For static frontend we determine the base path from the current route.
     return inferAppBasePath(window.location.pathname);
   }

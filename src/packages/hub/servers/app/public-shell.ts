@@ -185,8 +185,16 @@ function buildHead(req: Request): { head: string; notFound: boolean } {
     }),
   ].join("\n  ");
 
+  // The shell is built to live under /static/ (its script tags and runtime
+  // chunk loading use URLs relative to that directory), but we serve it at
+  // clean URLs like / and /docs/a/b. The <base> tag makes the relative script
+  // URLs resolve against /static/ regardless of the page URL. It must come
+  // before the plugin-emitted <script> tags, which follow the marker region.
+  const staticBase = `${joinUrlPath(basePath, "static")}/`;
   return {
-    head: `<title>${htmlEscape(metadata.title)}</title>\n  ${socialTags}`,
+    head: `<base href="${htmlEscape(staticBase)}">\n  <title>${htmlEscape(
+      metadata.title,
+    )}</title>\n  ${socialTags}`,
     notFound: !!metadata.notFound,
   };
 }

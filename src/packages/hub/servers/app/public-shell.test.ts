@@ -46,6 +46,17 @@ describe("public shell rendering", () => {
     expect(body).not.toContain("cocalc-head-end");
   });
 
+  it("injects a base tag for /static/ ahead of the shell scripts", async () => {
+    const { html: body } = await renderPublicShell(
+      request("/docs/collaboration/chat"),
+    );
+
+    const baseIndex = body.indexOf('<base href="/static/">');
+    expect(baseIndex).toBeGreaterThanOrEqual(0);
+    const scriptIndex = body.indexOf("<script");
+    expect(scriptIndex).toBeGreaterThan(baseIndex);
+  });
+
   it("does not interpret replacement patterns from request-derived values", async () => {
     const { html: body } = await renderPublicShell({
       get: (name: string) =>
