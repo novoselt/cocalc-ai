@@ -115,7 +115,6 @@ export type SiteSettingsKeys =
   | "public_signup_without_registration_token"
   | "legacy_migration_enabled"
   | "legacy_migration_page_message"
-  | "landing_pages"
   | "project_hosts_google-cloud_enabled"
   | "project_hosts_hyperstack_enabled"
   | "project_hosts_lambda_enabled"
@@ -907,17 +906,6 @@ export const site_settings_conf: SiteSettings = {
     tags: ["Migration"],
     group: "Access & Identity",
     subgroup: "Migration",
-  },
-  landing_pages: {
-    name: "Landing pages",
-    desc: "Host landing pages about the functionality of CoCalc.",
-    default: "no",
-    valid: only_booleans,
-    to_val: to_bool,
-    show: only_cocalc_com,
-    cocalc_only: true,
-    group: "Branding & UI",
-    subgroup: "Landing",
   },
   openai_enabled: {
     name: "Enable OpenAI Integration",

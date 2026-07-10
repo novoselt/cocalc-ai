@@ -1,10 +1,11 @@
-import { get_server_settings } from "@cocalc/database/postgres/settings/server-settings";
-import { getLogger } from "@cocalc/hub/logger";
 import { APP_ROUTES } from "@cocalc/util/routing/app";
 import type { Request } from "express";
 import { sitemapLocation } from "./sitemap";
 
-const logger = getLogger("hub:servers:robots");
+// Verify the public policy against a local hub with:
+// curl -H 'Host: cocalc.ai' http://127.0.0.1:9100/robots.txt
+// This is an exact host allowlist: subdomains such as dev123.cocalc.ai and
+// branded deployments must not become indexable copies of the public site.
 const PUBLIC_SITE_HOSTS = new Set(["cocalc.ai"]);
 const INDEXABLE_APP_ROUTES = new Set(["share"]);
 
@@ -17,12 +18,8 @@ function normalizeHost(host?: string): string {
     .replace(/:\d+$/, "");
 }
 
-function isPublicSite(req: Request, settings): boolean {
-  return (
-    !!settings.landing_pages ||
-    PUBLIC_SITE_HOSTS.has(normalizeHost(req.get("host"))) ||
-    PUBLIC_SITE_HOSTS.has(normalizeHost(settings.dns))
-  );
+function isPublicSite(req: Request): boolean {
+  return PUBLIC_SITE_HOSTS.has(normalizeHost(req.get("host")));
 }
 
 function renderLockedDownRobots(): string {
@@ -67,24 +64,16 @@ function renderPublicRobots(req: Request): string {
 }
 
 export default function getHandler() {
-  return async (req, res) => {
-    try {
-      const settings = await get_server_settings(); // don't worry -- this is cached.
-      res.header("Content-Type", "text/plain");
-      res.header("Cache-Control", "public, max-age=3600, must-revalidate");
-      if (!isPublicSite(req, settings)) {
-        // Default: disable everything except public shares.
-        res.write(renderLockedDownRobots());
-      } else {
-        // Hosted CoCalc serves public pages at clean URLs. Keep the legacy
-        // public shell URL and private application/API surfaces out of crawler
-        // indexes, but allow static chunks needed to render public pages.
-        res.write(renderPublicRobots(req));
-      }
-      res.end();
-    } catch (err) {
-      logger.warn("robots endpoint failed", { err: `${err}` });
-      res.status(500).type("text/plain").send("internal error");
+  return (req, res) => {
+    res.header("Content-Type", "text/plain");
+    res.header("Cache-Control", "public, max-age=3600, must-revalidate");
+    if (!isPublicSite(req)) {
+      // Default: disable everything except public shares.
+      res.send(renderLockedDownRobots());
+      return;
     }
+    // Only the canonical public host may be indexed. Dev and branded instances
+    // still render these pages, but their robots policy remains locked down.
+    res.send(renderPublicRobots(req));
   };
 }
