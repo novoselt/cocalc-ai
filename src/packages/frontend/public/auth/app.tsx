@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { AuthView } from "@cocalc/frontend/auth/types";
 import { getControlPlaneAuthBootstrap } from "@cocalc/frontend/auth/api";
@@ -24,6 +24,7 @@ import {
   PublicVerifyEmailView,
 } from "./completion-views";
 import {
+  type AuthNavigateOptions,
   PublicPasswordResetForm,
   PublicSignInForm,
   PublicSignUpForm,
@@ -166,6 +167,11 @@ export default function PublicAuthApp({
 }: PublicAuthAppProps) {
   const [resolvedConfig, setResolvedConfig] = useState(config);
   const [route, setRoute] = useState<PublicAuthRoute>(initialRoute);
+  const [authNavigateOptions, setAuthNavigateOptions] =
+    useState<AuthNavigateOptions>({});
+  const pendingAuthNavigateOptions = useRef<AuthNavigateOptions | undefined>(
+    undefined,
+  );
   const siteName = getSiteName(resolvedConfig);
   const ssoStrategies =
     initialSSOStrategies ??
@@ -173,6 +179,12 @@ export default function PublicAuthApp({
 
   useEffect(() => {
     setRoute(initialRoute);
+    if (pendingAuthNavigateOptions.current) {
+      setAuthNavigateOptions(pendingAuthNavigateOptions.current);
+      pendingAuthNavigateOptions.current = undefined;
+    } else {
+      setAuthNavigateOptions({});
+    }
   }, [initialRoute]);
 
   useEffect(() => {
@@ -217,8 +229,10 @@ export default function PublicAuthApp({
     return enableForceConsent();
   }, [resolvedConfig?.cookie_banner_enabled, route]);
 
-  function onNavigate(next: AuthView) {
+  function onNavigate(next: AuthView, options: AuthNavigateOptions = {}) {
     const nextRoute: PublicAuthRoute = { kind: "auth-form", view: next };
+    pendingAuthNavigateOptions.current = options;
+    setAuthNavigateOptions(options);
     setRoute(nextRoute);
     navigatePublic(pathForAuthView(next));
   }
@@ -258,7 +272,9 @@ export default function PublicAuthApp({
         {route.kind === "auth-form" && route.view === "sign-up" && (
           <PublicSignUpForm
             cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+            initialEmail={authNavigateOptions.initialEmail}
             initialSSOStrategies={ssoStrategies}
+            legacySignUpPrompt={!!authNavigateOptions.legacySignUpPrompt}
             onNavigate={onNavigate}
             redirectToPath={redirectToPath}
             signupEmailDomainPolicy={

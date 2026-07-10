@@ -15,6 +15,7 @@ const mockVerifyClusterAccountSignInPassword = jest.fn();
 const mockHasActiveSecondFactor = jest.fn();
 const mockCreateSignInSecondFactorChallenge = jest.fn();
 const mockEmailRequiresCocalc2fa = jest.fn();
+const mockDbQuery = jest.fn();
 
 jest.mock("@cocalc/server/auth/throttle", () => ({
   signInCheck: (...args) => mockSignInCheck(...args),
@@ -64,7 +65,7 @@ jest.mock("@cocalc/database/settings/sso-policies", () => ({
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
   default: () => ({
-    query: jest.fn(),
+    query: (...args: unknown[]) => mockDbQuery(...args),
   }),
 }));
 
@@ -84,6 +85,7 @@ describe("/api/v2/auth/sign-in", () => {
       methods: ["totp", "recovery_code"],
     });
     mockEmailRequiresCocalc2fa.mockReset().mockResolvedValue(false);
+    mockDbQuery.mockReset().mockResolvedValue({ rows: [] });
   });
 
   it("rejects non-POST sign-in attempts before auth checks", async () => {
@@ -122,6 +124,91 @@ describe("/api/v2/auth/sign-in", () => {
     const { req, res } = createMocks({
       method: "POST",
       url: "/api/v2/auth/sign-in",
+    });
+
+    const { default: handler } = await import("./sign-in");
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      error: "Invalid email address or password.",
+    });
+  });
+
+  it("marks missing accounts as legacy only when the email matches a legacy account", async () => {
+    mockDbQuery.mockImplementation(async (query: string) => {
+      if (query.includes("FROM legacy_migration_accounts")) {
+        return { rows: [{ exists: true }] };
+      }
+      return { rows: [] };
+    });
+
+    const { req, res } = createMocks({
+      method: "POST",
+      url: "/api/v2/auth/sign-in",
+      body: {
+        email: "legacy@example.com",
+        password: "old password",
+      },
+    });
+
+    const { default: handler, LEGACY_ACCOUNT_REQUIRES_NEW_ACCOUNT_CODE } =
+      await import("./sign-in");
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      error:
+        "Problem signing into account -- no account with email address 'legacy@example.com'.",
+      code: LEGACY_ACCOUNT_REQUIRES_NEW_ACCOUNT_CODE,
+    });
+    expect(mockRecordFail).toHaveBeenCalledWith("legacy@example.com", req.ip);
+  });
+
+  it("keeps missing non-legacy accounts as ordinary sign-in failures", async () => {
+    mockDbQuery.mockImplementation(async (query: string) => {
+      if (query.includes("FROM legacy_migration_accounts")) {
+        return { rows: [{ exists: false }] };
+      }
+      return { rows: [] };
+    });
+
+    const { req, res } = createMocks({
+      method: "POST",
+      url: "/api/v2/auth/sign-in",
+      body: {
+        email: "new@example.com",
+        password: "mistyped password",
+      },
+    });
+
+    const { default: handler } = await import("./sign-in");
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      error:
+        "Problem signing into account -- no account with email address 'new@example.com'.",
+    });
+    expect(mockRecordFail).toHaveBeenCalledWith("new@example.com", req.ip);
+  });
+
+  it("does not expose legacy account matching on token-gated deployments", async () => {
+    mockGetRequiresToken.mockResolvedValue(true);
+    mockDbQuery.mockImplementation(async (query: string) => {
+      if (query.includes("FROM legacy_migration_accounts")) {
+        return { rows: [{ exists: true }] };
+      }
+      return { rows: [] };
+    });
+
+    const { req, res } = createMocks({
+      method: "POST",
+      url: "/api/v2/auth/sign-in",
+      body: {
+        email: "legacy@example.com",
+        password: "old password",
+      },
     });
 
     const { default: handler } = await import("./sign-in");

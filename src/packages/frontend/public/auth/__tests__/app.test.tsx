@@ -725,6 +725,142 @@ describe("PublicAuthApp", () => {
     ).toHaveAttribute("aria-disabled", "false");
   });
 
+  it("moves missing legacy CoCalc.com accounts into sign-up with the email preserved", async () => {
+    mockedApi.mockImplementation(async (endpoint: string, body?: any) => {
+      if (endpoint === "auth/sign-in-method") {
+        return {
+          email: body.email,
+          password_allowed: true,
+          sso_required: false,
+        };
+      }
+      if (endpoint === "auth/requires-token") {
+        return false;
+      }
+      return undefined;
+    });
+    const err = new Error(
+      "Problem signing into account -- no account with email address 'legacy@example.com'.",
+    ) as Error & { code?: string };
+    err.code = "legacy_account_requires_new_account";
+    mockedPostAuthApi.mockRejectedValueOnce(err);
+
+    render(
+      <PublicAuthApp
+        config={config({ dns: "cocalc.ai", site_name: "CoCalc" })}
+        initialRoute={{ kind: "auth-form", view: "sign-in" }}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "legacy@example.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "old cocalc.com password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Create your CoCalc account",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(
+        "CoCalc.com accounts do not sign in directly on CoCalc.ai.",
+      ),
+    ).not.toBeNull();
+    expect(screen.getByDisplayValue("legacy@example.com")).not.toBeNull();
+  });
+
+  it("keeps missing non-legacy accounts on the sign-in form", async () => {
+    mockedApi.mockImplementation(async (endpoint: string, body?: any) => {
+      if (endpoint === "auth/sign-in-method") {
+        return {
+          email: body.email,
+          password_allowed: true,
+          sso_required: false,
+        };
+      }
+      return undefined;
+    });
+    mockedPostAuthApi.mockRejectedValueOnce(
+      new Error(
+        "Problem signing into account -- no account with email address 'new@example.com'.",
+      ),
+    );
+
+    render(
+      <PublicAuthApp
+        config={config({ dns: "cocalc.ai", site_name: "CoCalc" })}
+        initialRoute={{ kind: "auth-form", view: "sign-in" }}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "new@example.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "mistyped password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    expect(
+      await screen.findByText(
+        /no account with email address 'new@example.com'/,
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Sign in to CoCalc" }),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Create your CoCalc account" }),
+    ).toBeNull();
+  });
+
+  it("keeps wrong-password failures on the sign-in form", async () => {
+    mockedApi.mockImplementation(async (endpoint: string, body?: any) => {
+      if (endpoint === "auth/sign-in-method") {
+        return {
+          email: body.email,
+          password_allowed: true,
+          sso_required: false,
+        };
+      }
+      return undefined;
+    });
+    mockedPostAuthApi.mockRejectedValueOnce(
+      new Error(
+        "Problem signing into account -- password for 'ada@example.com' is incorrect.",
+      ),
+    );
+
+    render(
+      <PublicAuthApp
+        config={config({ dns: "cocalc.ai", site_name: "CoCalc" })}
+        initialRoute={{ kind: "auth-form", view: "sign-in" }}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "ada@example.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "wrong password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    expect(
+      await screen.findByText(/password for 'ada@example.com' is incorrect/),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Sign in to CoCalc" }),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Create your CoCalc account" }),
+    ).toBeNull();
+  });
+
   it("keeps passkey selection visually separate from passkey submission", async () => {
     mockedApi.mockResolvedValue({
       email: "ada@example.com",

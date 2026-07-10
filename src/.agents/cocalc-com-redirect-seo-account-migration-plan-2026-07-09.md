@@ -136,10 +136,50 @@ Initial redirect categories:
 | `/auth/sign-in` | route to sign-in with legacy-account guidance |
 | `/auth/sign-up` | route to sign-up with legacy-account guidance |
 | `/projects/<id>/files/...` | route to a legacy project resolver or migration page |
-| public share URLs | preserve path if supported; otherwise route to a public-share resolver |
+| public share URLs | route through the public-share resolver and preserve the file or folder path |
 
 Any route that is not supported on `cocalc.ai` should map to the closest useful
 replacement page, not to a generic root page.
+
+## Phase 2A: Public Share File URLs
+
+The current `cocalc.ai` public-share implementation supports public folder
+shares and already preserves direct share file paths in frontend routing. The
+project-host layer also already has read-only public-share file download and
+inline preview authorization for signed-in viewers. That means restoring legacy
+file-share behavior should be feasible without introducing a new data plane.
+
+The missing product/backend piece is exact file-scope publication. During legacy
+public-path replay, file-like legacy paths are currently disabled instead of
+being replayed as shares. That was the safe choice because replaying a file
+share as a containing-directory share would broaden access. The correct fix is
+to model file shares explicitly.
+
+Recommended implementation:
+
+- Add a `path_type` or equivalent metadata field for public project paths with
+  values `directory` and `file`.
+- Keep the read policy narrow:
+  - directory share: include `path/**` and allow directory listing below `path`;
+  - file share: include exactly `path` and do not expose sibling listing.
+- Extend `resolve`, `grantTemporaryViewerAccess`, `listDirectory`,
+  `copyToProject`, and `copyToNewProject` to understand file shares.
+- For file shares, render the file directly in the public viewer/project view
+  instead of treating the share root as a browsable directory.
+- Preserve old `/share/<slug>/...` behavior by continuing to use the existing
+  longest-slug-first resolver. This lets a URL resolve either to a file share
+  slug or to a directory share plus a relative file path.
+- Replay legacy file public paths as exact file shares once the new file-scope
+  model exists.
+- Add a project File menu entry named `Publish` for both files and folders. The
+  dialog should default to publishing the selected file when invoked from a file
+  tab and the selected folder when invoked from the file browser.
+
+This is worth doing. File publishing was common on `cocalc.com`, and supporting
+it avoids turning many old public URLs into dead ends. The implementation is
+moderate-sized rather than risky because the read-only project-host service and
+public-share routing are already present; the main care point is preserving the
+security invariant that publishing one file never exposes its parent directory.
 
 ## Phase 3: Legacy Project URL Resolver
 
@@ -178,12 +218,16 @@ Recommended product behavior:
 
 - On sign-in and sign-up pages, provide a visible migration notice:
   "If you used cocalc.com, create a cocalc.ai account first, then restore your
-  legacy projects from Settings -> Legacy Migration."
+  legacy projects from Settings -&gt; Legacy Migration."
 - When an email is entered, check a cheap backend endpoint for whether that
   email appears in legacy account metadata.
 - If a legacy match exists and no current `cocalc.ai` account exists, show:
   "We found a legacy cocalc.com account for this email. Create a new cocalc.ai
   account, then you can restore eligible legacy projects."
+  This is a limited email-enumeration disclosure for legacy account metadata.
+  It is acceptable during the migration support window because `cocalc.com` did
+  not historically enforce the same secrecy guarantee, and the benefit is
+  reducing substantial user confusion.
 - If a legacy match exists and a current account exists, show a link to
   `/settings/legacy-migration`.
 - Do not expose private legacy account details before the user has authenticated.
@@ -202,17 +246,18 @@ Suggested states:
 
 - `Available for restore`: an R2 `.tar.zst` artifact is present and the restore
   path should work.
-- `Restore in progress`: the project is known and expected to become available
-  because a recoverable source exists and a worker is processing it.
 - `No recoverable archive found`: the project is known in legacy metadata, but
   no source archive has been found.
-- `Too large for automatic restore`: the project requires manual or large-project
-  handling.
 - `Already restored`: the project was restored into `cocalc.ai`.
 - `Restored project missing`: the project was previously restored but the target
   project no longer exists; allow restore again if the source artifact exists.
 
 Avoid using "Not yet available" for data that is actually unrecoverable.
+
+Do not include `Restore in progress` or `Too large for automatic restore` in the
+public production UI unless the migration process changes again. The current
+target is to finish all feasible archive recovery before exposing the final
+language to users.
 
 ## Phase 6: SEO Stabilization
 
@@ -257,9 +302,9 @@ in the user-visible redirect chain for `cocalc.com`.
 Prepare a short support macro:
 
 > CoCalc has moved from cocalc.com to cocalc.ai. Please create a new cocalc.ai
-> account, then open Settings -> Legacy Migration to restore eligible legacy
+> account, then open Settings -&gt; Legacy Migration to restore eligible legacy
 > projects. If you followed an old project link, the migration page should help
-> locate that project. Some legacy project history such as TimeTravel may not be
+> locate that project. Some legacy project history such as TimeTravel is not
 > available; project files are available when a recoverable archive exists.
 
 Prepare a public status/migration page that explains:
@@ -275,29 +320,47 @@ Prepare a public status/migration page that explains:
 1. Keep the current emergency path-preserving `302` redirect in Cloudflare.
 2. Verify no `workers.dev` redirects remain.
 3. Build the URL inventory and high-value route map.
-4. Implement the legacy project URL resolver on `cocalc.ai`.
-5. Change `/projects/<id>/files/...` redirects to the resolver.
-6. Add sign-in/sign-up legacy guidance.
-7. Update legacy migration state labels.
-8. Switch stable public routes to permanent redirects.
-9. Submit sitemap/Search Console updates.
-10. Add redirect-chain monitoring.
+4. Add exact file-scope public-share support.
+5. Replay legacy file public paths as exact file shares.
+6. Implement the legacy project URL resolver on `cocalc.ai`.
+7. Change `/projects/<id>/files/...` redirects to the resolver.
+8. Add sign-in/sign-up legacy guidance.
+9. Update legacy migration state labels.
+10. Switch stable public routes to permanent redirects after at least two weeks
+    of stable 302 behavior.
+11. Submit sitemap/Search Console updates.
+12. Add redirect-chain monitoring.
 
 ## Open Decisions
 
 - Whether project URL redirects should preserve the old file path in the browser
   URL or route through a resolver page first.
+  Decision: preserve the old file path when possible, but route through a
+  resolver when the target project is not yet present in `cocalc.ai`. The
+  resolver should offer migration if the signed-in user is authorized for the
+  legacy project and a recoverable artifact exists.
 - Whether unsupported old public pages should redirect to the nearest specific
   page or return a custom explanatory page.
+  Decision: implement exact file-scope public shares so old public file URLs can
+  resolve when their backing project is restored. Unsupported custom vanity names
+  should be inventoried separately and mapped one-by-one when they matter.
 - Whether legacy account email matching should be shown before authentication or
   only after account creation/sign-in.
+  Decision: show this before auth for legacy account guidance. This is a limited
+  legacy-account information disclosure, but it matches historical `cocalc.com`
+  behavior closely enough and materially reduces user confusion. It can be
+  removed after the migration support window.
 - When to switch from `302` to `301`/`308` for public routes.
+  Decision: wait at least two weeks after the redirect/resolver behavior is
+  stable.
 
 ## Done Criteria
 
 - Chrome no longer shows lookalike warnings for `cocalc.com`.
 - `workers.dev` is absent from all user-visible redirect chains.
 - Top historical public URLs redirect to page-specific `cocalc.ai` URLs.
+- Legacy public file-share URLs either resolve to exact file shares or produce a
+  clear unavailable message without exposing parent directories.
 - Old project links send users to a useful migration/resolver flow.
 - Legacy users attempting to sign in understand they need a new `cocalc.ai`
   account.
