@@ -37,11 +37,13 @@ import { setProjectLabels } from "@cocalc/server/projects/labels";
 import { createLro } from "@cocalc/server/lro/lro-db";
 import { triggerLegacyMigrationProjectRestoreWorker } from "@cocalc/server/legacy-migration/restore-worker";
 import {
+  LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSED_MESSAGE,
   LEGACY_PROJECT_RESTORE_LRO_KIND,
   LEGACY_RESTORE_ERROR_LABEL,
   LEGACY_RESTORE_LRO_LABEL,
   LEGACY_RESTORE_STATUS_LABEL,
   LEGACY_SOURCE_PROJECT_LABEL,
+  legacyProjectArchiveRefreshPaused,
 } from "@cocalc/util/legacy-migration";
 import type {
   LegacyMigrationApplyFinancialHomeBayOptions,
@@ -3892,6 +3894,13 @@ async function importOneProject({
       error: "legacy project is not available for this account",
     };
   }
+  if (legacyProjectArchiveRefreshPaused(legacy)) {
+    return {
+      legacy_project_id,
+      status: "failed",
+      error: LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSED_MESSAGE,
+    };
+  }
   const pool = getPool();
   if (restoreStatusForProject(legacy) === "skipped") {
     const { rows } = await pool.query<{
@@ -3943,8 +3952,7 @@ async function importOneProject({
     return {
       legacy_project_id,
       status: "failed",
-      error:
-        "The archived files for this legacy project are not available yet. Try again after the cocalc.com archive has been uploaded.",
+      error: "No recoverable archive is available for this legacy project.",
     };
   }
   const created = await pool.query<{ legacy_project_id: string }>(
@@ -4208,6 +4216,9 @@ export async function retryProjectRestore({
   });
   if (row == null || !row.project_id) {
     throw new Error("legacy project import is not available for this account");
+  }
+  if (legacyProjectArchiveRefreshPaused(row)) {
+    throw new Error(LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSED_MESSAGE);
   }
   if (!legacyArchiveAvailable(row)) {
     throw new Error("legacy project archive is not available");
