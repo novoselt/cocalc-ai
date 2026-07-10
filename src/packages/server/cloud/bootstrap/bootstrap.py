@@ -2112,6 +2112,7 @@ fi
 cmd="$1"
 shift
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
+STORAGE_CGROUP_CPU_MAX="100000 100000"
 
 deny() {
   local code="$1"
@@ -2134,6 +2135,20 @@ project_pool_cgroup_storage() {
       deny "project-pool-cgroup-not-allowed" "$pool"
       ;;
   esac
+}
+
+project_storage_cgroup() {
+  local pool
+  pool="$(project_pool_cgroup_storage)"
+  printf '%s\n' "${pool}/storage"
+}
+
+configure_project_storage_cgroup() {
+  local pool="$1"
+  mkdir -p "$pool"
+  if [ -w "${pool}/cpu.max" ]; then
+    printf '%s\n' "${STORAGE_CGROUP_CPU_MAX}" > "${pool}/cpu.max" || true
+  fi
 }
 
 attach_pid_to_project_pool_storage() {
@@ -3190,8 +3205,8 @@ PY' bash "$tree"
       echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} pid=${existing_pid}" >&2
       exit 75
     fi
-    pool="$(project_pool_cgroup_storage)"
-    mkdir -p "$pool"
+    pool="$(project_storage_cgroup)"
+    configure_project_storage_cgroup "$pool"
     attach_pid_to_project_pool_storage "$$" "$pool" || true
     if [ -x /opt/cocalc/tools/current/bees ]; then
       exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /opt/cocalc/tools/current/bees "$@"
@@ -4962,6 +4977,7 @@ User={cfg.ssh_user}
 Group={cfg.ssh_user}
 WorkingDirectory=/
 ExecStart=/bin/bash -lc "{watchdog_command}"
+KillMode=process
 TimeoutStartSec=180
 """
     watchdog_timer = """[Unit]
