@@ -13,6 +13,7 @@ import type {
   LegacyMigrationAdminLinkedProjectsOptions,
   LegacyMigrationAdminLinkLegacyAccountOptions,
   LegacyMigrationAdminLinksOptions,
+  LegacyMigrationAdminPrepareProjectRemediationOptions,
   LegacyMigrationAdminProjectSearchOptions,
   LegacyMigrationAdminUnlinkLegacyAccountOptions,
   LegacyMigrationApplyFinancialOptions,
@@ -122,6 +123,17 @@ export async function prepareProjectRemediation(
     : await getSeedLegacyMigrationClient(
         6 * 60 * 60 * 1000,
       ).legacyMigrationPrepareProjectRemediation(opts);
+}
+
+export async function adminPrepareProjectRemediation(
+  opts: LegacyMigrationAdminPrepareProjectRemediationOptions,
+) {
+  await requireAdminAccount(opts?.account_id);
+  return isSeedBay()
+    ? await localLegacyMigration.adminPrepareProjectRemediation(opts)
+    : await getSeedLegacyMigrationClient(
+        6 * 60 * 60 * 1000,
+      ).legacyMigrationAdminPrepareProjectRemediation(opts);
 }
 
 export async function applyProjectRemediation(
