@@ -1173,6 +1173,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("BEES_ALREADY_RUNNING", script)
             self.assertIn("flock -n 9", script)
             self.assertIn("flock-missing", script)
+            self.assertIn('attach_pid_to_project_pool_storage "$$" "$pool"', script)
+            self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
             self.assertIn('cat "$proc/comm"', script)
             self.assertIn("sandbox-rm)", script)
             self.assertIn("sandbox-rmdir)", script)
@@ -1337,6 +1339,24 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                f'PROJECT_POOL_CPU_RESERVE_CORES_DEFAULT="{bootstrap.DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                f'PROJECT_POOL_CPU_RESERVE_DYNAMIC_MIN_CORES="{bootstrap.DYNAMIC_PROJECT_POOL_CPU_RESERVE_MIN_CORES}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                f'PROJECT_POOL_CPU_RESERVE_DYNAMIC_MAX_CORES="{bootstrap.DYNAMIC_PROJECT_POOL_CPU_RESERVE_MAX_CORES}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                f'MIN_PROJECT_POOL_CPU_CORES="{bootstrap.MIN_PROJECT_POOL_CPU_CORES}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn("project_pool_cpu_max_value()", rootctl.read_text(encoding="utf-8"))
+            self.assertIn('> "${pool}/cpu.max"', rootctl.read_text(encoding="utf-8"))
+            self.assertIn(
                 "repair_runtime_environment()",
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -1465,6 +1485,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text,
             )
             self.assertIn("COCALC_PROJECT_POOL_MEMORY_RESERVE_MB=4096", text)
+            self.assertIn(
+                f"COCALC_PROJECT_POOL_CPU_RESERVE_CORES={bootstrap.DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES}",
+                text,
+            )
             self.assertIn("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS=1", text)
             self.assertIn(
                 "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC=5", text
@@ -1563,6 +1587,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text,
             )
             self.assertIn("COCALC_PROJECT_POOL_MEMORY_RESERVE_MB=8192", text)
+            self.assertIn(
+                f"COCALC_PROJECT_POOL_CPU_RESERVE_CORES={bootstrap.DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES}",
+                text,
+            )
             self.assertNotIn("c.projecthosts.internal:9102", text)
 
     def test_write_env_rejects_invalid_assignments_without_clobbering_existing_file(self) -> None:
