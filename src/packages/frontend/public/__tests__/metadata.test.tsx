@@ -167,7 +167,10 @@ describe("public route metadata", () => {
       ["/policies/privacy", "/policies/privacy"],
       ["/lang", "/lang"],
       ["/en", "/en"],
-      ["/rootfs/id/rootfs-image-1", "/rootfs"],
+      ["/rootfs/ubuntu-24.04", "/rootfs/ubuntu-24.04"],
+      ["/rootfs/id/rootfs-image-1", "/rootfs/id/rootfs-image-1"],
+      ["/news/some-post-42", "/news/some-post-42"],
+      ["/news/some-post-42/1751000000", "/news/some-post-42"],
     ] as const) {
       const route = getPublicMetadataRouteFromPath(path);
       const metadata = getPublicRouteMetadata(route, { site_name: "CoCalc" });

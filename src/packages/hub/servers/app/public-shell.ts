@@ -104,7 +104,7 @@ function metaTag(attrs: Record<string, string>): string {
   return `<meta ${rendered}>`;
 }
 
-function buildHead(req: Request): string {
+function buildHead(req: Request): { head: string; notFound: boolean } {
   const { path, search } = metadataPathAndSearch(req);
   const route = getPublicMetadataRouteFromPath(path, search, {
     basePath,
@@ -185,7 +185,10 @@ function buildHead(req: Request): string {
     }),
   ].join("\n  ");
 
-  return `<title>${htmlEscape(metadata.title)}</title>\n  ${socialTags}`;
+  return {
+    head: `<title>${htmlEscape(metadata.title)}</title>\n  ${socialTags}`,
+    notFound: !!metadata.notFound,
+  };
 }
 
 async function publicHtml(): Promise<string> {
@@ -246,19 +249,22 @@ function injectHead(html: string, head: string): string {
   return html.slice(0, begin) + head + html.slice(end + HEAD_END_MARKER.length);
 }
 
-export async function renderPublicShell(req: Request): Promise<string> {
+export async function renderPublicShell(
+  req: Request,
+): Promise<{ html: string; status: 200 | 404 }> {
   const customize = await getCustomize();
   (req as any).cocalcPublicCustomize = customize;
   const html = await publicHtml();
-  return injectHead(html, buildHead(req));
+  const { head, notFound } = buildHead(req);
+  return { html: injectHead(html, head), status: notFound ? 404 : 200 };
 }
 
 export function servePublicShell(req: Request, res: Response): void {
   void renderPublicShell(req)
-    .then((html) => {
+    .then(({ html, status }) => {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Cache-Control", "public, max-age=10, must-revalidate");
-      res.status(200).send(html);
+      res.status(status).send(html);
     })
     .catch((err) => {
       logger.warn("serving public shell failed", { err: `${err}` });

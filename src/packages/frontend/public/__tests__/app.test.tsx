@@ -121,12 +121,14 @@ describe("section route parsers", () => {
       getNewsRouteFromPath(publicPath("news/launchpad-update-17")),
     ).toEqual({
       newsId: 17,
+      newsSlug: "launchpad-update-17",
       view: "news-detail",
     });
     expect(
       getNewsRouteFromPath(publicPath("news/launchpad-update-17/1712345678")),
     ).toEqual({
       newsId: 17,
+      newsSlug: "launchpad-update-17",
       timestamp: 1712345678,
       view: "news-history",
     });

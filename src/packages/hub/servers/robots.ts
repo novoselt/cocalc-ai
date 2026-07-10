@@ -47,9 +47,13 @@ function renderPublicRobots(req: Request): string {
     "Allow: /share",
     "Allow: /share/",
     // Public pages need hashed JS/CSS/image chunks from /static. The shell HTML
-    // itself is blocked below so crawlers prefer the clean canonical URLs.
+    // files themselves are blocked below: the public shell so crawlers prefer
+    // the clean canonical URLs, and the authenticated app/embed shells because
+    // they are thin app bootstraps, not public content.
     "Allow: /static/",
     "Disallow: /static/public.html",
+    "Disallow: /static/app.html",
+    "Disallow: /static/embed.html",
     // These are implementation surfaces, not standalone public pages.
     "Disallow: /webapp/",
     "Disallow: /cdn/",

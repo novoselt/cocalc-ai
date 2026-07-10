@@ -58,6 +58,6 @@ describe("public feature and docs routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("location")).toBeNull();
-    expect(body).toContain('/rootfs" rel="canonical"');
+    expect(body).toContain('/rootfs/id/rootfs-image-1" rel="canonical"');
   });
 });

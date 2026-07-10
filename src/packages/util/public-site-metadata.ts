@@ -16,6 +16,9 @@ export interface PublicRouteMetadata {
   description: string;
   faq?: PublicRouteMetadataFaq[];
   imagePath: string;
+  // Set when the path has the shape of a detail page but the slug does not
+  // exist in the corresponding registry; servers should respond 404.
+  notFound?: boolean;
   title: string;
 }
 
@@ -231,6 +234,15 @@ function routeParts(
   return parts.slice(base.length);
 }
 
+// News URLs look like /news/<slugified-title>-<id>; mirror the parsing in
+// @cocalc/frontend/public/news/routes.ts.
+function parseNewsIdFromSlug(segment?: string): number | undefined {
+  if (!segment) return;
+  const value = Number(segment.split("-").pop());
+  if (!Number.isInteger(value) || value < 0) return;
+  return value;
+}
+
 function authRoute(parts: string[]): PublicMetadataRoute {
   if (parts[0] === "auth") {
     if (parts[1] === "sign-up") {
@@ -304,7 +316,22 @@ export function getPublicMetadataRouteFromPath(
     }
     return { section: "not-found" };
   }
-  if (section === "news") return { section: "news" };
+  if (section === "news") {
+    if (
+      parts[1] &&
+      parts[1] !== "rss.xml" &&
+      parts[1] !== "feed.json" &&
+      parseNewsIdFromSlug(parts[1]) != null
+    ) {
+      // Covers both /news/<slug>-<id> and /news/<slug>-<id>/<timestamp>;
+      // the canonical for a history view is the current post.
+      return {
+        route: { newsSlug: parts[1], view: "news-detail" },
+        section: "news",
+      };
+    }
+    return { section: "news" };
+  }
   if (section === "policies") {
     if (parts[1] === "imprint") {
       return { route: { view: "policies-imprint" }, section: "policies" };
@@ -326,10 +353,16 @@ export function getPublicMetadataRouteFromPath(
     return { route: { view: detail }, section: "products" };
   }
   if (section === "rootfs") {
-    return {
-      route: { view: parts[1] ? "detail" : "index" },
-      section: "rootfs",
-    };
+    if (parts[1] === "id" && parts[2]) {
+      return {
+        route: { imageId: parts[2], view: "image-id" },
+        section: "rootfs",
+      };
+    }
+    if (parts[1]) {
+      return { route: { slug: parts[1], view: "slug" }, section: "rootfs" };
+    }
+    return { route: { view: "index" }, section: "rootfs" };
   }
   if (section === "support") {
     const view =
@@ -437,6 +470,8 @@ function featureRouteMetadata(
     description:
       "Explore CoCalc features for collaborative notebooks, Linux terminals, technical documents, whiteboards, teaching workflows, automation, and AI agents.",
     imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
+    // A slug was given but no such feature page exists.
+    notFound: !!route?.slug,
     title: pageTitle("CoCalc Features", siteName),
   };
 }
@@ -456,16 +491,68 @@ function guidesRouteMetadata(
 }
 
 function rootfsRouteMetadata(
-  _route: PublicMetadataRoute["route"],
+  route: PublicMetadataRoute["route"],
   siteName: string,
   options?: PublicRouteMetadataOptions,
 ): PublicRouteMetadata {
+  if (route?.view === "slug" && route.slug) {
+    return {
+      canonicalPath: publicPath(`rootfs/${route.slug}`, options),
+      description:
+        "Details of a CoCalc runtime image for project environments, including software, versions, and deployment options.",
+      imagePath: publicPath(WORKFLOW_SOCIAL_IMAGE, options),
+      title: pageTitle(`Runtime Image ${route.slug}`, siteName),
+    };
+  }
+  if (route?.view === "image-id" && route.imageId) {
+    return {
+      canonicalPath: publicPath(`rootfs/id/${route.imageId}`, options),
+      description:
+        "Details of a CoCalc runtime image for project environments, including software, versions, and deployment options.",
+      imagePath: publicPath(WORKFLOW_SOCIAL_IMAGE, options),
+      title: pageTitle("CoCalc Runtime Image", siteName),
+    };
+  }
   return {
     canonicalPath: publicPath("rootfs", options),
     description:
       "Explore CoCalc runtime images for project environments, including images for notebooks, terminals, teaching workflows, and self-hosted deployments.",
     imagePath: publicPath(WORKFLOW_SOCIAL_IMAGE, options),
     title: pageTitle("CoCalc Runtime Images", siteName),
+  };
+}
+
+function newsRouteMetadata(
+  route: PublicMetadataRoute["route"],
+  siteName: string,
+  options?: PublicRouteMetadataOptions,
+): PublicRouteMetadata {
+  if (
+    (route?.view === "news-detail" || route?.view === "news-history") &&
+    route.newsSlug
+  ) {
+    // The slug is the slugified post title followed by the numeric id, so a
+    // readable approximation of the title can be recovered from it.
+    const words = route.newsSlug.split("-");
+    words.pop();
+    const slugTitle = words.join(" ").trim();
+    const title = slugTitle
+      ? slugTitle.charAt(0).toUpperCase() + slugTitle.slice(1)
+      : `${siteName} News`;
+    return {
+      canonicalPath: publicPath(`news/${route.newsSlug}`, options),
+      description:
+        "Read a CoCalc news post with product updates, release notes, or public announcements.",
+      imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+      title: pageTitle(title, siteName),
+    };
+  }
+  return {
+    canonicalPath: publicPath("news", options),
+    description:
+      "Read CoCalc news, product updates, release notes, and public announcements.",
+    imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+    title: pageTitle(`${siteName} News`, siteName),
   };
 }
 
@@ -497,6 +584,9 @@ function aboutRouteMetadata(
         description:
           "Meet a member of the SageMath, Inc. team building CoCalc.",
         imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+        notFound: !(TEAM_MEMBER_SITEMAP_SLUGS as readonly string[]).includes(
+          route.teamSlug,
+        ),
         title: pageTitle(`${siteName} Team`, siteName),
       };
     case "about":
@@ -520,13 +610,14 @@ function policiesRouteMetadata(
     const title =
       POLICY_METADATA_TITLES[
         route.policySlug as keyof typeof POLICY_METADATA_TITLES
-      ] ?? "CoCalc Policy";
+      ];
     return {
       canonicalPath: publicPath(`policies/${route.policySlug}`, options),
       description:
         "Review CoCalc public policy information, terms, privacy details, trust resources, and compliance commitments.",
       imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
-      title: pageTitle(`${siteName} ${title}`, siteName),
+      notFound: title == null,
+      title: pageTitle(`${siteName} ${title ?? "Policy"}`, siteName),
     };
   }
   return {
@@ -586,11 +677,13 @@ function docsRouteMetadata(
     };
   }
   if (route?.view === "docs-detail" && route.slug) {
+    // A docs path with no matching (visible) registry entry.
     return {
       canonicalPath: publicPath(docsPath(route.slug), options),
       description:
         "Read CoCalc documentation for projects, files, notebooks, terminals, teaching, account management, and administration.",
       imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
+      notFound: true,
       title: pageTitle("CoCalc Documentation", siteName),
     };
   }
@@ -716,13 +809,7 @@ export function getPublicRouteMetadata(
     case "about":
       return aboutRouteMetadata(route.route, siteName, options);
     case "news":
-      return {
-        canonicalPath: publicPath("news", options),
-        description:
-          "Read CoCalc news, product updates, release notes, and public announcements.",
-        imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
-        title: pageTitle(`${siteName} News`, siteName),
-      };
+      return newsRouteMetadata(route.route, siteName, options);
     case "policies":
       return policiesRouteMetadata(route.route, siteName, options);
     case "lang":
@@ -732,6 +819,7 @@ export function getPublicRouteMetadata(
         canonicalPath: publicPath("", options),
         description: PUBLIC_SITE_DESCRIPTION,
         imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+        notFound: route.section === "not-found" || undefined,
         title: siteName,
       };
   }
