@@ -19,6 +19,7 @@ import {
   getPublicMetadataRouteFromPath,
   getPublicRouteMetadata,
   PUBLIC_HEAD_PLACEHOLDER,
+  PUBLIC_STATIC_BASE_PLACEHOLDER,
   type PublicRouteMetadataConfig,
 } from "@cocalc/util/public-site-metadata";
 import { initPublicDocsMetadata } from "@cocalc/util/public-site-metadata-docs";
@@ -254,20 +255,32 @@ async function buildHead(
   ].join("\n  ");
 
   return {
-    head: `${staticBaseTag()}\n  <title>${htmlEscape(
+    head: `${basePathMetaTag()}\n  <title>${htmlEscape(
       metadata.title,
     )}</title>\n  ${socialTags}`,
     notFound: !!metadata.notFound,
   };
 }
 
-// The shell is built to live under /static/ (its script tags and runtime
-// chunk loading use URLs relative to that directory), but we serve it at
-// clean URLs like / and /docs/a/b. The <base> tag makes the relative script
-// URLs resolve against /static/ regardless of the page URL. It must come
-// before the plugin-emitted <script> tags, which follow the marker region.
+function staticBasePath(): string {
+  return joinUrlPath(basePath, "static");
+}
+
+// The client cannot infer the serve-time base path from a clean page URL
+// like /docs/a/b, so the shell head states it explicitly;
+// @cocalc/frontend/customize/app-base-path reads this tag first.
+function basePathMetaTag(): string {
+  return `<meta name="cocalc-base-path" content="${htmlEscape(basePath)}">`;
+}
+
+// Legacy shells (built before the static-base token) have script URLs
+// relative to /static/, so serving them at clean URLs needs a page-wide
+// <base> tag. It must come before the plugin-emitted <script> tags, which
+// follow the marker region.
+// TODO remove together with the legacy branches in injectHead once all
+// deployed static artifacts carry PUBLIC_STATIC_BASE_PLACEHOLDER.
 function staticBaseTag(): string {
-  return `<base href="${htmlEscape(`${joinUrlPath(basePath, "static")}/`)}">`;
+  return `<base href="${htmlEscape(`${staticBasePath()}/`)}">`;
 }
 
 // Cache the shell file content keyed by mtime/size: serving public pages is
@@ -332,14 +345,23 @@ export function resolveStaticPath(): string {
 
 let warnedAboutMissingPlaceholder = false;
 
-// Replace the shared title placeholder with the rendered head using exact
-// string splicing only. Unlike comments, the title survives Rspack's
-// production HTML minification. If the placeholder is missing or duplicated,
-// skip the per-route metadata but still inject the <base> tag right after
-// <head> — without it
-// the stale shell's relative script URLs resolve against the clean page URL
-// and the page renders blank. Log so the stale static build gets noticed.
+// Rewrite the shell for serving: resolve the static-base token into the
+// serve-time asset location, then replace the shared title placeholder with
+// the rendered head using exact string splicing only. Unlike comments, the
+// title survives Rspack's production HTML minification. Legacy artifacts
+// without the token get a page-wide <base> tag instead — that breaks
+// same-page fragment links (href="#..." resolves to /static/#...), which is
+// why new artifacts use absolute asset URLs. If the placeholder is missing
+// or duplicated, skip the per-route metadata but keep the asset URLs
+// working — otherwise the stale shell renders blank. Log so the stale
+// static build gets noticed.
 function injectHead(html: string, head: string): string {
+  const tokenized = html.includes(PUBLIC_STATIC_BASE_PLACEHOLDER);
+  if (tokenized) {
+    html = html
+      .split(PUBLIC_STATIC_BASE_PLACEHOLDER)
+      .join(htmlEscape(staticBasePath()));
+  }
   const index = html.indexOf(PUBLIC_HEAD_PLACEHOLDER);
   const duplicate =
     index >= 0
@@ -355,14 +377,18 @@ function injectHead(html: string, head: string): string {
         "public.html must contain exactly one public head placeholder; serving shell without per-route metadata — rebuild @cocalc/static",
       );
     }
+    if (tokenized) {
+      return html;
+    }
     return html.replace(
       /<head[^>]*>/i,
       (match) => `${match}${staticBaseTag()}`,
     );
   }
+  const spliced = tokenized ? head : `${staticBaseTag()}\n  ${head}`;
   return (
     html.slice(0, index) +
-    head +
+    spliced +
     html.slice(index + PUBLIC_HEAD_PLACEHOLDER.length)
   );
 }

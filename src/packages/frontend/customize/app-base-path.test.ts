@@ -1,6 +1,7 @@
 import {
   inferAppBasePath,
   inferBasePathFromBaseElement,
+  inferBasePathFromMetaElement,
 } from "./app-base-path";
 
 describe("inferAppBasePath", () => {
@@ -54,6 +55,38 @@ describe("inferAppBasePath", () => {
         "/base/00000000-1000-4000-8000-000000000000/files/home/user/a.pdf",
       ),
     ).toBe("/base");
+  });
+});
+
+describe("inferBasePathFromMetaElement", () => {
+  afterEach(() => {
+    document.head.innerHTML = "";
+  });
+
+  it("derives the base path from the hub-injected meta tag", () => {
+    document.head.innerHTML = '<meta name="cocalc-base-path" content="/">';
+    expect(inferBasePathFromMetaElement()).toBe("/");
+
+    document.head.innerHTML =
+      '<meta name="cocalc-base-path" content="/launchpad">';
+    expect(inferBasePathFromMetaElement()).toBe("/launchpad");
+  });
+
+  it("normalizes trailing slashes", () => {
+    document.head.innerHTML =
+      '<meta name="cocalc-base-path" content="/launchpad/">';
+    expect(inferBasePathFromMetaElement()).toBe("/launchpad");
+  });
+
+  it("ignores absent or malformed meta tags", () => {
+    expect(inferBasePathFromMetaElement()).toBeUndefined();
+
+    document.head.innerHTML = '<meta name="cocalc-base-path" content="">';
+    expect(inferBasePathFromMetaElement()).toBeUndefined();
+
+    document.head.innerHTML =
+      '<meta name="cocalc-base-path" content="launchpad">';
+    expect(inferBasePathFromMetaElement()).toBeUndefined();
   });
 });
 

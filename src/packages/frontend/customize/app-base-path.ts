@@ -90,9 +90,22 @@ export function inferAppBasePath(pathname?: string): string {
 }
 
 // When the hub serves the public shell at a clean URL (e.g. /docs/a/b), it
-// injects <base href="<basePath>/static/"> so the shell's relative script
-// URLs resolve correctly. That tag is the authoritative serve-time base path
-// signal, so prefer it over inferring from the pathname.
+// injects <meta name="cocalc-base-path" content="<basePath>"> into the head.
+// That is the authoritative serve-time base path signal, so prefer it over
+// inferring from the pathname.
+export function inferBasePathFromMetaElement(): string | undefined {
+  if (typeof document === "undefined") return;
+  const content = document
+    .querySelector('meta[name="cocalc-base-path"]')
+    ?.getAttribute("content")
+    ?.trim();
+  if (!content || !content.startsWith("/")) return;
+  return content.length > 1 ? content.replace(/\/+$/, "") : content;
+}
+
+// Legacy shells stated the base path via <base href="<basePath>/static/">
+// instead of the meta tag.
+// TODO remove once all deployed hubs inject the cocalc-base-path meta tag.
 export function inferBasePathFromBaseElement(): string | undefined {
   if (typeof document === "undefined") return;
   const href = document.querySelector("base")?.getAttribute("href");
@@ -114,6 +127,10 @@ function init(): string {
     return process.env.BASE_PATH;
   }
   if (typeof window != "undefined" && typeof window.location != "undefined") {
+    const fromMetaElement = inferBasePathFromMetaElement();
+    if (fromMetaElement != null) {
+      return fromMetaElement;
+    }
     const fromBaseElement = inferBasePathFromBaseElement();
     if (fromBaseElement != null) {
       return fromBaseElement;

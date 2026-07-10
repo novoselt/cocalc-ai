@@ -1,3 +1,8 @@
+import { mkdtempSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+import { PUBLIC_STATIC_BASE_PLACEHOLDER } from "@cocalc/util/public-site-metadata";
 import { renderPublicShell } from "./public-shell";
 
 jest.mock("@cocalc/database/settings/customize", () => ({
@@ -10,6 +15,25 @@ jest.mock("@cocalc/database/postgres/news", () => ({
     { id: "42", title: "Test post", text: "Hello **world** body" },
   ]),
 }));
+
+// Serve a synthetic shell instead of whatever packages/static/dist currently
+// holds, so these tests do not depend on the state of the last static build.
+// resolveStaticPath() honors COCALC_STATIC_PATH and resolves lazily on the
+// first render, so setting it here is early enough.
+function shellHtml({ tokenized }: { tokenized: boolean }): string {
+  const src = (file: string) =>
+    tokenized ? `${PUBLIC_STATIC_BASE_PLACEHOLDER}/${file}` : file;
+  return `<!doctype html><html><head><title>CoCalc</title></head><body><script defer src="${src(
+    "load-abc.js",
+  )}"></script><script defer src="${src(
+    "public-def.js",
+  )}"></script><div id="cocalc-webapp-container"></div></body></html>`;
+}
+
+const staticDir = mkdtempSync(join(tmpdir(), "public-shell-test-"));
+writeFileSync(join(staticDir, "app.html"), "<!doctype html><html></html>");
+writeFileSync(join(staticDir, "public.html"), shellHtml({ tokenized: true }));
+process.env.COCALC_STATIC_PATH = staticDir;
 
 function request(
   path: string,
@@ -53,15 +77,41 @@ describe("public shell rendering", () => {
     expect(body.match(/<title>/g)).toHaveLength(1);
   });
 
-  it("injects a base tag for /static/ ahead of the shell scripts", async () => {
+  it("resolves the static-base token to absolute asset URLs without a base tag", async () => {
     const { html: body } = await renderPublicShell(
       request("/docs/collaboration/chat"),
     );
 
-    const baseIndex = body.indexOf('<base href="/static/">');
-    expect(baseIndex).toBeGreaterThanOrEqual(0);
-    const scriptIndex = body.indexOf("<script");
-    expect(scriptIndex).toBeGreaterThan(baseIndex);
+    expect(body).toContain('src="/static/load-abc.js"');
+    expect(body).toContain('src="/static/public-def.js"');
+    expect(body).not.toContain(PUBLIC_STATIC_BASE_PLACEHOLDER);
+    // A page-wide <base> tag would hijack same-page fragment links
+    // (href="#..." resolving to /static/#...), so tokenized shells must
+    // not get one.
+    expect(body).not.toContain("<base ");
+    expect(body).toContain('<meta name="cocalc-base-path" content="/">');
+  });
+
+  it("injects a base tag ahead of the scripts for legacy shells without the token", async () => {
+    writeFileSync(
+      join(staticDir, "public.html"),
+      shellHtml({ tokenized: false }),
+    );
+    try {
+      const { html: body } = await renderPublicShell(
+        request("/docs/collaboration/chat"),
+      );
+
+      const baseIndex = body.indexOf('<base href="/static/">');
+      expect(baseIndex).toBeGreaterThanOrEqual(0);
+      const scriptIndex = body.indexOf("<script");
+      expect(scriptIndex).toBeGreaterThan(baseIndex);
+    } finally {
+      writeFileSync(
+        join(staticDir, "public.html"),
+        shellHtml({ tokenized: true }),
+      );
+    }
   });
 
   it("does not interpret replacement patterns from request-derived values", async () => {

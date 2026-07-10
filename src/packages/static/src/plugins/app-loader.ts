@@ -1,9 +1,15 @@
 import rspack from "@rspack/core";
+import { PUBLIC_STATIC_BASE_PLACEHOLDER } from "@cocalc/util/public-site-metadata";
 import { renderAppTemplate } from "./app-template";
 
 export default function appLoaderPlugin(registerPlugin, PRODMODE: boolean) {
   const templateContent = renderAppTemplate();
-  const htmlPages = [
+  const htmlPages: {
+    chunks: string[];
+    desc: string;
+    filename: string;
+    publicPath?: string;
+  }[] = [
     { desc: "app", filename: "app.html", chunks: ["load", "app"] },
     { desc: "embed", filename: "embed.html", chunks: ["load", "embed"] },
     {
@@ -36,7 +42,16 @@ export default function appLoaderPlugin(registerPlugin, PRODMODE: boolean) {
       filename: "public-viewer-chat.html",
       chunks: ["load", "public-viewer-chat"],
     },
-    { desc: "public", filename: "public.html", chunks: ["load", "public"] },
+    {
+      desc: "public",
+      filename: "public.html",
+      chunks: ["load", "public"],
+      // The hub serves this shell at clean URLs (/, /docs/a/b, ...), so its
+      // asset URLs cannot be relative. Emit them behind the shared token,
+      // which the hub replaces with the serve-time static location. The
+      // other shells are served from /static/ itself and keep relative URLs.
+      publicPath: `${PUBLIC_STATIC_BASE_PLACEHOLDER}/`,
+    },
   ];
 
   for (const page of htmlPages) {
@@ -47,6 +62,7 @@ export default function appLoaderPlugin(registerPlugin, PRODMODE: boolean) {
         templateContent,
         hash: PRODMODE,
         chunks: page.chunks,
+        ...(page.publicPath != null ? { publicPath: page.publicPath } : {}),
       }),
     );
   }

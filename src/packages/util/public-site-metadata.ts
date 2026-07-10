@@ -20,6 +20,15 @@ import {
 // with the route-specific head block when serving a public page.
 export const PUBLIC_HEAD_PLACEHOLDER = "<title>CoCalc</title>";
 
+// Rspack emits the public.html script/link URLs with this prefix instead of
+// relative paths; the hub replaces it with the serve-time static location
+// (e.g. "/static" or "/<base-path>/static"). Absolute asset URLs let the
+// shell work at any clean URL without a page-wide <base> tag, which would
+// also hijack same-page fragment links (href="#..." resolving to
+// /static/#...). The leading slash keeps an unreplaced token an absolute
+// path, so a misconfiguration 404s visibly instead of resolving relative.
+export const PUBLIC_STATIC_BASE_PLACEHOLDER = "/__cocalc-public-static-base__";
+
 export interface PublicRouteMetadata {
   canonicalPath: string;
   description: string;
