@@ -277,6 +277,8 @@ export interface ChatThreadConfigRecord {
   acp_config?: CodexThreadConfig;
   automation_config?: ChatThreadAutomationConfig;
   automation_state?: ChatThreadAutomationState;
+  notification_followers?: string[];
+  notification_muted?: string[];
   updated_at: string;
   updated_by: string;
   schema_version: number;
@@ -303,6 +305,8 @@ export interface BuildThreadConfigRecordOptions {
   acp_config?: CodexThreadConfig;
   automation_config?: ChatThreadAutomationConfig;
   automation_state?: ChatThreadAutomationState;
+  notification_followers?: string[];
+  notification_muted?: string[];
   schema_version?: number;
 }
 
@@ -332,6 +336,8 @@ export function buildThreadConfigRecord(
     acp_config: options.acp_config,
     automation_config: options.automation_config,
     automation_state: options.automation_state,
+    notification_followers: options.notification_followers,
+    notification_muted: options.notification_muted,
     updated_at: updatedAt,
     updated_by: options.updated_by,
     schema_version: options.schema_version ?? CHAT_SCHEMA_V2,

@@ -150,6 +150,7 @@ describe("conat notifications api", () => {
           description: "Harald mentioned you in chat",
           priority: "high",
           stable_source_id: "chat-message-1",
+          notification_reason: "mention",
         },
       },
     ]);
