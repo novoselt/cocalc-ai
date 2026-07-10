@@ -18,8 +18,12 @@ import type {
   LegacyMigrationApplyFinancialOptions,
   LegacyMigrationConfigureFinancialRenewalOptions,
   LegacyMigrationFinancialPreviewOptions,
+  LegacyMigrationApplyProjectRemediationOptions,
+  LegacyMigrationDismissProjectRemediationOptions,
   LegacyMigrationImportProjectsOptions,
   LegacyMigrationListProjectsOptions,
+  LegacyMigrationPrepareProjectRemediationOptions,
+  LegacyMigrationProjectRemediationStatusOptions,
   LegacyMigrationRetryProjectRestoreOptions,
 } from "@cocalc/conat/hub/api/legacy-migration";
 import isAdmin from "@cocalc/server/accounts/is-admin";
@@ -96,6 +100,46 @@ export async function retryProjectRestore(
   return isSeedBay()
     ? await localLegacyMigration.retryProjectRestore(opts)
     : await getSeedLegacyMigrationClient().legacyMigrationRetryProjectRestore(
+        opts,
+      );
+}
+
+export async function getProjectRemediation(
+  opts: LegacyMigrationProjectRemediationStatusOptions,
+) {
+  return isSeedBay()
+    ? await localLegacyMigration.getProjectRemediation(opts)
+    : await getSeedLegacyMigrationClient().legacyMigrationGetProjectRemediation(
+        opts,
+      );
+}
+
+export async function prepareProjectRemediation(
+  opts: LegacyMigrationPrepareProjectRemediationOptions,
+) {
+  return isSeedBay()
+    ? await localLegacyMigration.prepareProjectRemediation(opts)
+    : await getSeedLegacyMigrationClient(
+        6 * 60 * 60 * 1000,
+      ).legacyMigrationPrepareProjectRemediation(opts);
+}
+
+export async function applyProjectRemediation(
+  opts: LegacyMigrationApplyProjectRemediationOptions,
+) {
+  return isSeedBay()
+    ? await localLegacyMigration.applyProjectRemediation(opts)
+    : await getSeedLegacyMigrationClient(
+        6 * 60 * 60 * 1000,
+      ).legacyMigrationApplyProjectRemediation(opts);
+}
+
+export async function dismissProjectRemediation(
+  opts: LegacyMigrationDismissProjectRemediationOptions,
+) {
+  return isSeedBay()
+    ? await localLegacyMigration.dismissProjectRemediation(opts)
+    : await getSeedLegacyMigrationClient().legacyMigrationDismissProjectRemediation(
         opts,
       );
 }

@@ -3,13 +3,27 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Alert, Button, Progress, Space, Typography, message } from "antd";
+import {
+  Alert,
+  Button,
+  Modal,
+  Progress,
+  Space,
+  Tag,
+  Typography,
+  message,
+} from "antd";
 import { useEffect, useMemo, useState } from "react";
 
 import type { LroEvent, LroSummary } from "@cocalc/conat/hub/api/lro";
+import type {
+  LegacyMigrationProjectRemediationDiffEntry,
+  LegacyMigrationProjectRemediationStatusResponse,
+} from "@cocalc/conat/hub/api/legacy-migration";
 import { redux, useProjectFromMap } from "@cocalc/frontend/app-framework";
 import { isDismissed, progressBarStatus } from "@cocalc/frontend/lro/utils";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
+import { COLORS } from "@cocalc/util/theme";
 import {
   LEGACY_RESTORE_ERROR_LABEL,
   LEGACY_RESTORE_LRO_LABEL,
@@ -19,6 +33,7 @@ import {
 } from "@cocalc/util/legacy-migration";
 
 const { Text } = Typography;
+const FINAL_ARCHIVE_SNAPSHOT_PATH = ".snapshots/final-cocalc-com-archive";
 
 function labelValue(value: unknown): string {
   return `${value ?? ""}`.trim();
@@ -66,6 +81,16 @@ function restoreIssueDismissKey({
   opId: string;
 }): string {
   return `legacy-project-restore-issue-dismissed:${project_id}:${opId || "no-op"}`;
+}
+
+function remediationSessionDismissKey({
+  project_id,
+  r2RefreshedAt,
+}: {
+  project_id: string;
+  r2RefreshedAt?: string | null;
+}): string {
+  return `legacy-project-final-archive-remediation-session-dismissed:${project_id}:${r2RefreshedAt || "unknown"}`;
 }
 
 export function markLegacyProjectRestoreKnownRestored({
@@ -130,6 +155,20 @@ function wasRestoreIssueDismissed(key: string): boolean {
 function markRestoreIssueDismissed(key: string): void {
   try {
     globalThis.localStorage?.setItem(key, "1");
+  } catch {}
+}
+
+function wasRemediationSessionDismissed(key: string): boolean {
+  try {
+    return globalThis.sessionStorage?.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markRemediationSessionDismissed(key: string): void {
+  try {
+    globalThis.sessionStorage?.setItem(key, "1");
   } catch {}
 }
 
@@ -202,6 +241,52 @@ function timestampMs(value: unknown): number | undefined {
 function formatTimestamp(value: unknown): string {
   const ms = timestampMs(value);
   return ms == null ? "" : new Date(ms).toLocaleString();
+}
+
+function remediationDiffKindLabel(
+  kind: LegacyMigrationProjectRemediationDiffEntry["kind"],
+): string {
+  switch (kind) {
+    case "add":
+      return "new";
+    case "update":
+      return "changed";
+    case "delete":
+      return "not in final archive";
+    default:
+      return "other";
+  }
+}
+
+function remediationDiffKindColor(
+  kind: LegacyMigrationProjectRemediationDiffEntry["kind"],
+): string {
+  switch (kind) {
+    case "add":
+      return "green";
+    case "update":
+      return "orange";
+    case "delete":
+      return "red";
+    default:
+      return "default";
+  }
+}
+
+function formatRemediationCounts(
+  status?: LegacyMigrationProjectRemediationStatusResponse,
+): string {
+  const counts = status?.diff_counts;
+  if (!counts) return "";
+  const parts = [
+    counts.add ? `${counts.add.toLocaleString()} new` : "",
+    counts.update ? `${counts.update.toLocaleString()} changed` : "",
+    counts.delete
+      ? `${counts.delete.toLocaleString()} only in current project`
+      : "",
+    counts.other ? `${counts.other.toLocaleString()} other` : "",
+  ].filter(Boolean);
+  return parts.join(", ");
 }
 
 function restoreQueueAndTimingText({
@@ -403,6 +488,23 @@ export function LegacyMigrationRestoreBanner({
   const [restoreIssueDismissed, setRestoreIssueDismissed] = useState(() =>
     wasRestoreIssueDismissed(restoreIssueKey),
   );
+  const [remediation, setRemediation] =
+    useState<LegacyMigrationProjectRemediationStatusResponse>();
+  const [remediationLoading, setRemediationLoading] = useState(false);
+  const [remediationPreparing, setRemediationPreparing] = useState(false);
+  const [remediationApplying, setRemediationApplying] = useState(false);
+  const [remediationError, setRemediationError] = useState("");
+  const [remediationDismissOpen, setRemediationDismissOpen] = useState(false);
+  const remediationSessionKey = useMemo(
+    () =>
+      remediationSessionDismissKey({
+        project_id,
+        r2RefreshedAt: remediation?.r2_refreshed_at,
+      }),
+    [project_id, remediation?.r2_refreshed_at],
+  );
+  const [remediationSessionDismissed, setRemediationSessionDismissed] =
+    useState(() => wasRemediationSessionDismissed(remediationSessionKey));
 
   useEffect(() => {
     if (optimisticRestore && opId === optimisticRestore.opId) {
@@ -427,6 +529,75 @@ export function LegacyMigrationRestoreBanner({
   useEffect(() => {
     setRestoreIssueDismissed(wasRestoreIssueDismissed(restoreIssueKey));
   }, [restoreIssueKey]);
+
+  useEffect(() => {
+    setRemediationSessionDismissed(
+      wasRemediationSessionDismissed(remediationSessionKey),
+    );
+  }, [remediationSessionKey]);
+
+  useEffect(() => {
+    if (!legacyProjectId) return;
+    let canceled = false;
+    async function loadRemediation() {
+      setRemediationLoading(true);
+      setRemediationError("");
+      try {
+        const status =
+          await webapp_client.conat_client.hub.legacyMigration.getProjectRemediation(
+            { project_id },
+          );
+        if (!canceled) {
+          setRemediation(status);
+        }
+      } catch (err) {
+        if (!canceled) setRemediationError(`${err}`);
+      } finally {
+        if (!canceled) setRemediationLoading(false);
+      }
+    }
+    void loadRemediation();
+    return () => {
+      canceled = true;
+    };
+  }, [legacyProjectId, project_id]);
+
+  useEffect(() => {
+    if (
+      !remediation?.needs_remediation ||
+      remediation.dismissed_forever ||
+      remediation.prepared_at ||
+      remediationPreparing
+    ) {
+      return;
+    }
+    let canceled = false;
+    async function prepare() {
+      setRemediationPreparing(true);
+      setRemediationError("");
+      try {
+        const status =
+          await webapp_client.conat_client.hub.legacyMigration.prepareProjectRemediation(
+            { project_id },
+          );
+        if (!canceled) setRemediation(status);
+      } catch (err) {
+        if (!canceled) setRemediationError(`${err}`);
+      } finally {
+        if (!canceled) setRemediationPreparing(false);
+      }
+    }
+    void prepare();
+    return () => {
+      canceled = true;
+    };
+  }, [
+    project_id,
+    remediation?.dismissed_forever,
+    remediation?.needs_remediation,
+    remediation?.prepared_at,
+    remediationPreparing,
+  ]);
 
   useEffect(() => {
     setSummary(undefined);
@@ -490,7 +661,203 @@ export function LegacyMigrationRestoreBanner({
     summary?.status,
   ]);
 
+  async function openFinalArchiveSnapshot() {
+    try {
+      await redux
+        .getProjectActions(project_id)
+        ?.open_directory?.(FINAL_ARCHIVE_SNAPSHOT_PATH, true, true);
+    } catch (err) {
+      void message.error(`Unable to open final archive snapshot: ${err}`);
+    }
+  }
+
+  async function safelyCopyFinalArchive() {
+    setRemediationApplying(true);
+    setRemediationError("");
+    try {
+      const status =
+        await webapp_client.conat_client.hub.legacyMigration.applyProjectRemediation(
+          { project_id },
+        );
+      setRemediation(status);
+      void message.success(
+        "Final cocalc.com files were safely copied without overwriting newer local edits.",
+      );
+    } catch (err) {
+      setRemediationError(`${err}`);
+      void message.error(`${err}`);
+    } finally {
+      setRemediationApplying(false);
+    }
+  }
+
+  async function dismissRemediationForever() {
+    try {
+      const status =
+        await webapp_client.conat_client.hub.legacyMigration.dismissProjectRemediation(
+          { project_id, forever: true },
+        );
+      setRemediation(status);
+      setRemediationDismissOpen(false);
+      void message.success("Final archive warning dismissed for this project.");
+    } catch (err) {
+      void message.error(`${err}`);
+    }
+  }
+
+  function dismissRemediationForSession() {
+    markRemediationSessionDismissed(remediationSessionKey);
+    setRemediationSessionDismissed(true);
+    setRemediationDismissOpen(false);
+  }
+
   if (!legacyProjectId) return null;
+  if (
+    remediation?.needs_remediation &&
+    !remediation.dismissed_forever &&
+    !remediationSessionDismissed
+  ) {
+    const countsText = formatRemediationCounts(remediation);
+    const preparing = remediationLoading || remediationPreparing;
+    const applied = !!remediation.applied_at;
+    const diffFileCount = remediation.diff_file_count ?? 0;
+    return (
+      <>
+        <Alert
+          showIcon
+          type={applied ? "success" : "warning"}
+          message={
+            applied
+              ? "Final cocalc.com archive has been safely copied"
+              : "This restored project may be missing final cocalc.com changes"
+          }
+          description={
+            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+              <Text>
+                This project was restored before we refreshed its final
+                cocalc.com archive. Your current project has been preserved. The
+                final archive is available as a read-only snapshot, and the safe
+                copy action does not overwrite files that are newer in this
+                project.
+              </Text>
+              {remediation.restored_at || remediation.r2_refreshed_at ? (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Restored{" "}
+                  {formatTimestamp(remediation.restored_at) ||
+                    "at an unknown time"}
+                  {remediation.r2_refreshed_at
+                    ? `; final archive refreshed ${formatTimestamp(
+                        remediation.r2_refreshed_at,
+                      )}`
+                    : ""}
+                  .
+                </Text>
+              ) : null}
+              {preparing ? (
+                <Text type="secondary">
+                  Preparing the final archive snapshot and comparing files...
+                </Text>
+              ) : countsText ? (
+                <Text>
+                  Difference summary: <Text strong>{countsText}</Text>.
+                </Text>
+              ) : remediation.prepared_at ? (
+                <Text>Final archive comparison found no file differences.</Text>
+              ) : null}
+              {remediation.diff_files && remediation.diff_files.length > 0 ? (
+                <div
+                  style={{
+                    background: COLORS.GRAY_LLL,
+                    border: `1px solid ${COLORS.GRAY_LL}`,
+                    maxHeight: 180,
+                    overflow: "auto",
+                    padding: "8px 10px",
+                  }}
+                >
+                  {remediation.diff_files.map((entry) => (
+                    <div key={`${entry.kind}:${entry.path}`}>
+                      <Tag color={remediationDiffKindColor(entry.kind)}>
+                        {remediationDiffKindLabel(entry.kind)}
+                      </Tag>
+                      <Text code>{entry.path}</Text>
+                    </div>
+                  ))}
+                  {remediation.truncated ? (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      Showing the first{" "}
+                      {remediation.diff_files.length.toLocaleString()} of{" "}
+                      {diffFileCount.toLocaleString()} changed paths.
+                    </Text>
+                  ) : null}
+                </div>
+              ) : null}
+              {applied && remediation.safety_snapshot_name ? (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Before copying, we created safety snapshot{" "}
+                  <Text code>{remediation.safety_snapshot_name}</Text>.
+                </Text>
+              ) : null}
+              {remediationError ? (
+                <Text type="danger">{remediationError}</Text>
+              ) : null}
+              <Space wrap>
+                <Button
+                  disabled={!remediation.prepared_at}
+                  onClick={() => void openFinalArchiveSnapshot()}
+                >
+                  Open final archive snapshot
+                </Button>
+                <Button
+                  type="primary"
+                  disabled={!remediation.prepared_at || applied}
+                  loading={remediationApplying}
+                  onClick={() => void safelyCopyFinalArchive()}
+                >
+                  Safely copy final cocalc.com files
+                </Button>
+                <Button onClick={() => setRemediationDismissOpen(true)}>
+                  Dismiss
+                </Button>
+              </Space>
+            </Space>
+          }
+        />
+        <Modal
+          open={remediationDismissOpen}
+          title="Dismiss final archive warning?"
+          onCancel={() => setRemediationDismissOpen(false)}
+          footer={
+            <Space wrap>
+              <Button onClick={() => setRemediationDismissOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={dismissRemediationForSession}>
+                Just this session
+              </Button>
+              <Button
+                danger
+                type="primary"
+                onClick={() => void dismissRemediationForever()}
+              >
+                Dismiss forever
+              </Button>
+            </Space>
+          }
+        >
+          <Space direction="vertical">
+            <Text>
+              “Just this session” hides this banner until you reload the
+              project. “Dismiss forever” records that choice for this project.
+            </Text>
+            <Text type="secondary">
+              The read-only final archive snapshot remains available at{" "}
+              <Text code>{FINAL_ARCHIVE_SNAPSHOT_PATH}</Text>.
+            </Text>
+          </Space>
+        </Modal>
+      </>
+    );
+  }
   if (restoreIssueDismissed && failed) return null;
 
   async function reopenProject() {
