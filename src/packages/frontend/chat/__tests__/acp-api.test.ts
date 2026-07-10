@@ -554,7 +554,7 @@ describe("processAcpLLM", () => {
       chatStreams: new Set<string>(),
       getAllMessages: () => new Map<string, any>(),
       getCodexConfig: jest.fn(() => ({
-        model: "gpt-5.5",
+        model: "gpt-5.6-sol",
         serviceTier: "fast",
         sessionMode: "full-access",
       })),
@@ -588,7 +588,7 @@ describe("processAcpLLM", () => {
     const arg = mockStreamAcp.mock.calls[0][0];
     expect(arg.config).toEqual(
       expect.objectContaining({
-        model: "gpt-5.5",
+        model: "gpt-5.6-sol",
         serviceTier: "fast",
       }),
     );

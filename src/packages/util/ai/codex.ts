@@ -1,5 +1,5 @@
 export interface CodexReasoningLevel {
-  id: "low" | "medium" | "high" | "extra_high";
+  id: "low" | "medium" | "high" | "extra_high" | "max" | "ultra";
   label: string;
   description: string;
   default?: boolean;
@@ -65,10 +65,44 @@ export function resolveCodexSessionMode(
   return "auto";
 }
 
-export const DEFAULT_CODEX_MODEL_NAME = "gpt-5.5";
+export const DEFAULT_CODEX_MODEL_NAME = "gpt-5.6-sol";
 export const CODEX_FAST_SERVICE_TIER_REQUEST_VALUE = "fast";
 
-const DEFAULT_REASONING_LEVELS: CodexReasoningLevel[] = [
+const GPT_5_6_SOL_REASONING_LEVELS: CodexReasoningLevel[] = [
+  {
+    id: "low",
+    label: "Low",
+    description: "Fast responses with lighter reasoning.",
+    default: true,
+  },
+  {
+    id: "medium",
+    label: "Medium",
+    description: "Balances speed and reasoning depth for everyday tasks.",
+  },
+  {
+    id: "high",
+    label: "High",
+    description: "Greater reasoning depth for complex problems.",
+  },
+  {
+    id: "extra_high",
+    label: "Extra high",
+    description: "Extra high reasoning depth for complex problems.",
+  },
+  {
+    id: "max",
+    label: "Max",
+    description: "Maximum reasoning depth for the hardest problems.",
+  },
+  {
+    id: "ultra",
+    label: "Ultra",
+    description: "Maximum reasoning with automatic task delegation.",
+  },
+];
+
+const GPT_5_6_REASONING_LEVELS: CodexReasoningLevel[] = [
   {
     id: "low",
     label: "Low",
@@ -90,9 +124,19 @@ const DEFAULT_REASONING_LEVELS: CodexReasoningLevel[] = [
     label: "Extra high",
     description: "Extra high reasoning depth for complex problems.",
   },
+  {
+    id: "max",
+    label: "Max",
+    description: "Maximum reasoning depth for the hardest problems.",
+  },
+  {
+    id: "ultra",
+    label: "Ultra",
+    description: "Maximum reasoning with automatic task delegation.",
+  },
 ];
 
-const SPARK_REASONING_LEVELS: CodexReasoningLevel[] = [
+const GPT_5_6_LUNA_REASONING_LEVELS: CodexReasoningLevel[] = [
   {
     id: "low",
     label: "Low",
@@ -102,12 +146,41 @@ const SPARK_REASONING_LEVELS: CodexReasoningLevel[] = [
     id: "medium",
     label: "Medium",
     description: "Balances speed and reasoning depth for everyday tasks.",
+    default: true,
   },
   {
     id: "high",
     label: "High",
     description: "Greater reasoning depth for complex problems.",
+  },
+  {
+    id: "extra_high",
+    label: "Extra high",
+    description: "Extra high reasoning depth for complex problems.",
+  },
+  {
+    id: "max",
+    label: "Max",
+    description: "Maximum reasoning depth for the hardest problems.",
+  },
+];
+
+const DEFAULT_REASONING_LEVELS: CodexReasoningLevel[] = [
+  {
+    id: "low",
+    label: "Low",
+    description: "Fast responses with lighter reasoning.",
+  },
+  {
+    id: "medium",
+    label: "Medium",
+    description: "Balances speed and reasoning depth for everyday tasks.",
     default: true,
+  },
+  {
+    id: "high",
+    label: "High",
+    description: "Greater reasoning depth for complex problems.",
   },
   {
     id: "extra_high",
@@ -151,6 +224,24 @@ const FAST_SERVICE_TIER: CodexServiceTierInfo = {
 export const DEFAULT_CODEX_MODELS: CodexModelInfo[] = [
   {
     name: DEFAULT_CODEX_MODEL_NAME,
+    description: "Latest frontier agentic coding model.",
+    reasoning: GPT_5_6_SOL_REASONING_LEVELS,
+    serviceTiers: [FAST_SERVICE_TIER],
+  },
+  {
+    name: "gpt-5.6-terra",
+    description: "Balanced agentic coding model for everyday work.",
+    reasoning: GPT_5_6_REASONING_LEVELS,
+    serviceTiers: [FAST_SERVICE_TIER],
+  },
+  {
+    name: "gpt-5.6-luna",
+    description: "Fast and affordable agentic coding model.",
+    reasoning: GPT_5_6_LUNA_REASONING_LEVELS,
+    serviceTiers: [FAST_SERVICE_TIER],
+  },
+  {
+    name: "gpt-5.5",
     description:
       "Frontier model for complex coding, research, and real-world work.",
     reasoning: DEFAULT_REASONING_LEVELS,
@@ -169,16 +260,6 @@ export const DEFAULT_CODEX_MODELS: CodexModelInfo[] = [
     reasoning: DEFAULT_REASONING_LEVELS,
   },
   {
-    name: "gpt-5.3-codex",
-    description: "Coding-optimized model.",
-    reasoning: DEFAULT_REASONING_LEVELS,
-  },
-  {
-    name: "gpt-5.3-codex-spark",
-    description: "Ultra-fast coding model.",
-    reasoning: SPARK_REASONING_LEVELS,
-  },
-  {
     name: "gpt-5.2",
     description: "Optimized for professional work and long-running agents.",
     reasoning: GPT_5_2_REASONING_LEVELS,
@@ -189,7 +270,13 @@ const CODEX_MODEL_NAME_SET = new Set(
   DEFAULT_CODEX_MODELS.map((model) => model.name.toLowerCase()),
 );
 
-const CODEX_MODEL_ALIASES = new Set(["codex-agent", "openai-codex-agent"]);
+const CODEX_MODEL_ALIASES = new Set([
+  "codex-agent",
+  "gpt-5.6",
+  "openai-codex-agent",
+]);
+
+const CODEX_MODEL_CANONICAL_ALIASES = new Map([["gpt-5.6", "gpt-5.6-sol"]]);
 
 export function isCodexModelName(model?: string): boolean {
   if (typeof model !== "string") return false;
@@ -208,7 +295,8 @@ export function normalizeCodexServiceTier(
 }
 
 export function codexModelSupportsFastMode(model?: string): boolean {
-  const normalized = `${model ?? ""}`.trim();
+  const raw = `${model ?? ""}`.trim().toLowerCase();
+  const normalized = CODEX_MODEL_CANONICAL_ALIASES.get(raw) ?? raw;
   return (
     DEFAULT_CODEX_MODELS.find(
       (entry) => entry.name === normalized,

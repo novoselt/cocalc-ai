@@ -78,7 +78,9 @@ export function buildAutomationAcpConfig({
     reasoning === "low" ||
     reasoning === "medium" ||
     reasoning === "high" ||
-    reasoning === "extra_high"
+    reasoning === "extra_high" ||
+    reasoning === "max" ||
+    reasoning === "ultra"
   ) {
     next.reasoning = reasoning;
   }

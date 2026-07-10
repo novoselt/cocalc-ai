@@ -264,7 +264,7 @@ export const SPEC = {
     desc: "codex",
     path: join(binPath, "codex"),
     getVersion: "codex --version | awk '{print $2}'",
-    VERSION: "0.140.0",
+    VERSION: "0.144.1",
     platforms: ["linux"],
     script: () => getCodexInstallScript(SPEC.codex.VERSION),
     BASE: "https://github.com/sagemathinc/codex/releases",

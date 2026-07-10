@@ -88,12 +88,14 @@ function parseCodexReasoning(value?: string): CodexReasoningId | undefined {
     reasoning === "low" ||
     reasoning === "medium" ||
     reasoning === "high" ||
-    reasoning === "extra_high"
+    reasoning === "extra_high" ||
+    reasoning === "max" ||
+    reasoning === "ultra"
   ) {
     return reasoning;
   }
   throw new Error(
-    `invalid --reasoning '${value}'; expected low|medium|high|extra_high`,
+    `invalid --reasoning '${value}'; expected low|medium|high|extra_high|max|ultra`,
   );
 }
 

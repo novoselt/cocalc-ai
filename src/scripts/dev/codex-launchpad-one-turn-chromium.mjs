@@ -31,7 +31,7 @@ function usageAndExit(message, code = 1) {
       "  --smoke <name>             Built-in smoke/check: live-text, open-tabs, root-route",
       "  --smoke-path <path>        Project file path for smoke checks",
       "  --smoke-marker <text>      Marker text for smoke checks",
-      "  --model <id>               Codex model for fallback frontend send (default: gpt-5.5)",
+      "  --model <id>               Codex model for fallback frontend send (default: gpt-5.6-sol)",
       "  --reasoning <level>        Codex reasoning for fallback frontend send (default: low)",
       "  --session-mode <mode>      Codex session mode for fallback send (default: full-access)",
       "  --browser <id>             Use an existing browser session instead of spawning Chromium",
@@ -88,7 +88,7 @@ function parseArgs(argv) {
       process.env.COCALC_CODEX_ONE_TURN_SMOKE_PATH ??
       "/home/user/codex-live-text-smoke.md",
     smokeMarker: process.env.COCALC_CODEX_ONE_TURN_SMOKE_MARKER ?? "",
-    model: process.env.COCALC_CODEX_ONE_TURN_MODEL ?? "gpt-5.5",
+    model: process.env.COCALC_CODEX_ONE_TURN_MODEL ?? "gpt-5.6-sol",
     reasoning: process.env.COCALC_CODEX_ONE_TURN_REASONING ?? "low",
     sessionMode:
       process.env.COCALC_CODEX_ONE_TURN_SESSION_MODE ?? "full-access",
@@ -188,7 +188,7 @@ function parseArgs(argv) {
   options.smokeMarker =
     options.smokeMarker.trim() ||
     `cocalc-live-text-smoke-${new Date().toISOString()}`;
-  options.model = options.model.trim() || "gpt-5.5";
+  options.model = options.model.trim() || "gpt-5.6-sol";
   options.reasoning = options.reasoning.trim() || "low";
   options.sessionMode = options.sessionMode.trim() || "full-access";
   options.browserId = options.browserId.trim();

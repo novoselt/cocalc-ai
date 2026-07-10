@@ -36,7 +36,7 @@ describe("codex new chat defaults", () => {
     });
 
     expect(saved).toEqual({
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       reasoning: "extra_high",
       sessionMode: "workspace-write",
       serviceTier: "fast",
