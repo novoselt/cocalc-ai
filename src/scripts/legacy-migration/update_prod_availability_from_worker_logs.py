@@ -66,8 +66,9 @@ def iter_chunks(path: Path, chunk_size: int):
             yield chunk_index, chunk
 
 
-def sql_for(rows: list[dict[str, Any]]) -> str:
+def sql_for(rows: list[dict[str, Any]], source: str) -> str:
     payload = json.dumps(rows, separators=(",", ":"))
+    source_sql = "'" + source.replace("'", "''") + "'"
     return f"""WITH input AS (
   SELECT *
     FROM jsonb_to_recordset($json${payload}$json$::jsonb) AS x(
@@ -88,7 +89,7 @@ def sql_for(rows: list[dict[str, Any]]) -> str:
                 'r2_bucket', 'cocalc-projects',
                 'r2_key', i.artifact_key,
                 'r2_refreshed_at', NOW(),
-                'r2_refresh_source', 'archive-to-r2-worker-logs-20260709'
+                'r2_refresh_source', {source_sql}
               )
          ),
          updated=NOW()
@@ -186,6 +187,11 @@ def main() -> int:
         type=Path,
         default=Path("/home/user/cocalc-ai/src/packages/cli/dist/bin/cocalc.js"),
     )
+    parser.add_argument(
+        "--source",
+        default="archive-to-r2-worker-logs-20260709",
+        help="Value stored in artifact_manifest.r2_refresh_source.",
+    )
     args = parser.parse_args()
     args.workdir.mkdir(parents=True, exist_ok=True)
     results_path = args.workdir / "prod-db-update-results.jsonl"
@@ -206,7 +212,7 @@ def main() -> int:
             if chunk_index in completed:
                 totals["skipped_chunks"] += 1
                 continue
-            sql_path.write_text(sql_for(rows), encoding="utf-8")
+            sql_path.write_text(sql_for(rows, args.source), encoding="utf-8")
             started_chunk = time.time()
             proc = run_chunk(
                 {
