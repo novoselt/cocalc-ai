@@ -3,10 +3,10 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -18,6 +18,10 @@ import { data } from "@cocalc/backend/data";
 import { envToInt } from "@cocalc/backend/misc/env-to-number";
 import type {
   LroRef,
+  LegacyProjectArchiveRemediationApplyResult,
+  LegacyProjectArchiveRemediationDiffEntry,
+  LegacyProjectArchiveRemediationDiffKind,
+  LegacyProjectArchiveRemediationResult,
   ProjectArchiveEntry,
   ProjectArchiveRestoreResult,
   SignedProjectArchiveDownload,
@@ -48,6 +52,11 @@ const PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT = Math.max(
   0,
   envToInt("COCALC_PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT", 100),
 );
+const LEGACY_PROJECT_REMEDIATION_DIFF_REPORT_LIMIT = Math.max(
+  1,
+  envToInt("COCALC_LEGACY_PROJECT_REMEDIATION_DIFF_REPORT_LIMIT", 500),
+);
+const LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME = "final-cocalc-com-archive";
 const LEGACY_PROJECT_ARCHIVE_MANAGED_EXCLUDE_ROOTS = [
   ".cache/cocalc",
   ".local/share/cocalc",
@@ -88,6 +97,10 @@ type LegacyProjectArchiveDeps = {
   ) => void;
   markProjectArchiveInitialBackupExempt?: (project_id: string) => void;
   projectMountpoint: (project_id: string) => string;
+  createWritableSnapshot: (source: string, dest: string) => Promise<void>;
+  createReadonlySnapshot: (source: string, dest: string) => Promise<void>;
+  setSubvolumeReadonly: (path: string, readOnly: boolean) => Promise<void>;
+  deleteSubvolumeTree: (path?: string) => Promise<void>;
   invalidateProjectFsServer: (project_id: string) => void;
   touchProjectLastEdited: (project_id: string, reason: string) => void;
   logger: {
@@ -679,6 +692,157 @@ async function downloadSignedProjectArchive({
   return { bytes, sha256 };
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+function slashDir(path: string): string {
+  return path.endsWith("/") ? path : `${path}/`;
+}
+
+function emptyDiffCounts(): Record<
+  LegacyProjectArchiveRemediationDiffKind,
+  number
+> {
+  return { add: 0, update: 0, delete: 0, other: 0 };
+}
+
+function parseRsyncItemizedLine(
+  line: string,
+): LegacyProjectArchiveRemediationDiffEntry | undefined {
+  if (!line.trim()) return;
+  const tab = line.indexOf("\t");
+  const itemized = tab >= 0 ? line.slice(0, tab) : line.slice(0, 11);
+  const rawPath = tab >= 0 ? line.slice(tab + 1) : line.slice(12);
+  const normalizedPath = normalizeProjectArchiveMemberPath(rawPath);
+  if (!normalizedPath) return;
+  const kind: LegacyProjectArchiveRemediationDiffKind = itemized.startsWith(
+    "*deleting",
+  )
+    ? "delete"
+    : itemized.includes("+++++++++")
+      ? "add"
+      : itemized[0] === ">" || itemized[0] === "c"
+        ? "update"
+        : "other";
+  return { path: normalizedPath, kind, itemized: itemized.trim() };
+}
+
+async function runRsyncItemized({ args }: { args: string[] }): Promise<{
+  counts: Record<LegacyProjectArchiveRemediationDiffKind, number>;
+  files: LegacyProjectArchiveRemediationDiffEntry[];
+  file_count: number;
+  truncated: boolean;
+}> {
+  const counts = emptyDiffCounts();
+  const files: LegacyProjectArchiveRemediationDiffEntry[] = [];
+  let file_count = 0;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("rsync", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      let idx: number;
+      while ((idx = stdout.indexOf("\n")) >= 0) {
+        const line = stdout.slice(0, idx);
+        stdout = stdout.slice(idx + 1);
+        const parsed = parseRsyncItemizedLine(line);
+        if (parsed == null) continue;
+        file_count += 1;
+        counts[parsed.kind] += 1;
+        if (files.length < LEGACY_PROJECT_REMEDIATION_DIFF_REPORT_LIMIT) {
+          files.push(parsed);
+        }
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      for (const line of stdout.split(/\r?\n/g)) {
+        const parsed = parseRsyncItemizedLine(line);
+        if (parsed == null) continue;
+        file_count += 1;
+        counts[parsed.kind] += 1;
+        if (files.length < LEGACY_PROJECT_REMEDIATION_DIFF_REPORT_LIMIT) {
+          files.push(parsed);
+        }
+      }
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `rsync failed with exit code ${code}${stderr ? `: ${stderr}` : ""}`,
+        ),
+      );
+    });
+  });
+  return {
+    counts,
+    files,
+    file_count,
+    truncated: file_count > files.length,
+  };
+}
+
+async function createSelectedMemberList({
+  project_id,
+  archivePath,
+  exclude,
+  max_uncompressed_bytes,
+  lro,
+}: {
+  project_id: string;
+  archivePath: string;
+  exclude?: string[];
+  max_uncompressed_bytes?: number;
+  lro?: LroRef;
+}): Promise<{
+  memberListTmpDir: string;
+  member_list_path: string;
+  file_count: number;
+  uncompressed_bytes: number;
+  skipped_file_count: number;
+  skipped_bytes: number;
+  skipped_files: ProjectArchiveEntry[];
+}> {
+  const tmpRoot = archiveRestoreTmpRoot();
+  await mkdir(tmpRoot, { recursive: true });
+  const memberListTmpDir = await mkdtemp(join(tmpRoot, `${project_id}-list-`));
+  await chmod(memberListTmpDir, 0o711);
+  const member_list_path = join(memberListTmpDir, "selected-members.txt");
+  const scan = await scanProjectArchiveTar({
+    archivePath,
+    exclude,
+    member_list_path,
+    max_uncompressed_bytes,
+    lro,
+  });
+  if (exclude != null && scan.file_count === 0) {
+    throw new Error("legacy project archive matched no restorable files");
+  }
+  await chmod(member_list_path, 0o644);
+  return { memberListTmpDir, member_list_path, ...scan };
+}
+
+function defaultSafetySnapshotName(): string {
+  return `before-final-cocalc-com-safe-restore-${new Date().toISOString()}`;
+}
+
 export function createLegacyProjectArchiveHandlers({
   getOrEnsureVolume,
   getProjectQuota,
@@ -687,6 +851,10 @@ export function createLegacyProjectArchiveHandlers({
   setProjectArchiveRestoreActive,
   markProjectArchiveInitialBackupExempt,
   projectMountpoint,
+  createWritableSnapshot,
+  createReadonlySnapshot,
+  setSubvolumeReadonly,
+  deleteSubvolumeTree,
   invalidateProjectFsServer,
   touchProjectLastEdited,
   logger,
@@ -698,8 +866,213 @@ export function createLegacyProjectArchiveHandlers({
     temporary_quota_grace?: boolean;
     lro?: LroRef;
   }) => Promise<ProjectArchiveRestoreResult>;
+  prepareLegacyProjectArchiveRemediation: (opts: {
+    project_id: string;
+    download: SignedProjectArchiveDownload;
+    snapshot_name?: string;
+    max_uncompressed_bytes?: number;
+    lro?: LroRef;
+  }) => Promise<LegacyProjectArchiveRemediationResult>;
+  applyLegacyProjectArchiveRemediation: (opts: {
+    project_id: string;
+    snapshot_name?: string;
+    safety_snapshot_name?: string;
+    lro?: LroRef;
+  }) => Promise<LegacyProjectArchiveRemediationApplyResult>;
 } {
   return {
+    async prepareLegacyProjectArchiveRemediation({
+      project_id,
+      download,
+      snapshot_name = LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME,
+      max_uncompressed_bytes,
+      lro,
+    }: {
+      project_id: string;
+      download: SignedProjectArchiveDownload;
+      snapshot_name?: string;
+      max_uncompressed_bytes?: number;
+      lro?: LroRef;
+    }): Promise<LegacyProjectArchiveRemediationResult> {
+      const started = Date.now();
+      await getOrEnsureVolume(project_id);
+      const home = projectMountpoint(project_id);
+      const snapshotsDir = join(home, ".snapshots");
+      const finalSnapshotPath = join(snapshotsDir, snapshot_name);
+      let tmpDir: string | undefined;
+      let memberListTmpDir: string | undefined;
+      let workSnapshotPath: string | undefined;
+      const exclude = normalizeProjectArchivePathRoots(
+        LEGACY_PROJECT_ARCHIVE_MANAGED_EXCLUDE_ROOTS,
+      );
+      let downloaded: { bytes: number; sha256: string } | undefined;
+      let scan:
+        | {
+            file_count: number;
+            uncompressed_bytes: number;
+            skipped_file_count: number;
+            skipped_bytes: number;
+            skipped_files: ProjectArchiveEntry[];
+          }
+        | undefined;
+      let missingArchiveFiles: string[] = [];
+      try {
+        setProjectArchiveRestoreActive?.(project_id, true);
+        await mkdir(snapshotsDir, { recursive: true });
+        if (!(await pathExists(finalSnapshotPath))) {
+          const tmpRoot = archiveRestoreTmpRoot();
+          await mkdir(tmpRoot, { recursive: true });
+          tmpDir = await mkdtemp(join(tmpRoot, `${project_id}-remediation-`));
+          const archivePath = join(tmpDir, "project.tar.zst");
+          const extractedPath = join(tmpDir, "extracted");
+          await mkdir(extractedPath, { recursive: true });
+          downloaded = await downloadSignedProjectArchive({
+            download,
+            dest: archivePath,
+            lro,
+          });
+          const selected = await createSelectedMemberList({
+            project_id,
+            archivePath,
+            exclude,
+            max_uncompressed_bytes,
+            lro,
+          });
+          memberListTmpDir = selected.memberListTmpDir;
+          scan = selected;
+          const homeStat = await stat(home);
+          const extraction = await extractProjectArchiveTar({
+            archivePath,
+            dest: extractedPath,
+            owner: { uid: homeStat.uid, gid: homeStat.gid },
+            member_list_path: selected.member_list_path,
+            expected_file_count: selected.file_count,
+            expected_uncompressed_bytes: selected.uncompressed_bytes,
+            lro,
+          });
+          missingArchiveFiles = extraction.missing_archive_files;
+          workSnapshotPath = join(
+            snapshotsDir,
+            `.final-cocalc-com-archive-work-${randomUUID()}`,
+          );
+          await createWritableSnapshot(home, workSnapshotPath);
+          await rm(join(workSnapshotPath, ".snapshots"), {
+            recursive: true,
+            force: true,
+          });
+          await runRsyncItemized({
+            args: [
+              "-a",
+              "--delete",
+              "--exclude=.snapshots/",
+              slashDir(extractedPath),
+              slashDir(workSnapshotPath),
+            ],
+          });
+          await setSubvolumeReadonly(workSnapshotPath, true);
+          await rename(workSnapshotPath, finalSnapshotPath);
+          workSnapshotPath = undefined;
+        }
+        const diff = await runRsyncItemized({
+          args: [
+            "-ani",
+            "--delete",
+            "--exclude=.snapshots/",
+            slashDir(finalSnapshotPath),
+            slashDir(home),
+          ],
+        });
+        return {
+          snapshot_name,
+          snapshot_path: `.snapshots/${snapshot_name}`,
+          diff_counts: diff.counts,
+          diff_files: diff.files,
+          diff_file_count: diff.file_count,
+          truncated: diff.truncated,
+          file_count: scan?.file_count,
+          uncompressed_bytes: scan?.uncompressed_bytes,
+          skipped_file_count: scan?.skipped_file_count,
+          skipped_bytes: scan?.skipped_bytes,
+          missing_archive_file_count: missingArchiveFiles.length,
+          missing_archive_files: missingArchiveFiles.slice(
+            0,
+            LEGACY_RESTORE_FILE_FAILURE_REPORT_LIMIT,
+          ),
+          bytes: downloaded?.bytes,
+          sha256: downloaded?.sha256,
+          duration_ms: Date.now() - started,
+        };
+      } finally {
+        setProjectArchiveRestoreActive?.(project_id, false);
+        await deleteSubvolumeTree(workSnapshotPath).catch(() => {});
+        if (memberListTmpDir) {
+          await rm(memberListTmpDir, { recursive: true, force: true }).catch(
+            () => {},
+          );
+        }
+        if (tmpDir) {
+          await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+        }
+      }
+    },
+
+    async applyLegacyProjectArchiveRemediation({
+      project_id,
+      snapshot_name = LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME,
+      safety_snapshot_name = defaultSafetySnapshotName(),
+      lro: _lro,
+    }: {
+      project_id: string;
+      snapshot_name?: string;
+      safety_snapshot_name?: string;
+      lro?: LroRef;
+    }): Promise<LegacyProjectArchiveRemediationApplyResult> {
+      const started = Date.now();
+      await getOrEnsureVolume(project_id);
+      const home = projectMountpoint(project_id);
+      const finalSnapshotPath = join(home, ".snapshots", snapshot_name);
+      if (!(await pathExists(finalSnapshotPath))) {
+        throw new Error(
+          `final archive snapshot does not exist: ${snapshot_name}`,
+        );
+      }
+      const safetySnapshotPath = join(home, ".snapshots", safety_snapshot_name);
+      if (await pathExists(safetySnapshotPath)) {
+        throw new Error(
+          `safety snapshot already exists: ${safety_snapshot_name}`,
+        );
+      }
+      try {
+        setProjectArchiveRestoreActive?.(project_id, true);
+        await createReadonlySnapshot(home, safetySnapshotPath);
+        const applied = await runRsyncItemized({
+          args: [
+            "-ai",
+            "--update",
+            "--exclude=.snapshots/",
+            slashDir(finalSnapshotPath),
+            slashDir(home),
+          ],
+        });
+        invalidateProjectFsServer(project_id);
+        void touchProjectLastEdited(
+          project_id,
+          "legacy-migration-safe-restore",
+        );
+        return {
+          snapshot_name,
+          safety_snapshot_name,
+          applied_counts: applied.counts,
+          applied_files: applied.files,
+          applied_file_count: applied.file_count,
+          truncated: applied.truncated,
+          duration_ms: Date.now() - started,
+        };
+      } finally {
+        setProjectArchiveRestoreActive?.(project_id, false);
+      }
+    },
+
     async restoreProjectArchive({
       project_id,
       download,

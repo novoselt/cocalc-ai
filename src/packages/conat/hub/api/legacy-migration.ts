@@ -115,6 +115,69 @@ export interface LegacyMigrationRetryProjectRestoreResponse {
   restore_lro_op_id?: string | null;
 }
 
+export type LegacyMigrationProjectRemediationDiffKind =
+  | "add"
+  | "update"
+  | "delete"
+  | "other";
+
+export interface LegacyMigrationProjectRemediationDiffEntry {
+  path: string;
+  kind: LegacyMigrationProjectRemediationDiffKind;
+  itemized?: string;
+}
+
+export interface LegacyMigrationProjectRemediationStatusOptions {
+  account_id?: string;
+  project_id: string;
+}
+
+export interface LegacyMigrationProjectRemediationStatusResponse {
+  project_id: string;
+  legacy_project_id?: string | null;
+  needs_remediation: boolean;
+  reason?: string | null;
+  restored_at?: string | null;
+  r2_refreshed_at?: string | null;
+  snapshot_name?: string | null;
+  snapshot_path?: string | null;
+  diff_counts?: Record<LegacyMigrationProjectRemediationDiffKind, number>;
+  diff_files?: LegacyMigrationProjectRemediationDiffEntry[];
+  diff_file_count?: number;
+  truncated?: boolean;
+  prepared_at?: string | null;
+  applied_at?: string | null;
+  dismissed_forever?: boolean;
+  safety_snapshot_name?: string | null;
+}
+
+export interface LegacyMigrationPrepareProjectRemediationOptions {
+  account_id?: string;
+  project_id: string;
+  snapshot_name?: string;
+}
+
+export type LegacyMigrationPrepareProjectRemediationResponse =
+  LegacyMigrationProjectRemediationStatusResponse;
+
+export interface LegacyMigrationApplyProjectRemediationOptions {
+  account_id?: string;
+  project_id: string;
+  snapshot_name?: string;
+}
+
+export type LegacyMigrationApplyProjectRemediationResponse =
+  LegacyMigrationProjectRemediationStatusResponse;
+
+export interface LegacyMigrationDismissProjectRemediationOptions {
+  account_id?: string;
+  project_id: string;
+  forever?: boolean;
+}
+
+export type LegacyMigrationDismissProjectRemediationResponse =
+  LegacyMigrationProjectRemediationStatusResponse;
+
 export interface LegacyMigrationMembershipPlan {
   id: string;
   label: string;
@@ -381,6 +444,18 @@ export interface LegacyMigration {
   retryProjectRestore: (
     opts: LegacyMigrationRetryProjectRestoreOptions,
   ) => Promise<LegacyMigrationRetryProjectRestoreResponse>;
+  getProjectRemediation: (
+    opts: LegacyMigrationProjectRemediationStatusOptions,
+  ) => Promise<LegacyMigrationProjectRemediationStatusResponse>;
+  prepareProjectRemediation: (
+    opts: LegacyMigrationPrepareProjectRemediationOptions,
+  ) => Promise<LegacyMigrationPrepareProjectRemediationResponse>;
+  applyProjectRemediation: (
+    opts: LegacyMigrationApplyProjectRemediationOptions,
+  ) => Promise<LegacyMigrationApplyProjectRemediationResponse>;
+  dismissProjectRemediation: (
+    opts: LegacyMigrationDismissProjectRemediationOptions,
+  ) => Promise<LegacyMigrationDismissProjectRemediationResponse>;
   previewFinancialMigration: (
     opts?: LegacyMigrationFinancialPreviewOptions,
   ) => Promise<LegacyMigrationFinancialPreviewResponse>;
@@ -414,6 +489,10 @@ export const legacyMigration = {
   listProjects: authFirstRequireAccount,
   importProjects: authFirstRequireAccount,
   retryProjectRestore: authFirstRequireAccount,
+  getProjectRemediation: authFirstRequireAccount,
+  prepareProjectRemediation: authFirstRequireAccount,
+  applyProjectRemediation: authFirstRequireAccount,
+  dismissProjectRemediation: authFirstRequireAccount,
   previewFinancialMigration: authFirstRequireAccount,
   applyFinancialMigration: authFirstRequireAccount,
   configureFinancialMembershipRenewal: authFirstRequireAccount,
