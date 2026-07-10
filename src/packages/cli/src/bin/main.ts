@@ -170,6 +170,10 @@ import {
 } from "./commands/membership";
 import { registerBayCommand, type BayCommandDeps } from "./commands/bay";
 import {
+  registerLegacyMigrationCommand,
+  type LegacyMigrationCommandDeps,
+} from "./commands/legacy-migration";
+import {
   registerNotificationsCommand,
   type NotificationsCommandDeps,
 } from "./commands/notifications";
@@ -2895,6 +2899,14 @@ const bayCommandDeps = {
 } satisfies BayCommandDeps;
 
 registerBayCommand(program, bayCommandDeps);
+
+const legacyMigrationCommandDeps = {
+  withContext,
+  hubCallByName,
+  isValidUUID,
+} satisfies LegacyMigrationCommandDeps;
+
+registerLegacyMigrationCommand(program, legacyMigrationCommandDeps);
 
 const rocketCommandDeps = {
   runCommand,

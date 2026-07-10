@@ -160,6 +160,15 @@ export interface LegacyMigrationPrepareProjectRemediationOptions {
 export type LegacyMigrationPrepareProjectRemediationResponse =
   LegacyMigrationProjectRemediationStatusResponse;
 
+export interface LegacyMigrationAdminPrepareProjectRemediationOptions {
+  account_id?: string;
+  project_id: string;
+  snapshot_name?: string;
+}
+
+export type LegacyMigrationAdminPrepareProjectRemediationResponse =
+  LegacyMigrationProjectRemediationStatusResponse;
+
 export interface LegacyMigrationApplyProjectRemediationOptions {
   account_id?: string;
   project_id: string;
@@ -450,6 +459,9 @@ export interface LegacyMigration {
   prepareProjectRemediation: (
     opts: LegacyMigrationPrepareProjectRemediationOptions,
   ) => Promise<LegacyMigrationPrepareProjectRemediationResponse>;
+  adminPrepareProjectRemediation: (
+    opts: LegacyMigrationAdminPrepareProjectRemediationOptions,
+  ) => Promise<LegacyMigrationAdminPrepareProjectRemediationResponse>;
   applyProjectRemediation: (
     opts: LegacyMigrationApplyProjectRemediationOptions,
   ) => Promise<LegacyMigrationApplyProjectRemediationResponse>;
@@ -491,6 +503,7 @@ export const legacyMigration = {
   retryProjectRestore: authFirstRequireAccount,
   getProjectRemediation: authFirstRequireAccount,
   prepareProjectRemediation: authFirstRequireAccount,
+  adminPrepareProjectRemediation: authFirstRequireAccount,
   applyProjectRemediation: authFirstRequireAccount,
   dismissProjectRemediation: authFirstRequireAccount,
   previewFinancialMigration: authFirstRequireAccount,

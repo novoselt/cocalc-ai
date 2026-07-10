@@ -21,7 +21,6 @@ import type {
   LegacyMigrationProjectRemediationStatusResponse,
 } from "@cocalc/conat/hub/api/legacy-migration";
 import { redux, useProjectFromMap } from "@cocalc/frontend/app-framework";
-import { Tooltip } from "@cocalc/frontend/components";
 import { isDismissed, progressBarStatus } from "@cocalc/frontend/lro/utils";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS } from "@cocalc/util/theme";
@@ -491,8 +490,6 @@ export function LegacyMigrationRestoreBanner({
   );
   const [remediation, setRemediation] =
     useState<LegacyMigrationProjectRemediationStatusResponse>();
-  const [remediationLoading, setRemediationLoading] = useState(false);
-  const [remediationPreparing, setRemediationPreparing] = useState(false);
   const [remediationApplying, setRemediationApplying] = useState(false);
   const [remediationError, setRemediationError] = useState("");
   const [remediationDismissOpen, setRemediationDismissOpen] = useState(false);
@@ -540,7 +537,6 @@ export function LegacyMigrationRestoreBanner({
   useEffect(() => {
     let canceled = false;
     async function loadRemediation() {
-      setRemediationLoading(true);
       setRemediationError("");
       try {
         const status =
@@ -552,8 +548,6 @@ export function LegacyMigrationRestoreBanner({
         }
       } catch (err) {
         if (!canceled) setRemediationError(`${err}`);
-      } finally {
-        if (!canceled) setRemediationLoading(false);
       }
     }
     void loadRemediation();
@@ -561,43 +555,6 @@ export function LegacyMigrationRestoreBanner({
       canceled = true;
     };
   }, [project_id]);
-
-  useEffect(() => {
-    if (
-      !remediation?.needs_remediation ||
-      remediation.dismissed_forever ||
-      remediation.prepared_at ||
-      remediationPreparing
-    ) {
-      return;
-    }
-    let canceled = false;
-    async function prepare() {
-      setRemediationPreparing(true);
-      setRemediationError("");
-      try {
-        const status =
-          await webapp_client.conat_client.hub.legacyMigration.prepareProjectRemediation(
-            { project_id },
-          );
-        if (!canceled) setRemediation(status);
-      } catch (err) {
-        if (!canceled) setRemediationError(`${err}`);
-      } finally {
-        if (!canceled) setRemediationPreparing(false);
-      }
-    }
-    void prepare();
-    return () => {
-      canceled = true;
-    };
-  }, [
-    project_id,
-    remediation?.dismissed_forever,
-    remediation?.needs_remediation,
-    remediation?.prepared_at,
-    remediationPreparing,
-  ]);
 
   useEffect(() => {
     setSummary(undefined);
@@ -671,23 +628,6 @@ export function LegacyMigrationRestoreBanner({
     }
   }
 
-  async function prepareFinalArchiveComparison() {
-    setRemediationPreparing(true);
-    setRemediationError("");
-    try {
-      const status =
-        await webapp_client.conat_client.hub.legacyMigration.prepareProjectRemediation(
-          { project_id },
-        );
-      setRemediation(status);
-    } catch (err) {
-      setRemediationError(`${err}`);
-      void message.error(`${err}`);
-    } finally {
-      setRemediationPreparing(false);
-    }
-  }
-
   async function safelyCopyFinalArchive() {
     setRemediationApplying(true);
     setRemediationError("");
@@ -730,11 +670,11 @@ export function LegacyMigrationRestoreBanner({
 
   if (
     remediation?.needs_remediation &&
+    remediation.prepared_at &&
     !remediation.dismissed_forever &&
     !remediationSessionDismissed
   ) {
     const countsText = formatRemediationCounts(remediation);
-    const preparing = remediationLoading || remediationPreparing;
     const applied = !!remediation.applied_at;
     const diffFileCount = remediation.diff_file_count ?? 0;
     return (
@@ -769,17 +709,13 @@ export function LegacyMigrationRestoreBanner({
                   .
                 </Text>
               ) : null}
-              {preparing ? (
-                <Text type="secondary">
-                  Preparing the final archive snapshot and comparing files...
-                </Text>
-              ) : countsText ? (
+              {countsText ? (
                 <Text>
                   Difference summary: <Text strong>{countsText}</Text>.
                 </Text>
-              ) : remediation.prepared_at ? (
+              ) : (
                 <Text>Final archive comparison found no file differences.</Text>
-              ) : null}
+              )}
               {remediation.diff_files && remediation.diff_files.length > 0 ? (
                 <div
                   style={{
@@ -817,44 +753,17 @@ export function LegacyMigrationRestoreBanner({
                 <Text type="danger">{remediationError}</Text>
               ) : null}
               <Space wrap>
-                {!remediation.prepared_at ? (
-                  <Button
-                    loading={remediationPreparing}
-                    onClick={() => void prepareFinalArchiveComparison()}
-                  >
-                    Prepare final archive comparison
-                  </Button>
-                ) : null}
-                <Tooltip
-                  title={
-                    remediation.prepared_at
-                      ? undefined
-                      : "Prepare the final archive comparison first."
-                  }
+                <Button onClick={() => void openFinalArchiveSnapshot()}>
+                  Open final archive snapshot
+                </Button>
+                <Button
+                  type="primary"
+                  disabled={applied}
+                  loading={remediationApplying}
+                  onClick={() => void safelyCopyFinalArchive()}
                 >
-                  <Button
-                    disabled={!remediation.prepared_at}
-                    onClick={() => void openFinalArchiveSnapshot()}
-                  >
-                    Open final archive snapshot
-                  </Button>
-                </Tooltip>
-                <Tooltip
-                  title={
-                    remediation.prepared_at
-                      ? undefined
-                      : "Prepare the final archive comparison first."
-                  }
-                >
-                  <Button
-                    type="primary"
-                    disabled={!remediation.prepared_at || applied}
-                    loading={remediationApplying}
-                    onClick={() => void safelyCopyFinalArchive()}
-                  >
-                    Safely copy final cocalc.com files
-                  </Button>
-                </Tooltip>
+                  Safely copy final cocalc.com files
+                </Button>
                 <Button onClick={() => setRemediationDismissOpen(true)}>
                   Dismiss
                 </Button>
@@ -896,24 +805,6 @@ export function LegacyMigrationRestoreBanner({
           </Space>
         </Modal>
       </>
-    );
-  }
-  if (legacyProjectId && remediationError) {
-    return (
-      <Alert
-        showIcon
-        type="error"
-        message="Unable to check final legacy archive status"
-        description={
-          <Space direction="vertical">
-            <Text>
-              This project was restored from cocalc.com, but CoCalc could not
-              check whether a newer final archive is available.
-            </Text>
-            <Text code>{remediationError}</Text>
-          </Space>
-        }
-      />
     );
   }
   if (!legacyProjectId) return null;
