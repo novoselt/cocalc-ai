@@ -4,7 +4,6 @@
  */
 
 import getStrategies from "@cocalc/database/settings/get-sso-strategies";
-import { KUCALC_COCALC_COM } from "@cocalc/util/db-schema/site-defaults";
 import type { Strategy } from "@cocalc/util/types/sso";
 import { ServerSettings, getServerSettings } from "./server-settings";
 import siteURL from "./site-url";
@@ -68,10 +67,6 @@ export default async function getCustomize(
 
       legacy_migration_enabled: !!settings.legacy_migration_enabled,
       legacy_migration_page_message: settings.legacy_migration_page_message,
-
-      // additionally restrict showing landing pages only in hosted CoCalc mode
-      landingPages:
-        !!settings.landing_pages && settings.kucalc === KUCALC_COCALC_COM,
 
       googleAnalytics: settings.google_analytics,
 

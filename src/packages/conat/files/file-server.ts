@@ -98,6 +98,46 @@ export interface ProjectArchiveEntry {
   mtime?: string;
 }
 
+export type LegacyProjectArchiveRemediationDiffKind =
+  | "add"
+  | "update"
+  | "delete"
+  | "other";
+
+export interface LegacyProjectArchiveRemediationDiffEntry {
+  path: string;
+  kind: LegacyProjectArchiveRemediationDiffKind;
+  itemized?: string;
+}
+
+export interface LegacyProjectArchiveRemediationResult {
+  snapshot_name: string;
+  snapshot_path: string;
+  diff_counts: Record<LegacyProjectArchiveRemediationDiffKind, number>;
+  diff_files: LegacyProjectArchiveRemediationDiffEntry[];
+  diff_file_count: number;
+  truncated: boolean;
+  file_count?: number;
+  uncompressed_bytes?: number;
+  skipped_file_count?: number;
+  skipped_bytes?: number;
+  missing_archive_file_count?: number;
+  missing_archive_files?: string[];
+  bytes?: number;
+  sha256?: string;
+  duration_ms: number;
+}
+
+export interface LegacyProjectArchiveRemediationApplyResult {
+  snapshot_name: string;
+  safety_snapshot_name: string;
+  applied_counts: Record<LegacyProjectArchiveRemediationDiffKind, number>;
+  applied_files: LegacyProjectArchiveRemediationDiffEntry[];
+  applied_file_count: number;
+  truncated: boolean;
+  duration_ms: number;
+}
+
 export interface PathCopyArchiveRoot {
   archive_path: string;
   source_path: string;
@@ -275,6 +315,19 @@ export interface Fileserver {
     temporary_quota_grace?: boolean;
     lro?: LroRef;
   }) => Promise<ProjectArchiveRestoreResult>;
+  prepareLegacyProjectArchiveRemediation: (opts: {
+    project_id: string;
+    download: SignedProjectArchiveDownload;
+    snapshot_name?: string;
+    max_uncompressed_bytes?: number;
+    lro?: LroRef;
+  }) => Promise<LegacyProjectArchiveRemediationResult>;
+  applyLegacyProjectArchiveRemediation: (opts: {
+    project_id: string;
+    snapshot_name?: string;
+    safety_snapshot_name?: string;
+    lro?: LroRef;
+  }) => Promise<LegacyProjectArchiveRemediationApplyResult>;
   // staged restore helpers (filesystem-specific implementation)
   beginRestoreStaging: (opts: {
     project_id: string;

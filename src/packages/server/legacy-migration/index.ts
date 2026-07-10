@@ -5,10 +5,15 @@
 
 import getPool from "@cocalc/database/pool";
 import { getTransactionClient, type PoolClient } from "@cocalc/database/pool";
+import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import getLogger from "@cocalc/backend/logger";
 import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
 import { MAX_INTEREST_TIMEOUT } from "@cocalc/conat/core/client";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import {
+  ensureProjectFileServerClientReady,
+  getProjectFileServerClient,
+} from "@cocalc/server/conat/file-server-client";
 import createProject, {
   createProjectWithInternalProjectId,
 } from "@cocalc/server/projects/create";
@@ -36,6 +41,7 @@ import {
 import { setProjectLabels } from "@cocalc/server/projects/labels";
 import { createLro } from "@cocalc/server/lro/lro-db";
 import { triggerLegacyMigrationProjectRestoreWorker } from "@cocalc/server/legacy-migration/restore-worker";
+import { issueSignedObjectDownload } from "@cocalc/server/project-backup/r2";
 import {
   LEGACY_PROJECT_RESTORE_LRO_KIND,
   LEGACY_RESTORE_ERROR_LABEL,
@@ -64,9 +70,11 @@ import type {
   LegacyMigrationAdminProjectSummary,
   LegacyMigrationAdminUnlinkLegacyAccountOptions,
   LegacyMigrationAdminUnlinkLegacyAccountResponse,
+  LegacyMigrationApplyProjectRemediationOptions,
   LegacyMigrationConfigureFinancialRenewalHomeBayOptions,
   LegacyMigrationConfigureFinancialRenewalOptions,
   LegacyMigrationConfigureFinancialRenewalResponse,
+  LegacyMigrationDismissProjectRemediationOptions,
   LegacyMigrationEntitlementCredit,
   LegacyMigrationFinancialAccount,
   LegacyMigrationFinancialMembershipGrantHomeBayOptions,
@@ -80,6 +88,11 @@ import type {
   LegacyMigrationListProjectsOptions,
   LegacyMigrationListProjectsResponse,
   LegacyMigrationMatchedAccount,
+  LegacyMigrationPrepareProjectRemediationOptions,
+  LegacyMigrationProjectRemediationDiffEntry,
+  LegacyMigrationProjectRemediationDiffKind,
+  LegacyMigrationProjectRemediationStatusOptions,
+  LegacyMigrationProjectRemediationStatusResponse,
   LegacyMigrationProjectRestoreMode,
   LegacyMigrationProjectRestoreStatus,
   LegacyMigrationProjectSummary,
@@ -98,6 +111,8 @@ const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
 const PROJECT_ARCHIVE_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const LEGACY_FINANCIAL_HOME_BAY_TIMEOUT_MS = MAX_INTEREST_TIMEOUT + 30_000;
+const DEFAULT_LEGACY_PROJECTS_BUCKET = "cocalc-projects";
+const LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME = "final-cocalc-com-archive";
 export const MAX_LEGACY_PROJECT_IMPORTS_PER_REQUEST = 50;
 const LEGACY_STRIPE_UPGRADE_PLAN_IDS = new Set([
   "standard",
@@ -733,6 +748,27 @@ function manifestCompressedBytes(
     ["archive", "object_bytes"],
     ["artifact", "bytes"],
   ]);
+}
+
+function manifestSha256(
+  manifest: Record<string, any> | null | undefined,
+): string | undefined {
+  if (manifest == null || typeof manifest !== "object") return undefined;
+  const paths = [
+    ["sha256"],
+    ["content_sha256"],
+    ["artifact_sha256"],
+    ["compressed_sha256"],
+    ["object_sha256"],
+    ["archive", "sha256"],
+    ["archive", "compressed_sha256"],
+    ["artifact", "sha256"],
+  ];
+  for (const path of paths) {
+    const value = clean(nestedValue(manifest, path));
+    if (value) return value.toLowerCase();
+  }
+  return undefined;
 }
 
 function legacyArchiveAvailable(
@@ -3943,8 +3979,7 @@ async function importOneProject({
     return {
       legacy_project_id,
       status: "failed",
-      error:
-        "The archived files for this legacy project are not available yet. Try again after the cocalc.com archive has been uploaded.",
+      error: "No recoverable archive is available for this legacy project.",
     };
   }
   const created = await pool.query<{ legacy_project_id: string }>(
@@ -4351,4 +4386,487 @@ async function importedProjectForAccount({
     [legacy_project_id, account_id],
   );
   return rows[0] ?? null;
+}
+
+type ProjectRemediationMetadata = {
+  prepared_at?: string | null;
+  applied_at?: string | null;
+  dismissed_at?: string | null;
+  dismissed_forever?: boolean;
+  snapshot_name?: string | null;
+  snapshot_path?: string | null;
+  safety_snapshot_name?: string | null;
+  diff_counts?: Record<string, number>;
+  diff_files?: LegacyMigrationProjectRemediationDiffEntry[];
+  diff_file_count?: number;
+  truncated?: boolean;
+  file_count?: number;
+  uncompressed_bytes?: number;
+  skipped_file_count?: number;
+  missing_archive_file_count?: number;
+  duration_ms?: number;
+};
+
+type ProjectRemediationRow = LegacyProjectRow & {
+  project_id: string;
+  owner_account_id: string;
+};
+
+function isoTimestamp(value: unknown): string | undefined {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+  }
+  const cleaned = clean(value);
+  if (!cleaned) return undefined;
+  const ms = Date.parse(cleaned);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
+
+function manifestArchiveRefreshedAt(
+  manifest: Record<string, any> | null | undefined,
+): string | undefined {
+  if (manifest == null || typeof manifest !== "object") return undefined;
+  const paths = [
+    ["r2_refreshed_at"],
+    ["r2_uploaded_at"],
+    ["r2_last_modified"],
+    ["r2_last_modified_at"],
+    ["artifact_refreshed_at"],
+    ["artifact_uploaded_at"],
+    ["uploaded_at"],
+    ["last_modified"],
+    ["last_modified_at"],
+    ["updated_at"],
+    ["created_at"],
+    ["generated_at"],
+    ["archive", "r2_refreshed_at"],
+    ["archive", "uploaded_at"],
+    ["archive", "updated_at"],
+    ["archive", "created_at"],
+    ["archive", "generated_at"],
+    ["artifact", "uploaded_at"],
+    ["artifact", "updated_at"],
+    ["artifact", "created_at"],
+    ["artifact", "generated_at"],
+  ];
+  for (const path of paths) {
+    const ts = isoTimestamp(nestedValue(manifest, path));
+    if (ts) return ts;
+  }
+  return undefined;
+}
+
+function remediationMetadata(
+  row: Pick<LegacyProjectRow, "restore_result">,
+): ProjectRemediationMetadata {
+  const value = row.restore_result?.final_archive_remediation;
+  return value && typeof value === "object"
+    ? (value as ProjectRemediationMetadata)
+    : {};
+}
+
+function emptyRemediationCounts(): Record<
+  LegacyMigrationProjectRemediationDiffKind,
+  number
+> {
+  return { add: 0, update: 0, delete: 0, other: 0 };
+}
+
+function normalizeRemediationCounts(
+  counts: unknown,
+): Record<LegacyMigrationProjectRemediationDiffKind, number> | undefined {
+  if (!counts || typeof counts !== "object") return undefined;
+  const normalized = emptyRemediationCounts();
+  for (const kind of Object.keys(
+    normalized,
+  ) as LegacyMigrationProjectRemediationDiffKind[]) {
+    const value = Number((counts as Record<string, unknown>)[kind]);
+    normalized[kind] =
+      Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  }
+  return normalized;
+}
+
+function remediationNeed(row: ProjectRemediationRow): {
+  needs_remediation: boolean;
+  reason?: string;
+  restored_at?: string;
+  r2_refreshed_at?: string;
+} {
+  const restoredAt = isoTimestamp(row.restore_result?.restored_at);
+  const r2RefreshedAt = manifestArchiveRefreshedAt(row.artifact_manifest);
+  if (row.restore_status !== "restored") {
+    return {
+      needs_remediation: false,
+      reason: "legacy project restore has not completed",
+      restored_at: restoredAt,
+      r2_refreshed_at: r2RefreshedAt,
+    };
+  }
+  if (!legacyArchiveAvailable(row)) {
+    return {
+      needs_remediation: false,
+      reason: "final legacy archive is not available",
+      restored_at: restoredAt,
+      r2_refreshed_at: r2RefreshedAt,
+    };
+  }
+  if (!restoredAt) {
+    return {
+      needs_remediation: false,
+      reason: "original restore timestamp is missing",
+      r2_refreshed_at: r2RefreshedAt,
+    };
+  }
+  if (!r2RefreshedAt) {
+    return {
+      needs_remediation: false,
+      reason: "final archive timestamp is missing",
+      restored_at: restoredAt,
+    };
+  }
+  const restoredMs = Date.parse(restoredAt);
+  const refreshedMs = Date.parse(r2RefreshedAt);
+  const needs =
+    Number.isFinite(restoredMs) &&
+    Number.isFinite(refreshedMs) &&
+    restoredMs < refreshedMs;
+  return {
+    needs_remediation: needs,
+    reason: needs
+      ? "project was restored before its final cocalc.com archive was refreshed"
+      : "project restore is not older than the final archive",
+    restored_at: restoredAt,
+    r2_refreshed_at: r2RefreshedAt,
+  };
+}
+
+function remediationResponse(
+  row: ProjectRemediationRow,
+): LegacyMigrationProjectRemediationStatusResponse {
+  const meta = remediationMetadata(row);
+  const need = remediationNeed(row);
+  return {
+    project_id: row.project_id,
+    legacy_project_id: row.legacy_project_id,
+    needs_remediation: need.needs_remediation,
+    reason: need.reason ?? null,
+    restored_at: need.restored_at ?? null,
+    r2_refreshed_at: need.r2_refreshed_at ?? null,
+    snapshot_name: meta.snapshot_name ?? null,
+    snapshot_path: meta.snapshot_path ?? null,
+    diff_counts: normalizeRemediationCounts(meta.diff_counts),
+    diff_files: Array.isArray(meta.diff_files) ? meta.diff_files : undefined,
+    diff_file_count:
+      typeof meta.diff_file_count === "number"
+        ? meta.diff_file_count
+        : undefined,
+    truncated: !!meta.truncated,
+    prepared_at: meta.prepared_at ?? null,
+    applied_at: meta.applied_at ?? null,
+    dismissed_forever: !!meta.dismissed_forever,
+    safety_snapshot_name: meta.safety_snapshot_name ?? null,
+  };
+}
+
+async function getR2Credentials(): Promise<{
+  endpoint: string;
+  accessKey: string;
+  secretKey: string;
+}> {
+  const settings = await getServerSettings();
+  const accountId = clean((settings as any).r2_account_id);
+  const accessKey = clean((settings as any).r2_access_key_id);
+  const secretKey = clean((settings as any).r2_secret_access_key);
+  const endpoint =
+    clean(process.env.COCALC_LEGACY_PROJECTS_R2_ENDPOINT) ??
+    (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined);
+  if (!endpoint || !accessKey || !secretKey) {
+    throw new Error("missing R2 credentials for legacy project remediation");
+  }
+  return { endpoint, accessKey, secretKey };
+}
+
+async function remediationProjectForAccount({
+  account_id,
+  project_id,
+}: {
+  account_id: string;
+  project_id: string;
+}): Promise<ProjectRemediationRow | null> {
+  if (!isValidUUID(project_id)) {
+    throw Error("invalid project_id");
+  }
+  await ensureLegacyMigrationProjectImportSchema();
+  const { rows } = await getPool().query<ProjectRemediationRow>(
+    `
+    SELECT p.legacy_project_id,
+           p.title,
+           p.description,
+           p.owner_legacy_account_id,
+           p.legacy_users,
+           p.hidden,
+           p.last_edited,
+           p.last_active,
+           p.artifact_bucket,
+           p.artifact_key,
+           p.manifest_key,
+           p.artifact_status,
+           p.artifact_manifest,
+           i.project_id,
+           i.owner_account_id,
+           i.status,
+           i.restore_mode,
+           i.restore_status,
+           i.restore_error,
+           i.restore_lro_op_id,
+           i.restore_progress,
+           i.restore_result
+      FROM legacy_migration_project_imports i
+      JOIN legacy_migration_projects p
+        ON p.legacy_project_id=i.legacy_project_id
+      JOIN projects active_import_project
+        ON active_import_project.project_id=i.project_id
+       AND COALESCE(active_import_project.deleted, false)=false
+     WHERE i.project_id=$1
+       AND (
+         i.owner_account_id=$2::uuid
+         OR COALESCE(active_import_project.users, '{}'::jsonb) ? $2::text
+       )
+     LIMIT 1
+    `,
+    [project_id, account_id],
+  );
+  return rows[0] ?? null;
+}
+
+async function updateProjectRemediationMetadata({
+  project_id,
+  metadata,
+}: {
+  project_id: string;
+  metadata: ProjectRemediationMetadata;
+}): Promise<void> {
+  await getPool().query(
+    `
+    UPDATE legacy_migration_project_imports
+       SET restore_result=jsonb_set(
+             COALESCE(restore_result, '{}'::jsonb),
+             '{final_archive_remediation}',
+             $2::jsonb,
+             true
+           ),
+           updated=NOW()
+     WHERE project_id=$1
+    `,
+    [project_id, JSON.stringify(metadata)],
+  );
+}
+
+async function connectProjectFileServerForRemediation({
+  project_id,
+  account_id,
+}: {
+  project_id: string;
+  account_id: string;
+}) {
+  const client = await getProjectFileServerClient({
+    project_id,
+    account_id,
+    timeout: PROJECT_ARCHIVE_TIMEOUT_MS,
+  });
+  await ensureProjectFileServerClientReady({
+    project_id,
+    client,
+    maxWait: 60_000,
+  });
+  return client;
+}
+
+function assertProjectNeedsRemediation(row: ProjectRemediationRow): void {
+  const need = remediationNeed(row);
+  if (!need.needs_remediation) {
+    throw new Error(need.reason ?? "project does not need remediation");
+  }
+}
+
+export async function getProjectRemediation({
+  account_id,
+  project_id,
+}: LegacyMigrationProjectRemediationStatusOptions): Promise<LegacyMigrationProjectRemediationStatusResponse> {
+  await assertLegacyMigrationEnabled();
+  if (!account_id) {
+    throw Error("account_id is required");
+  }
+  const row = await remediationProjectForAccount({ account_id, project_id });
+  if (row == null) {
+    return {
+      project_id,
+      needs_remediation: false,
+      reason: "not a linked legacy project",
+    };
+  }
+  return remediationResponse(row);
+}
+
+export async function prepareProjectRemediation({
+  account_id,
+  project_id,
+  snapshot_name,
+}: LegacyMigrationPrepareProjectRemediationOptions): Promise<LegacyMigrationProjectRemediationStatusResponse> {
+  await assertLegacyMigrationEnabled();
+  if (!account_id) {
+    throw Error("account_id is required");
+  }
+  const row = await remediationProjectForAccount({ account_id, project_id });
+  if (row == null) {
+    throw new Error("legacy project import is not available for this account");
+  }
+  assertProjectNeedsRemediation(row);
+  const bucket =
+    clean(row.artifact_bucket) ??
+    clean(process.env.COCALC_LEGACY_PROJECTS_BUCKET) ??
+    DEFAULT_LEGACY_PROJECTS_BUCKET;
+  const key = clean(row.artifact_key);
+  if (!key) {
+    throw new Error("legacy project archive key is missing");
+  }
+  const { endpoint, accessKey, secretKey } = await getR2Credentials();
+  const signed = issueSignedObjectDownload({
+    endpoint,
+    accessKey,
+    secretKey,
+    bucket,
+    key,
+  });
+  const client = await connectProjectFileServerForRemediation({
+    project_id: row.project_id,
+    account_id,
+  });
+  const result = await client.prepareLegacyProjectArchiveRemediation({
+    project_id: row.project_id,
+    snapshot_name:
+      clean(snapshot_name) ?? LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME,
+    download: {
+      ...signed,
+      bucket,
+      key,
+      bytes: manifestCompressedBytes(row.artifact_manifest),
+      sha256: manifestSha256(row.artifact_manifest),
+    },
+  });
+  const current = remediationMetadata(row);
+  const metadata: ProjectRemediationMetadata = {
+    ...current,
+    dismissed_forever: false,
+    prepared_at: new Date().toISOString(),
+    snapshot_name: result.snapshot_name,
+    snapshot_path: result.snapshot_path,
+    diff_counts: result.diff_counts,
+    diff_files: result.diff_files,
+    diff_file_count: result.diff_file_count,
+    truncated: result.truncated,
+    file_count: result.file_count,
+    uncompressed_bytes: result.uncompressed_bytes,
+    skipped_file_count: result.skipped_file_count,
+    missing_archive_file_count: result.missing_archive_file_count,
+    duration_ms: result.duration_ms,
+  };
+  await updateProjectRemediationMetadata({
+    project_id: row.project_id,
+    metadata,
+  });
+  return remediationResponse({
+    ...row,
+    restore_result: {
+      ...(row.restore_result ?? {}),
+      final_archive_remediation: metadata,
+    },
+  });
+}
+
+export async function applyProjectRemediation({
+  account_id,
+  project_id,
+  snapshot_name,
+}: LegacyMigrationApplyProjectRemediationOptions): Promise<LegacyMigrationProjectRemediationStatusResponse> {
+  await assertLegacyMigrationEnabled();
+  if (!account_id) {
+    throw Error("account_id is required");
+  }
+  const row = await remediationProjectForAccount({ account_id, project_id });
+  if (row == null) {
+    throw new Error("legacy project import is not available for this account");
+  }
+  assertProjectNeedsRemediation(row);
+  const meta = remediationMetadata(row);
+  const effectiveSnapshotName =
+    clean(snapshot_name) ??
+    clean(meta.snapshot_name) ??
+    LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME;
+  const client = await connectProjectFileServerForRemediation({
+    project_id: row.project_id,
+    account_id,
+  });
+  const result = await client.applyLegacyProjectArchiveRemediation({
+    project_id: row.project_id,
+    snapshot_name: effectiveSnapshotName,
+  });
+  const metadata: ProjectRemediationMetadata = {
+    ...meta,
+    applied_at: new Date().toISOString(),
+    snapshot_name: result.snapshot_name,
+    safety_snapshot_name: result.safety_snapshot_name,
+    diff_counts: result.applied_counts,
+    diff_files: result.applied_files,
+    diff_file_count: result.applied_file_count,
+    truncated: result.truncated,
+  };
+  await updateProjectRemediationMetadata({
+    project_id: row.project_id,
+    metadata,
+  });
+  return remediationResponse({
+    ...row,
+    restore_result: {
+      ...(row.restore_result ?? {}),
+      final_archive_remediation: metadata,
+    },
+  });
+}
+
+export async function dismissProjectRemediation({
+  account_id,
+  project_id,
+  forever,
+}: LegacyMigrationDismissProjectRemediationOptions): Promise<LegacyMigrationProjectRemediationStatusResponse> {
+  await assertLegacyMigrationEnabled();
+  if (!account_id) {
+    throw Error("account_id is required");
+  }
+  const row = await remediationProjectForAccount({ account_id, project_id });
+  if (row == null) {
+    throw new Error("legacy project import is not available for this account");
+  }
+  if (forever) {
+    const metadata: ProjectRemediationMetadata = {
+      ...remediationMetadata(row),
+      dismissed_forever: true,
+      dismissed_at: new Date().toISOString(),
+    };
+    await updateProjectRemediationMetadata({
+      project_id: row.project_id,
+      metadata,
+    });
+    return remediationResponse({
+      ...row,
+      restore_result: {
+        ...(row.restore_result ?? {}),
+        final_archive_remediation: metadata,
+      },
+    });
+  }
+  return remediationResponse(row);
 }

@@ -180,6 +180,29 @@ EOF
 EOF
 }
 
+ensure_rsyslog_output_files() {
+  if ! getent passwd syslog >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! getent group adm >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local file
+  for file in \
+    /var/log/syslog \
+    /var/log/auth.log \
+    /var/log/kern.log \
+    /var/log/mail.log \
+    /var/log/mail.err \
+    /var/log/ufw.log \
+    /var/log/cloud-init.log; do
+    if [[ ! -e "$file" ]]; then
+      run install -o syslog -g adm -m 0640 /dev/null "$file"
+    fi
+  done
+}
+
 configure_system_logging() {
   if [[ "$CONFIGURE_SYSTEM_LOGGING" -ne 1 ]]; then
     return 0
@@ -194,6 +217,7 @@ SystemMaxFileSize=128M
 MaxRetentionSec=7day
 EOF
 
+  ensure_rsyslog_output_files
   configure_rsyslog_logrotate
 
   if command -v systemctl >/dev/null 2>&1; then

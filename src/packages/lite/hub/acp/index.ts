@@ -149,6 +149,7 @@ import {
   finalizeAcpTurnLease,
   getAcpTurnLease,
   heartbeatAcpTurnLease,
+  countRunningAcpTurnLeasesForWorker,
   listRecentTerminalAcpTurnLeases,
   listRunningAcpTurnLeases,
   startAcpTurnLease,
@@ -157,12 +158,15 @@ import {
 import {
   cancelQueuedAcpJob,
   claimNextQueuedAcpJobForThread,
+  countQueuedAcpJobsForThread,
   countRunningAcpJobsForWorker,
   decodeAcpJobRequest,
   enqueueAcpJob,
   getAcpJob,
   getAcpJobByOpId,
-  listQueuedAcpJobs,
+  hasQueuedOrRunningAcpJobs,
+  hasRunningAcpJobForThread,
+  listQueuedAcpJobThreadKeys,
   listAcpJobsByRecoveryParent,
   listQueuedAcpJobsForThread,
   listRunningAcpJobs,
@@ -336,6 +340,10 @@ const ACP_COMMIT_SLOW_MS = envNumber("COCALC_ACP_COMMIT_SLOW_MS", 50);
 const ACP_SYNCDB_SAVE_SLOW_MS = envNumber(
   "COCALC_ACP_SYNCDB_SAVE_SLOW_MS",
   100,
+);
+const ACP_TERMINAL_STORAGE_TIMEOUT_MS = envNumber(
+  "COCALC_ACP_TERMINAL_STORAGE_TIMEOUT_MS",
+  15_000,
 );
 const ACP_LOG_PERSIST_SLOW_MS = envNumber(
   "COCALC_ACP_LOG_PERSIST_SLOW_MS",
@@ -632,12 +640,7 @@ function acpThreadHasRunningJob({
   path: string;
   thread_id: string;
 }): boolean {
-  return listRunningAcpJobs().some(
-    (row) =>
-      row.project_id === project_id &&
-      row.path === path &&
-      row.thread_id === thread_id,
-  );
+  return hasRunningAcpJobForThread({ project_id, path, thread_id });
 }
 
 function liveWorkerOwnerIds(host_id: string): Set<string> {
@@ -1678,6 +1681,7 @@ export class ChatStreamWriter {
   private timeTravelDisposePromise?: Promise<void>;
   private leaseFinalized = false;
   private lastActivityAt = Date.now();
+  private terminalStorageTimeoutMs = ACP_TERMINAL_STORAGE_TIMEOUT_MS;
   private patchflowVersionBaseline?: number;
   private patchflowVersionLatest?: number;
   private patchflowVersionPeak?: number;
@@ -1859,6 +1863,7 @@ export class ChatStreamWriter {
         state,
         err,
       });
+      this.noteProjectStorageFailure(err, `thread-state:${state}`);
     }
   }
 
@@ -1952,6 +1957,100 @@ export class ChatStreamWriter {
         err,
       });
     }
+  }
+
+  private noteProjectStorageFailure(err: unknown, phase: string): boolean {
+    if (!isProjectAcpStorageError(err)) {
+      return false;
+    }
+    this.syncdbError ??= err;
+    logger.warn("ACP turn project storage failure", {
+      chatKey: this.chatKey,
+      project_id: this.metadata.project_id,
+      path: this.metadata.path,
+      message_id: this.metadata.message_id,
+      thread_id: this.metadata.thread_id,
+      phase,
+      code: acpStorageFailureCode(err),
+      err,
+    });
+    return true;
+  }
+
+  private markTerminalStorageFailure(err: unknown, phase: string): void {
+    if (
+      shouldCompleteAcpTurnAfterTerminalStorageFailure({
+        err,
+        phase,
+        finishedBy: this.finishedBy,
+        terminalRowAlreadyPersisted: this.terminalRowAlreadyPersisted(),
+      })
+    ) {
+      logger.warn(
+        "ACP terminal storage timed out after summary row was verified; completing turn with degraded storage",
+        {
+          chatKey: this.chatKey,
+          project_id: this.metadata.project_id,
+          path: this.metadata.path,
+          message_id: this.metadata.message_id,
+          thread_id: this.metadata.thread_id,
+          phase,
+          code: acpStorageFailureCode(err),
+        },
+      );
+      // Preserve the successfully written summary instead of replacing it with
+      // a generic storage error. Record the storage failure after finalization
+      // so cleanup will not block on the same stuck save chain.
+      this.finalizeFinishedTurn();
+      this.noteProjectStorageFailure(err, phase);
+      return;
+    }
+    this.noteProjectStorageFailure(err, phase);
+    this.finished = true;
+    this.finishedBy = "error";
+    this.lastErrorText =
+      "Project storage became unavailable while saving this Codex turn. Free project disk space and retry.";
+    this.finalizeFinishedTurn();
+  }
+
+  private throwProjectStorageFailureIfPresent(phase: string): void {
+    if (
+      this.syncdbError != null &&
+      isProjectAcpStorageError(this.syncdbError)
+    ) {
+      logger.warn("ACP terminal persistence stopped after storage failure", {
+        chatKey: this.chatKey,
+        project_id: this.metadata.project_id,
+        path: this.metadata.path,
+        message_id: this.metadata.message_id,
+        thread_id: this.metadata.thread_id,
+        phase,
+        code: acpStorageFailureCode(this.syncdbError),
+      });
+      throw this.syncdbError;
+    }
+  }
+
+  private async runTerminalPersistence(
+    source: "summary" | "error",
+  ): Promise<void> {
+    await withTimeout({
+      phase: `terminal-${source}`,
+      timeoutMs: this.terminalStorageTimeoutMs,
+      promise: (async () => {
+        await this.waitForLiveLogFlush();
+        await this.waitForLivePreviewFlush();
+        await this.persistLog();
+        // Live turn output is rendered from the ACP log/DKV path. Reserve
+        // durable .chat writes for terminal state so patchflow history stays
+        // bounded regardless of streamed word count.
+        await this.ensureTerminalChatCommitApplied(source);
+        await this.waitForScheduledSyncdbSaves({
+          throwOnProjectStorageFailure: true,
+        });
+        this.throwProjectStorageFailureIfPresent(`terminal-${source}:complete`);
+      })(),
+    });
   }
 
   private upsertSessionRegistry(
@@ -2287,6 +2386,7 @@ export class ChatStreamWriter {
       this.observePatchflowVersions("init:save");
     } catch (err) {
       logger.warn("chat syncdb save failed during init", err);
+      this.noteProjectStorageFailure(err, "init-save");
     }
   }
 
@@ -2318,25 +2418,38 @@ export class ChatStreamWriter {
     const isLastMessage =
       message.type === "summary" || message.type === "error" || this.finished;
     if (isLastMessage) {
-      await this.waitForLiveLogFlush();
-      await this.waitForLivePreviewFlush();
-      await this.persistLog();
-      // Live turn output is rendered from the ACP log/DKV path. Reserve
-      // durable .chat writes for terminal state so patchflow history stays
-      // bounded regardless of streamed word count.
-      await this.ensureTerminalChatCommitApplied(
-        message.type === "error" ? "error" : "summary",
-      );
-      await this.waitForScheduledSyncdbSaves();
-      this.finalizeFinishedTurn();
-      if (shouldAutoRotate) {
-        await maybeAutoRotateChatStore({
-          client: this.client,
-          chatPath: this.resolveChatFilePath(),
-          chatKey: this.chatKey,
-          projectId: this.metadata.project_id,
-          chatPathKey: this.metadata.path,
-        });
+      let terminalPersistenceFailed = false;
+      try {
+        await this.runTerminalPersistence(
+          message.type === "error" ? "error" : "summary",
+        );
+      } catch (err) {
+        terminalPersistenceFailed = true;
+        this.markTerminalStorageFailure(
+          err,
+          message.type === "error" ? "terminal-error" : "terminal-summary",
+        );
+      }
+      if (!terminalPersistenceFailed) {
+        this.finalizeFinishedTurn();
+        if (shouldAutoRotate) {
+          try {
+            await maybeAutoRotateChatStore({
+              client: this.client,
+              chatPath: this.resolveChatFilePath(),
+              chatKey: this.chatKey,
+              projectId: this.metadata.project_id,
+              chatPathKey: this.metadata.path,
+            });
+          } catch (err) {
+            logger.warn("chat autorotate failed after terminal ACP turn", {
+              chatKey: this.chatKey,
+              project_id: this.metadata.project_id,
+              path: this.metadata.path,
+              err,
+            });
+          }
+        }
       }
     }
   }
@@ -2793,36 +2906,46 @@ export class ChatStreamWriter {
   }
 
   private terminalRowAlreadyPersisted(): boolean {
-    if (!this.syncdb) return false;
-    const current = this.findChatRow();
-    if (current == null) return false;
-    const generating = this.recordField<boolean>(current, "generating");
-    if (generating !== false) return false;
-    const history = this.historyToArray(this.recordField(current, "history"));
-    const currentContent = history[0]?.content ?? "";
-    const currentThreadId =
-      this.recordField<string>(current, "acp_thread_id") ?? null;
-    const currentStartedAtMs = this.normalizeStartedAtMs(
-      this.recordField<number | string>(current, "acp_started_at_ms"),
-    );
-    const currentInterrupted =
-      this.recordField<boolean>(current, "acp_interrupted") === true;
-    let currentUsageJson = "null";
     try {
-      currentUsageJson = JSON.stringify(
-        this.recordField<any>(current, "acp_usage") ?? null,
+      if (!this.syncdb) return false;
+      const current = this.findChatRow();
+      if (current == null) return false;
+      const generating = this.recordField<boolean>(current, "generating");
+      if (generating !== false) return false;
+      const history = this.historyToArray(this.recordField(current, "history"));
+      const currentContent = history[0]?.content ?? "";
+      const currentThreadId =
+        this.recordField<string>(current, "acp_thread_id") ?? null;
+      const currentStartedAtMs = this.normalizeStartedAtMs(
+        this.recordField<number | string>(current, "acp_started_at_ms"),
       );
-    } catch {
-      currentUsageJson = "null";
+      const currentInterrupted =
+        this.recordField<boolean>(current, "acp_interrupted") === true;
+      let currentUsageJson = "null";
+      try {
+        currentUsageJson = JSON.stringify(
+          this.recordField<any>(current, "acp_usage") ?? null,
+        );
+      } catch {
+        currentUsageJson = "null";
+      }
+      return (
+        currentContent === (this.content ?? "") &&
+        currentThreadId === this.threadId &&
+        currentStartedAtMs ===
+          this.normalizeStartedAtMs(this.metadata.started_at_ms) &&
+        currentInterrupted === this.interruptNotified &&
+        currentUsageJson === this.usageFingerprint()
+      );
+    } catch (err) {
+      logger.warn("failed to verify terminal chat row", {
+        chatKey: this.chatKey,
+        path: this.metadata.path,
+        message_id: this.metadata.message_id,
+        err,
+      });
+      return false;
     }
-    return (
-      currentContent === (this.content ?? "") &&
-      currentThreadId === this.threadId &&
-      currentStartedAtMs ===
-        this.normalizeStartedAtMs(this.metadata.started_at_ms) &&
-      currentInterrupted === this.interruptNotified &&
-      currentUsageJson === this.usageFingerprint()
-    );
   }
 
   private resolveInlineCodeLinks(): InlineCodeLink[] | undefined {
@@ -2910,21 +3033,44 @@ export class ChatStreamWriter {
             durationMs: roundMs(performance.now() - saveStarted),
             err,
           });
+          if (this.noteProjectStorageFailure(err, `syncdb-save:${reason}`)) {
+            throw err;
+          }
         }
       });
     this.saveChain = saveTask;
     return saveTask;
   }
 
-  private async waitForScheduledSyncdbSaves(): Promise<void> {
+  private async waitForScheduledSyncdbSaves({
+    throwOnProjectStorageFailure = false,
+  }: {
+    throwOnProjectStorageFailure?: boolean;
+  } = {}): Promise<void> {
+    if (
+      this.syncdbError != null &&
+      isProjectAcpStorageError(this.syncdbError)
+    ) {
+      if (throwOnProjectStorageFailure) {
+        throw this.syncdbError;
+      }
+      return;
+    }
     try {
       // Detached ACP workers can drain immediately after a turn finishes. If we
       // return before queued save() calls settle, the final generating=false
       // assistant row can be lost even though the thread-state row reached
       // "complete" in memory.
       await this.saveChain;
-    } catch {
+    } catch (err) {
       // Individual save failures are already logged in scheduleSyncdbSave.
+      if (
+        throwOnProjectStorageFailure &&
+        (this.noteProjectStorageFailure(err, "syncdb-save-wait") ||
+          isProjectAcpStorageError(err))
+      ) {
+        throw err;
+      }
     }
   }
 
@@ -2972,6 +3118,7 @@ export class ChatStreamWriter {
         fullContent,
         err,
       });
+      this.noteProjectStorageFailure(err, `syncdb-commit:${reason}`);
       return false;
     }
     const syncDurationMs = performance.now() - started;
@@ -3147,7 +3294,14 @@ export class ChatStreamWriter {
       try {
         await this.waitForScheduledSyncdbSaves();
         await this.syncdbPromise;
-        await this.syncdb!.save();
+        if (
+          !(
+            this.syncdbError != null &&
+            isProjectAcpStorageError(this.syncdbError)
+          )
+        ) {
+          await this.syncdb!.save();
+        }
       } catch (err) {
         logger.warn("failed to save chat syncdb", err);
       }
@@ -3623,6 +3777,9 @@ export class ChatStreamWriter {
       }
     } catch (err) {
       logger.warn("failed to persist acp log", err);
+      if (this.noteProjectStorageFailure(err, "activity-log-persist")) {
+        throw err;
+      }
     }
   }
 
@@ -4004,6 +4161,33 @@ function hasRecentChatWriterForTurn(
   return false;
 }
 
+function liveAgentRunningForTurn(turn: {
+  thread_id?: string | null;
+  session_id?: string | null;
+}): boolean | undefined {
+  const ids = new Set<string>();
+  const threadId = `${turn.thread_id ?? ""}`.trim();
+  const sessionId = `${turn.session_id ?? ""}`.trim();
+  if (threadId) ids.add(threadId);
+  if (sessionId) ids.add(sessionId);
+  if (ids.size === 0) {
+    return undefined;
+  }
+  let inspected = false;
+  for (const agent of agents.values()) {
+    if (typeof agent.hasRunningTurn !== "function") {
+      continue;
+    }
+    inspected = true;
+    for (const id of ids) {
+      if (agent.hasRunningTurn(id)) {
+        return true;
+      }
+    }
+  }
+  return inspected ? false : undefined;
+}
+
 function runningTurnMatchesTarget(
   row: {
     project_id: string;
@@ -4051,6 +4235,85 @@ type InterruptedAcpTurnTarget = {
   account_id?: string | null;
   owner_instance_id?: string | null;
 };
+
+export function finalizeInterruptedAcpBackendState({
+  turn,
+  recoveryReason = INTERRUPT_STATUS_TEXT,
+}: {
+  turn: InterruptedAcpTurnTarget;
+  recoveryReason?: string;
+}): boolean {
+  const project_id = `${turn.project_id ?? ""}`.trim();
+  const path = `${turn.path ?? ""}`.trim();
+  if (!project_id || !path) return false;
+  const target = {
+    project_id,
+    path,
+    message_date: `${turn.message_date ?? ""}`.trim() || undefined,
+    message_id: `${turn.message_id ?? ""}`.trim() || undefined,
+    thread_id: `${turn.thread_id ?? ""}`.trim() || undefined,
+  };
+  let finalized = false;
+
+  try {
+    for (const row of listRunningAcpJobs()) {
+      if (runningTurnMatchesTarget(row, target)) {
+        setAcpJobState({
+          op_id: row.op_id,
+          state: "interrupted",
+          error: recoveryReason,
+          worker_id: row.worker_id ?? turn.owner_instance_id ?? undefined,
+        });
+        finalized = true;
+      }
+    }
+  } catch (err) {
+    logger.warn("failed to finalize interrupted ACP jobs", {
+      project_id,
+      path,
+      target,
+      err,
+    });
+  }
+
+  try {
+    for (const row of listRunningAcpTurnLeases()) {
+      if (runningTurnMatchesTarget(row, target)) {
+        finalizeAcpTurnLease({
+          key: {
+            project_id: row.project_id,
+            path: row.path,
+            message_date: row.message_date,
+          },
+          state: "aborted",
+          reason: recoveryReason,
+          owner_instance_id:
+            turn.owner_instance_id ?? row.owner_instance_id ?? undefined,
+        });
+        finalized = true;
+      }
+    }
+  } catch (err) {
+    logger.warn("failed to finalize interrupted ACP turn leases", {
+      project_id,
+      path,
+      target,
+      err,
+    });
+  }
+
+  if (finalized) {
+    logger.warn("finalized interrupted ACP backend state", {
+      project_id,
+      path,
+      message_date: target.message_date,
+      message_id: target.message_id,
+      thread_id: target.thread_id,
+      recoveryReason,
+    });
+  }
+  return finalized;
+}
 
 async function persistQueuedAcpPayloadsAsActivityLog({
   client,
@@ -4186,210 +4449,194 @@ export async function repairInterruptedAcpTurn({
   }
 
   let repairedChat = false;
-  await withChatSyncDB({
-    client,
-    project_id,
-    path,
-    fn: async (syncdb) => {
-      const current =
-        findRecoverableChatRow(syncdb as any, {
-          message_date,
-          sender_id,
-          message_id: message_id || undefined,
-        }) ??
-        (thread_id
-          ? findLatestGeneratingChatRow(syncdb, thread_id)
-          : undefined);
-      const currentThreadId =
-        `${syncdbField<string>(current, "thread_id") ?? thread_id}`.trim() ||
-        undefined;
-      const currentMessageId =
-        `${syncdbField<string>(current, "message_id") ?? message_id}`.trim() ||
-        undefined;
-      const currentState = currentThreadId
-        ? syncdbField<string>(
-            preferredThreadStateRow(syncdb, currentThreadId),
-            "state",
-          )
-        : undefined;
-      const generating = syncdbField<boolean>(current, "generating") === true;
-      const interrupted =
-        syncdbField<boolean>(current, "acp_interrupted") === true;
-      let touched = false;
+  let chatRepairError: unknown;
+  try {
+    await withChatSyncDB({
+      client,
+      project_id,
+      path,
+      fn: async (syncdb) => {
+        const current =
+          findRecoverableChatRow(syncdb as any, {
+            message_date,
+            sender_id,
+            message_id: message_id || undefined,
+          }) ??
+          (thread_id
+            ? findLatestGeneratingChatRow(syncdb, thread_id)
+            : undefined);
+        const currentThreadId =
+          `${syncdbField<string>(current, "thread_id") ?? thread_id}`.trim() ||
+          undefined;
+        const currentMessageId =
+          `${syncdbField<string>(current, "message_id") ?? message_id}`.trim() ||
+          undefined;
+        const currentState = currentThreadId
+          ? syncdbField<string>(
+              preferredThreadStateRow(syncdb, currentThreadId),
+              "state",
+            )
+          : undefined;
+        const generating = syncdbField<boolean>(current, "generating") === true;
+        const interrupted =
+          syncdbField<boolean>(current, "acp_interrupted") === true;
+        let touched = false;
 
-      if (
-        current != null &&
-        (generating || !interrupted || currentState === "running")
-      ) {
-        const history = appendRestartNotice(syncdbField(current, "history"));
-        const patchedHistory =
-          interruptedNotice === RESTART_INTERRUPTED_NOTICE
-            ? history
-            : (() => {
-                const currentHistory = historyToArray(
-                  syncdbField(current, "history"),
-                );
-                if (currentHistory.length === 0) {
-                  return [];
-                }
-                const first = currentHistory[0] as MessageHistory;
-                const content =
-                  typeof first?.content === "string"
-                    ? first.content
-                    : `${(first as any)?.content ?? ""}`;
-                if (/conversation interrupted/i.test(content)) {
-                  return currentHistory;
-                }
-                const sep = content.trim().length > 0 ? "\n\n" : "";
-                return [
-                  {
-                    ...first,
-                    content: `${content}${sep}${interruptedNotice}`,
-                  },
-                  ...currentHistory.slice(1),
-                ];
-              })();
-        const rowDate =
-          normalizeIsoDateString(syncdbField<string>(current, "date")) ??
-          normalizeIsoDateString(message_date) ??
-          message_date;
-        const rowSender =
-          syncdbField<string>(current, "sender_id") ?? sender_id;
-        const update: any = {
-          event: "chat",
-          date: rowDate,
-          sender_id: rowSender,
-          generating: false,
-          acp_interrupted: true,
-          acp_interrupted_reason: interruptedReasonId,
-          acp_interrupted_text: interruptedNotice,
-        };
-        if (currentMessageId) {
-          update.message_id = currentMessageId;
-        }
-        if (currentThreadId) {
-          update.thread_id = currentThreadId;
-        }
-        const logMessageId = currentMessageId || message_id;
-        if (currentThreadId && logMessageId) {
-          const refs = deriveAcpLogRefs({
-            project_id,
-            path,
-            thread_id: currentThreadId,
-            message_id: logMessageId,
-          });
-          update.acp_log_store = refs.store;
-          update.acp_log_key = refs.key;
-          update.acp_log_subject = refs.subject;
-        }
-        const parentMessageId = syncdbField<string>(
-          current,
-          "parent_message_id",
-        );
-        if (parentMessageId) {
-          update.parent_message_id = parentMessageId;
-        }
-        const acpAccountId =
-          syncdbField<string>(current, "acp_account_id") ??
-          (`${turn.account_id ?? ""}`.trim() || undefined);
-        if (acpAccountId) {
-          update.acp_account_id = acpAccountId;
-        }
-        const startedAtMs = syncdbField<number>(current, "acp_started_at_ms");
-        if (Number.isFinite(startedAtMs)) {
-          update.acp_started_at_ms = startedAtMs;
-        }
-        if (patchedHistory.length > 0) {
-          update.history = patchedHistory;
-        } else if (queuedPayloads.length > 0) {
-          const recoveredContent = getInterruptedResponseMarkdown(
-            queuedPayloads,
-            interruptedNotice,
-          );
-          if (recoveredContent) {
-            update.history = [
-              {
-                author_id: rowSender,
-                content: recoveredContent,
-                date: rowDate,
-              },
-            ];
+        if (
+          current != null &&
+          (generating || !interrupted || currentState === "running")
+        ) {
+          const history = appendRestartNotice(syncdbField(current, "history"));
+          const patchedHistory =
+            interruptedNotice === RESTART_INTERRUPTED_NOTICE
+              ? history
+              : (() => {
+                  const currentHistory = historyToArray(
+                    syncdbField(current, "history"),
+                  );
+                  if (currentHistory.length === 0) {
+                    return [];
+                  }
+                  const first = currentHistory[0] as MessageHistory;
+                  const content =
+                    typeof first?.content === "string"
+                      ? first.content
+                      : `${(first as any)?.content ?? ""}`;
+                  if (/conversation interrupted/i.test(content)) {
+                    return currentHistory;
+                  }
+                  const sep = content.trim().length > 0 ? "\n\n" : "";
+                  return [
+                    {
+                      ...first,
+                      content: `${content}${sep}${interruptedNotice}`,
+                    },
+                    ...currentHistory.slice(1),
+                  ];
+                })();
+          const rowDate =
+            normalizeIsoDateString(syncdbField<string>(current, "date")) ??
+            normalizeIsoDateString(message_date) ??
+            message_date;
+          const rowSender =
+            syncdbField<string>(current, "sender_id") ?? sender_id;
+          const update: any = {
+            event: "chat",
+            date: rowDate,
+            sender_id: rowSender,
+            generating: false,
+            acp_interrupted: true,
+            acp_interrupted_reason: interruptedReasonId,
+            acp_interrupted_text: interruptedNotice,
+          };
+          if (currentMessageId) {
+            update.message_id = currentMessageId;
           }
+          if (currentThreadId) {
+            update.thread_id = currentThreadId;
+          }
+          const logMessageId = currentMessageId || message_id;
+          if (currentThreadId && logMessageId) {
+            const refs = deriveAcpLogRefs({
+              project_id,
+              path,
+              thread_id: currentThreadId,
+              message_id: logMessageId,
+            });
+            update.acp_log_store = refs.store;
+            update.acp_log_key = refs.key;
+            update.acp_log_subject = refs.subject;
+          }
+          const parentMessageId = syncdbField<string>(
+            current,
+            "parent_message_id",
+          );
+          if (parentMessageId) {
+            update.parent_message_id = parentMessageId;
+          }
+          const acpAccountId =
+            syncdbField<string>(current, "acp_account_id") ??
+            (`${turn.account_id ?? ""}`.trim() || undefined);
+          if (acpAccountId) {
+            update.acp_account_id = acpAccountId;
+          }
+          const startedAtMs = syncdbField<number>(current, "acp_started_at_ms");
+          if (Number.isFinite(startedAtMs)) {
+            update.acp_started_at_ms = startedAtMs;
+          }
+          if (patchedHistory.length > 0) {
+            update.history = patchedHistory;
+          } else if (queuedPayloads.length > 0) {
+            const recoveredContent = getInterruptedResponseMarkdown(
+              queuedPayloads,
+              interruptedNotice,
+            );
+            if (recoveredContent) {
+              update.history = [
+                {
+                  author_id: rowSender,
+                  content: recoveredContent,
+                  date: rowDate,
+                },
+              ];
+            }
+          }
+          syncdb.set(update);
+          touched = true;
         }
-        syncdb.set(update);
-        touched = true;
-      }
 
-      if (currentThreadId) {
-        replaceThreadScopedRow(
-          syncdb,
-          THREAD_STATE_EVENT,
-          currentThreadId,
-          buildThreadStateRecord({
-            thread_id: currentThreadId,
-            state: "interrupted",
-            active_message_id: currentMessageId,
-            updated_at: new Date().toISOString(),
-            schema_version: THREAD_STATE_SCHEMA_VERSION,
-          }),
-        );
-        touched = true;
-      }
+        if (currentThreadId) {
+          replaceThreadScopedRow(
+            syncdb,
+            THREAD_STATE_EVENT,
+            currentThreadId,
+            buildThreadStateRecord({
+              thread_id: currentThreadId,
+              state: "interrupted",
+              active_message_id: currentMessageId,
+              updated_at: new Date().toISOString(),
+              schema_version: THREAD_STATE_SCHEMA_VERSION,
+            }),
+          );
+          touched = true;
+        }
 
-      if (touched) {
-        syncdb.commit();
-        await syncdb.save();
-        repairedChat = true;
-      }
+        if (touched) {
+          syncdb.commit();
+          await syncdb.save();
+          repairedChat = true;
+        }
+      },
+    });
+  } catch (err) {
+    chatRepairError = err;
+    logger.warn("failed to repair interrupted ACP chat row", {
+      project_id,
+      path,
+      message_date,
+      message_id,
+      thread_id,
+      storage_error: isProjectAcpStorageError(err),
+      err,
+    });
+  }
+
+  const repairedBackend = finalizeInterruptedAcpBackendState({
+    turn: {
+      ...turn,
+      project_id,
+      path,
+      message_date,
+      sender_id,
+      message_id,
+      thread_id,
     },
+    recoveryReason,
   });
 
-  let repairedBackend = false;
-  for (const row of listRunningAcpJobs()) {
-    if (
-      runningTurnMatchesTarget(row, {
-        project_id,
-        path,
-        message_date: message_date || undefined,
-        message_id: message_id || undefined,
-        thread_id: thread_id || undefined,
-      })
-    ) {
-      setAcpJobState({
-        op_id: row.op_id,
-        state: "interrupted",
-        error: recoveryReason,
-        worker_id: row.worker_id ?? turn.owner_instance_id ?? undefined,
-      });
-      repairedBackend = true;
-    }
+  if (chatRepairError != null && !repairedBackend) {
+    throw chatRepairError;
   }
-
-  for (const row of listRunningAcpTurnLeases()) {
-    if (
-      runningTurnMatchesTarget(row, {
-        project_id,
-        path,
-        message_date: message_date || undefined,
-        message_id: message_id || undefined,
-        thread_id: thread_id || undefined,
-      })
-    ) {
-      finalizeAcpTurnLease({
-        key: {
-          project_id: row.project_id,
-          path: row.path,
-          message_date: row.message_date,
-        },
-        state: "aborted",
-        reason: recoveryReason,
-        owner_instance_id:
-          turn.owner_instance_id ?? row.owner_instance_id ?? undefined,
-      });
-      repairedBackend = true;
-    }
-  }
-
   return repairedChat || repairedBackend;
 }
 
@@ -4902,14 +5149,6 @@ export async function recoverCurrentWorkerStuckAcpTurns(
   let recovered = 0;
   for (const turn of listRunningAcpTurnLeases()) {
     if (turn.owner_instance_id !== ACP_INSTANCE_ID) continue;
-    if (
-      hasRecentChatWriterForTurn(turn, {
-        staleMs: writerStaleMs,
-        recoveryReason,
-      })
-    ) {
-      continue;
-    }
     const heartbeatAt = Number(turn.heartbeat_at ?? 0);
     const startedAt = Number(turn.started_at ?? 0);
     const referenceAt =
@@ -4919,6 +5158,31 @@ export async function recoverCurrentWorkerStuckAcpTurns(
           ? startedAt
           : 0;
     if (referenceAt > 0 && now - referenceAt < graceMs) continue;
+    if (
+      hasRecentChatWriterForTurn(turn, {
+        staleMs: writerStaleMs,
+        recoveryReason,
+      })
+    ) {
+      const liveAgentRunning = liveAgentRunningForTurn(turn);
+      if (liveAgentRunning !== false) {
+        continue;
+      }
+      logger.warn(
+        "recovering current-worker ACP turn with recent writer but no live agent",
+        {
+          project_id: turn.project_id,
+          path: turn.path,
+          message_date: turn.message_date,
+          message_id: turn.message_id,
+          thread_id: turn.thread_id,
+          session_id: turn.session_id,
+          heartbeat_age_ms: referenceAt > 0 ? now - referenceAt : null,
+          recoveryReason,
+        },
+      );
+      findChatWriterForTurn(turn)?.dispose(true);
+    }
     try {
       if (
         await repairInterruptedAcpTurn({
@@ -5057,7 +5321,7 @@ export function shouldStopDetachedWorkerForDrain({
   return now - exitRequestedAt >= quiesceMs;
 }
 
-export function isFatalAcpWorkerStorageError(err: unknown): boolean {
+function acpStorageFailureCode(err: unknown): string | undefined {
   const code = `${(err as any)?.code ?? ""}`.toUpperCase();
   const errno = `${(err as any)?.errno ?? ""}`.toUpperCase();
   const message = `${(err as any)?.message ?? err ?? ""}`.toLowerCase();
@@ -5070,20 +5334,101 @@ export function isFatalAcpWorkerStorageError(err: unknown): boolean {
       "SQLITE_CORRUPT",
       "SQLITE_NOTADB",
       "SQLITE_READONLY",
+      "ACP_TERMINAL_STORAGE_TIMEOUT",
     ].includes(code) ||
     ["ENOSPC", "EIO"].includes(errno)
   ) {
-    return true;
+    return code || errno;
   }
-  return [
-    "no space left on device",
-    "disk i/o error",
-    "input/output error",
-    "database or disk is full",
-    "database disk image is malformed",
-    "attempt to write a readonly database",
-    "readonly database",
-  ].some((needle) => message.includes(needle));
+  if (message.includes("no space left on device")) return "ENOSPC";
+  if (message.includes("disk i/o error")) return "SQLITE_IOERR";
+  if (message.includes("input/output error")) return "EIO";
+  if (message.includes("database or disk is full")) return "SQLITE_FULL";
+  if (message.includes("database disk image is malformed")) {
+    return "SQLITE_CORRUPT";
+  }
+  if (
+    message.includes("attempt to write a readonly database") ||
+    message.includes("readonly database")
+  ) {
+    return "SQLITE_READONLY";
+  }
+  if (message.includes("terminal storage timed out")) {
+    return "ACP_TERMINAL_STORAGE_TIMEOUT";
+  }
+  return undefined;
+}
+
+export function isProjectAcpStorageError(err: unknown): boolean {
+  return acpStorageFailureCode(err) != null;
+}
+
+export function isFatalAcpWorkerStorageError(err: unknown): boolean {
+  return isProjectAcpStorageError(err);
+}
+
+export function shouldCompleteAcpTurnAfterTerminalStorageFailure({
+  err,
+  phase,
+  finishedBy,
+  terminalRowAlreadyPersisted,
+}: {
+  err: unknown;
+  phase: string;
+  finishedBy?: "summary" | "error" | "interrupt";
+  terminalRowAlreadyPersisted: boolean;
+}): boolean {
+  return (
+    phase === "terminal-summary" &&
+    finishedBy === "summary" &&
+    terminalRowAlreadyPersisted &&
+    acpStorageFailureCode(err) === "ACP_TERMINAL_STORAGE_TIMEOUT"
+  );
+}
+
+function makeTerminalStorageTimeoutError({
+  phase,
+  timeoutMs,
+}: {
+  phase: string;
+  timeoutMs: number;
+}): Error {
+  return Object.assign(
+    new Error(
+      `ACP terminal storage timed out during ${phase} after ${timeoutMs}ms`,
+    ),
+    { code: "ACP_TERMINAL_STORAGE_TIMEOUT" },
+  );
+}
+
+async function withTimeout<T>({
+  promise,
+  timeoutMs,
+  phase,
+}: {
+  promise: Promise<T>;
+  timeoutMs: number;
+  phase: string;
+}): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return await promise;
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(makeTerminalStorageTimeoutError({ phase, timeoutMs }));
+        }, timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout != null) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export function shouldExitAcpWorkerAfterHeartbeatFailure({
@@ -5259,9 +5604,9 @@ export async function runDetachedAcpQueueWorker(
     if (!workerContext || !currentDetachedWorkerContext) {
       return null;
     }
-    const runningTurnLeases = listRunningAcpTurnLeases().filter(
-      (row) => row.owner_instance_id === workerContext.worker_id,
-    ).length;
+    const runningTurnLeases = countRunningAcpTurnLeasesForWorker(
+      workerContext.worker_id,
+    );
     return {
       worker_id: workerContext.worker_id,
       host_id: workerContext.host_id,
@@ -5315,9 +5660,9 @@ export async function runDetachedAcpQueueWorker(
     const nextState = currentDetachedWorkerContext.state;
     currentDetachedWorkerContext.state = nextState;
     const runningJobs = countRunningAcpJobsForWorker(workerContext.worker_id);
-    const runningTurnLeases = listRunningAcpTurnLeases().filter(
-      (row) => row.owner_instance_id === workerContext.worker_id,
-    ).length;
+    const runningTurnLeases = countRunningAcpTurnLeasesForWorker(
+      workerContext.worker_id,
+    );
     currentDetachedWorkerContext.last_heartbeat_at = now;
     currentDetachedWorkerContext.last_seen_running_jobs = runningJobs;
     heartbeatAcpWorker({
@@ -5464,8 +5809,7 @@ export async function runDetachedAcpQueueWorker(
               : "ACP worker stopped before turn startup",
         });
       }
-      const hasWork =
-        listQueuedAcpJobs().length > 0 || listRunningAcpJobs().length > 0;
+      const hasWork = hasQueuedOrRunningAcpJobs();
       if (hasWork) {
         idleSince = 0;
       } else if (!idleSince) {
@@ -7603,11 +7947,11 @@ function kickQueuedAcpJobsForThread({
     .finally(() => {
       pumpingAcpJobThreads.delete(key);
       if (
-        listQueuedAcpJobsForThread({
+        countQueuedAcpJobsForThread({
           project_id,
           path,
           thread_id,
-        }).length > 0 &&
+        }) > 0 &&
         !acpThreadHasRunningJob({
           project_id,
           path,
@@ -7624,7 +7968,7 @@ function kickAllQueuedAcpJobs(): void {
     return;
   }
   const seen = new Set<string>();
-  for (const job of listQueuedAcpJobs()) {
+  for (const job of listQueuedAcpJobThreadKeys()) {
     const key = acpJobThreadKey(job);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -7919,6 +8263,17 @@ async function processPendingAcpInterruptsOnce(): Promise<void> {
         ],
       });
       if (handled) {
+        finalizeInterruptedAcpBackendState({
+          turn: {
+            project_id: row.project_id,
+            path: row.path,
+            message_date: chat?.message_date,
+            sender_id: chat?.sender_id,
+            message_id: chat?.message_id,
+            thread_id: row.thread_id || chat?.thread_id,
+          },
+          recoveryReason: INTERRUPT_STATUS_TEXT,
+        });
         markAcpInterruptHandled({ id: row.id });
       } else if (ageMs >= ACP_INTERRUPT_MAX_AGE_MS) {
         markAcpInterruptError({
@@ -8675,7 +9030,30 @@ async function handleInterruptRequest(
           threadId,
           err,
         });
+      } finally {
+        finalizeInterruptedAcpBackendState({
+          turn: {
+            project_id,
+            path,
+            message_date: request.chat.message_date,
+            sender_id: request.chat.sender_id,
+            message_id: request.chat.message_id,
+            thread_id: threadId || request.chat.thread_id,
+            account_id: request.account_id,
+          },
+          recoveryReason: INTERRUPT_STATUS_TEXT,
+        });
       }
+    } else if (project_id && path) {
+      finalizeInterruptedAcpBackendState({
+        turn: {
+          project_id,
+          path,
+          thread_id: threadId,
+          account_id: request.account_id,
+        },
+        recoveryReason: INTERRUPT_STATUS_TEXT,
+      });
     }
     if (project_id && path && threadId) {
       markAcpInterruptsHandledForThread({

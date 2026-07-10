@@ -84,6 +84,7 @@ jest.mock("../../sqlite/acp-queue", () => ({
   clearAcpPayloads: jest.fn(),
 }));
 jest.mock("../../sqlite/acp-turns", () => ({
+  countRunningAcpTurnLeasesForWorker: jest.fn(() => 0),
   startAcpTurnLease: jest.fn(),
   heartbeatAcpTurnLease: jest.fn(),
   finalizeAcpTurnLease: jest.fn(),
@@ -695,6 +696,51 @@ describe("ChatStreamWriter", () => {
       ]),
     );
     (writer as any).dispose?.(true);
+  });
+
+  it("finalizes the lease as completed when verified terminal summary save times out", async () => {
+    const { syncdb, setCurrent } = makeFakeSyncDB();
+    setCurrent({
+      get: (key: string) => (key === "generating" ? true : undefined),
+    });
+    let hangSave = false;
+    syncdb.save = async () => {
+      if (hangSave) {
+        await new Promise(() => {});
+      }
+    };
+    const writer: any = new ChatStreamWriter({
+      metadata: baseMetadata,
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+    });
+
+    await writer.waitUntilReady();
+    hangSave = true;
+    writer.terminalStorageTimeoutMs = 5;
+    await writer.handle({
+      type: "summary",
+      finalResponse: "done",
+      seq: 0,
+    } as AcpStreamMessage);
+
+    expect(writer.getTerminalState()).toBe("completed");
+    expect((turns.finalizeAcpTurnLease as any).mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.objectContaining({
+            state: "completed",
+          }),
+        ],
+      ]),
+    );
+    (writer as any).dispose?.(true);
+    await writer.waitUntilDisposed();
   });
 
   it("does not write a duplicate terminal assistant patch during dispose", async () => {
@@ -2748,6 +2794,65 @@ describe("repairInterruptedAcpTurn", () => {
     expect(finalChat?.generating).toBe(false);
     expect(finalChat?.acp_interrupted).toBe(true);
     expect(finalThreadState?.state).toBe("interrupted");
+  });
+
+  it("finalizes backend state even when visible interrupted repair cannot save", async () => {
+    const { syncdb, setCurrent } = makeFakeSyncDB();
+    setCurrent({
+      event: "chat",
+      date: "2026-03-19T20:00:00.000Z",
+      sender_id: "codex-agent",
+      message_id: "msg-interrupt-storage",
+      thread_id: "thread-interrupt-storage",
+      generating: true,
+      history: [
+        {
+          author_id: "codex-agent",
+          content: "partial answer",
+          date: "2026-03-19T20:00:00.000Z",
+        },
+      ],
+    });
+    syncdb.save = async () => {
+      throw Object.assign(new Error("disk I/O error"), {
+        code: "SQLITE_IOERR",
+      });
+    };
+    (chatServer.acquireChatSyncDB as any).mockResolvedValue(syncdb);
+    (turns.listRunningAcpTurnLeases as any).mockReturnValue([
+      {
+        project_id: "p",
+        path: "chat",
+        message_date: "2026-03-19T20:00:00.000Z",
+        sender_id: "codex-agent",
+        message_id: "msg-interrupt-storage",
+        thread_id: "thread-interrupt-storage",
+        owner_instance_id: "worker-1",
+      },
+    ]);
+
+    const repaired = await repairInterruptedAcpTurn({
+      client: makeFakeClient() as any,
+      turn: {
+        project_id: "p",
+        path: "chat",
+        message_date: "2026-03-19T20:00:00.000Z",
+        sender_id: "codex-agent",
+        message_id: "msg-interrupt-storage",
+        thread_id: "thread-interrupt-storage",
+      },
+      interruptedNotice: "Conversation interrupted.",
+      interruptedReasonId: "interrupt",
+      recoveryReason: "Conversation interrupted.",
+    });
+
+    expect(repaired).toBe(true);
+    expect(turns.finalizeAcpTurnLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: "aborted",
+        reason: "Conversation interrupted.",
+      }),
+    );
   });
 });
 

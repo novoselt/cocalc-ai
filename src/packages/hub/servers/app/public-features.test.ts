@@ -2,6 +2,15 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import initPublicFeatures from "./public-features";
 
+jest.mock("@cocalc/database/settings/customize", () => ({
+  __esModule: true,
+  default: jest.fn(async () => ({ siteName: "CoCalc" })),
+}));
+
+jest.mock("@cocalc/database/postgres/news", () => ({
+  getFeedData: jest.fn(async () => []),
+}));
+
 describe("public feature and docs routes", () => {
   async function request(path: string) {
     const app = express();
@@ -25,34 +34,35 @@ describe("public feature and docs routes", () => {
     }
   }
 
-  it("redirects feature pages into the public shell", async () => {
+  it("serves feature pages from clean URLs", async () => {
     const response = await request("/features/python?x=1");
-    expect(response.status).toBe(302);
-    const location = response.headers.get("location");
-    expect(location).toContain("/static/public.html?target=");
-    const redirected = new URL(`http://host${location}`);
-    expect(redirected.searchParams.get("target")).toBe("/features/python?x=1");
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("vary")).toContain("Host");
+    expect(body).toContain('data-cocalc-public-route-meta="canonical"');
+    expect(body).toContain('/features/python" rel="canonical"');
   });
 
-  it("redirects docs pages into the public shell", async () => {
+  it("serves docs pages with per-entry canonical metadata", async () => {
     const response = await request("/docs/projects/project-secrets?x=1");
-    expect(response.status).toBe(302);
-    const location = response.headers.get("location");
-    expect(location).toContain("/static/public.html?target=");
-    const redirected = new URL(`http://host${location}`);
-    expect(redirected.searchParams.get("target")).toBe(
-      "/docs/projects/project-secrets?x=1",
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(body).toContain(
+      "<title>Project secrets - Documentation | CoCalc</title>",
     );
+    expect(body).toContain('/docs/projects/project-secrets" rel="canonical"');
   });
 
-  it("redirects rootfs image pages into the public shell", async () => {
+  it("serves rootfs image pages from clean URLs", async () => {
     const response = await request("/rootfs/id/rootfs-image-1?x=1");
-    expect(response.status).toBe(302);
-    const location = response.headers.get("location");
-    expect(location).toContain("/static/public.html?target=");
-    const redirected = new URL(`http://host${location}`);
-    expect(redirected.searchParams.get("target")).toBe(
-      "/rootfs/id/rootfs-image-1?x=1",
-    );
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(body).toContain('/rootfs/id/rootfs-image-1" rel="canonical"');
   });
 });

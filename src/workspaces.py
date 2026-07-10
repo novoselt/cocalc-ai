@@ -153,6 +153,7 @@ def all_packages() -> List[str]:
     v = [
         'packages/',  # top level workspace, e.g., typescript
         'packages/cdn',  # packages/hub assumes this is built
+        'packages/docs',  # util depends on this for public docs metadata
         'packages/util',
         'packages/sync',
         'packages/sync-client',
@@ -166,7 +167,6 @@ def all_packages() -> List[str]:
         'packages/assets',
         'packages/chat',
         'packages/ai',
-        'packages/docs',
         'packages/frontend',  # static depends on frontend; frontend depends on assets
         'packages/static',  # packages/hub assumes this is built (for webpack dev server)
         'packages/http-api',  # depends on packages/frontend for i18n

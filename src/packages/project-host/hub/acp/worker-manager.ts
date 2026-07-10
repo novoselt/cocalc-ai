@@ -19,11 +19,18 @@ import {
 } from "@cocalc/conat/ai/acp/daemon-control";
 import { getAcpWorker } from "@cocalc/lite/hub/sqlite/acp-workers";
 import {
+  listAcpWorkers,
+  stopAcpWorker,
+  type AcpWorkerRow,
+} from "@cocalc/lite/hub/sqlite/acp-workers";
+import {
+  countRunningAcpJobsForWorker,
   decodeAcpJobRequest,
-  listQueuedAcpJobs,
-  listRunningAcpJobs,
+  hasQueuedOrRunningAcpJobs,
+  listRunningAcpJobsByWorker,
+  oldestQueuedOrRunningAcpJobTimestamp,
 } from "@cocalc/lite/hub/sqlite/acp-jobs";
-import { listRunningAcpTurnLeases } from "@cocalc/lite/hub/sqlite/acp-turns";
+import { countRunningAcpTurnLeasesForWorker } from "@cocalc/lite/hub/sqlite/acp-turns";
 import { getSoftwareVersions } from "../../software";
 import { getProjectHostConatClient } from "../../runtime-client";
 import { getProjectHostProcessTitle } from "../../process-role";
@@ -304,7 +311,7 @@ function workerDatabaseStateProtectsUnresponsiveWorker(
   const row = getAcpWorker(worker_id);
   if (row == null || row.state === "stopped") return false;
   if (Number(row.pid ?? 0) !== worker.pid) return false;
-  if (countRunningTurnLeasesForWorker(worker_id) > 0) return true;
+  if (countRunningAcpTurnLeasesForWorker(worker_id) > 0) return true;
   if (hasAcpBacklog()) {
     return !shouldTerminateQueueStalledWorker({ worker, row, now });
   }
@@ -317,34 +324,19 @@ function workerDatabaseStateProtectsUnresponsiveWorker(
 }
 
 function hasAcpBacklog(): boolean {
-  return listQueuedAcpJobs().length > 0 || listRunningAcpJobs().length > 0;
+  return hasQueuedOrRunningAcpJobs();
 }
 
 function acpBacklogStaleSince(): number | undefined {
-  let oldest: number | undefined;
-  for (const row of [...listQueuedAcpJobs(), ...listRunningAcpJobs()]) {
-    const updatedAt = Number(row.updated_at ?? 0);
-    const createdAt = Number(row.created_at ?? 0);
-    const referenceAt =
-      Number.isFinite(updatedAt) && updatedAt > 0
-        ? updatedAt
-        : Number.isFinite(createdAt) && createdAt > 0
-          ? createdAt
-          : 0;
-    if (referenceAt <= 0) continue;
-    oldest = oldest == null ? referenceAt : Math.min(oldest, referenceAt);
-  }
-  return oldest;
+  return oldestQueuedOrRunningAcpJobTimestamp();
 }
 
 function countRunningJobsForWorker(worker_id: string): number {
-  return listRunningAcpJobs().filter((row) => row.worker_id === worker_id)
-    .length;
+  return countRunningAcpJobsForWorker(worker_id);
 }
 
 function workerHasRunningCommandJob(worker_id: string): boolean {
-  for (const job of listRunningAcpJobs()) {
-    if (job.worker_id !== worker_id) continue;
+  for (const job of listRunningAcpJobsByWorker(worker_id)) {
     try {
       if (decodeAcpJobRequest(job).request_kind === "command") return true;
     } catch (err) {
@@ -356,12 +348,6 @@ function workerHasRunningCommandJob(worker_id: string): boolean {
     }
   }
   return false;
-}
-
-function countRunningTurnLeasesForWorker(worker_id: string): number {
-  return listRunningAcpTurnLeases().filter(
-    (row) => row.owner_instance_id === worker_id,
-  ).length;
 }
 
 function numberOrUndefined(value: unknown): number | undefined {
@@ -386,7 +372,7 @@ export function shouldTerminateQueueStalledWorker({
   if (!worker_id) return false;
   const runningTurnLeases = Math.max(
     numberOrUndefined(status?.running_turn_leases) ?? 0,
-    countRunningTurnLeasesForWorker(worker_id),
+    countRunningAcpTurnLeasesForWorker(worker_id),
   );
   if (runningTurnLeases > 0) return false;
   if (workerHasRunningCommandJob(worker_id)) return false;
@@ -434,7 +420,7 @@ export function shouldTerminateOverdueDrainingWorker({
   if (runningJobs > 0) return false;
   const runningTurnLeases = Math.max(
     numberOrUndefined(status?.running_turn_leases) ?? 0,
-    worker_id ? countRunningTurnLeasesForWorker(worker_id) : 0,
+    worker_id ? countRunningAcpTurnLeasesForWorker(worker_id) : 0,
   );
   return runningTurnLeases <= 0;
 }
@@ -712,6 +698,81 @@ async function terminateWorkerPid(pid: number): Promise<void> {
   }
 }
 
+async function terminateWorker(
+  worker: WorkerProcessInfo,
+  reason: string,
+): Promise<void> {
+  await terminateWorkerPid(worker.pid);
+  const worker_id = workerIdOf(worker);
+  if (!worker_id) return;
+  try {
+    stopAcpWorker({ worker_id, reason });
+  } catch (err) {
+    logger.warn("failed marking terminated ACP worker stopped", {
+      pid: worker.pid,
+      worker_id,
+      reason,
+      err,
+    });
+  }
+}
+
+export function staleAcpWorkerRowsToStop({
+  rows,
+  observedWorkers,
+  now = Date.now(),
+  staleMs = ACP_WORKER_DB_HEARTBEAT_STALE_MS,
+}: {
+  rows: AcpWorkerRow[];
+  observedWorkers: WorkerProcessInfo[];
+  now?: number;
+  staleMs?: number;
+}): AcpWorkerRow[] {
+  const observed = new Set(
+    observedWorkers.map((worker) => `${workerIdOf(worker)}:${worker.pid}`),
+  );
+  return rows.filter((row) => {
+    if (row.state === "stopped") return false;
+    const rowPid = Number(row.pid ?? 0);
+    if (
+      rowPid > 0 &&
+      observed.has(`${`${row.worker_id ?? ""}`.trim()}:${rowPid}`)
+    ) {
+      return false;
+    }
+    const referenceAt = Math.max(
+      Number(row.last_heartbeat_at ?? 0),
+      Number(row.started_at ?? 0),
+    );
+    return referenceAt <= 0 || now - referenceAt >= staleMs;
+  });
+}
+
+function reconcileStaleAcpWorkerRows({
+  observedWorkers,
+}: {
+  observedWorkers: WorkerProcessInfo[];
+}): void {
+  const host_id = `${process.env.PROJECT_HOST_ID ?? ""}`.trim();
+  const rows = listAcpWorkers({
+    host_id: host_id || undefined,
+    states: ["active", "draining"],
+  });
+  const staleRows = staleAcpWorkerRowsToStop({ rows, observedWorkers });
+  if (!staleRows.length) return;
+  for (const row of staleRows) {
+    stopAcpWorker({
+      worker_id: row.worker_id,
+      reason: "ACP worker process is no longer running",
+    });
+  }
+  logger.warn("marked stale ACP worker rows stopped", {
+    count: staleRows.length,
+    worker_ids: staleRows.slice(0, 20).map((row) => row.worker_id),
+    truncated: staleRows.length > 20,
+  });
+}
+
 async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
   const launch = workerLaunchSignature();
   const { managedWorkers: observedWorkers } =
@@ -730,6 +791,7 @@ async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
       })),
     });
   }
+  reconcileStaleAcpWorkerRows({ observedWorkers });
   const workerStatuses = await Promise.all(
     observedWorkers.map(async (worker) => ({
       worker,
@@ -756,7 +818,7 @@ async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
           status?.exit_requested_at ?? row?.exit_requested_at ?? null,
         drain_terminate_ms: ACP_WORKER_DRAIN_TERMINATE_MS,
       });
-      await terminateWorkerPid(worker.pid);
+      await terminateWorker(worker, "overdue_draining_worker");
       continue;
     }
     if (
@@ -776,7 +838,7 @@ async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
           status?.last_queue_progress_at ?? row?.last_queue_progress_at ?? null,
         queue_stall_ms: ACP_WORKER_QUEUE_STALL_MS,
       });
-      await terminateWorkerPid(worker.pid);
+      await terminateWorker(worker, "queue_stalled_worker");
       continue;
     }
     if (
@@ -793,7 +855,7 @@ async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
         control_startup_grace_ms: ACP_WORKER_CONTROL_STARTUP_GRACE_MS,
         db_heartbeat_stale_ms: ACP_WORKER_DB_HEARTBEAT_STALE_MS,
       });
-      await terminateWorkerPid(worker.pid);
+      await terminateWorker(worker, "unresponsive_worker");
       continue;
     }
     if (status?.state === "stopped") {
@@ -803,7 +865,7 @@ async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
         bundle_version: status.bundle_version,
         bundle_path: status.bundle_path,
       });
-      await terminateWorkerPid(worker.pid);
+      await terminateWorker(worker, "stale_stopped_worker");
       continue;
     }
     workers.push({ ...worker, status });
@@ -836,7 +898,7 @@ async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
       pid: worker.pid,
       cmdline: worker.cmdline,
     });
-    await terminateWorkerPid(worker.pid);
+    await terminateWorker(worker, "non_cooperative_worker");
   }
   if (activePid && isPidAlive(activePid)) {
     writeFileSync(ACP_WORKER_PID_FILE, `${activePid}\n`);
@@ -1017,7 +1079,7 @@ export async function rolloutProjectHostAcpWorker({
       pid: activeWorker.pid,
       cmdline: activeWorker.cmdline,
     });
-    await terminateWorkerPid(activeWorker.pid);
+    await terminateWorker(activeWorker, "rollout_replacement");
     const spawned = await ensureProjectHostAcpWorkerRunning({ restartReason });
     return spawned
       ? {
@@ -1074,5 +1136,6 @@ export const __test__ = {
   resetProjectHostAcpWorkerSpawnBackoff,
   workerDatabaseStateProtectsUnresponsiveWorker,
   workerControlStartupGraceExpired,
+  staleAcpWorkerRowsToStop,
   shouldTerminateQueueStalledWorker,
 };

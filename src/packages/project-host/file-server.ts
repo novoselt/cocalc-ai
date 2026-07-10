@@ -290,6 +290,13 @@ const legacyProjectArchiveHandlers = createLegacyProjectArchiveHandlers({
     legacyProjectInitialBackupEgressExempt.add(project_id);
   },
   projectMountpoint,
+  createWritableSnapshot: async (source, dest) =>
+    await btrfsSnapshotWritable({ source, dest }),
+  createReadonlySnapshot: async (source, dest) =>
+    await btrfsSnapshotReadonly({ source, dest }),
+  setSubvolumeReadonly: async (path, readOnly) =>
+    await btrfsSetSubvolumeReadonly({ path, readOnly }),
+  deleteSubvolumeTree,
   invalidateProjectFsServer,
   touchProjectLastEdited,
   logger,
@@ -839,6 +846,20 @@ async function btrfsSnapshotWritable({
 }): Promise<void> {
   await btrfs({
     args: ["subvolume", "snapshot", source, dest],
+    err_on_exit: true,
+    verbose: false,
+  });
+}
+
+async function btrfsSetSubvolumeReadonly({
+  path,
+  readOnly,
+}: {
+  path: string;
+  readOnly: boolean;
+}): Promise<void> {
+  await btrfs({
+    args: ["property", "set", "-ts", path, "ro", readOnly ? "true" : "false"],
     err_on_exit: true,
     verbose: false,
   });
@@ -5402,6 +5423,12 @@ export async function initFileServer({
     restoreBackup: reuseInFlight(restoreBackup),
     restoreProjectArchive: reuseInFlight(
       legacyProjectArchiveHandlers.restoreProjectArchive,
+    ),
+    prepareLegacyProjectArchiveRemediation: reuseInFlight(
+      legacyProjectArchiveHandlers.prepareLegacyProjectArchiveRemediation,
+    ),
+    applyLegacyProjectArchiveRemediation: reuseInFlight(
+      legacyProjectArchiveHandlers.applyLegacyProjectArchiveRemediation,
     ),
     beginRestoreStaging,
     ensureRestoreStaging,

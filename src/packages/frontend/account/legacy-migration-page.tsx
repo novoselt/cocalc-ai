@@ -434,7 +434,10 @@ function archiveAvailable(project: LegacyMigrationProjectSummary): boolean {
 function projectActionAvailable(
   project: LegacyMigrationProjectSummary,
 ): boolean {
-  return !!project.project_id || archiveAvailable(project);
+  if (project.project_id) {
+    return true;
+  }
+  return archiveAvailable(project);
 }
 
 function bulkRestoreSelectable(
@@ -445,6 +448,10 @@ function bulkRestoreSelectable(
     project.import_status !== "creating" &&
     archiveAvailable(project)
   );
+}
+
+function legacyProjectUnavailableReason(): string {
+  return "No recoverable archive is available for this legacy project.";
 }
 
 function ignoreProjectRowClick(target: EventTarget | null): boolean {
@@ -527,7 +534,7 @@ function LegacyProjectImportModal({
   async function importAndOpen() {
     if (!project) return;
     if (!archiveAvailable(project)) {
-      setError("No recoverable archive is available for this legacy project.");
+      setError(legacyProjectUnavailableReason());
       return;
     }
     if (!draft.rootfs_image.trim()) {
@@ -564,7 +571,7 @@ function LegacyProjectImportModal({
   const importDisabledReason = !project
     ? "Legacy project details are still loading."
     : !archiveAvailable(project)
-      ? "No recoverable archive is available for this legacy project."
+      ? legacyProjectUnavailableReason()
       : rootfsLoading
         ? "Image choices are still loading."
         : imageMissing
@@ -595,7 +602,7 @@ function LegacyProjectImportModal({
             description={
               archiveAvailable(project)
                 ? `This will create a CoCalc project, open it immediately, and restore files from the legacy archive in the background. Last known disk use: ${formatDiskMb(project.disk_mb)}. Archived size: ${formatBytes(project.artifact_bytes)}.`
-                : "No recoverable archive is available for this legacy project, so it cannot be imported."
+                : legacyProjectUnavailableReason()
             }
           />
         ) : null}
@@ -1076,9 +1083,7 @@ export function LegacyMigrationPage() {
       return;
     }
     if (!archiveAvailable(project)) {
-      void message.error(
-        "No recoverable archive is available for this legacy project.",
-      );
+      void message.error(legacyProjectUnavailableReason());
       return;
     }
     setImportProject(project);
@@ -1310,7 +1315,7 @@ export function LegacyMigrationPage() {
           title={
             projectActionAvailable(project)
               ? undefined
-              : "No recoverable archive is available for this legacy project."
+              : legacyProjectUnavailableReason()
           }
           type={project.project_id ? "default" : "primary"}
         >
@@ -1386,8 +1391,8 @@ export function LegacyMigrationPage() {
               </Text>
               <Text type="secondary">
                 Open a legacy project to restore its files. Large projects may
-                take a few minutes; projects marked <Tag>Unavailable</Tag> do
-                not have a recoverable archive and cannot be restored.
+                take a few minutes. Projects marked <Tag>Unavailable</Tag> do
+                not have a recoverable archive.
               </Text>
               <Text type="secondary">
                 Billing credit and legacy memberships are handled in{" "}

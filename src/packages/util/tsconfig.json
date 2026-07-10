@@ -4,6 +4,7 @@
     "rootDir": "./",
     "outDir": "dist"
   },
+  "references": [{ "path": "../docs" }],
   "include": ["**/*.ts", "**/*.tsx", "**/*.js"],
   "exclude": [
     "node_modules",

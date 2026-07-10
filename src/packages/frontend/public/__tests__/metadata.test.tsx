@@ -2,7 +2,15 @@
 
 import { render, waitFor } from "@testing-library/react";
 
-import { getPublicRouteMetadata, PublicRouteHeadMetadata } from "../metadata";
+import {
+  applyPublicRouteMetadata,
+  getPublicRouteMetadata,
+  PublicRouteHeadMetadata,
+} from "../metadata";
+import { getPublicMetadataRouteFromPath } from "@cocalc/util/public-site-metadata";
+// Registers the docs registry with the metadata API; the browser loads this
+// lazily on docs routes, tests need it wired up front.
+import "@cocalc/util/public-site-metadata-docs";
 import type { PublicRoute } from "../routes";
 import { PUBLIC_SITEMAP_PATHS } from "../sitemap-paths";
 import { getFeatureIndexPages } from "../features/catalog";
@@ -148,6 +156,61 @@ describe("public route metadata", () => {
     expect(metadata.imagePath).toBe("/base/public/landing/product-options.jpg");
   });
 
+  it("canonicalizes duplicated marketing routes to cocalc.ai on branded hosts", () => {
+    const marketing = getPublicRouteMetadata(
+      productRoute("products-cocalc-star"),
+      { dns: "university.example.edu", site_name: "University CoCalc" },
+      { basePath: "/university-cocalc" },
+    );
+    expect(marketing.canonicalPath).toBe(
+      "https://cocalc.ai/products/cocalc-star",
+    );
+
+    const localNews = getPublicRouteMetadata(
+      { route: { view: "news" }, section: "news" },
+      { dns: "university.example.edu", site_name: "University CoCalc" },
+    );
+    expect(localNews.canonicalPath).toBe("/news");
+
+    const localSignIn = getPublicRouteMetadata(
+      {
+        route: { kind: "auth-form", view: "sign-in" },
+        section: "auth",
+      },
+      { dns: "university.example.edu", site_name: "University CoCalc" },
+    );
+    expect(localSignIn.canonicalPath).toBe("/auth/sign-in");
+  });
+
+  it("uses per-entry docs metadata for docs detail pages", () => {
+    const route = getPublicMetadataRouteFromPath(
+      "/docs/projects/project-secrets",
+    );
+    const metadata = getPublicRouteMetadata(route, { site_name: "CoCalc" });
+
+    expect(metadata.title).toBe("Project secrets - Documentation | CoCalc");
+    expect(metadata.description).toContain("encrypted, read-only files");
+    expect(metadata.canonicalPath).toBe("/docs/projects/project-secrets");
+  });
+
+  it("does not collapse sitemap detail paths to section canonicals", () => {
+    for (const [path, canonicalPath] of [
+      ["/about/team", "/about/team"],
+      ["/about/team/william-stein", "/about/team/william-stein"],
+      ["/policies/privacy", "/policies/privacy"],
+      ["/lang", "/lang"],
+      ["/en", "/en"],
+      ["/rootfs/ubuntu-24.04", "/rootfs/ubuntu-24.04"],
+      ["/rootfs/id/rootfs-image-1", "/rootfs/id/rootfs-image-1"],
+      ["/news/some-post-42", "/news/some-post-42"],
+      ["/news/some-post-42/1751000000", "/news/some-post-42"],
+    ] as const) {
+      const route = getPublicMetadataRouteFromPath(path);
+      const metadata = getPublicRouteMetadata(route, { site_name: "CoCalc" });
+      expect(metadata.canonicalPath).toBe(canonicalPath);
+    }
+  });
+
   it("only emits routable feature detail pages in the public metadata sitemap", () => {
     const featurePaths = PUBLIC_SITEMAP_PATHS.filter((path) =>
       path.startsWith("/features/"),
@@ -192,7 +255,26 @@ describe("public route metadata", () => {
     expect(headMeta('meta[property="og:image"]')).toBe(
       "http://localhost/public/landing/product-options.jpg",
     );
-    expect(canonicalHref()).toBe("http://localhost/products/cocalc-star");
+    expect(canonicalHref()).toBe("https://cocalc.ai/products/cocalc-star");
+  });
+
+  it("keeps the branded-host marketing canonical after React mounts", async () => {
+    render(
+      <PublicRouteHeadMetadata
+        config={{
+          dns: "university.example.edu",
+          site_name: "University CoCalc",
+        }}
+        route={productRoute("products-cocalc-star")}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(canonicalHref()).toBe("https://cocalc.ai/products/cocalc-star"),
+    );
+    expect(headMeta('meta[property="og:url"]')).toBe(
+      "https://cocalc.ai/products/cocalc-star",
+    );
   });
 
   it("updates managed head tags when the route changes", async () => {
@@ -204,7 +286,7 @@ describe("public route metadata", () => {
     );
 
     await waitFor(() =>
-      expect(canonicalHref()).toBe("http://localhost/products/cocalc-star"),
+      expect(canonicalHref()).toBe("https://cocalc.ai/products/cocalc-star"),
     );
 
     rerender(
@@ -226,5 +308,27 @@ describe("public route metadata", () => {
       "pricing, deployment, product paths",
     );
     expect(canonicalHref()).toBe("http://localhost/support/new");
+  });
+});
+
+describe("robots noindex tag management", () => {
+  it("adds noindex for restricted pages and removes it on navigation", () => {
+    const base = {
+      canonicalPath: "/docs/admin/users",
+      description: "d",
+      imagePath: "/i.png",
+      title: "t",
+    };
+    applyPublicRouteMetadata({ ...base, noindex: true });
+    expect(headMeta('meta[data-cocalc-public-route-meta="robots"]')).toBe(
+      "noindex",
+    );
+
+    applyPublicRouteMetadata({ ...base, canonicalPath: "/docs" });
+    expect(
+      document.head.querySelector(
+        'meta[data-cocalc-public-route-meta="robots"]',
+      ),
+    ).toBeNull();
   });
 });

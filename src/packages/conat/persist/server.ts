@@ -91,6 +91,30 @@ const ENABLE_SQLITE_GENERAL_QUERIES = false;
 
 const SEND_THROTTLE = 30;
 
+export function classifyPersistStorageErrorCode(
+  err: unknown,
+): string | undefined {
+  const code = `${(err as any)?.code ?? ""}`.toUpperCase();
+  const errno = `${(err as any)?.errno ?? ""}`.toUpperCase();
+  const message = `${(err as any)?.message ?? err ?? ""}`.toLowerCase();
+  if (code) return code;
+  if (errno) return errno;
+  if (message.includes("no space left on device")) return "ENOSPC";
+  if (message.includes("disk i/o error")) return "SQLITE_IOERR";
+  if (message.includes("input/output error")) return "EIO";
+  if (message.includes("database or disk is full")) return "SQLITE_FULL";
+  if (message.includes("database disk image is malformed")) {
+    return "SQLITE_CORRUPT";
+  }
+  if (
+    message.includes("attempt to write a readonly database") ||
+    message.includes("readonly database")
+  ) {
+    return "SQLITE_READONLY";
+  }
+  return undefined;
+}
+
 export function server({
   client,
   messagesThresh = DEFAULT_MESSAGES_THRESH,
@@ -174,7 +198,9 @@ export function server({
         } catch (err) {
           error = `${err}`;
           errorCode =
-            err.code ?? (error.includes("permission denied") ? 403 : undefined);
+            (err as any)?.code ??
+            classifyPersistStorageErrorCode(err) ??
+            (error.includes("permission denied") ? 403 : undefined);
           socket.write(null, { headers: { error, code: errorCode } });
           socket.emit("stream-initialized");
         }
@@ -310,7 +336,10 @@ export function server({
         }
       } catch (err) {
         mesg.respondSync(null, {
-          headers: { error: `${err}`, code: err.code },
+          headers: {
+            error: `${err}`,
+            code: (err as any)?.code ?? classifyPersistStorageErrorCode(err),
+          },
         });
       }
     });
@@ -352,7 +381,7 @@ async function getAll({ stream, mesg, request, messagesThresh }) {
       headers: {
         error,
         seq,
-        code: error?.code,
+        code: classifyPersistStorageErrorCode(error),
         config: !sentConfig ? config : undefined,
         metadata: !sentMetadata ? metadata : undefined,
         checkpoints: !sentCheckpoints ? checkpoints : undefined,

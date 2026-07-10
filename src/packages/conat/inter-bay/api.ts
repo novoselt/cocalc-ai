@@ -100,10 +100,18 @@ import type {
   LegacyMigrationFinancialMembershipGrantHomeBayResponse,
   LegacyMigrationFinancialPreviewOptions,
   LegacyMigrationFinancialPreviewResponse,
+  LegacyMigrationApplyProjectRemediationOptions,
+  LegacyMigrationApplyProjectRemediationResponse,
+  LegacyMigrationDismissProjectRemediationOptions,
+  LegacyMigrationDismissProjectRemediationResponse,
   LegacyMigrationImportProjectsOptions,
   LegacyMigrationImportProjectsResponse,
   LegacyMigrationListProjectsOptions,
   LegacyMigrationListProjectsResponse,
+  LegacyMigrationPrepareProjectRemediationOptions,
+  LegacyMigrationPrepareProjectRemediationResponse,
+  LegacyMigrationProjectRemediationStatusOptions,
+  LegacyMigrationProjectRemediationStatusResponse,
   LegacyMigrationRetryProjectRestoreOptions,
   LegacyMigrationRetryProjectRestoreResponse,
 } from "@cocalc/conat/hub/api/legacy-migration";
@@ -2232,6 +2240,10 @@ export type AccountLocalMethod =
   | "legacy-migration-list-projects"
   | "legacy-migration-import-projects"
   | "legacy-migration-retry-project-restore"
+  | "legacy-migration-get-project-remediation"
+  | "legacy-migration-prepare-project-remediation"
+  | "legacy-migration-apply-project-remediation"
+  | "legacy-migration-dismiss-project-remediation"
   | "legacy-migration-preview-financial-migration"
   | "legacy-migration-apply-financial-migration"
   | "legacy-migration-apply-financial-home-bay"
@@ -3454,6 +3466,18 @@ export interface InterBayAccountLocalApi {
   legacyMigrationRetryProjectRestore: (
     opts: LegacyMigrationRetryProjectRestoreOptions,
   ) => Promise<LegacyMigrationRetryProjectRestoreResponse>;
+  legacyMigrationGetProjectRemediation: (
+    opts: LegacyMigrationProjectRemediationStatusOptions,
+  ) => Promise<LegacyMigrationProjectRemediationStatusResponse>;
+  legacyMigrationPrepareProjectRemediation: (
+    opts: LegacyMigrationPrepareProjectRemediationOptions,
+  ) => Promise<LegacyMigrationPrepareProjectRemediationResponse>;
+  legacyMigrationApplyProjectRemediation: (
+    opts: LegacyMigrationApplyProjectRemediationOptions,
+  ) => Promise<LegacyMigrationApplyProjectRemediationResponse>;
+  legacyMigrationDismissProjectRemediation: (
+    opts: LegacyMigrationDismissProjectRemediationOptions,
+  ) => Promise<LegacyMigrationDismissProjectRemediationResponse>;
   legacyMigrationPreviewFinancialMigration: (
     opts?: LegacyMigrationFinancialPreviewOptions,
   ) => Promise<LegacyMigrationFinancialPreviewResponse>;
@@ -6048,6 +6072,42 @@ export function createInterBayAccountLocalClient({
       method: "legacy-migration-retry-project-restore",
     }),
   });
+  const legacyMigrationGetProjectRemediationClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationGetProjectRemediation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-get-project-remediation",
+    }),
+  });
+  const legacyMigrationPrepareProjectRemediationClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationPrepareProjectRemediation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-prepare-project-remediation",
+    }),
+  });
+  const legacyMigrationApplyProjectRemediationClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationApplyProjectRemediation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-apply-project-remediation",
+    }),
+  });
+  const legacyMigrationDismissProjectRemediationClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationDismissProjectRemediation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-dismiss-project-remediation",
+    }),
+  });
   const legacyMigrationPreviewFinancialMigrationClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "legacyMigrationPreviewFinancialMigration">
   >({
@@ -6501,6 +6561,22 @@ export function createInterBayAccountLocalClient({
       ),
     legacyMigrationRetryProjectRestore: async (opts) =>
       await legacyMigrationRetryProjectRestoreClient.legacyMigrationRetryProjectRestore(
+        opts,
+      ),
+    legacyMigrationGetProjectRemediation: async (opts) =>
+      await legacyMigrationGetProjectRemediationClient.legacyMigrationGetProjectRemediation(
+        opts,
+      ),
+    legacyMigrationPrepareProjectRemediation: async (opts) =>
+      await legacyMigrationPrepareProjectRemediationClient.legacyMigrationPrepareProjectRemediation(
+        opts,
+      ),
+    legacyMigrationApplyProjectRemediation: async (opts) =>
+      await legacyMigrationApplyProjectRemediationClient.legacyMigrationApplyProjectRemediation(
+        opts,
+      ),
+    legacyMigrationDismissProjectRemediation: async (opts) =>
+      await legacyMigrationDismissProjectRemediationClient.legacyMigrationDismissProjectRemediation(
         opts,
       ),
     legacyMigrationPreviewFinancialMigration: async (opts) =>
@@ -7821,6 +7897,62 @@ export function createInterBayAccountLocalHandler({
       impl: {
         legacyMigrationRetryProjectRestore: async (opts) =>
           await impl.legacyMigrationRetryProjectRestore(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationGetProjectRemediation">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-get-project-remediation",
+      }),
+      impl: {
+        legacyMigrationGetProjectRemediation: async (opts) =>
+          await impl.legacyMigrationGetProjectRemediation(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationPrepareProjectRemediation">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-prepare-project-remediation",
+      }),
+      impl: {
+        legacyMigrationPrepareProjectRemediation: async (opts) =>
+          await impl.legacyMigrationPrepareProjectRemediation(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationApplyProjectRemediation">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-apply-project-remediation",
+      }),
+      impl: {
+        legacyMigrationApplyProjectRemediation: async (opts) =>
+          await impl.legacyMigrationApplyProjectRemediation(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationDismissProjectRemediation">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-dismiss-project-remediation",
+      }),
+      impl: {
+        legacyMigrationDismissProjectRemediation: async (opts) =>
+          await impl.legacyMigrationDismissProjectRemediation(opts),
       },
     }),
     createServiceHandler<

@@ -65,5 +65,6 @@ export interface AcpSteerResult {
 export interface AcpAgent {
   evaluate(request: AcpEvaluateRequest): Promise<void>;
   steer?(threadId: string, request: AcpSteerRequest): Promise<AcpSteerResult>;
+  hasRunningTurn?(threadId: string): boolean;
   dispose?(): Promise<void>;
 }
