@@ -8,8 +8,44 @@ import {
   computeSkippedAutomationRunAt,
   normalizeAcpAutomationConfig,
 } from "../automation-schedule";
+import { automationAfterScheduledEnqueueFailure } from "../automation-enqueue-failure";
 
 describe("ACP automation schedule helpers", () => {
+  it("advances overdue automations after scheduled enqueue failure", () => {
+    const nowMs = Date.parse("2026-04-07T12:15:20.000Z");
+    const updated = automationAfterScheduledEnqueueFailure({
+      row: {
+        automation_id: "automation-1",
+        project_id: "project-1",
+        path: "/root/test.chat",
+        thread_id: "thread-1",
+        account_id: "account-1",
+        enabled: true,
+        title: "Frequent check",
+        prompt: "Check for updates.",
+        schedule_type: "interval",
+        interval_minutes: 1,
+        window_start_local_time: "00:00",
+        window_end_local_time: "23:59",
+        timezone: "UTC",
+        status: "active",
+        next_run_at: Date.parse("2026-04-07T12:00:00.000Z"),
+        unacknowledged_runs: 0,
+        created_at: nowMs - 1000,
+        updated_at: nowMs - 1000,
+      },
+      error: new Error("chat SyncDB unavailable"),
+      nowMs,
+      defaultPauseAfterRuns: 7,
+    });
+
+    expect(updated.status).toBe("error");
+    expect(updated.last_error).toBe("chat SyncDB unavailable");
+    expect(new Date(updated.next_run_at ?? 0).toISOString()).toBe(
+      "2026-04-07T12:16:00.000Z",
+    );
+  });
+
   it("keeps daily schedules on the selected weekdays only", () => {
     const nextRunAt = computeNextAutomationRunAt(
       {
