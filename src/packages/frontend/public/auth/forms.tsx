@@ -32,6 +32,7 @@ import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import {
   arePublicPoliciesVisible,
   getExternalPoliciesUrl,
+  isCocalcAiPublicSite,
   type PublicConfig,
   usePublicConfig,
 } from "@cocalc/frontend/public/config";
@@ -202,12 +203,22 @@ type PublicSsoStrategy = {
   do_not_hide?: boolean;
 };
 
+export type AuthNavigateOptions = {
+  initialEmail?: string;
+  legacySignUpPrompt?: boolean;
+};
+
+export type AuthNavigate = (
+  view: AuthView,
+  options?: AuthNavigateOptions,
+) => void;
+
 function Alert({
   children,
   kind,
 }: {
   children: ReactNode;
-  kind: "error" | "info" | "success";
+  kind: "error" | "info" | "success" | "warning";
 }) {
   const style: CSSProperties =
     kind === "error"
@@ -224,12 +235,19 @@ function Alert({
             border: "1px solid #b7eb8f",
             color: "#237804",
           }
-        : {
-            ...ALERT_STYLE,
-            background: "#e6f4ff",
-            border: "1px solid #91caff",
-            color: "#0958d9",
-          };
+        : kind === "warning"
+          ? {
+              ...ALERT_STYLE,
+              background: COLORS.YELL_LLL,
+              border: `1px solid ${COLORS.YELL_LL}`,
+              color: COLORS.BRWN,
+            }
+          : {
+              ...ALERT_STYLE,
+              background: "#e6f4ff",
+              border: "1px solid #91caff",
+              color: "#0958d9",
+            };
   return <div style={style}>{children}</div>;
 }
 
@@ -430,6 +448,63 @@ function googleStrategyFrom(strategies: PublicSsoStrategy[]) {
   return strategies.find((strategy) => strategy.name === "google");
 }
 
+function normalizedEmailAddress(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function signInErrorIsMissingAccount(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : `${err ?? ""}`;
+  return message.includes("no account with email address");
+}
+
+function validInitialEmail(email?: string): string {
+  const normalized = normalizedEmailAddress(email ?? "");
+  return isValidEmailAddress(normalized) ? normalized : "";
+}
+
+function LegacyCocalcAccountNotice({
+  attemptedEmail,
+  mode,
+  onCreateAccount,
+}: {
+  attemptedEmail?: string;
+  mode: "sign-in" | "sign-up";
+  onCreateAccount?: () => void;
+}) {
+  const email = validInitialEmail(attemptedEmail);
+  return (
+    <Alert kind="warning">
+      <div style={{ fontWeight: 700, marginBottom: "6px" }}>
+        CoCalc.com accounts do not sign in directly on CoCalc.ai.
+      </div>
+      <div style={{ marginBottom: mode === "sign-in" ? "10px" : 0 }}>
+        CoCalc.ai is the new service. If you used cocalc.com, create a new
+        CoCalc.ai account
+        {email ? (
+          <>
+            {" "}
+            with <strong>{email}</strong>
+          </>
+        ) : null}
+        . After signing in, open Settings &rarr; Legacy Migration to migrate
+        projects and subscription credit.
+      </div>
+      {mode === "sign-in" && onCreateAccount ? (
+        <button
+          type="button"
+          style={{
+            ...BUTTON_STYLE,
+            marginTop: "10px",
+          }}
+          onClick={onCreateAccount}
+        >
+          Create a new CoCalc.ai account
+        </button>
+      ) : null}
+    </Alert>
+  );
+}
+
 function SsoButton({
   children,
   disabled,
@@ -486,7 +561,7 @@ export function PublicSignInForm({
   initialInfo?: string;
   initialSSOStrategies?: PublicSsoStrategy[];
   cookieBannerEnabled?: boolean;
-  onNavigate: (view: AuthView) => void;
+  onNavigate: AuthNavigate;
   redirectToPath?: string | (() => string);
 }) {
   const [email, setEmail] = useState("");
@@ -503,6 +578,8 @@ export function PublicSignInForm({
   const strategies = usePublicSsoStrategies(initialSSOStrategies);
   const googleStrategy = googleStrategyFrom(strategies);
   const publicConfig = usePublicConfig();
+  const showLegacyMigrationNotice =
+    !challengeId && isCocalcAiPublicSite(publicConfig);
   const codeFactorMethod = inferSecondFactorInputMethod(factorCode);
   const consentReady = useEssentialConsent();
   const cookieConsentReady = !cookieBannerEnabled || consentReady;
@@ -525,6 +602,14 @@ export function PublicSignInForm({
       password.length > 0 &&
       !ssoStrategy &&
       !signingIn;
+
+  function createAccountFromSignIn(legacySignUpPrompt = false) {
+    const initialEmail = validInitialEmail(email);
+    onNavigate("sign-up", {
+      initialEmail: initialEmail || undefined,
+      legacySignUpPrompt,
+    });
+  }
 
   useEffect(() => {
     if (challengeId) return;
@@ -618,6 +703,14 @@ export function PublicSignInForm({
       setStoredControlPlaneOrigin(result?.home_bay_url);
       window.location.href = resolveAuthRedirectPath(redirectToPath);
     } catch (err) {
+      if (
+        showLegacyMigrationNotice &&
+        signInErrorIsMissingAccount(err) &&
+        validInitialEmail(email)
+      ) {
+        createAccountFromSignIn(true);
+        return;
+      }
       setError(`${err}`);
     } finally {
       setSigningIn(false);
@@ -664,6 +757,13 @@ export function PublicSignInForm({
         <AuthInstructions>
           {publicConfig?.sign_in_email_instructions}
         </AuthInstructions>
+      )}
+      {showLegacyMigrationNotice && (
+        <LegacyCocalcAccountNotice
+          attemptedEmail={email}
+          mode="sign-in"
+          onCreateAccount={() => createAccountFromSignIn(true)}
+        />
       )}
       {error && <Alert kind="error">{error}</Alert>}
       {initialInfo && challengeId && <Alert kind="info">{initialInfo}</Alert>}
@@ -861,7 +961,7 @@ export function PublicSignInForm({
           <NavLink onClick={() => onNavigate("password-reset")}>
             Forgot password?
           </NavLink>
-          <NavLink onClick={() => onNavigate("sign-up")}>
+          <NavLink onClick={() => createAccountFromSignIn(true)}>
             Create an account
           </NavLink>
         </div>
@@ -873,7 +973,7 @@ export function PublicSignInForm({
 export function PublicPasswordResetForm({
   onNavigate,
 }: {
-  onNavigate: (view: AuthView) => void;
+  onNavigate: AuthNavigate;
 }) {
   const [email, setEmail] = useState("");
   const [resetting, setResetting] = useState(false);
@@ -938,14 +1038,18 @@ export function PublicPasswordResetForm({
 
 export function PublicSignUpForm({
   cookieBannerEnabled = false,
+  initialEmail,
   initialSSOStrategies,
+  legacySignUpPrompt = false,
   onNavigate,
   redirectToPath,
   signupEmailDomainPolicy,
 }: {
   cookieBannerEnabled?: boolean;
+  initialEmail?: string;
   initialSSOStrategies?: PublicSsoStrategy[];
-  onNavigate: (view: AuthView) => void;
+  legacySignUpPrompt?: boolean;
+  onNavigate: AuthNavigate;
   redirectToPath?: string | (() => string);
   signupEmailDomainPolicy?: SignupEmailDomainPublicPolicy;
 }) {
@@ -953,7 +1057,7 @@ export function PublicSignUpForm({
   const [registrationToken, setRegistrationToken] = useState(
     new URL(window.location.href).searchParams.get("registrationToken") ?? "",
   );
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => validInitialEmail(initialEmail));
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -1000,6 +1104,14 @@ export function PublicSignUpForm({
       }
     })();
   }, [requiresToken]);
+
+  useEffect(() => {
+    const value = validInitialEmail(initialEmail);
+    if (!value) {
+      return;
+    }
+    setEmail((current) => current || value);
+  }, [initialEmail]);
 
   const syncBrowserFilledInputs = useCallback(() => {
     const sync = (
@@ -1136,6 +1248,9 @@ export function PublicSignUpForm({
           You are creating the initial admin account for this server.
         </Alert>
       )}
+      {legacySignUpPrompt && isCocalcAiPublicSite(publicConfig) ? (
+        <LegacyCocalcAccountNotice attemptedEmail={email} mode="sign-up" />
+      ) : null}
       {error && <Alert kind="error">{error}</Alert>}
       {issueList.length > 0 && (
         <Alert kind="error">
