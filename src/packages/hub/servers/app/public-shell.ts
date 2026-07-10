@@ -116,6 +116,15 @@ function buildHead(req: Request): { head: string; notFound: boolean } {
   const imageUrl = absolutePublicUrl(req, metadata.imagePath);
   const imageDimensions = getPublicImageDimensions(metadata.imagePath);
   const socialTags = [
+    ...(metadata.noindex
+      ? [
+          metaTag({
+            content: "noindex",
+            "data-cocalc-public-route-meta": "robots",
+            name: "robots",
+          }),
+        ]
+      : []),
     metaTag({
       content: metadata.description,
       "data-cocalc-public-route-meta": "description",

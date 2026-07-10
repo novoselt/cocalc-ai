@@ -108,6 +108,25 @@ describe("public shell rendering", () => {
     );
   });
 
+  it("serves restricted docs entries with 200 and a robots noindex tag", async () => {
+    // Admin-visibility docs entry: not visible to anonymous crawlers, but it
+    // must not 404 for entitled signed-in users (the client enforces access).
+    const { html: body, status } = await renderPublicShell(
+      request("/docs/admin/users"),
+    );
+
+    expect(status).toBe(200);
+    expect(body).toContain(
+      'content="noindex" data-cocalc-public-route-meta="robots" name="robots"',
+    );
+
+    // Publicly visible entries must not carry noindex.
+    const publicPage = await renderPublicShell(
+      request("/docs/collaboration/chat"),
+    );
+    expect(publicPage.html).not.toContain('name="robots"');
+  });
+
   it("responds 404 for detail slugs that are not in a registry", async () => {
     for (const path of [
       "/docs/does-not-exist",

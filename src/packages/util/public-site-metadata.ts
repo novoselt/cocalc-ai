@@ -4,7 +4,7 @@
  */
 
 import { LOCALE } from "./i18n/locale";
-import { docsPath, getDocsEntry } from "@cocalc/docs";
+import { DOCS_ENTRIES, docsPath, getDocsEntry } from "@cocalc/docs";
 import {
   getPublicFeatureIndexPages,
   getPublicFeaturePage,
@@ -16,6 +16,10 @@ export interface PublicRouteMetadata {
   description: string;
   faq?: PublicRouteMetadataFaq[];
   imagePath: string;
+  // Set for pages that exist but should not be indexed by search engines
+  // (e.g. docs entries restricted to admins or signed-in users); servers
+  // should emit a robots noindex meta tag.
+  noindex?: boolean;
   // Set when the path has the shape of a detail page but the slug does not
   // exist in the corresponding registry; servers should respond 404.
   notFound?: boolean;
@@ -677,13 +681,19 @@ function docsRouteMetadata(
     };
   }
   if (route?.view === "docs-detail" && route.slug) {
-    // A docs path with no matching (visible) registry entry.
+    // Not publicly visible for this site. If the entry exists in the registry
+    // at all (e.g. admin- or signed-in-only docs, or another site profile),
+    // it must still serve 200 for entitled users — the client enforces the
+    // actual visibility — but crawlers should not index it. Only slugs that
+    // exist nowhere in the registry are a real 404.
+    const exists = DOCS_ENTRIES.some((entry) => entry.slug === route.slug);
     return {
       canonicalPath: publicPath(docsPath(route.slug), options),
       description:
         "Read CoCalc documentation for projects, files, notebooks, terminals, teaching, account management, and administration.",
       imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
-      notFound: true,
+      noindex: exists || undefined,
+      notFound: !exists,
       title: pageTitle("CoCalc Documentation", siteName),
     };
   }
