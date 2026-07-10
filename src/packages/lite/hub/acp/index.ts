@@ -1979,6 +1979,33 @@ export class ChatStreamWriter {
   }
 
   private markTerminalStorageFailure(err: unknown, phase: string): void {
+    if (
+      shouldCompleteAcpTurnAfterTerminalStorageFailure({
+        err,
+        phase,
+        finishedBy: this.finishedBy,
+        terminalRowAlreadyPersisted: this.terminalRowAlreadyPersisted(),
+      })
+    ) {
+      logger.warn(
+        "ACP terminal storage timed out after summary row was verified; completing turn with degraded storage",
+        {
+          chatKey: this.chatKey,
+          project_id: this.metadata.project_id,
+          path: this.metadata.path,
+          message_id: this.metadata.message_id,
+          thread_id: this.metadata.thread_id,
+          phase,
+          code: acpStorageFailureCode(err),
+        },
+      );
+      // Preserve the successfully written summary instead of replacing it with
+      // a generic storage error. Record the storage failure after finalization
+      // so cleanup will not block on the same stuck save chain.
+      this.finalizeFinishedTurn();
+      this.noteProjectStorageFailure(err, phase);
+      return;
+    }
     this.noteProjectStorageFailure(err, phase);
     this.finished = true;
     this.finishedBy = "error";
@@ -2880,36 +2907,46 @@ export class ChatStreamWriter {
   }
 
   private terminalRowAlreadyPersisted(): boolean {
-    if (!this.syncdb) return false;
-    const current = this.findChatRow();
-    if (current == null) return false;
-    const generating = this.recordField<boolean>(current, "generating");
-    if (generating !== false) return false;
-    const history = this.historyToArray(this.recordField(current, "history"));
-    const currentContent = history[0]?.content ?? "";
-    const currentThreadId =
-      this.recordField<string>(current, "acp_thread_id") ?? null;
-    const currentStartedAtMs = this.normalizeStartedAtMs(
-      this.recordField<number | string>(current, "acp_started_at_ms"),
-    );
-    const currentInterrupted =
-      this.recordField<boolean>(current, "acp_interrupted") === true;
-    let currentUsageJson = "null";
     try {
-      currentUsageJson = JSON.stringify(
-        this.recordField<any>(current, "acp_usage") ?? null,
+      if (!this.syncdb) return false;
+      const current = this.findChatRow();
+      if (current == null) return false;
+      const generating = this.recordField<boolean>(current, "generating");
+      if (generating !== false) return false;
+      const history = this.historyToArray(this.recordField(current, "history"));
+      const currentContent = history[0]?.content ?? "";
+      const currentThreadId =
+        this.recordField<string>(current, "acp_thread_id") ?? null;
+      const currentStartedAtMs = this.normalizeStartedAtMs(
+        this.recordField<number | string>(current, "acp_started_at_ms"),
       );
-    } catch {
-      currentUsageJson = "null";
+      const currentInterrupted =
+        this.recordField<boolean>(current, "acp_interrupted") === true;
+      let currentUsageJson = "null";
+      try {
+        currentUsageJson = JSON.stringify(
+          this.recordField<any>(current, "acp_usage") ?? null,
+        );
+      } catch {
+        currentUsageJson = "null";
+      }
+      return (
+        currentContent === (this.content ?? "") &&
+        currentThreadId === this.threadId &&
+        currentStartedAtMs ===
+          this.normalizeStartedAtMs(this.metadata.started_at_ms) &&
+        currentInterrupted === this.interruptNotified &&
+        currentUsageJson === this.usageFingerprint()
+      );
+    } catch (err) {
+      logger.warn("failed to verify terminal chat row", {
+        chatKey: this.chatKey,
+        path: this.metadata.path,
+        message_id: this.metadata.message_id,
+        err,
+      });
+      return false;
     }
-    return (
-      currentContent === (this.content ?? "") &&
-      currentThreadId === this.threadId &&
-      currentStartedAtMs ===
-        this.normalizeStartedAtMs(this.metadata.started_at_ms) &&
-      currentInterrupted === this.interruptNotified &&
-      currentUsageJson === this.usageFingerprint()
-    );
   }
 
   private resolveInlineCodeLinks(): InlineCodeLink[] | undefined {
@@ -5329,6 +5366,25 @@ export function isProjectAcpStorageError(err: unknown): boolean {
 
 export function isFatalAcpWorkerStorageError(err: unknown): boolean {
   return isProjectAcpStorageError(err);
+}
+
+export function shouldCompleteAcpTurnAfterTerminalStorageFailure({
+  err,
+  phase,
+  finishedBy,
+  terminalRowAlreadyPersisted,
+}: {
+  err: unknown;
+  phase: string;
+  finishedBy?: "summary" | "error" | "interrupt";
+  terminalRowAlreadyPersisted: boolean;
+}): boolean {
+  return (
+    phase === "terminal-summary" &&
+    finishedBy === "summary" &&
+    terminalRowAlreadyPersisted &&
+    acpStorageFailureCode(err) === "ACP_TERMINAL_STORAGE_TIMEOUT"
+  );
 }
 
 function makeTerminalStorageTimeoutError({
