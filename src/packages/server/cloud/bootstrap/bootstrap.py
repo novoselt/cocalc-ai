@@ -2112,6 +2112,7 @@ fi
 cmd="$1"
 shift
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
+STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"
 STORAGE_CGROUP_CPU_MAX="100000 100000"
 
 deny() {
@@ -2138,13 +2139,14 @@ project_pool_cgroup_storage() {
 }
 
 project_storage_cgroup() {
-  local pool
-  pool="$(project_pool_cgroup_storage)"
-  printf '%s\n' "${pool}/storage"
+  printf '%s\n' "${STORAGE_CGROUP_DEFAULT}"
 }
 
 configure_project_storage_cgroup() {
   local pool="$1"
+  if [ -w /sys/fs/cgroup/cgroup.subtree_control ]; then
+    printf '+cpu\n' > /sys/fs/cgroup/cgroup.subtree_control || true
+  fi
   mkdir -p "$pool"
   if [ -w "${pool}/cpu.max" ]; then
     printf '%s\n' "${STORAGE_CGROUP_CPU_MAX}" > "${pool}/cpu.max" || true

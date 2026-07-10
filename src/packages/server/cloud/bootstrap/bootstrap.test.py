@@ -1173,10 +1173,19 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("BEES_ALREADY_RUNNING", script)
             self.assertIn("flock -n 9", script)
             self.assertIn("flock-missing", script)
+            self.assertIn(
+                'STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"',
+                script,
+            )
             self.assertIn('STORAGE_CGROUP_CPU_MAX="100000 100000"', script)
             self.assertIn("project_storage_cgroup()", script)
+            self.assertIn("printf '%s\n' \"${STORAGE_CGROUP_DEFAULT}\"", script)
             self.assertIn('pool="$(project_storage_cgroup)"', script)
             self.assertIn('configure_project_storage_cgroup "$pool"', script)
+            self.assertIn(
+                "> /sys/fs/cgroup/cgroup.subtree_control",
+                script,
+            )
             self.assertIn('> "${pool}/cpu.max"', script)
             self.assertIn('attach_pid_to_project_pool_storage "$$" "$pool"', script)
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
