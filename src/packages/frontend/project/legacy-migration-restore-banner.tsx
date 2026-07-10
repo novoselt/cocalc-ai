@@ -21,6 +21,7 @@ import type {
   LegacyMigrationProjectRemediationStatusResponse,
 } from "@cocalc/conat/hub/api/legacy-migration";
 import { redux, useProjectFromMap } from "@cocalc/frontend/app-framework";
+import { Tooltip } from "@cocalc/frontend/components";
 import { isDismissed, progressBarStatus } from "@cocalc/frontend/lro/utils";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS } from "@cocalc/util/theme";
@@ -670,6 +671,23 @@ export function LegacyMigrationRestoreBanner({
     }
   }
 
+  async function prepareFinalArchiveComparison() {
+    setRemediationPreparing(true);
+    setRemediationError("");
+    try {
+      const status =
+        await webapp_client.conat_client.hub.legacyMigration.prepareProjectRemediation(
+          { project_id },
+        );
+      setRemediation(status);
+    } catch (err) {
+      setRemediationError(`${err}`);
+      void message.error(`${err}`);
+    } finally {
+      setRemediationPreparing(false);
+    }
+  }
+
   async function safelyCopyFinalArchive() {
     setRemediationApplying(true);
     setRemediationError("");
@@ -799,20 +817,44 @@ export function LegacyMigrationRestoreBanner({
                 <Text type="danger">{remediationError}</Text>
               ) : null}
               <Space wrap>
-                <Button
-                  disabled={!remediation.prepared_at}
-                  onClick={() => void openFinalArchiveSnapshot()}
+                {!remediation.prepared_at ? (
+                  <Button
+                    loading={remediationPreparing}
+                    onClick={() => void prepareFinalArchiveComparison()}
+                  >
+                    Prepare final archive comparison
+                  </Button>
+                ) : null}
+                <Tooltip
+                  title={
+                    remediation.prepared_at
+                      ? undefined
+                      : "Prepare the final archive comparison first."
+                  }
                 >
-                  Open final archive snapshot
-                </Button>
-                <Button
-                  type="primary"
-                  disabled={!remediation.prepared_at || applied}
-                  loading={remediationApplying}
-                  onClick={() => void safelyCopyFinalArchive()}
+                  <Button
+                    disabled={!remediation.prepared_at}
+                    onClick={() => void openFinalArchiveSnapshot()}
+                  >
+                    Open final archive snapshot
+                  </Button>
+                </Tooltip>
+                <Tooltip
+                  title={
+                    remediation.prepared_at
+                      ? undefined
+                      : "Prepare the final archive comparison first."
+                  }
                 >
-                  Safely copy final cocalc.com files
-                </Button>
+                  <Button
+                    type="primary"
+                    disabled={!remediation.prepared_at || applied}
+                    loading={remediationApplying}
+                    onClick={() => void safelyCopyFinalArchive()}
+                  >
+                    Safely copy final cocalc.com files
+                  </Button>
+                </Tooltip>
                 <Button onClick={() => setRemediationDismissOpen(true)}>
                   Dismiss
                 </Button>
