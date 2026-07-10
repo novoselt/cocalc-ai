@@ -1,6 +1,6 @@
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
 import type { EditorDescription } from "@cocalc/frontend/frame-editors/frame-tree/types";
-import { Card, Input, Select } from "antd";
+import { Card, Input } from "antd";
 import { path_split, separate_file_extension, set } from "@cocalc/util/misc";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { throttle } from "lodash";
@@ -12,12 +12,7 @@ import type { ChatMessages } from "@cocalc/frontend/chat/types";
 import type { ChatActions } from "@cocalc/frontend/chat/actions";
 import type { ChatStoreSearchHit } from "@cocalc/conat/hub/api/projects";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
-import { deriveThreadLabel } from "@cocalc/frontend/chat/threads";
 import useSearchIndex from "@cocalc/frontend/frame-editors/generic/search/use-search-index";
-
-const ALL_MESSAGES_LABEL = "All messages";
-const ALL_MESSAGES_KEY = "__all_messages__";
-const LEGACY_COMBINED_FEED_KEY = "__COMBINED_FEED__";
 
 interface MatchHit {
   id: string;
@@ -28,11 +23,9 @@ interface MatchHit {
   source?: "live" | "archived";
 }
 
-interface ThreadOption {
-  key: string;
-  label: string;
-  newestTime: number;
-}
+type ChatEditorNavigator = {
+  gotoFragment?: (fragmentId: Record<string, string>) => void | Promise<void>;
+};
 
 function asArchivedFlag(value: unknown): boolean {
   if (value === true || value === 1) return true;
@@ -41,15 +34,6 @@ function asArchivedFlag(value: unknown): boolean {
     return v === "1" || v === "true" || v === "yes";
   }
   return false;
-}
-
-function threadLabelFromConfigRow(row: any, newestTime: number): string {
-  const name = typeof row?.name === "string" ? row.name.trim() : "";
-  if (name) return name;
-  if (newestTime > 0) {
-    return new Date(newestTime).toLocaleString();
-  }
-  return "Untitled chat";
 }
 
 export const search: EditorDescription = {
@@ -80,19 +64,9 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
     desc?.get?.("data-search") ?? "",
   );
   const externalSearch = `${desc?.get?.("data-search") ?? ""}`;
-  const externalSearchThread =
-    `${desc?.get?.("data-searchThread") ?? ""}`.trim();
-  const { error, setError, index, doRefresh, fragmentKey, isIndexing } =
-    useSearchIndex();
+  const { error, setError, index, doRefresh, isIndexing } = useSearchIndex();
   const messageCache = chatActions?.messageCache;
   const [cacheVersion, setCacheVersion] = useState<number>(0);
-  const [selectedThreadKey, setSelectedThreadKey] = useState<
-    string | undefined
-  >(
-    externalSearchThread === LEGACY_COMBINED_FEED_KEY
-      ? ALL_MESSAGES_KEY
-      : externalSearchThread || undefined,
-  );
   const [result, setResult] = useState<MatchHit[]>([]);
   const [archivedResult, setArchivedResult] = useState<MatchHit[]>([]);
   const [archivedTotalCount, setArchivedTotalCount] = useState<number>(0);
@@ -115,63 +89,6 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
   );
 
   const messages: ChatMessages | undefined = chatActions?.getAllMessages();
-  const threadIndex = chatActions?.getThreadIndex?.();
-
-  const threadOptions: ThreadOption[] = useMemo(() => {
-    const archivedByThreadId = new Map<string, boolean>();
-    for (const row0 of chatActions?.listThreadConfigRows?.() ?? []) {
-      const row = row0 && typeof row0?.toJS === "function" ? row0.toJS() : row0;
-      const threadId = `${row?.thread_id ?? ""}`.trim();
-      if (!threadId) continue;
-      archivedByThreadId.set(threadId, asArchivedFlag(row?.archived));
-    }
-    const byKey = new Map<string, ThreadOption>();
-    for (const entry of threadIndex?.values() ?? []) {
-      if (archivedByThreadId.get(entry.key) === true) continue;
-      const rootMessage =
-        entry.rootMessage ?? (messages ? messages.get(entry.key) : undefined);
-      byKey.set(entry.key, {
-        key: entry.key,
-        label: deriveThreadLabel(rootMessage, entry.key),
-        newestTime: entry.newestTime,
-      });
-    }
-    const configRows = chatActions?.listThreadConfigRows?.() ?? [];
-    for (const row0 of configRows) {
-      const row = row0 && typeof row0?.toJS === "function" ? row0.toJS() : row0;
-      const threadId = `${row?.thread_id ?? ""}`.trim();
-      if (
-        !threadId ||
-        threadId === LEGACY_COMBINED_FEED_KEY ||
-        threadId === ALL_MESSAGES_KEY ||
-        archivedByThreadId.get(threadId) === true
-      ) {
-        continue;
-      }
-      const whenRaw = row?.updated_at ?? row?.date;
-      const when = new Date(whenRaw);
-      const newestTime = Number.isFinite(when.valueOf()) ? when.valueOf() : 0;
-      const configLabel = threadLabelFromConfigRow(row, newestTime);
-      const configName = typeof row?.name === "string" ? row.name.trim() : "";
-      const existing = byKey.get(threadId);
-      if (existing) {
-        // Prefer explicit thread-config names over inferred root-message labels.
-        if (configName) {
-          existing.label = configLabel;
-        }
-        existing.newestTime = Math.max(existing.newestTime, newestTime);
-        continue;
-      }
-      byKey.set(threadId, {
-        key: threadId,
-        label: configLabel,
-        newestTime,
-      });
-    }
-    const items = Array.from(byKey.values());
-    items.sort((a, b) => b.newestTime - a.newestTime);
-    return items;
-  }, [threadIndex, messages, chatActions]);
 
   const archivedThreadIds = useMemo(() => {
     const out = new Set<string>();
@@ -216,42 +133,13 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
   }, [refreshIndex]);
 
   useEffect(() => {
-    if (!selectedThreadKey && threadOptions.length > 0) {
-      setSelectedThreadKey(threadOptions[0].key);
-      return;
-    }
-    if (
-      selectedThreadKey &&
-      selectedThreadKey !== ALL_MESSAGES_KEY &&
-      !threadOptions.some((thread) => thread.key === selectedThreadKey)
-    ) {
-      setSelectedThreadKey(threadOptions[0]?.key);
-    }
-  }, [selectedThreadKey, threadOptions]);
-
-  useEffect(() => {
     setSearchInput(externalSearch);
     setSearch(externalSearch);
   }, [externalSearch]);
 
-  useEffect(() => {
-    if (!externalSearchThread) return;
-    const normalizedThreadKey =
-      externalSearchThread === LEGACY_COMBINED_FEED_KEY
-        ? ALL_MESSAGES_KEY
-        : externalSearchThread;
-    if (selectedThreadKey === normalizedThreadKey) return;
-    setSelectedThreadKey(normalizedThreadKey);
-  }, [externalSearchThread, selectedThreadKey]);
-
-  const searchScope = selectedThreadKey ?? threadOptions[0]?.key;
-
   const scopeKeys = useMemo(() => {
     if (!messages) {
       return [];
-    }
-    if (searchScope && searchScope !== ALL_MESSAGES_KEY && threadIndex) {
-      return Array.from(threadIndex.get(searchScope)?.messageKeys ?? []);
     }
     return Array.from(messages.keys()).filter((key) => {
       const msg = messages.get(key) as any;
@@ -259,30 +147,20 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
       if (!threadId) return true;
       return !archivedThreadIds.has(threadId);
     });
-  }, [messages, threadIndex, searchScope, archivedThreadIds]);
+  }, [messages, archivedThreadIds]);
 
   const scopeHasArchivedRows = useMemo(() => {
-    if (!chatActions || !searchScope) return false;
-    if (searchScope === ALL_MESSAGES_KEY) {
-      // Cross-thread backend search should include only non-archived threads.
-      const rows = chatActions?.listThreadConfigRows?.() ?? [];
-      for (const row0 of rows) {
-        const row =
-          row0 && typeof row0?.toJS === "function" ? row0.toJS() : row0;
-        const threadId = `${row?.thread_id ?? ""}`.trim();
-        if (!threadId || archivedThreadIds.has(threadId)) continue;
-        const value = Number(row?.archived_chat_rows ?? 0);
-        if (Number.isFinite(value) && value > 0) return true;
-      }
-      return false;
+    if (!chatActions) return false;
+    const rows = chatActions?.listThreadConfigRows?.() ?? [];
+    for (const row0 of rows) {
+      const row = row0 && typeof row0?.toJS === "function" ? row0.toJS() : row0;
+      const threadId = `${row?.thread_id ?? ""}`.trim();
+      if (!threadId || archivedThreadIds.has(threadId)) continue;
+      const value = Number(row?.archived_chat_rows ?? 0);
+      if (Number.isFinite(value) && value > 0) return true;
     }
-    if (archivedThreadIds.has(searchScope)) return false;
-    const meta = chatActions.getThreadMetadata?.(searchScope, {
-      threadId: searchScope,
-    });
-    const value = meta?.archived_chat_rows;
-    return typeof value === "number" && Number.isFinite(value) && value > 0;
-  }, [chatActions, searchScope, cacheVersion, archivedThreadIds]);
+    return false;
+  }, [chatActions, cacheVersion, archivedThreadIds]);
   const keysToScanSet = useMemo(() => new Set(scopeKeys), [scopeKeys]);
 
   const resultLimit = useMemo(() => messages?.size ?? 0, [messages]);
@@ -305,10 +183,16 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
           keysToScanSet.has(hit.id ?? hit.document?.id),
         );
         setResult(
-          filtered.map((hit) => ({
-            id: hit.id,
-            content: hit.document?.content ?? "",
-          })),
+          filtered.map((hit) => {
+            const id = `${hit.id ?? hit.document?.id ?? ""}`;
+            return {
+              id,
+              content: hit.document?.content ?? "",
+              threadId:
+                `${(messages.get(id) as any)?.thread_id ?? ""}`.trim() ||
+                undefined,
+            };
+          }),
         );
       } catch (err) {
         if (!cancelled) {
@@ -323,13 +207,7 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
 
   useEffect(() => {
     const query = search.trim();
-    if (
-      !query ||
-      !project_id ||
-      !path ||
-      !searchScope ||
-      !scopeHasArchivedRows
-    ) {
+    if (!query || !project_id || !path || !scopeHasArchivedRows) {
       setArchivedSearchLoading(false);
       setArchivedSearchError("");
       setArchivedResult([]);
@@ -344,9 +222,7 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
       setArchivedTotalCount(0);
       return;
     }
-    const threadId = searchScope === ALL_MESSAGES_KEY ? undefined : searchScope;
-    const excludedThreadIds =
-      threadId == null ? Array.from(archivedThreadIds) : undefined;
+    const excludedThreadIds = Array.from(archivedThreadIds);
     let cancelled = false;
     setArchivedSearchLoading(true);
     setArchivedSearchError("");
@@ -356,7 +232,7 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
           project_id,
           chat_path: path,
           query,
-          thread_id: threadId,
+          thread_id: undefined,
           exclude_thread_ids: excludedThreadIds,
           limit: 100,
           offset: 0,
@@ -379,14 +255,7 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [
-    project_id,
-    path,
-    search,
-    searchScope,
-    scopeHasArchivedRows,
-    archivedThreadIds,
-  ]);
+  }, [project_id, path, search, scopeHasArchivedRows, archivedThreadIds]);
 
   const combinedResult = useMemo(() => {
     if (archivedResult.length === 0) return result;
@@ -434,14 +303,8 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
 
   const onSelectHit = useCallback(
     async (hit: MatchHit) => {
-      const key = fragmentKey ?? "chat";
       let dateMs = Number.parseFloat(hit.id);
-      if (hit.source === "archived" && hit.threadId) {
-        // In cross-thread scopes, lock onto the hit's thread first so follow-up
-        // navigation/search context is coherent.
-        if (searchScope === ALL_MESSAGES_KEY) {
-          setSelectedThreadKey(hit.threadId);
-        }
+      if (hit.source === "archived") {
         try {
           const hydratedDate = await hydrateArchivedHit(hit);
           if (Number.isFinite(hydratedDate)) {
@@ -452,9 +315,24 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
         }
       }
       if (!Number.isFinite(dateMs)) return;
-      actions?.gotoFragment?.({ [key]: `${dateMs}` });
+      const fragment: Record<string, string> = { chat: `${dateMs}` };
+      if (hit.threadId) {
+        fragment["thread"] = hit.threadId;
+      }
+      const editorNavigator = actions as ChatEditorNavigator | undefined;
+      if (typeof editorNavigator?.gotoFragment === "function") {
+        void editorNavigator.gotoFragment(fragment);
+        return;
+      }
+      if (hit.threadId) {
+        chatActions?.clearAllFilters?.();
+        chatActions?.setSelectedThread?.(hit.threadId);
+        setTimeout(() => chatActions?.scrollToDate?.(dateMs), 0);
+      } else {
+        chatActions?.scrollToDate?.(dateMs);
+      }
     },
-    [actions, fragmentKey, hydrateArchivedHit, searchScope],
+    [actions, chatActions, hydrateArchivedHit],
   );
 
   const loadedCount = result.length;
@@ -500,25 +378,6 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
             alignItems: "stretch",
           }}
         >
-          <Select
-            style={{ width: "100%" }}
-            value={searchScope}
-            onChange={(value) => setSelectedThreadKey(value)}
-            showSearch={{
-              optionFilterProp: "label",
-              filterSort: (optionA, optionB) =>
-                (optionA?.label ?? "")
-                  .toLowerCase()
-                  .localeCompare((optionB?.label ?? "").toLowerCase()),
-            }}
-            options={[
-              { value: ALL_MESSAGES_KEY, label: ALL_MESSAGES_LABEL },
-              ...threadOptions.map((thread) => ({
-                value: thread.key,
-                label: thread.label,
-              })),
-            ]}
-          />
           <Input.Search
             style={{ fontSize, width: "100%" }}
             allowClear
