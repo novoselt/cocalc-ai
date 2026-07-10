@@ -24,7 +24,12 @@ const DEVICE_AUTH_PRUNE_INTERVAL_MS = Math.max(
 );
 const CODEX_CREDENTIAL_STORE_SETTING = 'cli_auth_credentials_store = "file"';
 
-type DeviceAuthState = "pending" | "completed" | "failed" | "canceled";
+type DeviceAuthState =
+  | "pending"
+  | "syncing"
+  | "completed"
+  | "failed"
+  | "canceled";
 
 type DeviceAuthSession = {
   id: string;
@@ -41,7 +46,16 @@ type DeviceAuthSession = {
   output: string;
   verificationUrl?: string;
   userCode?: string;
+  syncedToRegistry?: boolean;
+  syncError?: string;
+  verifyPromise?: Promise<void>;
 };
+
+type DeviceAuthVerifier = (opts: {
+  projectId: string;
+  accountId: string;
+  codexHome: string;
+}) => Promise<void>;
 
 const sessions = new Map<string, DeviceAuthSession>();
 
@@ -235,6 +249,8 @@ function snapshot(session: DeviceAuthSession) {
     exitCode: session.exitCode,
     signal: session.signal,
     error: session.error,
+    syncedToRegistry: session.syncedToRegistry,
+    syncError: session.syncError,
   };
 }
 
@@ -301,7 +317,7 @@ export async function startLiteCodexDeviceAuth({
     session.updatedAt = Date.now();
     if (session.state === "canceled") return;
     if (code === 0) {
-      session.state = "completed";
+      session.state = "syncing";
       return;
     }
     session.state = "failed";
@@ -331,6 +347,50 @@ export function getLiteCodexDeviceAuthStatus(
   const session = sessions.get(id);
   if (!session) return;
   return snapshot(session);
+}
+
+export async function verifyLiteCodexDeviceAuthStatus(
+  id: string,
+  verifySubscriptionAuth: DeviceAuthVerifier,
+): Promise<LiteCodexDeviceAuthStatus | undefined> {
+  pruneSessions();
+  const session = sessions.get(id);
+  if (!session) return;
+  if (session.state !== "syncing") {
+    return snapshot(session);
+  }
+  session.verifyPromise ??= (async () => {
+    try {
+      await verifySubscriptionAuth({
+        projectId: session.projectId,
+        accountId: session.accountId,
+        codexHome: session.codexHome,
+      });
+      const current = sessions.get(id);
+      if (!current || current.state === "canceled") return;
+      current.state = "completed";
+      current.syncedToRegistry = true;
+      current.syncError = undefined;
+      current.updatedAt = Date.now();
+    } catch (err) {
+      const current = sessions.get(id);
+      if (!current || current.state === "canceled") return;
+      current.state = "failed";
+      current.syncedToRegistry = false;
+      current.syncError = `${err}`;
+      current.error =
+        "ChatGPT sign-in succeeded, but CoCalc could not verify that Codex can use the saved credential. Please try signing in again.";
+      current.updatedAt = Date.now();
+    } finally {
+      const current = sessions.get(id);
+      if (current) current.verifyPromise = undefined;
+    }
+  })();
+  if (session.verifyPromise) {
+    await session.verifyPromise;
+  }
+  const current = sessions.get(id);
+  return current ? snapshot(current) : undefined;
 }
 
 export function cancelLiteCodexDeviceAuth(id: string): boolean {

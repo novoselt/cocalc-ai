@@ -89,6 +89,64 @@ describe("codex device auth", () => {
     });
   });
 
+  it("does not report completed until synced subscription auth is verified", async () => {
+    const verification = deferred<void>();
+    const proc = new FakeProc();
+    spawnCodexInProjectContainerMock.mockResolvedValue({ proc });
+    pushSubscriptionAuthToRegistryMock.mockResolvedValue({ ok: true });
+    const { startCodexDeviceAuth, getCodexDeviceAuthStatus } =
+      await import("./codex/codex-device-auth");
+
+    const started = await startCodexDeviceAuth(
+      "project-1",
+      "account-1",
+      () => verification.promise,
+    );
+    proc.emit("exit", 0, null);
+    await Promise.resolve();
+
+    expect(getCodexDeviceAuthStatus(started.id)).toMatchObject({
+      state: "syncing",
+      syncedToRegistry: true,
+    });
+
+    verification.resolve();
+    await verification.promise;
+    await Promise.resolve();
+
+    expect(getCodexDeviceAuthStatus(started.id)).toMatchObject({
+      state: "completed",
+      syncedToRegistry: true,
+    });
+  });
+
+  it("fails device auth when synced subscription auth cannot be verified", async () => {
+    const proc = new FakeProc();
+    spawnCodexInProjectContainerMock.mockResolvedValue({ proc });
+    pushSubscriptionAuthToRegistryMock.mockResolvedValue({ ok: true });
+    const { startCodexDeviceAuth, getCodexDeviceAuthStatus } =
+      await import("./codex/codex-device-auth");
+
+    const started = await startCodexDeviceAuth(
+      "project-1",
+      "account-1",
+      async () => {
+        throw Error("account/rateLimits/read: auth required");
+      },
+    );
+    proc.emit("exit", 0, null);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(getCodexDeviceAuthStatus(started.id)).toMatchObject({
+      state: "failed",
+      syncedToRegistry: true,
+      syncError: "Error: account/rateLimits/read: auth required",
+      error:
+        "ChatGPT sign-in succeeded, but CoCalc could not verify that Codex can use the saved credential. Please try signing in again.",
+    });
+  });
+
   it("fails device auth when subscription auth cannot be synced to registry", async () => {
     const proc = new FakeProc();
     spawnCodexInProjectContainerMock.mockResolvedValue({ proc });

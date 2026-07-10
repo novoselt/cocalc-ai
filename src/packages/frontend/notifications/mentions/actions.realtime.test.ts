@@ -121,17 +121,22 @@ describe("MentionsActions realtime feed", () => {
   });
 
   it("subscribes to the notification feed and applies delta events", async () => {
+    let mentionsStore = ImmutableMap({ mentions: ImmutableMap() });
     const redux = {
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
         }
         if (name === "mentions") {
-          return ImmutableMap({ mentions: ImmutableMap() });
+          return mentionsStore;
         }
         return ImmutableMap();
       }),
-      _set_state: jest.fn(),
+      _set_state: jest.fn((patch) => {
+        if (patch.mentions != null) {
+          mentionsStore = mentionsStore.merge(patch.mentions);
+        }
+      }),
       removeActions: jest.fn(),
     } as any;
     const actions = new MentionsActions("mentions", redux);
@@ -219,6 +224,189 @@ describe("MentionsActions realtime feed", () => {
     expect(diagnostics.history_gap_count).toBe(1);
     expect(diagnostics.last_repair_reason).toBe("history-gap");
     expect(diagnostics.last_repair_scope).toBe("counts-and-inbox");
+  });
+
+  it("repairs a count/list mismatch by loading unread rows explicitly", async () => {
+    const missedUnreadRow = {
+      notification_id: "n-missed",
+      kind: "mention",
+      project_id: null,
+      summary: {
+        title: "Missed notice",
+      },
+      read_state: {
+        read: false,
+        saved: false,
+      },
+      created_at: new Date("2026-04-05T00:00:00.000Z"),
+      updated_at: new Date("2026-04-05T00:00:00.000Z"),
+    };
+    mockedWebappClient.conat_client.hub.notifications.list.mockImplementation(
+      async (opts = {}) =>
+        (opts as { state?: string }).state === "unread"
+          ? [missedUnreadRow]
+          : [],
+    );
+    mockedWebappClient.conat_client.hub.notifications.counts.mockResolvedValue({
+      total: 1,
+      unread: 1,
+      saved: 0,
+      archived: 0,
+      by_kind: {
+        mention: {
+          total: 1,
+          unread: 1,
+          saved: 0,
+          archived: 0,
+        },
+      },
+    });
+
+    let mentionsStore = ImmutableMap({
+      mentions: ImmutableMap(),
+      unread_count: 0,
+    });
+    const redux = {
+      getStore: jest.fn((name: string) => {
+        if (name === "account") {
+          return ImmutableMap({ account_id: "acct-1" });
+        }
+        if (name === "mentions") {
+          return mentionsStore;
+        }
+        return ImmutableMap();
+      }),
+      _set_state: jest.fn((patch) => {
+        if (patch.mentions != null) {
+          mentionsStore = mentionsStore.merge(patch.mentions);
+        }
+      }),
+      removeActions: jest.fn(),
+    } as any;
+    const actions = new MentionsActions("mentions", redux);
+
+    actions._init();
+    await flush();
+
+    expect(
+      mockedWebappClient.conat_client.hub.notifications.list,
+    ).toHaveBeenCalledWith({ limit: MAX_NOTIFICATION_INBOX_LIST_LIMIT });
+    expect(
+      mockedWebappClient.conat_client.hub.notifications.list,
+    ).toHaveBeenCalledWith({
+      state: "unread",
+      limit: MAX_NOTIFICATION_INBOX_LIST_LIMIT,
+    });
+    expect(mentionsStore.get("unread_count")).toBe(1);
+    expect(
+      mentionsStore.getIn(["mentions", "n-missed", "users", "acct-1", "read"]),
+    ).toBe(false);
+  });
+
+  it("repairs when realtime counts reveal a missing unread row", async () => {
+    const missedUnreadRow = {
+      notification_id: "n-realtime-missed",
+      kind: "mention",
+      project_id: null,
+      summary: {
+        title: "Realtime missed notice",
+      },
+      read_state: {
+        read: false,
+        saved: false,
+      },
+      created_at: new Date("2026-04-05T00:00:00.000Z"),
+      updated_at: new Date("2026-04-05T00:00:00.000Z"),
+    };
+
+    let mentionsStore = ImmutableMap({
+      mentions: ImmutableMap(),
+      unread_count: 0,
+    });
+    const redux = {
+      getStore: jest.fn((name: string) => {
+        if (name === "account") {
+          return ImmutableMap({ account_id: "acct-1" });
+        }
+        if (name === "mentions") {
+          return mentionsStore;
+        }
+        return ImmutableMap();
+      }),
+      _set_state: jest.fn((patch) => {
+        if (patch.mentions != null) {
+          mentionsStore = mentionsStore.merge(patch.mentions);
+        }
+      }),
+      removeActions: jest.fn(),
+    } as any;
+    const actions = new MentionsActions("mentions", redux);
+
+    actions._init();
+    await flush();
+
+    mockedWebappClient.conat_client.hub.notifications.list.mockImplementation(
+      async (opts = {}) =>
+        (opts as { state?: string }).state === "unread"
+          ? [missedUnreadRow]
+          : [],
+    );
+    mockedWebappClient.conat_client.hub.notifications.counts.mockResolvedValue({
+      total: 1,
+      unread: 1,
+      saved: 0,
+      archived: 0,
+      by_kind: {
+        mention: {
+          total: 1,
+          unread: 1,
+          saved: 0,
+          archived: 0,
+        },
+      },
+    });
+
+    const feed = await getSharedAccountDStreamMock.mock.results[0].value;
+    feed.emit("change", {
+      type: "notification.counts",
+      account_id: "acct-1",
+      reason: "projected_upsert",
+      ts: Date.now(),
+      counts: {
+        total: 1,
+        unread: 1,
+        saved: 0,
+        archived: 0,
+        by_kind: {
+          mention: {
+            total: 1,
+            unread: 1,
+            saved: 0,
+            archived: 0,
+          },
+        },
+      },
+    });
+    await flush();
+
+    expect(
+      mockedWebappClient.conat_client.hub.notifications.list,
+    ).toHaveBeenCalledWith({
+      state: "unread",
+      limit: MAX_NOTIFICATION_INBOX_LIST_LIMIT,
+    });
+    expect(
+      collectProjectionDiagnostics().consumers.notifications.last_repair_reason,
+    ).toBe("count-mismatch");
+    expect(
+      mentionsStore.getIn([
+        "mentions",
+        "n-realtime-missed",
+        "users",
+        "acct-1",
+        "read",
+      ]),
+    ).toBe(false);
   });
 
   it("only shows codex completion toasts for new unread notification arrivals", async () => {
