@@ -1485,6 +1485,8 @@ async function startAccountLocalService(): Promise<void> {
       await legacyMigration.getProjectRemediation(opts),
     legacyMigrationPrepareProjectRemediation: async (opts) =>
       await legacyMigration.prepareProjectRemediation(opts),
+    legacyMigrationAdminPrepareProjectRemediation: async (opts) =>
+      await legacyMigration.adminPrepareProjectRemediation(opts),
     legacyMigrationApplyProjectRemediation: async (opts) =>
       await legacyMigration.applyProjectRemediation(opts),
     legacyMigrationDismissProjectRemediation: async (opts) =>

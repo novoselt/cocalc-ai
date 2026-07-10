@@ -108,6 +108,7 @@ const HUB_API_GROUPS: HubGroupName[] = [
   "lro",
   "ssh",
   "reflect",
+  "legacyMigration",
 ];
 
 export function createHubApiForContext(

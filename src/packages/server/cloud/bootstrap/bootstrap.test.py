@@ -1173,6 +1173,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("BEES_ALREADY_RUNNING", script)
             self.assertIn("flock -n 9", script)
             self.assertIn("flock-missing", script)
+            self.assertIn(
+                'STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"',
+                script,
+            )
+            self.assertIn('STORAGE_CGROUP_CPU_MAX="100000 100000"', script)
+            self.assertIn("project_storage_cgroup()", script)
+            self.assertIn("printf '%s\n' \"${STORAGE_CGROUP_DEFAULT}\"", script)
+            self.assertIn('pool="$(project_storage_cgroup)"', script)
+            self.assertIn('configure_project_storage_cgroup "$pool"', script)
+            self.assertIn(
+                "> /sys/fs/cgroup/cgroup.subtree_control",
+                script,
+            )
+            self.assertIn('> "${pool}/cpu.max"', script)
+            self.assertIn('attach_pid_to_project_pool_storage "$$" "$pool"', script)
+            self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
             self.assertIn('cat "$proc/comm"', script)
             self.assertIn("sandbox-rm)", script)
             self.assertIn("sandbox-rmdir)", script)
@@ -1337,6 +1353,24 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                f'PROJECT_POOL_CPU_RESERVE_CORES_DEFAULT="{bootstrap.DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                f'PROJECT_POOL_CPU_RESERVE_DYNAMIC_MIN_CORES="{bootstrap.DYNAMIC_PROJECT_POOL_CPU_RESERVE_MIN_CORES}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                f'PROJECT_POOL_CPU_RESERVE_DYNAMIC_MAX_CORES="{bootstrap.DYNAMIC_PROJECT_POOL_CPU_RESERVE_MAX_CORES}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                f'MIN_PROJECT_POOL_CPU_CORES="{bootstrap.MIN_PROJECT_POOL_CPU_CORES}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn("project_pool_cpu_max_value()", rootctl.read_text(encoding="utf-8"))
+            self.assertIn('> "${pool}/cpu.max"', rootctl.read_text(encoding="utf-8"))
+            self.assertIn(
                 "repair_runtime_environment()",
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -1465,6 +1499,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text,
             )
             self.assertIn("COCALC_PROJECT_POOL_MEMORY_RESERVE_MB=4096", text)
+            self.assertIn(
+                f"COCALC_PROJECT_POOL_CPU_RESERVE_CORES={bootstrap.DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES}",
+                text,
+            )
             self.assertIn("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS=1", text)
             self.assertIn(
                 "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC=5", text
@@ -1563,6 +1601,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text,
             )
             self.assertIn("COCALC_PROJECT_POOL_MEMORY_RESERVE_MB=8192", text)
+            self.assertIn(
+                f"COCALC_PROJECT_POOL_CPU_RESERVE_CORES={bootstrap.DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES}",
+                text,
+            )
             self.assertNotIn("c.projecthosts.internal:9102", text)
 
     def test_write_env_rejects_invalid_assignments_without_clobbering_existing_file(self) -> None:
@@ -1705,6 +1747,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn(
                 f'ExecStart=/bin/bash -lc "mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; flock -n /mnt/cocalc/data/tmp/project-host-watchdog.lock {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1"',
+                written["/etc/systemd/system/cocalc-project-host-watchdog.service"],
+            )
+            self.assertIn(
+                "KillMode=process",
                 written["/etc/systemd/system/cocalc-project-host-watchdog.service"],
             )
             self.assertIn(
