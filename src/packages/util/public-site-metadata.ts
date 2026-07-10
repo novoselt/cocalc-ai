@@ -180,21 +180,21 @@ const POLICY_METADATA_TITLES: Record<
 };
 
 // Which policy pages a deployment exposes is an admin setting; the server
-// must mirror the client's gating (frontend/public/config.tsx +
-// policies/app.tsx) so metadata, 404s, and the sitemap match what actually
-// renders.
-export type PublicPolicyPagesMode = "none" | "custom" | "sagemathinc";
+// and the client must gate on it identically so metadata, 404s, and the
+// sitemap match what actually renders. These are the shared helpers —
+// frontend/public/config.tsx re-exports them.
+export type PublicPolicyPages = "none" | "custom" | "sagemathinc";
 
-export function getPublicPolicyPagesMode(
-  config?: Pick<PublicRouteMetadataConfig, "policy_pages">,
-): PublicPolicyPagesMode {
+export function getPublicPolicyPages(config?: {
+  policy_pages?: string;
+}): PublicPolicyPages {
   const value = `${config?.policy_pages ?? ""}`.trim();
   return value === "custom" || value === "sagemathinc" ? value : "none";
 }
 
-function externalPoliciesUrl(
-  config?: PublicRouteMetadataConfig,
-): string | undefined {
+export function getExternalPoliciesUrl(config?: {
+  terms_of_service_url?: string;
+}): string | undefined {
   const url = `${config?.terms_of_service_url ?? ""}`.trim();
   return url || undefined;
 }
@@ -245,8 +245,8 @@ function uniquePublicPaths(paths: string[]): string[] {
 // when policies are disabled or hosted externally (the /policies stub for
 // an external URL is thin link-out content and stays unlisted).
 function policySitemapPaths(config?: PublicRouteMetadataConfig): string[] {
-  const mode = getPublicPolicyPagesMode(config);
-  if (mode === "none" || externalPoliciesUrl(config) != null) return [];
+  const mode = getPublicPolicyPages(config);
+  if (mode === "none" || getExternalPoliciesUrl(config) != null) return [];
   const paths = [publicPath("policies")];
   if (mode === "sagemathinc") {
     paths.push(
@@ -729,8 +729,8 @@ function policiesRouteMetadata(
   // Mirrors the client gating in frontend/public/policies/app.tsx: which
   // policy pages exist depends on the "Policy pages" admin setting, an
   // optional external policies URL, and configured imprint/policies text.
-  const mode = getPublicPolicyPagesMode(config);
-  const externalUrl = externalPoliciesUrl(config);
+  const mode = getPublicPolicyPages(config);
+  const externalUrl = getExternalPoliciesUrl(config);
   const visible = externalUrl != null || mode !== "none";
   if (route?.view === "policies-detail" && route.policySlug) {
     const title =
