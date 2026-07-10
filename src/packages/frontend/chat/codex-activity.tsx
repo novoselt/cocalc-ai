@@ -25,6 +25,7 @@ import { containingPath, humanSize, plural } from "@cocalc/util/misc";
 import { isAbsolutePath, normalizeAbsolutePath } from "@cocalc/util/path-model";
 import { COLORS } from "@cocalc/util/theme";
 import type { AttachedSteerMessage } from "./agent-message-status";
+import { addCodexProjectRestartHint } from "./codex-error-presentation";
 import {
   buildPrismLineMetasFromPlain,
   highlightPrismLines,
@@ -1081,14 +1082,21 @@ function truncate(text: string, max: number): string {
 }
 
 function formatErrorDetail(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  if (error == null) return "Unknown error";
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
+  let detail: string;
+  if (typeof error === "string") {
+    detail = error;
+  } else if (error instanceof Error) {
+    detail = error.message;
+  } else if (error == null) {
+    detail = "Unknown error";
+  } else {
+    try {
+      detail = JSON.stringify(error);
+    } catch {
+      detail = String(error);
+    }
   }
+  return addCodexProjectRestartHint(detail);
 }
 
 function eventHasText(
