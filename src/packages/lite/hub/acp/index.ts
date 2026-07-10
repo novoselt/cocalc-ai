@@ -241,6 +241,7 @@ import {
 } from "./worker-manager";
 import { buildCodexRuntimeEnv } from "./runtime-env";
 import { automationHasActiveBackendRun } from "./active-automation-run";
+import { automationAfterScheduledEnqueueFailure } from "./automation-enqueue-failure";
 
 export {
   acpAdmissionLimitsFromEffectiveLimits,
@@ -265,6 +266,10 @@ const CHAT_OFFLOAD_AUTOROTATE_MAX_MESSAGES = 500;
 const ACP_AUTOMATION_STORE = "cocalc-thread-automations-v1";
 const ACP_AUTOMATION_POLL_MS = 30_000;
 const AUTOMATION_DEFAULT_UNACK_LIMIT = 7;
+const ACP_AUTOMATION_SYNCDB_READY_TIMEOUT_MS = envNumber(
+  "COCALC_ACP_AUTOMATION_SYNCDB_READY_TIMEOUT_MS",
+  10_000,
+);
 
 function acpAdmissionContextFromRequest(request: AcpJobRequest) {
   return {
@@ -6313,16 +6318,19 @@ async function withChatSyncDB<T>({
   project_id,
   path,
   fn,
+  readyTimeoutMs,
 }: {
   client: ConatClient;
   project_id: string;
   path: string;
   fn: (syncdb: SyncDB) => Promise<T>;
+  readyTimeoutMs?: number;
 }): Promise<T> {
   const syncdb = await acquireChatSyncDB({
     client,
     project_id,
     path,
+    readyTimeoutMs,
   });
   try {
     if (!syncdb.isReady()) {
@@ -6408,6 +6416,7 @@ async function persistQueuedUserMessageProjection({
   thread_id,
   user_message_id,
   queued,
+  readyTimeoutMs,
 }: {
   client: ConatClient;
   project_id: string;
@@ -6415,11 +6424,13 @@ async function persistQueuedUserMessageProjection({
   thread_id: string;
   user_message_id: string;
   queued: boolean;
+  readyTimeoutMs?: number;
 }): Promise<"queued" | "running" | null> {
   return await withChatSyncDB({
     client,
     project_id,
     path,
+    readyTimeoutMs,
     fn: async (syncdb) => {
       const versionCountBefore = syncdbVersionCount(syncdb);
       const waitingInLine =
@@ -6512,7 +6523,7 @@ function automationMessageLabel(
 
 async function enqueueAutomationRun(
   row: AcpAutomationRow,
-  opts: { manual: boolean },
+  opts: { manual: boolean; syncdbReadyTimeoutMs?: number },
 ): Promise<AcpAutomationRow> {
   if (!conatClient) {
     throw new Error("conat client must be initialized");
@@ -6584,6 +6595,7 @@ async function enqueueAutomationRun(
     client: conatClient,
     project_id: row.project_id,
     path: row.path,
+    readyTimeoutMs: opts.syncdbReadyTimeoutMs,
     fn: async (syncdb) => {
       const threadConfig = preferredThreadConfigRow(syncdb, row.thread_id);
       automationSenderId = resolveAutomationChatSenderId(
@@ -6660,6 +6672,7 @@ async function enqueueAutomationRun(
     thread_id: row.thread_id,
     user_message_id,
     queued: true,
+    readyTimeoutMs: opts.syncdbReadyTimeoutMs,
   });
 
   const updated = upsertAcpAutomation({
@@ -6805,16 +6818,64 @@ async function pollDueAcpAutomations(): Promise<void> {
     const due = listDueAcpAutomations(Date.now());
     for (const row of due) {
       try {
-        await enqueueAutomationRun(row, { manual: false });
+        await enqueueAutomationRun(row, {
+          manual: false,
+          syncdbReadyTimeoutMs: ACP_AUTOMATION_SYNCDB_READY_TIMEOUT_MS,
+        });
       } catch (err) {
         logger.warn("failed to enqueue due automation", {
           automation_id: row.automation_id,
           err,
         });
+        await recordScheduledAutomationEnqueueFailure(row, err);
       }
     }
   } finally {
     acpAutomationPollInFlight = false;
+  }
+}
+
+async function recordScheduledAutomationEnqueueFailure(
+  dueRow: AcpAutomationRow,
+  error: unknown,
+): Promise<void> {
+  const current = getAcpAutomationById(dueRow.automation_id);
+  if (
+    !current ||
+    !current.enabled ||
+    current.status === "paused" ||
+    current.status === "running" ||
+    automationHasActiveBackendRun(current) ||
+    current.next_run_at !== dueRow.next_run_at
+  ) {
+    return;
+  }
+  const updated = upsertAcpAutomation(
+    automationAfterScheduledEnqueueFailure({
+      row: current,
+      error,
+      nowMs: Date.now(),
+      defaultPauseAfterRuns: AUTOMATION_DEFAULT_UNACK_LIMIT,
+    }),
+  );
+  await publishAutomationRecordToProjectIndex(updated);
+  try {
+    await patchThreadAutomationProjection({
+      project_id: updated.project_id,
+      path: updated.path,
+      thread_id: updated.thread_id,
+      updated_by: updated.account_id,
+      automation_config: toAutomationConfig(
+        updated,
+      ) as ChatThreadAutomationConfig,
+      automation_state: toAutomationState(updated) as ChatThreadAutomationState,
+      syncdbReadyTimeoutMs: ACP_AUTOMATION_SYNCDB_READY_TIMEOUT_MS,
+    });
+  } catch (projectionError) {
+    logger.warn("failed to publish automation enqueue failure to chat", {
+      automation_id: updated.automation_id,
+      err: projectionError,
+    });
   }
 }
 
@@ -7307,6 +7368,7 @@ async function patchThreadAutomationProjection(opts: {
   updated_by: string;
   automation_config?: ChatThreadAutomationConfig | null;
   automation_state?: ChatThreadAutomationState | null;
+  syncdbReadyTimeoutMs?: number;
 }): Promise<void> {
   if (!conatClient) {
     throw new Error("conat client must be initialized");
@@ -7315,6 +7377,7 @@ async function patchThreadAutomationProjection(opts: {
     client: conatClient,
     project_id: opts.project_id,
     path: opts.path,
+    readyTimeoutMs: opts.syncdbReadyTimeoutMs,
     fn: async (syncdb) => {
       const current = preferredThreadConfigRow(syncdb, opts.thread_id);
       const base = current && typeof current === "object" ? { ...current } : {};
