@@ -296,6 +296,57 @@ export function listQueuedAcpJobs(): AcpJobRow[] {
     .all() as AcpJobRow[];
 }
 
+export function listQueuedAcpJobThreadKeys(): Pick<
+  AcpJobRow,
+  "project_id" | "path" | "thread_id"
+>[] {
+  ensureInit();
+  const db = getAcpDatabase();
+  return db
+    .prepare(
+      `SELECT project_id, path, thread_id
+       FROM ${TABLE}
+       WHERE state = 'queued'
+       GROUP BY project_id, path, thread_id
+       ORDER BY MAX(priority) DESC, MIN(created_at) ASC`,
+    )
+    .all() as Pick<AcpJobRow, "project_id" | "path" | "thread_id">[];
+}
+
+export function hasQueuedOrRunningAcpJobs(): boolean {
+  ensureInit();
+  const db = getAcpDatabase();
+  return (
+    db
+      .prepare(
+        `SELECT 1
+         FROM ${TABLE}
+         WHERE state IN ('queued', 'running')
+         LIMIT 1`,
+      )
+      .get() != null
+  );
+}
+
+export function oldestQueuedOrRunningAcpJobTimestamp(): number | undefined {
+  ensureInit();
+  const db = getAcpDatabase();
+  const row = db
+    .prepare(
+      `SELECT MIN(
+         CASE
+           WHEN updated_at IS NOT NULL AND updated_at > 0 THEN updated_at
+           ELSE created_at
+         END
+       ) AS oldest
+       FROM ${TABLE}
+       WHERE state IN ('queued', 'running')`,
+    )
+    .get() as { oldest?: number | null } | undefined;
+  const oldest = Number(row?.oldest ?? 0);
+  return Number.isFinite(oldest) && oldest > 0 ? oldest : undefined;
+}
+
 function countAcpJobsByWhere(where: string, args: unknown[]): number {
   ensureInit();
   const db = getAcpDatabase();
@@ -405,6 +456,32 @@ export function countQueuedAcpJobsForThread({
        AND thread_id = ?
        AND state = 'queued'`,
     [project_id, path, thread_id],
+  );
+}
+
+export function hasRunningAcpJobForThread({
+  project_id,
+  path,
+  thread_id,
+}: {
+  project_id: string;
+  path: string;
+  thread_id: string;
+}): boolean {
+  ensureInit();
+  const db = getAcpDatabase();
+  return (
+    db
+      .prepare(
+        `SELECT 1
+         FROM ${TABLE}
+         WHERE project_id = ?
+           AND path = ?
+           AND thread_id = ?
+           AND state = 'running'
+         LIMIT 1`,
+      )
+      .get(project_id, path, thread_id) != null
   );
 }
 

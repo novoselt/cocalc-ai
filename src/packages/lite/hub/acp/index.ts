@@ -149,6 +149,7 @@ import {
   finalizeAcpTurnLease,
   getAcpTurnLease,
   heartbeatAcpTurnLease,
+  countRunningAcpTurnLeasesForWorker,
   listRecentTerminalAcpTurnLeases,
   listRunningAcpTurnLeases,
   startAcpTurnLease,
@@ -157,12 +158,15 @@ import {
 import {
   cancelQueuedAcpJob,
   claimNextQueuedAcpJobForThread,
+  countQueuedAcpJobsForThread,
   countRunningAcpJobsForWorker,
   decodeAcpJobRequest,
   enqueueAcpJob,
   getAcpJob,
   getAcpJobByOpId,
-  listQueuedAcpJobs,
+  hasQueuedOrRunningAcpJobs,
+  hasRunningAcpJobForThread,
+  listQueuedAcpJobThreadKeys,
   listAcpJobsByRecoveryParent,
   listQueuedAcpJobsForThread,
   listRunningAcpJobs,
@@ -636,12 +640,7 @@ function acpThreadHasRunningJob({
   path: string;
   thread_id: string;
 }): boolean {
-  return listRunningAcpJobs().some(
-    (row) =>
-      row.project_id === project_id &&
-      row.path === path &&
-      row.thread_id === thread_id,
-  );
+  return hasRunningAcpJobForThread({ project_id, path, thread_id });
 }
 
 function liveWorkerOwnerIds(host_id: string): Set<string> {
@@ -5605,9 +5604,9 @@ export async function runDetachedAcpQueueWorker(
     if (!workerContext || !currentDetachedWorkerContext) {
       return null;
     }
-    const runningTurnLeases = listRunningAcpTurnLeases().filter(
-      (row) => row.owner_instance_id === workerContext.worker_id,
-    ).length;
+    const runningTurnLeases = countRunningAcpTurnLeasesForWorker(
+      workerContext.worker_id,
+    );
     return {
       worker_id: workerContext.worker_id,
       host_id: workerContext.host_id,
@@ -5661,9 +5660,9 @@ export async function runDetachedAcpQueueWorker(
     const nextState = currentDetachedWorkerContext.state;
     currentDetachedWorkerContext.state = nextState;
     const runningJobs = countRunningAcpJobsForWorker(workerContext.worker_id);
-    const runningTurnLeases = listRunningAcpTurnLeases().filter(
-      (row) => row.owner_instance_id === workerContext.worker_id,
-    ).length;
+    const runningTurnLeases = countRunningAcpTurnLeasesForWorker(
+      workerContext.worker_id,
+    );
     currentDetachedWorkerContext.last_heartbeat_at = now;
     currentDetachedWorkerContext.last_seen_running_jobs = runningJobs;
     heartbeatAcpWorker({
@@ -5810,8 +5809,7 @@ export async function runDetachedAcpQueueWorker(
               : "ACP worker stopped before turn startup",
         });
       }
-      const hasWork =
-        listQueuedAcpJobs().length > 0 || listRunningAcpJobs().length > 0;
+      const hasWork = hasQueuedOrRunningAcpJobs();
       if (hasWork) {
         idleSince = 0;
       } else if (!idleSince) {
@@ -7949,11 +7947,11 @@ function kickQueuedAcpJobsForThread({
     .finally(() => {
       pumpingAcpJobThreads.delete(key);
       if (
-        listQueuedAcpJobsForThread({
+        countQueuedAcpJobsForThread({
           project_id,
           path,
           thread_id,
-        }).length > 0 &&
+        }) > 0 &&
         !acpThreadHasRunningJob({
           project_id,
           path,
@@ -7970,7 +7968,7 @@ function kickAllQueuedAcpJobs(): void {
     return;
   }
   const seen = new Set<string>();
-  for (const job of listQueuedAcpJobs()) {
+  for (const job of listQueuedAcpJobThreadKeys()) {
     const key = acpJobThreadKey(job);
     if (seen.has(key)) continue;
     seen.add(key);
