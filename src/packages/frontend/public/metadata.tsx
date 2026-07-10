@@ -54,9 +54,27 @@ function upsertManagedElement<T extends HTMLMetaElement | HTMLLinkElement>({
   return element;
 }
 
+function removeManagedElement(key: string): void {
+  document.head
+    .querySelector(`[data-cocalc-public-route-meta="${key}"]`)
+    ?.remove();
+}
+
 export function applyPublicRouteMetadata(metadata: PublicRouteMetadata): void {
   const canonicalUrl = absolutePublicUrl(metadata.canonicalPath);
   const imageUrl = absolutePublicUrl(metadata.imagePath);
+
+  // Keep the robots noindex tag in sync during SPA navigation: restricted
+  // pages (e.g. admin-only docs) carry it, everything else must not.
+  if (metadata.noindex) {
+    upsertManagedElement<HTMLMetaElement>({
+      attrs: { content: "noindex", name: "robots" },
+      key: "robots",
+      tag: "meta",
+    });
+  } else {
+    removeManagedElement("robots");
+  }
 
   upsertManagedElement<HTMLMetaElement>({
     attrs: { content: metadata.description, name: "description" },

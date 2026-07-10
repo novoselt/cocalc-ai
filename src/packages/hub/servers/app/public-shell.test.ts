@@ -5,6 +5,12 @@ jest.mock("@cocalc/database/settings/customize", () => ({
   default: jest.fn(async () => ({ siteName: "CoCalc" })),
 }));
 
+jest.mock("@cocalc/database/postgres/news", () => ({
+  getFeedData: jest.fn(async () => [
+    { id: "42", title: "Test post", text: "Hello **world** body" },
+  ]),
+}));
+
 function request(path: string, query: Record<string, string> = {}) {
   const search = new URLSearchParams(query).toString();
   return {
@@ -73,26 +79,45 @@ describe("public shell rendering", () => {
     expect(body.match(/<title>/g)).toHaveLength(1);
   });
 
-  it("gives news posts a per-post canonical and title", async () => {
+  it("resolves news posts from the database for canonical, title, summary", async () => {
     const { html: body, status } = await renderPublicShell(
-      request("/news/cocalc-launches-something-42"),
+      request("/news/test-post-42"),
     );
 
     expect(status).toBe(200);
     expect(body).toContain(
-      'href="https://cocalc.ai/news/cocalc-launches-something-42" rel="canonical"',
+      'href="https://cocalc.ai/news/test-post-42" rel="canonical"',
     );
-    expect(body).toContain("<title>Cocalc launches something | CoCalc</title>");
+    expect(body).toContain("<title>Test post | CoCalc</title>");
+    expect(body).toContain('content="Hello world body"');
+  });
+
+  it("canonicalizes mistyped news slugs to the real post URL by id", async () => {
+    const { html: body, status } = await renderPublicShell(
+      request("/news/totally-wrong-slug-42"),
+    );
+
+    expect(status).toBe(200);
+    expect(body).toContain(
+      'href="https://cocalc.ai/news/test-post-42" rel="canonical"',
+    );
   });
 
   it("canonicalizes news history views to the current post", async () => {
     const { html: body } = await renderPublicShell(
-      request("/news/cocalc-launches-something-42/1751000000"),
+      request("/news/test-post-42/1751000000"),
     );
 
     expect(body).toContain(
-      'href="https://cocalc.ai/news/cocalc-launches-something-42" rel="canonical"',
+      'href="https://cocalc.ai/news/test-post-42" rel="canonical"',
     );
+  });
+
+  it("responds 404 for news ids that do not exist", async () => {
+    const { status } = await renderPublicShell(
+      request("/news/no-such-post-99"),
+    );
+    expect(status).toBe(404);
   });
 
   it("gives rootfs detail pages per-image canonicals", async () => {

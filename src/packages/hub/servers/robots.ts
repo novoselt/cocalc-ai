@@ -54,6 +54,8 @@ function renderPublicRobots(req: Request): string {
     "Disallow: /static/public.html",
     "Disallow: /static/app.html",
     "Disallow: /static/embed.html",
+    // Prefix-match covers all public-viewer*.html share-viewer shells.
+    "Disallow: /static/public-viewer",
     // These are implementation surfaces, not standalone public pages.
     "Disallow: /webapp/",
     "Disallow: /cdn/",

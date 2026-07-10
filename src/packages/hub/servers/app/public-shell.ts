@@ -9,8 +9,10 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 
 import basePath from "@cocalc/backend/base-path";
+import { getFeedData } from "@cocalc/database/postgres/news";
 import getCustomize from "@cocalc/database/settings/customize";
 import { getLogger } from "@cocalc/hub/logger";
+import { slugURL } from "@cocalc/util/news";
 import { path as STATIC_PATH } from "@cocalc/static";
 import {
   getPublicImageDimensions,
@@ -104,14 +106,64 @@ function metaTag(attrs: Record<string, string>): string {
   return `<meta ${rendered}>`;
 }
 
-function buildHead(req: Request): { head: string; notFound: boolean } {
+function stripMarkdownSummary(text?: string): string {
+  return `${text ?? ""}`
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[`*_>#-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
+
+// News detail metadata cannot come from the shared registry-based helper:
+// the post lives in the database. Resolve it here so /news/<slug>-<id>
+// canonicalizes to the post's real slug URL (a mistyped slug still resolves
+// by id and canonicalizes to the correct URL), gets the actual title and a
+// summary, and a nonexistent or unpublished id is a real 404.
+async function resolveNewsMetadata(
+  req: Request,
+  route: ReturnType<typeof getPublicMetadataRouteFromPath>,
+  metadata: ReturnType<typeof getPublicRouteMetadata>,
+): Promise<typeof metadata> {
+  if (
+    route.section !== "news" ||
+    (route.route?.view !== "news-detail" &&
+      route.route?.view !== "news-history")
+  ) {
+    return metadata;
+  }
+  const newsId = `${route.route.newsSlug}`.split("-").pop();
+  const item = (await getFeedData()).find((it) => `${it.id}` === newsId);
+  if (item == null) {
+    return { ...metadata, notFound: true };
+  }
+  const customize = (req as any).cocalcPublicCustomize;
+  const siteName = customize?.siteName ?? "CoCalc";
+  const description = stripMarkdownSummary(item.text);
+  return {
+    ...metadata,
+    canonicalPath: joinUrlPath(basePath, slugURL(item)),
+    ...(description ? { description } : {}),
+    notFound: false,
+    title: item.title === siteName ? item.title : `${item.title} | ${siteName}`,
+  };
+}
+
+async function buildHead(
+  req: Request,
+): Promise<{ head: string; notFound: boolean }> {
   const { path, search } = metadataPathAndSearch(req);
   const route = getPublicMetadataRouteFromPath(path, search, {
     basePath,
   });
-  const metadata = getPublicRouteMetadata(route, publicMetadataConfig(req), {
-    basePath,
-  });
+  const metadata = await resolveNewsMetadata(
+    req,
+    route,
+    getPublicRouteMetadata(route, publicMetadataConfig(req), {
+      basePath,
+    }),
+  );
   const canonicalUrl = absolutePublicUrl(req, metadata.canonicalPath);
   const imageUrl = absolutePublicUrl(req, metadata.imagePath);
   const imageDimensions = getPublicImageDimensions(metadata.imagePath);
@@ -194,18 +246,21 @@ function buildHead(req: Request): { head: string; notFound: boolean } {
     }),
   ].join("\n  ");
 
-  // The shell is built to live under /static/ (its script tags and runtime
-  // chunk loading use URLs relative to that directory), but we serve it at
-  // clean URLs like / and /docs/a/b. The <base> tag makes the relative script
-  // URLs resolve against /static/ regardless of the page URL. It must come
-  // before the plugin-emitted <script> tags, which follow the marker region.
-  const staticBase = `${joinUrlPath(basePath, "static")}/`;
   return {
-    head: `<base href="${htmlEscape(staticBase)}">\n  <title>${htmlEscape(
+    head: `${staticBaseTag()}\n  <title>${htmlEscape(
       metadata.title,
     )}</title>\n  ${socialTags}`,
     notFound: !!metadata.notFound,
   };
+}
+
+// The shell is built to live under /static/ (its script tags and runtime
+// chunk loading use URLs relative to that directory), but we serve it at
+// clean URLs like / and /docs/a/b. The <base> tag makes the relative script
+// URLs resolve against /static/ regardless of the page URL. It must come
+// before the plugin-emitted <script> tags, which follow the marker region.
+function staticBaseTag(): string {
+  return `<base href="${htmlEscape(`${joinUrlPath(basePath, "static")}/`)}">`;
 }
 
 async function publicHtml(): Promise<string> {
@@ -247,9 +302,10 @@ let warnedAboutMissingMarkers = false;
 
 // Replace the marked head region (markers included) with the rendered head,
 // using exact string splicing only. If the markers are missing (a public.html
-// built before the app.html template gained them), serve the shell unmodified
-// — that matches the pre-injection behavior — and log so the stale static
-// build gets noticed.
+// built before the app.html template gained them), skip the per-route
+// metadata but still inject the <base> tag right after <head> — without it
+// the stale shell's relative script URLs resolve against the clean page URL
+// and the page renders blank. Log so the stale static build gets noticed.
 function injectHead(html: string, head: string): string {
   const begin = html.indexOf(HEAD_BEGIN_MARKER);
   const end = begin >= 0 ? html.indexOf(HEAD_END_MARKER, begin) : -1;
@@ -261,7 +317,10 @@ function injectHead(html: string, head: string): string {
         "public.html has no cocalc-head markers; serving shell without per-route metadata — rebuild @cocalc/static",
       );
     }
-    return html;
+    return html.replace(
+      /<head[^>]*>/i,
+      (match) => `${match}${staticBaseTag()}`,
+    );
   }
   return html.slice(0, begin) + head + html.slice(end + HEAD_END_MARKER.length);
 }
@@ -272,7 +331,7 @@ export async function renderPublicShell(
   const customize = await getCustomize();
   (req as any).cocalcPublicCustomize = customize;
   const html = await publicHtml();
-  const { head, notFound } = buildHead(req);
+  const { head, notFound } = await buildHead(req);
   return { html: injectHead(html, head), status: notFound ? 404 : 200 };
 }
 

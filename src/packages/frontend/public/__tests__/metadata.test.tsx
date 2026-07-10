@@ -2,7 +2,11 @@
 
 import { render, waitFor } from "@testing-library/react";
 
-import { getPublicRouteMetadata, PublicRouteHeadMetadata } from "../metadata";
+import {
+  applyPublicRouteMetadata,
+  getPublicRouteMetadata,
+  PublicRouteHeadMetadata,
+} from "../metadata";
 import { getPublicMetadataRouteFromPath } from "@cocalc/util/public-site-metadata";
 import type { PublicRoute } from "../routes";
 import { PUBLIC_SITEMAP_PATHS } from "../sitemap-paths";
@@ -256,5 +260,27 @@ describe("public route metadata", () => {
       "pricing, deployment, product paths",
     );
     expect(canonicalHref()).toBe("http://localhost/support/new");
+  });
+});
+
+describe("robots noindex tag management", () => {
+  it("adds noindex for restricted pages and removes it on navigation", () => {
+    const base = {
+      canonicalPath: "/docs/admin/users",
+      description: "d",
+      imagePath: "/i.png",
+      title: "t",
+    };
+    applyPublicRouteMetadata({ ...base, noindex: true });
+    expect(headMeta('meta[data-cocalc-public-route-meta="robots"]')).toBe(
+      "noindex",
+    );
+
+    applyPublicRouteMetadata({ ...base, canonicalPath: "/docs" });
+    expect(
+      document.head.querySelector(
+        'meta[data-cocalc-public-route-meta="robots"]',
+      ),
+    ).toBeNull();
   });
 });

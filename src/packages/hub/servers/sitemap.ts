@@ -6,8 +6,10 @@
 import type { Request, Response } from "express";
 
 import basePath from "@cocalc/backend/base-path";
+import { getFeedData } from "@cocalc/database/postgres/news";
 import { docsPath, listDocsEntries, type DocsAccess } from "@cocalc/docs";
 import { getLogger } from "@cocalc/hub/logger";
+import { slugURL } from "@cocalc/util/news";
 import { PUBLIC_SITEMAP_PATHS } from "@cocalc/util/public-site-metadata";
 import { joinUrlPath } from "@cocalc/util/url-path";
 
@@ -61,8 +63,18 @@ export function publicSitemapPaths(req: Request): string[] {
   ]);
 }
 
-export function renderSitemapXml(req: Request): string {
-  const urls = publicSitemapPaths(req)
+// Published news posts (getFeedData is cached and already excludes hidden
+// and future items).
+async function newsSitemapPaths(): Promise<string[]> {
+  return (await getFeedData()).map((item) => slugURL(item));
+}
+
+export async function renderSitemapXml(req: Request): Promise<string> {
+  const paths = uniquePaths([
+    ...publicSitemapPaths(req),
+    ...(await newsSitemapPaths()),
+  ]);
+  const urls = paths
     .map((path) => {
       return `  <url><loc>${xmlEscape(sitemapLocation(req, path))}</loc></url>`;
     })
@@ -76,13 +88,15 @@ ${urls}
 
 export default function getHandler() {
   return (req: Request, res: Response) => {
-    try {
-      res.header("Content-Type", "application/xml; charset=utf-8");
-      res.header("Cache-Control", "public, max-age=3600, must-revalidate");
-      res.send(renderSitemapXml(req));
-    } catch (err) {
-      logger.warn("sitemap endpoint failed", { err: `${err}` });
-      res.status(500).type("text/plain").send("internal error");
-    }
+    renderSitemapXml(req)
+      .then((xml) => {
+        res.header("Content-Type", "application/xml; charset=utf-8");
+        res.header("Cache-Control", "public, max-age=3600, must-revalidate");
+        res.send(xml);
+      })
+      .catch((err) => {
+        logger.warn("sitemap endpoint failed", { err: `${err}` });
+        res.status(500).type("text/plain").send("internal error");
+      });
   };
 }

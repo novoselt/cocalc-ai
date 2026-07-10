@@ -12,7 +12,9 @@ import { getPublicFeatureIndexPages } from "@cocalc/util/public-feature-pages";
 import { docsPath, listDocsEntries } from "@cocalc/docs";
 
 jest.mock("@cocalc/database/postgres/news", () => ({
-  getFeedData: jest.fn(async () => []),
+  getFeedData: jest.fn(async () => [
+    { id: "42", title: "Test post", text: "Hello world" },
+  ]),
 }));
 
 jest.mock("@cocalc/database/settings/customize", () => ({
@@ -137,5 +139,15 @@ describe("public sitemap", () => {
     for (const path of publicSitemapPaths({ get: () => undefined } as any)) {
       expect(body).toContain(`<loc>${origin}${path}</loc>`);
     }
+    // Published news posts (from the mocked feed) are listed too.
+    expect(body).toContain(`<loc>${origin}/news/test-post-42</loc>`);
+  });
+
+  it("serves the listed news post URL without redirect", async () => {
+    const response = await fetch(`${origin}/news/test-post-42`, {
+      redirect: "manual",
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
   });
 });

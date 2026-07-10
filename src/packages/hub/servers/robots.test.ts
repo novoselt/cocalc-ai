@@ -8,6 +8,10 @@ jest.mock("@cocalc/database/postgres/settings/server-settings", () => ({
   get_server_settings: jest.fn(),
 }));
 
+jest.mock("@cocalc/database/postgres/news", () => ({
+  getFeedData: jest.fn(async () => []),
+}));
+
 const mockGetServerSettings = get_server_settings as jest.Mock;
 
 describe("robots.txt", () => {
@@ -46,6 +50,7 @@ describe("robots.txt", () => {
     expect(body).toContain("Disallow: /static/public.html");
     expect(body).toContain("Disallow: /static/app.html");
     expect(body).toContain("Disallow: /static/embed.html");
+    expect(body).toContain("Disallow: /static/public-viewer");
     expect(body).not.toContain("Disallow: /static/\n");
     expect(body).toContain("Disallow: /webapp/");
     expect(body).toContain("Disallow: /cdn/");

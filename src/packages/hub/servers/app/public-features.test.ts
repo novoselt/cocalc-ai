@@ -7,6 +7,10 @@ jest.mock("@cocalc/database/settings/customize", () => ({
   default: jest.fn(async () => ({ siteName: "CoCalc" })),
 }));
 
+jest.mock("@cocalc/database/postgres/news", () => ({
+  getFeedData: jest.fn(async () => []),
+}));
+
 describe("public feature and docs routes", () => {
   async function request(path: string) {
     const app = express();
