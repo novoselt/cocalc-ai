@@ -10,6 +10,7 @@ import { join } from "path";
 
 import basePath from "@cocalc/backend/base-path";
 import getCustomize from "@cocalc/database/settings/customize";
+import { getLogger } from "@cocalc/hub/logger";
 import { path as STATIC_PATH } from "@cocalc/static";
 import {
   getPublicImageDimensions,
@@ -23,10 +24,12 @@ import {
   isLaunchpadProduct,
 } from "@cocalc/server/launchpad/mode";
 
+const logger = getLogger("hub:servers:public-shell");
+
 const FALLBACK_PUBLIC_HTML = `<!DOCTYPE html>
 <html>
 <head>
-  <title>CoCalc</title>
+  <!-- cocalc-head-begin --><title>CoCalc</title><!-- cocalc-head-end -->
 </head>
 <body>
   <div id="cocalc-crash-container"></div>
@@ -215,15 +218,39 @@ export function resolveStaticPath(): string {
   return STATIC_PATH;
 }
 
+// The app.html template in @cocalc/static brackets its <title> with these
+// markers so we can splice in per-route metadata with an exact string match.
+const HEAD_BEGIN_MARKER = "<!-- cocalc-head-begin -->";
+const HEAD_END_MARKER = "<!-- cocalc-head-end -->";
+
+let warnedAboutMissingMarkers = false;
+
+// Replace the marked head region (markers included) with the rendered head,
+// using exact string splicing only. If the markers are missing (a public.html
+// built before the app.html template gained them), serve the shell unmodified
+// — that matches the pre-injection behavior — and log so the stale static
+// build gets noticed.
+function injectHead(html: string, head: string): string {
+  const begin = html.indexOf(HEAD_BEGIN_MARKER);
+  const end = begin >= 0 ? html.indexOf(HEAD_END_MARKER, begin) : -1;
+  // TODO: remove this fallback when all static builds have the head markers.
+  if (begin < 0 || end < 0) {
+    if (!warnedAboutMissingMarkers) {
+      warnedAboutMissingMarkers = true;
+      logger.warn(
+        "public.html has no cocalc-head markers; serving shell without per-route metadata — rebuild @cocalc/static",
+      );
+    }
+    return html;
+  }
+  return html.slice(0, begin) + head + html.slice(end + HEAD_END_MARKER.length);
+}
+
 export async function renderPublicShell(req: Request): Promise<string> {
   const customize = await getCustomize();
   (req as any).cocalcPublicCustomize = customize;
   const html = await publicHtml();
-  const head = buildHead(req);
-  if (/<title>[\s\S]*?<\/title>/i.test(html)) {
-    return html.replace(/<title>[\s\S]*?<\/title>/i, head);
-  }
-  return html.replace(/<\/head>/i, `  ${head}\n</head>`);
+  return injectHead(html, buildHead(req));
 }
 
 export function servePublicShell(req: Request, res: Response): void {
@@ -234,6 +261,7 @@ export function servePublicShell(req: Request, res: Response): void {
       res.status(200).send(html);
     })
     .catch((err) => {
-      res.status(500).send(`${err}`);
+      logger.warn("serving public shell failed", { err: `${err}` });
+      res.status(500).type("text/plain").send("internal error");
     });
 }

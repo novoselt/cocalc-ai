@@ -131,7 +131,7 @@ export default function getConfig(): Configuration {
 
   cleanPlugin(registerPlugin, OUTPUT);
 
-  appLoaderPlugin(registerPlugin, PRODMODE, TITLE);
+  appLoaderPlugin(registerPlugin, PRODMODE);
 
   defineConstantsPlugin(registerPlugin, {
     SMC_VERSION,

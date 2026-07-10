@@ -153,6 +153,7 @@ def all_packages() -> List[str]:
     v = [
         'packages/',  # top level workspace, e.g., typescript
         'packages/cdn',  # packages/hub assumes this is built
+        'packages/docs',  # util depends on this for public docs metadata
         'packages/util',
         'packages/sync',
         'packages/sync-client',

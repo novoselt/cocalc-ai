@@ -26,4 +26,35 @@ describe("public shell rendering", () => {
       'href="https://cocalc.ai/static/public.html" rel="canonical"',
     );
   });
+
+  it("emits exactly one title and no leftover head markers", async () => {
+    const body = await renderPublicShell({
+      get: (name: string) =>
+        name.toLowerCase() === "host" ? "cocalc.ai" : undefined,
+      path: "/pricing",
+      protocol: "https",
+      query: {},
+      url: "/pricing",
+    } as any);
+
+    expect(body.match(/<title>/g)).toHaveLength(1);
+    expect(body).not.toContain("cocalc-head-begin");
+    expect(body).not.toContain("cocalc-head-end");
+  });
+
+  it("does not interpret replacement patterns from request-derived values", async () => {
+    const body = await renderPublicShell({
+      get: (name: string) =>
+        name.toLowerCase() === "host" ? "cocalc.ai$'" : undefined,
+      path: "/pricing",
+      protocol: "https",
+      query: {},
+      url: "/pricing",
+    } as any);
+
+    // With String.replace $-substitution, $' would splice the document tail
+    // into the head, duplicating the webapp container div.
+    expect(body.match(/cocalc-webapp-container/g)).toHaveLength(1);
+    expect(body.match(/<title>/g)).toHaveLength(1);
+  });
 });
