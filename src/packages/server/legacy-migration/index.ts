@@ -4865,7 +4865,7 @@ export async function adminPrepareProjectRemediation({
     throw new Error("legacy project import is not available for this project");
   }
   return await prepareProjectRemediationForRow({
-    account_id,
+    account_id: clean(row.owner_account_id) ?? account_id,
     row,
     snapshot_name,
   });
