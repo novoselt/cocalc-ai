@@ -1414,6 +1414,25 @@ export function LegacyMigrationPage() {
           {legacyMigrationPageMessage ? (
             <Alert showIcon type="info" message={legacyMigrationPageMessage} />
           ) : null}
+          <Alert
+            showIcon
+            type="warning"
+            message="Important limitations"
+            description={
+              <Space direction="vertical" size={4}>
+                <span>
+                  Legacy TimeTravel and edit history from cocalc.com are not
+                  available in restored CoCalc.ai projects. Restores contain the
+                  latest archived project files only.
+                </span>
+                <span>
+                  Legacy blobs and uploaded images referenced by old notebooks
+                  or documents are not restored yet. We are working to make
+                  those attachments available soon.
+                </span>
+              </Space>
+            }
+          />
           {!emailVerificationRequired ? (
             <Space wrap size={[8, 8]}>
               <Tag color="blue">
