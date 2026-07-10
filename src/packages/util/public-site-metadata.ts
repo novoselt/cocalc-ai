@@ -57,9 +57,20 @@ export interface PublicImageDimensions {
 export interface PublicRouteMetadataConfig {
   cocalc_product?: string;
   dns?: string;
+  // Site-specific legal imprint markdown (admin setting); a policies page
+  // class exists only when the corresponding text is configured.
+  imprint?: string;
   is_launchpad?: boolean;
   logo_square?: string;
+  // Deployment-specific policy markdown served at /policies/policies.
+  policies?: string;
+  // "none" | "custom" | "sagemathinc" — the admin "Policy pages" setting
+  // deciding which public policy pages this deployment exposes.
+  policy_pages?: string;
   site_name?: string;
+  // External policies URL; when set, /policies renders a link-out stub and
+  // the local policy documents are not exposed.
+  terms_of_service_url?: string;
 }
 
 export interface PublicRouteMetadataOptions {
@@ -168,6 +179,30 @@ const POLICY_METADATA_TITLES: Record<
   trust: "Trust and Security",
 };
 
+// Which policy pages a deployment exposes is an admin setting; the server
+// must mirror the client's gating (frontend/public/config.tsx +
+// policies/app.tsx) so metadata, 404s, and the sitemap match what actually
+// renders.
+export type PublicPolicyPagesMode = "none" | "custom" | "sagemathinc";
+
+export function getPublicPolicyPagesMode(
+  config?: Pick<PublicRouteMetadataConfig, "policy_pages">,
+): PublicPolicyPagesMode {
+  const value = `${config?.policy_pages ?? ""}`.trim();
+  return value === "custom" || value === "sagemathinc" ? value : "none";
+}
+
+function externalPoliciesUrl(
+  config?: PublicRouteMetadataConfig,
+): string | undefined {
+  const url = `${config?.terms_of_service_url ?? ""}`.trim();
+  return url || undefined;
+}
+
+function hasConfiguredText(value?: string): boolean {
+  return !!`${value ?? ""}`.trim();
+}
+
 const TEAM_MEMBER_SITEMAP_SLUGS = [
   "william-stein",
   "blaec-bejarano",
@@ -204,29 +239,64 @@ function uniquePublicPaths(paths: string[]): string[] {
   });
 }
 
-export const PUBLIC_SITEMAP_PATHS = uniquePublicPaths([
-  publicPath(""),
-  publicPath("about"),
-  publicPath("about/events"),
-  publicPath("about/team"),
-  ...TEAM_MEMBER_SITEMAP_SLUGS.map((slug) => publicPath(`about/team/${slug}`)),
-  publicPath("docs"),
-  publicPath("features"),
-  ...getPublicFeatureIndexPages().map((page) =>
-    publicPath(`features/${page.slug}`),
-  ),
-  publicPath("guides"),
-  langPath(),
-  ...LOCALE.map((locale) => langPath(locale)),
-  publicPath("news"),
-  publicPath("policies"),
-  ...POLICY_SITEMAP_SLUGS.map((slug) => publicPath(`policies/${slug}`)),
-  publicPath("pricing"),
-  ...PRODUCT_SITEMAP_PATHS.map((path) => publicPath(path)),
-  publicPath("rootfs"),
-  publicPath("support"),
-  publicPath("support/community"),
-]);
+// Policy pages present in the sitemap must match what the deployment
+// actually exposes: the built-in SageMath, Inc. documents in "sagemathinc"
+// mode, the configured imprint/policies pages in "custom" mode, and nothing
+// when policies are disabled or hosted externally (the /policies stub for
+// an external URL is thin link-out content and stays unlisted).
+function policySitemapPaths(config?: PublicRouteMetadataConfig): string[] {
+  const mode = getPublicPolicyPagesMode(config);
+  if (mode === "none" || externalPoliciesUrl(config) != null) return [];
+  const paths = [publicPath("policies")];
+  if (mode === "sagemathinc") {
+    paths.push(
+      ...POLICY_SITEMAP_SLUGS.map((slug) => publicPath(`policies/${slug}`)),
+    );
+    return paths;
+  }
+  if (hasConfiguredText(config?.imprint)) {
+    paths.push(publicPath("policies/imprint"));
+  }
+  if (hasConfiguredText(config?.policies)) {
+    paths.push(publicPath("policies/policies"));
+  }
+  return paths;
+}
+
+export function buildPublicSitemapPaths(
+  config?: PublicRouteMetadataConfig,
+): string[] {
+  return uniquePublicPaths([
+    publicPath(""),
+    publicPath("about"),
+    publicPath("about/events"),
+    publicPath("about/team"),
+    ...TEAM_MEMBER_SITEMAP_SLUGS.map((slug) =>
+      publicPath(`about/team/${slug}`),
+    ),
+    publicPath("docs"),
+    publicPath("features"),
+    ...getPublicFeatureIndexPages().map((page) =>
+      publicPath(`features/${page.slug}`),
+    ),
+    publicPath("guides"),
+    langPath(),
+    ...LOCALE.map((locale) => langPath(locale)),
+    publicPath("news"),
+    ...policySitemapPaths(config),
+    publicPath("pricing"),
+    ...PRODUCT_SITEMAP_PATHS.map((path) => publicPath(path)),
+    publicPath("rootfs"),
+    publicPath("support"),
+    publicPath("support/community"),
+  ]);
+}
+
+// The full cocalc.ai list (built-in policies enabled) — the config-free
+// default used by tests and as the superset of public paths.
+export const PUBLIC_SITEMAP_PATHS = buildPublicSitemapPaths({
+  policy_pages: "sagemathinc",
+});
 
 function normalizePublicImagePath(imagePath: string): string {
   let path = imagePath;
@@ -652,21 +722,55 @@ function aboutRouteMetadata(
 
 function policiesRouteMetadata(
   route: PublicMetadataRoute["route"],
+  config: PublicRouteMetadataConfig | undefined,
   siteName: string,
   options?: PublicRouteMetadataOptions,
 ): PublicRouteMetadata {
+  // Mirrors the client gating in frontend/public/policies/app.tsx: which
+  // policy pages exist depends on the "Policy pages" admin setting, an
+  // optional external policies URL, and configured imprint/policies text.
+  const mode = getPublicPolicyPagesMode(config);
+  const externalUrl = externalPoliciesUrl(config);
+  const visible = externalUrl != null || mode !== "none";
   if (route?.view === "policies-detail" && route.policySlug) {
     const title =
       POLICY_METADATA_TITLES[
         route.policySlug as keyof typeof POLICY_METADATA_TITLES
       ];
+    // The built-in SageMath, Inc. documents exist only in "sagemathinc"
+    // mode without an external override.
+    const exists =
+      title != null && mode === "sagemathinc" && externalUrl == null;
     return {
       canonicalPath: publicPath(`policies/${route.policySlug}`, options),
       description:
         "Review CoCalc public policy information, terms, privacy details, trust resources, and compliance commitments.",
       imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
-      notFound: title == null,
+      notFound: !exists,
       title: pageTitle(`${siteName} ${title ?? "Policy"}`, siteName),
+    };
+  }
+  if (route?.view === "policies-imprint") {
+    const exists =
+      visible && externalUrl == null && hasConfiguredText(config?.imprint);
+    return {
+      canonicalPath: publicPath("policies/imprint", options),
+      description: "Site-specific legal imprint information.",
+      imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+      notFound: !exists,
+      title: pageTitle(`${siteName} Imprint`, siteName),
+    };
+  }
+  if (route?.view === "policies-custom") {
+    const exists =
+      visible && externalUrl == null && hasConfiguredText(config?.policies);
+    return {
+      canonicalPath: publicPath("policies/policies", options),
+      description:
+        "Site-specific policy information configured by this deployment.",
+      imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+      notFound: !exists,
+      title: pageTitle(`${siteName} Policies`, siteName),
     };
   }
   return {
@@ -674,6 +778,10 @@ function policiesRouteMetadata(
     description:
       "Review CoCalc public policies, terms, privacy information, and trust resources.",
     imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+    // Disabled policies are a 404; an external policies URL keeps the index
+    // reachable as a link-out stub, which is thin content — noindex it.
+    ...(visible ? {} : { notFound: true }),
+    ...(visible && externalUrl != null ? { noindex: true } : {}),
     title: pageTitle(`${siteName} Policies`, siteName),
   };
 }
@@ -865,7 +973,7 @@ function getSameOriginPublicRouteMetadata(
     case "news":
       return newsRouteMetadata(route.route, siteName, options);
     case "policies":
-      return policiesRouteMetadata(route.route, siteName, options);
+      return policiesRouteMetadata(route.route, config, siteName, options);
     case "lang":
       return langRouteMetadata(route.route, siteName, options);
     default:

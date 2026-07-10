@@ -7,10 +7,11 @@ import type { Request, Response } from "express";
 
 import basePath from "@cocalc/backend/base-path";
 import { getFeedData } from "@cocalc/database/postgres/news";
+import getCustomize from "@cocalc/database/settings/customize";
 import { docsPath, listDocsEntries, type DocsAccess } from "@cocalc/docs";
 import { getLogger } from "@cocalc/hub/logger";
 import { slugURL } from "@cocalc/util/news";
-import { PUBLIC_SITEMAP_PATHS } from "@cocalc/util/public-site-metadata";
+import { buildPublicSitemapPaths } from "@cocalc/util/public-site-metadata";
 import { joinUrlPath } from "@cocalc/util/url-path";
 import {
   isCanonicalPublicSiteHost,
@@ -55,10 +56,20 @@ function uniquePaths(paths: string[]): string[] {
   });
 }
 
-export function publicSitemapPaths(req: Request): string[] {
+export async function publicSitemapPaths(req: Request): Promise<string[]> {
+  // Which policy pages exist depends on admin settings (policy_pages,
+  // external policies URL, configured imprint/policies text), so the page
+  // list is built per request from the cached customize data.
+  const customize = await getCustomize();
+  const allPaths = buildPublicSitemapPaths({
+    imprint: customize?.imprint,
+    policies: customize?.policies,
+    policy_pages: customize?.policy_pages,
+    terms_of_service_url: customize?.termsOfServiceURL,
+  });
   const staticPaths = isCanonicalPublicSiteHost(req.get("host"))
-    ? PUBLIC_SITEMAP_PATHS
-    : PUBLIC_SITEMAP_PATHS.filter((path) => !isCocalcAiOnlyPublicPath(path));
+    ? allPaths
+    : allPaths.filter((path) => !isCocalcAiOnlyPublicPath(path));
   return uniquePaths([
     ...staticPaths,
     ...listDocsEntries(docsAccessForRequest(req)).map((entry) =>
@@ -75,7 +86,7 @@ async function newsSitemapPaths(): Promise<string[]> {
 
 export async function renderSitemapXml(req: Request): Promise<string> {
   const paths = uniquePaths([
-    ...publicSitemapPaths(req),
+    ...(await publicSitemapPaths(req)),
     ...(await newsSitemapPaths()),
   ]);
   const urls = paths

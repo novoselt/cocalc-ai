@@ -101,9 +101,13 @@ function publicMetadataConfig(req: Request): PublicRouteMetadataConfig {
   return {
     cocalc_product: getCocalcProduct(),
     dns: req.get("host"),
+    imprint: customize?.imprint,
     is_launchpad: isLaunchpadProduct(),
     logo_square: customize?.logoSquareURL,
+    policies: customize?.policies,
+    policy_pages: customize?.policy_pages,
     site_name: customize?.siteName,
+    terms_of_service_url: customize?.termsOfServiceURL,
   };
 }
 

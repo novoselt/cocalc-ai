@@ -19,8 +19,22 @@ jest.mock("@cocalc/database/postgres/news", () => ({
 
 jest.mock("@cocalc/database/settings/customize", () => ({
   __esModule: true,
-  default: jest.fn(async () => ({ siteName: "CoCalc" })),
+  default: jest.fn(async () => ({
+    policy_pages: "sagemathinc",
+    siteName: "CoCalc",
+  })),
 }));
+
+import getCustomize from "@cocalc/database/settings/customize";
+
+const mockedCustomize = jest.mocked(getCustomize);
+
+function requestFor(host?: string) {
+  return {
+    get: (name: string) => (name === "host" ? host : undefined),
+    protocol: "http",
+  } as any;
+}
 
 describe("public sitemap", () => {
   let server: ReturnType<express.Express["listen"]>;
@@ -79,10 +93,8 @@ describe("public sitemap", () => {
     );
   });
 
-  it("adds public docs detail pages from the docs registry", () => {
-    const paths = publicSitemapPaths({
-      get: (name: string) => (name === "host" ? "example.test" : undefined),
-    } as any);
+  it("adds public docs detail pages from the docs registry", async () => {
+    const paths = await publicSitemapPaths(requestFor("example.test"));
 
     expect(paths).toContain("/docs");
     expect(paths).toContain("/docs/projects/project-secrets");
@@ -98,10 +110,8 @@ describe("public sitemap", () => {
     expect(paths).toContain("/policies");
   });
 
-  it("adds cocalc.ai profile docs only for the public cocalc.ai host", () => {
-    const paths = publicSitemapPaths({
-      get: (name: string) => (name === "host" ? "cocalc.ai" : undefined),
-    } as any);
+  it("adds cocalc.ai profile docs only for the public cocalc.ai host", async () => {
+    const paths = await publicSitemapPaths(requestFor("cocalc.ai"));
 
     expect(paths).toContain("/docs/projects/rstudio-project");
     expect(paths).toContain("/docs/jupyter/install-octave-kernel");
@@ -111,10 +121,8 @@ describe("public sitemap", () => {
     expect(paths).toContain("/about");
   });
 
-  it("keeps sitemap docs paths in sync with visible docs entries", () => {
-    const paths = publicSitemapPaths({
-      get: (name: string) => (name === "host" ? "cocalc.ai" : undefined),
-    } as any);
+  it("keeps sitemap docs paths in sync with visible docs entries", async () => {
+    const paths = await publicSitemapPaths(requestFor("cocalc.ai"));
     const docsPaths = paths.filter((path) => path.startsWith("/docs/"));
 
     expect(docsPaths).toEqual(
@@ -124,11 +132,51 @@ describe("public sitemap", () => {
     );
   });
 
-  it("serves every listed path through current public route handlers", async () => {
-    const paths = publicSitemapPaths({
-      get: (name: string) => (name === "host" ? "example.test" : undefined),
-      protocol: "http",
+  it("respects the policy_pages admin setting", async () => {
+    mockedCustomize.mockResolvedValueOnce({ siteName: "CoCalc" } as any);
+    const disabled = await publicSitemapPaths(requestFor("cocalc.ai"));
+    expect(disabled.filter((path) => path.startsWith("/policies"))).toEqual([]);
+
+    mockedCustomize.mockResolvedValueOnce({
+      imprint: "# Imprint",
+      policies: "site policies text",
+      policy_pages: "custom",
+      siteName: "CoCalc",
     } as any);
+    const custom = await publicSitemapPaths(requestFor("cocalc.ai"));
+    expect(custom.filter((path) => path.startsWith("/policies"))).toEqual([
+      "/policies",
+      "/policies/imprint",
+      "/policies/policies",
+    ]);
+
+    // Custom mode without configured texts lists only the index.
+    mockedCustomize.mockResolvedValueOnce({
+      policy_pages: "custom",
+      siteName: "CoCalc",
+    } as any);
+    const bare = await publicSitemapPaths(requestFor("cocalc.ai"));
+    expect(bare.filter((path) => path.startsWith("/policies"))).toEqual([
+      "/policies",
+    ]);
+
+    // An external policies URL replaces local policy pages entirely.
+    mockedCustomize.mockResolvedValueOnce({
+      policy_pages: "sagemathinc",
+      siteName: "CoCalc",
+      termsOfServiceURL: "https://example.com/legal",
+    } as any);
+    const external = await publicSitemapPaths(requestFor("cocalc.ai"));
+    expect(external.filter((path) => path.startsWith("/policies"))).toEqual([]);
+
+    const builtin = await publicSitemapPaths(requestFor("cocalc.ai"));
+    expect(builtin).toContain("/policies");
+    expect(builtin).toContain("/policies/privacy");
+    expect(builtin).not.toContain("/policies/imprint");
+  });
+
+  it("serves every listed path through current public route handlers", async () => {
+    const paths = await publicSitemapPaths(requestFor("example.test"));
     for (const path of paths) {
       const response = await fetch(`${origin}${path}`, { redirect: "manual" });
       expect(response.status).toBe(200);
@@ -146,7 +194,7 @@ describe("public sitemap", () => {
     expect(body).toContain(
       '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
     );
-    for (const path of publicSitemapPaths({ get: () => undefined } as any)) {
+    for (const path of await publicSitemapPaths(requestFor(undefined))) {
       expect(body).toContain(`<loc>${origin}${path}</loc>`);
     }
     // Published news posts (from the mocked feed) are listed too.

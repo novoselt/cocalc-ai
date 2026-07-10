@@ -7,8 +7,15 @@ import { renderPublicShell } from "./public-shell";
 
 jest.mock("@cocalc/database/settings/customize", () => ({
   __esModule: true,
-  default: jest.fn(async () => ({ siteName: "CoCalc" })),
+  default: jest.fn(async () => ({
+    policy_pages: "sagemathinc",
+    siteName: "CoCalc",
+  })),
 }));
+
+import getCustomize from "@cocalc/database/settings/customize";
+
+const mockedCustomize = jest.mocked(getCustomize);
 
 jest.mock("@cocalc/database/postgres/news", () => ({
   getFeedData: jest.fn(async () => [
@@ -217,6 +224,73 @@ describe("public shell rendering", () => {
       request("/docs/collaboration/chat"),
     );
     expect(publicPage.html).not.toContain('name="robots"');
+  });
+
+  it("mirrors the policy_pages admin setting for policy routes", async () => {
+    // Disabled policies: the whole section is a 404.
+    mockedCustomize.mockResolvedValueOnce({ siteName: "CoCalc" } as any);
+    expect((await renderPublicShell(request("/policies"))).status).toBe(404);
+    mockedCustomize.mockResolvedValueOnce({ siteName: "CoCalc" } as any);
+    expect((await renderPublicShell(request("/policies/privacy"))).status).toBe(
+      404,
+    );
+
+    // Custom mode: configured pages exist, built-in documents do not.
+    const customModeSettings = {
+      imprint: "# Imprint",
+      policies: "site policy text",
+      policy_pages: "custom",
+      siteName: "CoCalc",
+    } as any;
+    mockedCustomize.mockResolvedValueOnce(customModeSettings);
+    const customPage = await renderPublicShell(request("/policies/policies"));
+    expect(customPage.status).toBe(200);
+    expect(customPage.html).toContain(
+      'href="https://cocalc.ai/policies/policies" rel="canonical"',
+    );
+    mockedCustomize.mockResolvedValueOnce(customModeSettings);
+    expect((await renderPublicShell(request("/policies/imprint"))).status).toBe(
+      200,
+    );
+    mockedCustomize.mockResolvedValueOnce(customModeSettings);
+    expect((await renderPublicShell(request("/policies/privacy"))).status).toBe(
+      404,
+    );
+
+    // Custom mode without configured texts: those pages do not exist.
+    mockedCustomize.mockResolvedValueOnce({
+      policy_pages: "custom",
+      siteName: "CoCalc",
+    } as any);
+    expect(
+      (await renderPublicShell(request("/policies/policies"))).status,
+    ).toBe(404);
+
+    // External policies URL: index stays as a noindexed link-out stub,
+    // local documents are gone.
+    const externalSettings = {
+      policy_pages: "sagemathinc",
+      siteName: "CoCalc",
+      termsOfServiceURL: "https://example.com/legal",
+    } as any;
+    mockedCustomize.mockResolvedValueOnce(externalSettings);
+    const stub = await renderPublicShell(request("/policies"));
+    expect(stub.status).toBe(200);
+    expect(stub.html).toContain(
+      'content="noindex" data-cocalc-public-route-meta="robots" name="robots"',
+    );
+    mockedCustomize.mockResolvedValueOnce(externalSettings);
+    expect((await renderPublicShell(request("/policies/privacy"))).status).toBe(
+      404,
+    );
+
+    // Built-in mode (the default mock): imprint/custom pages do not exist.
+    expect((await renderPublicShell(request("/policies/imprint"))).status).toBe(
+      404,
+    );
+    expect(
+      (await renderPublicShell(request("/policies/policies"))).status,
+    ).toBe(404);
   });
 
   it("responds 404 for detail slugs that are not in a registry", async () => {
