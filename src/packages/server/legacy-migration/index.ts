@@ -89,6 +89,7 @@ import type {
   LegacyMigrationListProjectsResponse,
   LegacyMigrationMatchedAccount,
   LegacyMigrationPrepareProjectRemediationOptions,
+  LegacyMigrationPrepareProjectRemediationResponse,
   LegacyMigrationProjectRemediationDiffEntry,
   LegacyMigrationProjectRemediationDiffKind,
   LegacyMigrationProjectRemediationStatusOptions,
@@ -4642,6 +4643,53 @@ async function remediationProjectForAccount({
   return rows[0] ?? null;
 }
 
+async function remediationProjectByProjectId({
+  project_id,
+}: {
+  project_id: string;
+}): Promise<ProjectRemediationRow | null> {
+  if (!isValidUUID(project_id)) {
+    throw Error("invalid project_id");
+  }
+  await ensureLegacyMigrationProjectImportSchema();
+  const { rows } = await getPool().query<ProjectRemediationRow>(
+    `
+    SELECT p.legacy_project_id,
+           p.title,
+           p.description,
+           p.owner_legacy_account_id,
+           p.legacy_users,
+           p.hidden,
+           p.last_edited,
+           p.last_active,
+           p.artifact_bucket,
+           p.artifact_key,
+           p.manifest_key,
+           p.artifact_status,
+           p.artifact_manifest,
+           i.project_id,
+           i.owner_account_id,
+           i.status,
+           i.restore_mode,
+           i.restore_status,
+           i.restore_error,
+           i.restore_lro_op_id,
+           i.restore_progress,
+           i.restore_result
+      FROM legacy_migration_project_imports i
+      JOIN legacy_migration_projects p
+        ON p.legacy_project_id=i.legacy_project_id
+      JOIN projects active_import_project
+        ON active_import_project.project_id=i.project_id
+       AND COALESCE(active_import_project.deleted, false)=false
+     WHERE i.project_id=$1
+     LIMIT 1
+    `,
+    [project_id],
+  );
+  return rows[0] ?? null;
+}
+
 async function updateProjectRemediationMetadata({
   project_id,
   metadata,
@@ -4692,38 +4740,15 @@ function assertProjectNeedsRemediation(row: ProjectRemediationRow): void {
   }
 }
 
-export async function getProjectRemediation({
+async function prepareProjectRemediationForRow({
   account_id,
-  project_id,
-}: LegacyMigrationProjectRemediationStatusOptions): Promise<LegacyMigrationProjectRemediationStatusResponse> {
-  await assertLegacyMigrationEnabled();
-  if (!account_id) {
-    throw Error("account_id is required");
-  }
-  const row = await remediationProjectForAccount({ account_id, project_id });
-  if (row == null) {
-    return {
-      project_id,
-      needs_remediation: false,
-      reason: "not a linked legacy project",
-    };
-  }
-  return remediationResponse(row);
-}
-
-export async function prepareProjectRemediation({
-  account_id,
-  project_id,
+  row,
   snapshot_name,
-}: LegacyMigrationPrepareProjectRemediationOptions): Promise<LegacyMigrationProjectRemediationStatusResponse> {
-  await assertLegacyMigrationEnabled();
-  if (!account_id) {
-    throw Error("account_id is required");
-  }
-  const row = await remediationProjectForAccount({ account_id, project_id });
-  if (row == null) {
-    throw new Error("legacy project import is not available for this account");
-  }
+}: {
+  account_id: string;
+  row: ProjectRemediationRow;
+  snapshot_name?: string;
+}): Promise<LegacyMigrationProjectRemediationStatusResponse> {
   assertProjectNeedsRemediation(row);
   const bucket =
     clean(row.artifact_bucket) ??
@@ -4784,6 +4809,65 @@ export async function prepareProjectRemediation({
       ...(row.restore_result ?? {}),
       final_archive_remediation: metadata,
     },
+  });
+}
+
+export async function getProjectRemediation({
+  account_id,
+  project_id,
+}: LegacyMigrationProjectRemediationStatusOptions): Promise<LegacyMigrationProjectRemediationStatusResponse> {
+  await assertLegacyMigrationEnabled();
+  if (!account_id) {
+    throw Error("account_id is required");
+  }
+  const row = await remediationProjectForAccount({ account_id, project_id });
+  if (row == null) {
+    return {
+      project_id,
+      needs_remediation: false,
+      reason: "not a linked legacy project",
+    };
+  }
+  return remediationResponse(row);
+}
+
+export async function prepareProjectRemediation({
+  account_id,
+  project_id,
+  snapshot_name,
+}: LegacyMigrationPrepareProjectRemediationOptions): Promise<LegacyMigrationProjectRemediationStatusResponse> {
+  await assertLegacyMigrationEnabled();
+  if (!account_id) {
+    throw Error("account_id is required");
+  }
+  const row = await remediationProjectForAccount({ account_id, project_id });
+  if (row == null) {
+    throw new Error("legacy project import is not available for this account");
+  }
+  return await prepareProjectRemediationForRow({
+    account_id,
+    row,
+    snapshot_name,
+  });
+}
+
+export async function adminPrepareProjectRemediation({
+  account_id,
+  project_id,
+  snapshot_name,
+}: LegacyMigrationPrepareProjectRemediationOptions): Promise<LegacyMigrationPrepareProjectRemediationResponse> {
+  await assertLegacyMigrationEnabled();
+  if (!account_id) {
+    throw Error("account_id is required");
+  }
+  const row = await remediationProjectByProjectId({ project_id });
+  if (row == null) {
+    throw new Error("legacy project import is not available for this project");
+  }
+  return await prepareProjectRemediationForRow({
+    account_id: clean(row.owner_account_id) ?? account_id,
+    row,
+    snapshot_name,
   });
 }
 
