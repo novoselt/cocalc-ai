@@ -864,11 +864,15 @@ function buildAcpConfig({
   const selectedReasoning =
     config?.reasoning ?? modelInfo?.reasoning?.find((r) => r.default)?.id;
   if (selectedReasoning) {
-    if (["low", "medium", "high", "extra_high"].includes(selectedReasoning)) {
+    if (
+      ["low", "medium", "high", "extra_high", "max", "ultra"].includes(
+        selectedReasoning,
+      )
+    ) {
       opts.reasoning = selectedReasoning as CodexSessionConfig["reasoning"];
     } else {
       console.error(
-        "Invalid Codex reasoning level; expected one of low|medium|high|extra_high:",
+        "Invalid Codex reasoning level; expected one of low|medium|high|extra_high|max|ultra:",
         selectedReasoning,
       );
     }

@@ -131,6 +131,7 @@ import {
 } from "../project-start-quota";
 
 const logger = getLogger("project-host:hub:projects");
+const CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS = 45_000;
 export const PROJECT_RUNNER_RPC_TIMEOUT_MS = 60 * 60 * 1000;
 const MB = 1_000_000;
 const DEFAULT_PID_LIMIT = positiveIntegerEnv("COCALC_PROJECT_PIDS_LIMIT", 4096);
@@ -1940,7 +1941,32 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     if (!getProject(project_id)) {
       throw Error("project is not hosted on this project-host");
     }
-    return await startCodexDeviceAuth(project_id, account_id);
+    return await startCodexDeviceAuth(
+      project_id,
+      account_id,
+      verifyCodexSubscriptionAuth,
+    );
+  }
+
+  async function verifyCodexSubscriptionAuth({
+    projectId,
+    accountId,
+  }: {
+    projectId: string;
+    accountId: string;
+    codexHome: string;
+  }): Promise<void> {
+    const status = await getCodexAppServerAccountStatus({
+      projectId,
+      accountId,
+      timeoutMs: CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS,
+    });
+    if (status.rateLimits) return;
+    throw Error(
+      status.errors?.rateLimits ??
+        status.errors?.account ??
+        "Codex account verification did not return live rate limits",
+    );
   }
 
   async function codexDeviceAuthStatus({

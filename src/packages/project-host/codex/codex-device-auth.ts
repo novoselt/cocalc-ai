@@ -39,6 +39,12 @@ type DeviceAuthSession = {
   syncError?: string;
 };
 
+type DeviceAuthVerifier = (opts: {
+  projectId: string;
+  accountId: string;
+  codexHome: string;
+}) => Promise<void>;
+
 const MAX_OUTPUT_CHARS = 50_000;
 const sessions = new Map<string, DeviceAuthSession>();
 const DEVICE_AUTH_MAX_SESSIONS = Math.max(
@@ -157,6 +163,7 @@ function appendOutput(session: DeviceAuthSession, chunk: string): void {
 export async function startCodexDeviceAuth(
   projectId: string,
   accountId: string,
+  verifySubscriptionAuth?: DeviceAuthVerifier,
 ): Promise<ReturnType<typeof snapshot>> {
   pruneSessions();
   if (sessions.size >= DEVICE_AUTH_MAX_SESSIONS) {
@@ -226,35 +233,47 @@ export async function startCodexDeviceAuth(
           err: `${err}`,
         });
       });
-      void pushSubscriptionAuthToRegistry({
-        projectId: session.projectId,
-        accountId: session.accountId,
-        codexHome: session.codexHome,
-      })
-        .then((result) => {
+      void (async () => {
+        try {
+          const result = await pushSubscriptionAuthToRegistry({
+            projectId: session.projectId,
+            accountId: session.accountId,
+            codexHome: session.codexHome,
+          });
           if (session.state === "canceled") return;
           session.syncedToRegistry = result.ok;
-          if (result.ok) {
-            session.state = "completed";
-            session.syncError = undefined;
-          } else {
+          if (!result.ok) {
             session.state = "failed";
             session.syncError =
               "unable to sync credentials to central registry";
             session.error =
               "ChatGPT sign-in succeeded, but CoCalc could not save the credential. Please try signing in again.";
+            session.updatedAt = Date.now();
+            return;
           }
+          session.syncError = undefined;
+          if (verifySubscriptionAuth) {
+            await verifySubscriptionAuth({
+              projectId: session.projectId,
+              accountId: session.accountId,
+              codexHome: session.codexHome,
+            });
+            const current = sessions.get(session.id);
+            if (!current || current.state === "canceled") return;
+          }
+          session.state = "completed";
           session.updatedAt = Date.now();
-        })
-        .catch((err) => {
-          if (session.state === "canceled") return;
+        } catch (err) {
+          const current = sessions.get(session.id);
+          if (!current || current.state === "canceled") return;
           session.state = "failed";
-          session.syncedToRegistry = false;
+          session.syncedToRegistry = session.syncedToRegistry === true;
           session.syncError = `${err}`;
           session.error =
-            "ChatGPT sign-in succeeded, but CoCalc could not save the credential. Please try signing in again.";
+            "ChatGPT sign-in succeeded, but CoCalc could not verify that Codex can use the saved credential. Please try signing in again.";
           session.updatedAt = Date.now();
-        });
+        }
+      })();
     } else {
       session.state = "failed";
       if (!session.error) {

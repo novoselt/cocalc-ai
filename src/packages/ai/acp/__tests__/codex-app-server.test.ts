@@ -693,13 +693,13 @@ describe("CodexAppServerAgent", () => {
 
     expect(threadStartRequests).toEqual([
       expect.objectContaining({
-        model: "gpt-5.5",
+        model: "gpt-5.6-sol",
         serviceTier: "fast",
       }),
     ]);
     expect(turnStartRequests).toEqual([
       expect.objectContaining({
-        model: "gpt-5.5",
+        model: "gpt-5.6-sol",
         serviceTier: "fast",
       }),
     ]);
@@ -709,7 +709,7 @@ describe("CodexAppServerAgent", () => {
           type: "event",
           event: expect.objectContaining({
             type: "config",
-            model: "gpt-5.5",
+            model: "gpt-5.6-sol",
             reasoning: "low",
             serviceTier: "fast",
             appServerServiceTier: "fast",

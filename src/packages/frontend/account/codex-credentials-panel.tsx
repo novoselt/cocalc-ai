@@ -821,7 +821,9 @@ function CodexCredentialsPanelBody({
                   ? "ChatGPT accepted the sign-in. CoCalc is saving it so Codex can use it from this and future projects."
                   : deviceAuth.error
                     ? deviceAuth.error
-                    : undefined
+                    : deviceAuth.syncError
+                      ? `Verification failed: ${deviceAuth.syncError}. Please run the ChatGPT sign-in again.`
+                      : undefined
             }
           />
         ) : null}

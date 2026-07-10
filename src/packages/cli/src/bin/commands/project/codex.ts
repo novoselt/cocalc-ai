@@ -45,7 +45,7 @@ export function registerProjectCodexCommands(
     .option("--model <model>", "codex model name")
     .option(
       "--reasoning <level>",
-      "reasoning level (low|medium|high|extra_high)",
+      "reasoning level (low|medium|high|extra_high|max|ultra)",
     )
     .option(
       "--service-tier <tier>",

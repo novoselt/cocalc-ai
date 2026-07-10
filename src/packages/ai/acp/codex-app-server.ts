@@ -1204,11 +1204,13 @@ async function readPersistedTurnInfo(opts: {
 
 function toReasoningEffort(
   config?: CodexSessionConfig,
-): "low" | "medium" | "high" | "xhigh" | undefined {
+): "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | undefined {
   switch (config?.reasoning) {
     case "low":
     case "medium":
     case "high":
+    case "max":
+    case "ultra":
       return config.reasoning;
     case "extra_high":
       return "xhigh";
