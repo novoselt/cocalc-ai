@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260709-v1"
+HELPER_SCHEMA_VERSION = "20260710-v1"
 RUNTIME_WRAPPER_VERSION = "20260505-v9"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -57,6 +57,11 @@ DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB = "auto"
 DYNAMIC_PROJECT_POOL_MEMORY_RESERVE_MIN_MB = 3072
 DYNAMIC_PROJECT_POOL_MEMORY_RESERVE_MAX_MB = 8192
 MIN_PROJECT_POOL_MEMORY_MB = 1024
+DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES = "auto"
+DYNAMIC_PROJECT_POOL_CPU_RESERVE_MIN_CORES = 1
+DYNAMIC_PROJECT_POOL_CPU_RESERVE_MAX_CORES = 4
+MIN_PROJECT_POOL_CPU_CORES = 1
+PROJECT_POOL_CPU_PERIOD_US = 100000
 NVIDIA_CDI_PODMAN4_VERSION = "0.5.0"
 PROJECT_HOST_RUNTIME_SUBID_RANGES = (
     (231072, ROOTLESS_SUBID_ALIGNMENT),
@@ -552,6 +557,13 @@ def project_pool_memory_reserve_env_value(existing_env: dict[str, str]) -> str:
     if existing and existing != str(LEGACY_PROJECT_POOL_MEMORY_RESERVE_MB):
         return existing
     return str(DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB)
+
+
+def project_pool_cpu_reserve_env_value(existing_env: dict[str, str]) -> str:
+    existing = existing_env.get("COCALC_PROJECT_POOL_CPU_RESERVE_CORES", "").strip()
+    if existing:
+        return existing
+    return str(DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES)
 
 
 def render_env_text(lines: list[str]) -> str:
@@ -3178,13 +3190,16 @@ PY' bash "$tree"
       echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} pid=${existing_pid}" >&2
       exit 75
     fi
+    pool="$(project_pool_cgroup_storage)"
+    mkdir -p "$pool"
+    attach_pid_to_project_pool_storage "$$" "$pool" || true
     if [ -x /opt/cocalc/tools/current/bees ]; then
-      exec /opt/cocalc/tools/current/bees "$@"
+      exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /opt/cocalc/tools/current/bees "$@"
     fi
     if command -v /usr/bin/bees >/dev/null 2>&1; then
-      exec /usr/bin/bees "$@"
+      exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /usr/bin/bees "$@"
     fi
-    exec /bin/bees "$@"
+    exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /bin/bees "$@"
     ;;
   grow-btrfs)
     if [ "$#" -gt 1 ]; then
@@ -3491,6 +3506,17 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
                 "COCALC_PROJECT_POOL_MEMORY_RESERVE_MB": env_assignments.get(
                     "COCALC_PROJECT_POOL_MEMORY_RESERVE_MB",
                     existing_env.get("COCALC_PROJECT_POOL_MEMORY_RESERVE_MB", ""),
+                ),
+            }
+        )
+    )
+    env_assignments["COCALC_PROJECT_POOL_CPU_RESERVE_CORES"] = (
+        project_pool_cpu_reserve_env_value(
+            {
+                **existing_env,
+                "COCALC_PROJECT_POOL_CPU_RESERVE_CORES": env_assignments.get(
+                    "COCALC_PROJECT_POOL_CPU_RESERVE_CORES",
+                    existing_env.get("COCALC_PROJECT_POOL_CPU_RESERVE_CORES", ""),
                 ),
             }
         )
@@ -4143,6 +4169,11 @@ PROJECT_POOL_MEMORY_RESERVE_MB_DEFAULT="__PROJECT_POOL_MEMORY_RESERVE_MB__"
 PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB="__PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB__"
 PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MAX_MB="__PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MAX_MB__"
 MIN_PROJECT_POOL_MEMORY_MB="__MIN_PROJECT_POOL_MEMORY_MB__"
+PROJECT_POOL_CPU_RESERVE_CORES_DEFAULT="__PROJECT_POOL_CPU_RESERVE_CORES__"
+PROJECT_POOL_CPU_RESERVE_DYNAMIC_MIN_CORES="__PROJECT_POOL_CPU_RESERVE_DYNAMIC_MIN_CORES__"
+PROJECT_POOL_CPU_RESERVE_DYNAMIC_MAX_CORES="__PROJECT_POOL_CPU_RESERVE_DYNAMIC_MAX_CORES__"
+MIN_PROJECT_POOL_CPU_CORES="__MIN_PROJECT_POOL_CPU_CORES__"
+PROJECT_POOL_CPU_PERIOD_US="__PROJECT_POOL_CPU_PERIOD_US__"
 SYSCTL_CONFIG_PATH="/etc/sysctl.d/90-cocalc-project-host.conf"
 HELPER_SCHEMA_VERSION="__HELPER_SCHEMA_VERSION__"
 
@@ -4389,14 +4420,56 @@ project_pool_memory_high_bytes() {
   printf '%s\n' "$((max_bytes * 95 / 100))"
 }
 
+project_pool_cpu_max_value() {
+  local reserve_cores cpu_count pool_cores quota
+  reserve_cores="$(read_env_value COCALC_PROJECT_POOL_CPU_RESERVE_CORES)"
+  cpu_count="$(nproc 2>/dev/null || true)"
+  if ! echo "${cpu_count}" | grep -Eq '^[0-9]+$' || [ "${cpu_count}" -le 0 ]; then
+    printf '%s\n' "max"
+    return
+  fi
+  if [ -z "${reserve_cores}" ] || [ "${reserve_cores}" = "auto" ]; then
+    reserve_cores="$((cpu_count / 8))"
+    if [ "${reserve_cores}" -lt "${PROJECT_POOL_CPU_RESERVE_DYNAMIC_MIN_CORES}" ]; then
+      reserve_cores="${PROJECT_POOL_CPU_RESERVE_DYNAMIC_MIN_CORES}"
+    fi
+    if [ "${reserve_cores}" -gt "${PROJECT_POOL_CPU_RESERVE_DYNAMIC_MAX_CORES}" ]; then
+      reserve_cores="${PROJECT_POOL_CPU_RESERVE_DYNAMIC_MAX_CORES}"
+    fi
+  elif ! echo "${reserve_cores}" | grep -Eq '^[0-9]+$'; then
+    reserve_cores="${PROJECT_POOL_CPU_RESERVE_CORES_DEFAULT}"
+    if [ "${reserve_cores}" = "auto" ]; then
+      reserve_cores="${PROJECT_POOL_CPU_RESERVE_DYNAMIC_MIN_CORES}"
+    fi
+  fi
+  if [ "${reserve_cores}" -le 0 ]; then
+    printf '%s\n' "max"
+    return
+  fi
+  pool_cores="$((cpu_count - reserve_cores))"
+  if [ "${pool_cores}" -lt "${MIN_PROJECT_POOL_CPU_CORES}" ]; then
+    pool_cores="${MIN_PROJECT_POOL_CPU_CORES}"
+  fi
+  if [ "${pool_cores}" -ge "${cpu_count}" ]; then
+    printf '%s\n' "max"
+    return
+  fi
+  quota="$((pool_cores * PROJECT_POOL_CPU_PERIOD_US))"
+  printf '%s %s\n' "${quota}" "${PROJECT_POOL_CPU_PERIOD_US}"
+}
+
 configure_project_pool_cgroup() {
-  local pool max_bytes high_bytes
+  local pool max_bytes high_bytes cpu_max
   pool="$(project_pool_cgroup)"
   mkdir -p "${pool}"
   max_bytes="$(project_pool_memory_max_bytes)"
   high_bytes="$(project_pool_memory_high_bytes "${max_bytes}")"
   printf '%s\n' "${max_bytes}" > "${pool}/memory.max"
   printf '%s\n' "${high_bytes}" > "${pool}/memory.high"
+  cpu_max="$(project_pool_cpu_max_value)"
+  if [ -w "${pool}/cpu.max" ]; then
+    printf '%s\n' "${cpu_max}" > "${pool}/cpu.max" || true
+  fi
 }
 
 attach_pid_to_project_pool() {
@@ -4725,6 +4798,26 @@ esac
     rootctl = rootctl.replace(
         "__MIN_PROJECT_POOL_MEMORY_MB__",
         str(MIN_PROJECT_POOL_MEMORY_MB),
+    )
+    rootctl = rootctl.replace(
+        "__PROJECT_POOL_CPU_RESERVE_CORES__",
+        str(DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES),
+    )
+    rootctl = rootctl.replace(
+        "__PROJECT_POOL_CPU_RESERVE_DYNAMIC_MIN_CORES__",
+        str(DYNAMIC_PROJECT_POOL_CPU_RESERVE_MIN_CORES),
+    )
+    rootctl = rootctl.replace(
+        "__PROJECT_POOL_CPU_RESERVE_DYNAMIC_MAX_CORES__",
+        str(DYNAMIC_PROJECT_POOL_CPU_RESERVE_MAX_CORES),
+    )
+    rootctl = rootctl.replace(
+        "__MIN_PROJECT_POOL_CPU_CORES__",
+        str(MIN_PROJECT_POOL_CPU_CORES),
+    )
+    rootctl = rootctl.replace(
+        "__PROJECT_POOL_CPU_PERIOD_US__",
+        str(PROJECT_POOL_CPU_PERIOD_US),
     )
     rootctl = rootctl.replace("__HELPER_SCHEMA_VERSION__", HELPER_SCHEMA_VERSION)
     (bin_dir / "ctl").write_text(ctl, encoding="utf-8")
