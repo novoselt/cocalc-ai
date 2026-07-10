@@ -1047,6 +1047,10 @@ export function createLegacyProjectArchiveHandlers({
           `safety snapshot already exists: ${safety_snapshot_name}`,
         );
       }
+      const exclude = normalizeProjectArchivePathRoots(
+        LEGACY_PROJECT_ARCHIVE_MANAGED_EXCLUDE_ROOTS,
+      );
+      const rsyncExclude = rsyncExcludeArgs(exclude);
       try {
         setProjectArchiveRestoreActive?.(project_id, true);
         await createReadonlySnapshot(home, safetySnapshotPath);
@@ -1054,7 +1058,7 @@ export function createLegacyProjectArchiveHandlers({
           args: [
             "-ai",
             "--update",
-            "--exclude=.snapshots/",
+            ...rsyncExclude,
             slashDir(finalSnapshotPath),
             slashDir(home),
           ],
