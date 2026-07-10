@@ -94,4 +94,12 @@ describe("isPublicTarget", () => {
     expect(isPublicTarget("/guides")).toBe(true);
     expect(isPublicTarget("/guides/some-guide")).toBe(false);
   });
+
+  it("treats two-letter segments as locales only in final position", () => {
+    expect(isPublicTarget("/de")).toBe(true);
+    expect(isPublicTarget("/base/de")).toBe(true);
+    // A two-letter base-path prefix must not be mistaken for a locale page.
+    expect(isPublicTarget("/hb/projects/123")).toBe(false);
+    expect(isPublicTarget("/hb/admin")).toBe(false);
+  });
 });

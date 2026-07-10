@@ -190,9 +190,13 @@ export function isPublicTarget(target?: string | null): target is string {
       return parts.length === i + 1;
     }
     if (PUBLIC_TARGET_SECTIONS.has(section)) return true;
-    // Locale alias roots such as /de or /pt-BR.
-    if (/^[a-z]{2}(-[A-Z]{2})?$/.test(section)) return true;
     if (APP_ROUTE_SEGMENTS.has(section)) return false;
+    // Locale alias roots such as /de or /pt-BR — but only as the final
+    // segment, so a two-letter base-path prefix (e.g. /hb/projects) is not
+    // mistaken for a locale page.
+    if (i === parts.length - 1 && /^[a-z]{2}(-[A-Z]{2})?$/.test(section)) {
+      return true;
+    }
     // Otherwise: possibly a base-path segment — keep scanning.
   }
   return false;
