@@ -1209,7 +1209,7 @@ describe("submitNavigatorPromptToCurrentThread", () => {
 
   it("uses account Codex defaults when forceCodex has no explicit model", async () => {
     mockOtherSettings.codex_new_chat_defaults = {
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       reasoning: "high",
       sessionMode: "full-access",
     };
@@ -1264,9 +1264,9 @@ describe("submitNavigatorPromptToCurrentThread", () => {
       expect.objectContaining({
         threadAgent: expect.objectContaining({
           mode: "codex",
-          model: "gpt-5.3-codex",
+          model: "gpt-5.4",
           codexConfig: expect.objectContaining({
-            model: "gpt-5.3-codex",
+            model: "gpt-5.4",
             reasoning: "high",
             sessionMode: "full-access",
           }),
@@ -1277,9 +1277,9 @@ describe("submitNavigatorPromptToCurrentThread", () => {
       actions,
       message,
       tag: "intent:jupyter-install-kernel",
-      threadModel: "gpt-5.3-codex",
+      threadModel: "gpt-5.4",
       acpConfigOverride: expect.objectContaining({
-        model: "gpt-5.3-codex",
+        model: "gpt-5.4",
         reasoning: "high",
         sessionMode: "full-access",
         workingDirectory: "/home/wstein",
