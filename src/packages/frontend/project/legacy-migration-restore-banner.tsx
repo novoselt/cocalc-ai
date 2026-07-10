@@ -34,6 +34,7 @@ import {
 
 const { Text } = Typography;
 const FINAL_ARCHIVE_SNAPSHOT_PATH = ".snapshots/final-cocalc-com-archive";
+const remediationSessionDismissedKeys = new Set<string>();
 
 function labelValue(value: unknown): string {
   return `${value ?? ""}`.trim();
@@ -159,17 +160,11 @@ function markRestoreIssueDismissed(key: string): void {
 }
 
 function wasRemediationSessionDismissed(key: string): boolean {
-  try {
-    return globalThis.sessionStorage?.getItem(key) === "1";
-  } catch {
-    return false;
-  }
+  return remediationSessionDismissedKeys.has(key);
 }
 
 function markRemediationSessionDismissed(key: string): void {
-  try {
-    globalThis.sessionStorage?.setItem(key, "1");
-  } catch {}
+  remediationSessionDismissedKeys.add(key);
 }
 
 function isActiveRestoreStatus(status: string): boolean {
