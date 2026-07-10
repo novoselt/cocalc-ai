@@ -12,7 +12,6 @@ import { parse as parseURL } from "url";
 import * as Module from "module";
 import { path as WEBAPP_PATH } from "@cocalc/assets";
 import { path as CDN_PATH } from "@cocalc/cdn/path";
-import { path as STATIC_PATH } from "@cocalc/static";
 import { setup_health_checks as setupHealthChecks } from "../health-checks";
 import { getLogger } from "../logger";
 import initProxy from "../proxy";
@@ -28,6 +27,7 @@ import initPublicContent from "./app/public-content";
 import initPublicFeatures from "./app/public-features";
 import initPublicLang from "./app/public-lang";
 import initPublicSupport from "./app/public-support";
+import { resolveStaticPath, servePublicShell } from "./app/public-shell";
 import { initMetricsEndpoint, setupInstrumentation } from "./app/metrics";
 import initProjectHostBootstrap from "./app/project-host-bootstrap";
 import initProjectHostSoftware from "./app/project-host-software";
@@ -412,27 +412,6 @@ function cacheLongTerm(res) {
   );
 }
 
-function resolveStaticPath(): string {
-  const candidates: string[] = [];
-  if (process.env.COCALC_STATIC_PATH) {
-    candidates.push(process.env.COCALC_STATIC_PATH);
-  }
-  if (process.env.COCALC_BUNDLE_DIR) {
-    candidates.push(join(process.env.COCALC_BUNDLE_DIR, "static"));
-  }
-  candidates.push(
-    STATIC_PATH,
-    join(process.cwd(), "static"),
-    join(__dirname, "..", "static"),
-  );
-  for (const candidate of candidates) {
-    if (existsSync(join(candidate, "app.html"))) {
-      return candidate;
-    }
-  }
-  return STATIC_PATH;
-}
-
 function resolvePublicAssetsPath(): string | undefined {
   const candidates: string[] = [];
   if (process.env.COCALC_PUBLIC_ASSETS_PATH) {
@@ -534,13 +513,7 @@ async function initStatic(router) {
       setHeaders: setPublicViewerShellHeaders,
     }),
   );
-  router.use(
-    "/static/public.html",
-    staticCompression,
-    express.static(join(staticPath, "public.html"), {
-      setHeaders: cacheShortTerm,
-    }),
-  );
+  router.get("/static/public.html", staticCompression, servePublicShell);
   router.use(
     "/static",
     staticCompression,
@@ -693,9 +666,7 @@ function initLanding(router: express.Router) {
           return;
         }
       }
-      const url = new URL("http://host");
-      url.searchParams.set("target", base === "" || base === "/" ? "/" : base);
-      res.redirect(join(base, "static/public.html") + url.search);
+      servePublicShell(req, res);
     })().catch((err) => {
       logger.warn("landing page failed", { err });
       res.status(500).send("Landing page error.");

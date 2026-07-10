@@ -89,12 +89,52 @@ export function inferAppBasePath(pathname?: string): string {
   return trimmed || "/";
 }
 
+// When the hub serves the public shell at a clean URL (e.g. /docs/a/b), it
+// injects <meta name="cocalc-base-path" content="<basePath>"> into the head.
+// That is the authoritative serve-time base path signal, so prefer it over
+// inferring from the pathname.
+export function inferBasePathFromMetaElement(): string | undefined {
+  if (typeof document === "undefined") return;
+  const content = document
+    .querySelector('meta[name="cocalc-base-path"]')
+    ?.getAttribute("content")
+    ?.trim();
+  if (!content || !content.startsWith("/")) return;
+  return content.length > 1 ? content.replace(/\/+$/, "") : content;
+}
+
+// Legacy shells stated the base path via <base href="<basePath>/static/">
+// instead of the meta tag.
+// TODO remove once all deployed hubs inject the cocalc-base-path meta tag.
+export function inferBasePathFromBaseElement(): string | undefined {
+  if (typeof document === "undefined") return;
+  const href = document.querySelector("base")?.getAttribute("href");
+  if (!href) return;
+  let pathname: string;
+  try {
+    pathname = new URL(href, window.location.href).pathname;
+  } catch {
+    return;
+  }
+  const suffix = "/static/";
+  if (!pathname.endsWith(suffix)) return;
+  return pathname.slice(0, -suffix.length) || "/";
+}
+
 function init(): string {
   if (process.env.BASE_PATH) {
     // This is used by next.js.
     return process.env.BASE_PATH;
   }
   if (typeof window != "undefined" && typeof window.location != "undefined") {
+    const fromMetaElement = inferBasePathFromMetaElement();
+    if (fromMetaElement != null) {
+      return fromMetaElement;
+    }
+    const fromBaseElement = inferBasePathFromBaseElement();
+    if (fromBaseElement != null) {
+      return fromBaseElement;
+    }
     // For static frontend we determine the base path from the current route.
     return inferAppBasePath(window.location.pathname);
   }

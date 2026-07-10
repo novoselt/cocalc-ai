@@ -15,8 +15,8 @@ import {
   PUBLIC_TYPE,
   PUBLIC_WEIGHT,
 } from "../theme";
-import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import {
+  appPath,
   EmptySection,
   fetchJson,
   getPublicMarketingSiteName,
@@ -315,7 +315,7 @@ function AboutEventsPage() {
 
   useEffect(() => {
     let canceled = false;
-    void fetchJson<EventsPayload>(`${appBasePath}/api/v2/news/events`)
+    void fetchJson<EventsPayload>(appPath("api/v2/news/events"))
       .then((value) => {
         if (!canceled) setPayload(value ?? {});
       })
