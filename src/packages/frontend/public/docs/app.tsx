@@ -57,7 +57,7 @@ function DocsIndex({ config }: { config?: PublicConfig }) {
               {siteName} documentation
             </Text>
             <Title style={{ marginBottom: 12, marginTop: 10 }}>
-              Current docs for this CoCalc instance.
+              Current docs for this {siteName} instance.
             </Title>
             <Paragraph
               style={{
