@@ -15,25 +15,6 @@ export const LEGACY_RESTORE_ERROR_LABEL = "legacy.cocalc.com/restore_error";
 
 export const LEGACY_RESTORE_FILE_FAILURE_REPORT_LIMIT = 50;
 
-export const LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSE_CUTOFF =
-  "2026-06-18T00:00:00.000Z";
-
-export const LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSED_MESSAGE =
-  "Restore is temporarily paused for legacy projects with cocalc.com activity on or after June 18, 2026 while CoCalc refreshes their archives from the final cocalc.com backup.";
-
-export function legacyProjectArchiveRefreshPaused(project: {
-  last_active?: Date | string | null;
-  last_edited?: Date | string | null;
-}): boolean {
-  const cutoff = Date.parse(LEGACY_PROJECT_ARCHIVE_REFRESH_PAUSE_CUTOFF);
-  for (const value of [project.last_edited, project.last_active]) {
-    if (!value) continue;
-    const timestamp = new Date(value).getTime();
-    if (Number.isFinite(timestamp) && timestamp >= cutoff) return true;
-  }
-  return false;
-}
-
 function cleanTarPath(path: string): string {
   return path.replace(/^\.\//, "").trim();
 }
