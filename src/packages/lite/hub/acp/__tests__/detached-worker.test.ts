@@ -5,6 +5,7 @@ import {
   ChatStreamWriter,
   disposeAllChatWritersForTests,
   isFatalAcpWorkerStorageError,
+  isProjectAcpStorageError,
   recoverCurrentWorkerStuckAcpTurns,
   recoverDetachedWorkerStartupState,
   shouldStopDetachedWorkerForDrain,
@@ -1262,6 +1263,13 @@ describe("isFatalAcpWorkerStorageError", () => {
       isFatalAcpWorkerStorageError(
         Object.assign(new Error("database or disk is full"), {
           code: "SQLITE_FULL",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isProjectAcpStorageError(
+        Object.assign(new Error("terminal storage timed out"), {
+          code: "ACP_TERMINAL_STORAGE_TIMEOUT",
         }),
       ),
     ).toBe(true);

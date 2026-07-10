@@ -2554,6 +2554,10 @@ export class CodexAppServerAgent implements AcpAgent {
     return true;
   }
 
+  hasRunningTurn(threadId: string): boolean {
+    return this.running.has(threadId);
+  }
+
   async steer(
     threadId: string,
     request: AcpSteerRequest,
