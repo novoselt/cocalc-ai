@@ -23,6 +23,7 @@ describe("robots.txt", () => {
         body: string;
         contentType?: string;
         status: number;
+        vary?: string;
       }>((resolve, reject) => {
         const request = httpRequest(
           {
@@ -39,6 +40,7 @@ describe("robots.txt", () => {
                 body: Buffer.concat(chunks).toString("utf8"),
                 contentType: response.headers["content-type"],
                 status: response.statusCode ?? 0,
+                vary: response.headers.vary,
               }),
             );
           },
@@ -53,11 +55,13 @@ describe("robots.txt", () => {
     }
   }
 
-  it("allows indexing only on the canonical public host", async () => {
-    const { body, contentType, status } = await request({ host: "cocalc.ai" });
+  it("allows all public content on the canonical public host", async () => {
+    const host = "cocalc.ai";
+    const { body, contentType, status, vary } = await request({ host });
 
     expect(status).toBe(200);
     expect(contentType).toContain("text/plain");
+    expect(vary).toContain("Host");
     expect(body.split("\n")).toContain("Allow: /");
     expect(body.split("\n")).toContain("Allow: /share");
     expect(body.split("\n")).toContain("Allow: /static/");
@@ -69,7 +73,8 @@ describe("robots.txt", () => {
     expect(body).toContain("Disallow: /webapp/");
     expect(body).toContain("Disallow: /cdn/");
     expect(body).toContain("Disallow: /api/");
-    expect(body).toContain("Sitemap: http://cocalc.ai/sitemap.xml");
+    expect(body).toContain(`Sitemap: http://${host}/sitemap.xml`);
+    expect(body).not.toContain("Disallow: /features");
     expect(body).not.toMatch(/^ +/m);
   });
 
@@ -86,12 +91,26 @@ describe("robots.txt", () => {
     }
   });
 
-  it("keeps dev, local, and branded instances locked down", async () => {
-    for (const host of [
-      "localhost:9100",
-      "dev123.cocalc.ai",
-      "university.example.edu",
-    ]) {
+  it("lets branded crawlers read canonicals and advertises the local sitemap", async () => {
+    const host = "university.example.edu";
+    const { body, status } = await request({ host });
+    const lines = body.split("\n");
+
+    expect(status).toBe(200);
+    expect(lines).toContain("Allow: /");
+    expect(lines).toContain("Allow: /share");
+    expect(lines).not.toContain("Disallow: /features");
+    expect(lines).not.toContain("Disallow: /pricing");
+    expect(lines).not.toContain("Disallow: /about");
+    expect(lines).not.toContain("Disallow: /products");
+    expect(lines).not.toContain("Disallow: /news");
+    expect(lines).not.toContain("Disallow: /docs");
+    expect(lines).not.toContain("Disallow: /auth");
+    expect(body).toContain(`Sitemap: http://${host}/sitemap.xml`);
+  });
+
+  it("keeps dev subdomains and local instances locked down", async () => {
+    for (const host of ["localhost:9100", "[::1]:9100", "dev123.cocalc.ai"]) {
       const { body, status } = await request({ host });
       expect({ body, host, status }).toEqual({
         body: "User-agent: *\nAllow: /share\nDisallow: /\n",

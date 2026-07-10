@@ -12,6 +12,10 @@ import { getLogger } from "@cocalc/hub/logger";
 import { slugURL } from "@cocalc/util/news";
 import { PUBLIC_SITEMAP_PATHS } from "@cocalc/util/public-site-metadata";
 import { joinUrlPath } from "@cocalc/util/url-path";
+import {
+  isCanonicalPublicSiteHost,
+  isCocalcAiOnlyPublicPath,
+} from "@cocalc/util/public-site-policy";
 
 export { PUBLIC_SITEMAP_PATHS } from "@cocalc/util/public-site-metadata";
 
@@ -34,14 +38,11 @@ export function sitemapLocation(req: Request, path: string): string {
   return `${requestOrigin(req)}${joinUrlPath(basePath, path)}`;
 }
 
-function normalizeHost(host?: string): string {
-  return `${host ?? ""}`.trim().toLowerCase().replace(/:\d+$/, "");
-}
-
 function docsAccessForRequest(req: Request): DocsAccess {
   return {
-    siteProfile:
-      normalizeHost(req.get("host")) === "cocalc.ai" ? "cocalc-ai" : undefined,
+    siteProfile: isCanonicalPublicSiteHost(req.get("host"))
+      ? "cocalc-ai"
+      : undefined,
   };
 }
 
@@ -55,8 +56,11 @@ function uniquePaths(paths: string[]): string[] {
 }
 
 export function publicSitemapPaths(req: Request): string[] {
+  const staticPaths = isCanonicalPublicSiteHost(req.get("host"))
+    ? PUBLIC_SITEMAP_PATHS
+    : PUBLIC_SITEMAP_PATHS.filter((path) => !isCocalcAiOnlyPublicPath(path));
   return uniquePaths([
-    ...PUBLIC_SITEMAP_PATHS,
+    ...staticPaths,
     ...listDocsEntries(docsAccessForRequest(req)).map((entry) =>
       docsPath(entry.slug),
     ),
@@ -92,6 +96,7 @@ export default function getHandler() {
       .then((xml) => {
         res.header("Content-Type", "application/xml; charset=utf-8");
         res.header("Cache-Control", "public, max-age=3600, must-revalidate");
+        res.vary("Host");
         res.send(xml);
       })
       .catch((err) => {

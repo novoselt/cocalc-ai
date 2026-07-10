@@ -122,13 +122,18 @@ export function PublicRouteHeadMetadata({
   config?: PublicConfig;
   route: PublicRoute;
 }) {
-  const metadata = useMemo(
-    () =>
-      getPublicRouteMetadataData(route, config, {
+  const metadata = useMemo(() => {
+    const dns =
+      config?.dns ??
+      (typeof window === "undefined" ? undefined : window.location.host);
+    return getPublicRouteMetadataData(
+      route,
+      { ...config, dns },
+      {
         basePath: appBasePath,
-      }),
-    [config, route],
-  );
+      },
+    );
+  }, [config, route]);
 
   useEffect(() => {
     applyPublicRouteMetadata(metadata);

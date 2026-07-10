@@ -12,6 +12,7 @@ import { SITE_NAME } from "@cocalc/util/theme";
 import type { SignupEmailDomainPublicPolicy } from "@cocalc/util/accounts/signup-email-domain-policy";
 import type { PassportStrategyFrontend } from "@cocalc/util/types/passport-types";
 import { joinUrlPath } from "@cocalc/util/url-path";
+import { isCanonicalPublicSiteHost } from "@cocalc/util/public-site-policy";
 
 export interface PublicConfig {
   account_display_name?: string;
@@ -141,15 +142,10 @@ export function arePublicPoliciesVisible(config?: PublicConfig): boolean {
   );
 }
 
-function normalizedPublicHost(host?: string): string {
-  return `${host ?? ""}`.trim().replace(/:\d+$/, "").toLowerCase();
-}
-
 export function isCocalcAiPublicSite(config?: PublicConfig): boolean {
-  const configuredHost = normalizedPublicHost(config?.dns);
-  if (configuredHost) return configuredHost === "cocalc.ai";
+  if (config?.dns?.trim()) return isCanonicalPublicSiteHost(config.dns);
   if (typeof window === "undefined") return false;
-  return normalizedPublicHost(window.location.hostname) === "cocalc.ai";
+  return isCanonicalPublicSiteHost(window.location.hostname);
 }
 
 export function getPublicDocsAccess(config?: PublicConfig): DocsAccess {

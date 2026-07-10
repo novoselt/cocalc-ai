@@ -11,11 +11,14 @@ jest.mock("@cocalc/database/postgres/news", () => ({
   ]),
 }));
 
-function request(path: string, query: Record<string, string> = {}) {
+function request(
+  path: string,
+  query: Record<string, string> = {},
+  host = "cocalc.ai",
+) {
   const search = new URLSearchParams(query).toString();
   return {
-    get: (name: string) =>
-      name.toLowerCase() === "host" ? "cocalc.ai" : undefined,
+    get: (name: string) => (name.toLowerCase() === "host" ? host : undefined),
     path,
     protocol: "https",
     query,
@@ -43,13 +46,11 @@ describe("public shell rendering", () => {
     );
   });
 
-  it("emits exactly one title and no leftover head markers", async () => {
+  it("emits exactly one title", async () => {
     const { html: body, status } = await renderPublicShell(request("/pricing"));
 
     expect(status).toBe(200);
     expect(body.match(/<title>/g)).toHaveLength(1);
-    expect(body).not.toContain("cocalc-head-begin");
-    expect(body).not.toContain("cocalc-head-end");
   });
 
   it("injects a base tag for /static/ ahead of the shell scripts", async () => {
@@ -130,6 +131,22 @@ describe("public shell rendering", () => {
     const byId = await renderPublicShell(request("/rootfs/id/abc123"));
     expect(byId.html).toContain(
       'href="https://cocalc.ai/rootfs/id/abc123" rel="canonical"',
+    );
+  });
+
+  it("canonicalizes duplicated marketing pages to cocalc.ai on branded hosts", async () => {
+    const marketing = await renderPublicShell(
+      request("/features/jupyter-notebook", {}, "university.example.edu"),
+    );
+    expect(marketing.html).toContain(
+      'href="https://cocalc.ai/features/jupyter-notebook" rel="canonical"',
+    );
+
+    const localNews = await renderPublicShell(
+      request("/news/test-post-42", {}, "university.example.edu"),
+    );
+    expect(localNews.html).toContain(
+      'href="https://university.example.edu/news/test-post-42" rel="canonical"',
     );
   });
 

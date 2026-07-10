@@ -153,6 +153,32 @@ describe("public route metadata", () => {
     expect(metadata.imagePath).toBe("/base/public/landing/product-options.jpg");
   });
 
+  it("canonicalizes duplicated marketing routes to cocalc.ai on branded hosts", () => {
+    const marketing = getPublicRouteMetadata(
+      productRoute("products-cocalc-star"),
+      { dns: "university.example.edu", site_name: "University CoCalc" },
+      { basePath: "/university-cocalc" },
+    );
+    expect(marketing.canonicalPath).toBe(
+      "https://cocalc.ai/products/cocalc-star",
+    );
+
+    const localNews = getPublicRouteMetadata(
+      { route: { view: "news" }, section: "news" },
+      { dns: "university.example.edu", site_name: "University CoCalc" },
+    );
+    expect(localNews.canonicalPath).toBe("/news");
+
+    const localSignIn = getPublicRouteMetadata(
+      {
+        route: { kind: "auth-form", view: "sign-in" },
+        section: "auth",
+      },
+      { dns: "university.example.edu", site_name: "University CoCalc" },
+    );
+    expect(localSignIn.canonicalPath).toBe("/auth/sign-in");
+  });
+
   it("uses per-entry docs metadata for docs detail pages", () => {
     const route = getPublicMetadataRouteFromPath(
       "/docs/projects/project-secrets",
@@ -226,7 +252,26 @@ describe("public route metadata", () => {
     expect(headMeta('meta[property="og:image"]')).toBe(
       "http://localhost/public/landing/product-options.jpg",
     );
-    expect(canonicalHref()).toBe("http://localhost/products/cocalc-star");
+    expect(canonicalHref()).toBe("https://cocalc.ai/products/cocalc-star");
+  });
+
+  it("keeps the branded-host marketing canonical after React mounts", async () => {
+    render(
+      <PublicRouteHeadMetadata
+        config={{
+          dns: "university.example.edu",
+          site_name: "University CoCalc",
+        }}
+        route={productRoute("products-cocalc-star")}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(canonicalHref()).toBe("https://cocalc.ai/products/cocalc-star"),
+    );
+    expect(headMeta('meta[property="og:url"]')).toBe(
+      "https://cocalc.ai/products/cocalc-star",
+    );
   });
 
   it("updates managed head tags when the route changes", async () => {
@@ -238,7 +283,7 @@ describe("public route metadata", () => {
     );
 
     await waitFor(() =>
-      expect(canonicalHref()).toBe("http://localhost/products/cocalc-star"),
+      expect(canonicalHref()).toBe("https://cocalc.ai/products/cocalc-star"),
     );
 
     rerender(

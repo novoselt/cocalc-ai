@@ -275,7 +275,7 @@ describe("PublicApp", () => {
     );
 
     await waitFor(() =>
-      expect(canonicalHref()).toBe("http://localhost/products/cocalc-star"),
+      expect(canonicalHref()).toBe("https://cocalc.ai/products/cocalc-star"),
     );
     expect(headMeta('meta[name="description"]')).toContain(
       "single-VM appliance",
@@ -288,7 +288,9 @@ describe("PublicApp", () => {
       />,
     );
 
-    await waitFor(() => expect(canonicalHref()).toBe("http://localhost/about"));
+    await waitFor(() =>
+      expect(canonicalHref()).toBe("https://cocalc.ai/about"),
+    );
     expect(headMeta('meta[name="description"]')).toContain(
       "people and company behind CoCalc",
     );
@@ -991,6 +993,7 @@ describe("PublicApp", () => {
       await waitFor(() =>
         expect(screen.getByText("Fresh update")).not.toBeNull(),
       );
+      expect(fetchMock).toHaveBeenCalledWith("/api/v2/news/list");
     } finally {
       global.fetch = originalFetch;
     }

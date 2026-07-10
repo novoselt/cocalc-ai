@@ -40,6 +40,7 @@ describe("public feature and docs routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("vary")).toContain("Host");
     expect(body).toContain('data-cocalc-public-route-meta="canonical"');
     expect(body).toContain('/features/python" rel="canonical"');
   });

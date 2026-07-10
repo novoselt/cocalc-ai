@@ -1,10 +1,8 @@
 import rspack from "@rspack/core";
-import { resolve } from "path";
+import { renderAppTemplate } from "./app-template";
 
-// NOTE: the <title> is part of the app.html template itself (inside the
-// cocalc-head-begin/end markers), not injected here, so that the hub can
-// replace the whole head region with per-route metadata at serve time.
 export default function appLoaderPlugin(registerPlugin, PRODMODE: boolean) {
+  const templateContent = renderAppTemplate();
   const htmlPages = [
     { desc: "app", filename: "app.html", chunks: ["load", "app"] },
     { desc: "embed", filename: "embed.html", chunks: ["load", "embed"] },
@@ -46,7 +44,7 @@ export default function appLoaderPlugin(registerPlugin, PRODMODE: boolean) {
       `HTML -- generates the ${page.filename} file`,
       new rspack.HtmlRspackPlugin({
         filename: page.filename,
-        template: resolve(__dirname, "../app.html"),
+        templateContent,
         hash: PRODMODE,
         chunks: page.chunks,
       }),

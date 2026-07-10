@@ -5,7 +5,7 @@
 
 import type { Request, Response } from "express";
 import { existsSync } from "fs";
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import { join } from "path";
 
 import basePath from "@cocalc/backend/base-path";
@@ -18,6 +18,7 @@ import {
   getPublicImageDimensions,
   getPublicMetadataRouteFromPath,
   getPublicRouteMetadata,
+  PUBLIC_HEAD_PLACEHOLDER,
   type PublicRouteMetadataConfig,
 } from "@cocalc/util/public-site-metadata";
 import { joinUrlPath } from "@cocalc/util/url-path";
@@ -31,7 +32,7 @@ const logger = getLogger("hub:servers:public-shell");
 const FALLBACK_PUBLIC_HTML = `<!DOCTYPE html>
 <html>
 <head>
-  <!-- cocalc-head-begin --><title>CoCalc</title><!-- cocalc-head-end -->
+  ${PUBLIC_HEAD_PLACEHOLDER}
 </head>
 <body>
   <div id="cocalc-crash-container"></div>
@@ -263,15 +264,44 @@ function staticBaseTag(): string {
   return `<base href="${htmlEscape(`${joinUrlPath(basePath, "static")}/`)}">`;
 }
 
+// Cache the shell file content keyed by mtime/size: serving public pages is
+// hot and the file only changes when static is rebuilt, so a cheap stat per
+// request replaces a full read; a rebuild bumps the mtime and refreshes the
+// cache automatically (important for dev, where static rebuilds while the
+// hub keeps running).
+let cachedShell:
+  | { file: string; mtimeMs: number; size: number; html: string }
+  | undefined;
+
 async function publicHtml(): Promise<string> {
   try {
-    return await readFile(join(resolveStaticPath(), "public.html"), "utf8");
+    const file = join(resolveStaticPath(), "public.html");
+    const { mtimeMs, size } = await stat(file);
+    if (
+      cachedShell != null &&
+      cachedShell.file === file &&
+      cachedShell.mtimeMs === mtimeMs &&
+      cachedShell.size === size
+    ) {
+      return cachedShell.html;
+    }
+    const html = await readFile(file, "utf8");
+    cachedShell = { file, mtimeMs, size, html };
+    return html;
   } catch {
     return FALLBACK_PUBLIC_HTML;
   }
 }
 
+// The resolved directory cannot change for the lifetime of the process, so
+// resolve it once; a miss (no built static assets yet) is not memoized so a
+// build that finishes after hub startup is still picked up.
+let resolvedStaticPath: string | undefined;
+
 export function resolveStaticPath(): string {
+  if (resolvedStaticPath != null) {
+    return resolvedStaticPath;
+  }
   const candidates: string[] = [];
   if (process.env.COCALC_STATIC_PATH) {
     candidates.push(process.env.COCALC_STATIC_PATH);
@@ -287,34 +317,36 @@ export function resolveStaticPath(): string {
   );
   for (const candidate of candidates) {
     if (existsSync(join(candidate, "app.html"))) {
+      resolvedStaticPath = candidate;
       return candidate;
     }
   }
   return STATIC_PATH;
 }
 
-// The app.html template in @cocalc/static brackets its <title> with these
-// markers so we can splice in per-route metadata with an exact string match.
-const HEAD_BEGIN_MARKER = "<!-- cocalc-head-begin -->";
-const HEAD_END_MARKER = "<!-- cocalc-head-end -->";
+let warnedAboutMissingPlaceholder = false;
 
-let warnedAboutMissingMarkers = false;
-
-// Replace the marked head region (markers included) with the rendered head,
-// using exact string splicing only. If the markers are missing (a public.html
-// built before the app.html template gained them), skip the per-route
-// metadata but still inject the <base> tag right after <head> — without it
+// Replace the shared title placeholder with the rendered head using exact
+// string splicing only. Unlike comments, the title survives Rspack's
+// production HTML minification. If the placeholder is missing or duplicated,
+// skip the per-route metadata but still inject the <base> tag right after
+// <head> — without it
 // the stale shell's relative script URLs resolve against the clean page URL
 // and the page renders blank. Log so the stale static build gets noticed.
 function injectHead(html: string, head: string): string {
-  const begin = html.indexOf(HEAD_BEGIN_MARKER);
-  const end = begin >= 0 ? html.indexOf(HEAD_END_MARKER, begin) : -1;
-  // TODO: remove this fallback when all static builds have the head markers.
-  if (begin < 0 || end < 0) {
-    if (!warnedAboutMissingMarkers) {
-      warnedAboutMissingMarkers = true;
+  const index = html.indexOf(PUBLIC_HEAD_PLACEHOLDER);
+  const duplicate =
+    index >= 0
+      ? html.indexOf(
+          PUBLIC_HEAD_PLACEHOLDER,
+          index + PUBLIC_HEAD_PLACEHOLDER.length,
+        )
+      : -1;
+  if (index < 0 || duplicate >= 0) {
+    if (!warnedAboutMissingPlaceholder) {
+      warnedAboutMissingPlaceholder = true;
       logger.warn(
-        "public.html has no cocalc-head markers; serving shell without per-route metadata — rebuild @cocalc/static",
+        "public.html must contain exactly one public head placeholder; serving shell without per-route metadata — rebuild @cocalc/static",
       );
     }
     return html.replace(
@@ -322,7 +354,11 @@ function injectHead(html: string, head: string): string {
       (match) => `${match}${staticBaseTag()}`,
     );
   }
-  return html.slice(0, begin) + head + html.slice(end + HEAD_END_MARKER.length);
+  return (
+    html.slice(0, index) +
+    head +
+    html.slice(index + PUBLIC_HEAD_PLACEHOLDER.length)
+  );
 }
 
 export async function renderPublicShell(
@@ -340,6 +376,9 @@ export function servePublicShell(req: Request, res: Response): void {
     .then(({ html, status }) => {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Cache-Control", "public, max-age=10, must-revalidate");
+      // The body embeds host-derived canonical/og URLs and host-dependent
+      // policy, so shared caches must key on the host.
+      res.vary("Host");
       res.status(status).send(html);
     })
     .catch((err) => {

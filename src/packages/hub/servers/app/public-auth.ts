@@ -6,18 +6,21 @@
 import { join } from "path";
 import type { Router } from "express";
 import basePath from "@cocalc/backend/base-path";
+import { servePublicShell } from "./public-shell";
 
 export default function initPublicAuth(router: Router): void {
+  // Stable, site-specific auth entry pages may be indexed at their clean URLs.
+  router.get(
+    ["/auth", "/auth/", "/auth/sign-in", "/auth/sign-up"],
+    servePublicShell,
+  );
+
   const authPaths = [
-    "/auth",
-    "/auth/",
-    "/auth/sign-in",
     "/auth/sign-in/*rest",
     "/auth/cli-login",
     "/auth/cli-login/*rest",
     "/auth/cli-elevate",
     "/auth/cli-elevate/*rest",
-    "/auth/sign-up",
     "/auth/sign-up/*rest",
     "/auth/password-reset",
     "/auth/password-reset/*rest",

@@ -1,26 +1,13 @@
 import { APP_ROUTES } from "@cocalc/util/routing/app";
 import type { Request } from "express";
+import { isLockedDownPublicSiteHost } from "@cocalc/util/public-site-policy";
 import { sitemapLocation } from "./sitemap";
 
-// Verify the public policy against a local hub with:
+// Verify the cocalc.ai policy against a local hub with:
 // curl -H 'Host: cocalc.ai' http://127.0.0.1:9100/robots.txt
-// This is an exact host allowlist: subdomains such as dev123.cocalc.ai and
-// branded deployments must not become indexable copies of the public site.
-const PUBLIC_SITE_HOSTS = new Set(["cocalc.ai"]);
+// Compare a branded deployment with:
+// curl -H 'Host: university.example.edu' http://127.0.0.1:9100/robots.txt
 const INDEXABLE_APP_ROUTES = new Set(["share"]);
-
-function normalizeHost(host?: string): string {
-  return `${host ?? ""}`
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/\/.*$/, "")
-    .replace(/:\d+$/, "");
-}
-
-function isPublicSite(req: Request): boolean {
-  return PUBLIC_SITE_HOSTS.has(normalizeHost(req.get("host")));
-}
 
 function renderLockedDownRobots(): string {
   return ["User-agent: *", "Allow: /share", "Disallow: /", ""].join("\n");
@@ -36,8 +23,9 @@ function renderPublicRobots(req: Request): string {
 
   return [
     "User-agent: *",
-    // Public marketing, docs, pricing, policy, language, and feature pages are
-    // served at clean URLs. Let crawlers discover them normally.
+    // Public pages are served at clean URLs. Branded sites also allow the
+    // duplicated marketing routes to be crawled so search engines can read
+    // their cross-domain canonical tags pointing at cocalc.ai.
     "Allow: /",
     // Shared files are intentionally public when a user creates a share link,
     // and /share is one of the few app routes that should be indexable.
@@ -67,13 +55,13 @@ export default function getHandler() {
   return (req, res) => {
     res.header("Content-Type", "text/plain");
     res.header("Cache-Control", "public, max-age=3600, must-revalidate");
-    if (!isPublicSite(req)) {
-      // Default: disable everything except public shares.
+    res.vary("Host");
+    const host = req.get("host");
+    if (isLockedDownPublicSiteHost(host)) {
+      // Local development and cocalc.ai subdomains must not be indexed.
       res.send(renderLockedDownRobots());
       return;
     }
-    // Only the canonical public host may be indexed. Dev and branded instances
-    // still render these pages, but their robots policy remains locked down.
     res.send(renderPublicRobots(req));
   };
 }

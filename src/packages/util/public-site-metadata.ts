@@ -10,6 +10,15 @@ import {
   getPublicFeaturePage,
 } from "./public-feature-pages";
 import { SITE_NAME } from "./theme";
+import {
+  CANONICAL_PUBLIC_SITE_ORIGIN,
+  isCanonicalPublicSiteHost,
+  isCocalcAiOnlyPublicSection,
+} from "./public-site-policy";
+
+// Rspack renders this exact element into public.html. The hub replaces it
+// with the route-specific head block when serving a public page.
+export const PUBLIC_HEAD_PLACEHOLDER = "<title>CoCalc</title>";
 
 export interface PublicRouteMetadata {
   canonicalPath: string;
@@ -656,18 +665,15 @@ function langRouteMetadata(
   };
 }
 
-function normalizedPublicHost(host?: string): string {
-  return `${host ?? ""}`.trim().replace(/:\d+$/, "").toLowerCase();
-}
-
 function docsRouteMetadata(
   route: PublicMetadataRoute["route"],
   config: PublicRouteMetadataConfig | undefined,
   siteName: string,
   options?: PublicRouteMetadataOptions,
 ): PublicRouteMetadata {
-  const siteProfile =
-    normalizedPublicHost(config?.dns) === "cocalc.ai" ? "cocalc-ai" : undefined;
+  const siteProfile = isCanonicalPublicSiteHost(config?.dns)
+    ? "cocalc-ai"
+    : undefined;
   const entry =
     route?.view === "docs-detail"
       ? getDocsEntry(route.slug, { siteProfile })
@@ -780,7 +786,7 @@ function supportRouteMetadata(
   }
 }
 
-export function getPublicRouteMetadata(
+function getSameOriginPublicRouteMetadata(
   route: PublicMetadataRoute,
   config?: PublicRouteMetadataConfig,
   options?: PublicRouteMetadataOptions,
@@ -833,4 +839,30 @@ export function getPublicRouteMetadata(
         title: siteName,
       };
   }
+}
+
+export function getPublicRouteMetadata(
+  route: PublicMetadataRoute,
+  config?: PublicRouteMetadataConfig,
+  options?: PublicRouteMetadataOptions,
+): PublicRouteMetadata {
+  const metadata = getSameOriginPublicRouteMetadata(route, config, options);
+  if (
+    !config?.dns ||
+    isCanonicalPublicSiteHost(config.dns) ||
+    !isCocalcAiOnlyPublicSection(route.section) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(metadata.canonicalPath)
+  ) {
+    return metadata;
+  }
+  const canonicalMetadata = options?.basePath
+    ? getSameOriginPublicRouteMetadata(route, config, {
+        ...options,
+        basePath: undefined,
+      })
+    : metadata;
+  return {
+    ...metadata,
+    canonicalPath: `${CANONICAL_PUBLIC_SITE_ORIGIN}${canonicalMetadata.canonicalPath}`,
+  };
 }

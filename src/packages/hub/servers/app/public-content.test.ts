@@ -42,7 +42,6 @@ describe("public content routes", () => {
     expect(response.headers.get("location")).toBeNull();
     expect(body).toContain("<title>CoCalc Guides | CoCalc</title>");
     expect(body).toContain('rel="canonical"');
-    expect(body).toContain('href="http://127.0.0.1');
-    expect(body).toContain('/guides" rel="canonical"');
+    expect(body).toContain('href="https://cocalc.ai/guides" rel="canonical"');
   });
 });

@@ -90,6 +90,12 @@ describe("public sitemap", () => {
     expect(paths).not.toContain("/docs/admin/users");
     expect(paths).not.toContain("/docs/account/settings");
     expect(paths).not.toContain("/docs/projects/rstudio-project");
+    expect(paths).not.toContain("/features");
+    expect(paths).not.toContain("/pricing");
+    expect(paths).not.toContain("/about");
+    expect(paths).toContain("/");
+    expect(paths).toContain("/news");
+    expect(paths).toContain("/policies");
   });
 
   it("adds cocalc.ai profile docs only for the public cocalc.ai host", () => {
@@ -100,6 +106,9 @@ describe("public sitemap", () => {
     expect(paths).toContain("/docs/projects/rstudio-project");
     expect(paths).toContain("/docs/jupyter/install-octave-kernel");
     expect(paths).not.toContain("/docs/admin/users");
+    expect(paths).toContain("/features");
+    expect(paths).toContain("/pricing");
+    expect(paths).toContain("/about");
   });
 
   it("keeps sitemap docs paths in sync with visible docs entries", () => {
@@ -133,6 +142,7 @@ describe("public sitemap", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/xml");
+    expect(response.headers.get("vary")).toContain("Host");
     expect(body).toContain(
       '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
     );
