@@ -435,6 +435,34 @@ describe("moveProjectToHost", () => {
     expect(startProjectLroMock).not.toHaveBeenCalled();
   });
 
+  it("skips a same-host backup-region cutover when the project is already in the destination region", async () => {
+    const progress = jest.fn();
+
+    const { moveProjectToHost } = await import("./move");
+    await expect(
+      moveProjectToHost(
+        {
+          project_id: PROJECT_ID,
+          dest_host_id: SOURCE_HOST_ID,
+          account_id: "account-id",
+          backup_region_cutover: true,
+        },
+        { progress },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(progress).toHaveBeenCalledWith({
+      step: "done",
+      message: "project is already on the requested host",
+      detail: { host_id: SOURCE_HOST_ID },
+      progress: 100,
+    });
+    expect(stopProjectOnHostMock).not.toHaveBeenCalled();
+    expect(createBackupLroMock).not.toHaveBeenCalled();
+    expect(savePlacementMock).not.toHaveBeenCalled();
+    expect(startProjectLroMock).not.toHaveBeenCalled();
+  });
+
   it("accepts a timed-out destination start wait if the project is already running on the destination host", async () => {
     process.env.COCALC_MOVE_START_DEST_TIMEOUT_MS = "1";
     lroSummaryByOpId.set("44444444-4444-4444-8444-444444444444", {

@@ -1493,7 +1493,8 @@ export async function moveProjectToHost(
   if (
     context.project_host_id &&
     context.project_host_id === context.dest_host_id &&
-    !context.backup_region_cutover
+    (!context.backup_region_cutover ||
+      context.project_region === context.dest_region)
   ) {
     progress({
       step: "done",
