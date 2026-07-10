@@ -480,6 +480,20 @@ describe("NavigatorShell keyboard suppression", () => {
     });
   });
 
+  it("directs outdated Codex errors to project restart settings", () => {
+    expect(
+      classifyNavigatorCodexError(
+        `{"type":"error","status":400,"error":{"message":"The 'gpt-5.6-sol' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again."}}`,
+      ),
+    ).toMatchObject({
+      kind: "upgrade-required",
+      title: "Restart this project to use the selected Codex model.",
+      description:
+        "Restart this project from Project Settings to load the newer Codex version, then retry.",
+      actionLabel: "Open Project Settings",
+    });
+  });
+
   it("classifies internal openat2 initialization failures as filesystem unavailable", () => {
     expect(
       classifyNavigatorCodexError(

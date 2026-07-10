@@ -60,6 +60,10 @@ import {
   saveNavigatorSelectedThreadKey,
 } from "./navigator-state";
 import { getDefaultCodexNewChatDefaults } from "@cocalc/frontend/chat/codex-defaults";
+import {
+  CODEX_PROJECT_RESTART_HINT,
+  isCodexUpgradeRequiredError,
+} from "@cocalc/frontend/chat/codex-error-presentation";
 
 interface NavigatorShellProps {
   project_id: string;
@@ -75,7 +79,12 @@ const NAVIGATOR_CHAT_INIT_RETRY_MS = 2000;
 const NAVIGATOR_CHAT_READY_STALE_RETRY_MS = 15_000;
 
 type NavigatorCodexErrorPresentation = {
-  kind: "missing-auth" | "expired-auth" | "missing-volume" | "other";
+  kind:
+    | "missing-auth"
+    | "expired-auth"
+    | "missing-volume"
+    | "upgrade-required"
+    | "other";
   title: string;
   description?: string;
   actionLabel?: string;
@@ -335,6 +344,14 @@ export function classifyNavigatorCodexError(
       title: "Codex is not signed in yet.",
       description: "Open Codex credentials and sign in before starting a turn.",
       actionLabel: "Sign in to Codex",
+    };
+  }
+  if (isCodexUpgradeRequiredError(raw)) {
+    return {
+      kind: "upgrade-required",
+      title: "Restart this project to use the selected Codex model.",
+      description: CODEX_PROJECT_RESTART_HINT,
+      actionLabel: "Open Project Settings",
     };
   }
   return {
@@ -1391,7 +1408,16 @@ export function NavigatorShell({
           }
           action={
             presentedError?.actionLabel ? (
-              <Button size="small" onClick={() => setCodexAuthOpen(true)}>
+              <Button
+                size="small"
+                onClick={() => {
+                  if (presentedError.kind === "upgrade-required") {
+                    projectActions.set_active_tab("settings");
+                    return;
+                  }
+                  setCodexAuthOpen(true);
+                }}
+              >
                 {presentedError.actionLabel}
               </Button>
             ) : undefined
