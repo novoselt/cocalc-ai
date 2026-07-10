@@ -23,7 +23,7 @@ interface MatchHit {
   source?: "live" | "archived";
 }
 
-type ChatFragmentNavigator = {
+type ChatEditorNavigator = {
   gotoFragment?: (fragmentId: Record<string, string>) => void | Promise<void>;
 };
 
@@ -64,8 +64,7 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
     desc?.get?.("data-search") ?? "",
   );
   const externalSearch = `${desc?.get?.("data-search") ?? ""}`;
-  const { error, setError, index, doRefresh, fragmentKey, isIndexing } =
-    useSearchIndex();
+  const { error, setError, index, doRefresh, isIndexing } = useSearchIndex();
   const messageCache = chatActions?.messageCache;
   const [cacheVersion, setCacheVersion] = useState<number>(0);
   const [result, setResult] = useState<MatchHit[]>([]);
@@ -184,10 +183,16 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
           keysToScanSet.has(hit.id ?? hit.document?.id),
         );
         setResult(
-          filtered.map((hit) => ({
-            id: hit.id,
-            content: hit.document?.content ?? "",
-          })),
+          filtered.map((hit) => {
+            const id = `${hit.id ?? hit.document?.id ?? ""}`;
+            return {
+              id,
+              content: hit.document?.content ?? "",
+              threadId:
+                `${(messages.get(id) as any)?.thread_id ?? ""}`.trim() ||
+                undefined,
+            };
+          }),
         );
       } catch (err) {
         if (!cancelled) {
@@ -298,9 +303,8 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
 
   const onSelectHit = useCallback(
     async (hit: MatchHit) => {
-      const key = fragmentKey ?? "chat";
       let dateMs = Number.parseFloat(hit.id);
-      if (hit.source === "archived" && hit.threadId) {
+      if (hit.source === "archived") {
         try {
           const hydratedDate = await hydrateArchivedHit(hit);
           if (Number.isFinite(hydratedDate)) {
@@ -311,11 +315,24 @@ function ChatSearch({ font_size: fontSize, desc }: Props) {
         }
       }
       if (!Number.isFinite(dateMs)) return;
-      (chatActions as ChatFragmentNavigator | undefined)?.gotoFragment?.({
-        [key]: `${dateMs}`,
-      });
+      const fragment: Record<string, string> = { chat: `${dateMs}` };
+      if (hit.threadId) {
+        fragment["thread"] = hit.threadId;
+      }
+      const editorNavigator = actions as ChatEditorNavigator | undefined;
+      if (typeof editorNavigator?.gotoFragment === "function") {
+        void editorNavigator.gotoFragment(fragment);
+        return;
+      }
+      if (hit.threadId) {
+        chatActions?.clearAllFilters?.();
+        chatActions?.setSelectedThread?.(hit.threadId);
+        setTimeout(() => chatActions?.scrollToDate?.(dateMs), 0);
+      } else {
+        chatActions?.scrollToDate?.(dateMs);
+      }
     },
-    [chatActions, fragmentKey, hydrateArchivedHit],
+    [actions, chatActions, hydrateArchivedHit],
   );
 
   const loadedCount = result.length;

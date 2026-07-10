@@ -208,7 +208,9 @@ describe("chat search archived integration", () => {
       getAllMessages: () => messages,
       listThreadConfigRows,
       hydrateArchivedRows: jest.fn(),
-      gotoFragment: jest.fn(),
+      clearAllFilters: jest.fn(),
+      setSelectedThread: jest.fn(),
+      scrollToDate: jest.fn(),
       messageCache: undefined,
     };
     const frameActions = {
@@ -268,10 +270,84 @@ describe("chat search archived integration", () => {
           thread_id: "thread-1",
         }),
       );
-      expect(chatActions.gotoFragment).toHaveBeenCalledWith({
+      expect(chatActions.hydrateArchivedRows).toHaveBeenCalled();
+      expect(frameActions.gotoFragment).toHaveBeenCalledWith({
         chat: "1700000099999",
+        thread: "thread-1",
       });
-      expect(frameActions.gotoFragment).not.toHaveBeenCalled();
+      expect(chatActions.scrollToDate).not.toHaveBeenCalled();
+    });
+  });
+
+  it("opens clicked live hits in their thread", async () => {
+    const messages = new Map([
+      [
+        "1700000000000",
+        {
+          date: "2026-02-20T00:00:00.000Z",
+          thread_id: "thread-live",
+          history: [{ content: "live matched message" }],
+        },
+      ],
+    ]);
+    const chatActions = {
+      getAllMessages: () => messages,
+      listThreadConfigRows: () => [],
+      clearAllFilters: jest.fn(),
+      setSelectedThread: jest.fn(),
+      scrollToDate: jest.fn(),
+      messageCache: undefined,
+    };
+    const frameActions = {
+      getChatActions: () => chatActions,
+      set_frame_data: jest.fn(),
+      gotoFragment: jest.fn(),
+    };
+    useFrameContextMock.mockReturnValue({
+      actions: frameActions,
+      path: "lite2.chat",
+      id: "frame-1",
+      project_id: "project-1",
+    });
+    useSearchIndexMock.mockReturnValue({
+      error: "",
+      setError: jest.fn(),
+      index: {
+        search: jest.fn().mockResolvedValue({
+          hits: [
+            {
+              id: "1700000000000",
+              document: {
+                id: "1700000000000",
+                content: "live matched message",
+              },
+            },
+          ],
+        }),
+      },
+      doRefresh: jest.fn(),
+      fragmentKey: "chat",
+      isIndexing: false,
+    });
+
+    const Component = search.component as any;
+    render(
+      <Component
+        font_size={14}
+        desc={{
+          get: (key: string) => (key === "data-search" ? "matched" : undefined),
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("live matched message"));
+
+    await waitFor(() => {
+      expect(frameActions.gotoFragment).toHaveBeenCalledWith({
+        chat: "1700000000000",
+        thread: "thread-live",
+      });
+      expect(chatActions.scrollToDate).not.toHaveBeenCalled();
     });
   });
 });
