@@ -56,19 +56,6 @@ jest.mock("antd", () => {
   return {
     Card: ({ children }: any) => <div>{children}</div>,
     Input: Object.assign(InputBase, { Search: InputSearch }),
-    Select: ({ value, onChange, options = [] }: any) => (
-      <select
-        data-testid="thread-scope-select"
-        value={value ?? ""}
-        onChange={(e) => onChange?.((e.target as HTMLSelectElement).value)}
-      >
-        {options.map((opt: any) => (
-          <option key={String(opt.value)} value={String(opt.value)}>
-            {String(opt.label)}
-          </option>
-        ))}
-      </select>
-    ),
   };
 });
 
@@ -114,23 +101,18 @@ describe("chat search archived integration", () => {
     });
   });
 
-  it("calls chatStoreSearch for thread scope when archived rows exist", async () => {
+  it("calls chatStoreSearch in all-message scope when archived rows exist", async () => {
     const messages = new Map();
-    const threadIndex = new Map([
-      [
-        "thread-1",
-        {
-          key: "thread-1",
-          newestTime: Date.now(),
-          messageKeys: new Set<string>(),
-        },
-      ],
-    ]);
     const chatActions = {
       getAllMessages: () => messages,
-      getThreadIndex: () => threadIndex,
-      listThreadConfigRows: () => [],
-      getThreadMetadata: () => ({ archived_chat_rows: 123 }),
+      listThreadConfigRows: () => [
+        {
+          event: "chat-thread-config",
+          thread_id: "thread-1",
+          archived_chat_rows: 123,
+          archived: false,
+        },
+      ],
       messageCache: undefined,
     };
     const frameActions = {
@@ -171,18 +153,20 @@ describe("chat search archived integration", () => {
           project_id: "project-1",
           chat_path: "lite2.chat",
           query: "the",
-          thread_id: "thread-1",
+          thread_id: undefined,
+          exclude_thread_ids: [],
         }),
       );
     });
 
+    expect(screen.queryByTestId("thread-scope-select")).toBeNull();
     expect(
       (await screen.findAllByText(/stored on backend/i)).length,
     ).toBeGreaterThan(0);
     expect(await screen.findByText("archived match")).toBeTruthy();
   });
 
-  it("uses cross-thread backend search with exclude_thread_ids in all-messages scope", async () => {
+  it("opens clicked backend hits through the chat actions", async () => {
     const now = Date.now();
     const messages = new Map([
       [
@@ -199,24 +183,6 @@ describe("chat search archived integration", () => {
           date: "2026-02-20T00:00:01.000Z",
           thread_id: "thread-archived",
           history: [{ content: "live archived thread" }],
-        },
-      ],
-    ]);
-    const threadIndex = new Map([
-      [
-        "thread-1",
-        {
-          key: "thread-1",
-          newestTime: now,
-          messageKeys: new Set<string>(["1700000000000"]),
-        },
-      ],
-      [
-        "thread-archived",
-        {
-          key: "thread-archived",
-          newestTime: now - 1000,
-          messageKeys: new Set<string>(["1700000001000"]),
         },
       ],
     ]);
@@ -240,11 +206,9 @@ describe("chat search archived integration", () => {
     ];
     const chatActions = {
       getAllMessages: () => messages,
-      getThreadIndex: () => threadIndex,
       listThreadConfigRows,
-      getThreadMetadata: (threadId: string) =>
-        threadId === "thread-1" ? { archived_chat_rows: 50 } : undefined,
       hydrateArchivedRows: jest.fn(),
+      gotoFragment: jest.fn(),
       messageCache: undefined,
     };
     const frameActions = {
@@ -281,9 +245,6 @@ describe("chat search archived integration", () => {
       />,
     );
 
-    const scopeSelect = await screen.findByTestId("thread-scope-select");
-    fireEvent.change(scopeSelect, { target: { value: "__all_messages__" } });
-
     await waitFor(() => {
       expect(chatStoreSearchMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -307,13 +268,10 @@ describe("chat search archived integration", () => {
           thread_id: "thread-1",
         }),
       );
-      expect(frameActions.gotoFragment).toHaveBeenCalled();
-      // Clicking the cross-thread backend hit should pivot scope to the hit thread.
-      expect(chatStoreSearchMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          thread_id: "thread-1",
-        }),
-      );
+      expect(chatActions.gotoFragment).toHaveBeenCalledWith({
+        chat: "1700000099999",
+      });
+      expect(frameActions.gotoFragment).not.toHaveBeenCalled();
     });
   });
 });
