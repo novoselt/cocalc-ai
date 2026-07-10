@@ -217,6 +217,10 @@ function shouldRestoreArchivePath({
   return true;
 }
 
+function rsyncExcludeArgs(exclude?: string[]): string[] {
+  return (exclude ?? []).map((root) => `--exclude=${root}`);
+}
+
 function runProjectArchiveTarCommand({
   archivePath,
   args,
@@ -905,6 +909,7 @@ export function createLegacyProjectArchiveHandlers({
       const exclude = normalizeProjectArchivePathRoots(
         LEGACY_PROJECT_ARCHIVE_MANAGED_EXCLUDE_ROOTS,
       );
+      const rsyncExclude = rsyncExcludeArgs(exclude);
       let downloaded: { bytes: number; sha256: string } | undefined;
       let scan:
         | {
@@ -964,7 +969,7 @@ export function createLegacyProjectArchiveHandlers({
             args: [
               "-a",
               "--delete",
-              "--exclude=.snapshots/",
+              ...rsyncExclude,
               slashDir(extractedPath),
               slashDir(workSnapshotPath),
             ],
@@ -977,7 +982,7 @@ export function createLegacyProjectArchiveHandlers({
           args: [
             "-ani",
             "--delete",
-            "--exclude=.snapshots/",
+            ...rsyncExclude,
             slashDir(finalSnapshotPath),
             slashDir(home),
           ],
