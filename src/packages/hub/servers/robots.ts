@@ -39,8 +39,10 @@ function renderPublicRobots(req: Request): string {
     "Disallow: /static/public.html",
     "Disallow: /static/app.html",
     "Disallow: /static/embed.html",
-    // Prefix-match covers all public-viewer*.html share-viewer shells.
-    "Disallow: /static/public-viewer",
+    // The wildcard covers all public-viewer*.html share-viewer shells while
+    // leaving the public-viewer*-<hash>.js entry chunks fetchable — crawlers
+    // need those bundles to render indexable /share pages.
+    "Disallow: /static/public-viewer*.html",
     // These are implementation surfaces, not standalone public pages.
     "Disallow: /webapp/",
     "Disallow: /cdn/",

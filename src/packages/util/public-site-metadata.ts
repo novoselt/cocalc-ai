@@ -4,7 +4,7 @@
  */
 
 import { LOCALE } from "./i18n/locale";
-import { DOCS_ENTRIES, docsPath, getDocsEntry } from "@cocalc/docs";
+import type { DocsAccess, DocsEntry } from "@cocalc/docs";
 import {
   getPublicFeatureIndexPages,
   getPublicFeaturePage,
@@ -60,6 +60,33 @@ export interface PublicRouteMetadataOptions {
 export interface PublicMetadataRoute {
   route?: any;
   section: string;
+}
+
+// The docs registry ships the full documentation content, which must stay out
+// of the initial public bundle. Docs-aware metadata is therefore wired in via
+// this source, registered by @cocalc/util/public-site-metadata-docs: servers
+// import it statically, the browser loads it lazily on docs routes only.
+export interface PublicDocsMetadataSource {
+  getEntry(slugOrId: string, access?: DocsAccess): DocsEntry | undefined;
+  hasEntry(slug: string): boolean;
+}
+
+let docsMetadataSource: PublicDocsMetadataSource | undefined;
+
+export function registerPublicDocsMetadataSource(
+  source: PublicDocsMetadataSource,
+): void {
+  docsMetadataSource = source;
+}
+
+export function hasPublicDocsMetadataSource(): boolean {
+  return docsMetadataSource != null;
+}
+
+// Mirrors docsPath from @cocalc/docs, which cannot be imported here (see
+// PublicDocsMetadataSource above).
+function docsPath(slug?: string): string {
+  return slug ? `/docs/${slug.replace(/^\/+/, "")}` : "/docs";
 }
 
 const DEFAULT_SOCIAL_IMAGE = "public/landing/home-hero.jpg";
@@ -676,7 +703,7 @@ function docsRouteMetadata(
     : undefined;
   const entry =
     route?.view === "docs-detail"
-      ? getDocsEntry(route.slug, { siteProfile })
+      ? docsMetadataSource?.getEntry(route.slug, { siteProfile })
       : undefined;
   if (entry) {
     return {
@@ -691,15 +718,17 @@ function docsRouteMetadata(
     // at all (e.g. admin- or signed-in-only docs, or another site profile),
     // it must still serve 200 for entitled users — the client enforces the
     // actual visibility — but crawlers should not index it. Only slugs that
-    // exist nowhere in the registry are a real 404.
-    const exists = DOCS_ENTRIES.some((entry) => entry.slug === route.slug);
+    // exist nowhere in the registry are a real 404. Without a registered
+    // docs source (browser before the lazy registry chunk loads), emit
+    // neutral metadata without noindex/notFound decisions.
+    const exists = docsMetadataSource?.hasEntry(route.slug);
     return {
       canonicalPath: publicPath(docsPath(route.slug), options),
       description:
         "Read CoCalc documentation for projects, files, notebooks, terminals, teaching, account management, and administration.",
       imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
       noindex: exists || undefined,
-      notFound: !exists,
+      notFound: docsMetadataSource ? !exists : undefined,
       title: pageTitle("CoCalc Documentation", siteName),
     };
   }

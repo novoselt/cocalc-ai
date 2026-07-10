@@ -8,6 +8,9 @@ import {
   PublicRouteHeadMetadata,
 } from "../metadata";
 import { getPublicMetadataRouteFromPath } from "@cocalc/util/public-site-metadata";
+// Registers the docs registry with the metadata API; the browser loads this
+// lazily on docs routes, tests need it wired up front.
+import "@cocalc/util/public-site-metadata-docs";
 import type { PublicRoute } from "../routes";
 import { PUBLIC_SITEMAP_PATHS } from "../sitemap-paths";
 import { getFeatureIndexPages } from "../features/catalog";

@@ -3,13 +3,14 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 
 import type { PublicConfig } from "./config";
 import {
   getPublicRouteMetadata as getPublicRouteMetadataData,
+  hasPublicDocsMetadataSource,
   type PublicRouteMetadata,
 } from "./metadata-data";
 import type { PublicRoute } from "./routes";
@@ -122,7 +123,37 @@ export function PublicRouteHeadMetadata({
   config?: PublicConfig;
   route: PublicRoute;
 }) {
+  // Docs metadata needs the docs registry, which is deliberately kept out of
+  // the initial public bundle; load it on demand (the chunk is shared with
+  // the lazy docs app, so docs visitors pay for it once).
+  const [docsSourceReady, setDocsSourceReady] = useState<boolean>(
+    hasPublicDocsMetadataSource,
+  );
+  useEffect(() => {
+    if (route.section !== "docs" || docsSourceReady) return;
+    let cancelled = false;
+    import("@cocalc/util/public-site-metadata-docs")
+      .then((mod) => {
+        mod.initPublicDocsMetadata();
+        if (!cancelled) {
+          setDocsSourceReady(true);
+        }
+      })
+      .catch((err) => {
+        console.warn("failed to load docs metadata registry", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [route, docsSourceReady]);
+
   const metadata = useMemo(() => {
+    if (route.section === "docs" && !docsSourceReady) {
+      // Leave the server-rendered head untouched (including a restricted
+      // page's noindex tag) until the docs registry is available; applying
+      // metadata now would emit generic docs metadata instead.
+      return undefined;
+    }
     const dns =
       config?.dns ??
       (typeof window === "undefined" ? undefined : window.location.host);
@@ -133,9 +164,10 @@ export function PublicRouteHeadMetadata({
         basePath: appBasePath,
       },
     );
-  }, [config, route]);
+  }, [config, route, docsSourceReady]);
 
   useEffect(() => {
+    if (metadata == null) return;
     applyPublicRouteMetadata(metadata);
   }, [metadata]);
 

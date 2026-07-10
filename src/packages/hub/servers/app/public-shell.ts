@@ -21,6 +21,7 @@ import {
   PUBLIC_HEAD_PLACEHOLDER,
   type PublicRouteMetadataConfig,
 } from "@cocalc/util/public-site-metadata";
+import { initPublicDocsMetadata } from "@cocalc/util/public-site-metadata-docs";
 import { joinUrlPath } from "@cocalc/util/url-path";
 import {
   getCocalcProduct,
@@ -28,6 +29,11 @@ import {
 } from "@cocalc/server/launchpad/mode";
 
 const logger = getLogger("hub:servers:public-shell");
+
+// Docs route metadata (per-entry titles, noindex, 404 detection) needs the
+// docs registry, which is only wired in on demand; on the server that is
+// simply at startup.
+initPublicDocsMetadata();
 
 const FALLBACK_PUBLIC_HTML = `<!DOCTYPE html>
 <html>
