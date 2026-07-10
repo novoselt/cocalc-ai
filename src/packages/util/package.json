@@ -47,6 +47,7 @@
   "dependencies": {
     "@ant-design/colors": "^6.0.0",
     "@cocalc/diff-match-patch": "^1.0.0",
+    "@cocalc/docs": "workspace:*",
     "@cocalc/util": "workspace:*",
     "@isaacs/ttlcache": "^1.4.1",
     "async": "^1.5.2",

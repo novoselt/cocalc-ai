@@ -34,12 +34,15 @@ describe("public content routes", () => {
     }
   }
 
-  it("redirects the guides bridge page into the public shell", async () => {
+  it("serves the guides bridge page from the clean URL", async () => {
     const response = await request("/guides?topic=jupyter");
-    expect(response.status).toBe(302);
-    const location = response.headers.get("location");
-    expect(location).toContain("/static/public.html?target=");
-    const redirected = new URL(`http://host${location}`);
-    expect(redirected.searchParams.get("target")).toBe("/guides?topic=jupyter");
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(body).toContain("<title>CoCalc Guides | CoCalc</title>");
+    expect(body).toContain('rel="canonical"');
+    expect(body).toContain('href="http://127.0.0.1');
+    expect(body).toContain('/guides" rel="canonical"');
   });
 });

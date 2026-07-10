@@ -3,6 +3,7 @@
 import { render, waitFor } from "@testing-library/react";
 
 import { getPublicRouteMetadata, PublicRouteHeadMetadata } from "../metadata";
+import { getPublicMetadataRouteFromPath } from "@cocalc/util/public-site-metadata";
 import type { PublicRoute } from "../routes";
 import { PUBLIC_SITEMAP_PATHS } from "../sitemap-paths";
 import { getFeatureIndexPages } from "../features/catalog";
@@ -146,6 +147,32 @@ describe("public route metadata", () => {
 
     expect(metadata.canonicalPath).toBe("/base/products/cocalc-star");
     expect(metadata.imagePath).toBe("/base/public/landing/product-options.jpg");
+  });
+
+  it("uses per-entry docs metadata for docs detail pages", () => {
+    const route = getPublicMetadataRouteFromPath(
+      "/docs/projects/project-secrets",
+    );
+    const metadata = getPublicRouteMetadata(route, { site_name: "CoCalc" });
+
+    expect(metadata.title).toBe("Project secrets - Documentation | CoCalc");
+    expect(metadata.description).toContain("encrypted, read-only files");
+    expect(metadata.canonicalPath).toBe("/docs/projects/project-secrets");
+  });
+
+  it("does not collapse sitemap detail paths to section canonicals", () => {
+    for (const [path, canonicalPath] of [
+      ["/about/team", "/about/team"],
+      ["/about/team/william-stein", "/about/team/william-stein"],
+      ["/policies/privacy", "/policies/privacy"],
+      ["/lang", "/lang"],
+      ["/en", "/en"],
+      ["/rootfs/id/rootfs-image-1", "/rootfs"],
+    ] as const) {
+      const route = getPublicMetadataRouteFromPath(path);
+      const metadata = getPublicRouteMetadata(route, { site_name: "CoCalc" });
+      expect(metadata.canonicalPath).toBe(canonicalPath);
+    }
   });
 
   it("only emits routable feature detail pages in the public metadata sitemap", () => {

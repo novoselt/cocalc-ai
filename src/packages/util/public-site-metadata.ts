@@ -4,6 +4,7 @@
  */
 
 import { LOCALE } from "./i18n/locale";
+import { docsPath, getDocsEntry } from "@cocalc/docs";
 import {
   getPublicFeatureIndexPages,
   getPublicFeaturePage,
@@ -30,6 +31,7 @@ export interface PublicImageDimensions {
 
 export interface PublicRouteMetadataConfig {
   cocalc_product?: string;
+  dns?: string;
   is_launchpad?: boolean;
   logo_square?: string;
   site_name?: string;
@@ -100,6 +102,19 @@ const POLICY_SITEMAP_SLUGS = [
   "copyright",
   "ferpa",
 ] as const;
+
+const POLICY_METADATA_TITLES: Record<
+  (typeof POLICY_SITEMAP_SLUGS)[number],
+  string
+> = {
+  accessibility: "Accessibility",
+  copyright: "Copyright",
+  dpa: "Data Processing Addendum",
+  ferpa: "FERPA",
+  privacy: "Privacy Policy",
+  terms: "Terms of Service",
+  trust: "Trust and Security",
+};
 
 const TEAM_MEMBER_SITEMAP_SLUGS = [
   "william-stein",
@@ -243,6 +258,18 @@ export function getPublicMetadataRouteFromPath(
   const section = parts[0];
   if (!section) return { section: "home" };
   if (section === "about") {
+    if (parts[1] === "events") {
+      return { route: { view: "about-events" }, section: "about" };
+    }
+    if (parts[1] === "team" && parts[2]) {
+      return {
+        route: { teamSlug: parts[2], view: "about-team-member" },
+        section: "about",
+      };
+    }
+    if (parts[1] === "team") {
+      return { route: { view: "about-team" }, section: "about" };
+    }
     return { route: { view: "about" }, section: "about" };
   }
   if (
@@ -254,7 +281,16 @@ export function getPublicMetadataRouteFromPath(
     return authRoute(parts);
   }
   if (section === "docs") {
-    return { route: { view: "docs-index" }, section: "docs" };
+    if (parts[1] === "print") {
+      return { route: { view: "docs-print" }, section: "docs" };
+    }
+    if (!parts[1]) {
+      return { route: { view: "docs-index" }, section: "docs" };
+    }
+    return {
+      route: { slug: parts.slice(1).join("/"), view: "docs-detail" },
+      section: "docs",
+    };
   }
   if (section === "features") {
     return {
@@ -269,11 +305,31 @@ export function getPublicMetadataRouteFromPath(
     return { section: "not-found" };
   }
   if (section === "news") return { section: "news" };
-  if (section === "policies") return { section: "policies" };
+  if (section === "policies") {
+    if (parts[1] === "imprint") {
+      return { route: { view: "policies-imprint" }, section: "policies" };
+    }
+    if (parts[1] === "policies") {
+      return { route: { view: "policies-custom" }, section: "policies" };
+    }
+    if (parts[1]) {
+      return {
+        route: { policySlug: parts[1], view: "policies-detail" },
+        section: "policies",
+      };
+    }
+    return { route: { view: "policies" }, section: "policies" };
+  }
   if (section === "pricing") return { section: "pricing" };
   if (section === "products") {
     const detail = parts[1] ? `products-${parts[1]}` : "products";
     return { route: { view: detail }, section: "products" };
+  }
+  if (section === "rootfs") {
+    return {
+      route: { view: parts[1] ? "detail" : "index" },
+      section: "rootfs",
+    };
   }
   if (section === "support") {
     const view =
@@ -282,8 +338,14 @@ export function getPublicMetadataRouteFromPath(
         : "index";
     return { route: { view }, section: "support" };
   }
-  if (section === "lang" || LOCALE.includes(section as any)) {
-    return { route: { locale: parts[1] ?? section }, section: "lang" };
+  if (section === "lang") {
+    if (parts[1] && LOCALE.includes(parts[1] as any)) {
+      return { route: { locale: parts[1], view: "locale" }, section: "lang" };
+    }
+    return { route: { view: "index" }, section: "lang" };
+  }
+  if (LOCALE.includes(section as any)) {
+    return { route: { locale: section, view: "locale" }, section: "lang" };
   }
   return { section: "not-found" };
 }
@@ -393,6 +455,154 @@ function guidesRouteMetadata(
   };
 }
 
+function rootfsRouteMetadata(
+  _route: PublicMetadataRoute["route"],
+  siteName: string,
+  options?: PublicRouteMetadataOptions,
+): PublicRouteMetadata {
+  return {
+    canonicalPath: publicPath("rootfs", options),
+    description:
+      "Explore CoCalc runtime images for project environments, including images for notebooks, terminals, teaching workflows, and self-hosted deployments.",
+    imagePath: publicPath(WORKFLOW_SOCIAL_IMAGE, options),
+    title: pageTitle("CoCalc Runtime Images", siteName),
+  };
+}
+
+function aboutRouteMetadata(
+  route: PublicMetadataRoute["route"],
+  siteName: string,
+  options?: PublicRouteMetadataOptions,
+): PublicRouteMetadata {
+  switch (route?.view) {
+    case "about-events":
+      return {
+        canonicalPath: publicPath("about/events", options),
+        description:
+          "Find public CoCalc events, talks, workshops, and community appearances.",
+        imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+        title: pageTitle(`${siteName} Events`, siteName),
+      };
+    case "about-team":
+      return {
+        canonicalPath: publicPath("about/team", options),
+        description:
+          "Meet the SageMath, Inc. team building CoCalc for collaborative technical work.",
+        imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+        title: pageTitle(`${siteName} Team`, siteName),
+      };
+    case "about-team-member":
+      return {
+        canonicalPath: publicPath(`about/team/${route.teamSlug}`, options),
+        description:
+          "Meet a member of the SageMath, Inc. team building CoCalc.",
+        imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+        title: pageTitle(`${siteName} Team`, siteName),
+      };
+    case "about":
+    default:
+      return {
+        canonicalPath: publicPath("about", options),
+        description:
+          "Learn about the people and company behind CoCalc, the collaborative computing platform from SageMath, Inc.",
+        imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+        title: pageTitle(`About ${siteName}`, siteName),
+      };
+  }
+}
+
+function policiesRouteMetadata(
+  route: PublicMetadataRoute["route"],
+  siteName: string,
+  options?: PublicRouteMetadataOptions,
+): PublicRouteMetadata {
+  if (route?.view === "policies-detail" && route.policySlug) {
+    const title =
+      POLICY_METADATA_TITLES[
+        route.policySlug as keyof typeof POLICY_METADATA_TITLES
+      ] ?? "CoCalc Policy";
+    return {
+      canonicalPath: publicPath(`policies/${route.policySlug}`, options),
+      description:
+        "Review CoCalc public policy information, terms, privacy details, trust resources, and compliance commitments.",
+      imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+      title: pageTitle(`${siteName} ${title}`, siteName),
+    };
+  }
+  return {
+    canonicalPath: publicPath("policies", options),
+    description:
+      "Review CoCalc public policies, terms, privacy information, and trust resources.",
+    imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+    title: pageTitle(`${siteName} Policies`, siteName),
+  };
+}
+
+function langRouteMetadata(
+  route: PublicMetadataRoute["route"],
+  siteName: string,
+  options?: PublicRouteMetadataOptions,
+): PublicRouteMetadata {
+  if (route?.view === "locale" && route.locale) {
+    return {
+      canonicalPath: publicPath(route.locale, options),
+      description:
+        "Read a localized overview of CoCalc, the collaborative workspace for technical teams, teaching, and research.",
+      imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+      title: pageTitle(`${siteName} ${route.locale}`, siteName),
+    };
+  }
+  return {
+    canonicalPath: publicPath("lang", options),
+    description:
+      "Choose a localized CoCalc overview for public product discovery and evaluation.",
+    imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
+    title: pageTitle(`${siteName} Languages`, siteName),
+  };
+}
+
+function normalizedPublicHost(host?: string): string {
+  return `${host ?? ""}`.trim().replace(/:\d+$/, "").toLowerCase();
+}
+
+function docsRouteMetadata(
+  route: PublicMetadataRoute["route"],
+  config: PublicRouteMetadataConfig | undefined,
+  siteName: string,
+  options?: PublicRouteMetadataOptions,
+): PublicRouteMetadata {
+  const siteProfile =
+    normalizedPublicHost(config?.dns) === "cocalc.ai" ? "cocalc-ai" : undefined;
+  const entry =
+    route?.view === "docs-detail"
+      ? getDocsEntry(route.slug, { siteProfile })
+      : undefined;
+  if (entry) {
+    return {
+      canonicalPath: publicPath(docsPath(entry.slug), options),
+      description: entry.summary,
+      imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
+      title: pageTitle(`${entry.title} - Documentation`, siteName),
+    };
+  }
+  if (route?.view === "docs-detail" && route.slug) {
+    return {
+      canonicalPath: publicPath(docsPath(route.slug), options),
+      description:
+        "Read CoCalc documentation for projects, files, notebooks, terminals, teaching, account management, and administration.",
+      imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
+      title: pageTitle("CoCalc Documentation", siteName),
+    };
+  }
+  return {
+    canonicalPath: publicPath("docs", options),
+    description:
+      "Browse CoCalc documentation for projects, files, notebooks, terminals, teaching, account management, and administration.",
+    imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
+    title: pageTitle("CoCalc Documentation", siteName),
+  };
+}
+
 function authRouteMetadata(
   route: PublicMetadataRoute["route"],
   siteName: string,
@@ -483,6 +693,8 @@ export function getPublicRouteMetadata(
       };
     case "products":
       return productRouteMetadata(route.route, siteName, options);
+    case "rootfs":
+      return rootfsRouteMetadata(route.route, siteName, options);
     case "pricing":
       return {
         canonicalPath: publicPath("pricing", options),
@@ -500,21 +712,9 @@ export function getPublicRouteMetadata(
     case "guides":
       return guidesRouteMetadata(route.route, siteName, options);
     case "docs":
-      return {
-        canonicalPath: publicPath("docs", options),
-        description:
-          "Browse CoCalc documentation for projects, files, notebooks, terminals, teaching, account management, and administration.",
-        imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
-        title: pageTitle("CoCalc Documentation", siteName),
-      };
+      return docsRouteMetadata(route.route, config, siteName, options);
     case "about":
-      return {
-        canonicalPath: publicPath("about", options),
-        description:
-          "Learn about the people and company behind CoCalc, the collaborative computing platform from SageMath, Inc.",
-        imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
-        title: pageTitle(`About ${siteName}`, siteName),
-      };
+      return aboutRouteMetadata(route.route, siteName, options);
     case "news":
       return {
         canonicalPath: publicPath("news", options),
@@ -524,13 +724,9 @@ export function getPublicRouteMetadata(
         title: pageTitle(`${siteName} News`, siteName),
       };
     case "policies":
-      return {
-        canonicalPath: publicPath("policies", options),
-        description:
-          "Review CoCalc public policies, terms, privacy information, and trust resources.",
-        imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
-        title: pageTitle(`${siteName} Policies`, siteName),
-      };
+      return policiesRouteMetadata(route.route, siteName, options);
+    case "lang":
+      return langRouteMetadata(route.route, siteName, options);
     default:
       return {
         canonicalPath: publicPath("", options),

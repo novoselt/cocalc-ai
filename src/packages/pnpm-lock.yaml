@@ -1992,6 +1992,9 @@ importers:
       '@cocalc/diff-match-patch':
         specifier: ^1.0.0
         version: 1.0.1
+      '@cocalc/docs':
+        specifier: workspace:*
+        version: link:../docs
       '@cocalc/util':
         specifier: workspace:*
         version: 'link:'

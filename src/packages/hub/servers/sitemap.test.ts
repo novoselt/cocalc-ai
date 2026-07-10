@@ -119,8 +119,9 @@ describe("public sitemap", () => {
       protocol: "http",
     } as any);
     for (const path of paths) {
-      const response = await fetch(`${origin}${path}`, { redirect: "follow" });
+      const response = await fetch(`${origin}${path}`, { redirect: "manual" });
       expect(response.status).toBe(200);
+      expect(response.headers.get("location")).toBeNull();
     }
   });
 

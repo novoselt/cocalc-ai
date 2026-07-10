@@ -30,16 +30,27 @@ function renderLockedDownRobots(): string {
 }
 
 function renderPublicRobots(req: Request): string {
+  // These are authenticated app-shell routes. They may render HTML, but they are
+  // not public landing/share content and should not compete with crawlable
+  // marketing, docs, or shared-file URLs.
   const privateAppRoutes = Array.from(APP_ROUTES)
     .filter((route) => !INDEXABLE_APP_ROUTES.has(route))
     .map((route) => `Disallow: /${route}`);
 
   return [
     "User-agent: *",
+    // Public marketing, docs, pricing, policy, language, and feature pages are
+    // served at clean URLs. Let crawlers discover them normally.
     "Allow: /",
+    // Shared files are intentionally public when a user creates a share link,
+    // and /share is one of the few app routes that should be indexable.
     "Allow: /share",
     "Allow: /share/",
+    // Public pages need hashed JS/CSS/image chunks from /static. The shell HTML
+    // itself is blocked below so crawlers prefer the clean canonical URLs.
     "Allow: /static/",
+    "Disallow: /static/public.html",
+    // These are implementation surfaces, not standalone public pages.
     "Disallow: /webapp/",
     "Disallow: /cdn/",
     "Disallow: /api/",
@@ -59,9 +70,9 @@ export default function getHandler() {
         // Default: disable everything except public shares.
         res.write(renderLockedDownRobots());
       } else {
-        // Hosted CoCalc serves public pages through static HTML shells. Allow
-        // those page shells and public routes, but keep compiled assets and
-        // private application/API surfaces out of crawler indexes.
+        // Hosted CoCalc serves public pages at clean URLs. Keep the legacy
+        // public shell URL and private application/API surfaces out of crawler
+        // indexes, but allow static chunks needed to render public pages.
         res.write(renderPublicRobots(req));
       }
       res.end();

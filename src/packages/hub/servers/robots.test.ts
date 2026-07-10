@@ -43,7 +43,8 @@ describe("robots.txt", () => {
     expect(body.split("\n")).toContain("Allow: /");
     expect(body.split("\n")).toContain("Allow: /share");
     expect(body.split("\n")).toContain("Allow: /static/");
-    expect(body).not.toContain("Disallow: /static/");
+    expect(body).toContain("Disallow: /static/public.html");
+    expect(body).not.toContain("Disallow: /static/\n");
     expect(body).toContain("Disallow: /webapp/");
     expect(body).toContain("Disallow: /cdn/");
     expect(body).toContain("Disallow: /api/");
@@ -63,7 +64,8 @@ describe("robots.txt", () => {
     expect(body.split("\n")).toContain("Allow: /");
     expect(body.split("\n")).toContain("Allow: /share/");
     expect(body.split("\n")).toContain("Allow: /static/");
-    expect(body).not.toContain("Disallow: /static/");
+    expect(body).toContain("Disallow: /static/public.html");
+    expect(body).not.toContain("Disallow: /static/\n");
     expect(body).toContain(`Sitemap: ${origin}/sitemap.xml`);
     expect(body).not.toContain("Disallow: /\n");
   });
