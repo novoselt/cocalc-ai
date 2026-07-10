@@ -4,8 +4,12 @@ import initPublicContent from "./app/public-content";
 import initPublicFeatures from "./app/public-features";
 import initPublicLang from "./app/public-lang";
 import initPublicSupport from "./app/public-support";
-import initSitemap, { PUBLIC_SITEMAP_PATHS } from "./sitemap";
+import initSitemap, {
+  publicSitemapPaths,
+  PUBLIC_SITEMAP_PATHS,
+} from "./sitemap";
 import { getPublicFeatureIndexPages } from "@cocalc/util/public-feature-pages";
+import { docsPath, listDocsEntries } from "@cocalc/docs";
 
 jest.mock("@cocalc/database/postgres/news", () => ({
   getFeedData: jest.fn(async () => []),
@@ -73,8 +77,48 @@ describe("public sitemap", () => {
     );
   });
 
+  it("adds public docs detail pages from the docs registry", () => {
+    const paths = publicSitemapPaths({
+      get: (name: string) => (name === "host" ? "example.test" : undefined),
+    } as any);
+
+    expect(paths).toContain("/docs");
+    expect(paths).toContain("/docs/projects/project-secrets");
+    expect(paths).toContain("/docs/collaboration/chat");
+    expect(paths).not.toContain("/docs/admin/users");
+    expect(paths).not.toContain("/docs/account/settings");
+    expect(paths).not.toContain("/docs/projects/rstudio-project");
+  });
+
+  it("adds cocalc.ai profile docs only for the public cocalc.ai host", () => {
+    const paths = publicSitemapPaths({
+      get: (name: string) => (name === "host" ? "cocalc.ai" : undefined),
+    } as any);
+
+    expect(paths).toContain("/docs/projects/rstudio-project");
+    expect(paths).toContain("/docs/jupyter/install-octave-kernel");
+    expect(paths).not.toContain("/docs/admin/users");
+  });
+
+  it("keeps sitemap docs paths in sync with visible docs entries", () => {
+    const paths = publicSitemapPaths({
+      get: (name: string) => (name === "host" ? "cocalc.ai" : undefined),
+    } as any);
+    const docsPaths = paths.filter((path) => path.startsWith("/docs/"));
+
+    expect(docsPaths).toEqual(
+      listDocsEntries({ siteProfile: "cocalc-ai" }).map((entry) =>
+        docsPath(entry.slug),
+      ),
+    );
+  });
+
   it("serves every listed path through current public route handlers", async () => {
-    for (const path of PUBLIC_SITEMAP_PATHS) {
+    const paths = publicSitemapPaths({
+      get: (name: string) => (name === "host" ? "example.test" : undefined),
+      protocol: "http",
+    } as any);
+    for (const path of paths) {
       const response = await fetch(`${origin}${path}`, { redirect: "follow" });
       expect(response.status).toBe(200);
     }
@@ -89,7 +133,7 @@ describe("public sitemap", () => {
     expect(body).toContain(
       '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
     );
-    for (const path of PUBLIC_SITEMAP_PATHS) {
+    for (const path of publicSitemapPaths({ get: () => undefined } as any)) {
       expect(body).toContain(`<loc>${origin}${path}</loc>`);
     }
   });

@@ -6,6 +6,7 @@
 import type { Request, Response } from "express";
 
 import basePath from "@cocalc/backend/base-path";
+import { docsPath, listDocsEntries, type DocsAccess } from "@cocalc/docs";
 import { getLogger } from "@cocalc/hub/logger";
 import { PUBLIC_SITEMAP_PATHS } from "@cocalc/util/public-site-metadata";
 import { joinUrlPath } from "@cocalc/util/url-path";
@@ -31,10 +32,41 @@ export function sitemapLocation(req: Request, path: string): string {
   return `${requestOrigin(req)}${joinUrlPath(basePath, path)}`;
 }
 
+function normalizeHost(host?: string): string {
+  return `${host ?? ""}`.trim().toLowerCase().replace(/:\d+$/, "");
+}
+
+function docsAccessForRequest(req: Request): DocsAccess {
+  return {
+    siteProfile:
+      normalizeHost(req.get("host")) === "cocalc.ai" ? "cocalc-ai" : undefined,
+  };
+}
+
+function uniquePaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  return paths.filter((path) => {
+    if (seen.has(path)) return false;
+    seen.add(path);
+    return true;
+  });
+}
+
+export function publicSitemapPaths(req: Request): string[] {
+  return uniquePaths([
+    ...PUBLIC_SITEMAP_PATHS,
+    ...listDocsEntries(docsAccessForRequest(req)).map((entry) =>
+      docsPath(entry.slug),
+    ),
+  ]);
+}
+
 export function renderSitemapXml(req: Request): string {
-  const urls = PUBLIC_SITEMAP_PATHS.map((path) => {
-    return `  <url><loc>${xmlEscape(sitemapLocation(req, path))}</loc></url>`;
-  }).join("\n");
+  const urls = publicSitemapPaths(req)
+    .map((path) => {
+      return `  <url><loc>${xmlEscape(sitemapLocation(req, path))}</loc></url>`;
+    })
+    .join("\n");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
