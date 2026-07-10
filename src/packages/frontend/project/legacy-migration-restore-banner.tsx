@@ -666,6 +666,7 @@ export function LegacyMigrationRestoreBanner({
   if (
     remediation?.needs_remediation &&
     remediation.prepared_at &&
+    (remediation.diff_file_count !== 0 || remediation.applied_at) &&
     !remediation.dismissed_forever &&
     !remediationSessionDismissed
   ) {
