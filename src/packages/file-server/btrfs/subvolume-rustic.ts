@@ -189,22 +189,40 @@ export class SubvolumeRustic {
     const stagingRoot = this.backupStagingRoot();
     await sudo({ command: "mkdir", args: ["-p", stagingRoot] });
     const snapshotPath = join(stagingRoot, name);
-    await btrfs({
-      args: ["subvolume", "snapshot", "-r", this.subvolume.path, snapshotPath],
+    await withBtrfsMutationLock({
+      mount: this.subvolume.filesystem.opts.mount,
+      operation: "rustic-backup-snapshot-create",
+      run: async () => {
+        await btrfs({
+          args: [
+            "subvolume",
+            "snapshot",
+            "-r",
+            this.subvolume.path,
+            snapshotPath,
+          ],
+        });
+        invalidateBtrfsSubvolumeShow(snapshotPath);
+        invalidateBtrfsQgroupShowRaw(this.subvolume.filesystem.opts.mount);
+      },
     });
-    invalidateBtrfsSubvolumeShow(snapshotPath);
-    invalidateBtrfsQgroupShowRaw(this.subvolume.filesystem.opts.mount);
     return { snapshotPath };
   }
 
   private async deleteTempBackupSnapshot(snapshotPath: string): Promise<void> {
-    await btrfs({
-      args: ["subvolume", "delete", snapshotPath],
-      err_on_exit: false,
-      verbose: false,
+    await withBtrfsMutationLock({
+      mount: this.subvolume.filesystem.opts.mount,
+      operation: "rustic-backup-snapshot-delete",
+      run: async () => {
+        await btrfs({
+          args: ["subvolume", "delete", snapshotPath],
+          err_on_exit: false,
+          verbose: false,
+        });
+        invalidateBtrfsSubvolumeShow(snapshotPath);
+        invalidateBtrfsQgroupShowRaw(this.subvolume.filesystem.opts.mount);
+      },
     });
-    invalidateBtrfsSubvolumeShow(snapshotPath);
-    invalidateBtrfsQgroupShowRaw(this.subvolume.filesystem.opts.mount);
   }
 
   private rusticHost = async (
@@ -336,11 +354,7 @@ export class SubvolumeRustic {
 
   // create a new rustic backup
   backup = async (opts: RusticBackupOptions = {}): Promise<Snapshot> => {
-    return await withBtrfsMutationLock({
-      mount: this.subvolume.filesystem.opts.mount,
-      operation: "rustic-backup",
-      run: async () => await this.backupUnlocked(opts),
-    });
+    return await this.backupUnlocked(opts);
   };
 
   restore = async ({

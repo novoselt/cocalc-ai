@@ -4154,17 +4154,17 @@ async function backupProjectToExternalRepository({
     backupResult = await withBackupParallelLimit({
       project_id,
       op: "backupProjectToExternalRepository",
-      run: async () =>
+      run: async () => {
+        const stagingRoot = projectSiteMigrationStagingRoot({
+          mount: vol.filesystem.opts.mount,
+          project_id,
+          migration_id,
+        });
+        const snapshotPath = join(stagingRoot, "home");
         await withBtrfsMutationLock({
           mount: vol.filesystem.opts.mount,
-          operation: "project-site-migration-backup",
+          operation: "project-site-migration-snapshot-create",
           run: async () => {
-            const stagingRoot = projectSiteMigrationStagingRoot({
-              mount: vol.filesystem.opts.mount,
-              project_id,
-              migration_id,
-            });
-            const snapshotPath = join(stagingRoot, "home");
             await deleteProjectSiteMigrationSnapshot(snapshotPath).catch(
               () => {},
             );
@@ -4172,64 +4172,71 @@ async function backupProjectToExternalRepository({
               () => {},
             );
             await sudo({ command: "mkdir", args: ["-p", stagingRoot] });
-            try {
-              await btrfs({
-                args: ["subvolume", "snapshot", vol.path, snapshotPath],
-              });
-              await sudo({
-                command: "rm",
-                args: [
-                  "-rf",
-                  join(snapshotPath, PROJECT_SITE_MIGRATION_ROOTFS_STATE_PATH),
-                ],
-              });
-              const backup = await projectRusticBackup({
-                src: snapshotPath,
-                repoProfile: profilePath,
-                host: projectRusticSnapshotHost(destination_project_id),
-                timeoutMs: PROJECT_RUSTIC_TIMEOUT_MS,
-                tags,
-                progress,
-              });
-              let index: ExternalProjectBackupResult["index"] | undefined;
-              if (backup_index_store) {
-                const outputPath = backupIndexFilePath(
-                  destination_project_id,
-                  backup.id,
-                );
-                await buildBackupIndex({
-                  snapshotPath,
-                  outputPath,
-                  meta: {
-                    backupId: backup.id,
-                    backupTime: backup.time,
-                    snapshotId: backup.id,
-                  },
-                });
-                index = await uploadBackupIndexObject({
-                  config: backup_index_store,
-                  project_id: destination_project_id,
-                  backup_id: backup.id,
-                  input_path: outputPath,
-                });
-              }
-              return {
-                time: backup.time,
-                id: backup.id,
-                summary: backup.summary,
-                ...(index ? { index } : {}),
-              };
-            } finally {
-              try {
-                await deleteProjectSiteMigrationSnapshot(snapshotPath);
-              } finally {
-                await rm(stagingRoot, { recursive: true, force: true }).catch(
-                  () => {},
-                );
-              }
-            }
+            await btrfs({
+              args: ["subvolume", "snapshot", vol.path, snapshotPath],
+            });
           },
-        }),
+        });
+        try {
+          await sudo({
+            command: "rm",
+            args: [
+              "-rf",
+              join(snapshotPath, PROJECT_SITE_MIGRATION_ROOTFS_STATE_PATH),
+            ],
+          });
+          const backup = await projectRusticBackup({
+            src: snapshotPath,
+            repoProfile: profilePath,
+            host: projectRusticSnapshotHost(destination_project_id),
+            timeoutMs: PROJECT_RUSTIC_TIMEOUT_MS,
+            tags,
+            progress,
+          });
+          let index: ExternalProjectBackupResult["index"] | undefined;
+          if (backup_index_store) {
+            const outputPath = backupIndexFilePath(
+              destination_project_id,
+              backup.id,
+            );
+            await buildBackupIndex({
+              snapshotPath,
+              outputPath,
+              meta: {
+                backupId: backup.id,
+                backupTime: backup.time,
+                snapshotId: backup.id,
+              },
+            });
+            index = await uploadBackupIndexObject({
+              config: backup_index_store,
+              project_id: destination_project_id,
+              backup_id: backup.id,
+              input_path: outputPath,
+            });
+          }
+          return {
+            time: backup.time,
+            id: backup.id,
+            summary: backup.summary,
+            ...(index ? { index } : {}),
+          };
+        } finally {
+          try {
+            await withBtrfsMutationLock({
+              mount: vol.filesystem.opts.mount,
+              operation: "project-site-migration-snapshot-delete",
+              run: async () => {
+                await deleteProjectSiteMigrationSnapshot(snapshotPath);
+              },
+            });
+          } finally {
+            await rm(stagingRoot, { recursive: true, force: true }).catch(
+              () => {},
+            );
+          }
+        }
+      },
     });
     await recordManagedBackupEgressBestEffort({
       project_id,

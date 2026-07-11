@@ -52,6 +52,8 @@ const DEFAULT_MAX_PARALLEL = Math.max(
 );
 const HOST_LOCAL_BACKUP_WORKER_KIND = "project-host-backup-execution";
 const FILE_SERVER_READY_TIMEOUT_MS = 60_000;
+const BACKUP_CLAIM_LOCK_NAMESPACE = "cocalc";
+const BACKUP_CLAIM_LOCK_NAME = "project-backup-claim";
 
 const WORKER_ID = randomUUID();
 const TERMINAL_LRO_STATUSES = new Set([
@@ -75,6 +77,13 @@ let tickRequested = false;
 
 type BackupClaimCandidateRow = LroSummary & {
   host_id: string | null;
+};
+
+type BackupQueryClient = {
+  query<Row extends Record<string, any> = any>(
+    text: string,
+    values?: any[],
+  ): Promise<{ rows: Row[] }>;
 };
 
 function publishSummary(summary: LroSummary) {
@@ -412,10 +421,12 @@ async function shouldLeaveTerminalLroUntouched(
 
 async function listFreshRunningBackupCountsByHost({
   lease_ms = LEASE_MS,
+  client,
 }: {
   lease_ms?: number;
+  client?: BackupQueryClient;
 } = {}): Promise<Map<string, number>> {
-  const { rows } = await pool().query<{
+  const { rows } = await (client ?? pool()).query<{
     host_id: string;
     count: string | number;
   }>(
@@ -450,65 +461,78 @@ async function claimBackupLroOps({
   lease_ms?: number;
 }): Promise<LroSummary[]> {
   if (limit <= 0) return [];
-  const expired = await expireDueLros({ kind: BACKUP_LRO_KIND });
-  if (expired.length > 0) {
-    logger.info("expired stale backup LROs before claim", {
-      count: expired.length,
-      op_ids: expired.map(({ op_id }) => op_id),
-    });
-  }
-  const hostStatuses = await listHostLocalBackupStatuses();
-  const freshRunningCounts = await listFreshRunningBackupCountsByHost({
-    lease_ms,
-  });
-  const fallbackMaxParallelByHost = new Map<string, number>();
-  if (hostStatuses.unreachable_hosts > 0 || hostStatuses.rows.length === 0) {
-    const hostRegistration = getParallelOpsWorkerRegistration(
-      HOST_LOCAL_BACKUP_WORKER_KIND,
-    );
-    const reportedHostIds = new Set(
-      hostStatuses.rows.map(({ host_id }) => host_id),
-    );
-    const fallbackHostIds: string[] = [];
-    for (const { id } of await listActiveProjectHosts()) {
-      if (reportedHostIds.has(id)) continue;
-      fallbackHostIds.push(id);
-    }
-    const defaultHostLimits = await getProjectHostDefaultParallelLimits({
-      host_ids: fallbackHostIds,
-    });
-    const defaultFallbackLimit =
-      hostRegistration?.getLimitSnapshot().default_limit ?? 1;
-    for (const id of fallbackHostIds) {
-      const { value } = await getEffectiveParallelOpsLimit({
-        worker_kind: HOST_LOCAL_BACKUP_WORKER_KIND,
-        default_limit: defaultHostLimits.get(id) ?? defaultFallbackLimit,
-        scope_type: "project_host",
-        scope_id: id,
-      });
-      fallbackMaxParallelByHost.set(id, value);
-    }
-    if (fallbackMaxParallelByHost.size > 0) {
-      logger.warn("backup admission falling back to configured host limits", {
-        reachable_hosts: hostStatuses.rows.length,
-        unreachable_hosts: hostStatuses.unreachable_hosts,
-        fallback_hosts: Array.from(fallbackMaxParallelByHost.keys()),
-      });
-    }
-  }
-  const availableByHost = computeHostAvailableBackupSlots({
-    hostStatuses: hostStatuses.rows,
-    freshRunningCounts,
-    fallbackMaxParallelByHost,
-  });
-  if (!Array.from(availableByHost.values()).some((slots) => slots > 0)) {
-    return [];
-  }
-
-  await ensureLroSchema();
   const client = await pool().connect();
+  let claimLockHeld = false;
+  let inTransaction = false;
   try {
+    const lockResult = await client.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS locked`,
+      [BACKUP_CLAIM_LOCK_NAMESPACE, BACKUP_CLAIM_LOCK_NAME],
+    );
+    if (!lockResult.rows[0]?.locked) {
+      return [];
+    }
+    claimLockHeld = true;
+
+    const expired = await expireDueLros({ kind: BACKUP_LRO_KIND });
+    if (expired.length > 0) {
+      logger.info("expired stale backup LROs before claim", {
+        count: expired.length,
+        op_ids: expired.map(({ op_id }) => op_id),
+      });
+    }
+    const hostStatuses = await listHostLocalBackupStatuses();
+    const freshRunningCounts = await listFreshRunningBackupCountsByHost({
+      lease_ms,
+      client,
+    });
+    const fallbackMaxParallelByHost = new Map<string, number>();
+    if (hostStatuses.unreachable_hosts > 0 || hostStatuses.rows.length === 0) {
+      const hostRegistration = getParallelOpsWorkerRegistration(
+        HOST_LOCAL_BACKUP_WORKER_KIND,
+      );
+      const reportedHostIds = new Set(
+        hostStatuses.rows.map(({ host_id }) => host_id),
+      );
+      const fallbackHostIds: string[] = [];
+      for (const { id } of await listActiveProjectHosts()) {
+        if (reportedHostIds.has(id)) continue;
+        fallbackHostIds.push(id);
+      }
+      const defaultHostLimits = await getProjectHostDefaultParallelLimits({
+        host_ids: fallbackHostIds,
+      });
+      const defaultFallbackLimit =
+        hostRegistration?.getLimitSnapshot().default_limit ?? 1;
+      for (const id of fallbackHostIds) {
+        const { value } = await getEffectiveParallelOpsLimit({
+          worker_kind: HOST_LOCAL_BACKUP_WORKER_KIND,
+          default_limit: defaultHostLimits.get(id) ?? defaultFallbackLimit,
+          scope_type: "project_host",
+          scope_id: id,
+        });
+        fallbackMaxParallelByHost.set(id, value);
+      }
+      if (fallbackMaxParallelByHost.size > 0) {
+        logger.warn("backup admission falling back to configured host limits", {
+          reachable_hosts: hostStatuses.rows.length,
+          unreachable_hosts: hostStatuses.unreachable_hosts,
+          fallback_hosts: Array.from(fallbackMaxParallelByHost.keys()),
+        });
+      }
+    }
+    const availableByHost = computeHostAvailableBackupSlots({
+      hostStatuses: hostStatuses.rows,
+      freshRunningCounts,
+      fallbackMaxParallelByHost,
+    });
+    if (!Array.from(availableByHost.values()).some((slots) => slots > 0)) {
+      return [];
+    }
+
+    await ensureLroSchema();
     await client.query("BEGIN");
+    inTransaction = true;
     const { rows } = await client.query<BackupClaimCandidateRow>(
       `
         SELECT l.*, p.host_id::text AS host_id
@@ -540,6 +564,7 @@ async function claimBackupLroOps({
     });
     if (opIds.length === 0) {
       await client.query("ROLLBACK");
+      inTransaction = false;
       return [];
     }
     const claimed = await client.query<LroSummary>(
@@ -558,12 +583,36 @@ async function claimBackupLroOps({
       [opIds, owner_type, owner_id],
     );
     await client.query("COMMIT");
+    inTransaction = false;
     return claimed.rows;
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (inTransaction) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      inTransaction = false;
+    }
     throw err;
   } finally {
-    client.release();
+    let releaseError: Error | undefined;
+    if (claimLockHeld) {
+      await client
+        .query<{ unlocked: boolean }>(
+          `SELECT pg_advisory_unlock(hashtext($1), hashtext($2)) AS unlocked`,
+          [BACKUP_CLAIM_LOCK_NAMESPACE, BACKUP_CLAIM_LOCK_NAME],
+        )
+        .then(({ rows }) => {
+          if (!rows[0]?.unlocked) {
+            throw new Error("backup claim advisory lock was not held");
+          }
+        })
+        .catch((err) => {
+          releaseError =
+            err instanceof Error ? err : new Error(`advisory unlock: ${err}`);
+          logger.warn("failed to release backup claim advisory lock", {
+            err: `${err}`,
+          });
+        });
+    }
+    client.release(releaseError);
   }
 }
 

@@ -4,6 +4,7 @@
  */
 
 import getLogger from "@cocalc/backend/logger";
+import { getBtrfsMutationLockStatus } from "@cocalc/file-server/btrfs/operation-cache";
 import {
   getBackupExecutionLimit,
   getCachedBackupExecutionLimit,
@@ -26,10 +27,7 @@ async function acquireBackupSlot(): Promise<void> {
     return;
   }
   await new Promise<void>((resolve) => {
-    backupWaiters.push(() => {
-      backupInFlight += 1;
-      resolve();
-    });
+    backupWaiters.push(resolve);
   });
 }
 
@@ -62,6 +60,7 @@ export async function getBackupExecutionStatus() {
     in_flight: backupInFlight,
     queued: backupWaiters.length,
     project_lock_count: backupProjectTails.size,
+    btrfs_mutation_locks: getBtrfsMutationLockStatus(),
     config_source,
   };
 }

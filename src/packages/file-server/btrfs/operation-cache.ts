@@ -14,7 +14,37 @@ const qgroupShowCache = new Map<string, CacheEntry<BtrfsOutput>>();
 const qgroupShowInflight = new Map<string, Promise<BtrfsOutput>>();
 const subvolumeShowCache = new Map<string, CacheEntry<BtrfsOutput>>();
 const subvolumeShowInflight = new Map<string, Promise<BtrfsOutput>>();
-const mutationTails = new Map<string, Promise<void>>();
+const DEFAULT_MUTATION_LOCK_WAIT_MS = 2 * 60_000;
+
+type MutationLockHolder = {
+  token: symbol;
+  operation: string;
+  startedAt: number;
+};
+
+type MutationLockWaiter = {
+  token: symbol;
+  operation: string;
+  queuedAt: number;
+  timeout: ReturnType<typeof setTimeout>;
+  resolve: (release: () => void) => void;
+  reject: (err: Error) => void;
+};
+
+type MutationLockState = {
+  holder: MutationLockHolder;
+  waiters: MutationLockWaiter[];
+};
+
+export type BtrfsMutationLockStatus = {
+  mount: string;
+  holder_operation: string;
+  held_ms: number;
+  queued: number;
+  oldest_wait_ms?: number;
+};
+
+const mutationLocks = new Map<string, MutationLockState>();
 
 function envDurationMs(name: string, fallback: number): number {
   const value = Number.parseInt(`${process.env[name] ?? ""}`, 10);
@@ -30,6 +60,13 @@ function qgroupShowCacheMs(): number {
 
 function subvolumeShowCacheMs(): number {
   return envDurationMs("COCALC_BTRFS_SUBVOLUME_SHOW_CACHE_MS", 1_000);
+}
+
+function mutationLockWaitMs(): number {
+  return envDurationMs(
+    "COCALC_BTRFS_MUTATION_LOCK_WAIT_MS",
+    DEFAULT_MUTATION_LOCK_WAIT_MS,
+  );
 }
 
 async function cached<T>({
@@ -119,34 +156,145 @@ export async function withBtrfsMutationLock<T>({
   mount,
   operation,
   run,
+  wait_ms = mutationLockWaitMs(),
 }: {
   mount: string;
   operation: string;
   run: () => Promise<T>;
+  wait_ms?: number;
 }): Promise<T> {
-  const existing = mutationTails.get(mount);
-  const previous = existing ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
+  const release = await acquireBtrfsMutationLock({
+    mount,
+    operation,
+    wait_ms,
   });
-  const chained = previous.then(
-    () => current,
-    () => current,
-  );
-  mutationTails.set(mount, chained);
-  if (existing) {
-    logger.debug("waiting for btrfs mutation lock", { mount, operation });
-  }
-  await previous.catch(() => undefined);
   try {
     return await run();
   } finally {
     release();
-    if (mutationTails.get(mount) === chained) {
-      mutationTails.delete(mount);
-    }
   }
+}
+
+async function acquireBtrfsMutationLock({
+  mount,
+  operation,
+  wait_ms,
+}: {
+  mount: string;
+  operation: string;
+  wait_ms: number;
+}): Promise<() => void> {
+  const token = Symbol(operation);
+  const existing = mutationLocks.get(mount);
+  if (!existing) {
+    const state: MutationLockState = {
+      holder: { token, operation, startedAt: Date.now() },
+      waiters: [],
+    };
+    mutationLocks.set(mount, state);
+    logger.debug("acquired btrfs mutation lock", { mount, operation });
+    return () => releaseBtrfsMutationLock({ mount, token });
+  }
+
+  const queuedAt = Date.now();
+  logger.debug("waiting for btrfs mutation lock", {
+    mount,
+    operation,
+    holder_operation: existing.holder.operation,
+    held_ms: queuedAt - existing.holder.startedAt,
+    queued: existing.waiters.length + 1,
+  });
+  return await new Promise<() => void>((resolve, reject) => {
+    const timeout = setTimeout(
+      () => {
+        const state = mutationLocks.get(mount);
+        if (!state) return;
+        const index = state.waiters.findIndex(
+          (waiter) => waiter.token === token,
+        );
+        if (index < 0) return;
+        state.waiters.splice(index, 1);
+        const heldMs = Date.now() - state.holder.startedAt;
+        const err = new Error(
+          `timed out after ${wait_ms}ms waiting for btrfs mutation lock on ${mount}; holder=${state.holder.operation} held_ms=${heldMs}`,
+        );
+        logger.warn("timed out waiting for btrfs mutation lock", {
+          mount,
+          operation,
+          wait_ms,
+          holder_operation: state.holder.operation,
+          held_ms: heldMs,
+          queued: state.waiters.length,
+        });
+        reject(err);
+      },
+      Math.max(0, wait_ms),
+    );
+    timeout.unref?.();
+    existing.waiters.push({
+      token,
+      operation,
+      queuedAt,
+      timeout,
+      resolve,
+      reject,
+    });
+  });
+}
+
+function releaseBtrfsMutationLock({
+  mount,
+  token,
+}: {
+  mount: string;
+  token: symbol;
+}): void {
+  const state = mutationLocks.get(mount);
+  if (!state || state.holder.token !== token) return;
+
+  const released = state.holder;
+  const next = state.waiters.shift();
+  if (!next) {
+    mutationLocks.delete(mount);
+    logger.debug("released btrfs mutation lock", {
+      mount,
+      operation: released.operation,
+      held_ms: Date.now() - released.startedAt,
+      queued: 0,
+    });
+    return;
+  }
+
+  clearTimeout(next.timeout);
+  state.holder = {
+    token: next.token,
+    operation: next.operation,
+    startedAt: Date.now(),
+  };
+  logger.debug("handed off btrfs mutation lock", {
+    mount,
+    released_operation: released.operation,
+    released_held_ms: Date.now() - released.startedAt,
+    operation: next.operation,
+    waited_ms: Date.now() - next.queuedAt,
+    queued: state.waiters.length,
+  });
+  next.resolve(() => releaseBtrfsMutationLock({ mount, token: next.token }));
+}
+
+export function getBtrfsMutationLockStatus(): BtrfsMutationLockStatus[] {
+  const now = Date.now();
+  return Array.from(mutationLocks.entries())
+    .map(([mount, state]) => ({
+      mount,
+      holder_operation: state.holder.operation,
+      held_ms: Math.max(0, now - state.holder.startedAt),
+      queued: state.waiters.length,
+      ...(state.waiters[0]
+        ? { oldest_wait_ms: Math.max(0, now - state.waiters[0].queuedAt) }
+        : {}),
+    }))
+    .sort((a, b) => a.mount.localeCompare(b.mount));
 }
 
 export function clearBtrfsOperationCachesForTest(): void {
@@ -154,5 +302,10 @@ export function clearBtrfsOperationCachesForTest(): void {
   qgroupShowInflight.clear();
   subvolumeShowCache.clear();
   subvolumeShowInflight.clear();
-  mutationTails.clear();
+  for (const state of mutationLocks.values()) {
+    for (const waiter of state.waiters) {
+      clearTimeout(waiter.timeout);
+    }
+  }
+  mutationLocks.clear();
 }

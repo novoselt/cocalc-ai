@@ -243,6 +243,13 @@ export interface HostBackupExecutionStatus {
   in_flight: number;
   queued: number;
   project_lock_count: number;
+  btrfs_mutation_locks?: Array<{
+    mount: string;
+    holder_operation: string;
+    held_ms: number;
+    queued: number;
+    oldest_wait_ms?: number;
+  }>;
   config_source?: "env-legacy" | "db-override";
 }
 

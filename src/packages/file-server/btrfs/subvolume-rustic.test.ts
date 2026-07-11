@@ -239,14 +239,24 @@ describe("SubvolumeRustic.backup", () => {
     );
   });
 
-  it("serializes concurrent backups on the same mount", async () => {
+  it("serializes snapshot mutations but allows concurrent rustic transfers", async () => {
     let releaseFirst!: () => void;
+    let resolveFirstStarted!: () => void;
+    let resolveSecondStarted!: () => void;
     const firstStarted = new Promise<void>((resolve) => {
-      const wait = new Promise<void>((release) => {
-        releaseFirst = release;
-      });
-      backupFsRusticMock = jest.fn(async () => {
-        resolve();
+      resolveFirstStarted = resolve;
+    });
+    const secondStarted = new Promise<void>((resolve) => {
+      resolveSecondStarted = resolve;
+    });
+    const wait = new Promise<void>((release) => {
+      releaseFirst = release;
+    });
+    let backupCall = 0;
+    backupFsRusticMock = jest.fn(async () => {
+      backupCall += 1;
+      if (backupCall === 1) {
+        resolveFirstStarted();
         await wait;
         return {
           stdout: Buffer.from(
@@ -260,7 +270,20 @@ describe("SubvolumeRustic.backup", () => {
           code: 0,
           truncated: false,
         };
-      });
+      }
+      resolveSecondStarted();
+      return {
+        stdout: Buffer.from(
+          JSON.stringify({
+            time: "2026-04-30T22:00:00.000Z",
+            id: "snap-2",
+            summary: { files_new: 2 },
+          }),
+        ),
+        stderr: Buffer.alloc(0),
+        code: 0,
+        truncated: false,
+      };
     });
     sandboxedFilesystemMock = jest.fn((_path, _opts) => ({
       rustic: backupFsRusticMock,
@@ -292,23 +315,10 @@ describe("SubvolumeRustic.backup", () => {
     const first = rustic1.backup();
     await firstStarted;
     const second = rustic2.backup();
-    await Promise.resolve();
+    await secondStarted;
 
-    expect(backupFsRusticMock).toHaveBeenCalledTimes(1);
-    expect(btrfsMock).toHaveBeenCalledTimes(1);
-
-    backupFsRusticMock.mockImplementation(async () => ({
-      stdout: Buffer.from(
-        JSON.stringify({
-          time: "2026-04-30T22:00:00.000Z",
-          id: "snap-2",
-          summary: { files_new: 2 },
-        }),
-      ),
-      stderr: Buffer.alloc(0),
-      code: 0,
-      truncated: false,
-    }));
+    expect(backupFsRusticMock).toHaveBeenCalledTimes(2);
+    expect(btrfsMock).toHaveBeenCalledTimes(2);
     releaseFirst();
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
     expect(backupFsRusticMock).toHaveBeenCalledTimes(2);

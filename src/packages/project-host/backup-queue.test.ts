@@ -11,6 +11,10 @@ jest.mock("./backup-execution-limit", () => ({
   })),
 }));
 
+jest.mock("@cocalc/file-server/btrfs/operation-cache", () => ({
+  getBtrfsMutationLockStatus: jest.fn(() => []),
+}));
+
 async function flushEventLoop(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -132,5 +136,60 @@ describe("backup queue", () => {
 
     releaseFirst?.();
     await first;
+  });
+
+  it("counts a handed-off backup slot exactly once", async () => {
+    const {
+      getBackupExecutionStatus,
+      resetBackupQueueForTest,
+      withBackupParallelLimit,
+    } = await import("./backup-queue");
+
+    resetBackupQueueForTest();
+    let releaseFirst: (() => void) | undefined;
+    let releaseSecond: (() => void) | undefined;
+    let secondStarted: (() => void) | undefined;
+    const secondStartedPromise = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    const first = withBackupParallelLimit({
+      project_id: "project-1",
+      op: "first",
+      run: async () =>
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    });
+    await flushEventLoop();
+    const second = withBackupParallelLimit({
+      project_id: "project-2",
+      op: "second",
+      run: async () => {
+        secondStarted?.();
+        await new Promise<void>((resolve) => {
+          releaseSecond = resolve;
+        });
+      },
+    });
+    await flushEventLoop();
+    await expect(getBackupExecutionStatus()).resolves.toMatchObject({
+      in_flight: 1,
+      queued: 1,
+    });
+
+    releaseFirst?.();
+    await first;
+    await secondStartedPromise;
+    await expect(getBackupExecutionStatus()).resolves.toMatchObject({
+      in_flight: 1,
+      queued: 0,
+    });
+
+    releaseSecond?.();
+    await second;
+    await expect(getBackupExecutionStatus()).resolves.toMatchObject({
+      in_flight: 0,
+      queued: 0,
+    });
   });
 });
