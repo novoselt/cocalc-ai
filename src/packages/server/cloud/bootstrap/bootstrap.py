@@ -41,7 +41,7 @@ from typing import Any
 
 STATE_SCHEMA_VERSION = 1
 HELPER_SCHEMA_VERSION = "20260710-v1"
-RUNTIME_WRAPPER_VERSION = "20260710-v10"
+RUNTIME_WRAPPER_VERSION = "20260711-v11"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
 BUNDLE_RETENTION_COUNT = 3
@@ -2161,6 +2161,43 @@ attach_pid_to_project_pool_storage() {
   printf '%s\n' "$pid" > "$pool/cgroup.procs"
 }
 
+find_bees_pid() {
+  local mountpoint="$1" proc pid
+  for proc in /proc/[0-9]*; do
+    pid="${proc##*/}"
+    if [ "$pid" = "$$" ]; then
+      continue
+    fi
+    if [ ! -r "$proc/comm" ] || [ ! -r "$proc/cmdline" ]; then
+      continue
+    fi
+    if [ "$(cat "$proc/comm" 2>/dev/null || true)" != "bees" ]; then
+      continue
+    fi
+    if [ "$(tr '\0' '\n' <"$proc/cmdline" 2>/dev/null | tail -n 1)" = "$mountpoint" ]; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+  done
+  return 0
+}
+
+apply_bees_runtime_policy() {
+  local pid="$1" pool task tid
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  pool="$(project_storage_cgroup)"
+  configure_project_storage_cgroup "$pool"
+  attach_pid_to_project_pool_storage "$pid" "$pool" || true
+  for task in "/proc/${pid}/task/"[0-9]*; do
+    [ -d "$task" ] || continue
+    tid="${task##*/}"
+    /usr/bin/renice -n 19 -p "$tid" >/dev/null 2>&1 || true
+    /usr/bin/ionice -c3 -p "$tid" >/dev/null 2>&1 || true
+  done
+}
+
 attach_pid_tree_to_project_pool_storage() {
   local root_pid="$1" pool="$2" pending pid child
   if [ -z "$root_pid" ] || ! kill -0 "$root_pid" 2>/dev/null; then
@@ -3160,6 +3197,28 @@ PY' bash "$tree"
     check_args "$@"
     exec /bin/df "$@"
     ;;
+  reconcile-bees)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage reconcile-bees <mountpoint>" >&2
+      exit 2
+    fi
+    mountpoint="$1"
+    check_args "$mountpoint"
+    case "$mountpoint" in
+      /mnt/cocalc|/mnt/cocalc/*)
+        ;;
+      *)
+        deny "bees-mountpoint-not-allowed" "$mountpoint"
+        ;;
+    esac
+    existing_pid="$(find_bees_pid "$mountpoint")"
+    if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+      apply_bees_runtime_policy "$existing_pid"
+      echo "BEES_POLICY_RECONCILED mountpoint=${mountpoint} pid=${existing_pid}" >&2
+    else
+      echo "BEES_NOT_RUNNING mountpoint=${mountpoint}" >&2
+    fi
+    ;;
   bees)
     check_args "$@"
     mountpoint=""
@@ -3180,31 +3239,16 @@ PY' bash "$tree"
     if ! command -v flock >/dev/null 2>&1; then
       deny "flock-missing" "flock"
     fi
+    existing_pid="$(find_bees_pid "$mountpoint")"
+    if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+      apply_bees_runtime_policy "$existing_pid"
+      echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} pid=${existing_pid}" >&2
+      exit 75
+    fi
     lock_path="$beeshome/cocalc-bees.lock"
     exec 9>"$lock_path"
     if ! flock -n 9; then
       echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} lock=${lock_path}" >&2
-      exit 75
-    fi
-    existing_pid=""
-    for proc in /proc/[0-9]*; do
-      pid="${proc##*/}"
-      if [ "$pid" = "$$" ]; then
-        continue
-      fi
-      if [ ! -r "$proc/comm" ] || [ ! -r "$proc/cmdline" ]; then
-        continue
-      fi
-      if [ "$(cat "$proc/comm" 2>/dev/null || true)" != "bees" ]; then
-        continue
-      fi
-      if [ "$(tr '\0' '\n' <"$proc/cmdline" 2>/dev/null | tail -n 1)" = "$mountpoint" ]; then
-        existing_pid="$pid"
-        break
-      fi
-    done
-    if [ -n "$existing_pid" ]; then
-      echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} pid=${existing_pid}" >&2
       exit 75
     fi
     pool="$(project_storage_cgroup)"
@@ -3362,6 +3406,18 @@ exec /bin/journalctl -u "$service" -o cat -f -n "$lines"
         p = Path(path)
         p.write_text(content, encoding="utf-8")
         p.chmod(0o755)
+
+
+def reconcile_bees_runtime_policy(cfg: BootstrapConfig) -> None:
+    run_best_effort(
+        cfg,
+        [
+            "/usr/local/sbin/cocalc-runtime-storage",
+            "reconcile-bees",
+            "/mnt/cocalc",
+        ],
+        "reconcile BEES runtime policy",
+    )
 
 
 def ensure_btrfs_data(cfg: BootstrapConfig) -> None:
@@ -5486,6 +5542,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         install_btrfs_helper(cfg)
         install_privileged_wrappers(cfg)
         ensure_cocalc_mount(cfg)
+        reconcile_bees_runtime_policy(cfg)
         setup_shared_scratch(cfg)
         ensure_btrfs_data(cfg)
         ensure_subuids(cfg)
