@@ -1082,7 +1082,7 @@ function CodexCredentialsPanelBody({
                   }
                   onClick={() => void startDeviceAuth()}
                   loading={deviceAuthActionPending}
-                  disabled={!authProjectId || deviceAuth?.state === "pending"}
+                  disabled={deviceAuth?.state === "pending"}
                 >
                   {deviceAuthActionPending
                     ? "Getting sign-in code..."
@@ -1092,6 +1092,12 @@ function CodexCredentialsPanelBody({
                   {CODEX_USAGE_LABEL}
                 </Button>
               </Space>
+              {!authProjectId ? (
+                <Text type="secondary">
+                  Device sign-in needs a project to run Codex. Open or create a
+                  project, then try again.
+                </Text>
+              ) : null}
             </>
           ) : (
             <>
@@ -1111,7 +1117,7 @@ function CodexCredentialsPanelBody({
                   type="primary"
                   onClick={() => void startDeviceAuth()}
                   loading={deviceAuthActionPending}
-                  disabled={!authProjectId || deviceAuth?.state === "pending"}
+                  disabled={deviceAuth?.state === "pending"}
                 >
                   {deviceAuthActionPending
                     ? "Getting sign-in code..."
@@ -1121,6 +1127,12 @@ function CodexCredentialsPanelBody({
                   {CODEX_USAGE_LABEL}
                 </Button>
               </Space>
+              {!authProjectId ? (
+                <Text type="secondary">
+                  Device sign-in needs a project to run Codex. Open or create a
+                  project, then try again.
+                </Text>
+              ) : null}
             </>
           )}
         </Space>
