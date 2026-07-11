@@ -2724,11 +2724,19 @@ Examples:
     .command("reconcile [host]")
     .description("run bootstrap/software reconcile on one or more hosts")
     .option("--all-online", "reconcile all online hosts")
+    .option(
+      "--force-bootstrap",
+      "run the host bootstrap even when the reported lifecycle is in sync",
+    )
     .option("--wait", "wait for completion")
     .action(
       async (
         hostIdentifier: string | undefined,
-        opts: { allOnline?: boolean; wait?: boolean },
+        opts: {
+          allOnline?: boolean;
+          forceBootstrap?: boolean;
+          wait?: boolean;
+        },
         command: Command,
       ) => {
         await withContext(command, "host reconcile", async (ctx) => {
@@ -2760,6 +2768,7 @@ Examples:
             hosts.map(async (h) => {
               const op = await ctx.hub.hosts.reconcileHostSoftware({
                 id: h.id,
+                force_bootstrap: opts.forceBootstrap === true,
               });
               return {
                 host_id: h.id,

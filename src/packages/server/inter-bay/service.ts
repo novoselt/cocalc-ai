@@ -2097,10 +2097,11 @@ async function startHostConnectionService(): Promise<void> {
         align_runtime_stack,
         record_runtime_deployments,
       }),
-    reconcileHostSoftware: async ({ account_id, id }) =>
+    reconcileHostSoftware: async ({ account_id, id, force_bootstrap }) =>
       await reconcileHostSoftware({
         account_id,
         id,
+        force_bootstrap,
       }),
     reconcileHostRuntimeDeployments: async ({
       account_id,

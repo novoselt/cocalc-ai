@@ -3202,6 +3202,7 @@ test("software deploy host-bootstrap publishes latest bootstrap and reconciles h
     "host",
     "reconcile",
     "--all-online",
+    "--force-bootstrap",
     "--wait",
   ]);
   const history = JSON.parse(

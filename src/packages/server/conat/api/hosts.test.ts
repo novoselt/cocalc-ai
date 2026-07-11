@@ -4644,6 +4644,28 @@ describe("hosts.upgradeHostSoftware", () => {
       }),
     );
   });
+
+  it("records forced bootstrap reconciliation in the host operation", async () => {
+    const { reconcileHostSoftware } = await import("./hosts");
+    await reconcileHostSoftware({
+      account_id: ACCOUNT_ID,
+      id: HOST_ID,
+      force_bootstrap: true,
+    });
+
+    expect(createLroMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "host-reconcile-software",
+        scope_type: "host",
+        scope_id: HOST_ID,
+        input: expect.objectContaining({
+          id: HOST_ID,
+          force_bootstrap: true,
+        }),
+        dedupe_key: `host-reconcile-software:${HOST_ID}:force-bootstrap`,
+      }),
+    );
+  });
 });
 
 describe("hosts.stopHostProjects / restartHostProjects", () => {

@@ -24,6 +24,7 @@ type Capture = {
     align_runtime_stack?: boolean;
   }>;
   reconciles: string[];
+  reconcileRequests?: Array<{ id: string; force_bootstrap?: boolean }>;
   rollouts: Array<{ id: string; components: string[]; reason?: string }>;
   runtimeDeploymentReconciles: Array<{
     id: string;
@@ -134,6 +135,7 @@ function makeDeps(
   },
 ): HostCommandDeps {
   capture.runtimeDeploymentRollbacks ??= [];
+  capture.reconcileRequests ??= [];
   capture.upgradeRequests ??= [];
   capture.hostRootfsImageRequests ??= [];
   capture.hostProjectsRequests ??= [];
@@ -242,8 +244,9 @@ function makeDeps(
               });
               return { op_id: `op-${id}` };
             },
-            reconcileHostSoftware: async ({ id }) => {
+            reconcileHostSoftware: async ({ id, force_bootstrap }) => {
               capture.reconciles.push(id);
+              capture.reconcileRequests!.push({ id, force_bootstrap });
               return { op_id: `reconcile-${id}` };
             },
             rolloutHostManagedComponents: async ({
@@ -1194,8 +1197,10 @@ test("host where returns the bay for the resolved host", async () => {
               capture.upgrades.push(id);
               return { op_id: `op-${id}` };
             },
-            reconcileHostSoftware: async ({ id }) => {
+            reconcileHostSoftware: async ({ id, force_bootstrap }) => {
               capture.reconciles.push(id);
+              capture.reconcileRequests ??= [];
+              capture.reconcileRequests.push({ id, force_bootstrap });
               return { op_id: `reconcile-${id}` };
             },
             getHostMetricsHistory: async (opts) => ({
@@ -2033,6 +2038,32 @@ test("host reconcile queues and waits for completion", async () => {
   assert.equal(capture.data.op_id, "reconcile-host-1");
   assert.equal(capture.data.status, "succeeded");
   assert.deepEqual(capture.reconciles, ["host-1"]);
+});
+
+test("host reconcile forwards forced bootstrap requests", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const program = new Command();
+  registerHostCommand(program, makeDeps(capture));
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "reconcile",
+    "host-1",
+    "--force-bootstrap",
+  ]);
+
+  assert.deepEqual(capture.reconcileRequests, [
+    { id: "host-1", force_bootstrap: true },
+  ]);
 });
 
 test("host reconcile --all-online targets only online running hosts", async () => {
