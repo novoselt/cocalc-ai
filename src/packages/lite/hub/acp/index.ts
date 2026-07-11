@@ -59,6 +59,10 @@ import {
 } from "./automation-chat-sender";
 import { buildAutomationAcpConfig } from "./automation-request-config";
 import {
+  automationHasActiveBackendRun,
+  finishedAutomationRunFromJob,
+} from "./active-automation-run";
+import {
   computeNextAutomationRunAt,
   computeSkippedAutomationRunAt,
   normalizeAcpAutomationConfig,
@@ -240,7 +244,6 @@ import {
   startAcpWorkerSupervisor,
 } from "./worker-manager";
 import { buildCodexRuntimeEnv } from "./runtime-env";
-import { automationHasActiveBackendRun } from "./active-automation-run";
 import { automationAfterScheduledEnqueueFailure } from "./automation-enqueue-failure";
 
 export {
@@ -348,6 +351,10 @@ const ACP_SYNCDB_SAVE_SLOW_MS = envNumber(
 );
 const ACP_TERMINAL_STORAGE_TIMEOUT_MS = envNumber(
   "COCALC_ACP_TERMINAL_STORAGE_TIMEOUT_MS",
+  15_000,
+);
+const ACP_CHAT_WRITER_DISPOSE_TIMEOUT_MS = envNumber(
+  "COCALC_ACP_CHAT_WRITER_DISPOSE_TIMEOUT_MS",
   15_000,
 );
 const ACP_LOG_PERSIST_SLOW_MS = envNumber(
@@ -6282,10 +6289,36 @@ async function executeAcpRequest({
     // TODO: we might not want to immediately close, since there is
     // overhead in creating the syncdoc each time.
     chatWriter?.dispose();
-    await chatWriter?.waitUntilDisposed();
+    if (chatWriter != null && !(await waitForChatWriterDisposal(chatWriter))) {
+      logger.warn("timed out disposing ACP chat writer; continuing cleanup", {
+        reqId,
+        project_id: request.chat?.project_id,
+        path: request.chat?.path,
+        thread_id: request.chat?.thread_id,
+        message_id: request.chat?.message_id,
+        automation_id: request.chat?.automation_id,
+        timeout_ms: ACP_CHAT_WRITER_DISPOSE_TIMEOUT_MS,
+      });
+    }
     await cleanup();
   }
   return { terminalState };
+}
+
+async function waitForChatWriterDisposal(
+  writer: Pick<ChatStreamWriter, "waitUntilDisposed">,
+  timeoutMs: number = ACP_CHAT_WRITER_DISPOSE_TIMEOUT_MS,
+): Promise<boolean> {
+  try {
+    await withTimeout({
+      promise: writer.waitUntilDisposed(),
+      timeoutMs,
+      phase: "chat-writer-dispose",
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function acpJobThreadKey({
@@ -6790,6 +6823,43 @@ async function finalizeAutomationRun(opts: {
   await publishAutomationRecordToProjectIndex(updated);
 }
 
+async function reconcileFinishedAutomationRuns(): Promise<void> {
+  for (const row of listAllAcpAutomations()) {
+    if (row.status !== "running") {
+      continue;
+    }
+    try {
+      if (automationHasActiveBackendRun(row)) {
+        continue;
+      }
+      const jobOpId = `${row.last_job_op_id ?? ""}`.trim();
+      const job = jobOpId ? getAcpJobByOpId(jobOpId) : undefined;
+      const finished = finishedAutomationRunFromJob(job);
+      if (!finished) {
+        continue;
+      }
+      logger.warn("reconciling automation left running after job completion", {
+        automation_id: row.automation_id,
+        job_op_id: jobOpId,
+        job_state: job?.state,
+      });
+      await finalizeAutomationRun({
+        automation_id: row.automation_id,
+        terminalState: finished.terminalState,
+        last_job_op_id: jobOpId,
+        last_message_id: row.last_message_id ?? undefined,
+        error: finished.error,
+      });
+    } catch (err) {
+      logger.warn("failed to reconcile completed automation run", {
+        automation_id: row.automation_id,
+        job_op_id: row.last_job_op_id,
+        err,
+      });
+    }
+  }
+}
+
 async function acknowledgeAutomationFromHumanTurn(
   request: Pick<AcpRequest, "project_id" | "account_id" | "chat">,
 ): Promise<void> {
@@ -6826,6 +6896,7 @@ async function pollDueAcpAutomations(): Promise<void> {
   if (!conatClient) return;
   acpAutomationPollInFlight = true;
   try {
+    await reconcileFinishedAutomationRuns();
     const due = listDueAcpAutomations(Date.now());
     for (const row of due) {
       try {
@@ -9288,4 +9359,5 @@ export const acpTestInternals = {
   noteDetachedWorkerQueuePoll,
   persistQueuedUserMessageProjection,
   prepareQueuedUserMessageForExecution,
+  waitForChatWriterDisposal,
 };

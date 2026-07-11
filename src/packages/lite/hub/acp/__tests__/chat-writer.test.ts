@@ -646,6 +646,25 @@ describe("ChatStreamWriter", () => {
     expect(disposed).toBe(true);
   });
 
+  it("bounds chat writer disposal so terminal jobs can finalize", async () => {
+    expect(
+      await acpTestInternals.waitForChatWriterDisposal(
+        {
+          waitUntilDisposed: async () => {
+            await new Promise(() => {});
+          },
+        },
+        5,
+      ),
+    ).toBe(false);
+    expect(
+      await acpTestInternals.waitForChatWriterDisposal(
+        { waitUntilDisposed: async () => {} },
+        5,
+      ),
+    ).toBe(true);
+  });
+
   it("does not finalize the lease before the terminal chat save settles", async () => {
     const { syncdb, setCurrent } = makeFakeSyncDB();
     setCurrent({
