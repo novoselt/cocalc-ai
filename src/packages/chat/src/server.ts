@@ -36,6 +36,7 @@ export interface CreateChatSyncDBOptions extends Omit<
   client: ConatClient;
   project_id: string;
   path: string;
+  readyTimeoutMs?: number;
 }
 
 export function createChatSyncDB(opts: CreateChatSyncDBOptions): ImmerDB {
@@ -48,6 +49,7 @@ export function createChatSyncDB(opts: CreateChatSyncDBOptions): ImmerDB {
     string_cols,
     cursors,
     persistent,
+    readyTimeoutMs: _readyTimeoutMs,
     ...rest
   } = opts;
 
@@ -122,22 +124,62 @@ export async function acquireChatSyncDB(
   }
   logger.debug("acquireChatSyncDB: create new", { key });
   const db = createChatSyncDB(opts);
-  const ready = db.isReady()
-    ? Promise.resolve()
-    : new Promise<void>((res, rej) => {
-        db.once("ready", res);
-        db.once("error", rej);
-      });
   try {
-    await ready;
+    await waitForChatSyncDBReady(db, {
+      key,
+      timeoutMs: opts.readyTimeoutMs,
+    });
     openSyncdbs.set(key, db);
     pushRelease(key, release);
     return db;
   } catch (err) {
-    // Creation failed; drop the lease.
+    try {
+      await db.close();
+    } catch (closeErr) {
+      logger.debug("close failed after syncdb acquisition error", {
+        key,
+        err: closeErr,
+      });
+    }
     await release();
     throw err;
   }
+}
+
+async function waitForChatSyncDBReady(
+  db: ImmerDB,
+  { key, timeoutMs }: { key: string; timeoutMs?: number },
+): Promise<void> {
+  if (db.isReady()) return;
+  await new Promise<void>((resolve, reject) => {
+    let timer: NodeJS.Timeout | undefined;
+    const cleanup = () => {
+      db.removeListener("ready", onReady);
+      db.removeListener("error", onError);
+      if (timer != null) clearTimeout(timer);
+    };
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: unknown) => {
+      cleanup();
+      reject(err);
+    };
+    db.once("ready", onReady);
+    db.once("error", onError);
+    if (Number.isFinite(timeoutMs) && (timeoutMs ?? 0) > 0) {
+      timer = setTimeout(() => {
+        cleanup();
+        reject(
+          new Error(
+            `timed out waiting for chat SyncDB '${key}' after ${timeoutMs}ms`,
+          ),
+        );
+      }, timeoutMs);
+      timer.unref?.();
+    }
+  });
 }
 
 export async function releaseChatSyncDB(

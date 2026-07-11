@@ -5,6 +5,7 @@
 
 import { fromJS } from "immutable";
 import { debounce } from "lodash";
+import { message as antdMessage } from "antd";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { Actions, redux } from "@cocalc/frontend/app-framework";
 import { History as LanguageModelHistory } from "@cocalc/frontend/client/types";
@@ -78,6 +79,10 @@ import {
 import { ChatMessageCache, type ThreadIndexEntry } from "./message-cache";
 import { processAI as processAIExternal } from "./actions/ai";
 import { getDefaultCodexSessionMode } from "./codex-defaults";
+import {
+  buildThreadNotificationPlan,
+  sendThreadFollowerNotifications,
+} from "./thread-notifications";
 import { isAnyChatOverlayOpen } from "./drawer-overlay-state";
 import type {
   ChatArchiveExportOptions,
@@ -200,6 +205,8 @@ export interface ThreadMetadataSnapshot {
   acp_config?: CodexThreadConfig | null;
   automation_config?: ChatThreadAutomationConfig;
   automation_state?: ChatThreadAutomationState;
+  notification_followers?: string[];
+  notification_muted?: string[];
 }
 
 function deriveThreadAgentFromMetadata(args: {
@@ -335,6 +342,22 @@ function buildNewThreadConfig({
     threadConfigPatch.agent_mode = "interactive";
   }
   return { threadConfigPatch, acpConfigOverride };
+}
+
+function showChatNotificationSuccessToast(
+  user_map: any,
+  account_ids: string[],
+) {
+  const ids = Array.from(new Set(account_ids)).filter((id) => isValidUUID(id));
+  if (ids.length === 0) return;
+  const shown = ids.slice(0, 3).map((id) => getUserName(user_map, id));
+  const extra = ids.length - shown.length;
+  const label =
+    extra > 0 ? `${shown.join(", ")} and ${extra} more` : shown.join(", ");
+  antdMessage.success({
+    content: `Notified ${label} via chat follow-up.`,
+    duration: 2,
+  });
 }
 
 export function collectThreadMessages({
@@ -929,6 +952,9 @@ export class ChatActions extends Actions<ChatState> {
       // do not send when there is nothing to send.
       return "";
     }
+    const previousThreadMessages = explicitReplyThreadId
+      ? (this.getMessagesInThread(thread_id) ?? [])
+      : [];
     const trimmedName = name?.trim();
     let effectiveAcpConfigOverride = acpConfigOverride;
     const message = {
@@ -1014,6 +1040,10 @@ export class ChatActions extends Actions<ChatState> {
     if (!path) {
       throw Error("bug -- path must be defined");
     }
+    const notificationProjectId =
+      typeof project_id === "string" && project_id.trim()
+        ? project_id
+        : undefined;
     // set notification saying that we sent an actual chat
     let action;
     if (
@@ -1027,12 +1057,57 @@ export class ChatActions extends Actions<ChatState> {
     } else {
       action = "chat";
     }
+    const threadNotificationPlan =
+      action === "chat" && notificationProjectId
+        ? buildThreadNotificationPlan({
+            project_id: notificationProjectId,
+            sender_id,
+            input,
+            threadMessages: previousThreadMessages,
+            notificationState: this.getThreadMetadata(thread_id, {
+              threadId: thread_id,
+            }),
+          })
+        : undefined;
+    if (threadNotificationPlan != null) {
+      this.setThreadConfigRecord(thread_id, {
+        notification_followers: threadNotificationPlan.nextFollowers,
+        notification_muted: threadNotificationPlan.nextMuted,
+      });
+      this.syncdb.commit();
+    }
     webapp_client.mark_file({
       project_id,
       path,
       action,
       ttl: 10000,
     });
+
+    if (
+      notificationProjectId != null &&
+      threadNotificationPlan != null &&
+      threadNotificationPlan.followerTargets.length > 0
+    ) {
+      (async () => {
+        const { notified_account_ids } = await sendThreadFollowerNotifications({
+          project_id: notificationProjectId,
+          path,
+          thread_id,
+          message_id,
+          date: time_stamp,
+          input,
+          target_account_ids: threadNotificationPlan.followerTargets,
+        });
+        if (notified_account_ids.length > 0) {
+          showChatNotificationSuccessToast(
+            this.redux.getStore("users")?.get("user_map"),
+            notified_account_ids,
+          );
+        }
+      })().catch((err) => {
+        console.warn("Failed to notify chat thread followers", err);
+      });
+    }
 
     if (!skipModelDispatch) {
       (async () => {
@@ -1823,6 +1898,15 @@ export class ChatActions extends Actions<ChatState> {
       }
       return undefined;
     };
+    const parseAccountIdList = (value: any): string[] | undefined => {
+      if (!Array.isArray(value)) return undefined;
+      const accountIds = Array.from(
+        new Set(
+          value.map((x) => `${x ?? ""}`.trim()).filter((x) => isValidUUID(x)),
+        ),
+      );
+      return accountIds.length > 0 ? accountIds : undefined;
+    };
     const readString = (
       key:
         | "name"
@@ -1884,7 +1968,44 @@ export class ChatActions extends Actions<ChatState> {
       acp_config,
       automation_config,
       automation_state,
+      notification_followers: parseAccountIdList(
+        field<any>(cfg, "notification_followers"),
+      ),
+      notification_muted: parseAccountIdList(
+        field<any>(cfg, "notification_muted"),
+      ),
     };
+  };
+
+  setThreadNotificationMuted = (
+    threadKey: string,
+    muted: boolean,
+    accountId?: string,
+  ): boolean => {
+    if (this.syncdb == null) return false;
+    const account_id =
+      `${accountId ?? this.redux.getStore("account").get_account_id() ?? ""}`.trim();
+    if (!isValidUUID(account_id)) return false;
+    const metadata = this.getThreadMetadata(threadKey, { threadId: threadKey });
+    const followers = new Set(metadata.notification_followers ?? []);
+    const mutedAccounts = new Set(metadata.notification_muted ?? []);
+    if (muted) {
+      followers.delete(account_id);
+      mutedAccounts.add(account_id);
+    } else {
+      mutedAccounts.delete(account_id);
+      followers.add(account_id);
+    }
+    if (
+      !this.setThreadConfigRecord(threadKey, {
+        notification_followers: Array.from(followers).sort(),
+        notification_muted: Array.from(mutedAccounts).sort(),
+      })
+    ) {
+      return false;
+    }
+    this.syncdb.commit();
+    return true;
   };
 
   setThreadAutomationConfig = (

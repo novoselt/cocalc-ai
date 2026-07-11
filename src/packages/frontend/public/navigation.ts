@@ -38,6 +38,18 @@ function getInternalPublicUrl(href: string): URL | undefined {
   return url;
 }
 
+// Fragment links within the current page (href="#section", or a full URL
+// that differs only in its hash) must reach the browser's native fragment
+// navigation: intercepting them would push the hash into history without
+// ever scrolling to the target.
+function isSamePageFragmentNavigation(url: URL): boolean {
+  return (
+    !!url.hash &&
+    url.pathname === window.location.pathname &&
+    url.search === window.location.search
+  );
+}
+
 function notify(url: URL): void {
   listener?.(url.pathname, url.search);
 }
@@ -71,7 +83,7 @@ export function attachPublicNavigationInterceptor(): () => void {
     if (!(anchor instanceof HTMLAnchorElement)) return;
     if (!shouldIntercept(anchor, event)) return;
     const url = getInternalPublicUrl(anchor.href);
-    if (url == null) return;
+    if (url == null || isSamePageFragmentNavigation(url)) return;
     event.preventDefault();
     navigatePublic(anchor.href);
   }

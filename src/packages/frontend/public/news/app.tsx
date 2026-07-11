@@ -6,7 +6,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 
 import { Flex, Segmented, Tag, Typography } from "antd";
-import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { capitalize } from "@cocalc/util/misc";
 import {
   CHANNELS_DESCRIPTIONS,
@@ -161,7 +160,7 @@ function NewsListPage({ isAdmin }: { isAdmin?: boolean }) {
   useEffect(() => {
     let canceled = false;
     setLoading(true);
-    void fetchJson<NewsItem[]>(`${appBasePath}/api/v2/news/list`)
+    void fetchJson<NewsItem[]>(appPath("api/v2/news/list"))
       .then((payload) => {
         if (!canceled) setItems(Array.isArray(payload) ? payload : []);
       })
@@ -246,7 +245,7 @@ function NewsDetailPage({ route }: { route: PublicNewsDetailRoute }) {
       params.set("timestamp", `${routeTimestamp}`);
     }
     void fetchJson<NewsDetailPayload>(
-      `${appBasePath}/api/v2/news/get?${params.toString()}`,
+      `${appPath("api/v2/news/get")}?${params.toString()}`,
     )
       .then((value) => {
         if (!canceled) setPayload(value ?? {});

@@ -211,6 +211,7 @@ export function ChatRoomSidebar({
 
 interface ChatRoomSidebarContentProps {
   actions: ChatActions;
+  accountId?: string;
   acpState?: immutable.Map<string, string>;
   isCompact: boolean;
   selectedThreadKey: string | null;
@@ -238,6 +239,7 @@ interface ChatRoomSidebarContentProps {
 
 export function ChatRoomSidebarContent({
   actions,
+  accountId,
   acpState,
   isCompact,
   selectedThreadKey,
@@ -304,12 +306,11 @@ export function ChatRoomSidebarContent({
     const showMenu =
       allowMenu && (isHovered || selectedThreadKey === key || isMenuOpen);
     const codexConfig = actions?.getCodexConfig?.(key);
+    const threadMetadata = actions?.getThreadMetadata?.(key);
     const model =
       typeof codexConfig?.model === "string"
         ? codexConfig.model
-        : (actions?.getThreadMetadata?.(key)?.agent_model as
-            | string
-            | undefined);
+        : (threadMetadata?.agent_model as string | undefined);
     const isCodexThread =
       isAI && typeof model === "string" && isCodexModelName(model);
     const { showDot, dotColor, dotTitle } = resolveThreadStatusDot({
@@ -393,6 +394,12 @@ export function ChatRoomSidebarContent({
               isAI={isAI}
               isAutomation={isAutomation}
               isCodexThread={isCodexThread}
+              notificationMuted={
+                !!(
+                  accountId &&
+                  threadMetadata?.notification_muted?.includes(accountId)
+                )
+              }
               threadColor={threadColor}
               threadIcon={threadIcon}
               openAppearanceModal={openAppearanceModal}

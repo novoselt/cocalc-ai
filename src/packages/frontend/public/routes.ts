@@ -4,6 +4,7 @@
  */
 
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
+import { HOST_ABSOLUTE_ROUTE_PREFIXES } from "@cocalc/util/routing/app";
 import type { PublicAboutRoute } from "./about/routes";
 import { getAboutRouteFromPath } from "./about/routes";
 import type { PublicAuthRoute } from "./auth/routes";
@@ -133,6 +134,36 @@ export function getPublicRouteFromPath(
   return { section: "not-found" };
 }
 
+const PUBLIC_TARGET_SECTIONS = new Set([
+  "about",
+  "auth",
+  "invites",
+  "sso",
+  "redeem",
+  "docs",
+  "features",
+  "guides",
+  "lang",
+  "news",
+  "policies",
+  "pricing",
+  "products",
+  "rootfs",
+  "support",
+]);
+
+// Route segments that belong to the webapp (or other server handlers), not
+// the public SPA. Hitting one of these while scanning must force a full
+// navigation — matching public section names anywhere in the path would
+// wrongly claim app routes like /admin/news for the public router.
+const APP_ROUTE_SEGMENTS = new Set(
+  HOST_ABSOLUTE_ROUTE_PREFIXES.map((prefix) => prefix.replace(/^\/+/, "")),
+);
+
+// Whether the target is handled by the public SPA. Scans path segments from
+// the left: unknown leading segments are tolerated as a (possibly foreign)
+// base path prefix, the first public section claims the target, and the
+// first app-route segment rejects it.
 export function isPublicTarget(target?: string | null): target is string {
   if (!target) return false;
   if (
@@ -148,13 +179,27 @@ export function isPublicTarget(target?: string | null): target is string {
   } catch {
     return false;
   }
-  if (url.pathname.split("/").filter(Boolean).includes("auth")) {
-    return isPublicAuthRoutePath(url.pathname, url.search);
+  const parts = url.pathname.split("/").filter(Boolean);
+  for (let i = 0; i < parts.length; i++) {
+    const section = parts[i];
+    if (section === "auth") {
+      return isPublicAuthRoutePath(url.pathname, url.search);
+    }
+    if (section === "guides") {
+      // Only the guides index is a public SPA page.
+      return parts.length === i + 1;
+    }
+    if (PUBLIC_TARGET_SECTIONS.has(section)) return true;
+    if (APP_ROUTE_SEGMENTS.has(section)) return false;
+    // Locale alias roots such as /de or /pt-BR — but only as the final
+    // segment, so a two-letter base-path prefix (e.g. /hb/projects) is not
+    // mistaken for a locale page.
+    if (i === parts.length - 1 && /^[a-z]{2}(-[A-Z]{2})?$/.test(section)) {
+      return true;
+    }
+    // Otherwise: possibly a base-path segment — keep scanning.
   }
-  if (/\/guides\/[^/?#]+/.test(target)) return false;
-  return /\/(about|auth|invites|sso|redeem|docs|features|guides|lang|news|policies|pricing|products|rootfs|support|[a-z]{2}(-[A-Z]{2})?)(\/|$|\?|#)/.test(
-    target,
-  );
+  return false;
 }
 
 export function publicPath(view: string): string {

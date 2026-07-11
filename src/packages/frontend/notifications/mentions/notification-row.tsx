@@ -94,8 +94,10 @@ export function NotificationRow(props: Props) {
     action_link,
     action_label,
     severity,
+    notification_reason,
   } = mention.toJS();
   const shownPath = display_path || path;
+  const isThreadFollowNotification = notification_reason === "thread_follow";
   const fragmentId = Fragment.decode(fragment_id);
   const is_read = mention.getIn(["users", target, "read"]);
 
@@ -400,7 +402,16 @@ export function NotificationRow(props: Props) {
         <strong>
           <User account_id={source} user_map={user_map} />
         </strong>{" "}
-        mentioned you in the file <code>{shownPath}</code> in the project{" "}
+        {isThreadFollowNotification ? (
+          <>
+            replied in the chat <code>{shownPath}</code> in the project{" "}
+          </>
+        ) : (
+          <>
+            mentioned you in the file <code>{shownPath}</code> in the
+            project{" "}
+          </>
+        )}
         <ProjectTitle project_id={project_id} />.
         {description ? (
           <StaticMarkdown

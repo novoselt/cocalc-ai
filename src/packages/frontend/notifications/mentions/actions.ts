@@ -40,6 +40,7 @@ const REFRESH_ON_RESUME_STALE_MS = 60_000;
 
 export type NotificationProjectionRepairReason =
   | "history-gap"
+  | "count-mismatch"
   | "foreground-wake"
   | "manual-refresh"
   | "diagnostic"
@@ -96,6 +97,7 @@ function buildNotificationMention(
     action_link: summary.action_link,
     action_label: summary.action_label,
     severity: summary.severity,
+    notification_reason: summary.notification_reason,
     description: summary.description,
     fragment_id: summary.fragment_id,
     thread_id: summary.thread_id,
@@ -130,6 +132,44 @@ export function getUnreadNotificationCount(
   counts?: NotificationCountsResult,
 ): number {
   return counts?.unread ?? 0;
+}
+
+function isUnreadNotificationRow(row: NotificationListRow): boolean {
+  return !row.read_state?.archived && !row.read_state?.read;
+}
+
+function countUnreadNotificationRows(rows: NotificationListRow[]): number {
+  return rows.filter(isUnreadNotificationRow).length;
+}
+
+function mergeNotificationRows(
+  rows: NotificationListRow[],
+  extraRows: NotificationListRow[],
+): NotificationListRow[] {
+  const byId = new globalThis.Map<string, NotificationListRow>();
+  for (const row of rows) {
+    byId.set(row.notification_id, row);
+  }
+  for (const row of extraRows) {
+    byId.set(row.notification_id, row);
+  }
+  return Array.from(byId.values());
+}
+
+function countUnreadMentions(
+  mentions: MentionsMap,
+  account_id: string,
+): number {
+  let count = 0;
+  mentions.forEach((mention) => {
+    if (
+      mention.get("target") === account_id &&
+      !mention.getIn(["users", account_id, "read"])
+    ) {
+      count += 1;
+    }
+  });
+  return count;
 }
 
 type ProjectKey = string | null;
@@ -287,10 +327,15 @@ export class MentionsActions extends Actions<MentionsState> {
     }
     this.setState({ loading: true });
     try {
-      const [rows, counts] = await Promise.all([
+      const [initialRows, counts] = await Promise.all([
         notifications.list({ limit: MAX_NOTIFICATION_INBOX_LIST_LIMIT }),
         notifications.counts({}),
       ]);
+      const rows = await this.repairMissingUnreadRows({
+        notifications,
+        rows: initialRows,
+        counts,
+      });
       this.setState({
         loading: false,
         mentions: buildNotificationInboxMap({ account_id, rows }),
@@ -479,6 +524,41 @@ export class MentionsActions extends Actions<MentionsState> {
     this.clearRefreshRetry();
   }
 
+  private async repairMissingUnreadRows({
+    notifications,
+    rows,
+    counts,
+  }: {
+    notifications: {
+      list: (opts: {
+        state?: "unread";
+        limit?: number;
+      }) => Promise<NotificationListRow[]>;
+    };
+    rows: NotificationListRow[];
+    counts: NotificationCountsResult;
+  }): Promise<NotificationListRow[]> {
+    const unreadCount = getUnreadNotificationCount(counts);
+    if (unreadCount <= countUnreadNotificationRows(rows)) {
+      return rows;
+    }
+    const unreadRows = await notifications.list({
+      state: "unread",
+      limit: MAX_NOTIFICATION_INBOX_LIST_LIMIT,
+    });
+    if (unreadRows.length === 0) {
+      console.warn(
+        "WARNING: notifications unread count/list mismatch persisted after unread repair",
+        {
+          unreadCount,
+          loadedUnreadRows: countUnreadNotificationRows(rows),
+        },
+      );
+      return rows;
+    }
+    return mergeNotificationRows(rows, unreadRows);
+  }
+
   private handleRealtimeFeedChange = (
     event?: AccountFeedEvent,
     seq?: number,
@@ -532,6 +612,15 @@ export class MentionsActions extends Actions<MentionsState> {
         return;
       case "notification.counts":
         this.setState({ unread_count: event.counts.unread });
+        if (
+          event.counts.unread >
+          countUnreadMentions(this.getMentions(), account_id)
+        ) {
+          void this.repairNotificationProjection({
+            kind: "counts-and-inbox",
+            reason: "count-mismatch",
+          });
+        }
         return;
       default:
         return;

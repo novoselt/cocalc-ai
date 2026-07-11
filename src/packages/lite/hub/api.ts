@@ -110,12 +110,14 @@ import {
   resolveLiteCodexHome,
   startLiteCodexDeviceAuth,
   uploadLiteSubscriptionAuthFile,
+  verifyLiteCodexDeviceAuthStatus,
 } from "./codex-auth";
 import { getRow, listRows } from "./sqlite/database";
 import { DEFAULT_BAY_ID } from "@cocalc/util/bay";
 
 const logger = getLogger("lite:hub:api");
 const execFile = promisify(execFileCb);
+const CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS = 45_000;
 
 function syncHistoryWithExplicitClient(
   opts: Parameters<typeof syncHistory>[0],
@@ -507,7 +509,10 @@ async function codexDeviceAuthStatusLite(opts: {
   const account_id = requireLiteAccountId(opts.account_id);
   const project_id = requireLiteProjectId(opts.project_id);
   const id = `${opts.id ?? ""}`.trim();
-  const status = getLiteCodexDeviceAuthStatus(id);
+  const status = await verifyLiteCodexDeviceAuthStatus(
+    id,
+    verifyLiteCodexSubscriptionAuth,
+  );
   if (
     !status ||
     status.accountId !== account_id ||
@@ -516,6 +521,25 @@ async function codexDeviceAuthStatusLite(opts: {
     throw Error("unknown device auth id");
   }
   return status;
+}
+
+async function verifyLiteCodexSubscriptionAuth({
+  codexHome,
+}: {
+  projectId: string;
+  accountId: string;
+  codexHome: string;
+}): Promise<void> {
+  const status = await getCodexAppServerAccountStatus({
+    appServerLogin: await getLiteSubscriptionAppServerLogin(codexHome),
+    timeoutMs: CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS,
+  });
+  if (status.rateLimits) return;
+  throw Error(
+    status.errors?.rateLimits ??
+      status.errors?.account ??
+      "Codex account verification did not return live rate limits",
+  );
 }
 
 async function codexDeviceAuthCancelLite(opts: {

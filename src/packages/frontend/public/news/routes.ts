@@ -7,8 +7,13 @@ import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 
 export type PublicNewsRoute =
   | { view: "news" }
-  | { newsId: number; view: "news-detail" }
-  | { newsId: number; timestamp: number; view: "news-history" };
+  | { newsId: number; newsSlug: string; view: "news-detail" }
+  | {
+      newsId: number;
+      newsSlug: string;
+      timestamp: number;
+      view: "news-history";
+    };
 
 function getRouteParts(pathname: string): string[] {
   const parts = pathname.split("?")[0].split("/").filter(Boolean);
@@ -31,11 +36,14 @@ export function getNewsRouteFromPath(pathname: string): PublicNewsRoute {
   }
   const newsId = parseTrailingInteger(routeParts[1]);
   const timestamp = parseTrailingInteger(routeParts[2]);
+  // newsSlug is the full URL segment (slugified title + id); it is used for
+  // per-post canonical URLs in the shared public route metadata.
+  const newsSlug = routeParts[1];
   if (newsId != null && timestamp != null) {
-    return { newsId, timestamp, view: "news-history" };
+    return { newsId, newsSlug, timestamp, view: "news-history" };
   }
   if (newsId != null) {
-    return { newsId, view: "news-detail" };
+    return { newsId, newsSlug, view: "news-detail" };
   }
   return { view: "news" };
 }

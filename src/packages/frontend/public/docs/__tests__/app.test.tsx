@@ -171,9 +171,12 @@ describe("public/docs", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Current docs for this CoCalc instance.",
+        name: "Current docs for this Launchpad instance.",
       }),
     ).not.toBeNull();
+    expect(
+      screen.queryByText("Current docs for this CoCalc instance."),
+    ).toBeNull();
     expect(
       screen.getByRole("heading", { name: "All documentation pages" }),
     ).not.toBeNull();
