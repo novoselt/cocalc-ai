@@ -4,7 +4,10 @@ import getLogger from "@cocalc/backend/logger";
 import { conat } from "@cocalc/backend/conat";
 import getPool from "@cocalc/database/pool";
 import type { LroSummary } from "@cocalc/conat/hub/api/lro";
-import type { HostBackupAllResult } from "@cocalc/conat/hub/api/hosts";
+import type {
+  HostBackupAllResult,
+  HostSoftwareUpgradeTarget,
+} from "@cocalc/conat/hub/api/hosts";
 import {
   claimLroOps,
   createLro,
@@ -271,6 +274,36 @@ function projectHostLastKnownGoodVersion(row: any): string | undefined {
   );
 }
 
+function projectHostInstalledVersion(row: any): string | undefined {
+  return (
+    `${row?.metadata?.software?.project_host ?? row?.version ?? ""}`.trim() ||
+    undefined
+  );
+}
+
+function requestedProjectHostUpgradeVersion(
+  targets?: HostSoftwareUpgradeTarget[],
+): string | undefined {
+  return (
+    `${targets?.find((target) => target.artifact === "project-host")?.version ?? ""}`.trim() ||
+    undefined
+  );
+}
+
+function redundantProjectHostRollbackReason({
+  row,
+  rollbackVersion,
+}: {
+  row: any;
+  rollbackVersion?: string;
+}): string | undefined {
+  const rollback = `${rollbackVersion ?? ""}`.trim();
+  if (!rollback) return undefined;
+  return projectHostInstalledVersion(row) === rollback
+    ? "host_already_running_rollback_version"
+    : undefined;
+}
+
 function completedProjectHostUpgradeVersion({
   row,
   targetVersion,
@@ -282,9 +315,7 @@ function completedProjectHostUpgradeVersion({
 }): string | undefined {
   const target = `${targetVersion ?? ""}`.trim();
   const previous = `${previousVersion ?? ""}`.trim();
-  const installedVersion =
-    `${row?.metadata?.software?.project_host ?? row?.version ?? ""}`.trim() ||
-    undefined;
+  const installedVersion = projectHostInstalledVersion(row);
   const lastKnownGoodVersion = projectHostLastKnownGoodVersion(row);
   if (!installedVersion || !lastKnownGoodVersion) {
     return undefined;
@@ -1572,11 +1603,13 @@ async function handleOp(op: LroSummary): Promise<void> {
     if (kind === "host-upgrade-software") {
       const preUpgradeRow = await loadHostStatus(host_id);
       const knownGoodProjectHostVersion =
-        `${preUpgradeRow?.metadata?.software?.project_host ?? preUpgradeRow?.version ?? ""}`.trim() ||
-        undefined;
+        projectHostLastKnownGoodVersion(preUpgradeRow) ??
+        projectHostInstalledVersion(preUpgradeRow);
       const requestedProjectHostUpgrade = (input?.targets ?? []).some(
         (target: any) => target?.artifact === "project-host",
       );
+      const requestedProjectHostTargetVersion =
+        requestedProjectHostUpgradeVersion(input?.targets);
       let response;
       let rolloutResponse;
       const phase_timings_ms: Record<string, number> = {};
@@ -1662,7 +1695,7 @@ async function handleOp(op: LroSummary): Promise<void> {
       } catch (err) {
         const targetProjectHostVersion =
           `${(response?.results ?? []).find((result: any) => result?.artifact === "project-host")?.version ?? ""}`.trim() ||
-          undefined;
+          requestedProjectHostTargetVersion;
         if (isProjectHostLocalRollbackError(err)) {
           const automaticRollback = err.automaticRollback;
           const updated = await updateLro({
@@ -1773,6 +1806,62 @@ async function handleOp(op: LroSummary): Promise<void> {
           }
         }
         if (requestedProjectHostUpgrade && knownGoodProjectHostVersion) {
+          const currentRow = await loadHostStatus(host_id);
+          const rollbackSuppressionReason = redundantProjectHostRollbackReason({
+            row: currentRow,
+            rollbackVersion: knownGoodProjectHostVersion,
+          });
+          if (rollbackSuppressionReason) {
+            const automaticRollback = {
+              attempted: false,
+              suppressed: true,
+              reason: rollbackSuppressionReason,
+              version: knownGoodProjectHostVersion,
+            };
+            logger.warn(
+              "host upgrade: suppressing redundant project-host rollback",
+              {
+                host_id,
+                target_version: targetProjectHostVersion,
+                rollback_version: knownGoodProjectHostVersion,
+                reason: rollbackSuppressionReason,
+                err: `${err}`,
+              },
+            );
+            const updated = await updateLro({
+              op_id,
+              status: "failed",
+              progress_summary: {
+                phase: "done",
+                host_id,
+                results: response?.results ?? [],
+                automatic_rollback: automaticRollback,
+                ...timingSummary(),
+              },
+              result: {
+                host_id,
+                ...(response ? response : {}),
+                automatic_rollback: automaticRollback,
+                ...timingSummary(),
+              },
+              error: `project-host upgrade failed but rollback was suppressed because the host already runs ${knownGoodProjectHostVersion}: ${err instanceof Error ? err.message : err}`,
+            });
+            if (updated) {
+              await publishSummary(updated);
+            }
+            await progressStep(
+              "done",
+              "project-host upgrade failed; redundant rollback suppressed",
+              {
+                host_id,
+                target_version: targetProjectHostVersion,
+                rollback_version: knownGoodProjectHostVersion,
+                automatic_rollback: automaticRollback,
+                ...timingSummary(),
+              },
+            );
+            return;
+          }
           try {
             await progressStep(
               "waiting",
@@ -2358,6 +2447,8 @@ export function startHostLroWorker({
 export const __test__ = {
   currentBootstrapFailure,
   completedProjectHostUpgradeVersion,
+  requestedProjectHostUpgradeVersion,
+  redundantProjectHostRollbackReason,
   waitForHostStatus,
   billingEnforcementDrainCompleteMetadata,
 };
