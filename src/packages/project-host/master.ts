@@ -90,6 +90,7 @@ import { recordProjectHostRpcTraffic } from "./rpc-traffic-audit";
 import { upsertProjectStopPolicy } from "./sqlite/stop-policy";
 import { querySqlite } from "./sqlite/admin-query";
 import { startHostPressureController } from "./host-pressure";
+import { redactRuntimeLogText } from "./runtime-diagnostics-redaction";
 import {
   cancelRootfsBuild as cancelRootfsBuildOnHost,
   getRootfsBuildLog as getRootfsBuildLogOnHost,
@@ -271,18 +272,6 @@ function normalizeSnapshotLimit(value?: number, fallback = 50): number {
   const n = Number(value ?? fallback);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(1, Math.min(500, Math.floor(n)));
-}
-
-function redactRuntimeLogText(text: string): string {
-  return text
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [REDACTED]")
-    .replace(
-      /\b(COCALC_(?:API_KEY|BEARER_TOKEN|PROJECT_TOKEN|SECRET)\s*=\s*)\S+/g,
-      "$1[REDACTED]",
-    )
-    .replace(/("(?:access_)?token"\s*:\s*")[^"]+"/gi, '$1[REDACTED]"')
-    .replace(/("(?:api_)?key"\s*:\s*")[^"]+"/gi, '$1[REDACTED]"')
-    .replace(/("(?:password|secret)"\s*:\s*")[^"]+"/gi, '$1[REDACTED]"');
 }
 
 function truncateDiagnosticText(text: string, maxBytes = 512 * 1024) {
