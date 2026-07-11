@@ -1,4 +1,4 @@
-import { Alert, Button, Space, Typography, Upload } from "antd";
+import { Alert, Button, Checkbox, Space, Typography, Upload } from "antd";
 import ImgCrop from "antd-img-crop";
 import { InboxOutlined } from "@ant-design/icons";
 import { React, useState } from "@cocalc/frontend/app-framework";
@@ -11,6 +11,7 @@ interface ThreadImageUploadProps {
   modalTitle: string;
   uploadText?: string;
   size?: number;
+  allowFullImage?: boolean;
 }
 
 export function ThreadImageUpload({
@@ -20,10 +21,12 @@ export function ThreadImageUpload({
   modalTitle,
   uploadText = "Click or drag image",
   size = 84,
+  allowFullImage = false,
 }: ThreadImageUploadProps): React.JSX.Element {
   const [error, setError] = useState<string>("");
   const [uploading, setUploading] = useState<boolean>(false);
   const [pasteFocused, setPasteFocused] = useState<boolean>(false);
+  const [cropBeforeUpload, setCropBeforeUpload] = useState<boolean>(false);
 
   async function handlePastedImage(
     event: React.ClipboardEvent<HTMLDivElement>,
@@ -34,7 +37,7 @@ export function ThreadImageUpload({
       if (!file) continue;
       event.preventDefault();
       event.stopPropagation();
-      await uploadCroppedImage({
+      await uploadImage({
         file,
         projectId,
         onChange,
@@ -64,49 +67,62 @@ export function ThreadImageUpload({
           Clear image
         </Button>
       </Space>
-      <ImgCrop
-        modalTitle={modalTitle}
-        cropShape="rect"
-        rotationSlider
-        maxZoom={5}
-        onModalOk={(file) => {
-          void uploadCroppedImage({
-            file,
-            projectId,
-            onChange,
-            setError,
-            setUploading,
-          });
-        }}
-      >
+      {allowFullImage ? (
+        <Checkbox
+          checked={cropBeforeUpload}
+          style={{ marginBottom: 8 }}
+          onChange={(event) => setCropBeforeUpload(event.target.checked)}
+        >
+          Crop image before upload
+        </Checkbox>
+      ) : null}
+      {allowFullImage && !cropBeforeUpload ? (
         <Upload.Dragger
+          accept="image/*"
           name="file"
           showUploadList={false}
-          onDrop={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
+          beforeUpload={(file) => {
+            void uploadImage({
+              file,
+              projectId,
+              onChange,
+              setError,
+              setUploading,
+            });
+            return Upload.LIST_IGNORE;
           }}
         >
-          {value ? (
-            <img
-              src={value}
-              alt="Chat image preview"
-              style={{
-                width: `${size}px`,
-                height: `${size}px`,
-                objectFit: "cover",
-              }}
-            />
-          ) : (
-            <p className="ant-upload-drag-icon">
-              <InboxOutlined />
-            </p>
-          )}
-          <p className="ant-upload-text">
-            {uploading ? "Uploading..." : uploadText}
-          </p>
+          {renderUploadContents({ size, uploading, uploadText, value })}
         </Upload.Dragger>
-      </ImgCrop>
+      ) : (
+        <ImgCrop
+          modalTitle={modalTitle}
+          cropShape="rect"
+          rotationSlider
+          maxZoom={5}
+          onModalOk={(file) => {
+            void uploadImage({
+              file,
+              projectId,
+              onChange,
+              setError,
+              setUploading,
+            });
+          }}
+        >
+          <Upload.Dragger
+            accept="image/*"
+            name="file"
+            showUploadList={false}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+          >
+            {renderUploadContents({ size, uploading, uploadText, value })}
+          </Upload.Dragger>
+        </ImgCrop>
+      )}
       <div
         tabIndex={0}
         onPaste={(event) => void handlePastedImage(event)}
@@ -139,7 +155,42 @@ export function ThreadImageUpload({
   );
 }
 
-async function uploadCroppedImage({
+function renderUploadContents({
+  size,
+  uploading,
+  uploadText,
+  value,
+}: {
+  size: number;
+  uploading: boolean;
+  uploadText: string;
+  value?: string;
+}): React.JSX.Element {
+  return (
+    <>
+      {value ? (
+        <img
+          src={value}
+          alt="Chat image preview"
+          style={{
+            width: `${size}px`,
+            height: `${size}px`,
+            objectFit: "cover",
+          }}
+        />
+      ) : (
+        <p className="ant-upload-drag-icon">
+          <InboxOutlined />
+        </p>
+      )}
+      <p className="ant-upload-text">
+        {uploading ? "Uploading..." : uploadText}
+      </p>
+    </>
+  );
+}
+
+async function uploadImage({
   file,
   projectId,
   onChange,

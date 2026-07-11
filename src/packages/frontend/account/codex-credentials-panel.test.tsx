@@ -171,6 +171,35 @@ describe("CodexCredentialsPanel", () => {
     });
   });
 
+  it("explains the project requirement instead of disabling ChatGPT sign-in", async () => {
+    getCodexPaymentSource.mockResolvedValue({ source: "none" });
+
+    render(<CodexCredentialsPanel embedded />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Codex is not connected yet.")).toBeTruthy();
+    });
+
+    const signIn = screen.getByText(
+      "Sign in with ChatGPT",
+    ) as HTMLButtonElement;
+    expect(signIn.disabled).toBe(false);
+    expect(
+      screen.getByText(/Device sign-in needs a project to run Codex/),
+    ).toBeTruthy();
+
+    await act(async () => {
+      signIn.click();
+    });
+
+    expect(
+      screen.getByText(
+        "No project available. Create or open a project, then retry.",
+      ),
+    ).toBeTruthy();
+    expect(codexDeviceAuthStart).not.toHaveBeenCalled();
+  });
+
   it("clears the previous payment source label immediately when the project changes", async () => {
     const first = deferred<any>();
     const second = deferred<any>();

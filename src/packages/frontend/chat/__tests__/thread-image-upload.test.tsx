@@ -92,6 +92,50 @@ describe("ThreadImageUpload", () => {
     );
   });
 
+  it("uploads the full image when optional cropping is not selected", async () => {
+    const onChange = jest.fn();
+    render(
+      <ThreadImageUpload
+        allowFullImage
+        value=""
+        onChange={onChange}
+        modalTitle="Crop support image"
+      />,
+    );
+
+    const file = new File(["full image"], "screenshot.png", {
+      type: "image/png",
+    });
+    const input = document.querySelector('input[type="file"]');
+    expect(input).not.toBeNull();
+    fireEvent.change(input!, { target: { files: [file] } });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith(
+        expect.stringContaining("?uuid=uuid-123"),
+      ),
+    );
+    expect(screen.queryByRole("button", { name: "Confirm crop" })).toBeNull();
+  });
+
+  it("offers the cropper when optional cropping is selected", () => {
+    render(
+      <ThreadImageUpload
+        allowFullImage
+        value=""
+        onChange={jest.fn()}
+        modalTitle="Crop support image"
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Crop image before upload" }),
+    );
+
+    expect(screen.getByRole("button", { name: "Confirm crop" })).not.toBeNull();
+  });
+
   it("clears the current image", () => {
     const onChange = jest.fn();
     render(

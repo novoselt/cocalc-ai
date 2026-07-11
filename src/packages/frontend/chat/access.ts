@@ -55,6 +55,24 @@ export function parentMessageId(
   return undefined;
 }
 
+export function isAcpAssistantMessage(msg: ChatMessage | undefined): boolean {
+  if (!msg) return false;
+  for (const key of [
+    "acp_account_id",
+    "acp_thread_id",
+    "acp_log_store",
+    "acp_log_key",
+    "acp_log_subject",
+    "acp_live_log_stream",
+    "acp_live_preview_stream",
+  ]) {
+    const value = field<unknown>(msg, key);
+    if (typeof value === "string" && value.trim().length > 0) return true;
+  }
+  const startedAt = Number(field<number | string>(msg, "acp_started_at_ms"));
+  return Number.isFinite(startedAt) && startedAt > 0;
+}
+
 // Return list of account IDs currently editing the message.
 export function editingArray(msg: ChatMessage | undefined): string[] {
   const editing = msg?.editing;

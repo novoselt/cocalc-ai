@@ -12,6 +12,33 @@ import {
 import type { AcpAutomationRow } from "../sqlite/acp-automations";
 import { listRunningAcpTurnLeases } from "../sqlite/acp-turns";
 
+export interface FinishedAutomationRun {
+  terminalState: "completed" | "error" | "interrupted";
+  error?: string;
+}
+
+export function finishedAutomationRunFromJob(
+  job?: Pick<AcpJobRow, "state" | "error">,
+): FinishedAutomationRun | undefined {
+  switch (job?.state) {
+    case "completed":
+      return { terminalState: "completed" };
+    case "error":
+      return {
+        terminalState: "error",
+        error: job.error ?? "automation run failed",
+      };
+    case "canceled":
+    case "interrupted":
+      return {
+        terminalState: "interrupted",
+        error: job.error ?? undefined,
+      };
+    default:
+      return undefined;
+  }
+}
+
 function acpJobMatchesAutomation(
   job: AcpJobRow,
   row: Pick<

@@ -69,7 +69,6 @@ import {
   sendQueuedAcpTurnImmediately,
 } from "./acp-api";
 import { History, HistoryFooter, HistoryTitle } from "./history";
-import { resolveAgentSessionIdForThread } from "./thread-session";
 import ChatInput from "./input";
 import { AIFeedback } from "./ai-msg-feedback";
 import { Name } from "./name";
@@ -88,12 +87,12 @@ import {
   dateValue,
   field,
   historyArray,
+  isAcpAssistantMessage,
   parentMessageId,
   editingArray,
 } from "./access";
 import { SyncOutlined } from "@ant-design/icons";
 import {
-  AgentActivityChip,
   AgentMessageStatus,
   AttachedSteerStatusList,
   InlineSteerStatusRow,
@@ -292,7 +291,6 @@ interface Props {
 
   selected?: boolean;
   threadViewMode?: boolean;
-  onForceScrollToBottom?: () => void;
 
   acpState?: string;
   dim?: boolean;
@@ -359,7 +357,6 @@ export default function Message({
   is_thread_body,
   selected,
   threadViewMode = false,
-  onForceScrollToBottom,
   acpState,
   dim,
   searchHighlight,
@@ -483,7 +480,6 @@ export default function Message({
   const [showTouchActions, setShowTouchActions] = useState<boolean>(false);
   const [showZenMessage, setShowZenMessage] = useState<boolean>(false);
   const [showAcpPromptModal, setShowAcpPromptModal] = useState<boolean>(false);
-  const [interruptRequested, setInterruptRequested] = useState<boolean>(false);
   const [openActivityDrawerToken, setOpenActivityDrawerToken] = useState<
     number | undefined
   >(undefined);
@@ -563,12 +559,6 @@ export default function Message({
       setElapsedMs(0);
     }
   }, [effectiveGenerating, acpStartedAtMs, date]);
-
-  useEffect(() => {
-    if (!effectiveGenerating || acpInterrupted) {
-      setInterruptRequested(false);
-    }
-  }, [effectiveGenerating, acpInterrupted, date]);
 
   const elapsedLabel = useMemo(() => {
     if (!elapsedMs || elapsedMs < 0) return "";
@@ -696,10 +686,7 @@ export default function Message({
   }, [message, project_id, path, messageThreadId]);
 
   const showCodexActivity = useMemo(() => {
-    // Only show for ACP-driven turns (Codex activity). The log identifiers are
-    // derived deterministically, but this marker distinguishes ACP turns from
-    // other kinds of AI messages.
-    return Boolean(field<string>(message, "acp_account_id"));
+    return isAcpAssistantMessage(message);
   }, [message]);
   const inlineCodexActivityMode = useMemo(
     () =>
@@ -1027,11 +1014,6 @@ export default function Message({
     [messageThreadId, threadRootMs],
   );
 
-  const acpThreadId = useMemo(
-    () => field<string>(message, "acp_thread_id"),
-    [message],
-  );
-
   const threadCodexConfig = useMemo(() => {
     if (threadLookup.threadLookupKey == null) return undefined;
     return (
@@ -1040,19 +1022,6 @@ export default function Message({
       })?.acp_config ?? undefined
     );
   }, [actions, threadLookup]);
-
-  // Prefer the persisted sessionId from the thread_id-indexed thread config;
-  // fall back to the latest assistant-row acp_thread_id, then the message
-  // payload, then the legacy date-key/thread key.
-  const sessionIdForInterrupt = useMemo(() => {
-    const resolved = resolveAgentSessionIdForThread({
-      actions,
-      threadId: threadLookup.threadId,
-      threadKey: threadLookup.threadLookupKey ?? "",
-      persistedSessionId: threadCodexConfig?.sessionId,
-    });
-    return acpThreadId ?? resolved;
-  }, [actions, threadCodexConfig, acpThreadId, threadLookup]);
 
   const activityBasePath = useMemo(
     () => threadCodexConfig?.workingDirectory,
@@ -2300,82 +2269,6 @@ export default function Message({
     );
   }
 
-  function renderBottomControls() {
-    if (!effectiveGenerating || actions == null) {
-      return null;
-    }
-    if (suppressInlineCodexActivity) {
-      return null;
-    }
-    const interruptLabel = isCodexThread
-      ? interruptRequested
-        ? "Interrupting..."
-        : "Interrupt"
-      : "Stop Generating";
-    const interruptIcon = isCodexThread ? "bolt" : "square";
-    return (
-      <div
-        style={{
-          marginTop: "8px",
-          display: "flex",
-          justifyContent: "flex-end",
-          alignItems: "center",
-          gap: "8px",
-          flexWrap: "wrap",
-          color: COLORS.GRAY_M,
-        }}
-      >
-        {onForceScrollToBottom ? (
-          <Button
-            size="small"
-            style={{ color: COLORS.GRAY_M }}
-            onClick={() => onForceScrollToBottom?.()}
-            title="Scroll to newest message and re-enable auto-scroll"
-          >
-            <Icon name="arrow-down" /> Newest
-          </Button>
-        ) : null}
-        <Button
-          size="small"
-          style={{ color: COLORS.GRAY_M }}
-          disabled={interruptRequested}
-          loading={interruptRequested}
-          onClick={async () => {
-            if (interruptRequested) return;
-            setInterruptRequested(true);
-            const ok = await actions?.languageModelStopGenerating(
-              new Date(date),
-              {
-                threadId: sessionIdForInterrupt,
-                senderId: field<string>(message, "sender_id"),
-              },
-            );
-            if (!ok) {
-              setInterruptRequested(false);
-              antdMessage.error("Failed to interrupt Codex turn.");
-            }
-          }}
-        >
-          <Icon name={interruptIcon} /> {interruptLabel}
-        </Button>
-        {showCodexActivity && elapsedLabel ? (
-          <AgentActivityChip
-            generating={effectiveGenerating}
-            durationLabel={elapsedLabel}
-            lastActivityAtMs={lastCodexActivityAtMs}
-            startedAtMs={acpStartedAtMs}
-            date={date}
-            onOpen={() => setOpenActivityDrawerToken((n) => (n ?? 0) + 1)}
-          />
-        ) : elapsedLabel ? (
-          <span style={{ fontSize: 12, display: "inline-flex", gap: "4px" }}>
-            <Icon name="clock" /> {elapsedLabel}
-          </span>
-        ) : null}
-      </div>
-    );
-  }
-
   function renderInterruptedControls() {
     if (
       actions == null ||
@@ -2499,7 +2392,6 @@ export default function Message({
             ? renderEditMessage()
             : renderMessageBody({ message_class })}
           {renderEditingMeta()}
-          {renderBottomControls()}
           {renderInterruptedControls()}
         </div>
         {renderHistory()}

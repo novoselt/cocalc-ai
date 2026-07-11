@@ -45,7 +45,12 @@ import {
   newest_content,
   orderLinearThreadMessages,
 } from "./utils";
-import { dateValue, field, parentMessageId } from "./access";
+import {
+  dateValue,
+  field,
+  isAcpAssistantMessage,
+  parentMessageId,
+} from "./access";
 import {
   captureChatViewportAnchor,
   loadChatViewportAnchor,
@@ -121,7 +126,7 @@ function resolveSteerAnchorMessageId({
       guard += 1;
       continue;
     }
-    if (field<string>(directParent, "acp_account_id")) {
+    if (isAcpAssistantMessage(directParent)) {
       const assistantParentId = `${parentMessageId(directParent) ?? ""}`.trim();
       return assistantParentId || directParentId;
     }
@@ -149,7 +154,7 @@ function resolveSteerAssistantMessageId({
       guard += 1;
       continue;
     }
-    if (!field<string>(directParent, "acp_account_id")) {
+    if (!isAcpAssistantMessage(directParent)) {
       return undefined;
     }
     const assistantMessageId =
@@ -701,7 +706,7 @@ function acpReplyParentMessageIds(messages: ChatMessages): Set<string> {
   const parentMessageIds = new Set<string>();
   for (const [, other] of messages) {
     if (other == null) continue;
-    if (!field<string>(other, "acp_account_id")) continue;
+    if (!isAcpAssistantMessage(other)) continue;
     const parentId = `${parentMessageId(other) ?? ""}`.trim();
     if (parentId) {
       parentMessageIds.add(parentId);
@@ -1034,7 +1039,7 @@ export function MessageList({
       });
       if (
         message == null ||
-        !field<string>(message, "acp_account_id") ||
+        !isAcpAssistantMessage(message) ||
         !isActiveAcpAssistantTurn({ message, acpState })
       ) {
         continue;
@@ -1371,7 +1376,6 @@ export function MessageList({
               })()
             }
             threadViewMode={singleThreadView}
-            onForceScrollToBottom={forceScrollToBottom}
             acpState={messageAcpState}
             attachedSteers={attachedSteers}
             activitySteers={activitySteers}

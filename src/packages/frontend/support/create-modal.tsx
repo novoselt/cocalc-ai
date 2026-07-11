@@ -558,13 +558,14 @@ export default function SupportCreateModal() {
         <Text strong>Images</Text>
         <Paragraph type="secondary" style={{ marginTop: 4 }}>
           You can paste or drop images directly into the composer above. This
-          extra upload box is useful when you want to crop an image before it is
-          inserted into the ticket body. Every image is converted to a clickable
-          absolute link for Zendesk.
+          extra upload box uploads the full image by default; select the crop
+          option when you only want to include part of it. Every image is
+          converted to a clickable absolute link for Zendesk.
         </Paragraph>
         <ThreadImageUpload
+          allowFullImage
           modalTitle="Crop support image"
-          uploadText="Click or drag an image, then crop if needed"
+          uploadText="Click or drag a full-size image"
           value={lastImageUrl}
           onChange={(value) => {
             setLastImageUrl(value);
