@@ -10,6 +10,7 @@ import { SNAPSHOTS } from "@cocalc/util/consts/snapshots";
 import { getSubvolumeField, invalidateSubvolumeMetadata } from "./subvolume";
 import { parsePlainQgroupShow } from "./subvolume-quota";
 import { btrfsQuotasDisabled } from "./config";
+import { assertValidSnapshotName } from "@cocalc/util/snapshot-name";
 import {
   invalidateBtrfsQgroupShowRaw,
   withBtrfsMutationLock,
@@ -38,11 +39,17 @@ export class SubvolumeSnapshots {
   }
 
   path = (snapshot?: string, ...segments) => {
-    if (!snapshot) {
+    if (snapshot == null) {
       return SNAPSHOTS;
     }
-    return join(SNAPSHOTS, snapshot, ...segments);
+    return join(SNAPSHOTS, assertValidSnapshotName(snapshot), ...segments);
   };
+
+  private snapshotAbsolutePath = (name: string): string =>
+    join(this.snapshotsDir, assertValidSnapshotName(name));
+
+  private lockPath = (name: string): string =>
+    join(SNAPSHOTS, `.${assertValidSnapshotName(name)}.lock`);
 
   private makeSnapshotsDir = async () => {
     if (await this.subvolume.fs.exists(SNAPSHOTS)) {
@@ -62,10 +69,8 @@ export class SubvolumeSnapshots {
       quotaMode?: "sync" | "async" | "skip";
     } = {},
   ) => {
-    if (name?.startsWith(".")) {
-      throw Error("snapshot name must not start with '.'");
-    }
     name ??= new Date().toISOString();
+    name = assertValidSnapshotName(name);
     logger.debug("create", { name, subvolume: this.subvolume.name });
     await this.makeSnapshotsDir();
 
@@ -84,7 +89,7 @@ export class SubvolumeSnapshots {
     }
 
     const args = ["subvolume", "snapshot", "-r"];
-    const snapshotPath = join(this.snapshotsDir, name);
+    const snapshotPath = this.snapshotAbsolutePath(name);
     args.push(this.subvolume.path, snapshotPath);
 
     await withBtrfsMutationLock({
@@ -116,7 +121,16 @@ export class SubvolumeSnapshots {
     for (const name of entries) {
       // Skip lock/hidden files up front.
       if (name.startsWith(".")) continue;
-      const path = join(this.snapshotsDir, name);
+      let path: string;
+      try {
+        path = this.snapshotAbsolutePath(name);
+      } catch (err) {
+        logger.warn("readdir: skipping snapshot with unsafe name", {
+          name,
+          err: `${err}`,
+        });
+        continue;
+      }
       try {
         // Only keep readonly btrfs subvolumes (actual snapshots).
         let flags: string | undefined;
@@ -146,28 +160,29 @@ export class SubvolumeSnapshots {
 
   lock = async (name: string) => {
     if (await this.subvolume.fs.exists(this.path(name))) {
-      await this.subvolume.fs.writeFile(this.path(`.${name}.lock`), "");
+      await this.subvolume.fs.writeFile(this.lockPath(name), "");
     } else {
       throw Error(`snapshot ${name} does not exist`);
     }
   };
 
   unlock = async (name: string) => {
-    await this.subvolume.fs.rm(this.path(`.${name}.lock`));
+    await this.subvolume.fs.rm(this.lockPath(name));
   };
 
   exists = async (name: string) => {
     return await this.subvolume.fs.exists(this.path(name));
   };
 
-  delete = async (name) => {
-    if (await this.subvolume.fs.exists(this.path(`.${name}.lock`))) {
+  delete = async (name: string) => {
+    name = assertValidSnapshotName(name);
+    if (await this.subvolume.fs.exists(this.lockPath(name))) {
       throw Error(`snapshot ${name} is locked`);
     }
     await this.withCleanupQuotaRelief({
       operation: "delete-snapshot",
       run: async () => {
-        const snapshotPath = join(this.snapshotsDir, name);
+        const snapshotPath = this.snapshotAbsolutePath(name);
         await btrfs({
           args: ["subvolume", "delete", snapshotPath],
         });
@@ -246,7 +261,7 @@ export class SubvolumeSnapshots {
   };
 
   private setReadOnly = async (name: string, readOnly: boolean) => {
-    const snapshotPath = join(this.snapshotsDir, name);
+    const snapshotPath = this.snapshotAbsolutePath(name);
     await btrfs({
       args: [
         "property",
@@ -261,7 +276,7 @@ export class SubvolumeSnapshots {
   };
 
   private safePruneTargetPath = async (name: string, path: string) => {
-    const snapshotRoot = join(this.snapshotsDir, name);
+    const snapshotRoot = this.snapshotAbsolutePath(name);
     const target = join(snapshotRoot, path);
     let realTarget: string;
     try {
@@ -302,7 +317,7 @@ export class SubvolumeSnapshots {
       if (!(await this.exists(name))) {
         throw new Error(`snapshot ${name} does not exist`);
       }
-      if (await this.subvolume.fs.exists(this.path(`.${name}.lock`))) {
+      if (await this.subvolume.fs.exists(this.lockPath(name))) {
         throw Error(`snapshot ${name} is locked`);
       }
     }
@@ -344,16 +359,17 @@ export class SubvolumeSnapshots {
       cache: false,
     });
     const snapGen = await getGeneration(
-      join(this.snapshotsDir, s[s.length - 1]),
+      this.snapshotAbsolutePath(s[s.length - 1]),
     );
     return snapGen < pathGen;
   };
 
   usage = async (name: string): Promise<SnapshotUsage> => {
+    name = assertValidSnapshotName(name);
     if (btrfsQuotasDisabled()) {
       return { name, used: 0, quota: 0, exclusive: 0 };
     }
-    const snapshotPath = join(this.snapshotsDir, name);
+    const snapshotPath = this.snapshotAbsolutePath(name);
     let row;
     try {
       const { stdout } = await btrfs({

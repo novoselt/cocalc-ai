@@ -49,6 +49,7 @@ import {
   LEGACY_RESTORE_STATUS_LABEL,
   LEGACY_SOURCE_PROJECT_LABEL,
 } from "@cocalc/util/legacy-migration";
+import { assertValidSnapshotName } from "@cocalc/util/snapshot-name";
 import type {
   LegacyMigrationApplyFinancialHomeBayOptions,
   LegacyMigrationApplyFinancialHomeBayResponse,
@@ -4744,12 +4745,25 @@ async function prepareProjectRemediationForRow({
   account_id,
   row,
   snapshot_name,
+  allow_custom_snapshot_name = false,
 }: {
   account_id: string;
   row: ProjectRemediationRow;
   snapshot_name?: string;
+  allow_custom_snapshot_name?: boolean;
 }): Promise<LegacyMigrationProjectRemediationStatusResponse> {
   assertProjectNeedsRemediation(row);
+  const requestedSnapshotName = clean(snapshot_name);
+  if (
+    requestedSnapshotName &&
+    !allow_custom_snapshot_name &&
+    requestedSnapshotName !== LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME
+  ) {
+    throw new Error("custom remediation snapshot names are admin-only");
+  }
+  const snapshotName = assertValidSnapshotName(
+    requestedSnapshotName ?? LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME,
+  );
   const bucket =
     clean(row.artifact_bucket) ??
     clean(process.env.COCALC_LEGACY_PROJECTS_BUCKET) ??
@@ -4772,8 +4786,7 @@ async function prepareProjectRemediationForRow({
   });
   const result = await client.prepareLegacyProjectArchiveRemediation({
     project_id: row.project_id,
-    snapshot_name:
-      clean(snapshot_name) ?? LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME,
+    snapshot_name: snapshotName,
     download: {
       ...signed,
       bucket,
@@ -4868,6 +4881,7 @@ export async function adminPrepareProjectRemediation({
     account_id: clean(row.owner_account_id) ?? account_id,
     row,
     snapshot_name,
+    allow_custom_snapshot_name: true,
   });
 }
 
@@ -4886,10 +4900,16 @@ export async function applyProjectRemediation({
   }
   assertProjectNeedsRemediation(row);
   const meta = remediationMetadata(row);
-  const effectiveSnapshotName =
-    clean(snapshot_name) ??
-    clean(meta.snapshot_name) ??
-    LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME;
+  const effectiveSnapshotName = assertValidSnapshotName(
+    clean(meta.snapshot_name) ?? LEGACY_PROJECT_FINAL_ARCHIVE_SNAPSHOT_NAME,
+  );
+  const requestedSnapshotName = clean(snapshot_name);
+  if (
+    requestedSnapshotName &&
+    requestedSnapshotName !== effectiveSnapshotName
+  ) {
+    throw new Error("remediation snapshot must match the prepared snapshot");
+  }
   const client = await connectProjectFileServerForRemediation({
     project_id: row.project_id,
     account_id,

@@ -31,6 +31,7 @@ import {
   legacyRestoreMissingArchiveEntriesFromTarStderr,
   legacyRestoreTarStderrHasOnlyMissingArchiveEntries,
 } from "@cocalc/util/legacy-migration";
+import { assertValidSnapshotName } from "@cocalc/util/snapshot-name";
 import { publishLroEvent } from "../lro/stream";
 
 import { normalizeArchivePath } from "../archive-path";
@@ -899,6 +900,7 @@ export function createLegacyProjectArchiveHandlers({
       lro?: LroRef;
     }): Promise<LegacyProjectArchiveRemediationResult> {
       const started = Date.now();
+      snapshot_name = assertValidSnapshotName(snapshot_name);
       await getOrEnsureVolume(project_id);
       const home = projectMountpoint(project_id);
       const snapshotsDir = join(home, ".snapshots");
@@ -1033,6 +1035,8 @@ export function createLegacyProjectArchiveHandlers({
       lro?: LroRef;
     }): Promise<LegacyProjectArchiveRemediationApplyResult> {
       const started = Date.now();
+      snapshot_name = assertValidSnapshotName(snapshot_name);
+      safety_snapshot_name = assertValidSnapshotName(safety_snapshot_name);
       await getOrEnsureVolume(project_id);
       const home = projectMountpoint(project_id);
       const finalSnapshotPath = join(home, ".snapshots", snapshot_name);

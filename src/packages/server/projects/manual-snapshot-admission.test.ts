@@ -6,6 +6,14 @@ import {
 } from "./manual-snapshot-admission";
 
 describe("manual snapshot admission", () => {
+  it.each(["../outside", "nested/name", ".hidden"])(
+    "rejects unsafe manual snapshot names: %s",
+    (name) => {
+      expect(() => normalizeManualSnapshotName(name)).toThrow(
+        /invalid snapshot name/,
+      );
+    },
+  );
   it("reserves configured rolling snapshot slots", () => {
     expect(
       rollingSnapshotReservedSlots({

@@ -52,6 +52,7 @@ import type {
 } from "@cocalc/conat/hub/api/hosts";
 import { hubApi } from "@cocalc/lite/hub/api";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
+import { assertValidSnapshotName } from "@cocalc/util/snapshot-name";
 import getLogger from "@cocalc/backend/logger";
 import {
   data,
@@ -977,6 +978,7 @@ async function createSafetySnapshotFromPath({
   project_id: string;
   snapshot: string;
 }): Promise<void> {
+  snapshot = assertValidSnapshotName(snapshot);
   if (!(await exists(snapshotPath))) return;
   const home = projectMountpoint(project_id);
   const destDir = join(home, ".snapshots");
@@ -2662,6 +2664,10 @@ async function restoreSnapshot({
   safety_snapshot_name?: string;
   lro?: LroRef;
 }): Promise<void> {
+  snapshot = assertValidSnapshotName(snapshot);
+  if (safety_snapshot_name != null) {
+    safety_snapshot_name = assertValidSnapshotName(safety_snapshot_name);
+  }
   if (!["both", "home", "rootfs"].includes(mode)) {
     throw new Error(`invalid snapshot restore mode: ${mode}`);
   }
