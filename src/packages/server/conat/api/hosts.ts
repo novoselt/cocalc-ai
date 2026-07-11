@@ -49,6 +49,7 @@ import type {
   HostAvailabilityCategory,
 } from "@cocalc/conat/hub/api/hosts";
 import { getAccountProductAccessTrust } from "@cocalc/server/accounts/trusted-product-access";
+import { getClusterAccountsByIdsDirect } from "@cocalc/server/accounts/cluster-directory";
 import type { MembershipEffectiveLimits } from "@cocalc/conat/hub/api/purchases";
 import {
   normalizeProviderId,
@@ -172,6 +173,7 @@ import {
 } from "@cocalc/server/projects/change-tracking";
 import { to_bool } from "@cocalc/util/db-schema/site-defaults";
 import { is_valid_email_address, isValidUUID } from "@cocalc/util/misc";
+import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import { getAIUsageStatus } from "@cocalc/server/ai/usage-status";
 import { computeAIUsageUnits } from "@cocalc/server/ai/usage-units";
 import { saveAIResponse } from "@cocalc/server/ai/save-response";
@@ -3259,6 +3261,20 @@ export async function listHostsLocal({
     await loadHostRuntimeDesiredArtifactSummaries(
       visibleRows.map(({ row }) => row.id),
     );
+  const ownerDirectory = new Map(
+    isTrustedAdminView
+      ? (
+          await getClusterAccountsByIdsDirect(
+            visibleRows
+              .map(({ row }) => row.metadata?.owner)
+              .filter(
+                (account_id): account_id is string =>
+                  typeof account_id === "string" && account_id.length > 0,
+              ),
+          )
+        ).map((entry) => [entry.account_id, entry] as const)
+      : [],
+  );
   const ownerSpendUsage = new Map<
     string,
     Awaited<ReturnType<typeof getDedicatedHostWindowUsageForHostLocal>>
@@ -3295,6 +3311,9 @@ export async function listHostsLocal({
       reason_unavailable,
       starred,
     }) => {
+      const ownerAccountId =
+        typeof row.metadata?.owner === "string" ? row.metadata.owner : "";
+      const ownerEntry = ownerDirectory.get(ownerAccountId);
       const host = parseRow(row, {
         scope,
         access_role,
@@ -3303,10 +3322,12 @@ export async function listHostsLocal({
         can_manage_access: hostAccessRoleCan(access_role, "manage-access"),
         can_view_host_projects: hostAccessRoleCan(access_role, "view-projects"),
         reason_unavailable,
-        billing_owner_account_id:
-          typeof row.metadata?.owner === "string"
-            ? row.metadata.owner
-            : undefined,
+        billing_owner_account_id: ownerAccountId || undefined,
+        owner_display_name: ownerEntry
+          ? displayNameFromAccount(ownerEntry) || undefined
+          : undefined,
+        owner_email_address: ownerEntry?.email_address ?? undefined,
+        owner_home_bay_id: ownerEntry?.home_bay_id ?? undefined,
         backup_status: backupStatus.get(row.id),
         starred,
         owner_spend_5h_usd:

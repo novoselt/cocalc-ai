@@ -386,6 +386,9 @@ export function parseRow(
     can_manage_access?: boolean;
     can_view_host_projects?: boolean;
     billing_owner_account_id?: string;
+    owner_display_name?: string;
+    owner_email_address?: string;
+    owner_home_bay_id?: string | null;
     project_ram_limit_mb?: number;
     host_ram_mb?: number;
     owner_spend_limit_5h_usd?: number;
@@ -1231,6 +1234,9 @@ export function parseRow(
     billing_owner_account_id:
       opts.billing_owner_account_id ??
       (typeof metadata.owner === "string" ? metadata.owner : undefined),
+    owner_display_name: opts.owner_display_name,
+    owner_email_address: opts.owner_email_address,
+    owner_home_bay_id: opts.owner_home_bay_id,
     project_ram_limit_mb:
       opts.project_ram_limit_mb ??
       parsePositiveInt(metadata.resources?.project_ram_limit_mb),

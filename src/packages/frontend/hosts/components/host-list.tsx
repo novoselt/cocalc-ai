@@ -49,6 +49,7 @@ import {
 } from "./host-billing-enforcement";
 import { HostPricingSummary } from "./host-pricing-summary";
 import { HostStatusSummary } from "./host-status-summary";
+import { HostOwnershipSummary } from "./host-ownership-summary";
 import { search_match, search_split } from "@cocalc/util/misc";
 import type {
   HostListViewMode,
@@ -525,6 +526,11 @@ export const HostList: React.FC<{ vm: HostListViewModel }> = ({ vm }) => {
         host.provider_instance_id,
         getExpectedProviderInstanceName(host),
         host.pricing_model,
+        host.funding_mode,
+        host.owner_display_name,
+        host.owner_email_address,
+        host.owner_home_bay_id,
+        host.billing_owner_account_id,
         selfHostDetail,
         host.region,
         host.machine?.zone,
@@ -739,6 +745,20 @@ export const HostList: React.FC<{ vm: HostListViewModel }> = ({ vm }) => {
     [],
   );
 
+  const ownershipColumns: ColumnsType<Host> =
+    isAdmin && showAdmin
+      ? [
+          {
+            title: "Owner / funding",
+            key: "ownership",
+            width: 260,
+            render: (_: string, host: Host) => (
+              <HostOwnershipSummary host={host} compact />
+            ),
+          },
+        ]
+      : [];
+
   const columns: ColumnsType<Host> = [
     {
       title: (
@@ -820,6 +840,7 @@ export const HostList: React.FC<{ vm: HostListViewModel }> = ({ vm }) => {
       render: (_: string, host: Host) =>
         renderHostPrice(host, pricingCatalogs ?? catalog, pricingSettings),
     },
+    ...ownershipColumns,
     {
       title: "Resources",
       key: "resources",
@@ -1316,7 +1337,7 @@ export const HostList: React.FC<{ vm: HostListViewModel }> = ({ vm }) => {
           dataSource={sortedHosts}
           pagination={false}
           tableLayout="fixed"
-          scroll={{ x: 1760 }}
+          scroll={{ x: isAdmin && showAdmin ? 2020 : 1760 }}
           rowSelection={{
             selectedRowKeys,
             onChange: (keys) => setSelectedRowKeys(keys as string[]),
@@ -1365,6 +1386,7 @@ export const HostList: React.FC<{ vm: HostListViewModel }> = ({ vm }) => {
                 catalog={catalog}
                 pricingCatalogs={pricingCatalogs}
                 providerCapabilities={providerCapabilities}
+                showOwnership={isAdmin && showAdmin}
               />
             </Col>
           ))}

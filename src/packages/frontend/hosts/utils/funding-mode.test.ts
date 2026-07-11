@@ -6,6 +6,7 @@
 import {
   defaultHostFundingMode,
   getHostFundingModeOptions,
+  hostFundingModeLabel,
   isBillableHostProvider,
 } from "./funding-mode";
 
@@ -68,5 +69,12 @@ describe("host funding mode helpers", () => {
     expect(isBillableHostProvider("gcp")).toBe(true);
     expect(isBillableHostProvider("self-host")).toBe(false);
     expect(isBillableHostProvider("none")).toBe(false);
+  });
+
+  it("formats funding modes for operator-facing summaries", () => {
+    expect(hostFundingModeLabel("site-funded")).toBe("Site-funded");
+    expect(hostFundingModeLabel("account-prepaid")).toBe("Account prepaid");
+    expect(hostFundingModeLabel("account-postpaid")).toBe("Account postpaid");
+    expect(hostFundingModeLabel()).toBe("Funding unknown");
   });
 });

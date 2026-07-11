@@ -23,6 +23,7 @@ import { HostStatusSummary } from "./host-status-summary";
 import { HostActionsPanel } from "./host-actions-panel";
 import { HostConfigurationCell } from "./host-configuration-cell";
 import { HostAccessPolicySummary } from "./host-access-policy";
+import { HostOwnershipSummary } from "./host-ownership-summary";
 
 type HostCardProps = {
   host: Host;
@@ -45,6 +46,7 @@ type HostCardProps = {
     isConnectorOnline: (connectorId?: string) => boolean;
     onSetup: (host: Host) => void;
   };
+  showOwnership?: boolean;
 };
 
 export const HostCard: React.FC<HostCardProps> = ({
@@ -65,6 +67,7 @@ export const HostCard: React.FC<HostCardProps> = ({
   pricingCatalogs,
   providerCapabilities,
   selfHost,
+  showOwnership = false,
 }) => {
   const pricingSettings = useHostPricingSettings();
   const projectHostObservation = host.observed_host_agent?.project_host;
@@ -130,6 +133,7 @@ export const HostCard: React.FC<HostCardProps> = ({
           fullWidth
         />
         <HostConfigurationCell host={host} maxWidth="100%" />
+        {showOwnership ? <HostOwnershipSummary host={host} compact /> : null}
         <HostAccessPolicySummary host={host} compact />
         <HostPricingSummary
           host={host}

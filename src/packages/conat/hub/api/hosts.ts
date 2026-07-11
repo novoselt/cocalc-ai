@@ -817,6 +817,9 @@ export interface Host {
   can_manage_access?: boolean;
   can_view_host_projects?: boolean;
   billing_owner_account_id?: string;
+  owner_display_name?: string;
+  owner_email_address?: string;
+  owner_home_bay_id?: string | null;
   project_ram_limit_mb?: number;
   host_ram_mb?: number;
   owner_spend_limit_5h_usd?: number;

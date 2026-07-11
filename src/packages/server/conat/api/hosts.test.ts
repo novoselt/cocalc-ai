@@ -6,6 +6,7 @@ import os from "node:os";
 let spawnMock: jest.Mock;
 let queryMock: jest.Mock;
 let isAdminMock: jest.Mock;
+let getClusterAccountsByIdsDirectMock: jest.Mock;
 let isBannedMock: jest.Mock;
 let ensureAccountSecurityStateReadyMock: jest.Mock;
 let isAccountBannedCachedMock: jest.Mock;
@@ -165,6 +166,11 @@ jest.mock("@cocalc/server/cloud", () => {
 jest.mock("@cocalc/server/accounts/is-admin", () => ({
   __esModule: true,
   default: (...args: any[]) => isAdminMock(...args),
+}));
+
+jest.mock("@cocalc/server/accounts/cluster-directory", () => ({
+  getClusterAccountsByIdsDirect: (...args: any[]) =>
+    getClusterAccountsByIdsDirectMock(...args),
 }));
 
 jest.mock("@cocalc/server/accounts/is-banned", () => ({
@@ -490,6 +496,7 @@ const HOST_ID = "host-123";
 const ACCOUNT_ID = "acct-123";
 
 beforeEach(() => {
+  getClusterAccountsByIdsDirectMock = jest.fn(async () => []);
   createLroMock = jest.fn(async (opts: any) => ({
     op_id: "op-123",
     kind: opts.kind,
@@ -6055,6 +6062,8 @@ describe("hosts.listHosts bootstrap normalization", () => {
       entitlements: {},
     }));
     loadProjectHostMetricsHistoryMock = jest.fn(async () => new Map());
+    listProjectHostRuntimeDeploymentsMock = jest.fn(async () => []);
+    loadEffectiveProjectHostRuntimeDeploymentsMock = jest.fn(async () => []);
     hostConnectionListMock = jest.fn(async () => []);
     queryMock = jest.fn(async (sql: string) => {
       if (
@@ -6200,6 +6209,14 @@ describe("hosts.listHosts bootstrap normalization", () => {
   });
 
   it("keeps machine and pricing fields for cross-owner admin host lists", async () => {
+    getClusterAccountsByIdsDirectMock = jest.fn(async () => [
+      {
+        account_id: "other-owner",
+        display_name: "Dedicated Host Owner",
+        email_address: "owner@example.com",
+        home_bay_id: "bay-2",
+      },
+    ]);
     queryMock = jest.fn(async (sql: string) => {
       if (
         sql.includes(
@@ -6266,6 +6283,9 @@ describe("hosts.listHosts bootstrap normalization", () => {
         id: HOST_ID,
         access_role: "admin",
         billing_owner_account_id: "other-owner",
+        owner_display_name: "Dedicated Host Owner",
+        owner_email_address: "owner@example.com",
+        owner_home_bay_id: "bay-2",
         pricing_model: "spot",
         desired_pricing_model: "spot",
         effective_pricing_model: "on_demand",
@@ -6281,6 +6301,24 @@ describe("hosts.listHosts bootstrap normalization", () => {
         }),
       }),
     );
+    expect(getClusterAccountsByIdsDirectMock).toHaveBeenCalledWith([
+      "other-owner",
+    ]);
+  });
+
+  it("does not resolve private owner identity outside admin view", async () => {
+    const { listHostsLocal } = await import("./hosts");
+    const hosts = await listHostsLocal({
+      account_id: ACCOUNT_ID,
+      include_deleted: true,
+      show_all: true,
+    });
+
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0].owner_display_name).toBeUndefined();
+    expect(hosts[0].owner_email_address).toBeUndefined();
+    expect(hosts[0].owner_home_bay_id).toBeUndefined();
+    expect(getClusterAccountsByIdsDirectMock).not.toHaveBeenCalled();
   });
 
   it("prefers deleted duplicate host rows over stale live rows", async () => {

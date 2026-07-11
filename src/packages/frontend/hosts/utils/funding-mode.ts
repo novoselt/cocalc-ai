@@ -14,6 +14,19 @@ export type HostFundingModeOption = {
   label: string;
 };
 
+export function hostFundingModeLabel(mode?: HostFundingMode | null): string {
+  switch (mode) {
+    case "site-funded":
+      return "Site-funded";
+    case "account-prepaid":
+      return "Account prepaid";
+    case "account-postpaid":
+      return "Account postpaid";
+    default:
+      return "Funding unknown";
+  }
+}
+
 function hasPositiveLimit(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
