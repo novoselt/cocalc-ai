@@ -36,6 +36,7 @@ import {
   listAcpJobsByRecoveryParent,
   listQueuedAcpJobs,
   listQueuedAcpJobsForThread,
+  oldestQueuedAcpJobTimestamp,
   resendCanceledAcpJob,
   reprioritizeAcpJobImmediate,
   setAcpJobState,
@@ -213,6 +214,33 @@ describe("acp job queue ordering", () => {
     });
     expect(afterFinish?.op_id).toBe(second.op_id);
     expect(afterFinish?.worker_id).toBe("worker-b");
+  });
+
+  it("measures queued backlog without counting a long-running job", async () => {
+    const first = enqueueAcpJob(
+      makeRequest({
+        userMessageId: "user-1",
+        assistantMessageId: "assistant-1",
+        assistantDate: "2026-03-08T00:00:01.000Z",
+      }),
+    );
+    await delay();
+    const second = enqueueAcpJob(
+      makeRequest({
+        userMessageId: "user-2",
+        assistantMessageId: "assistant-2",
+        assistantDate: "2026-03-08T00:00:02.000Z",
+      }),
+    );
+
+    claimNextQueuedAcpJobForThread({
+      project_id: first.project_id,
+      path: first.path,
+      thread_id: first.thread_id,
+      worker_id: "worker-a",
+    });
+
+    expect(oldestQueuedAcpJobTimestamp()).toBe(second.updated_at);
   });
 
   it("round-trips command automation jobs without a codex session id", () => {

@@ -28,7 +28,7 @@ import {
   decodeAcpJobRequest,
   hasQueuedOrRunningAcpJobs,
   listRunningAcpJobsByWorker,
-  oldestQueuedOrRunningAcpJobTimestamp,
+  oldestQueuedAcpJobTimestamp,
 } from "@cocalc/lite/hub/sqlite/acp-jobs";
 import { countRunningAcpTurnLeasesForWorker } from "@cocalc/lite/hub/sqlite/acp-turns";
 import { getSoftwareVersions } from "../../software";
@@ -327,8 +327,24 @@ function hasAcpBacklog(): boolean {
   return hasQueuedOrRunningAcpJobs();
 }
 
-function acpBacklogStaleSince(): number | undefined {
-  return oldestQueuedOrRunningAcpJobTimestamp();
+function acpJobReferenceTimestamp(row: {
+  updated_at?: number | null;
+  created_at?: number | null;
+}): number | undefined {
+  const updatedAt = Number(row.updated_at ?? 0);
+  if (Number.isFinite(updatedAt) && updatedAt > 0) return updatedAt;
+  const createdAt = Number(row.created_at ?? 0);
+  return Number.isFinite(createdAt) && createdAt > 0 ? createdAt : undefined;
+}
+
+function acpBacklogStaleSince(worker_id: string): number | undefined {
+  let oldest = oldestQueuedAcpJobTimestamp();
+  for (const row of listRunningAcpJobsByWorker(worker_id)) {
+    const timestamp = acpJobReferenceTimestamp(row);
+    if (timestamp == null) continue;
+    oldest = oldest == null ? timestamp : Math.min(oldest, timestamp);
+  }
+  return oldest;
 }
 
 function countRunningJobsForWorker(worker_id: string): number {
@@ -376,7 +392,7 @@ export function shouldTerminateQueueStalledWorker({
   );
   if (runningTurnLeases > 0) return false;
   if (workerHasRunningCommandJob(worker_id)) return false;
-  const backlogSince = acpBacklogStaleSince();
+  const backlogSince = acpBacklogStaleSince(worker_id);
   if (backlogSince == null || now - backlogSince < stallMs) return false;
   const startedAt = Math.max(
     workerStartedAtMs(worker),

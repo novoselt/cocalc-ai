@@ -328,7 +328,7 @@ export function hasQueuedOrRunningAcpJobs(): boolean {
   );
 }
 
-export function oldestQueuedOrRunningAcpJobTimestamp(): number | undefined {
+export function oldestQueuedAcpJobTimestamp(): number | undefined {
   ensureInit();
   const db = getAcpDatabase();
   const row = db
@@ -340,7 +340,7 @@ export function oldestQueuedOrRunningAcpJobTimestamp(): number | undefined {
          END
        ) AS oldest
        FROM ${TABLE}
-       WHERE state IN ('queued', 'running')`,
+       WHERE state = 'queued'`,
     )
     .get() as { oldest?: number | null } | undefined;
   const oldest = Number(row?.oldest ?? 0);
