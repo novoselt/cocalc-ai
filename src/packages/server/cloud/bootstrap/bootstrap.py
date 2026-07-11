@@ -41,7 +41,7 @@ from typing import Any
 
 STATE_SCHEMA_VERSION = 1
 HELPER_SCHEMA_VERSION = "20260710-v1"
-RUNTIME_WRAPPER_VERSION = "20260711-v11"
+RUNTIME_WRAPPER_VERSION = "20260711-v12"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
 BUNDLE_RETENTION_COUNT = 3
@@ -2114,6 +2114,8 @@ shift
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"
 STORAGE_CGROUP_CPU_MAX="100000 100000"
+STORAGE_CGROUP_CPU_WEIGHT="1"
+STORAGE_CGROUP_IO_WEIGHT="1"
 
 deny() {
   local code="$1"
@@ -2146,10 +2148,17 @@ configure_project_storage_cgroup() {
   local pool="$1"
   if [ -w /sys/fs/cgroup/cgroup.subtree_control ]; then
     printf '+cpu\n' > /sys/fs/cgroup/cgroup.subtree_control || true
+    printf '+io\n' > /sys/fs/cgroup/cgroup.subtree_control || true
   fi
   mkdir -p "$pool"
   if [ -w "${pool}/cpu.max" ]; then
     printf '%s\n' "${STORAGE_CGROUP_CPU_MAX}" > "${pool}/cpu.max" || true
+  fi
+  if [ -w "${pool}/cpu.weight" ]; then
+    printf '%s\n' "${STORAGE_CGROUP_CPU_WEIGHT}" > "${pool}/cpu.weight" || true
+  fi
+  if [ -w "${pool}/io.weight" ]; then
+    printf 'default %s\n' "${STORAGE_CGROUP_IO_WEIGHT}" > "${pool}/io.weight" || true
   fi
 }
 
@@ -2174,8 +2183,8 @@ find_bees_pid() {
     if [ "$(cat "$proc/comm" 2>/dev/null || true)" != "bees" ]; then
       continue
     fi
-    if [ "$(tr '\0' '\n' <"$proc/cmdline" 2>/dev/null | tail -n 1)" = "$mountpoint" ]; then
-      printf '%s\n' "$pid"
+    if [ "$(tr '\\0' '\\n' <"$proc/cmdline" 2>/dev/null | tail -n 1)" = "$mountpoint" ]; then
+      printf '%s\\n' "$pid"
       return 0
     fi
   done
