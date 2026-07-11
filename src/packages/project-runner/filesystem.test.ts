@@ -178,4 +178,40 @@ describe("localPath remote quota fallback", () => {
       "project-00000000-1000-4000-8000-000000000000-scratch",
     );
   });
+
+  it("uses the file-server RPC when local filesystem supervision is disabled", async () => {
+    mockProjectRunnerMountpoint = "/mnt/cocalc";
+    const ensureVolume = jest.fn(async () => undefined);
+    const mount = jest.fn(async ({ scratch }: { scratch?: boolean }) => ({
+      path: scratch ? "/mnt/project-scratch" : "/mnt/project-home",
+    }));
+    createFileClient.mockReturnValue({
+      ensureVolume,
+      mount,
+      getQuota: jest.fn(async () => ({ size: 0 })),
+      setQuota: jest.fn(async () => undefined),
+    });
+
+    const mod = await import("./run/filesystem");
+    mod.init({ client: {} as any, forceFileServerRpc: true });
+
+    await expect(
+      mod.localPath({
+        project_id: "00000000-1000-4000-8000-000000000000",
+        scratch: 0,
+      }),
+    ).resolves.toEqual({
+      home: "/mnt/project-home",
+      quota_applied: false,
+      scratch: undefined,
+    });
+
+    expect(filesystem).not.toHaveBeenCalled();
+    expect(ensureVolume).toHaveBeenCalledWith({
+      project_id: "00000000-1000-4000-8000-000000000000",
+    });
+    expect(mount).toHaveBeenCalledWith({
+      project_id: "00000000-1000-4000-8000-000000000000",
+    });
+  });
 });

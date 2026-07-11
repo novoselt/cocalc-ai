@@ -238,6 +238,7 @@ describe("project-host ACP worker runtime wiring", () => {
     );
     expect(initProjectRunnerFilesystemMock).toHaveBeenCalledWith({
       client: connectMock.mock.results[0].value,
+      forceFileServerRpc: true,
     });
     expect(publishActiveAcpSessionsMock).toHaveBeenCalledTimes(1);
     expect(runDetachedAcpQueueWorkerMock).toHaveBeenCalledTimes(1);

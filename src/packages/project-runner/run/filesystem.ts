@@ -18,8 +18,14 @@ import { exists } from "@cocalc/backend/misc/async-utils-node";
 const logger = getLogger("project-runner:filesystem");
 
 let client: ConatClient | null = null;
-export function init(opts: { client: ConatClient }) {
+let forceFileServerRpc = false;
+
+export function init(opts: {
+  client: ConatClient;
+  forceFileServerRpc?: boolean;
+}) {
   client = opts.client;
+  forceFileServerRpc = opts.forceFileServerRpc === true;
 }
 
 let fsclient: Fileserver | null = null;
@@ -102,9 +108,10 @@ export async function localPath({
     resetScratch,
     hasProjectRunnerMountpoint: !!projectRunnerMountpoint,
     hasProjectPathEnv: !!process.env.COCALC_PROJECT_PATH,
+    forceFileServerRpc,
   });
 
-  if (projectRunnerMountpoint) {
+  if (projectRunnerMountpoint && !forceFileServerRpc) {
     logger.debug("localPath: using local btrfs mountpoint", {
       project_id,
       mountpoint: projectRunnerMountpoint,
@@ -228,7 +235,7 @@ export async function localPath({
       scratch,
       quota_applied: hasPositiveQuotaValue(disk),
     };
-  } else if (process.env.COCALC_PROJECT_PATH) {
+  } else if (process.env.COCALC_PROJECT_PATH && !forceFileServerRpc) {
     const path = join(process.env.COCALC_PROJECT_PATH, project_id);
     logger.debug("localPath: using COCALC_PROJECT_PATH", {
       project_id,
