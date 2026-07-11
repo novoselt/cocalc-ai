@@ -6,6 +6,7 @@ let fileServerClientMock: jest.Mock;
 let fsClientMock: jest.Mock;
 let conatWithProjectRoutingMock: jest.Mock;
 let conatWithProjectRoutingForAccountMock: jest.Mock;
+let getExplicitProjectHostRoutedHubClientMock: jest.Mock;
 let getExplicitProjectRoutedClientMock: jest.Mock;
 let pingMock: jest.Mock;
 
@@ -23,6 +24,8 @@ jest.mock("./route-client", () => ({
     conatWithProjectRoutingMock(...args),
   conatWithProjectRoutingForAccount: (...args: any[]) =>
     conatWithProjectRoutingForAccountMock(...args),
+  getExplicitProjectHostRoutedHubClient: (...args: any[]) =>
+    getExplicitProjectHostRoutedHubClientMock(...args),
   getExplicitProjectRoutedClient: (...args: any[]) =>
     getExplicitProjectRoutedClientMock(...args),
 }));
@@ -50,6 +53,9 @@ describe("conat/file-server-client", () => {
     conatWithProjectRoutingMock = jest.fn(() => ({ id: "routed-client" }));
     conatWithProjectRoutingForAccountMock = jest.fn(() => ({
       id: "account-routed-client",
+    }));
+    getExplicitProjectHostRoutedHubClientMock = jest.fn(() => ({
+      id: "explicit-hub-client",
     }));
     getExplicitProjectRoutedClientMock = jest.fn(async () => ({
       id: "explicit-project-client",
@@ -79,13 +85,13 @@ describe("conat/file-server-client", () => {
       "11111111-1111-1111-1111-111111111111",
       { fresh: true },
     );
-    expect(getExplicitProjectRoutedClientMock).toHaveBeenCalledWith({
-      project_id: "11111111-1111-1111-1111-111111111111",
-      fresh: true,
-      account_id: undefined,
+    expect(getExplicitProjectHostRoutedHubClientMock).toHaveBeenCalledWith({
+      address: "https://host",
+      host_id: "host-1",
+      host_session_id: undefined,
     });
     expect(fileServerClientMock).toHaveBeenCalledWith({
-      client: { id: "explicit-project-client" },
+      client: { id: "explicit-hub-client" },
       project_id: "11111111-1111-1111-1111-111111111111",
       timeout: 1234,
       waitForInterest: true,
@@ -107,7 +113,7 @@ describe("conat/file-server-client", () => {
     expect(fileServerClientMock).not.toHaveBeenCalled();
   });
 
-  it("uses account-authenticated file-server client after remote route discovery", async () => {
+  it("uses a hub-authenticated file-server client after remote route discovery", async () => {
     materializeProjectHostTargetMock = jest.fn(async () => undefined);
     materializeRemoteProjectHostTargetMock = jest.fn(async () => ({
       address: "https://remote-host",
@@ -125,18 +131,20 @@ describe("conat/file-server-client", () => {
       account_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       project_id: "22222222-2222-2222-2222-222222222222",
     });
-    expect(getExplicitProjectRoutedClientMock).not.toHaveBeenCalled();
+    expect(getExplicitProjectHostRoutedHubClientMock).toHaveBeenCalledWith({
+      address: "https://remote-host",
+      host_id: "host-remote",
+      host_session_id: "session-remote",
+    });
     expect(fileServerClientMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        client: { id: "account-routed-client" },
+        client: { id: "explicit-hub-client" },
       }),
     );
-    expect(conatWithProjectRoutingForAccountMock).toHaveBeenCalledWith({
-      account_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-    });
+    expect(conatWithProjectRoutingForAccountMock).not.toHaveBeenCalled();
   });
 
-  it("uses account-scoped routing for local project clients", async () => {
+  it("does not use an account principal for local file-server management", async () => {
     const { getProjectFileServerClient } = await import("./file-server-client");
 
     await getProjectFileServerClient({
@@ -144,14 +152,14 @@ describe("conat/file-server-client", () => {
       account_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
     });
 
-    expect(getExplicitProjectRoutedClientMock).toHaveBeenCalledWith({
-      account_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-      project_id: "66666666-6666-6666-6666-666666666666",
-      fresh: true,
+    expect(getExplicitProjectHostRoutedHubClientMock).toHaveBeenCalledWith({
+      address: "https://host",
+      host_id: "host-1",
+      host_session_id: undefined,
     });
     expect(fileServerClientMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        client: { id: "explicit-project-client" },
+        client: { id: "explicit-hub-client" },
       }),
     );
   });
@@ -172,18 +180,18 @@ describe("conat/file-server-client", () => {
     });
   });
 
-  it("forwards an explicit stale-route override to the local routed client", async () => {
+  it("forwards an explicit stale-route override to target discovery", async () => {
     const { getProjectFileServerClient } = await import("./file-server-client");
     await getProjectFileServerClient({
       project_id: "77777777-7777-7777-7777-777777777777",
       fresh: false,
     });
 
-    expect(getExplicitProjectRoutedClientMock).toHaveBeenCalledWith({
-      project_id: "77777777-7777-7777-7777-777777777777",
-      fresh: false,
-      account_id: undefined,
-    });
+    expect(materializeProjectHostTargetMock).toHaveBeenCalledWith(
+      "77777777-7777-7777-7777-777777777777",
+      { fresh: false },
+    );
+    expect(getExplicitProjectHostRoutedHubClientMock).toHaveBeenCalled();
   });
 
   it("creates a project filesystem client with the same fresh local routing", async () => {
@@ -203,6 +211,21 @@ describe("conat/file-server-client", () => {
       timeout: undefined,
       waitForInterest: true,
     });
+  });
+
+  it("preserves account-scoped routing for ordinary project filesystem RPC", async () => {
+    const { getProjectFsClient } = await import("./file-server-client");
+    await getProjectFsClient({
+      project_id: "99999999-9999-9999-9999-999999999999",
+      account_id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+    });
+
+    expect(getExplicitProjectRoutedClientMock).toHaveBeenCalledWith({
+      project_id: "99999999-9999-9999-9999-999999999999",
+      account_id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      fresh: true,
+    });
+    expect(getExplicitProjectHostRoutedHubClientMock).not.toHaveBeenCalled();
   });
 
   it("pings the file-server service when explicitly asked to ensure readiness", async () => {

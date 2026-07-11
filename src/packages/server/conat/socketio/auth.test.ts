@@ -468,6 +468,51 @@ describe("test isAllowed for common subjects for projects and accounts", () => {
   });
 });
 
+describe("file-server management authorization", () => {
+  const subject = `file-server.${project_id}`;
+
+  it("allows hub principals", async () => {
+    await expect(
+      isAllowed({ user: { hub_id: "hub" }, type: "pub", subject }),
+    ).resolves.toBe(true);
+  });
+
+  it("denies project and collaborator account principals", async () => {
+    (hasProjectCollaboratorAccessAllowRemote as jest.Mock).mockResolvedValue(
+      true,
+    );
+    await expect(
+      isAllowed({ user: { project_id }, type: "pub", subject }),
+    ).resolves.toBe(false);
+    await expect(
+      isAllowed({ user: { account_id }, type: "pub", subject }),
+    ).resolves.toBe(false);
+  });
+
+  it("denies account-agent project sessions without affecting normal fs", async () => {
+    (hasProjectCollaboratorAccessAllowRemote as jest.Mock).mockResolvedValue(
+      true,
+    );
+    const user = {
+      account_id,
+      auth_actor: "agent",
+      auth_iat_s: 100,
+      auth_scopes: ["project_session"],
+      auth_project_id: project_id,
+    } as any;
+    await expect(isAllowed({ user, type: "pub", subject })).resolves.toBe(
+      false,
+    );
+    await expect(
+      isAllowed({
+        user,
+        type: "pub",
+        subject: `fs.project-${project_id}`,
+      }),
+    ).resolves.toBe(true);
+  });
+});
+
 // `project.${project_id}.` and `*.project-${project_id}.>`
 describe("test isAllowed for subjects special to projects", () => {
   it("checks the special project subjects, which allow both pub and sub", async () => {

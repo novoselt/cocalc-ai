@@ -271,10 +271,11 @@ export function isProjectAllowed({
   if (subject.startsWith(`project.${project_id}.`)) {
     return true;
   }
-  if (subject.startsWith(`file-server.${project_id}.`)) {
-    return true;
-  }
   return subject.split(".")[1] === `project-${project_id}`;
+}
+
+export function isFileServerManagementSubject(subject: string): boolean {
+  return subject === "file-server" || subject.startsWith("file-server.");
 }
 
 export function isHostAllowed({

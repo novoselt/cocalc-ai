@@ -404,6 +404,31 @@ describe("project-host Conat auth", () => {
     }
   });
 
+  it("allows only hub principals to use file-server management subjects", async () => {
+    mockGetRow.mockReturnValue({
+      users: { [account_id]: { group: "collaborator" } },
+    });
+    const { isAllowed } = createProjectHostConatAuth({ host_id });
+    const subject = `file-server.${project_id}`;
+
+    await expect(
+      isAllowed({ user: { hub_id: "hub" }, type: "pub", subject }),
+    ).resolves.toBe(true);
+    await expect(
+      isAllowed({ user: { account_id }, type: "pub", subject }),
+    ).resolves.toBe(false);
+    await expect(
+      isAllowed({ user: { project_id }, type: "pub", subject }),
+    ).resolves.toBe(false);
+    await expect(
+      isAllowed({
+        user: { account_id },
+        type: "pub",
+        subject: `fs.project-${project_id}`,
+      }),
+    ).resolves.toBe(true);
+  });
+
   it("does not cache negative collaborator decisions across user syncs", async () => {
     mockGetRow.mockReturnValueOnce({ users: {} }).mockReturnValue({
       users: {

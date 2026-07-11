@@ -59,6 +59,7 @@ import {
   extractHostSubject,
   extractProjectSubject,
   isAccountAllowed as isAccountSubjectAllowed,
+  isFileServerManagementSubject,
   isHostAllowed as isHostSubjectAllowed,
   isProjectAllowed as isProjectSubjectAllowed,
 } from "@cocalc/conat/auth/subject-policy";
@@ -448,8 +449,16 @@ export async function isAllowed({
       return false;
     }
   }
+  if (userType == "hub") {
+    // File-server management RPC is intentionally hub-only. Other hub subjects
+    // retain the existing full-permission behavior.
+    return true;
+  }
   const agentUser = user as CoCalcUserWithAgent;
   if (agentUser.auth_actor === "agent") {
+    if (isFileServerManagementSubject(subject)) {
+      return false;
+    }
     const userId = getCoCalcUserId(agentUser);
     if (type === "pub" && subject.startsWith("_INBOX.")) {
       return true;
@@ -502,10 +511,6 @@ export async function isAllowed({
     }
     return false;
   }
-  if (userType == "hub") {
-    // right now hubs have full permissions.
-    return true;
-  }
   const apiKeyUser = user as CoCalcUserWithApiKey;
   if (apiKeyUser.auth_method === "api_key") {
     return await isApiKeyAllowed({
@@ -513,6 +518,9 @@ export async function isAllowed({
       subject,
       type,
     });
+  }
+  if (isFileServerManagementSubject(subject)) {
+    return false;
   }
   const userId = getCoCalcUserId(user);
   const key = `${userType}-${userId}-${subject}-${type}`;

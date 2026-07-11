@@ -2,6 +2,7 @@ import {
   checkCommonPermissions,
   extractProjectSubject,
   extractViewerFileSubject,
+  isFileServerManagementSubject,
   isProjectAllowed,
 } from "./subject-policy";
 import { inboxPrefix } from "@cocalc/conat/names";
@@ -16,13 +17,19 @@ describe("conat auth subject policy", () => {
     );
   });
 
-  it("allows project identities to use their file-server subjects", () => {
+  it("denies project identities access to file-server management subjects", () => {
     expect(
       isProjectAllowed({
         project_id: PROJECT_ID,
         subject: `file-server.${PROJECT_ID}.api`,
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(isFileServerManagementSubject(`file-server.${PROJECT_ID}`)).toBe(
+      true,
+    );
+    expect(isFileServerManagementSubject(`fs.project-${PROJECT_ID}`)).toBe(
+      false,
+    );
   });
 
   it("extracts viewer file subjects", () => {

@@ -11,6 +11,7 @@ import type { Client } from "@cocalc/conat/core/client";
 import {
   conatWithProjectRouting,
   conatWithProjectRoutingForAccount,
+  getExplicitProjectHostRoutedHubClient,
   getExplicitProjectRoutedClient,
 } from "./route-client";
 import {
@@ -36,11 +37,13 @@ async function getProjectConatClient({
   account_id,
   ensure_route = true,
   fresh = true,
+  hub_only = false,
 }: {
   project_id: string;
   account_id?: string;
   ensure_route?: boolean;
   fresh?: boolean;
+  hub_only?: boolean;
 }): Promise<Client> {
   if (!ensure_route) {
     return getRoutedClient();
@@ -48,9 +51,17 @@ async function getProjectConatClient({
   const target = await resolveProjectFileServerTarget({
     project_id,
     account_id,
+    fresh,
   });
   if (!target?.address) {
     throw new Error(`unable to route project ${project_id} to a host`);
+  }
+  if (hub_only) {
+    return getExplicitProjectHostRoutedHubClient({
+      host_id: target.host_id,
+      address: target.address,
+      host_session_id: target.host_session_id,
+    });
   }
   return target.local
     ? await getExplicitProjectRoutedClient({ project_id, fresh, account_id })
@@ -62,9 +73,11 @@ async function getProjectConatClient({
 async function resolveProjectFileServerTarget({
   project_id,
   account_id,
+  fresh = true,
 }: {
   project_id: string;
   account_id?: string;
+  fresh?: boolean;
 }): Promise<
   | {
       address: string;
@@ -75,7 +88,7 @@ async function resolveProjectFileServerTarget({
   | undefined
 > {
   const local = await materializeProjectHostTarget(project_id, {
-    fresh: true,
+    fresh,
   });
   if (local?.address && local.host_id) {
     return { ...local, local: true };
@@ -99,6 +112,7 @@ export async function ensureProjectFileServerRoute(
   const target = await resolveProjectFileServerTarget({
     project_id,
     account_id,
+    fresh: true,
   });
   if (!target?.address) {
     throw new Error(`unable to route project ${project_id} to a host`);
@@ -124,10 +138,11 @@ export async function getProjectFileServerClient({
     account_id,
     ensure_route,
     fresh,
+    hub_only: true,
   });
-  // File-server is a server-only service. When account_id is provided, route
-  // through that account's project-host token so process-level env auth cannot
-  // leak into project-scoped file-server/persist subjects.
+  // File-server management is server-only. account_id is used to authorize and
+  // discover cross-bay placement, but the direct host connection always uses a
+  // short-lived hub principal.
   return fileServerClient({
     client: conatClient,
     project_id,
