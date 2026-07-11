@@ -1376,7 +1376,6 @@ export function MessageList({
               })()
             }
             threadViewMode={singleThreadView}
-            onForceScrollToBottom={forceScrollToBottom}
             acpState={messageAcpState}
             attachedSteers={attachedSteers}
             activitySteers={activitySteers}
