@@ -3,6 +3,7 @@ import type { Client as ConatClient } from "@cocalc/conat/core/client";
 import { CHAT_THREAD_META_ROW_DATE, threadConfigSenderId } from "@cocalc/chat";
 import {
   ChatStreamWriter,
+  acpTestInternals,
   disposeAllChatWritersForTests,
   isFatalAcpWorkerStorageError,
   isProjectAcpStorageError,
@@ -88,6 +89,19 @@ jest.mock("@cocalc/chat/server", () => ({
   acquireChatSyncDB: jest.fn(),
   releaseChatSyncDB: jest.fn(),
 }));
+
+describe("detached worker queue liveness", () => {
+  it("records a successful poll even when the queued job cannot be claimed", () => {
+    const context = { last_queue_progress_at: 1 } as any;
+
+    acpTestInternals.noteDetachedWorkerQueuePoll({
+      context,
+      now: 42_000,
+    });
+
+    expect(context.last_queue_progress_at).toBe(42_000);
+  });
+});
 
 function makeRequest() {
   return {

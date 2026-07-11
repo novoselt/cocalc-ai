@@ -7166,9 +7166,11 @@ export async function upgradeHostSoftware({
 export async function reconcileHostSoftware({
   account_id,
   id,
+  force_bootstrap = false,
 }: {
   account_id?: string;
   id: string;
+  force_bootstrap?: boolean;
 }): Promise<HostLroResponse> {
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -7177,6 +7179,7 @@ export async function reconcileHostSoftware({
       .reconcileHostSoftware({
         account_id,
         id,
+        ...(force_bootstrap ? { force_bootstrap: true } : {}),
       });
   }
   const row = await loadHostForRootfsManagement(id, account_id);
@@ -7185,8 +7188,14 @@ export async function reconcileHostSoftware({
     kind: HOST_RECONCILE_LRO_KIND,
     row,
     account_id,
-    input: { id: row.id, account_id },
-    dedupe_key: `${HOST_RECONCILE_LRO_KIND}:${row.id}`,
+    input: {
+      id: row.id,
+      account_id,
+      ...(force_bootstrap ? { force_bootstrap: true } : {}),
+    },
+    dedupe_key: force_bootstrap
+      ? `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap`
+      : `${HOST_RECONCILE_LRO_KIND}:${row.id}`,
   });
 }
 
@@ -7720,12 +7729,19 @@ export async function upgradeHostConnector({
 export async function reconcileHostSoftwareInternal({
   account_id,
   id,
+  force_bootstrap = false,
 }: {
   account_id?: string;
   id: string;
+  force_bootstrap?: boolean;
 }): Promise<void> {
   const row = await loadHostForStartStop(id, account_id);
   assertHostRunningForUpgrade(row);
+  if (force_bootstrap) {
+    assertCloudHostBootstrapReconcileSupported(row);
+    await reconcileCloudHostBootstrapOverSsh({ host_id: id, row });
+    return;
+  }
   const availability = computeHostOperationalAvailability(row);
   let fallbackReason: string | undefined;
 

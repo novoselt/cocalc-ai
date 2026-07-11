@@ -4006,6 +4006,7 @@ Supported deploy/smoke components:
                   "host",
                   "reconcile",
                   "--all-online",
+                  "--force-bootstrap",
                   "--wait",
                 ],
               ];

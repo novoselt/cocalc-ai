@@ -587,6 +587,17 @@ function noteDetachedWorkerQueueProgress(): void {
   });
 }
 
+function noteDetachedWorkerQueuePoll({
+  context = currentDetachedWorkerContext,
+  now = Date.now(),
+}: {
+  context?: DetachedWorkerContext | null;
+  now?: number;
+} = {}): void {
+  if (!context) return;
+  context.last_queue_progress_at = now;
+}
+
 function liteUseDetachedAcpWorker(): boolean {
   const value = `${process.env.COCALC_LITE_ACP_DETACHED_WORKER ?? ""}`
     .trim()
@@ -7945,6 +7956,9 @@ async function pumpQueuedAcpJobsForThread({
     if (!nextQueued) {
       return;
     }
+    // Reaching the queued row proves the queue loop is responsive even when a
+    // live turn or an admission limit intentionally prevents claiming it.
+    noteDetachedWorkerQueuePoll();
     const admissionLimits = await resolveAcpAdmissionLimits({
       account_id: nextQueued.account_id ?? undefined,
       project_id,
@@ -9271,6 +9285,7 @@ export async function disposeAcpAgents(): Promise<void> {
 }
 
 export const acpTestInternals = {
+  noteDetachedWorkerQueuePoll,
   persistQueuedUserMessageProjection,
   prepareQueuedUserMessageForExecution,
 };

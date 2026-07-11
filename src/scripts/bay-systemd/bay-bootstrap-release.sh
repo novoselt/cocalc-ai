@@ -510,7 +510,7 @@ prune_old_releases() {
   fi
 
   local -A keep=()
-  local current previous release count
+  local current previous release count process_ref process_path
   current="$(current_release_id || true)"
   previous=""
   if [[ -r "${BAY_ROOT}/state/previous-version" ]]; then
@@ -518,6 +518,24 @@ prune_old_releases() {
   fi
   [[ -n "$current" ]] && keep["$current"]=1
   [[ -n "$previous" ]] && keep["$previous"]=1
+
+  # Static-only deploys intentionally leave hub workers running.  Their
+  # WorkingDirectory resolves through /opt/cocalc/bay/current at process
+  # start, so lazy ncc chunks continue loading from that original release even
+  # after current moves.  Never prune a release that a live process still
+  # references through its cwd, root, or executable.
+  for process_ref in "${COCALC_BAY_PROC_ROOT:-/proc}"/[0-9]*/{cwd,root,exe}; do
+    process_path="$(readlink -f "$process_ref" 2>/dev/null || true)"
+    case "$process_path" in
+      "${RELEASES_DIR}"/*)
+        release="${process_path#"${RELEASES_DIR}"/}"
+        release="${release%%/*}"
+        if [[ -d "${RELEASES_DIR}/${release}" ]]; then
+          keep["$release"]=1
+        fi
+        ;;
+    esac
+  done
 
   count=0
   while IFS= read -r release; do
@@ -966,4 +984,6 @@ Next steps:
 EOF
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

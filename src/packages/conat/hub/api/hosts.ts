@@ -1886,6 +1886,7 @@ export interface Hosts {
   reconcileHostSoftware: (opts: {
     account_id?: string;
     id: string;
+    force_bootstrap?: boolean;
   }) => Promise<HostLroResponse>;
   getHostManagedComponentStatus: (opts: {
     account_id?: string;

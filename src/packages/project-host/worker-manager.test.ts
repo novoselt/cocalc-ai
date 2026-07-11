@@ -15,7 +15,7 @@ import {
   decodeAcpJobRequest,
   hasQueuedOrRunningAcpJobs,
   listRunningAcpJobsByWorker,
-  oldestQueuedOrRunningAcpJobTimestamp,
+  oldestQueuedAcpJobTimestamp,
 } from "@cocalc/lite/hub/sqlite/acp-jobs";
 import { countRunningAcpTurnLeasesForWorker } from "@cocalc/lite/hub/sqlite/acp-turns";
 
@@ -29,7 +29,7 @@ jest.mock("@cocalc/lite/hub/sqlite/acp-jobs", () => ({
   decodeAcpJobRequest: jest.fn((row) => JSON.parse(row.request_json ?? "{}")),
   hasQueuedOrRunningAcpJobs: jest.fn(() => false),
   listRunningAcpJobsByWorker: jest.fn(() => []),
-  oldestQueuedOrRunningAcpJobTimestamp: jest.fn(() => undefined),
+  oldestQueuedAcpJobTimestamp: jest.fn(() => undefined),
 }));
 jest.mock("@cocalc/lite/hub/sqlite/acp-turns", () => ({
   countRunningAcpTurnLeasesForWorker: jest.fn(() => 0),
@@ -59,9 +59,9 @@ const mockListRunningAcpJobsByWorker =
 const mockDecodeAcpJobRequest = decodeAcpJobRequest as jest.MockedFunction<
   typeof decodeAcpJobRequest
 >;
-const mockOldestQueuedOrRunningAcpJobTimestamp =
-  oldestQueuedOrRunningAcpJobTimestamp as jest.MockedFunction<
-    typeof oldestQueuedOrRunningAcpJobTimestamp
+const mockOldestQueuedAcpJobTimestamp =
+  oldestQueuedAcpJobTimestamp as jest.MockedFunction<
+    typeof oldestQueuedAcpJobTimestamp
   >;
 const mockCountRunningAcpTurnLeasesForWorker =
   countRunningAcpTurnLeasesForWorker as jest.MockedFunction<
@@ -83,8 +83,8 @@ beforeEach(() => {
   mockDecodeAcpJobRequest.mockImplementation((row) =>
     JSON.parse(row.request_json ?? "{}"),
   );
-  mockOldestQueuedOrRunningAcpJobTimestamp.mockReset();
-  mockOldestQueuedOrRunningAcpJobTimestamp.mockReturnValue(undefined);
+  mockOldestQueuedAcpJobTimestamp.mockReset();
+  mockOldestQueuedAcpJobTimestamp.mockReturnValue(undefined);
   mockCountRunningAcpTurnLeasesForWorker.mockReset();
   mockCountRunningAcpTurnLeasesForWorker.mockReturnValue(0);
 });
@@ -611,7 +611,7 @@ describe("ACP worker control startup grace", () => {
       last_queue_progress_at: 70_000,
     });
     mockHasQueuedOrRunningAcpJobs.mockReturnValue(true);
-    mockOldestQueuedOrRunningAcpJobTimestamp.mockReturnValue(95_000);
+    mockOldestQueuedAcpJobTimestamp.mockReturnValue(95_000);
 
     expect(
       __test__.workerDatabaseStateProtectsUnresponsiveWorker({
@@ -646,7 +646,7 @@ describe("ACP worker control startup grace", () => {
       } as any,
     ]);
     mockHasQueuedOrRunningAcpJobs.mockReturnValue(true);
-    mockOldestQueuedOrRunningAcpJobTimestamp.mockReturnValue(80_000);
+    mockOldestQueuedAcpJobTimestamp.mockReturnValue(80_000);
 
     expect(
       __test__.workerDatabaseStateProtectsUnresponsiveWorker({
@@ -674,7 +674,7 @@ describe("ACP worker control startup grace", () => {
       last_queue_progress_at: 50_000,
     });
     mockHasQueuedOrRunningAcpJobs.mockReturnValue(true);
-    mockOldestQueuedOrRunningAcpJobTimestamp.mockReturnValue(50_000);
+    mockOldestQueuedAcpJobTimestamp.mockReturnValue(50_000);
 
     expect(
       __test__.workerDatabaseStateProtectsUnresponsiveWorker(
@@ -702,7 +702,7 @@ describe("queue-stalled ACP workers", () => {
   };
 
   it("terminates stale backlog when the worker has no live turn lease and no queue progress", () => {
-    mockOldestQueuedOrRunningAcpJobTimestamp.mockReturnValue(10_000);
+    mockOldestQueuedAcpJobTimestamp.mockReturnValue(10_000);
 
     expect(
       __test__.shouldTerminateQueueStalledWorker({
@@ -720,7 +720,7 @@ describe("queue-stalled ACP workers", () => {
   });
 
   it("does not terminate while backlog is still inside the stall grace period", () => {
-    mockOldestQueuedOrRunningAcpJobTimestamp.mockReturnValue(170_000);
+    mockOldestQueuedAcpJobTimestamp.mockReturnValue(170_000);
 
     expect(
       __test__.shouldTerminateQueueStalledWorker({
@@ -737,8 +737,49 @@ describe("queue-stalled ACP workers", () => {
     ).toBe(false);
   });
 
+  it("does not attribute another worker's running turn to the replacement worker", () => {
+    expect(
+      __test__.shouldTerminateQueueStalledWorker({
+        worker: worker as any,
+        status: {
+          worker_id: "worker-stalled",
+          started_at: 1_000,
+          last_queue_progress_at: 10_000,
+          running_turn_leases: 0,
+        } as any,
+        now: 200_000,
+        stallMs: 60_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("terminates a worker that owns a stale running job without a turn lease", () => {
+    mockListRunningAcpJobsByWorker.mockReturnValue([
+      {
+        worker_id: "worker-stalled",
+        updated_at: 10_000,
+        created_at: 10_000,
+        request_json: "{}",
+      } as any,
+    ]);
+
+    expect(
+      __test__.shouldTerminateQueueStalledWorker({
+        worker: worker as any,
+        status: {
+          worker_id: "worker-stalled",
+          started_at: 1_000,
+          last_queue_progress_at: 10_000,
+          running_turn_leases: 0,
+        } as any,
+        now: 200_000,
+        stallMs: 60_000,
+      }),
+    ).toBe(true);
+  });
+
   it("does not terminate a worker that owns a live running turn lease", () => {
-    mockOldestQueuedOrRunningAcpJobTimestamp.mockReturnValue(10_000);
+    mockOldestQueuedAcpJobTimestamp.mockReturnValue(10_000);
     mockCountRunningAcpTurnLeasesForWorker.mockReturnValue(1);
 
     expect(

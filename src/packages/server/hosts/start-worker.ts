@@ -1428,7 +1428,11 @@ async function runHostAction(
       }
       return drain;
     case "host-reconcile-software":
-      await reconcileHostSoftwareInternal({ account_id, id: host_id });
+      await reconcileHostSoftwareInternal({
+        account_id,
+        id: host_id,
+        force_bootstrap: input?.force_bootstrap === true,
+      });
       return undefined;
     case "host-deprovision":
     case "host-delete":
@@ -1988,6 +1992,7 @@ async function handleOp(op: LroSummary): Promise<void> {
       await reconcileHostSoftwareInternal({
         account_id,
         id: host_id,
+        force_bootstrap: input?.force_bootstrap === true,
       });
       await progressStep("waiting", "waiting for host to return", {
         host_id,

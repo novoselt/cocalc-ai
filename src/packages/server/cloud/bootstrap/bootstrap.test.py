@@ -1187,8 +1187,23 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn('> "${pool}/cpu.max"', script)
+            self.assertIn('> "${pool}/cpu.weight"', script)
+            self.assertIn('> "${pool}/io.weight"', script)
             self.assertIn('attach_pid_to_project_pool_storage "$$" "$pool"', script)
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
+            self.assertIn("find_bees_pid()", script)
+            self.assertIn("apply_bees_runtime_policy()", script)
+            self.assertIn("reconcile-bees)", script)
+            self.assertNotIn("\x00", script)
+            self.assertIn("tr '\\0' '\\n'", script)
+            self.assertIn('/usr/bin/renice -n 19 -p "$tid"', script)
+            self.assertIn('/usr/bin/ionice -c3 -p "$tid"', script)
+            bees_branch = script.index("  bees)")
+            existing_check = script.index(
+                'existing_pid="$(find_bees_pid "$mountpoint")"', bees_branch
+            )
+            lock_check = script.index('lock_path="$beeshome/cocalc-bees.lock"')
+            self.assertLess(existing_check, lock_check)
             self.assertIn('cat "$proc/comm"', script)
             self.assertIn("sandbox-rm)", script)
             self.assertIn("sandbox-rmdir)", script)
@@ -1233,6 +1248,33 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             wrapper_path = Path(tmpdir) / "cocalc-runtime-storage"
             wrapper_path.write_text(script, encoding="utf-8")
             subprocess.run(["bash", "-n", str(wrapper_path)], check=True)
+
+    def test_reconcile_bees_runtime_policy_uses_storage_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            recorded = []
+            original_run_best_effort = bootstrap.run_best_effort
+            try:
+                bootstrap.run_best_effort = (
+                    lambda _cfg, args, desc: recorded.append((args, desc))
+                )
+                bootstrap.reconcile_bees_runtime_policy(cfg)
+            finally:
+                bootstrap.run_best_effort = original_run_best_effort
+
+            self.assertEqual(
+                recorded,
+                [
+                    (
+                        [
+                            "/usr/local/sbin/cocalc-runtime-storage",
+                            "reconcile-bees",
+                            "/mnt/cocalc",
+                        ],
+                        "reconcile BEES runtime policy",
+                    )
+                ],
+            )
 
     def test_btrfs_grow_helper_refreshes_block_device_before_online_resize(
         self,
@@ -1699,7 +1741,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("nvm install 20", script)
             self.assertIn("nvm alias default 20", script)
 
-    def test_configure_autostart_installs_systemd_watchdog_and_cron_fallback(self) -> None:
+    def test_configure_autostart_installs_systemd_watchdog_and_removes_cron(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
             runtime_root = Path(tmpdir) / "runtime-root"
@@ -1729,24 +1771,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 bootstrap.Path.write_text = original_write_text
                 bootstrap.os.chmod = original_chmod
 
-            self.assertIn(
-                (
-                    "/etc/cron.d/cocalc-project-host",
-                    (
-                        f"@reboot {cfg.ssh_user} /bin/bash -lc '{runtime_root}/bin/start-project-host'\n"
-                        f"* * * * * {cfg.ssh_user} /bin/bash -lc 'if mountpoint -q /mnt/cocalc; then mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; flock -n /mnt/cocalc/data/tmp/project-host-watchdog.lock {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1; fi'\n"
-                    ),
-                    "utf-8",
-                ),
-                writes,
-            )
             written = {path: data for path, data, _ in writes}
+            self.assertNotIn("/etc/cron.d/cocalc-project-host", written)
             self.assertIn(
                 "/etc/systemd/system/cocalc-project-host-watchdog.service",
                 written,
             )
             self.assertIn(
-                f'ExecStart=/bin/bash -lc "mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; flock -n /mnt/cocalc/data/tmp/project-host-watchdog.lock {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1"',
+                f'ExecStart=/bin/bash -lc "mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; flock -n -E 0 /mnt/cocalc/data/tmp/project-host-watchdog.lock {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1"',
                 written["/etc/systemd/system/cocalc-project-host-watchdog.service"],
             )
             self.assertIn(
@@ -1797,8 +1829,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn(
                 (
-                    ["systemctl", "enable", "--now", "cron"],
-                    "enable cron",
+                    ["rm", "-f", "/etc/cron.d/cocalc-project-host"],
+                    "remove legacy project-host cron watchdog",
                 ),
                 recorded,
             )
