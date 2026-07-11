@@ -1699,7 +1699,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("nvm install 20", script)
             self.assertIn("nvm alias default 20", script)
 
-    def test_configure_autostart_installs_systemd_watchdog_and_cron_fallback(self) -> None:
+    def test_configure_autostart_installs_systemd_watchdog_and_removes_cron(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
             runtime_root = Path(tmpdir) / "runtime-root"
@@ -1729,24 +1729,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 bootstrap.Path.write_text = original_write_text
                 bootstrap.os.chmod = original_chmod
 
-            self.assertIn(
-                (
-                    "/etc/cron.d/cocalc-project-host",
-                    (
-                        f"@reboot {cfg.ssh_user} /bin/bash -lc '{runtime_root}/bin/start-project-host'\n"
-                        f"* * * * * {cfg.ssh_user} /bin/bash -lc 'if mountpoint -q /mnt/cocalc; then mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; flock -n /mnt/cocalc/data/tmp/project-host-watchdog.lock {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1; fi'\n"
-                    ),
-                    "utf-8",
-                ),
-                writes,
-            )
             written = {path: data for path, data, _ in writes}
+            self.assertNotIn("/etc/cron.d/cocalc-project-host", written)
             self.assertIn(
                 "/etc/systemd/system/cocalc-project-host-watchdog.service",
                 written,
             )
             self.assertIn(
-                f'ExecStart=/bin/bash -lc "mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; flock -n /mnt/cocalc/data/tmp/project-host-watchdog.lock {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1"',
+                f'ExecStart=/bin/bash -lc "mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; flock -n -E 0 /mnt/cocalc/data/tmp/project-host-watchdog.lock {runtime_root}/bin/ctl ensure >> /mnt/cocalc/data/logs/project-host-watchdog.log 2>&1"',
                 written["/etc/systemd/system/cocalc-project-host-watchdog.service"],
             )
             self.assertIn(
@@ -1797,8 +1787,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn(
                 (
-                    ["systemctl", "enable", "--now", "cron"],
-                    "enable cron",
+                    ["rm", "-f", "/etc/cron.d/cocalc-project-host"],
+                    "remove legacy project-host cron watchdog",
                 ),
                 recorded,
             )

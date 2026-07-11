@@ -4964,7 +4964,7 @@ def configure_autostart(cfg: BootstrapConfig) -> None:
     watchdog_lock = "/mnt/cocalc/data/tmp/project-host-watchdog.lock"
     watchdog_command = (
         "mkdir -p /mnt/cocalc/data/logs /mnt/cocalc/data/tmp; "
-        f"flock -n {watchdog_lock} {runtime_root}/bin/ctl ensure "
+        f"flock -n -E 0 {watchdog_lock} {runtime_root}/bin/ctl ensure "
         f">> {watchdog_log} 2>&1"
     )
     watchdog_service = f"""[Unit]
@@ -5036,19 +5036,11 @@ WantedBy=multi-user.target
         ["systemctl", "enable", "--now", "cocalc-project-host-watchdog.timer"],
         "enable project-host watchdog timer",
     )
-
-    cron_lines = [
-        f"@reboot {cfg.ssh_user} /bin/bash -lc '{runtime_root}/bin/start-project-host'",
-        (
-            f"* * * * * {cfg.ssh_user} /bin/bash -lc "
-            f"'if mountpoint -q /mnt/cocalc; then {watchdog_command}; fi'"
-        ),
-    ]
-    Path("/etc/cron.d/cocalc-project-host").write_text(
-        "\n".join(cron_lines) + "\n", encoding="utf-8"
+    run_best_effort(
+        cfg,
+        ["rm", "-f", "/etc/cron.d/cocalc-project-host"],
+        "remove legacy project-host cron watchdog",
     )
-    os.chmod("/etc/cron.d/cocalc-project-host", 0o644)
-    run_best_effort(cfg, ["systemctl", "enable", "--now", "cron"], "enable cron")
 
 
 def configure_runtime_sudoers(cfg: BootstrapConfig) -> None:
