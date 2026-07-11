@@ -124,6 +124,18 @@ describe("resolveThreadSearchHighlightQuery", () => {
 });
 
 describe("resolveSelectedThreadRunningCodexMessage", () => {
+  it("recognizes a generating ACP turn without acp_account_id", () => {
+    const running = {
+      acp_log_key: "thread-1:message-1",
+      generating: true,
+      message_id: "message-1",
+      thread_id: "thread-1",
+      date: new Date("2026-07-11T00:00:00Z"),
+    } as any;
+
+    expect(resolveSelectedThreadRunningCodexMessage([running])).toBe(running);
+  });
+
   it("picks the newest generating codex turn", () => {
     const older = {
       acp_account_id: "acp-1",

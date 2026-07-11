@@ -88,6 +88,7 @@ import {
   dateValue,
   field,
   historyArray,
+  isAcpAssistantMessage,
   parentMessageId,
   editingArray,
 } from "./access";
@@ -696,10 +697,7 @@ export default function Message({
   }, [message, project_id, path, messageThreadId]);
 
   const showCodexActivity = useMemo(() => {
-    // Only show for ACP-driven turns (Codex activity). The log identifiers are
-    // derived deterministically, but this marker distinguishes ACP turns from
-    // other kinds of AI messages.
-    return Boolean(field<string>(message, "acp_account_id"));
+    return isAcpAssistantMessage(message);
   }, [message]);
   const inlineCodexActivityMode = useMemo(
     () =>
@@ -2304,7 +2302,7 @@ export default function Message({
     if (!effectiveGenerating || actions == null) {
       return null;
     }
-    if (suppressInlineCodexActivity) {
+    if (showCodexActivity) {
       return null;
     }
     const interruptLabel = isCodexThread

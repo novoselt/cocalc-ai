@@ -53,7 +53,7 @@ import type { ChatMessages } from "./types";
 import type * as immutable from "immutable";
 import type { ThreadIndexEntry } from "./message-cache";
 import type { ThreadListItem, ThreadMeta } from "./threads";
-import { dateValue, field } from "./access";
+import { dateValue, field, isAcpAssistantMessage } from "./access";
 import { getThreadRootDate, newest_content } from "./utils";
 import type { CodexPaymentSourceInfo } from "@cocalc/conat/hub/api/system";
 import type {
@@ -338,7 +338,7 @@ export function resolveSelectedThreadRunningCodexMessage(
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const message = entries[i];
     if (message == null) continue;
-    if (!field<string>(message, "acp_account_id")) continue;
+    if (!isAcpAssistantMessage(message)) continue;
     const messageId = field<string>(message, "message_id");
     const messageDate = dateValue(message);
     const messageState =

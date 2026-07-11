@@ -63,7 +63,7 @@ import {
   resetThreadSelectionForNewChat,
   useChatThreadSelection,
 } from "./thread-selection";
-import { dateValue, field } from "./access";
+import { dateValue, field, isAcpAssistantMessage } from "./access";
 import { useCodexPaymentSource } from "./use-codex-payment-source";
 import {
   acknowledgeThreadAutomation,
@@ -196,7 +196,7 @@ export function getLatestCodexActivityDate(
 ): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (!field<string>(msg, "acp_account_id")) continue;
+    if (!isAcpAssistantMessage(msg)) continue;
     const d = dateValue(msg);
     if (!d) continue;
     return `${d.valueOf()}`;
@@ -220,7 +220,7 @@ export function latestThreadAcpInterrupted(
 ): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (!field<string>(msg, "acp_account_id")) continue;
+    if (!isAcpAssistantMessage(msg)) continue;
     return field<boolean>(msg, "acp_interrupted") === true;
   }
   return false;
@@ -365,7 +365,7 @@ export function hasActiveAcpTurnForComposer({
   if (!selectedThreadMessages.length) return false;
   for (const msg of selectedThreadMessages) {
     if (field<boolean>(msg, "generating") !== true) continue;
-    const isAcpTurn = !!field<string>(msg, "acp_account_id");
+    const isAcpTurn = isAcpAssistantMessage(msg);
     if (!isAcpTurn) continue;
     const d = dateValue(msg);
     if (!d) continue;
@@ -401,7 +401,7 @@ export function resolveImmediateAcpParentMessageId({
   let sawNewerTerminalAcpTurn = isTerminalAcpState(threadState);
   for (let i = selectedThreadMessages.length - 1; i >= 0; i -= 1) {
     const msg = selectedThreadMessages[i];
-    if (!field<string>(msg, "acp_account_id")) continue;
+    if (!isAcpAssistantMessage(msg)) continue;
     const messageId = normalizeThreadKey(field<string>(msg, "message_id"));
     if (!messageId) continue;
     if (isActiveAcpState(threadState)) {
@@ -466,7 +466,7 @@ export function resolveAgentSessionRecordStatus({
   let sawNewerTerminalAcpTurn = threadStateTerminal;
   for (let i = threadMessages.length - 1; i >= 0; i -= 1) {
     const msg = threadMessages[i];
-    if (field<string>(msg, "acp_account_id") == null) continue;
+    if (!isAcpAssistantMessage(msg)) continue;
     const rowState = `${field<string>(msg, "acp_state") ?? ""}`
       .trim()
       .toLowerCase();
@@ -2152,7 +2152,7 @@ export function ChatPanel({
     let newestCodexDate: number | undefined;
     for (let i = threadMessages.length - 1; i >= 0; i--) {
       const msg = threadMessages[i];
-      if (!field<string>(msg, "acp_account_id")) continue;
+      if (!isAcpAssistantMessage(msg)) continue;
       const d = dateValue(msg);
       if (!d) continue;
       newestCodexDate = d.valueOf();

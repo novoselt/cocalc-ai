@@ -56,6 +56,30 @@ describe("hasActiveAcpTurnForComposer", () => {
     ).toBe(true);
   });
 
+  it("locks the composer for an active ACP row without acp_account_id", () => {
+    expect(
+      hasActiveAcpTurnForComposer({
+        isSelectedThreadAI: true,
+        selectedThreadId: "thread-1",
+        acpState: immutable
+          .Map<string, string>()
+          .set("message:msg-1", "running"),
+        selectedThreadMessages: [
+          {
+            event: "chat",
+            sender_id: "assistant",
+            generating: true,
+            acp_log_key: "thread-1:msg-1",
+            thread_id: "thread-1",
+            message_id: "msg-1",
+            date: "2026-07-11T00:00:00.000Z",
+            history: [],
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
   it("ignores non-ACP generating rows for queue/send-now state", () => {
     expect(
       hasActiveAcpTurnForComposer({
