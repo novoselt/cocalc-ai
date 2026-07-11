@@ -3880,7 +3880,6 @@ test("software smoke static runs HTTP checks against the profile API", async () 
   assert.deepEqual(urls, [
     "https://staging.cocalc.ai/",
     "https://staging.cocalc.ai/static/app.html",
-    "https://staging.cocalc.ai/static/public.html",
     "https://staging.cocalc.ai/webapp/favicon.ico",
   ]);
 });

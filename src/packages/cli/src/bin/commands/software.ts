@@ -1567,7 +1567,6 @@ async function smokeHttpChecks({
   for (const [check, path] of [
     ["homepage", "/"],
     ["static app shell", "/static/app.html"],
-    ["static public shell", "/static/public.html"],
     ["webapp favicon", "/webapp/favicon.ico"],
   ] as const) {
     checks.push(
