@@ -151,19 +151,20 @@ describe("project document activity service", () => {
   });
 
   it("filters recent activity by wildcard filename search", async () => {
+    const recent = new Date(Date.now() - 60_000).toISOString();
     const store = makeStore({
       "notes/a.txt": {
         path: "notes/a.txt",
-        last_accessed: "2026-04-12T12:00:00.000Z",
+        last_accessed: recent,
         recent_accounts: {
-          "00000000-0000-4000-8000-000000000001": "2026-04-12T12:00:00.000Z",
+          "00000000-0000-4000-8000-000000000001": recent,
         },
       },
       "notes/b.ipynb": {
         path: "notes/b.ipynb",
-        last_accessed: "2026-04-12T11:00:00.000Z",
+        last_accessed: recent,
         recent_accounts: {
-          "00000000-0000-4000-8000-000000000001": "2026-04-12T11:00:00.000Z",
+          "00000000-0000-4000-8000-000000000001": recent,
         },
       },
     });

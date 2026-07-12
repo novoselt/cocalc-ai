@@ -41,6 +41,8 @@ describe("snapshot-backup-maintenance", () => {
     jest.clearAllMocks();
     jest.useRealTimers();
     process.env = { ...env };
+    process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_MAX_MEMORY_AVAILABLE_BYTES =
+      "0";
     getMasterConatClientMock.mockReturnValue({ id: "master-client" });
     listProjectMaintenanceSchedulesMock.mockResolvedValue([
       {
@@ -142,6 +144,8 @@ describe("snapshot-backup-maintenance", () => {
   });
 
   it("skips maintenance when host memory is below the dynamic threshold", async () => {
+    delete process.env
+      .COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_MAX_MEMORY_AVAILABLE_BYTES;
     const { _test, runProjectSnapshotBackupMaintenanceSweepOnce } =
       await import("./snapshot-backup-maintenance");
 
