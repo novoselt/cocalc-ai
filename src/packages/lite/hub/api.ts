@@ -766,10 +766,12 @@ export async function init({
   client,
   sshUi,
   reflectUi,
+  authorizeRequest,
 }: {
   client;
   sshUi?: any;
   reflectUi?: any;
+  authorizeRequest?: AuthorizeHubApiRequest;
 }) {
   const subject = "hub.*.*.api";
   const filename = join(data, "hub.db");
@@ -789,14 +791,27 @@ export async function init({
   });
   await initUserQuery({ filename });
   const api = await client.subscribe(subject, { queue: "0" });
-  listen(api, client);
+  listen(api, client, authorizeRequest);
 }
 
-async function listen(api, client) {
+export interface HubApiRequestContext {
+  subject: string;
+  name: string;
+  args: any[];
+  account_id?: string;
+  project_id?: string;
+  host_id?: string;
+}
+
+export type AuthorizeHubApiRequest = (
+  context: HubApiRequestContext,
+) => void | Promise<void>;
+
+async function listen(api, client, authorizeRequest?: AuthorizeHubApiRequest) {
   for await (const mesg of api) {
     (async () => {
       try {
-        await handleMessage(mesg, client);
+        await handleMessage(mesg, client, authorizeRequest);
       } catch (err) {
         logger.debug(`WARNING: unexpected error  - ${err}`);
       }
@@ -804,7 +819,11 @@ async function listen(api, client) {
   }
 }
 
-async function handleMessage(mesg, client) {
+async function handleMessage(
+  mesg,
+  client,
+  authorizeRequest?: AuthorizeHubApiRequest,
+) {
   const request = mesg.data ?? ({} as any);
   let resp, headers;
   try {
@@ -813,7 +832,10 @@ async function handleMessage(mesg, client) {
     let host_id: string | undefined;
     try {
       ({ account_id, project_id, host_id } = getUserId(mesg.subject));
-    } catch {
+    } catch (err) {
+      if (authorizeRequest != null) {
+        throw err;
+      }
       // Keep legacy fallback behavior if subject parsing fails unexpectedly.
       account_id = ACCOUNT_ID;
       project_id = undefined;
@@ -835,6 +857,8 @@ async function handleMessage(mesg, client) {
         project_id,
         host_id,
         client,
+        subject: mesg.subject,
+        authorizeRequest,
       })) ?? null;
     headers = undefined;
   } catch (err) {
@@ -1412,24 +1436,41 @@ async function getResponse({
   project_id,
   host_id,
   client,
+  subject,
+  authorizeRequest,
 }) {
+  if (typeof name !== "string") {
+    throw Error("hub API request name must be a string");
+  }
   const [group, functionName] = name.split(".");
-  if (functionName == "getSshKeys") {
+  if (functionName == "getSshKeys" && authorizeRequest == null) {
     // no ssh keys in lite mode for now...
     return [];
   }
   const f = hubApi[group]?.[functionName];
-  if (f == null) {
+  if (functionName != "getSshKeys" && f == null) {
     throw Error(`not implemented function '${name}'`);
   }
   const args2 = await transformArgs({
     name,
-    args,
+    args: Array.isArray(args) ? args : [],
     account_id,
     auth_session_hash,
     project_id,
     host_id,
   });
+  await authorizeRequest?.({
+    subject,
+    name,
+    args: args2,
+    account_id,
+    project_id,
+    host_id,
+  });
+  if (functionName == "getSshKeys") {
+    // Project-host preserves Lite's empty-key behavior after authorization.
+    return [];
+  }
   if (group === "sync" && args2?.[0] != null) {
     args2[0].client = client;
   }

@@ -56,6 +56,7 @@ import { APP_PROXY_EXPOSURE_HEADER } from "@cocalc/backend/auth/app-proxy";
 import { attachProjectProxy } from "@cocalc/project-proxy/proxy";
 import { init as initChangefeeds } from "@cocalc/lite/hub/changefeeds";
 import { hubApi, init as initHubApi } from "@cocalc/lite/hub/api";
+import { authorizeProjectHostHubApiRequest } from "./hub/api-request-authorization";
 import { listAcpAutomationProjectIds } from "@cocalc/lite/hub/sqlite/acp-automations";
 import {
   getAccountEffectiveLimits,
@@ -510,7 +511,10 @@ export async function main(
   });
 
   initChangefeeds({ client: conatClient });
-  await initHubApi({ client: conatClient });
+  await initHubApi({
+    client: conatClient,
+    authorizeRequest: authorizeProjectHostHubApiRequest,
+  });
   wireSystemApi();
   wireHostsApi();
   wireNotificationsApi();
