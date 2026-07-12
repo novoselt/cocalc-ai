@@ -38,7 +38,7 @@ import { AccountCpuWarning } from "@cocalc/frontend/purchases/account-cpu-warnin
 import openSupportTab from "@cocalc/frontend/support/open";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS } from "@cocalc/util/theme";
-import { IS_IOS, IS_MOBILE, IS_SAFARI } from "../feature";
+import { IS_ANDROID, IS_IOS, IS_MOBILE, IS_SAFARI } from "../feature";
 import { ActiveContent } from "./active-content";
 import { ConnectionIndicator } from "./connection-indicator";
 import { ConnectionInfo } from "./connection-info";
@@ -60,6 +60,7 @@ import { ImpersonationBanner } from "./impersonation-banner";
 import { LegacyMigrationCtaBanner } from "./legacy-migration-cta-banner";
 import { TeamLicenseWarningBanner } from "./team-license-warning-banner";
 import AutomaticUpdateNotice from "./automatic-update-notice";
+import { useVisibleViewportBottom } from "./visible-viewport";
 
 // ipad and ios have a weird trick where they make the screen
 // actually smaller than 100vh and have it be scrollable, even
@@ -70,8 +71,12 @@ import AutomaticUpdateNotice from "./automatic-update-notice";
 // https://liuhao.im/english/2015/05/29/ios-safari-window-height.html
 // ...
 // https://lukechannings.com/blog/2021-06-09-does-safari-15-fix-the-vh-bug/
-const PAGE_HEIGHT: string =
-  IS_MOBILE || IS_SAFARI
+// Android has the same visible-vs-layout viewport mismatch when browser chrome
+// or the software keyboard is present. 100dvh is its fallback; Page overrides
+// this with the live Visual Viewport bottom edge when that API is available.
+const PAGE_HEIGHT: string = IS_ANDROID
+  ? "calc(100dvh - env(safe-area-inset-bottom))"
+  : IS_MOBILE || IS_SAFARI
     ? `calc(100vh - env(safe-area-inset-bottom) - ${IS_IOS ? 80 : 20}px)`
     : "100vh";
 
@@ -118,6 +123,7 @@ function useClientSignedIn(): boolean {
 
 export const Page: React.FC = () => {
   const page_actions = useActions("page");
+  const androidViewportBottom = useVisibleViewportBottom(IS_ANDROID);
 
   const { pageStyle } = useAppContext();
   const { isNarrow, topBarStyle, projectsNavStyle } = pageStyle;
@@ -385,7 +391,11 @@ export const Page: React.FC = () => {
   // Note that the parent is a flex container
   const body = (
     <div
-      style={PAGE_STYLE}
+      style={
+        androidViewportBottom == null
+          ? PAGE_STYLE
+          : { ...PAGE_STYLE, height: `${androidViewportBottom}px` }
+      }
       onDragOver={(e) => e.preventDefault()}
       onDrop={drop}
     >
