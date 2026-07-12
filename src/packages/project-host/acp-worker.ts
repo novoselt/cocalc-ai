@@ -244,7 +244,9 @@ export async function main(): Promise<void> {
     }),
   );
   initProjectRunnerConatClient(client);
-  initProjectRunnerFilesystem({ client });
+  // The main project-host process owns BEES, backups, and quota supervision.
+  // ACP only needs volume paths and must not instantiate another supervisor.
+  initProjectRunnerFilesystem({ client, forceFileServerRpc: true });
   const masterClient = connectMasterClient();
   const republishedSessions = publishActiveAcpSessions();
   if (republishedSessions > 0) {

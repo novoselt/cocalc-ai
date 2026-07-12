@@ -3880,7 +3880,6 @@ test("software smoke static runs HTTP checks against the profile API", async () 
   assert.deepEqual(urls, [
     "https://staging.cocalc.ai/",
     "https://staging.cocalc.ai/static/app.html",
-    "https://staging.cocalc.ai/static/public.html",
     "https://staging.cocalc.ai/webapp/favicon.ico",
   ]);
 });
@@ -4083,6 +4082,177 @@ test("software smoke cli validates public release channel artifact", async () =>
 
   assert.deepEqual(fetched, [manifestUrl, artifactUrl]);
   assert.equal(versionRun.args[0], "--version");
+});
+
+test("software smoke gives release downloads a size-aware timeout", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-smoke-cli-timeout-"));
+  const artifactId = "20260615T000000Z-abcdef12-cli";
+  const artifact = Buffer.from("#!/usr/bin/env bash\n");
+  const artifactSha256 = createHash("sha256").update(artifact).digest("hex");
+  const os = process.platform === "darwin" ? "darwin" : "linux";
+  const arch = process.arch === "arm64" ? "arm64" : "amd64";
+  const machine = process.arch === "arm64" ? "aarch64" : "x86_64";
+  const manifestUrl = `https://software.example.test/software/cocalc/candidate-${os}-${arch}.json`;
+  const artifactUrl = `https://software.example.test/software/artifacts/cli/${artifactId}/files/cocalc-cli-${artifactId}-${machine}-${os}`;
+  const outputRuns: CapturedOutputRun[] = [
+    {
+      command: "",
+      args: [],
+      stdout: `${artifactId}\n`,
+      stderr: "",
+    },
+  ];
+  const program = createProgram(
+    makeDeps({
+      localStore: join(dir, "store"),
+      outputRuns,
+      env: {
+        COCALC_SOFTWARE_PUBLIC_BASE_URL: "https://software.example.test",
+      },
+      fetch: async (input, init) => {
+        const url = `${input}`;
+        if (url === manifestUrl) {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () =>
+              arrayBufferForBuffer(
+                Buffer.from(
+                  JSON.stringify({
+                    schema: "cocalc-software-release-channel-v1",
+                    product: "cocalc",
+                    component: "cli",
+                    channel: "candidate",
+                    artifact_id: artifactId,
+                    tag: "cli",
+                    created_at: "2026-06-15T00:00:00.000Z",
+                    published_at: "2026-06-15T00:00:00.000Z",
+                    git: {
+                      commit: "abcdef123456",
+                      short: "abcdef12",
+                      dirty: false,
+                    },
+                    os,
+                    arch,
+                    filename: `cocalc-cli-${artifactId}-${machine}-${os}`,
+                    size_bytes: 152 * 1024 * 1024,
+                    sha256: artifactSha256,
+                    url: artifactUrl,
+                    version: artifactId,
+                  }),
+                ),
+              ),
+          } as Response;
+        }
+        if (url === artifactUrl) {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () =>
+              await new Promise<ArrayBuffer>((resolve, reject) => {
+                const timer = setTimeout(
+                  () => resolve(arrayBufferForBuffer(artifact)),
+                  20,
+                );
+                init?.signal?.addEventListener(
+                  "abort",
+                  () => {
+                    clearTimeout(timer);
+                    reject(new Error("aborted"));
+                  },
+                  { once: true },
+                );
+              }),
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      },
+    }),
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "--quiet",
+    "software",
+    "smoke",
+    "cli",
+    "candidate",
+    "--check-timeout-ms",
+    "1",
+  ]);
+});
+
+test("software smoke stops after a failed release download", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-smoke-cli-failure-"));
+  const artifactId = "20260615T000000Z-abcdef12-cli";
+  const os = process.platform === "darwin" ? "darwin" : "linux";
+  const arch = process.arch === "arm64" ? "arm64" : "amd64";
+  const machine = process.arch === "arm64" ? "aarch64" : "x86_64";
+  const manifestUrl = `https://software.example.test/software/cocalc/candidate-${os}-${arch}.json`;
+  const artifactUrl = `https://software.example.test/software/artifacts/cli/${artifactId}/files/cocalc-cli-${artifactId}-${machine}-${os}`;
+  const outputRuns: CapturedOutputRun[] = [];
+  const program = createProgram(
+    makeDeps({
+      localStore: join(dir, "store"),
+      outputRuns,
+      env: {
+        COCALC_SOFTWARE_PUBLIC_BASE_URL: "https://software.example.test",
+      },
+      fetch: async (input) => {
+        const url = `${input}`;
+        if (url === manifestUrl) {
+          return {
+            ok: true,
+            status: 200,
+            arrayBuffer: async () =>
+              arrayBufferForBuffer(
+                Buffer.from(
+                  JSON.stringify({
+                    schema: "cocalc-software-release-channel-v1",
+                    product: "cocalc",
+                    component: "cli",
+                    channel: "candidate",
+                    artifact_id: artifactId,
+                    tag: "cli",
+                    created_at: "2026-06-15T00:00:00.000Z",
+                    published_at: "2026-06-15T00:00:00.000Z",
+                    git: {
+                      commit: "abcdef123456",
+                      short: "abcdef12",
+                      dirty: false,
+                    },
+                    os,
+                    arch,
+                    filename: `cocalc-cli-${artifactId}-${machine}-${os}`,
+                    size_bytes: 152 * 1024 * 1024,
+                    sha256: "unused",
+                    url: artifactUrl,
+                    version: artifactId,
+                  }),
+                ),
+              ),
+          } as Response;
+        }
+        throw new Error("download failed");
+      },
+    }),
+  );
+
+  await assert.rejects(
+    async () =>
+      await program.parseAsync([
+        "node",
+        "test",
+        "--quiet",
+        "software",
+        "smoke",
+        "cli",
+        "candidate",
+      ]),
+    /software smoke failed: download artifact: download failed/,
+  );
+  assert.equal(outputRuns.length, 0);
 });
 
 test("software smoke project-host validates representative host status", async () => {

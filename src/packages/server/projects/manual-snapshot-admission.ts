@@ -9,6 +9,7 @@ import {
   type SnapshotSchedule,
 } from "@cocalc/util/consts/snapshots";
 import { isISODate } from "@cocalc/util/misc";
+import { assertValidSnapshotName } from "@cocalc/util/snapshot-name";
 
 export interface ManualSnapshotQuota {
   limit: number;
@@ -39,7 +40,9 @@ export function rollingSnapshotReservedSlots(
 export function normalizeManualSnapshotName(name?: string): string {
   const trimmed = `${name ?? ""}`.trim();
   const candidate = trimmed || `manual-${new Date().toISOString()}`;
-  return isISODate(candidate) ? `manual-${candidate}` : candidate;
+  return assertValidSnapshotName(
+    isISODate(candidate) ? `manual-${candidate}` : candidate,
+  );
 }
 
 export function manualSnapshotQuota({

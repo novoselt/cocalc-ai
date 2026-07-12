@@ -294,6 +294,27 @@ function getOrCreateRoutedHubClient({
   return state.client;
 }
 
+export function getExplicitProjectHostRoutedHubClient({
+  host_id,
+  address,
+  host_session_id,
+}: {
+  host_id: string;
+  address: string;
+  host_session_id?: string;
+}): Client {
+  if (!host_id || !address) {
+    throw new Error(
+      "an explicit project-host route requires host_id and address",
+    );
+  }
+  return getOrCreateRoutedHubClient({
+    host_id,
+    address,
+    host_session_id,
+  });
+}
+
 function routeTargetToClient(
   _subject: string,
   target?: {

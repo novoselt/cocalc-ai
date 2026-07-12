@@ -1,0 +1,187 @@
+/*
+ *  This file is part of CoCalc: Copyright © 2026 Sagemath, Inc.
+ *  License: MS-RSL – see LICENSE.md for details
+ */
+
+const mockGetRow = jest.fn();
+
+jest.mock("@cocalc/lite/hub/sqlite/database", () => ({
+  getRow: (...args: any[]) => mockGetRow(...args),
+}));
+
+import {
+  ACCOUNT_PROJECT_HOST_HUB_METHODS,
+  authorizeProjectHostHubApiRequest,
+  PROJECT_PROJECT_HOST_HUB_METHODS,
+} from "./api-request-authorization";
+
+const account_id = "00000000-1000-4000-8000-000000000001";
+const project_id = "00000000-1000-4000-8000-000000000002";
+const other_project_id = "00000000-1000-4000-8000-000000000003";
+const host_id = "00000000-1000-4000-8000-000000000004";
+
+function accountRequest(name: string, target = project_id) {
+  return {
+    subject: `hub.account.${account_id}.api`,
+    name,
+    args: [{ project_id: target, account_id }],
+    account_id,
+  };
+}
+
+function projectRequest(name: string, target = project_id) {
+  return {
+    subject: `hub.project.${project_id}.api`,
+    name,
+    args: [{ project_id: target }],
+    project_id,
+  };
+}
+
+function expectForbidden(run: () => void): void {
+  let error: unknown;
+  try {
+    run();
+  } catch (err) {
+    error = err;
+  }
+  expect(error).toMatchObject({ code: 403 });
+}
+
+describe("project-host hub API request authorization", () => {
+  beforeEach(() => {
+    mockGetRow.mockReset();
+    mockGetRow.mockReturnValue({
+      users: { [account_id]: { group: "collaborator" } },
+    });
+  });
+
+  it("allows account and project health probes", () => {
+    expect(() =>
+      authorizeProjectHostHubApiRequest({
+        ...accountRequest("system.ping"),
+        args: [],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      authorizeProjectHostHubApiRequest({
+        ...projectRequest("system.ping"),
+        args: [],
+      }),
+    ).not.toThrow();
+    expect(mockGetRow).not.toHaveBeenCalled();
+  });
+
+  it("allows only the routed account methods for local collaborators", () => {
+    for (const name of ACCOUNT_PROJECT_HOST_HUB_METHODS) {
+      expect(() =>
+        authorizeProjectHostHubApiRequest(accountRequest(name)),
+      ).not.toThrow();
+    }
+    expect(mockGetRow).toHaveBeenCalledWith(
+      "projects",
+      JSON.stringify({ project_id }),
+    );
+  });
+
+  it.each(["owner", "collaborator"])("accepts the %s project role", (group) => {
+    mockGetRow.mockReturnValue({ users: { [account_id]: group } });
+    expect(() =>
+      authorizeProjectHostHubApiRequest(
+        accountRequest("projects.chatStoreStats"),
+      ),
+    ).not.toThrow();
+  });
+
+  it.each(["viewer", "public", "admin", undefined])(
+    "rejects the %s project role",
+    (group) => {
+      mockGetRow.mockReturnValue(
+        group == null ? undefined : { users: { [account_id]: { group } } },
+      );
+      expectForbidden(() =>
+        authorizeProjectHostHubApiRequest(
+          accountRequest("projects.chatStoreStats"),
+        ),
+      );
+    },
+  );
+
+  it("rejects an account request without a valid target project", () => {
+    expectForbidden(() =>
+      authorizeProjectHostHubApiRequest({
+        ...accountRequest("projects.chatStoreStats"),
+        args: [{}],
+      }),
+    );
+    expect(mockGetRow).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "projects.start",
+    "projects.stop",
+    "projects.createBackup",
+    "projects.restoreBackup",
+    "db.userQuery",
+    "agent.execute",
+    "sync.history",
+    "unknown.method",
+  ])("rejects account access to %s", (name) => {
+    expectForbidden(() =>
+      authorizeProjectHostHubApiRequest(accountRequest(name)),
+    );
+    expect(mockGetRow).not.toHaveBeenCalled();
+  });
+
+  it("allows the narrow project-identity method set bound to itself", () => {
+    for (const name of PROJECT_PROJECT_HOST_HUB_METHODS) {
+      expect(() =>
+        authorizeProjectHostHubApiRequest(projectRequest(name)),
+      ).not.toThrow();
+    }
+    expect(mockGetRow).not.toHaveBeenCalled();
+  });
+
+  it("rejects a project identity targeting another project", () => {
+    expectForbidden(() =>
+      authorizeProjectHostHubApiRequest(
+        projectRequest("system.getProjectAppPublicPolicy", other_project_id),
+      ),
+    );
+  });
+
+  it.each([
+    "projects.start",
+    "projects.createBackup",
+    "projects.restoreSnapshot",
+    "db.userQuery",
+    "agent.execute",
+    "sync.purgeHistory",
+    "unknown.method",
+  ])("rejects project access to %s", (name) => {
+    expectForbidden(() =>
+      authorizeProjectHostHubApiRequest(projectRequest(name)),
+    );
+  });
+
+  it("retains the trusted host-scoped internal surface", () => {
+    expect(() =>
+      authorizeProjectHostHubApiRequest({
+        subject: `hub.host.${host_id}.api`,
+        name: "projects.createBackup",
+        args: [{ project_id }],
+        host_id,
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a request without a recognized identity", () => {
+    expectForbidden(() =>
+      authorizeProjectHostHubApiRequest({
+        subject: "hub.invalid.invalid.api",
+        name: "system.ping",
+        args: [],
+      }),
+    );
+  });
+});

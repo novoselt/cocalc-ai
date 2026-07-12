@@ -61,6 +61,23 @@ describe("hosts start-worker bootstrap wait failure detection", () => {
 });
 
 describe("hosts start-worker project-host upgrade convergence detection", () => {
+  test("recovers an explicit project-host target from the upgrade request", () => {
+    expect(
+      __test__.requestedProjectHostUpgradeVersion([
+        { artifact: "project", version: "project-v2" },
+        { artifact: "project-host", version: " ph-v2 " },
+      ]),
+    ).toBe("ph-v2");
+  });
+
+  test("does not invent a target version for a channel upgrade", () => {
+    expect(
+      __test__.requestedProjectHostUpgradeVersion([
+        { artifact: "project-host", channel: "latest" },
+      ]),
+    ).toBeUndefined();
+  });
+
   test("detects a completed project-host upgrade once installed and last-known-good match the target", () => {
     expect(
       __test__.completedProjectHostUpgradeVersion({
@@ -138,6 +155,36 @@ describe("hosts start-worker project-host upgrade convergence detection", () => 
               project_host: {
                 last_known_good_version: "ph-v1",
               },
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  test("suppresses rollback when the host already runs the rollback version", () => {
+    expect(
+      __test__.redundantProjectHostRollbackReason({
+        rollbackVersion: "ph-v2",
+        row: {
+          metadata: {
+            software: {
+              project_host: "ph-v2",
+            },
+          },
+        },
+      }),
+    ).toBe("host_already_running_rollback_version");
+  });
+
+  test("allows rollback when the host reports a different installed version", () => {
+    expect(
+      __test__.redundantProjectHostRollbackReason({
+        rollbackVersion: "ph-v1",
+        row: {
+          metadata: {
+            software: {
+              project_host: "ph-v2",
             },
           },
         },

@@ -28,7 +28,7 @@ write+rename on the backend; plain `writeFile` may still be a truncate+write
 path, which can corrupt large chat logs if interrupted mid-write.
 */
 
-import { type Client } from "@cocalc/conat/core/client";
+import { ConatError, type Client } from "@cocalc/conat/core/client";
 import { type SnapshotCounts } from "@cocalc/util/consts/snapshots";
 import type { ProjectBackupIndexStoreConfig } from "@cocalc/conat/hub/api/hosts";
 import type {
@@ -39,6 +39,7 @@ import type {
 import { type CopyOptions } from "./fs";
 export { type CopyOptions };
 import { type LroScopeType } from "@cocalc/conat/hub/api/lro";
+import { isValidUUID } from "@cocalc/util/misc";
 
 const SUBJECT = "file-server";
 
@@ -478,9 +479,85 @@ function requireClient(client: Client | undefined): Client {
   return client;
 }
 
+function boundProjectIdFromSubject(subject?: string): string | undefined {
+  if (subject === `${SUBJECT}.api`) {
+    // Host-local trusted services historically use this unbound subject.
+    return;
+  }
+  const parts = `${subject ?? ""}`.split(".");
+  if (parts.length !== 2 || parts[0] !== SUBJECT || !isValidUUID(parts[1])) {
+    throw new ConatError("invalid file-server management subject", {
+      code: 403,
+      subject,
+    });
+  }
+  return parts[1];
+}
+
+function requestRoutingProjectId(
+  method: string,
+  args: any[],
+): string | undefined {
+  const opts = args[0];
+  if (method === "clone") {
+    return opts?.src_project_id;
+  }
+  if (method === "cp") {
+    return opts?.src?.project_id;
+  }
+  if (method === "applyPathCopyArchive") {
+    return opts?.dests?.[0]?.project_id;
+  }
+  return opts?.project_id ?? opts?.handle?.project_id;
+}
+
+function permitsUnboundProjectRequest(method: string, args: any[]): boolean {
+  if (method === "cleanupRestoreStaging") {
+    return true;
+  }
+  // The hub probes this optional method with an empty destination list before
+  // constructing the real, project-bound request.
+  return method === "applyPathCopyArchive" && args[0]?.dests?.length === 0;
+}
+
+function bindImplementationToRequestSubject(impl: Fileserver): Fileserver {
+  const guarded: Record<string, (...args: any[]) => Promise<any>> = {};
+  for (const [method, fn] of Object.entries(impl)) {
+    guarded[method] = async function (this: { subject?: string }, ...args) {
+      const boundProjectId = boundProjectIdFromSubject(this?.subject);
+      const requestProjectId = requestRoutingProjectId(method, args);
+      if (
+        boundProjectId != null &&
+        requestProjectId == null &&
+        !permitsUnboundProjectRequest(method, args)
+      ) {
+        throw new ConatError("file-server request is missing routed project", {
+          code: 403,
+          subject: this?.subject,
+        });
+      }
+      if (
+        boundProjectId != null &&
+        requestProjectId != null &&
+        requestProjectId !== boundProjectId
+      ) {
+        throw new ConatError(
+          `file-server request project does not match routed subject`,
+          { code: 403, subject: this?.subject },
+        );
+      }
+      return await fn(...args);
+    };
+  }
+  return guarded as unknown as Fileserver;
+}
+
 export async function server({ client, ...impl }: Options) {
   client = requireClient(client);
-  const sub = await client.service<Fileserver>(`${SUBJECT}.*`, impl);
+  const sub = await client.service<Fileserver>(
+    `${SUBJECT}.*`,
+    bindImplementationToRequestSubject(impl as Fileserver),
+  );
 
   return {
     close: () => {

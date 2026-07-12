@@ -88,6 +88,23 @@ describe("SubvolumeSnapshots simple-quota snapshot policy", () => {
     });
   });
 
+  it.each(["../project-2", "nested/name", ".hidden", ""])(
+    "rejects unsafe snapshot names before invoking btrfs: %s",
+    async (name) => {
+      const snapshots = new SubvolumeSnapshots(createSubvolume() as any);
+      await expect(snapshots.create(name)).rejects.toThrow(
+        /snapshot name|invalid snapshot/,
+      );
+      await expect(snapshots.delete(name)).rejects.toThrow(
+        /snapshot name|invalid snapshot/,
+      );
+      expect(() => snapshots.path(name)).toThrow(
+        /snapshot name|invalid snapshot/,
+      );
+      expect(btrfsMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("temporarily makes snapshots writable while pruning a path", async () => {
     const subvolume = createSubvolumeWithSnapshots(["snap1", "snap2"]) as any;
     const snapshots = new SubvolumeSnapshots(subvolume);

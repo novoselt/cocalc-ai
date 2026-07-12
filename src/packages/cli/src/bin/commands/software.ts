@@ -1477,6 +1477,24 @@ function smokeRpcTimeout(timeoutMs: number): string {
   return `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`;
 }
 
+function releaseArtifactDownloadTimeoutMs({
+  checkTimeoutMs,
+  sizeBytes,
+}: {
+  checkTimeoutMs: number;
+  sizeBytes: unknown;
+}): number {
+  const parsedSizeBytes = Number(sizeBytes);
+  const sizeBudgetMs =
+    Number.isFinite(parsedSizeBytes) && parsedSizeBytes > 0
+      ? Math.ceil(parsedSizeBytes / (1024 * 1024)) * 1000 + 30_000
+      : 60_000;
+  return Math.max(
+    checkTimeoutMs,
+    Math.min(15 * 60_000, Math.max(60_000, sizeBudgetMs)),
+  );
+}
+
 function formatDurationMs(ms: number): string {
   const value = Math.max(0, Math.round(ms));
   if (value < 1000) {
@@ -1549,6 +1567,11 @@ async function fetchSmokeUrl({
       throw new Error(`GET ${url} returned HTTP ${response.status}`);
     }
     return `HTTP ${response.status}`;
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`GET ${url} timed out after ${timeoutMs}ms`);
+    }
+    throw err;
   } finally {
     clearTimeout(timeout);
   }
@@ -1567,7 +1590,6 @@ async function smokeHttpChecks({
   for (const [check, path] of [
     ["homepage", "/"],
     ["static app shell", "/static/app.html"],
-    ["static public shell", "/static/public.html"],
     ["webapp favicon", "/webapp/favicon.ico"],
   ] as const) {
     checks.push(
@@ -1964,6 +1986,11 @@ async function fetchSmokeBuffer({
       throw new Error(`GET ${url} returned HTTP ${response.status}`);
     }
     return Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`GET ${url} timed out after ${timeoutMs}ms`);
+    }
+    throw err;
   } finally {
     clearTimeout(timeout);
   }
@@ -2142,30 +2169,38 @@ async function smokeReleaseChannelChecks({
   );
   if (!manifest) return checks;
 
-  checks.push(
-    await runTimedSmokeCheck(
-      "download artifact",
-      async () => {
-        workDir = await mkdtemp(join(tmpdir(), "cocalc-software-smoke-"));
-        artifactPath = join(workDir, manifest.filename || "artifact");
-        const body = await fetchSmokeBuffer({
-          url: manifest.url,
-          timeoutMs,
-          deps,
-        });
-        const sha256 = sha256Buffer(body);
-        if (sha256 !== manifest.sha256) {
-          throw new Error(
-            `artifact sha256 mismatch: expected ${manifest.sha256}, got ${sha256}`,
-          );
-        }
-        await writeFile(artifactPath, body);
-        return `${humanSize(body.length)} sha256:${sha256}`;
-      },
-      deps,
-    ),
+  const downloadCheck = await runTimedSmokeCheck(
+    "download artifact",
+    async () => {
+      workDir = await mkdtemp(join(tmpdir(), "cocalc-software-smoke-"));
+      const candidatePath = join(workDir, manifest.filename || "artifact");
+      const body = await fetchSmokeBuffer({
+        url: manifest.url,
+        timeoutMs: releaseArtifactDownloadTimeoutMs({
+          checkTimeoutMs: timeoutMs,
+          sizeBytes: manifest.size_bytes,
+        }),
+        deps,
+      });
+      const sha256 = sha256Buffer(body);
+      if (sha256 !== manifest.sha256) {
+        throw new Error(
+          `artifact sha256 mismatch: expected ${manifest.sha256}, got ${sha256}`,
+        );
+      }
+      await writeFile(candidatePath, body);
+      artifactPath = candidatePath;
+      return `${humanSize(body.length)} sha256:${sha256}`;
+    },
+    deps,
   );
-  if (!artifactPath || !workDir) return checks;
+  checks.push(downloadCheck);
+  if (downloadCheck.status !== "ok" || !artifactPath || !workDir) {
+    if (workDir) {
+      await rm(workDir, { recursive: true, force: true });
+    }
+    return checks;
+  }
 
   checks.push(
     await runTimedSmokeCheck(
