@@ -33,6 +33,7 @@ import {
 } from "@cocalc/server/project-host/access";
 import { getProjectHostAuthTokenPublicKey } from "@cocalc/backend/data";
 import { verifyProjectHostAuthToken } from "@cocalc/conat/auth/project-host-token";
+import { isAcpSubject, parseAcpSubject } from "@cocalc/conat/ai/acp/subjects";
 import { isValidUUID } from "@cocalc/util/misc";
 import {
   hasApiKeyProjectCapability,
@@ -456,6 +457,24 @@ export async function isAllowed({
   }
   const agentUser = user as CoCalcUserWithAgent;
   if (agentUser.auth_actor === "agent") {
+    if (isAcpSubject(subject)) {
+      const parsed = parseAcpSubject(subject);
+      const userId = getCoCalcUserId(agentUser);
+      if (
+        type !== "pub" ||
+        parsed == null ||
+        (parsed.version === "account-project" &&
+          parsed.account_id !== userId) ||
+        !agentUser.auth_scopes?.includes("project_session") ||
+        agentUser.auth_project_id !== parsed.project_id
+      ) {
+        return false;
+      }
+      return await hasProjectCollaboratorAccessAllowRemote({
+        account_id: userId,
+        project_id: parsed.project_id,
+      });
+    }
     if (isFileServerManagementSubject(subject)) {
       return false;
     }
@@ -572,6 +591,24 @@ async function isApiKeyAllowed({
   if (!account_id || user.auth_method !== "api_key") return false;
   if (type === "pub" && subject.startsWith("_INBOX.")) {
     return true;
+  }
+  if (isAcpSubject(subject)) {
+    const parsed = parseAcpSubject(subject);
+    if (
+      type !== "pub" ||
+      parsed == null ||
+      (parsed.version === "account-project" && parsed.account_id !== account_id)
+    ) {
+      recordConatApiKeyDenial({
+        user,
+        subject,
+        type,
+        project_id: parsed?.project_id,
+        reason: "ACP subject does not match the authenticated account",
+        code: "api_key_acp_identity_denied",
+      });
+      return false;
+    }
   }
   const common = checkCommonPermissions({
     userId: account_id,
@@ -776,6 +813,22 @@ async function isAccountAllowed({
   subject: string;
   type: "sub" | "pub";
 }): Promise<boolean> {
+  if (isAcpSubject(subject)) {
+    const parsed = parseAcpSubject(subject);
+    if (
+      type !== "pub" ||
+      parsed == null ||
+      (parsed.version === "account-project" && parsed.account_id !== account_id)
+    ) {
+      return false;
+    }
+    // Legacy subjects can only reach the non-executing refresh-required
+    // listener. New subjects bind the authenticated account explicitly.
+    return await hasProjectCollaboratorAccessAllowRemote({
+      account_id,
+      project_id: parsed.project_id,
+    });
+  }
   // pub and sub are the same
   if (isAccountSubjectAllowed({ account_id, subject })) {
     return true;

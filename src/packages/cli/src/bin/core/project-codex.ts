@@ -6,7 +6,7 @@
  */
 import { basename } from "node:path";
 
-import { acpSubject } from "@cocalc/conat/ai/acp/server";
+import { acpSubject } from "@cocalc/conat/ai/acp/subjects";
 import type { AcpRequest, AcpStreamMessage } from "@cocalc/conat/ai/acp/types";
 import type {
   CodexReasoningId,
@@ -242,7 +242,10 @@ export function createProjectCodexOps<Ctx, Project extends ProjectIdentity>(
       ...(sessionId?.trim() ? { session_id: sessionId.trim() } : undefined),
       ...(config ? { config } : undefined),
     };
-    const subject = acpSubject({ project_id: project.project_id });
+    const subject = acpSubject({
+      account_id: request.account_id,
+      project_id: project.project_id,
+    });
     const startedAt = Date.now();
     const maxWait = Math.max(1_000, Number((ctx as any).timeoutMs ?? 0));
 

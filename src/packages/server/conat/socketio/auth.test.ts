@@ -664,7 +664,7 @@ describe("test isAllowed for collaboration -- this is the most nontrivial one", 
     ).toBe(true);
   });
 
-  it("warms routing for ACP automation subjects", async () => {
+  it("authorizes matching account-bound ACP subjects", async () => {
     const automationProjectId = "00000000-0000-4000-8000-000000000003";
     (hasProjectCollaboratorAccessAllowRemote as jest.Mock).mockResolvedValue(
       true,
@@ -673,10 +673,63 @@ describe("test isAllowed for collaboration -- this is the most nontrivial one", 
     expect(
       await isAllowed({
         user: { account_id },
-        subject: `acp.project-${automationProjectId}.automation`,
+        subject: `acp.project-${automationProjectId}.account-${account_id}.automation`,
         type: "pub",
       }),
     ).toBe(true);
+  });
+
+  it("rejects ACP subject account mismatches and subscriptions", async () => {
+    (hasProjectCollaboratorAccessAllowRemote as jest.Mock).mockResolvedValue(
+      true,
+    );
+    const subject = `acp.project-${project_id}.account-${account_id2}.api`;
+
+    await expect(
+      isAllowed({ user: { account_id }, subject, type: "pub" }),
+    ).resolves.toBe(false);
+    await expect(
+      isAllowed({
+        user: { account_id },
+        subject: `acp.project-${project_id}.account-${account_id}.api`,
+        type: "sub",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("allows collaborators to reach the legacy ACP refresh listener", async () => {
+    (hasProjectCollaboratorAccessAllowRemote as jest.Mock).mockResolvedValue(
+      true,
+    );
+
+    await expect(
+      isAllowed({
+        user: { account_id },
+        subject: `acp.project-${project_id}.api`,
+        type: "pub",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      isAllowed({
+        user: { project_id },
+        subject: `acp.project-${project_id}.api`,
+        type: "pub",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("denies ACP to accounts without collaborator access", async () => {
+    (hasProjectCollaboratorAccessAllowRemote as jest.Mock).mockResolvedValue(
+      false,
+    );
+
+    await expect(
+      isAllowed({
+        user: { account_id },
+        subject: `acp.project-${project_id}.account-${account_id}.api`,
+        type: "pub",
+      }),
+    ).resolves.toBe(false);
   });
 });
 
@@ -734,6 +787,34 @@ describe("test isAllowed for account API keys", () => {
         subject: `project.${project_id}.api`,
       }),
     ).toBe(true);
+  });
+
+  it("binds API-key ACP subjects to the API-key account", async () => {
+    (hasProjectCollaboratorAccessAllowRemote as jest.Mock).mockResolvedValue(
+      true,
+    );
+    await expect(
+      isAllowed({
+        user: apiKeyUser,
+        type: "pub",
+        subject: `acp.project-${project_id}.account-${account_id}.api`,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      isAllowed({
+        user: apiKeyUser,
+        type: "pub",
+        subject: `acp.project-${project_id}.account-${account_id2}.api`,
+      }),
+    ).resolves.toBe(false);
+    expect(mockRecordApiKeyAuditEventSoon).toHaveBeenCalledWith({
+      event: "api_key_denied",
+      value: expect.objectContaining({
+        account_id,
+        subject: `acp.project-${project_id}.account-${account_id2}.api`,
+        code: "api_key_acp_identity_denied",
+      }),
+    });
   });
 
   it("denies hub project API subjects because function-level policy is required", async () => {

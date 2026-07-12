@@ -23,6 +23,7 @@ import {
   type CoCalcUser,
 } from "@cocalc/conat/auth/subject-policy";
 import { isProjectViewerRole } from "@cocalc/util/project-access";
+import { isAcpSubject, parseAcpSubject } from "@cocalc/conat/ai/acp/subjects";
 import { verifyProjectHostAuthToken } from "@cocalc/conat/auth/project-host-token";
 import { getRow } from "@cocalc/lite/hub/sqlite/database";
 import TTL from "@isaacs/ttlcache";
@@ -140,10 +141,6 @@ function isProjectCollaboratorLocal({
   account_id: string;
   project_id: string;
 }): boolean {
-  if (account_id === project_id) {
-    // project identity user (legacy case) can always access itself.
-    return true;
-  }
   const row = getRow("projects", JSON.stringify({ project_id }));
   const userEntry = row?.users?.[account_id];
   const group = typeof userEntry === "string" ? userEntry : userEntry?.group;
@@ -358,6 +355,24 @@ export function createProjectHostConatAuth({ host_id }: { host_id: string }): {
     const cacheable = shouldCacheAuthDecision(subject);
     if (cacheable && authDecisionCache.has(cacheKey)) {
       return authDecisionCache.get(cacheKey)!;
+    }
+
+    if (isAcpSubject(subject)) {
+      const parsed = parseAcpSubject(subject);
+      if (
+        userType !== "account" ||
+        type !== "pub" ||
+        parsed == null ||
+        (parsed.version === "account-project" && parsed.account_id !== userId)
+      ) {
+        return false;
+      }
+      // Legacy subjects are allowed only so the compatibility listener can
+      // return a refresh-required error. It never executes ACP work.
+      return isProjectCollaboratorLocal({
+        account_id: userId,
+        project_id: parsed.project_id,
+      });
     }
 
     const common = checkCommonPermissions({

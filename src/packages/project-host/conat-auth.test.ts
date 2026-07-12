@@ -404,6 +404,131 @@ describe("project-host Conat auth", () => {
     }
   });
 
+  describe("ACP account and project binding", () => {
+    const otherAccountId = "00000000-1000-4000-8000-000000000002";
+    const otherProjectId = "00000000-1000-4000-8000-000000000003";
+    const operations = [
+      "api",
+      "interrupt",
+      "steer",
+      "fork",
+      "truncate",
+      "control",
+      "automation",
+    ];
+
+    it.each(operations)(
+      "allows a matching local collaborator to publish %s",
+      async (operation) => {
+        mockGetRow.mockReturnValue({
+          users: { [account_id]: { group: "collaborator" } },
+        });
+        const { isAllowed } = createProjectHostConatAuth({ host_id });
+        const subject = `acp.project-${project_id}.account-${account_id}.${operation}`;
+
+        await expect(
+          isAllowed({ user: { account_id }, type: "pub", subject }),
+        ).resolves.toBe(true);
+        await expect(
+          isAllowed({ user: { account_id }, type: "sub", subject }),
+        ).resolves.toBe(false);
+      },
+    );
+
+    it("rejects account and project authorization mismatches", async () => {
+      mockGetRow.mockImplementation((_table, key) => {
+        const requestedProjectId = JSON.parse(key).project_id;
+        return requestedProjectId === project_id
+          ? { users: { [account_id]: { group: "collaborator" } } }
+          : { users: {} };
+      });
+      const { isAllowed } = createProjectHostConatAuth({ host_id });
+
+      await expect(
+        isAllowed({
+          user: { account_id },
+          type: "pub",
+          subject: `acp.project-${project_id}.account-${otherAccountId}.api`,
+        }),
+      ).resolves.toBe(false);
+      await expect(
+        isAllowed({
+          user: { account_id },
+          type: "pub",
+          subject: `acp.project-${otherProjectId}.account-${account_id}.api`,
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it("denies project identities, viewers, and public-share-only accounts", async () => {
+      const { isAllowed } = createProjectHostConatAuth({ host_id });
+      const subject = `acp.project-${project_id}.account-${account_id}.api`;
+
+      mockGetRow.mockReturnValue({
+        users: { [account_id]: { group: "viewer" } },
+      });
+      await expect(
+        isAllowed({ user: { account_id }, type: "pub", subject }),
+      ).resolves.toBe(false);
+      await expect(
+        isAllowed({ user: { project_id }, type: "pub", subject }),
+      ).resolves.toBe(false);
+
+      mockGetRow.mockReturnValue({ users: {} });
+      await expect(
+        isAllowed({
+          user: { account_id: project_id },
+          type: "pub",
+          subject: `acp.project-${project_id}.account-${project_id}.api`,
+        }),
+      ).resolves.toBe(false);
+
+      mockGetMasterConatClient.mockReturnValue({ id: "master" });
+      mockCallHub.mockResolvedValue({
+        project_id,
+        account_id,
+        read_policy: { rules: [{ action: "include", path: "share/**" }] },
+      });
+      await expect(
+        isAllowed({ user: { account_id }, type: "pub", subject }),
+      ).resolves.toBe(false);
+      expect(mockCallHub).not.toHaveBeenCalled();
+    });
+
+    it("permits only collaborator publications to the legacy rejection listener", async () => {
+      mockGetRow.mockReturnValue({
+        users: { [account_id]: { group: "collaborator" } },
+      });
+      const { isAllowed } = createProjectHostConatAuth({ host_id });
+      const subject = `acp.project-${project_id}.api`;
+
+      await expect(
+        isAllowed({ user: { account_id }, type: "pub", subject }),
+      ).resolves.toBe(true);
+      await expect(
+        isAllowed({ user: { account_id }, type: "sub", subject }),
+      ).resolves.toBe(false);
+      await expect(
+        isAllowed({ user: { project_id }, type: "pub", subject }),
+      ).resolves.toBe(false);
+    });
+
+    it("fails closed for malformed ACP subjects", async () => {
+      mockGetRow.mockReturnValue({
+        users: { [account_id]: { group: "collaborator" } },
+      });
+      const { isAllowed } = createProjectHostConatAuth({ host_id });
+
+      await expect(
+        isAllowed({
+          user: { account_id },
+          type: "pub",
+          subject: `acp.project-${project_id}.account-${account_id}.unknown`,
+        }),
+      ).resolves.toBe(false);
+    });
+  });
+
   it("allows only hub principals to use file-server management subjects", async () => {
     mockGetRow.mockReturnValue({
       users: { [account_id]: { group: "collaborator" } },

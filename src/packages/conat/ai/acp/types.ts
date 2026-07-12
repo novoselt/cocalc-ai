@@ -330,6 +330,8 @@ export type AcpStreamPayload =
   | {
       type: "error";
       error: string;
+      code?: string;
+      retryable?: boolean;
     };
 
 export type AcpStreamMessage = AcpStreamPayload & {

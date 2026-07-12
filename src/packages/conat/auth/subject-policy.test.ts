@@ -32,6 +32,22 @@ describe("conat auth subject policy", () => {
     );
   });
 
+  it("denies project identities access to account-bound and legacy ACP subjects", () => {
+    const account_id = "22222222-2222-4222-8222-222222222222";
+    expect(
+      isProjectAllowed({
+        project_id: PROJECT_ID,
+        subject: `acp.project-${PROJECT_ID}.account-${account_id}.api`,
+      }),
+    ).toBe(false);
+    expect(
+      isProjectAllowed({
+        project_id: PROJECT_ID,
+        subject: `acp.project-${PROJECT_ID}.api`,
+      }),
+    ).toBe(false);
+  });
+
   it("extracts viewer file subjects", () => {
     expect(
       extractViewerFileSubject(

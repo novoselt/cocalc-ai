@@ -97,6 +97,15 @@ describe("route-project bay-aware routing", () => {
       host_id: HOST_ID,
       host_session_id: "session-1",
     });
+    expect(
+      routeProjectSubject(
+        `acp.project-${PROJECT_ID}.account-00000000-0000-4000-8000-000000000099.api`,
+      ),
+    ).toEqual({
+      address: "http://host.internal:9000",
+      host_id: HOST_ID,
+      host_session_id: "session-1",
+    });
     expect(queryMock).toHaveBeenCalledTimes(1);
     expect(warnMock).not.toHaveBeenCalled();
   });

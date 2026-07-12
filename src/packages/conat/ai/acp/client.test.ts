@@ -1,13 +1,3 @@
-jest.mock("./server", () => ({
-  acpAutomationSubject: () => "acp.test.automation",
-  acpControlSubject: () => "acp.test.control",
-  acpForkSubject: () => "acp.test.fork",
-  acpInterruptSubject: () => "acp.test.interrupt",
-  acpSteerSubject: () => "acp.test.steer",
-  acpTruncateSubject: () => "acp.test.truncate",
-  acpSubject: () => "acp.test.api",
-}));
-
 import {
   automationAcp,
   forkAcpSession,
@@ -113,6 +103,14 @@ describe("interruptAcp", () => {
       state: "missing",
       threadId: "thread-1",
     });
+    expect(client.request).toHaveBeenCalledWith(
+      "acp.project-00000000-0000-4000-8000-000000000000.account-00000000-0000-4000-8000-000000000001.interrupt",
+      expect.objectContaining({
+        project_id: "00000000-0000-4000-8000-000000000000",
+        account_id: "00000000-0000-4000-8000-000000000001",
+      }),
+      { timeout: 30 * 1000 },
+    );
   });
 });
 

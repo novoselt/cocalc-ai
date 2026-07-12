@@ -1,5 +1,6 @@
 import { inboxPrefix } from "@cocalc/conat/names";
 import { isValidUUID } from "@cocalc/util/misc";
+import { isAcpSubject } from "../ai/acp/subjects";
 
 export type CoCalcUser =
   | {
@@ -268,6 +269,12 @@ export function isProjectAllowed({
   project_id: string;
   subject: string;
 }): boolean {
+  // ACP requests carry an account identity and are authorized as that account.
+  // A project-secret identity must never be able to manufacture an account-bound
+  // ACP subject merely because the project segment matches itself.
+  if (isAcpSubject(subject)) {
+    return false;
+  }
   if (subject.startsWith(`project.${project_id}.`)) {
     return true;
   }

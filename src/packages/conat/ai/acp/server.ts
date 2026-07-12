@@ -1,6 +1,5 @@
 import type { Client, Subscription } from "@cocalc/conat/core/client";
 import { getLogger } from "@cocalc/conat/logger";
-import { isValidUUID } from "@cocalc/util/misc";
 import type {
   AcpAutomationRequest,
   AcpAutomationResponse,
@@ -15,89 +14,27 @@ import type {
   AcpTruncateSessionRequest,
   AcpStreamPayload,
 } from "./types";
+import {
+  ACP_CLIENT_REFRESH_REQUIRED_CODE,
+  ACP_CLIENT_REFRESH_REQUIRED_MESSAGE,
+  acpSubscriptionSubject,
+  legacyAcpSubscriptionSubject,
+  parseAcpSubject,
+  type AcpOperation,
+} from "./subjects";
 import pLimit from "p-limit";
 
+export {
+  acpAutomationSubject,
+  acpControlSubject,
+  acpForkSubject,
+  acpInterruptSubject,
+  acpSteerSubject,
+  acpSubject,
+  acpTruncateSubject,
+} from "./subjects";
+
 const logger = getLogger("conat:ai:acp:server");
-
-const SUBJECT = process.env.COCALC_ACP_TEST ? "acp-test" : "acp";
-
-function buildSubjectPrefix({
-  account_id,
-  project_id,
-}: {
-  account_id?: string;
-  project_id?: string;
-}): string {
-  if (project_id) {
-    return `${SUBJECT}.project-${project_id}`;
-  }
-  if (account_id) {
-    return `${SUBJECT}.account-${account_id}`;
-  }
-  return `${SUBJECT}.hub`;
-}
-
-export function acpSubject(opts: {
-  account_id?: string;
-  project_id?: string;
-}): string {
-  return `${buildSubjectPrefix(opts)}.api`;
-}
-
-export function acpInterruptSubject(opts: {
-  account_id?: string;
-  project_id?: string;
-}): string {
-  return `${buildSubjectPrefix(opts)}.interrupt`;
-}
-
-export function acpSteerSubject(opts: {
-  account_id?: string;
-  project_id?: string;
-}): string {
-  return `${buildSubjectPrefix(opts)}.steer`;
-}
-
-export function acpForkSubject(opts: {
-  account_id?: string;
-  project_id?: string;
-}): string {
-  return `${buildSubjectPrefix(opts)}.fork`;
-}
-
-export function acpTruncateSubject(opts: {
-  account_id?: string;
-  project_id?: string;
-}): string {
-  return `${buildSubjectPrefix(opts)}.truncate`;
-}
-
-export function acpControlSubject(opts: {
-  account_id?: string;
-  project_id?: string;
-}): string {
-  return `${buildSubjectPrefix(opts)}.control`;
-}
-
-export function acpAutomationSubject(opts: {
-  account_id?: string;
-  project_id?: string;
-}): string {
-  return `${buildSubjectPrefix(opts)}.automation`;
-}
-
-function getProjectId(subject: string): string | undefined {
-  if (subject.startsWith(`${SUBJECT}.project-`)) {
-    const id = subject.slice(
-      `${SUBJECT}.project-`.length,
-      `${SUBJECT}.project-`.length + 36,
-    );
-    if (isValidUUID(id)) {
-      return id;
-    }
-  }
-  return undefined;
-}
 
 let apiSub: Subscription | null = null;
 let interruptSub: Subscription | null = null;
@@ -106,6 +43,7 @@ let forkSub: Subscription | null = null;
 let truncateSub: Subscription | null = null;
 let controlSub: Subscription | null = null;
 let automationSub: Subscription | null = null;
+const legacySubs: Subscription[] = [];
 function nonNegativeIntegerFromEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
   if (!Number.isFinite(value) || value < 0) {
@@ -206,44 +144,67 @@ export async function init(
   if (client == null) {
     throw Error("acp server init must provide an explicit Conat client");
   }
-  apiSub = await client.subscribe(`${SUBJECT}.*.api`, { queue: "acp-q" });
+  apiSub = await client.subscribe(acpSubscriptionSubject("api"), {
+    queue: "acp-q",
+  });
   listenApi(handlers.evaluate);
+  await subscribeLegacy(client, "api");
   if (handlers.interrupt) {
-    interruptSub = await client.subscribe(`${SUBJECT}.*.interrupt`, {
+    interruptSub = await client.subscribe(acpSubscriptionSubject("interrupt"), {
       queue: "acp-interrupt-q",
     });
     listenInterrupts(handlers.interrupt);
+    await subscribeLegacy(client, "interrupt");
   }
   if (handlers.steer) {
-    steerSub = await client.subscribe(`${SUBJECT}.*.steer`, {
+    steerSub = await client.subscribe(acpSubscriptionSubject("steer"), {
       queue: "acp-steer-q",
     });
     listenSteers(handlers.steer);
+    await subscribeLegacy(client, "steer");
   }
   if (handlers.forkSession) {
-    forkSub = await client.subscribe(`${SUBJECT}.*.fork`, {
+    forkSub = await client.subscribe(acpSubscriptionSubject("fork"), {
       queue: "acp-fork-q",
     });
     listenForks(handlers.forkSession);
+    await subscribeLegacy(client, "fork");
   }
   if (handlers.truncateSession) {
-    truncateSub = await client.subscribe(`${SUBJECT}.*.truncate`, {
+    truncateSub = await client.subscribe(acpSubscriptionSubject("truncate"), {
       queue: "acp-truncate-q",
     });
     listenTruncates(handlers.truncateSession);
+    await subscribeLegacy(client, "truncate");
   }
   if (handlers.control) {
-    controlSub = await client.subscribe(`${SUBJECT}.*.control`, {
+    controlSub = await client.subscribe(acpSubscriptionSubject("control"), {
       queue: "acp-control-q",
     });
     listenControls(handlers.control);
+    await subscribeLegacy(client, "control");
   }
   if (handlers.automation) {
-    automationSub = await client.subscribe(`${SUBJECT}.*.automation`, {
-      queue: "acp-automation-q",
-    });
+    automationSub = await client.subscribe(
+      acpSubscriptionSubject("automation"),
+      {
+        queue: "acp-automation-q",
+      },
+    );
     listenAutomations(handlers.automation);
+    await subscribeLegacy(client, "automation");
   }
+}
+
+async function subscribeLegacy(
+  client: Client,
+  operation: AcpOperation,
+): Promise<void> {
+  const sub = await client.subscribe(legacyAcpSubscriptionSubject(operation), {
+    queue: `acp-legacy-${operation}-q`,
+  });
+  legacySubs.push(sub);
+  listenLegacy(sub, operation);
 }
 
 export async function close(): Promise<void> {
@@ -275,6 +236,49 @@ export async function close(): Promise<void> {
     automationSub.close();
     automationSub = null;
   }
+  while (legacySubs.length > 0) {
+    legacySubs.pop()?.close();
+  }
+}
+
+function listenLegacy(sub: Subscription, operation: AcpOperation): void {
+  (async () => {
+    for await (const mesg of sub) {
+      void rejectLegacyRequest(mesg, operation).catch((err) => {
+        logger.debug("failed responding to legacy ACP request", {
+          operation,
+          subject: mesg.subject,
+          err,
+        });
+      });
+    }
+  })().catch((err) => {
+    logger.warn("legacy ACP listener stopped", { operation, err });
+  });
+}
+
+async function rejectLegacyRequest(
+  mesg,
+  operation: AcpOperation,
+): Promise<void> {
+  const parsed = parseAcpSubject(mesg.subject);
+  logger.warn("rejecting legacy ACP client request", {
+    code: ACP_CLIENT_REFRESH_REQUIRED_CODE,
+    operation,
+    project_id: parsed?.project_id,
+    subject: mesg.subject,
+  });
+  const error = {
+    code: ACP_CLIENT_REFRESH_REQUIRED_CODE,
+    error: ACP_CLIENT_REFRESH_REQUIRED_MESSAGE,
+    retryable: false,
+  };
+  if (operation === "api") {
+    await mesg.respond({ seq: 0, type: "error", ...error }, { noThrow: true });
+    await mesg.respond(null, { noThrow: true });
+    return;
+  }
+  await mesg.respond(error, { noThrow: true });
 }
 
 function listenApi(evaluate: EvaluateHandler): void {
@@ -411,17 +415,7 @@ async function handleMessage(mesg, evaluate: EvaluateHandler) {
   };
 
   try {
-    // TODO: the account_id is not actually used for anything yet; it should
-    // be added somewhere for attribution. The authentication is by the
-    // fact they could write to the subject, which determines the project_id.
-    if (!isValidUUID(options.account_id)) {
-      throw Error("account_id must be a valid uuid");
-    }
-
-    // In project-scoped requests, derive the project_id from the subject to
-    // avoid trusting client-provided IDs. Ensure any provided project_id
-    // matches what was derived.
-    validateOptions(options, mesg.subject);
+    bindOptionsToSubject(options, mesg.subject, "api");
     if (!options.chat) {
       activeChatTurnKey = chatTurnKey(options);
       if (activeChatTurnKey != null) {
@@ -490,20 +484,41 @@ async function handleMessage(mesg, evaluate: EvaluateHandler) {
   }
 }
 
-function validateOptions(options, subject) {
-  const project_id = getProjectId(subject);
-  if (!isValidUUID(project_id)) {
-    throw Error("project_id must be a valid uuid");
+function bindOptionsToSubject(
+  options,
+  subject: string,
+  expectedOperation: AcpOperation,
+): void {
+  if (
+    options == null ||
+    typeof options !== "object" ||
+    Array.isArray(options)
+  ) {
+    throw Error("ACP request payload must be an object");
   }
-  if (options.project_id && options.project_id !== project_id) {
+  const parsed = parseAcpSubject(subject);
+  if (
+    parsed?.version !== "account-project" ||
+    parsed.operation !== expectedOperation
+  ) {
+    throw Error("ACP subject must bind an account and project");
+  }
+  if (options.project_id != null && options.project_id !== parsed.project_id) {
     throw Error("project_id does not match subject");
   }
-  options.project_id = project_id;
+  if (options.account_id != null && options.account_id !== parsed.account_id) {
+    throw Error("account_id does not match subject");
+  }
+  options.project_id = parsed.project_id;
+  options.account_id = parsed.account_id;
   if (options.chat) {
-    if (options.chat.project_id && options.chat.project_id !== project_id) {
+    if (
+      options.chat.project_id != null &&
+      options.chat.project_id !== parsed.project_id
+    ) {
       throw Error("chat.project_id does not match subject");
     }
-    options.chat.project_id = project_id;
+    options.chat.project_id = parsed.project_id;
   }
 }
 
@@ -545,7 +560,7 @@ async function handleInterruptMessage(
   };
 
   try {
-    validateOptions(options, mesg.subject);
+    bindOptionsToSubject(options, mesg.subject, "interrupt");
     const result = await interrupt(options);
     await respond(result);
   } catch (err) {
@@ -564,7 +579,7 @@ async function handleSteerMessage(mesg, steer: SteerHandler): Promise<void> {
   };
 
   try {
-    validateOptions(options, mesg.subject);
+    bindOptionsToSubject(options, mesg.subject, "steer");
     const result = await steer(options);
     await respond(result);
   } catch (err) {
@@ -586,7 +601,7 @@ async function handleForkMessage(
   };
 
   try {
-    validateOptions(options, mesg.subject);
+    bindOptionsToSubject(options, mesg.subject, "fork");
     const result = await forkSession(options);
     await respond(result);
   } catch (err) {
@@ -608,7 +623,7 @@ async function handleTruncateMessage(
   };
 
   try {
-    validateOptions(options, mesg.subject);
+    bindOptionsToSubject(options, mesg.subject, "truncate");
     const result = await truncateSession(options);
     await respond(result);
   } catch (err) {
@@ -630,7 +645,7 @@ async function handleControlMessage(
   };
 
   try {
-    validateOptions(options, mesg.subject);
+    bindOptionsToSubject(options, mesg.subject, "control");
     const result = await control(options);
     await respond(result);
   } catch (err) {
@@ -652,10 +667,15 @@ async function handleAutomationMessage(
   };
 
   try {
-    validateOptions(options, mesg.subject);
+    bindOptionsToSubject(options, mesg.subject, "automation");
     const result = await automation(options);
     await respond(result);
   } catch (err) {
     await respond(undefined, `${err}`);
   }
 }
+
+export const __test__ = {
+  bindOptionsToSubject,
+  rejectLegacyRequest,
+};

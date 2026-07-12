@@ -22,7 +22,7 @@ import {
   acpSteerSubject,
   acpTruncateSubject,
   acpSubject,
-} from "./server";
+} from "./subjects";
 
 interface StreamOptions {
   timeout?: number;
@@ -53,7 +53,10 @@ export async function* streamAcp(
     throw Error("account_id must be a valid uuid");
   }
 
-  const subject = acpSubject({ project_id: request.project_id });
+  const subject = acpSubject({
+    account_id: request.account_id,
+    project_id: request.project_id,
+  });
   // ACP helpers are shared across frontend, CLI, and backend code paths. Do
   // not silently grab the global singleton here; callers must choose the
   // intended routed client explicitly.
@@ -106,7 +109,13 @@ export async function interruptAcp(
   if (!isValidUUID(request.project_id)) {
     throw Error("project_id must be a valid uuid");
   }
-  const subject = acpInterruptSubject({ project_id: request.project_id });
+  if (!isValidUUID(request.account_id)) {
+    throw Error("account_id must be a valid uuid");
+  }
+  const subject = acpInterruptSubject({
+    account_id: request.account_id,
+    project_id: request.project_id,
+  });
   const cn = requireExplicitConatClient(client);
   const resp = await cn.request(subject, request, { timeout: 30 * 1000 });
   const error = resp?.data?.error;
@@ -129,7 +138,10 @@ export async function steerAcp(
   if (!isValidUUID(request.account_id)) {
     throw Error("account_id must be a valid uuid");
   }
-  const subject = acpSteerSubject({ project_id: request.project_id });
+  const subject = acpSteerSubject({
+    account_id: request.account_id,
+    project_id: request.project_id,
+  });
   const cn = requireExplicitConatClient(client);
   const resp = await cn.request(subject, request, { timeout: 30 * 1000 });
   const error = resp?.data?.error;
@@ -158,7 +170,10 @@ export async function forkAcpSession(
   ) {
     throw Error("newSessionId must be a non-empty string");
   }
-  const subject = acpForkSubject({ project_id: request.project_id });
+  const subject = acpForkSubject({
+    account_id: request.account_id,
+    project_id: request.project_id,
+  });
   const cn = requireExplicitConatClient(client);
   const resp = await cn.request(subject, request, { timeout: 30 * 1000 });
   const error = resp?.data?.error;
@@ -185,7 +200,10 @@ export async function truncateAcpSession(
   if (!isNonEmptySessionId(request.sessionId)) {
     throw Error("sessionId must be a non-empty string");
   }
-  const subject = acpTruncateSubject({ project_id: request.project_id });
+  const subject = acpTruncateSubject({
+    account_id: request.account_id,
+    project_id: request.project_id,
+  });
   const cn = requireExplicitConatClient(client);
   const resp = await cn.request(subject, request, { timeout: 30 * 1000 });
   const error = resp?.data?.error;
@@ -208,7 +226,10 @@ export async function controlAcp(
   if (!isValidUUID(request.account_id)) {
     throw Error("account_id must be a valid uuid");
   }
-  const subject = acpControlSubject({ project_id: request.project_id });
+  const subject = acpControlSubject({
+    account_id: request.account_id,
+    project_id: request.project_id,
+  });
   const cn = requireExplicitConatClient(client);
   const resp = await cn.request(subject, request, { timeout: 30 * 1000 });
   const error = resp?.data?.error;
@@ -228,7 +249,10 @@ export async function automationAcp(
   if (!isValidUUID(request.account_id)) {
     throw Error("account_id must be a valid uuid");
   }
-  const subject = acpAutomationSubject({ project_id: request.project_id });
+  const subject = acpAutomationSubject({
+    account_id: request.account_id,
+    project_id: request.project_id,
+  });
   const cn = requireExplicitConatClient(client);
   const resp = await cn.request(subject, request, { timeout: 30 * 1000 });
   const error = resp?.data?.error;

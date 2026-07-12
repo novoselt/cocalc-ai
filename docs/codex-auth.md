@@ -82,6 +82,43 @@ Key modules:
 - [src/packages/project-host/codex/codex-auth.ts](../src/packages/project-host/codex/codex-auth.ts)
 - [src/packages/project-host/codex/codex-auth-registry.ts](../src/packages/project-host/codex/codex-auth-registry.ts)
 
+## ACP Conat Authorization Boundary
+
+Interactive ACP requests execute directly on the project host. Their Conat
+subjects bind both security identities:
+
+```text
+acp.project-<project_id>.account-<account_id>.<operation>
+```
+
+The project remains the second subject segment so normal project-host routing
+can resolve the destination. Project-host authorization then requires all of
+the following:
+
+- the authenticated principal is an account, not a project identity;
+- the subject account equals the authenticated account;
+- the account is a locally mirrored owner or collaborator of the subject
+  project;
+- the operation is a publication; replies use the caller's private inbox.
+
+Viewer and public-share grants do not authorize ACP. The ACP server derives
+both IDs from the subject and rejects any payload or nested chat project ID
+that disagrees with it. This is important because `account_id` selects
+credential, approval, admission, and attribution paths; it must never be
+trusted solely from request data.
+
+Legacy subjects of the form `acp.project-<project_id>.<operation>` are accepted
+only for authenticated collaborators to reach a compatibility listener. That
+listener returns `ACP_CLIENT_REFRESH_REQUIRED`, terminates the request, and
+never calls ACP execution, session, control, or automation handlers.
+
+Key modules:
+
+- [src/packages/conat/ai/acp/subjects.ts](../src/packages/conat/ai/acp/subjects.ts)
+- [src/packages/conat/ai/acp/server.ts](../src/packages/conat/ai/acp/server.ts)
+- [src/packages/project-host/conat-auth.ts](../src/packages/project-host/conat-auth.ts)
+- [src/packages/server/conat/socketio/auth.ts](../src/packages/server/conat/socketio/auth.ts)
+
 ## Credential Lifecycle
 
 ### ChatGPT subscription auth
