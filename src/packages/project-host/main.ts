@@ -54,7 +54,6 @@ import {
 } from "@cocalc/backend/auth/project-proxy-auth";
 import { APP_PROXY_EXPOSURE_HEADER } from "@cocalc/backend/auth/app-proxy";
 import { attachProjectProxy } from "@cocalc/project-proxy/proxy";
-import { init as initChangefeeds } from "@cocalc/lite/hub/changefeeds";
 import { hubApi, init as initHubApi } from "@cocalc/lite/hub/api";
 import { authorizeProjectHostHubApiRequest } from "./hub/api-request-authorization";
 import { listAcpAutomationProjectIds } from "@cocalc/lite/hub/sqlite/acp-automations";
@@ -510,7 +509,11 @@ export async function main(
     client: conatClient,
   });
 
-  initChangefeeds({ client: conatClient });
+  // Do not initialize @cocalc/lite/hub/changefeeds here. That is the legacy
+  // single-user Lite/Plus database-table feed, not Conat document persistence.
+  // A project host's host-wide SQLite control state must never be exposed as a
+  // browser table changefeed. Project documents instead use the project-scoped
+  // Conat persist service, whose SQLite streams live in project storage.
   await initHubApi({
     client: conatClient,
     authorizeRequest: authorizeProjectHostHubApiRequest,

@@ -1,4 +1,18 @@
 /*
+LEGACY LITE TABLE CHANGEFEEDS
+
+This service belongs to the single-user CoCalc Lite runtime used by
+@cocalc/plus. It streams rows from Lite's local hub database so the local
+frontend can use the historical SyncTable database API.
+
+Do not initialize this service in @cocalc/project-host. A project host has one
+host-wide SQLite control database containing state for many projects, and that
+database is not a browser-facing data plane. Project-host document sync uses
+the separate Conat persist service (persist.project-<project_id>), with stream
+SQLite files stored in the corresponding project. Despite both implementations
+using SQLite and the word "changefeed", they have different storage, subjects,
+authorization, and security boundaries.
+
 DEVELOPMENT:
 
 In a node session:

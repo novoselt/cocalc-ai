@@ -35,6 +35,50 @@ When adding a new project-host API, use this flow:
 - Call it from frontend conat code so subject routing can send project messages to the correct project-host.
 - Only add HTTP routes when they are intentionally host-global and do not rely on caller identity.
 
+## Persistence And Changefeed Boundaries
+
+Project-host uses several SQLite-backed systems that have different trust and
+storage boundaries. Do not treat them as interchangeable merely because they
+all use SQLite or expose live updates.
+
+### Project document persistence
+
+- Project documents, chat streams, and other DStream data use the Conat persist
+  service implemented under `@cocalc/conat/persist`.
+- Project-host runs that service through `conat-persist-daemon.ts`.
+- Its subjects are project-scoped, for example
+  `persist.project-<project_id>`, and Conat authorization enforces access to the
+  project.
+- Persist stream databases live in the corresponding project's storage. They
+  are intentionally readable and writable by authorized document clients, and
+  their changefeeds are required for collaborative editing and reconnect.
+
+### Host-local control SQLite
+
+- `COCALC_LITE_SQLITE_FILENAME` names a host-wide control database reused by
+  project-host for project inventory, membership mirrors, ports, provisioning,
+  runtime policy, and related host operations.
+- This database contains state for many projects on the same host. It is an
+  internal control-plane cache and is not a project document store.
+- Reusing modules from `@cocalc/lite/hub/sqlite` does not make project-host a
+  CoCalc Lite deployment and does not make this database browser-readable.
+
+### Lite database-table changefeeds
+
+- `@cocalc/lite/hub/changefeeds` is the historical database-table changefeed
+  used by the single-user CoCalc Lite runtime packaged as `@cocalc/plus`.
+- Project-host must not initialize that service. It would expose the host-wide
+  control database through a browser-oriented table API and would cross the
+  per-project security boundary.
+- Project-host does not serve a standalone frontend. The main frontend keeps
+  its control-plane database/query connection to the hub and creates separate
+  routed project-host clients only for explicit project data-plane services.
+- Removing the Lite table service from project-host has no effect on Conat
+  persist changefeeds.
+
+The invariant is: **host-local control SQLite is internal; project document
+persistence is project-scoped; Lite table changefeeds are Plus-only.**
+
 ## Getting Started
 
 - Build with `pnpm --filter @cocalc/project-host build`.
