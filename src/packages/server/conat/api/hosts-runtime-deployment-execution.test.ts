@@ -3,7 +3,53 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { rollbackHostRuntimeDeploymentsInternalHelper } from "./hosts-runtime-deployment-execution";
+import {
+  reconcileHostRuntimeDeploymentsInternalHelper,
+  rollbackHostRuntimeDeploymentsInternalHelper,
+} from "./hosts-runtime-deployment-execution";
+
+describe("reconcileHostRuntimeDeploymentsInternalHelper", () => {
+  it("does not persist inherited desired state as a host override", async () => {
+    const rolloutHostManagedComponentsInternal = jest.fn(async () => ({
+      results: [],
+    }));
+
+    const result = await reconcileHostRuntimeDeploymentsInternalHelper({
+      account_id: "account-1",
+      id: "host-1",
+      components: ["project-host"],
+      reason: "automatic_runtime_deployment_reconcile",
+      loadHostForStartStop: async () => ({
+        id: "host-1",
+        status: "running",
+      }),
+      assertHostRunningForUpgrade: () => undefined,
+      getHostRuntimeDeploymentStatus: async () => ({}),
+      computeHostRuntimeDeploymentReconcilePlan: () => ({
+        requested_components: ["project-host"],
+        reconciled_components: ["project-host"],
+        decisions: [],
+      }),
+      rolloutHostManagedComponentsInternal,
+    });
+
+    expect(rolloutHostManagedComponentsInternal).toHaveBeenCalledWith({
+      account_id: "account-1",
+      id: "host-1",
+      components: ["project-host"],
+      reason: "automatic_runtime_deployment_reconcile",
+      record_runtime_deployments: false,
+      onProgress: undefined,
+    });
+    expect(result).toEqual({
+      host_id: "host-1",
+      requested_components: ["project-host"],
+      reconciled_components: ["project-host"],
+      decisions: [],
+      rollout_results: [],
+    });
+  });
+});
 
 describe("rollbackHostRuntimeDeploymentsInternalHelper", () => {
   const targetKeyForRuntimeDeployment = ({ target_type, target }) =>

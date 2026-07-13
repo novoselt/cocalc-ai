@@ -68,6 +68,7 @@ export async function reconcileHostRuntimeDeploymentsInternalHelper({
     id: string;
     components: ManagedComponentKind[];
     reason?: string;
+    record_runtime_deployments?: boolean;
     onProgress?: (
       update: HostSoftwareRolloutProgressUpdate,
     ) => Promise<void> | void;
@@ -99,6 +100,9 @@ export async function reconcileHostRuntimeDeploymentsInternalHelper({
     id,
     components: plan.reconciled_components,
     reason,
+    // Reconcile applies effective desired state; it must not turn inherited
+    // global configuration into a persistent host-specific override.
+    record_runtime_deployments: false,
     onProgress,
   });
   return {
