@@ -1190,11 +1190,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('> "${pool}/cpu.weight"', script)
             self.assertIn('> "${pool}/io.weight"', script)
             self.assertIn('attach_pid_to_project_pool_storage "$$" "$pool"', script)
-            self.assertIn("find_project_network_namespace_ids()", script)
-            self.assertIn("find_project_pasta_pids()", script)
-            self.assertIn("stat -Lc '%d:%i'", script)
-            self.assertIn('case "$comm" in', script)
-            self.assertIn("pasta|pasta.*)", script)
+            self.assertIn("find_pasta_pids()", script)
+            self.assertIn("find_pasta_pids_for_netns()", script)
+            self.assertIn('ps -eo pid=,comm=', script)
+            self.assertIn('$2 == "pasta" || $2 ~ /^pasta[.]/', script)
+            self.assertIn('case "$arg" in', script)
+            self.assertIn("--netns=*)", script)
+            self.assertIn('tr \'\\0\' \'\\n\' <"$proc/cmdline"', script)
+            self.assertNotIn('for fd in "$proc/fd/"*', script)
+            self.assertIn("attach-pasta-cgroups)", script)
             self.assertIn(
                 'attach_pid_to_project_pool_storage "$pasta_pid" "$pool"',
                 script,
@@ -1497,11 +1501,11 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "{{.State.Pid}} {{.State.ConmonPid}} {{.Name}}",
+                "{{.State.Pid}} {{.State.ConmonPid}}",
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
-                '/usr/local/sbin/cocalc-runtime-storage attach-project-cgroup "${project_id}"',
+                "/usr/local/sbin/cocalc-runtime-storage attach-pasta-cgroups",
                 rootctl.read_text(encoding="utf-8"),
             )
             subprocess.run(["bash", "-n", str(rootctl)], check=True)

@@ -441,6 +441,17 @@ describe("project-runner podman orphan fallback", () => {
 
   it("uses caller-provided host ports when starting a project", async () => {
     mockProjectStartPodman(project1);
+    const sandboxPath =
+      "/mnt/cocalc/data/tmp/cocalc-podman-runtime-2000/netns/netns-test";
+    mockExecuteCode.mockImplementation(async ({ command, args }) => {
+      if (
+        command === "podman" &&
+        args?.includes("{{.NetworkSettings.SandboxKey}}")
+      ) {
+        return { stdout: `${sandboxPath}\n` };
+      }
+      return { stdout: "" };
+    });
     const libatomic = `/tmp/cocalc-test-libatomic-${project1}`;
     const compatLibs = `/tmp/cocalc-test-runtime-libs-${project1}`;
     await writeFile(libatomic, "test-libatomic");
@@ -482,6 +493,18 @@ describe("project-runner podman orphan fallback", () => {
         "--init",
         ".local/share/cocalc/startup.sh",
       ]),
+    );
+    expect(mockExecuteCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "sudo",
+        args: [
+          "-n",
+          "/usr/local/sbin/cocalc-runtime-storage",
+          "attach-project-cgroup",
+          project1,
+          sandboxPath,
+        ],
+      }),
     );
     expect(status).toMatchObject({
       state: "running",

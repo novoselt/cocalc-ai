@@ -846,8 +846,33 @@ async function inspectContainerPids(name: string): Promise<number[]> {
   ];
 }
 
-async function attachProjectToCgroup(project_id: string): Promise<void> {
+async function inspectContainerSandboxPath(
+  name: string,
+): Promise<string | undefined> {
   try {
+    const { stdout } = await executeCode({
+      command: "podman",
+      args: ["inspect", "--format", "{{.NetworkSettings.SandboxKey}}", name],
+      timeout: STOP_INSPECT_TIMEOUT_S,
+      err_on_exit: false,
+      env: podmanEnv(),
+    });
+    return `${stdout ?? ""}`.trim() || undefined;
+  } catch (err) {
+    logger.warn("start: failed to inspect project network namespace", {
+      name,
+      err: `${err}`,
+    });
+    return undefined;
+  }
+}
+
+async function attachProjectToCgroup(
+  project_id: string,
+  name: string,
+): Promise<void> {
+  try {
+    const sandboxPath = await inspectContainerSandboxPath(name);
     const result = await executeCode({
       command: "sudo",
       args: [
@@ -855,6 +880,7 @@ async function attachProjectToCgroup(project_id: string): Promise<void> {
         "/usr/local/sbin/cocalc-runtime-storage",
         "attach-project-cgroup",
         project_id,
+        ...(sandboxPath ? [sandboxPath] : []),
       ],
       timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
       err_on_exit: false,
@@ -1873,7 +1899,7 @@ export async function start({
         `project container ${name} exited before reporting a running state${detail ? `\n${detail}` : ""}`,
       );
     }
-    await attachProjectToCgroup(project_id);
+    await attachProjectToCgroup(project_id, name);
 
     report({
       type: "start-project",
