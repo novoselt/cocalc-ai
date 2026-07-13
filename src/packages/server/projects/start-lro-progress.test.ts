@@ -8,6 +8,7 @@ let publishLroSummaryMock: jest.Mock;
 
 class FakeStream extends EventEmitter {
   private events: any[] = [];
+  closeCalls = 0;
 
   getAll() {
     return [...this.events];
@@ -19,6 +20,7 @@ class FakeStream extends EventEmitter {
   }
 
   close() {
+    this.closeCalls += 1;
     this.emit("closed");
   }
 }
@@ -89,6 +91,10 @@ describe("mirrorStartLroProgress", () => {
       op_id: "op-1",
     });
 
+    expect(getLroStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({ bootstrapRetry: false }),
+    );
+
     stream.push({
       type: "progress",
       ts: 1000,
@@ -122,6 +128,27 @@ describe("mirrorStartLroProgress", () => {
         }),
       }),
     );
+    expect(stream.closeCalls).toBe(1);
+  });
+
+  it("closes the mirror as soon as the operation becomes terminal", async () => {
+    const stream = new FakeStream();
+    getLroStreamMock.mockResolvedValue(stream);
+    const { mirrorStartLroProgress } = await import("./start-lro-progress");
+
+    await mirrorStartLroProgress({ project_id: "proj-1", op_id: "op-1" });
+    stream.push({
+      type: "summary",
+      ts: 2000,
+      summary: {
+        op_id: "op-1",
+        scope_type: "project",
+        scope_id: "proj-1",
+        status: "succeeded",
+      },
+    });
+
+    expect(stream.closeCalls).toBe(1);
   });
 
   it("does not block project start when the lro progress stream hangs", async () => {
@@ -137,5 +164,29 @@ describe("mirrorStartLroProgress", () => {
 
     expect(updateLroMock).not.toHaveBeenCalled();
     expect(publishLroSummaryMock).not.toHaveBeenCalled();
+  });
+
+  it("closes a stream that finishes opening after the mirror timeout", async () => {
+    jest.useFakeTimers();
+    process.env.COCALC_START_LRO_PROGRESS_STREAM_TIMEOUT_MS = "1";
+    const stream = new FakeStream();
+    let resolveOpening: ((stream: FakeStream) => void) | undefined;
+    getLroStreamMock.mockReturnValue(
+      new Promise<FakeStream>((resolve) => {
+        resolveOpening = resolve;
+      }),
+    );
+    const { mirrorStartLroProgress } = await import("./start-lro-progress");
+
+    const mirror = mirrorStartLroProgress({
+      project_id: "proj-1",
+      op_id: "op-1",
+    });
+    await jest.advanceTimersByTimeAsync(1);
+    await mirror;
+    resolveOpening?.(stream);
+    await Promise.resolve();
+
+    expect(stream.closeCalls).toBe(1);
   });
 });

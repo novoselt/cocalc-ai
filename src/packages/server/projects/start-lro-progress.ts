@@ -19,6 +19,13 @@ const OPEN_START_LRO_PROGRESS_STREAM_TIMEOUT_MS = Math.max(
 
 type CloseFn = () => Promise<void>;
 
+const TERMINAL_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "canceled",
+  "expired",
+]);
+
 function toProgressSummary(event: Extract<LroEvent, { type: "progress" }>) {
   return {
     phase: event.phase,
@@ -40,18 +47,25 @@ export async function mirrorStartLroProgress({
   }
 
   let stream: DStream<LroEvent> | undefined;
+  const opening = getLroStream({
+    op_id,
+    scope_type: "project",
+    scope_id: project_id,
+    client: conat(),
+    // Progress mirroring is optional. An unavailable project-local persist
+    // route must not leave an abandoned infinite bootstrap retry in the hub.
+    bootstrapRetry: false,
+  });
   try {
     stream = await withTimeout(
-      getLroStream({
-        op_id,
-        scope_type: "project",
-        scope_id: project_id,
-        client: conat(),
-      }),
+      opening,
       OPEN_START_LRO_PROGRESS_STREAM_TIMEOUT_MS,
       "timeout opening project-start lro stream",
     );
   } catch (err) {
+    // Promise.race does not cancel the losing operation. Close a stream that
+    // finishes opening after our timeout so it cannot outlive this mirror.
+    void opening.then((lateStream) => lateStream.close()).catch(() => {});
     log.warn("unable to open project-start lro stream", {
       project_id,
       op_id,
@@ -65,6 +79,15 @@ export async function mirrorStartLroProgress({
   let lastSummaryKey = "";
   let closed = false;
   let pending = Promise.resolve();
+
+  const closeStream = (): void => {
+    if (closed) return;
+    closed = true;
+    stream?.removeListener("change", onChange);
+    stream?.removeListener("reset", onReset);
+    stream?.removeListener("closed", onClosed);
+    stream?.close();
+  };
 
   const persistProgress = (
     event: Extract<LroEvent, { type: "progress" }>,
@@ -125,6 +148,14 @@ export async function mirrorStartLroProgress({
       if (event.type === "progress") {
         persistProgress(event);
       }
+      if (
+        event.type === "summary" &&
+        TERMINAL_STATUSES.has(event.summary.status)
+      ) {
+        lastIndex = events.length;
+        closeStream();
+        return;
+      }
     }
     lastIndex = events.length;
   };
@@ -141,11 +172,7 @@ export async function mirrorStartLroProgress({
   drain();
 
   return async () => {
-    closed = true;
-    stream?.removeListener("change", onChange);
-    stream?.removeListener("reset", onReset);
-    stream?.removeListener("closed", onClosed);
-    stream?.close();
+    closeStream();
     try {
       await pending;
     } catch {
