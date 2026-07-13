@@ -25,7 +25,7 @@ import { containingPath, humanSize, plural } from "@cocalc/util/misc";
 import { isAbsolutePath, normalizeAbsolutePath } from "@cocalc/util/path-model";
 import { COLORS } from "@cocalc/util/theme";
 import type { AttachedSteerMessage } from "./agent-message-status";
-import { addCodexProjectRestartHint } from "./codex-error-presentation";
+import { formatCodexErrorForDisplay } from "./codex-error-presentation";
 import {
   buildPrismLineMetasFromPlain,
   highlightPrismLines,
@@ -1096,7 +1096,7 @@ function formatErrorDetail(error: unknown): string {
       detail = String(error);
     }
   }
-  return addCodexProjectRestartHint(detail);
+  return formatCodexErrorForDisplay(detail);
 }
 
 function eventHasText(
