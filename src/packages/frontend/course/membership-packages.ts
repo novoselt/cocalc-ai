@@ -8,8 +8,25 @@ import type {
   MembershipPackageDetails,
 } from "@cocalc/conat/hub/api/purchases";
 
-function toTime(value?: Date): number {
-  return value instanceof Date ? value.valueOf() : 0;
+function toTime(value?: Date | string | null): number {
+  if (value == null) {
+    return 0;
+  }
+  const time =
+    value instanceof Date ? value.valueOf() : new Date(value).valueOf();
+  return Number.isFinite(time) ? time : 0;
+}
+
+export function isMembershipPackageCurrentlyActive(
+  membershipPackage: MembershipPackageDetails | undefined,
+  now = Date.now(),
+): boolean {
+  if (!membershipPackage) {
+    return false;
+  }
+  const startsAt = toTime(membershipPackage.starts_at);
+  const expiresAt = toTime(membershipPackage.expires_at);
+  return (!startsAt || startsAt <= now) && (!expiresAt || expiresAt > now);
 }
 
 export function isActiveMembershipPackageAssignment(
@@ -38,6 +55,8 @@ export function getCourseMembershipPackage(
     )
     .sort(
       (left, right) =>
+        Number(isMembershipPackageCurrentlyActive(right)) -
+          Number(isMembershipPackageCurrentlyActive(left)) ||
         toTime(right.updated) - toTime(left.updated) ||
         toTime(right.created) - toTime(left.created),
     )[0];

@@ -53,6 +53,8 @@ import { getExplicitProjectRoutedClient } from "@cocalc/server/conat/route-clien
 import { getProjectFileServerClient } from "@cocalc/server/conat/file-server-client";
 import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
+import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
+import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { resolveProjectCollabInviteDirectory } from "@cocalc/server/projects/collab-invite-directory";
 import { resolveOnPremHost } from "@cocalc/server/onprem";
@@ -115,13 +117,18 @@ import {
   PROJECT_COLLABORATOR_REQUIRED_ERROR,
   PROJECT_NOT_FOUND_ERROR,
 } from "@cocalc/server/conat/project-local-access";
-import { resolveProjectAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
+import {
+  resolveProjectAccessAllowRemote,
+  resolveProjectReferenceCollaboratorOrAdminAllowRemote,
+} from "@cocalc/server/conat/project-remote-access";
 import type { ProjectViewerReadPolicy } from "@cocalc/util/project-access";
 import type {
   ChatStoreScope,
   CourseAssignmentPatchDestination,
   CourseAssignmentPatchResult,
   CourseStudentAccessStatus,
+  CoursePaymentOverview,
+  CourseStudentPaymentStatus,
   CourseCollectAssignmentItem,
   CourseCollectAssignmentResult,
   ImportPublicUrlResult,
@@ -236,7 +243,10 @@ import {
 } from "@cocalc/server/project-host/control";
 import { assertAccountTrustedForProductAccess } from "@cocalc/server/accounts/trusted-product-access";
 import getName from "@cocalc/server/accounts/get-name";
-import { resolveProjectOwningBay } from "@cocalc/server/bay-directory";
+import {
+  resolveAccountHomeBay,
+  resolveProjectOwningBay,
+} from "@cocalc/server/bay-directory";
 import dayjs from "dayjs";
 import {
   PROJECT_DANGEROUS_INTERNAL_AUTH,
@@ -2618,6 +2628,251 @@ export async function getCourseStudentAccess({
     required_label: requiredTier?.label,
     deadline: deadline?.isValid() ? deadline.toDate() : null,
     course,
+  };
+}
+
+const COURSE_PAYMENT_OVERVIEW_MAX_STUDENTS = 1000;
+const COURSE_PAYMENT_OVERVIEW_CONCURRENCY = 12;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  f: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (true) {
+        const index = next++;
+        if (index >= items.length) {
+          return;
+        }
+        results[index] = await f(items[index]);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+async function resolveAccountMembershipAllowRemote(account_id: string) {
+  const location = await resolveAccountHomeBay({
+    account_id,
+    user_account_id: account_id,
+  });
+  if (location.home_bay_id === getConfiguredBayId()) {
+    return await resolveMembershipForAccount(account_id);
+  }
+  return await createInterBayAccountLocalClient({
+    client: getInterBayFabricClient(),
+    dest_bay: location.home_bay_id,
+  }).getMembership({ account_id });
+}
+
+async function listAccountMembershipPackagesAllowRemote(account_id: string) {
+  const location = await resolveAccountHomeBay({
+    account_id,
+    user_account_id: account_id,
+  });
+  if (location.home_bay_id === getConfiguredBayId()) {
+    return await listMembershipPackageDetailsForOwner({
+      owner_account_id: account_id,
+    });
+  }
+  return await createInterBayAccountLocalClient({
+    client: getInterBayFabricClient(),
+    dest_bay: location.home_bay_id,
+  }).getMembershipPackages({ owner_account_id: account_id });
+}
+
+export async function getCoursePaymentOverview({
+  account_id,
+  course_project_id,
+  student_project_ids,
+}: {
+  account_id: string;
+  course_project_id: string;
+  student_project_ids: string[];
+}): Promise<CoursePaymentOverview> {
+  if (!isValidUUID(course_project_id)) {
+    throw new Error("invalid course_project_id");
+  }
+  const projectIds = [
+    ...new Set(
+      (student_project_ids ?? [])
+        .map((project_id) => `${project_id ?? ""}`.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (projectIds.length > COURSE_PAYMENT_OVERVIEW_MAX_STUDENTS) {
+    throw new Error(
+      `too many student projects; maximum is ${COURSE_PAYMENT_OVERVIEW_MAX_STUDENTS}`,
+    );
+  }
+  for (const project_id of projectIds) {
+    if (!isValidUUID(project_id)) {
+      throw new Error(`invalid student project_id: ${project_id}`);
+    }
+  }
+
+  const courseReference =
+    await resolveProjectReferenceCollaboratorOrAdminAllowRemote({
+      account_id,
+      project_id: course_project_id,
+    });
+  if (courseReference == null) {
+    throw new Error(PROJECT_COLLABORATOR_REQUIRED_ERROR);
+  }
+  const managerAccountIds = Object.entries(courseReference.users ?? {})
+    .filter(
+      ([, user]) => user?.group === "owner" || user?.group === "collaborator",
+    )
+    .map(([manager_account_id]) => manager_account_id)
+    .filter((manager_account_id) => isValidUUID(manager_account_id));
+
+  const packageResults = await mapWithConcurrency(
+    managerAccountIds,
+    COURSE_PAYMENT_OVERVIEW_CONCURRENCY,
+    async (owner_account_id) => {
+      try {
+        const packages =
+          await listAccountMembershipPackagesAllowRemote(owner_account_id);
+        return {
+          owner_account_id,
+          packages: packages.filter(
+            (membershipPackage) =>
+              membershipPackage.kind === "course" &&
+              membershipPackage.metadata?.course_project_id ===
+                course_project_id,
+          ),
+        };
+      } catch (err) {
+        return { owner_account_id, packages: [], error: `${err}` };
+      }
+    },
+  );
+
+  const tierCache = new Map<
+    string,
+    ReturnType<typeof getSeedMembershipTierById>
+  >();
+  const getTier = (id: string) => {
+    let value = tierCache.get(id);
+    if (value == null) {
+      value = getSeedMembershipTierById({ id });
+      tierCache.set(id, value);
+    }
+    return value;
+  };
+  const students = await mapWithConcurrency(
+    projectIds,
+    COURSE_PAYMENT_OVERVIEW_CONCURRENCY,
+    async (project_id): Promise<CourseStudentPaymentStatus> => {
+      try {
+        const details = await getProjectReadDetailsAllowRemote({
+          account_id,
+          project_id,
+        });
+        const course = details.course;
+        if (
+          course?.type !== "student" ||
+          course.project_id !== course_project_id
+        ) {
+          return {
+            project_id,
+            status: "error",
+            error: "project is not linked to this course",
+          };
+        }
+        const studentAccountId = `${course.account_id ?? ""}`.trim();
+        if (!studentAccountId || !isValidUUID(studentAccountId)) {
+          return {
+            project_id,
+            status: "error",
+            error: "student project is not linked to a student account",
+          };
+        }
+        const requiredMembershipClass = `${
+          course.required_membership_class ?? ""
+        }`
+          .trim()
+          .toLowerCase();
+        if (!course.student_pay || !requiredMembershipClass) {
+          return {
+            project_id,
+            account_id: studentAccountId,
+            status: "not-required",
+          };
+        }
+        const requiredTier = await getTier(requiredMembershipClass);
+        if (requiredTier == null) {
+          return {
+            project_id,
+            account_id: studentAccountId,
+            status: "error",
+            required_membership_class: requiredMembershipClass,
+            error: `required membership tier '${requiredMembershipClass}' does not exist`,
+          };
+        }
+        const membership =
+          await resolveAccountMembershipAllowRemote(studentAccountId);
+        const currentTier = await getTier(membership.class);
+        const paid =
+          (currentTier?.priority ?? 0) >= (requiredTier.priority ?? 0);
+        return {
+          project_id,
+          account_id: studentAccountId,
+          status: paid ? "paid" : "must-pay",
+          required_membership_class: requiredMembershipClass,
+          required_label: requiredTier.label,
+          current_membership_class: membership.class,
+          current_expires: membership.expires ?? null,
+          source: membership.grant_source ?? membership.source,
+        };
+      } catch (err) {
+        return { project_id, status: "error", error: `${err}` };
+      }
+    },
+  );
+  const studentAccountIds = new Set(
+    students
+      .map(({ account_id }) => account_id)
+      .filter(
+        (studentAccountId): studentAccountId is string => !!studentAccountId,
+      ),
+  );
+  const coursePackages = packageResults.flatMap(({ packages }) =>
+    packages.map((membershipPackage) => ({
+      ...membershipPackage,
+      assignments: membershipPackage.assignments
+        .filter(
+          ({ account_id: studentAccountId }) =>
+            !!studentAccountId && studentAccountIds.has(studentAccountId),
+        )
+        .map(
+          ({
+            email_address: _email,
+            account_email_address: _accountEmail,
+            ...assignment
+          }) => assignment,
+        ),
+    })),
+  );
+
+  return {
+    course_project_id,
+    course_title: courseReference.title,
+    manager_account_ids: managerAccountIds,
+    packages: coursePackages,
+    package_errors: packageResults
+      .filter(({ error }) => !!error)
+      .map(({ owner_account_id, error }) => ({
+        owner_account_id,
+        error: error!,
+      })),
+    students,
   };
 }
 

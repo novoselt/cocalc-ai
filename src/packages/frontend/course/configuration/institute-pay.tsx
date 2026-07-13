@@ -165,7 +165,12 @@ export function InstitutePaySection({
               </Space>
               <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                 Seats are assigned per student account from the Students tab.
-                The current package covers the term
+                Package <Text code>{membershipPackage.id}</Text>
+                {membershipPackage.purchase_id
+                  ? ` was created by purchase #${membershipPackage.purchase_id}`
+                  : ""}{" "}
+                and is explicitly linked to course project{" "}
+                <Text code>{project_id}</Text>. It covers the term
                 {membershipPackage.expires_at ? (
                   <>
                     {" "}

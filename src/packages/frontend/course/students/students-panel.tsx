@@ -8,18 +8,28 @@ import { Set } from "immutable";
 import { isEqual } from "lodash";
 import { useEffect, useMemo, useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
-import { AppRedux, useRedux } from "@cocalc/frontend/app-framework";
+import {
+  AppRedux,
+  useRedux,
+  useTypedRedux,
+} from "@cocalc/frontend/app-framework";
 import { Gap, Icon, Tip } from "@cocalc/frontend/components";
 import ScrollableList from "@cocalc/frontend/components/scrollable-list";
 import { course, labels } from "@cocalc/frontend/i18n";
-import { getMembershipPackages } from "@cocalc/frontend/purchases/api";
 import { useProjectRunQuotaPrefetch } from "@cocalc/frontend/project/use-project-run-quota";
 import { ProjectMap, UserMap } from "@cocalc/frontend/todo-types";
-import type { MembershipPackageDetails } from "@cocalc/conat/hub/api/purchases";
+import type {
+  CoursePaymentOverview,
+  CourseStudentPaymentStatus,
+} from "@cocalc/conat/hub/api/projects";
 import { search_match, search_split } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
 import type { CourseActions } from "../actions";
-import { getCourseMembershipPackage } from "../membership-packages";
+import {
+  getCourseMembershipPackage,
+  isMembershipPackageCurrentlyActive,
+} from "../membership-packages";
+import { getCoursePaymentOverview } from "../payment-api";
 import {
   AssignmentsMap,
   IsGradingMap,
@@ -29,6 +39,7 @@ import {
   StudentsMap,
 } from "../store";
 import * as util from "../util";
+import { ManageSeats } from "./manage-seats";
 import { Student, StudentNameDescription } from "./students-panel-student";
 
 interface StudentsPanelReactProps {
@@ -88,20 +99,14 @@ export function StudentsPanel({
     actions.setPageFilter("students", filter);
   };
   const institutePay = !!settings?.get("institute_pay");
-  const [coursePackage, setCoursePackage] = useState<
-    MembershipPackageDetails | undefined
-  >(undefined);
-  const [coursePackageError, setCoursePackageError] = useState<string>("");
-
-  async function refreshCoursePackage() {
-    try {
-      setCoursePackageError("");
-      const packages = await getMembershipPackages();
-      setCoursePackage(getCourseMembershipPackage(packages, project_id));
-    } catch (err) {
-      setCoursePackageError(`${err}`);
-    }
-  }
+  const studentPay = !!settings?.get("student_pay");
+  const paymentEnabled = institutePay || studentPay;
+  const currentAccountId = useTypedRedux("account", "account_id");
+  const isAdmin = !!useTypedRedux("account", "is_admin");
+  const [coursePaymentOverview, setCoursePaymentOverview] =
+    useState<CoursePaymentOverview>();
+  const [coursePaymentError, setCoursePaymentError] = useState<string>("");
+  const [manageSeatsOpen, setManageSeatsOpen] = useState<boolean>(false);
 
   // the type is copy/paste from what TS infers in the util.parse_students function
   const [students_unordered, set_students_unordered] = useState<
@@ -128,11 +133,33 @@ export function StudentsPanel({
       students
         .valueSeq()
         .map((student) => student.get("project_id"))
-        .filter(Boolean)
-        .toArray(),
+        .toArray()
+        .filter(
+          (studentProjectId): studentProjectId is string =>
+            typeof studentProjectId === "string",
+        ),
     [students],
   );
+  const studentProjectIdsKey = studentProjectIds.join(",");
   const runQuotaVersion = useProjectRunQuotaPrefetch(studentProjectIds);
+
+  async function refreshCoursePaymentOverview() {
+    try {
+      setCoursePaymentError("");
+      const overview = await getCoursePaymentOverview({
+        course_project_id: project_id,
+        student_project_ids: studentProjectIds,
+      });
+      setCoursePaymentOverview(overview);
+      if (overview.package_errors.length > 0) {
+        setCoursePaymentError(
+          `Unable to load ${overview.package_errors.length} course manager seat package${overview.package_errors.length === 1 ? "" : "s"}.`,
+        );
+      }
+    } catch (err) {
+      setCoursePaymentError(`${err}`);
+    }
+  }
 
   // this updates a JS list from the ever changing user_map immutableMap
   useEffect(() => {
@@ -143,12 +170,38 @@ export function StudentsPanel({
   }, [students, user_map, runQuotaVersion]);
 
   useEffect(() => {
-    if (!institutePay) {
-      setCoursePackage(undefined);
+    if (!paymentEnabled) {
+      setCoursePaymentOverview(undefined);
       return;
     }
-    refreshCoursePackage();
-  }, [institutePay, project_id]);
+    refreshCoursePaymentOverview();
+  }, [paymentEnabled, project_id, studentProjectIdsKey]);
+
+  const coursePackages = useMemo(
+    () => coursePaymentOverview?.packages ?? [],
+    [coursePaymentOverview],
+  );
+  const coursePackage = useMemo(() => {
+    const ownedPackages = coursePackages.filter(
+      (membershipPackage) =>
+        membershipPackage.owner_account_id === currentAccountId,
+    );
+    const selected = getCourseMembershipPackage(
+      ownedPackages.length > 0 || !isAdmin ? ownedPackages : coursePackages,
+      project_id,
+    );
+    return isMembershipPackageCurrentlyActive(selected) ? selected : undefined;
+  }, [coursePackages, currentAccountId, isAdmin, project_id]);
+  const paymentStatusByProject = useMemo(
+    () =>
+      new Map<string, CourseStudentPaymentStatus>(
+        (coursePaymentOverview?.students ?? []).map((status) => [
+          status.project_id,
+          status,
+        ]),
+      ),
+    [coursePaymentOverview],
+  );
 
   // student_list not a list, but has one, plus some extra info.
   const student_list: StudentList = useMemo(() => {
@@ -234,6 +287,13 @@ export function StudentsPanel({
               <Icon name="user-plus" /> Add Students
             </Button>
           </Col>
+          {institutePay && (
+            <Col flex="none">
+              <Button onClick={() => setManageSeatsOpen(true)}>
+                <Icon name="users" /> Manage seats
+              </Button>
+            </Col>
+          )}
           <Col flex="320px">
             <Input.Search
               allowClear
@@ -306,7 +366,7 @@ export function StudentsPanel({
     return (
       <div>
         <Row style={{ marginRight: 0 }}>
-          <Col md={6}>
+          <Col md={paymentEnabled ? 5 : 6}>
             <div style={{ display: "inline-block", width: "50%" }}>
               {render_sort_link("first_name", firstName)}
             </div>
@@ -315,9 +375,12 @@ export function StudentsPanel({
             </div>
           </Col>
           <Col md={4}>{render_sort_link("email", emailAddress)}</Col>
-          <Col md={8}>{render_sort_link("last_active", lastActive)}</Col>
+          <Col md={paymentEnabled ? 6 : 8}>
+            {render_sort_link("last_active", lastActive)}
+          </Col>
+          {paymentEnabled && <Col md={4}>Paid seat</Col>}
           <Col md={3}>{render_sort_link("hosting", projectStatus)}</Col>
-          <Col md={3}>
+          <Col md={paymentEnabled ? 2 : 3}>
             {num_deleted ? render_show_deleted(num_deleted) : undefined}
           </Col>
         </Row>
@@ -365,7 +428,15 @@ export function StudentsPanel({
         nbgrader_run_info={nbgrader_run_info}
         assignmentFilter={assignmentFilter?.get(student_id)}
         coursePackage={coursePackage}
-        refreshCoursePackage={refreshCoursePackage}
+        coursePackages={coursePackages}
+        refreshCoursePackage={refreshCoursePaymentOverview}
+        paymentMode={institutePay ? "institute" : studentPay ? "student" : null}
+        paymentStatus={
+          x.project_id ? paymentStatusByProject.get(x.project_id) : undefined
+        }
+        currentAccountId={currentAccountId}
+        isAdmin={isAdmin}
+        onManageSeats={() => setManageSeatsOpen(true)}
       />
     );
   }
@@ -376,11 +447,33 @@ export function StudentsPanel({
     }
     return (
       <>
-        {coursePackageError && (
+        {coursePaymentError && (
           <Alert
             type="error"
             style={{ marginBottom: "15px" }}
-            title={coursePackageError}
+            title={coursePaymentError}
+          />
+        )}
+        {institutePay && (
+          <Alert
+            type={coursePackages.length > 0 ? "info" : "warning"}
+            showIcon
+            style={{ marginBottom: 12 }}
+            title={
+              coursePackages.length > 0
+                ? `${coursePackages.length} seat package${coursePackages.length === 1 ? " is" : "s are"} linked to this course`
+                : "No seat package is linked to this course"
+            }
+            description={
+              coursePackages.length > 0
+                ? `${coursePackages.reduce((sum, membershipPackage) => sum + membershipPackage.active_assignment_count, 0)} assigned of ${coursePackages.reduce((sum, membershipPackage) => sum + membershipPackage.seat_count, 0)} purchased seats. Use Manage seats to inspect package ownership and change assignments.`
+                : "Purchase seats in the course payment configuration, then assign them here."
+            }
+            action={
+              <Button size="small" onClick={() => setManageSeatsOpen(true)}>
+                Manage seats
+              </Button>
+            }
           />
         )}
         <ScrollableList
@@ -501,6 +594,21 @@ export function StudentsPanel({
       <div className="smc-vfill" style={{ margin: "0" }}>
         {render_header(num_omitted)}
         {render_student_info(students, num_deleted)}
+        <ManageSeats
+          open={manageSeatsOpen}
+          onClose={() => setManageSeatsOpen(false)}
+          courseProjectId={project_id}
+          courseTitle={coursePaymentOverview?.course_title ?? ""}
+          coursePath={actions.get_store()?.get("course_filename") ?? ""}
+          packages={coursePackages}
+          students={students_unordered.filter((student) => !student.deleted)}
+          currentAccountId={currentAccountId}
+          isAdmin={isAdmin}
+          ownerName={(account_id) =>
+            redux.getStore("users")?.get_name(account_id)?.trim() || account_id
+          }
+          onRefresh={refreshCoursePaymentOverview}
+        />
       </div>
     );
   }

@@ -642,38 +642,64 @@ export async function handleProjectControlActiveOperation(
 export async function handleProjectReferenceGet(
   req: GetProjectReferenceRequest,
 ): Promise<ProjectReference | null> {
+  let project;
   try {
-    const project = await resolveVisibleProjectReferenceLocal({
+    project = await resolveVisibleProjectReferenceLocal({
       account_id: req.account_id,
       project_id: req.project_id,
     });
+  } catch {
+    if (!(await isAdmin(req.account_id))) {
+      return null;
+    }
     const { rows } = await getPool().query<{
-      users: Record<string, any> | null;
-      allow_collaborator_destructive_storage_actions: boolean | null;
+      project_id: string;
+      title: string | null;
+      host_id: string | null;
+      owning_bay_id: string | null;
     }>(
-      `
-        SELECT
-          COALESCE(users, '{}'::jsonb) AS users,
-          allow_collaborator_destructive_storage_actions
-        FROM projects
+      `SELECT project_id, title, host_id, owning_bay_id
+         FROM projects
         WHERE project_id = $1
           AND deleted IS NOT TRUE
-        LIMIT 1
-      `,
+        LIMIT 1`,
       [req.project_id],
     );
-    return {
-      project_id: project.project_id,
-      title: project.title,
-      host_id: project.host_id,
-      owning_bay_id: project.owning_bay_id,
-      users: rows[0]?.users ?? {},
-      allow_collaborator_destructive_storage_actions:
-        rows[0]?.allow_collaborator_destructive_storage_actions ?? null,
+    const row = rows[0];
+    if (!row) {
+      return null;
+    }
+    project = {
+      project_id: row.project_id,
+      title: row.title ?? "",
+      host_id: row.host_id ?? null,
+      owning_bay_id: row.owning_bay_id ?? getConfiguredBayId(),
     };
-  } catch {
-    return null;
   }
+  const { rows } = await getPool().query<{
+    users: Record<string, any> | null;
+    allow_collaborator_destructive_storage_actions: boolean | null;
+  }>(
+    `
+      SELECT
+        COALESCE(users, '{}'::jsonb) AS users,
+        allow_collaborator_destructive_storage_actions
+      FROM projects
+      WHERE project_id = $1
+        AND deleted IS NOT TRUE
+      LIMIT 1
+    `,
+    [req.project_id],
+  );
+  return {
+    project_id: project.project_id,
+    title: project.title,
+    host_id: project.host_id,
+    owning_bay_id: project.owning_bay_id,
+    users: rows[0]?.users ?? {},
+    allow_collaborator_destructive_storage_actions:
+      rows[0]?.allow_collaborator_destructive_storage_actions ?? null,
+  };
 }
 
 async function assertLocalProjectReadAccessOrAdmin({

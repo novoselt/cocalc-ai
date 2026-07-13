@@ -33,6 +33,7 @@ import { User } from "@cocalc/frontend/users";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type { MembershipPackageDetails } from "@cocalc/conat/hub/api/purchases";
 import type {
+  CourseStudentPaymentStatus,
   ProjectCollabInviteRow,
   ProjectInviteEmailBlockedReason,
 } from "@cocalc/conat/hub/api/projects";
@@ -40,7 +41,10 @@ import { search_match, search_split, trunc_middle } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
 import { CourseActions } from "../actions";
 import { StudentAssignmentInfo, StudentAssignmentInfoHeader } from "../common";
-import { getActiveMembershipPackageAssignmentForAccount } from "../membership-packages";
+import {
+  getActiveMembershipPackageAssignmentForAccount,
+  isMembershipPackageCurrentlyActive,
+} from "../membership-packages";
 import {
   AssignmentsMap,
   IsGradingMap,
@@ -98,7 +102,13 @@ interface StudentProps {
   nbgrader_run_info?: NBgraderRunInfo;
   assignmentFilter?;
   coursePackage?: MembershipPackageDetails;
+  coursePackages?: MembershipPackageDetails[];
   refreshCoursePackage?: () => Promise<void>;
+  paymentMode?: "student" | "institute" | null;
+  paymentStatus?: CourseStudentPaymentStatus;
+  currentAccountId?: string;
+  isAdmin?: boolean;
+  onManageSeats?: () => void;
 }
 
 export function Student({
@@ -117,7 +127,13 @@ export function Student({
   nbgrader_run_info,
   assignmentFilter,
   coursePackage,
+  coursePackages = [],
   refreshCoursePackage,
+  paymentMode,
+  paymentStatus,
+  currentAccountId,
+  isAdmin = false,
+  onManageSeats,
 }: StudentProps) {
   const intl = useIntl();
   const actions: CourseActions = redux.getActions(name);
@@ -130,14 +146,29 @@ export function Student({
   const institutePayEnabled = !!store.getIn(["settings", "institute_pay"]);
   const studentAccountId = student.get("account_id");
   const studentProjectId = student.get("project_id");
+  const assignedCoursePackage = useMemo(
+    () =>
+      coursePackages.find(
+        (membershipPackage) =>
+          isMembershipPackageCurrentlyActive(membershipPackage) &&
+          !!getActiveMembershipPackageAssignmentForAccount(
+            membershipPackage,
+            studentAccountId,
+          ),
+      ),
+    [coursePackages, studentAccountId],
+  );
   const activeSeatAssignment = useMemo(
     () =>
       getActiveMembershipPackageAssignmentForAccount(
-        coursePackage,
+        assignedCoursePackage,
         studentAccountId,
       ),
-    [coursePackage, studentAccountId],
+    [assignedCoursePackage, studentAccountId],
   );
+  const canManageAssignedPackage =
+    assignedCoursePackage != null &&
+    (isAdmin || assignedCoursePackage.owner_account_id === currentAccountId);
   const [seatLoading, setSeatLoading] = useState<boolean>(false);
   const [seatError, setSeatError] = useState<string>("");
   const [sendInviteLoading, setSendInviteLoading] = useState<boolean>(false);
@@ -1079,7 +1110,7 @@ export function Student({
         key="basic"
         style={{ alignItems: "center", backgroundColor: background }}
       >
-        <Col md={6} style={cellStyle}>
+        <Col md={paymentMode ? 5 : 6} style={cellStyle}>
           <h6 style={{ margin: 0 }}>
             {render_student()}
             {render_deleted()}
@@ -1090,13 +1121,75 @@ export function Student({
             {render_student_email()}
           </h6>
         </Col>
-        <Col md={8} style={cellStyle}>
+        <Col md={paymentMode ? 6 : 8} style={cellStyle}>
           {render_last_active()}
         </Col>
-        <Col md={6} style={cellStyle}>
+        {paymentMode && (
+          <Col md={4} style={cellStyle}>
+            {render_paid_seat_status()}
+          </Col>
+        )}
+        <Col md={paymentMode ? 5 : 6} style={cellStyle}>
           {render_hosting()}
         </Col>
       </Row>
+    );
+  }
+
+  function render_paid_seat_status() {
+    if (student.get("deleted")) {
+      return <Tag>Deleted</Tag>;
+    }
+    if (!hasAccount) {
+      return <Tag>Hasn't joined course</Tag>;
+    }
+    if (paymentMode === "institute") {
+      return (
+        <a onClick={onManageSeats}>
+          {activeSeatAssignment ? (
+            <Tag color="green">Assigned</Tag>
+          ) : (
+            <Tag color="orange">Not assigned</Tag>
+          )}
+        </a>
+      );
+    }
+    if (!studentProjectId) {
+      return <Tag>Project not ready</Tag>;
+    }
+    if (paymentStatus == null) {
+      return <Tag>Checking...</Tag>;
+    }
+    if (paymentStatus.status === "paid") {
+      return (
+        <Tip
+          title="Paid"
+          tip={`Current membership: ${paymentStatus.current_membership_class ?? "unknown"}`}
+        >
+          <Tag color="green">Paid</Tag>
+        </Tip>
+      );
+    }
+    if (paymentStatus.status === "must-pay") {
+      return (
+        <Tip
+          title="Must still pay"
+          tip={`Requires ${paymentStatus.required_label ?? paymentStatus.required_membership_class ?? "course membership"}.`}
+        >
+          <Tag color="orange">Must still pay</Tag>
+        </Tip>
+      );
+    }
+    if (paymentStatus.status === "not-required") {
+      return <Tag>Not required</Tag>;
+    }
+    return (
+      <Tip
+        title="Unable to check payment"
+        tip={paymentStatus.error ?? "Payment status is unavailable."}
+      >
+        <Tag color="red">Check failed</Tag>
+      </Tip>
     );
   }
 
@@ -1244,7 +1337,7 @@ export function Student({
   }
 
   async function revoke_institute_paid_seat() {
-    if (!coursePackage || !studentAccountId) {
+    if (!assignedCoursePackage || !studentAccountId) {
       return;
     }
     setSeatLoading(true);
@@ -1252,7 +1345,7 @@ export function Student({
     try {
       await runFreshAuthAction(async () => {
         await revokeMembershipPackageSeat({
-          package_id: coursePackage.id,
+          package_id: assignedCoursePackage.id,
           target_account_id: studentAccountId,
         });
         await refreshCoursePackage?.();
@@ -1269,10 +1362,34 @@ export function Student({
       return;
     }
     let content: React.JSX.Element;
-    if (!coursePackage) {
+    if (activeSeatAssignment && assignedCoursePackage) {
+      content = (
+        <Space wrap>
+          <Tag color="green">Assigned</Tag>
+          <span style={{ color: COLORS.GRAY_M }}>
+            Package owned by{" "}
+            {redux
+              .getStore("users")
+              ?.get_name(assignedCoursePackage.owner_account_id) ??
+              assignedCoursePackage.owner_account_id}
+          </span>
+          {canManageAssignedPackage && (
+            <Button
+              size={size}
+              loading={seatLoading}
+              onClick={revoke_institute_paid_seat}
+            >
+              <Icon name="times" /> Revoke paid seat
+            </Button>
+          )}
+        </Space>
+      );
+    } else if (!coursePackage) {
       content = (
         <span style={{ color: COLORS.GRAY_M }}>
-          No institute-paid course seats have been purchased yet.
+          {coursePackages.length > 0
+            ? "Paid seats exist, but only the purchaser or an administrator can assign them."
+            : "No institute-paid course seats have been purchased yet."}
         </span>
       );
     } else if (!hasAccount) {
@@ -1288,19 +1405,6 @@ export function Student({
           Create the student project before assigning a paid seat so usage is
           attributed correctly.
         </span>
-      );
-    } else if (activeSeatAssignment) {
-      content = (
-        <Space wrap>
-          <Tag color="green">Assigned</Tag>
-          <Button
-            size={size}
-            loading={seatLoading}
-            onClick={revoke_institute_paid_seat}
-          >
-            <Icon name="times" /> Revoke paid seat
-          </Button>
-        </Space>
       );
     } else {
       content = (

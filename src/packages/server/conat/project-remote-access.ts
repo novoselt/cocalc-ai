@@ -5,6 +5,7 @@
 
 import type { ProjectReference } from "@cocalc/conat/inter-bay/api";
 import getPool from "@cocalc/database/pool";
+import isAdmin from "@cocalc/server/accounts/is-admin";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
@@ -26,9 +27,11 @@ import * as publicDirectoryShares from "@cocalc/server/conat/api/public-director
 async function loadLocalProjectReference({
   account_id,
   project_id,
+  requireProjectUser = true,
 }: {
   account_id: string;
   project_id: string;
+  requireProjectUser?: boolean;
 }): Promise<ProjectReference | null> {
   const { rows } = await getPool().query<{
     project_id: string;
@@ -49,7 +52,7 @@ async function loadLocalProjectReference({
       FROM projects
       WHERE project_id = $1
         AND deleted IS NOT TRUE
-        AND users ? $2::text
+        ${requireProjectUser ? "AND users ? $2::text" : ""}
       LIMIT 1
     `,
     [project_id, account_id, getConfiguredBayId()],
@@ -67,6 +70,47 @@ async function loadLocalProjectReference({
     allow_collaborator_destructive_storage_actions:
       row.allow_collaborator_destructive_storage_actions,
   };
+}
+
+export async function resolveProjectReferenceCollaboratorOrAdminAllowRemote({
+  account_id,
+  project_id,
+}: {
+  account_id: string;
+  project_id: string;
+}): Promise<ProjectReference | null> {
+  const collaboratorReference =
+    await resolveProjectReferenceForProjectUserAllowRemote({
+      account_id,
+      project_id,
+    });
+  if (
+    isProjectCollaboratorRole(collaboratorReference?.users?.[account_id]?.group)
+  ) {
+    return collaboratorReference;
+  }
+  if (!(await isAdmin(account_id))) {
+    return null;
+  }
+  if (collaboratorReference != null) {
+    return collaboratorReference;
+  }
+
+  const local = await loadLocalProjectReference({
+    account_id,
+    project_id,
+    requireProjectUser: false,
+  });
+  if (local != null) {
+    return local;
+  }
+  const ownership = await resolveProjectBay(project_id);
+  if (!ownership || ownership.bay_id === getConfiguredBayId()) {
+    return null;
+  }
+  return await getInterBayBridge()
+    .projectReference(ownership.bay_id)
+    .get({ account_id, project_id });
 }
 
 async function warmProjectRoute(project_id: string): Promise<void> {

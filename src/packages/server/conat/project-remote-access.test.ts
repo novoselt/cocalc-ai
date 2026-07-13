@@ -9,6 +9,7 @@ let getLocalProjectCollaboratorAccessStatusMock: jest.Mock;
 let getLocalProjectAccessStatusMock: jest.Mock;
 let materializeProjectHostMock: jest.Mock;
 let getTemporaryViewerReadPolicyMock: jest.Mock;
+let isAdminMock: jest.Mock;
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -19,6 +20,11 @@ jest.mock("@cocalc/database/pool", () => ({
 
 jest.mock("@cocalc/server/bay-config", () => ({
   getConfiguredBayId: jest.fn(() => "bay-local"),
+}));
+
+jest.mock("@cocalc/server/accounts/is-admin", () => ({
+  __esModule: true,
+  default: (...args: any[]) => isAdminMock(...args),
 }));
 
 jest.mock("@cocalc/server/inter-bay/directory", () => ({
@@ -68,6 +74,7 @@ describe("project remote access", () => {
       project_id: PROJECT_ID,
       account_id: ACCOUNT_ID,
     }));
+    isAdminMock = jest.fn(async () => false);
   });
 
   it("does not treat a remote viewer as a collaborator or warm runtime routing", async () => {
@@ -165,5 +172,35 @@ describe("project remote access", () => {
     expect(access.role).toBe("collaborator");
     expect(access.capabilities.writeProjectFiles).toBe(true);
     expect(getTemporaryViewerReadPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it("lets an admin inspect a remote project reference without broadening collaborator access", async () => {
+    isAdminMock = jest.fn(async () => true);
+    projectReferenceGetMock = jest.fn(async () => ({
+      project_id: PROJECT_ID,
+      title: "Course",
+      host_id: null,
+      owning_bay_id: "bay-remote",
+      users: {
+        "33333333-3333-4333-8333-333333333333": { group: "owner" },
+      },
+    }));
+    const {
+      hasProjectCollaboratorAccessAllowRemote,
+      resolveProjectReferenceCollaboratorOrAdminAllowRemote,
+    } = await import("./project-remote-access");
+
+    await expect(
+      resolveProjectReferenceCollaboratorOrAdminAllowRemote({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ title: "Course" }));
+    await expect(
+      hasProjectCollaboratorAccessAllowRemote({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+      }),
+    ).resolves.toBe(false);
   });
 });

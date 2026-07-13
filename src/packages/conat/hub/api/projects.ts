@@ -9,7 +9,10 @@ import {
   type CreateProjectOptions,
   type ProjectTheme,
 } from "@cocalc/util/db-schema/projects";
-import type { ProjectDefaultOverrides } from "./purchases";
+import type {
+  MembershipPackageDetails,
+  ProjectDefaultOverrides,
+} from "./purchases";
 import { type SnapshotSchedule } from "@cocalc/util/consts/snapshots";
 import { type CopyOptions } from "@cocalc/conat/files/fs";
 import {
@@ -276,6 +279,27 @@ export type CourseStudentAccessStatus =
       deadline?: Date | string | null;
       course?: ProjectCourseInfo;
     };
+
+export interface CourseStudentPaymentStatus {
+  project_id: string;
+  account_id?: string;
+  status: "paid" | "must-pay" | "not-required" | "error";
+  required_membership_class?: string;
+  required_label?: string;
+  current_membership_class?: string;
+  current_expires?: Date | string | null;
+  source?: string;
+  error?: string;
+}
+
+export interface CoursePaymentOverview {
+  course_project_id: string;
+  course_title: string;
+  manager_account_ids: string[];
+  packages: MembershipPackageDetails[];
+  package_errors: { owner_account_id: string; error: string }[];
+  students: CourseStudentPaymentStatus[];
+}
 
 // "cloudflare-access-tcp" is kept temporarily for compatibility with older
 // servers/clients. The route is a Cloudflare-published SSH/TCP endpoint; it
@@ -984,6 +1008,7 @@ export const projects = {
   getProjectRuntimeSponsorStatus: authFirstRequireAccount,
   getAccountRuntimeSponsorStatus: authFirstRequireAccount,
   getCourseStudentAccess: authFirstRequireAccount,
+  getCoursePaymentOverview: authFirstRequireAccount,
   getProjectSnapshotSchedule: authFirstRequireAccount,
   getProjectBackupSchedule: authFirstRequireAccount,
   getProjectRunQuota: authFirstRequireAccount,
@@ -1325,6 +1350,12 @@ export interface Projects {
     account_id?: string;
     project_id: string;
   }) => Promise<CourseStudentAccessStatus>;
+
+  getCoursePaymentOverview: (opts: {
+    account_id?: string;
+    course_project_id: string;
+    student_project_ids: string[];
+  }) => Promise<CoursePaymentOverview>;
 
   getProjectRunQuota: (opts: {
     account_id?: string;

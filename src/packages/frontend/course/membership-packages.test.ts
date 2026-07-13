@@ -7,6 +7,7 @@ import {
   getActiveMembershipPackageAssignmentForAccount,
   getCourseMembershipPackage,
   isActiveMembershipPackageAssignment,
+  isMembershipPackageCurrentlyActive,
 } from "./membership-packages";
 
 describe("course membership package helpers", () => {
@@ -90,5 +91,32 @@ describe("course membership package helpers", () => {
         "student-1",
       )?.id,
     ).toBe("active");
+  });
+
+  it("does not select expired packages ahead of active packages", () => {
+    const active = {
+      id: "active",
+      owner_account_id: "owner",
+      kind: "course" as const,
+      membership_class: "student",
+      seat_count: 5,
+      expires_at: new Date("2100-01-01T00:00:00Z"),
+      metadata: { course_project_id: "course-1" },
+      assignments: [],
+      active_assignment_count: 0,
+      available_seat_count: 5,
+      updated: new Date("2026-05-01T00:00:00Z"),
+    };
+    const expired = {
+      ...active,
+      id: "expired",
+      expires_at: new Date("2000-01-01T00:00:00Z"),
+      updated: new Date("2026-06-01T00:00:00Z"),
+    };
+    expect(isMembershipPackageCurrentlyActive(active)).toBe(true);
+    expect(isMembershipPackageCurrentlyActive(expired)).toBe(false);
+    expect(getCourseMembershipPackage([expired, active], "course-1")?.id).toBe(
+      "active",
+    );
   });
 });
