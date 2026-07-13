@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "수정",
   "jupyter.ai.cell-tool.actions.translate.descr": "이 셀을 다른 언어로 번역하도록 에이전트에 요청합니다.",
   "jupyter.ai.cell-tool.actions.translate.label": "번역",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "이 {cellType, select, code {코드 셀} other {Markdown 셀}}에 대해 무엇을 알고 싶으신가요?",
   "jupyter.ai.cell-tool.assistant.title": "이 셀에서 에이전트 사용",
   "jupyter.ai.cell-tool.bugfix.placeholder": "선택 사항: Agent가 집중할 문제를 설명하세요.",
   "jupyter.ai.cell-tool.document.placeholder": "선택 사항: 문서에서 어떤 내용을 중점적으로 다뤄야 하나요?",

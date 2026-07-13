@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "変更",
   "jupyter.ai.cell-tool.actions.translate.descr": "Agentにこのセルを別の言語に翻訳するよう依頼します。",
   "jupyter.ai.cell-tool.actions.translate.label": "翻訳",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "この{cellType, select, code {セル} other {Markdownセル}}について何を知りたいですか？",
   "jupyter.ai.cell-tool.assistant.title": "このセルでエージェントを使用する",
   "jupyter.ai.cell-tool.bugfix.placeholder": "オプション：Agent に重点的に取り組んでほしい問題を説明してください。",
   "jupyter.ai.cell-tool.document.placeholder": "任意：ドキュメントで重点的に扱う内容は何ですか？",

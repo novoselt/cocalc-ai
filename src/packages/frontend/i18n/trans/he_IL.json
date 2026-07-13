@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "שינוי",
   "jupyter.ai.cell-tool.actions.translate.descr": "בקשו מהסוכן לתרגם תא זה לשפה אחרת.",
   "jupyter.ai.cell-tool.actions.translate.label": "תרגם",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "מה תרצו לדעת על {cellType, select, code {תא} other {תא Markdown}}?",
   "jupyter.ai.cell-tool.assistant.title": "השתמש בסוכן בתא זה",
   "jupyter.ai.cell-tool.bugfix.placeholder": "אופציונלי: תארו את הבעיה שבה תרצו שהסוכן יתמקד.",
   "jupyter.ai.cell-tool.document.placeholder": "אופציונלי: במה להתמקד בתיעוד?",

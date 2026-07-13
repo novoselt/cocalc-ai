@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "Módosítás",
   "jupyter.ai.cell-tool.actions.translate.descr": "Kérje meg az Agentet, hogy fordítsa le ezt a cellát egy másik nyelvre.",
   "jupyter.ai.cell-tool.actions.translate.label": "Fordítás",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "Mit szeretnél megtudni erről a {cellType, select, code {kódcelláról} other {Markdown-celláról}}?",
   "jupyter.ai.cell-tool.assistant.title": "Ügynök használata ezen a cellán",
   "jupyter.ai.cell-tool.bugfix.placeholder": "Opcionális: írja le a problémát, amelyre az Agent összpontosítson.",
   "jupyter.ai.cell-tool.document.placeholder": "Opcionális: mire összpontosítson a dokumentáció?",

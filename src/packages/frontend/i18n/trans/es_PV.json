@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "Aldatu",
   "jupyter.ai.cell-tool.actions.translate.descr": "Eskatu Agenteari gelaxka hau beste hizkuntza batera itzultzeko.",
   "jupyter.ai.cell-tool.actions.translate.label": "Itzuli",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "Zer jakin nahiko zenuke {cellType, select, code {gelaxka} other {Markdown gelaxka}} honi buruz?",
   "jupyter.ai.cell-tool.assistant.title": "Erabili agentea gelaxka honetan",
   "jupyter.ai.cell-tool.bugfix.placeholder": "Aukerakoa: deskribatu Agenteak zertan zentratu behar duen.",
   "jupyter.ai.cell-tool.document.placeholder": "Aukerakoa: zertan jarri behar luke arreta dokumentazioak?",

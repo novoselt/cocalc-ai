@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "修改",
   "jupyter.ai.cell-tool.actions.translate.descr": "请求 Agent 将此单元格翻译成另一种语言。",
   "jupyter.ai.cell-tool.actions.translate.label": "翻译",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "您想了解这个{cellType, select, code {代码单元格} other {Markdown 单元格}}的什么内容？",
   "jupyter.ai.cell-tool.assistant.title": "在此单元格中使用代理氏",
   "jupyter.ai.cell-tool.bugfix.placeholder": "可选：描述您希望 Agent 重点关注的问题。",
   "jupyter.ai.cell-tool.document.placeholder": "可选：文档应重点介绍什么？",

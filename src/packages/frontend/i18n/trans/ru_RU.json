@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "Изменить",
   "jupyter.ai.cell-tool.actions.translate.descr": "Попросить агента перевести эту ячейку на другой язык.",
   "jupyter.ai.cell-tool.actions.translate.label": "Перевести",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "Что вы хотите узнать об этой {cellType, select, code {ячейке} other {ячейке Markdown}}?",
   "jupyter.ai.cell-tool.assistant.title": "Использовать агента для этой ячейки",
   "jupyter.ai.cell-tool.bugfix.placeholder": "Необязательно: опишите проблему, на которой должен сосредоточиться агент.",
   "jupyter.ai.cell-tool.document.placeholder": "Необязательно: на чём должна сосредоточиться документация?",

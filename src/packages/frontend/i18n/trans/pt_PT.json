@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "Modificar",
   "jupyter.ai.cell-tool.actions.translate.descr": "Peça ao Agent para traduzir esta célula para outro idioma.",
   "jupyter.ai.cell-tool.actions.translate.label": "Traduzir",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "O que gostaria de saber sobre esta {cellType, select, code {célula} other {célula Markdown}}?",
   "jupyter.ai.cell-tool.assistant.title": "Usar o agente nesta célula",
   "jupyter.ai.cell-tool.bugfix.placeholder": "Opcional: descreva o problema no qual pretende que o Agent se concentre.",
   "jupyter.ai.cell-tool.document.placeholder": "Opcional: em que deve incidir a documentação?",

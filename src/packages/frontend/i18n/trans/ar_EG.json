@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "تعديل",
   "jupyter.ai.cell-tool.actions.translate.descr": "اطلب من الوكيل ترجمة هذه الخلية إلى لغة أخرى.",
   "jupyter.ai.cell-tool.actions.translate.label": "ترجمة",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "ما الذي تود معرفته عن هذه {cellType, select, code {الخلية} other {خلية Markdown}}؟",
   "jupyter.ai.cell-tool.assistant.title": "استخدم الوكيل في هذه الخلية",
   "jupyter.ai.cell-tool.bugfix.placeholder": "اختياري: صِف المشكلة التي تريد من الوكيل التركيز عليها.",
   "jupyter.ai.cell-tool.document.placeholder": "اختياري: ما الذي ينبغي أن تركز عليه الوثائق؟",

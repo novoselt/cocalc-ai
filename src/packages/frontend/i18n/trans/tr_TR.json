@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "Değiştir",
   "jupyter.ai.cell-tool.actions.translate.descr": "Aracıdan bu hücreyi başka bir dile çevirmesini isteyin.",
   "jupyter.ai.cell-tool.actions.translate.label": "Çevir",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "Bu {cellType, select, code {hücre} other {Markdown hücresi}} hakkında ne bilmek istersiniz?",
   "jupyter.ai.cell-tool.assistant.title": "Bu hücrede Agent'ı kullan",
   "jupyter.ai.cell-tool.bugfix.placeholder": "İsteğe bağlı: Aracının odaklanmasını istediğiniz sorunu açıklayın.",
   "jupyter.ai.cell-tool.document.placeholder": "İsteğe bağlı: Belgeler neye odaklanmalı?",

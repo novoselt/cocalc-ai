@@ -643,7 +643,7 @@
   "jupyter.ai.cell-tool.actions.modify.label": "संशोधित करें",
   "jupyter.ai.cell-tool.actions.translate.descr": "इस सेल का किसी अन्य भाषा में अनुवाद करने के लिए एजेंट से कहें।",
   "jupyter.ai.cell-tool.actions.translate.label": "अनुवाद करें",
-  "jupyter.ai.cell-tool.ask.placeholder": "",
+  "jupyter.ai.cell-tool.ask.placeholder": "आप इस {cellType, select, code {सेल} other {Markdown सेल}} के बारे में क्या जानना चाहते हैं?",
   "jupyter.ai.cell-tool.assistant.title": "इस सेल पर एजेंट का उपयोग करें",
   "jupyter.ai.cell-tool.bugfix.placeholder": "वैकल्पिक: उस समस्या का वर्णन करें जिस पर आप Agent का ध्यान केंद्रित करना चाहते हैं.",
   "jupyter.ai.cell-tool.document.placeholder": "वैकल्पिक: दस्तावेज़ में किस पर ध्यान केंद्रित किया जाना चाहिए?",
