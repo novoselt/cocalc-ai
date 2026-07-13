@@ -81,6 +81,38 @@ test("createHubApiForContext exposes the adminHost hub group", async () => {
   ]);
 });
 
+test("createHubApiForContext exposes the adminSupport hub group", async () => {
+  const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
+  const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
+    calls.push({ name, args, timeout });
+    return { audit_id: "audit-support-1", tickets: [] } as T;
+  });
+
+  const result = await hub.adminSupport.triage({
+    since_minutes: 60,
+    limit: 3,
+    reason: "investigate recent support signals",
+  });
+
+  assert.deepEqual(result, {
+    audit_id: "audit-support-1",
+    tickets: [],
+  });
+  assert.deepEqual(calls, [
+    {
+      name: "adminSupport.triage",
+      args: [
+        {
+          since_minutes: 60,
+          limit: 3,
+          reason: "investigate recent support signals",
+        },
+      ],
+      timeout: undefined,
+    },
+  ]);
+});
+
 test("createHubApiForContext forwards explicit per-call timeout", async () => {
   const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
   const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
