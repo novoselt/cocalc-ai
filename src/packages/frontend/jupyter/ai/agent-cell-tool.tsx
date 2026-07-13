@@ -277,10 +277,14 @@ function optionalPromptPlaceholder(
 ): string {
   switch (mode) {
     case "ask":
-      return intl.formatMessage({
-        id: "jupyter.ai.cell-tool.ask.placeholder",
-        defaultMessage: `What would you like to know about this ${cellType === "code" ? "cell" : "Markdown cell"}?`,
-      });
+      return intl.formatMessage(
+        {
+          id: "jupyter.ai.cell-tool.ask.placeholder",
+          defaultMessage:
+            "What would you like to know about this {cellType, select, code {cell} other {Markdown cell}}?",
+        },
+        { cellType },
+      );
     case "bugfix":
       return intl.formatMessage({
         id: "jupyter.ai.cell-tool.bugfix.placeholder",

@@ -53,6 +53,15 @@ After introducing new messages, these are the steps to get all translations into
 
 Note: if just a translation has been updated, you only need to do the `i18n:download` & `i18n:compile` steps.
 
+Note: you can also run `pnpm i18n:update` which combines all steps in one go.
+
+**Updating an existing message:** SimpleLocalize only auto-translates _new_ keys. If you change the `defaultMessage` of an existing key, the old translations will remain unchanged. To force re-translation, you must first delete the key from SimpleLocalize, then run the update pipeline:
+
+```bash
+pnpm i18n:delete <key-id>   # removes the key and all its translations from SimpleLocalize
+pnpm i18n:update             # re-extracts, uploads (as new), auto-translates, downloads, compiles
+```
+
 ### Unused keys
 
 Development goes on, and it might happen that keys are no longer in use.
@@ -101,12 +110,11 @@ This is about auto-translations, in "Settings → Auto-translation":
 - To start: when you add a new language, set its full code, e.g. "fr_FR", name "French" and language "French". Translation provider: OpenAI.
 - You need the API key, it's in Integrations → REST API. See notes above.
 - In the Auto-translate configuration, OpenAI → Configure:
-
   - API key: a separate one to track usage, it's fine to restrict its capabilities to list and use models.
   - GPT-4o
   - System prompt: here, the key point is to give some context and to instruct it to retain those ICU messages. That's what I came up with after a few tests and iterations:
 
-        Translation of strings in the user-interface of the online platform "CoCalc".
+        Translation of strings in the user-interface of the online platform "CoCalc AI".
 
         Stay close to the original meaning of the source text and match the length and style. In particular, short labels of commands must stay short.
 
