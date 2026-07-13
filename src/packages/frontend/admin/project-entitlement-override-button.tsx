@@ -21,6 +21,10 @@ import {
   FreshAuthModal,
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
+import {
+  normalizeUserFacingError,
+  type UserFacingError,
+} from "@cocalc/frontend/components/user-facing-error";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { humanSize } from "@cocalc/util/misc";
 
@@ -29,6 +33,12 @@ const { Text } = Typography;
 interface FormValues {
   disk_quota_mb: number;
   reason: string;
+}
+
+export function projectEntitlementOverrideError(
+  error: unknown,
+): UserFacingError {
+  return normalizeUserFacingError(error);
 }
 
 function diskQuotaMb(
@@ -58,7 +68,7 @@ export function ProjectEntitlementOverrideButton({
   const [override, setOverride] = useState<ProjectEntitlementOverride | null>(
     null,
   );
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UserFacingError | null>(null);
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction({
     origin: "project disk override",
   });
@@ -78,7 +88,7 @@ export function ProjectEntitlementOverrideButton({
         reason: result?.reason ?? "",
       });
     } catch (err) {
-      setError(`${err}`);
+      setError(projectEntitlementOverrideError(err));
     } finally {
       setLoading(false);
     }
@@ -108,7 +118,7 @@ export function ProjectEntitlementOverrideButton({
         void message.success("Project disk override saved.");
       });
     } catch (err) {
-      setError(`${err}`);
+      setError(projectEntitlementOverrideError(err));
     } finally {
       setSaving(false);
     }
@@ -131,7 +141,7 @@ export function ProjectEntitlementOverrideButton({
         void message.success("Project disk override cleared.");
       });
     } catch (err) {
-      setError(`${err}`);
+      setError(projectEntitlementOverrideError(err));
     } finally {
       setClearing(false);
     }
@@ -159,7 +169,30 @@ export function ProjectEntitlementOverrideButton({
             apply, but this project will not be started with less disk space
             than this override.
           </Text>
-          {error ? <Alert type="error" showIcon message={error} /> : null}
+          {error ? (
+            <Alert
+              type="error"
+              showIcon
+              message={error.message}
+              description={
+                error.details ? (
+                  <details style={{ fontSize: "12px", marginTop: "6px" }}>
+                    <summary>Technical details</summary>
+                    <pre
+                      style={{
+                        marginBottom: 0,
+                        maxHeight: "160px",
+                        overflow: "auto",
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {error.details}
+                    </pre>
+                  </details>
+                ) : undefined
+              }
+            />
+          ) : null}
           <Alert
             type={current == null ? "info" : "success"}
             showIcon
