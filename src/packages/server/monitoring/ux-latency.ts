@@ -9,7 +9,10 @@ import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import getAdmins from "@cocalc/server/accounts/admins";
 import adminAlert from "@cocalc/server/messages/admin-alert";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import { getLro } from "@cocalc/server/lro/lro-db";
 import { ADMIN_UX_LATENCY_ALERTS_ENABLED_KEY } from "@cocalc/util/admin-alerts";
+import { isProjectDiskQuotaError } from "@cocalc/util/project-start-errors";
+import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import type {
   UxLatencyEventInput,
   UxLatencyMetricSummary,
@@ -194,6 +197,60 @@ function cleanDetails(value: unknown): Record<string, unknown> {
   }
 }
 
+const PROJECT_START_STALL_METRICS = new Set([
+  "project_start_running_stuck",
+  "project_start_running_timeout",
+]);
+
+export function classifyProjectStartQuotaTelemetry({
+  event,
+  lro,
+}: {
+  event: UxLatencyEventInput;
+  lro?: Pick<LroSummary, "status" | "error" | "result">;
+}): UxLatencyEventInput {
+  if (
+    !PROJECT_START_STALL_METRICS.has(event.metric) ||
+    lro?.status !== "failed" ||
+    !isProjectDiskQuotaError({ error: lro.error, result: lro.result })
+  ) {
+    return event;
+  }
+  return {
+    ...event,
+    metric: "project_start_running_blocked",
+    details: {
+      ...cleanDetails(event.details),
+      original_metric: event.metric,
+      op_status: lro.status,
+      op_error: lro.error,
+      project_start_failure: lro.result?.project_start_failure,
+    },
+  };
+}
+
+async function classifyUxLatencyEvent(
+  event: UxLatencyEventInput,
+): Promise<UxLatencyEventInput> {
+  if (!PROJECT_START_STALL_METRICS.has(event.metric)) {
+    return event;
+  }
+  const opId = cleanUuid(cleanDetails(event.details).op_id);
+  if (!opId) return event;
+  try {
+    return classifyProjectStartQuotaTelemetry({
+      event,
+      lro: await getLro(opId),
+    });
+  } catch (err) {
+    logger.debug("unable to classify project start telemetry from lro", {
+      op_id: opId,
+      err: `${err}`,
+    });
+    return event;
+  }
+}
+
 export async function recordUxLatencyEvent({
   account_id,
   event,
@@ -201,6 +258,7 @@ export async function recordUxLatencyEvent({
   account_id?: string;
   event: UxLatencyEventInput;
 }): Promise<void> {
+  event = await classifyUxLatencyEvent(event);
   const metric = cleanText(event?.metric, 80);
   const eventType = cleanText(event?.event_type, 80);
   if (!metric || !eventType) {

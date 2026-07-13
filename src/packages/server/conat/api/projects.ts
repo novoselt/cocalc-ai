@@ -72,6 +72,7 @@ import {
   resolvePublicViewerDns,
 } from "@cocalc/util/public-viewer-origin";
 import { isValidUUID } from "@cocalc/util/misc";
+import { projectStartFailureFromError } from "@cocalc/util/project-start-errors";
 import type { CodexUsageStatusInfo } from "@cocalc/conat/hub/api/system";
 import {
   cancelCopy as cancelCopyDb,
@@ -4402,6 +4403,7 @@ async function runProjectStartLikeAction({
       });
     } catch (err) {
       const runtimeSponsorDenial = extractRuntimeSponsorDenial(err);
+      const projectStartFailure = projectStartFailureFromError(err);
       const enrichedRuntimeSponsorDenial = runtimeSponsorDenial
         ? await enrichRuntimeSponsorDenial({
             denial: runtimeSponsorDenial,
@@ -4424,7 +4426,9 @@ async function runProjectStartLikeAction({
           : `${err}`,
         ...(enrichedRuntimeSponsorDenial
           ? { result: { runtime_sponsor_denial: enrichedRuntimeSponsorDenial } }
-          : {}),
+          : projectStartFailure
+            ? { result: { project_start_failure: projectStartFailure } }
+            : {}),
       });
       if (updated) {
         publishStartLroSummaryBestEffort({

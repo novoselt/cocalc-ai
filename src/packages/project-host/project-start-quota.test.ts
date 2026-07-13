@@ -8,6 +8,8 @@ import {
   ProjectDiskQuotaExceededError,
   assertProjectDiskQuotaStartAllowed,
   isProjectDiskQuotaExceeded,
+  isProjectDiskQuotaStartBlocked,
+  projectDiskStartupHeadroomBytes,
 } from "./project-start-quota";
 
 describe("project start quota admission", () => {
@@ -16,6 +18,24 @@ describe("project start quota admission", () => {
     expect(isProjectDiskQuotaExceeded({ used: 10, size: 10 })).toBe(true);
     expect(isProjectDiskQuotaExceeded({ used: 11, size: 10 })).toBe(true);
     expect(isProjectDiskQuotaExceeded({ used: 11, size: 0 })).toBe(false);
+  });
+
+  it("reserves bounded headroom for startup filesystem metadata", () => {
+    expect(projectDiskStartupHeadroomBytes(1_000_000_000)).toBe(16_000_000);
+    expect(projectDiskStartupHeadroomBytes(4_000_000_000)).toBe(40_000_000);
+    expect(projectDiskStartupHeadroomBytes(100_000_000_000)).toBe(64_000_000);
+    expect(
+      isProjectDiskQuotaStartBlocked({
+        used: 3_950_000_000,
+        size: 4_000_000_000,
+      }),
+    ).toBe(false);
+    expect(
+      isProjectDiskQuotaStartBlocked({
+        used: 3_960_000_000,
+        size: 4_000_000_000,
+      }),
+    ).toBe(true);
   });
 
   it("throws a stable coded error when the project is over quota", async () => {
@@ -29,6 +49,7 @@ describe("project start quota admission", () => {
       code: PROJECT_DISK_QUOTA_EXCEEDED_CODE,
       quota_used_bytes: 9_100_000_000,
       quota_size_bytes: 4_000_000_000,
+      startup_headroom_bytes: 40_000_000,
     });
   });
 
@@ -38,10 +59,10 @@ describe("project start quota admission", () => {
       size: 4_000_000_000,
     });
     expect(err.message).toContain("Project disk quota exceeded");
-    expect(err.message).toContain("cannot be started");
+    expect(err.message).toContain("required filesystem metadata");
     expect(err.message).toContain("do not need to start the project");
     expect(err.message).toContain("browse, edit, download, or delete files");
-    expect(err.message).toContain("Delete files");
+    expect(err.message).toContain("files and snapshots");
     expect(err.message).toContain("upgrade your membership");
     expect(err.message).toContain("contact support");
   });

@@ -413,6 +413,46 @@ describe("StartButton", () => {
     expect(screen.getByText("Technical details")).toBeTruthy();
   });
 
+  it("shows stopped-project recovery actions for disk quota failures", () => {
+    startLroRecord = {
+      toJS: () => ({
+        summary: {
+          status: "failed",
+          op_id: "op-1",
+          scope_type: "project",
+          scope_id: "project-1",
+          error: "Project disk quota almost exhausted for project startup",
+          result: {
+            project_start_failure: {
+              code: "project_disk_quota_exceeded",
+            },
+          },
+        },
+      }),
+    };
+
+    render(
+      <IntlProvider locale="en">
+        <StartButton />
+      </IntlProvider>,
+    );
+
+    expect(
+      screen.getByText("Project storage is full or nearly full"),
+    ).toBeTruthy();
+    expect(screen.getByText(/do not need to start the project/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Manage files" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Manage snapshots" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Upgrade membership" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Contact support" }),
+    ).toBeTruthy();
+  });
+
   it("explains project start blocks caused by unverified email", async () => {
     startLroRecord = {
       toJS: () => ({

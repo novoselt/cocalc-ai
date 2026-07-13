@@ -54,6 +54,11 @@ import {
   formatProjectStartPolicyBlock,
   getProjectStartPolicyBlock,
 } from "@cocalc/frontend/projects/runtime-start-policy";
+import {
+  isProjectDiskQuotaError,
+  type ProjectStartFailure,
+} from "@cocalc/util/project-start-errors";
+import { ProjectDiskQuotaRemediation } from "./disk-usage/quota-remediation";
 
 const STYLE: CSSProperties = {
   fontSize: "40px",
@@ -131,7 +136,12 @@ export function StartButton({
   const startLroError = `${startLroSummary?.error ?? ""}`.trim();
   const runtimeSponsorDenial = startLroSummary?.result
     ?.runtime_sponsor_denial as RuntimeSponsorDenial | undefined;
-  const startFailed = startLroSummary?.status === "failed" && !!startLroError;
+  const projectStartFailure = startLroSummary?.result?.project_start_failure as
+    | ProjectStartFailure
+    | undefined;
+  const startFailed =
+    startLroSummary?.status === "failed" &&
+    (!!startLroError || projectStartFailure != null);
   const minimalStartAttemptOpIdsRef = useRef<Set<string>>(new Set());
   const moveActive =
     moveLro != null &&
@@ -226,7 +236,11 @@ export function StartButton({
         }}
       />
     ) : (
-      <ProjectStartFailureDescription error={startLroError} />
+      <ProjectStartFailureDescription
+        error={startLroError}
+        failure={projectStartFailure}
+        project_id={resolvedProjectId}
+      />
     );
   }
 
@@ -242,11 +256,17 @@ export function StartButton({
         }}
       />
     ) : err instanceof Error ? (
-      <ProjectStartFailureDescription error={err.message} />
+      <ProjectStartFailureDescription
+        error={err.message}
+        project_id={resolvedProjectId}
+      />
     ) : startPolicyBlock ? (
       formatProjectStartPolicyBlock(startPolicyBlock)
     ) : (
-      <ProjectStartFailureDescription error={`${err}`} />
+      <ProjectStartFailureDescription
+        error={`${err}`}
+        project_id={resolvedProjectId}
+      />
     );
   }
 
@@ -570,7 +590,20 @@ function MembershipDetailsModal({
   );
 }
 
-function ProjectStartFailureDescription({ error }: { error: string }) {
+function ProjectStartFailureDescription({
+  error,
+  failure,
+  project_id,
+}: {
+  error: string;
+  failure?: ProjectStartFailure;
+  project_id: string;
+}) {
+  if (isProjectDiskQuotaError({ error, failure })) {
+    return (
+      <ProjectDiskQuotaRemediation project_id={project_id} technical={error} />
+    );
+  }
   const { message, technical } = getProjectStartErrorDisplay(error);
   const showTechnical =
     !!technical &&

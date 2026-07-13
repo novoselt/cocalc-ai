@@ -43,6 +43,8 @@ import { dirname, posix } from "path";
 import { COLORS } from "@cocalc/util/theme";
 import { SNAPSHOTS } from "@cocalc/util/consts/snapshots";
 import { indexedBackupState } from "@cocalc/frontend/projects/host-operational";
+import { ProjectDiskQuotaRemediation } from "./quota-remediation";
+import { isProjectDiskQuotaStartBlocked } from "@cocalc/util/project-start-errors";
 
 const { Text } = Typography;
 const DISK_USAGE_TOOLTIP_PROPS = {
@@ -771,6 +773,9 @@ export default function DiskUsage({
       ? 0
       : Math.round((100 * quota.used) / quota.size);
   const quotaStatus = percent > 80 ? "exception" : undefined;
+  const quotaBlocksStart =
+    quota != null &&
+    isProjectDiskQuotaStartBlocked({ used: quota.used, size: quota.size });
   const scratchPercent =
     sharedScratch == null || sharedScratch.size <= 0
       ? 0
@@ -1446,14 +1451,13 @@ export default function DiskUsage({
                   </div>
                 </>
               )}
-              {percent >= 100 && (
-                <Alert
-                  style={{ margin: "15px 0" }}
-                  showIcon
-                  title="OVER QUOTA"
-                  description="Delete files or increase your quota."
-                  type="error"
-                />
+              {quotaBlocksStart && (
+                <div style={{ margin: "15px 0" }}>
+                  <ProjectDiskQuotaRemediation
+                    project_id={project_id}
+                    onNavigate={() => setExpand(false)}
+                  />
+                </div>
               )}
               {visible.length > 0 && (
                 <>
