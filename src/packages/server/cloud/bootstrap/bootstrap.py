@@ -26,6 +26,7 @@ import json
 import os
 import pwd
 import re
+import signal
 import shutil
 import ssl
 import subprocess
@@ -71,6 +72,7 @@ APT_RETRIES = 5
 APT_ACQUIRE_TIMEOUT_S = 60
 APT_UPDATE_TIMEOUT_S = 180
 APT_INSTALL_TIMEOUT_S = 600
+RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S = 10
 NODE_RUNTIME_APT_PACKAGES = ("libatomic1",)
 GCE_UBUNTU_MIRROR_RE = re.compile(
     r"https?://[A-Za-z0-9.-]*gce(?:\.clouds)?\.archive\.ubuntu\.com/ubuntu/?"
@@ -696,6 +698,29 @@ def read_user_subid_ranges(path: Path, user: str) -> list[tuple[int, int]]:
     return [(start, length) for name, start, length in entries if name == user]
 
 
+def run_bounded_capture(
+    args: list[str], timeout_s: float
+) -> subprocess.CompletedProcess[str]:
+    """Capture a command without allowing descendants to survive a timeout."""
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = proc.communicate()
+        return subprocess.CompletedProcess(args, 124, stdout, stderr)
+    return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
+
+
 def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     contract: dict[str, Any] = {"user": cfg.ssh_user}
     try:
@@ -718,17 +743,20 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
         prefix = ["sudo", "-u", cfg.ssh_user, "-H"]
     else:
         prefix = []
-    uid_proc = subprocess.run(
+    uid_proc = run_bounded_capture(
         prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman} unshare cat /proc/self/uid_map'],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
     )
-    gid_proc = subprocess.run(
+    if uid_proc.returncode != 0:
+        log_line(
+            cfg,
+            "bootstrap: unable to inspect runtime uid map "
+            f"(exit={uid_proc.returncode}); continuing without userns map facts",
+        )
+        return contract
+    gid_proc = run_bounded_capture(
         prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman} unshare cat /proc/self/gid_map'],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
     )
     if uid_proc.returncode == 0 and gid_proc.returncode == 0:
         uid_map = normalize_map_lines(uid_proc.stdout.splitlines())

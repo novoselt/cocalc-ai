@@ -2,8 +2,11 @@
 
 import json
 import os
+import pwd
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from collections import namedtuple
 from dataclasses import replace
@@ -606,6 +609,37 @@ class BootstrapStateFilesTest(unittest.TestCase):
 
 
 class BootstrapRuntimeUserContractTest(unittest.TestCase):
+    def test_bounded_capture_kills_hung_process_group(self) -> None:
+        started = time.monotonic()
+        result = bootstrap.run_bounded_capture(
+            [sys.executable, "-c", "import time; time.sleep(60)"], 0.05
+        )
+        self.assertEqual(result.returncode, 124)
+        self.assertLess(time.monotonic() - started, 2)
+
+    def test_runtime_user_contract_stops_after_timed_out_uid_probe(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        cfg = replace(cfg, ssh_user=pwd.getpwuid(os.getuid()).pw_name)
+        calls = []
+        original_which = bootstrap.shutil.which
+        original_probe = bootstrap.run_bounded_capture
+        try:
+            bootstrap.shutil.which = lambda _name: "/usr/bin/podman"
+
+            def fake_probe(args, timeout_s):
+                calls.append((args, timeout_s))
+                return subprocess.CompletedProcess(args, 124, "", "timed out")
+
+            bootstrap.run_bounded_capture = fake_probe
+            contract = bootstrap.read_current_runtime_user_contract(cfg)
+        finally:
+            bootstrap.shutil.which = original_which
+            bootstrap.run_bounded_capture = original_probe
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], bootstrap.RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S)
+        self.assertNotIn("uid_map", contract)
+
     def test_verify_runtime_user_contract_raises_on_drift(self) -> None:
         cfg = make_cfg(tempfile.mkdtemp())
         original_expected = bootstrap.expected_runtime_user_contract
