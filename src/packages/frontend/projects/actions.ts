@@ -3695,6 +3695,8 @@ export class ProjectsActions extends Actions<ProjectsState> {
       store.getIn(["project_map", project_id, "state", "state"]) as
         | string
         | undefined;
+    const projectHostId = (): string | undefined =>
+      store.getIn(["project_map", project_id, "host_id"]) as string | undefined;
     const authoritativeProjectState = async (): Promise<
       ProjectState | undefined
     > => {
@@ -3718,6 +3720,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
         metric: "project_start_running",
         duration_ms,
         project_id,
+        host_id: projectHostId(),
         client_event_id,
         segment,
         details: {
@@ -3744,6 +3747,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
         metric: "project_start_running_stream_stale",
         duration_ms: elapsedUxMs(timer),
         project_id,
+        host_id: projectHostId(),
         client_event_id,
         segment,
         details: {
@@ -3799,6 +3803,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
         metric: "project_start_running_blocked",
         duration_ms: elapsedUxMs(timer),
         project_id,
+        host_id: projectHostId(),
         client_event_id,
         segment,
         details: {
@@ -3841,6 +3846,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
           metric: "project_start_running_stuck",
           duration_ms: elapsedUxMs(timer),
           project_id,
+          host_id: projectHostId(),
           client_event_id,
           segment,
           details: {
@@ -3873,6 +3879,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
           metric: "project_start_running_timeout",
           duration_ms: elapsedUxMs(timer),
           project_id,
+          host_id: projectHostId(),
           client_event_id,
           segment,
           details: {
@@ -4020,6 +4027,10 @@ export class ProjectsActions extends Actions<ProjectsState> {
           metric: "project_start_request_failed",
           duration_ms: elapsedUxMs(uxTimer),
           project_id,
+          host_id:
+            (store.getIn(["project_map", project_id, "host_id"]) as
+              | string
+              | undefined) ?? undefined,
           client_event_id: uxClientEventId,
           segment: uxSegment,
           details: {

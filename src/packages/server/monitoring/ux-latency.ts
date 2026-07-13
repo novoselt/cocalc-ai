@@ -208,6 +208,7 @@ export async function recordUxLatencyEvent({
   }
   await ensureUxLatencySchema();
   const details = cleanDetails(event.details);
+  const hostId = cleanUuid(event.host_id) ?? cleanUuid(details.host_id);
   await getPool().query(
     `
     INSERT INTO ${TABLE}
@@ -224,7 +225,7 @@ export async function recordUxLatencyEvent({
       metric,
       cleanUuid(account_id),
       cleanUuid(event.project_id),
-      cleanUuid(event.host_id),
+      hostId,
       cleanText(event.bay_id, 80) ?? getConfiguredBayId(),
       cleanText(event.client_event_id, 120),
       cleanDuration(event.duration_ms),
@@ -304,7 +305,8 @@ export async function getUxLatencySummary({
       `
       SELECT e.received_at, e.started_at, e.event_type, e.metric, e.segment,
              e.duration_ms, e.account_id, e.project_id, p.title AS project_title,
-             e.host_id, e.bay_id, e.client_event_id, e.path_ext, e.editor,
+             COALESCE(e.host_id::text, e.details->>'host_id') AS host_id,
+             e.bay_id, e.client_event_id, e.path_ext, e.editor,
              e.details
         FROM ${TABLE} e
         LEFT JOIN projects p ON p.project_id = e.project_id

@@ -405,12 +405,22 @@ export function listUnreportedProjects(): ProjectRow[] {
   return stmt.all() as ProjectRow[];
 }
 
-export function markProjectStateReported(project_id: string) {
+export function markProjectStateReported(
+  project_id: string,
+  expected_state: string,
+): boolean {
   ensureProjectsTable();
   const db = getDatabase();
-  db.prepare("UPDATE projects SET state_reported=1 WHERE project_id=?").run(
+  const current = db
+    .prepare("SELECT state FROM projects WHERE project_id=?")
+    .get(project_id) as { state?: string | null } | undefined;
+  if (!current) return false;
+  const matched = current.state === expected_state;
+  db.prepare("UPDATE projects SET state_reported=? WHERE project_id=?").run(
+    matched ? 1 : 0,
     project_id,
   );
+  return matched;
 }
 
 export function deleteProjectLocal(project_id: string) {

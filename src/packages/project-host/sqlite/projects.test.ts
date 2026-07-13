@@ -1,7 +1,9 @@
 import { closeDatabase } from "@cocalc/lite/hub/sqlite/database";
 import {
   getProject,
+  listUnreportedProjects,
   listRuntimeArtifactReferences,
+  markProjectStateReported,
   upsertProject,
 } from "./projects";
 
@@ -41,6 +43,25 @@ describe("project sqlite runtime ports", () => {
     });
     expect(getProject(project_id)?.http_port).toBeNull();
     expect(getProject(project_id)?.ssh_port).toBeNull();
+  });
+
+  it("does not let an old state acknowledgement suppress a newer report", () => {
+    upsertProject({ project_id, state: "running" });
+    expect(markProjectStateReported(project_id, "running")).toBe(true);
+    expect(listUnreportedProjects()).toEqual([]);
+
+    upsertProject({ project_id, state: "opened" });
+    expect(markProjectStateReported(project_id, "opened")).toBe(true);
+    expect(listUnreportedProjects()).toEqual([]);
+
+    // A delayed acknowledgement for the earlier running report may have
+    // overwritten the master after opened was accepted. Requeue the current
+    // state so the periodic reporter restores convergence.
+    expect(markProjectStateReported(project_id, "running")).toBe(false);
+    expect(listUnreportedProjects()).toEqual([{ project_id, state: "opened" }]);
+
+    expect(markProjectStateReported(project_id, "opened")).toBe(true);
+    expect(listUnreportedProjects()).toEqual([]);
   });
 
   it("stores and aggregates running project bundle/tools references", () => {

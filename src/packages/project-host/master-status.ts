@@ -128,7 +128,13 @@ export async function reportProjectStateToMaster(
       await deleteProjectDataLocal(project_id);
       return;
     }
-    markProjectStateReported(project_id);
+    // A newer local state may have been written while this RPC was in flight.
+    // Only acknowledge the exact state the master accepted so the newer state
+    // remains queued for the background reporter.
+    const reportedState = typeof state === "string" ? state : state.state;
+    if (reportedState) {
+      markProjectStateReported(project_id, reportedState);
+    }
   } catch (err) {
     recordProjectHostRpcTraffic({
       channel: "status",
