@@ -171,7 +171,8 @@ src/packages/cli/src/bin/commands/rootfs-recipes-builtin.generated.ts
 **/project-env.sh
 **/*.bash_history
 
-src/.claude/settings.local.json
+.claude/settings.local.json
+.claude/launch.json
 
 # test reports by jest-junit
 junit.xml
