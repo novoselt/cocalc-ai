@@ -105,7 +105,11 @@ import {
   pullRootfsCacheEntry,
   type RootfsCachePullProgress,
 } from "../rootfs-cache";
-import { withOciPullReservationIfNeeded } from "../storage-reservations";
+import {
+  prepareOciPullReservationEstimate,
+  withOciPullReservationIfNeeded,
+  type OciPullReservationEstimate,
+} from "../storage-reservations";
 import { getLocalHostId } from "../sqlite/hosts";
 import { assertManagedRawNetworkStartAllowedBestEffort } from "../raw-network-egress";
 import {
@@ -996,6 +1000,7 @@ async function startRunnerWithStorageReservation<T>({
   image,
   op_id,
   onProgress,
+  preparedEstimate,
   fn,
 }: {
   project_id: string;
@@ -1005,6 +1010,7 @@ async function startRunnerWithStorageReservation<T>({
     message: string;
     detail?: Record<string, any>;
   }) => void;
+  preparedEstimate?: Promise<OciPullReservationEstimate | undefined>;
   fn: () => Promise<T>;
 }): Promise<T> {
   if (isManagedRootfsImageName(image)) {
@@ -1020,6 +1026,7 @@ async function startRunnerWithStorageReservation<T>({
     image,
     project_id,
     op_id,
+    preparedEstimate: await preparedEstimate,
     onProgress: (estimate) =>
       onProgress?.({
         message: "reserving host storage for OCI image pull",
@@ -1450,6 +1457,25 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           "Automatic starts are disabled for this project. Use the project Start button, then try again.",
         );
       }
+      const normalizedImage = getImage({ image: startMetadata.image });
+      const preparedOciEstimate = isManagedRootfsImageName(normalizedImage)
+        ? undefined
+        : timings
+            .measure(
+              "prepare_oci_pull_reservation",
+              async () =>
+                await prepareOciPullReservationEstimate({
+                  image: normalizedImage,
+                }),
+            )
+            .catch((err) => {
+              logger.warn("unable to prepare OCI pull storage estimate", {
+                project_id,
+                image: normalizedImage,
+                err: `${err}`,
+              });
+              return undefined;
+            });
       publishStartProgress({
         activity_id,
         project_id,
@@ -1575,6 +1601,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
               project_id,
               image: getImage(runnerConfig),
               op_id,
+              preparedEstimate: preparedOciEstimate,
               onProgress: ({ message, detail }) =>
                 publishStartProgress({
                   activity_id,

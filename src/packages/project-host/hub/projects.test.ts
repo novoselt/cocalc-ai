@@ -17,6 +17,7 @@ const pullRootfsCacheEntry = jest.fn(async () => undefined);
 const withOciPullReservationIfNeeded = jest.fn(
   async ({ fn }: { fn: () => Promise<any> }) => await fn(),
 );
+const prepareOciPullReservationEstimate = jest.fn(async () => undefined);
 const readFile = jest.fn(async () => "");
 const callHub = jest.fn();
 const getLocalHostId = jest.fn(() => "host-1");
@@ -124,6 +125,8 @@ jest.mock("@cocalc/lite/hub/acp", () => ({
     rehydrateAcpAutomationsForProject(...args),
 }));
 jest.mock("../storage-reservations", () => ({
+  prepareOciPullReservationEstimate: (...args: any[]) =>
+    prepareOciPullReservationEstimate(...args),
   withOciPullReservationIfNeeded: (...args: any[]) =>
     withOciPullReservationIfNeeded(...args),
 }));
@@ -196,8 +199,9 @@ describe("project host start ACP rehydrate ordering", () => {
   const project_id = "3f5d0b28-cf69-4c78-9b0a-ea747bc7acb3";
   const customImage = "ghcr.io/example/custom-rootfs:2026-03-21";
   const flushMicrotasks = async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
   };
 
   beforeEach(async () => {
@@ -213,6 +217,10 @@ describe("project host start ACP rehydrate ordering", () => {
     applyPendingCopies.mockResolvedValue(undefined);
     writeManagedAuthorizedKeys.mockResolvedValue(undefined);
     pullRootfsCacheEntry.mockResolvedValue(undefined);
+    prepareOciPullReservationEstimate.mockResolvedValue(undefined);
+    withOciPullReservationIfNeeded.mockImplementation(
+      async ({ fn }: { fn: () => Promise<any> }) => await fn(),
+    );
     readFile.mockResolvedValue("");
     callHub.mockReset();
     fileServerCreateBackup.mockReset();
@@ -300,6 +308,45 @@ describe("project host start ACP rehydrate ordering", () => {
         last_started_ms: expect.any(Number),
       }),
     );
+  });
+
+  it("overlaps a cold OCI estimate with start preparation", async () => {
+    const estimate = {
+      estimated_bytes: 4_000_000_000,
+      compressed_bytes: 1_000_000_000,
+      source: "skopeo" as const,
+    };
+    let resolveEstimate: ((value: typeof estimate) => void) | undefined;
+    const estimatePromise = new Promise<typeof estimate>((resolve) => {
+      resolveEstimate = resolve;
+    });
+    prepareOciPullReservationEstimate.mockReturnValueOnce(estimatePromise);
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    const startPromise = hubApi.projects.start({ project_id });
+    await flushMicrotasks();
+
+    expect(prepareOciPullReservationEstimate).toHaveBeenCalledTimes(1);
+    expect(applyPendingCopies).toHaveBeenCalledTimes(1);
+    expect(runnerApi.start).not.toHaveBeenCalled();
+
+    resolveEstimate?.(estimate);
+    await startPromise;
+
+    expect(withOciPullReservationIfNeeded).toHaveBeenCalledWith(
+      expect.objectContaining({ preparedEstimate: estimate }),
+    );
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
   });
 
   it("verifies stop convergence before marking a project opened", async () => {

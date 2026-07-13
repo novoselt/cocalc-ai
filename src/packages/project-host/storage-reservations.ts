@@ -504,6 +504,12 @@ type CachedEstimate = {
   source: "skopeo" | "fallback";
 };
 
+export type OciPullReservationEstimate = {
+  estimated_bytes: number;
+  compressed_bytes?: number;
+  source: "skopeo" | "fallback";
+};
+
 const ociEstimateCache = new Map<string, CachedEstimate>();
 
 async function inspectRemoteOciCompressedBytes(
@@ -551,11 +557,7 @@ export async function estimateOciPullReservation({
   image,
 }: {
   image: string;
-}): Promise<{
-  estimated_bytes: number;
-  compressed_bytes?: number;
-  source: "skopeo" | "fallback";
-}> {
+}): Promise<OciPullReservationEstimate> {
   const cached = ociEstimateCache.get(image);
   if (cached && cached.expires_at > Date.now()) {
     return {
@@ -589,6 +591,17 @@ export async function estimateOciPullReservation({
   };
 }
 
+export async function prepareOciPullReservationEstimate({
+  image,
+}: {
+  image: string;
+}): Promise<OciPullReservationEstimate | undefined> {
+  if (await hasCachedOciRootfs(image)) {
+    return undefined;
+  }
+  return await estimateOciPullReservation({ image });
+}
+
 async function hasCachedOciRootfs(image: string): Promise<boolean> {
   return (
     (await exists(imageCachePath(image))) &&
@@ -601,6 +614,7 @@ export async function withOciPullReservationIfNeeded<T>({
   project_id,
   op_id,
   onProgress,
+  preparedEstimate,
   fn,
 }: {
   image: string;
@@ -611,12 +625,14 @@ export async function withOciPullReservationIfNeeded<T>({
     compressed_bytes?: number;
     source: "skopeo" | "fallback";
   }) => void;
+  preparedEstimate?: OciPullReservationEstimate;
   fn: () => Promise<T>;
 }): Promise<T> {
   if (await hasCachedOciRootfs(image)) {
     return await fn();
   }
-  const estimate = await estimateOciPullReservation({ image });
+  const estimate =
+    preparedEstimate ?? (await estimateOciPullReservation({ image }));
   onProgress?.(estimate);
   return await withStorageReservation(
     {
