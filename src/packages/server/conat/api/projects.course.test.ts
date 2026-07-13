@@ -11,6 +11,7 @@ let getSeedMembershipTierByIdMock: jest.Mock;
 let listMembershipPackagesMock: jest.Mock;
 let interBayGetMembershipMock: jest.Mock;
 let interBayGetMembershipPackagesMock: jest.Mock;
+let claimMembershipPackageSeatWithVerifiedEmailsOnLocalBayMock: jest.Mock;
 
 jest.mock("@cocalc/server/conat/project-local-access", () => ({
   __esModule: true,
@@ -77,6 +78,8 @@ jest.mock("@cocalc/server/membership/tiers", () => ({
 jest.mock("@cocalc/server/membership/packages", () => ({
   __esModule: true,
   assignMembershipPackageSeat: jest.fn(),
+  claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay: (...args: any[]) =>
+    claimMembershipPackageSeatWithVerifiedEmailsOnLocalBayMock(...args),
   listClaimableMembershipPackagesForAccount: jest.fn(async () => []),
   listMembershipPackageDetailsForOwner: (...args: any[]) =>
     listMembershipPackagesMock(...args),
@@ -141,6 +144,18 @@ describe("project course info helpers", () => {
       entitlements: {},
     }));
     interBayGetMembershipPackagesMock = jest.fn(async () => []);
+    claimMembershipPackageSeatWithVerifiedEmailsOnLocalBayMock = jest.fn(
+      async ({ package_id, account_id }) => ({
+        id: "reserved-assignment",
+        package_id,
+        account_id,
+        metadata: {
+          course_project_id: "33333333-3333-4333-8333-333333333333",
+          project_id: "44444444-4444-4444-8444-444444444444",
+          student_id: "77777777-7777-4777-8777-777777777777",
+        },
+      }),
+    );
   });
 
   it("aggregates linked packages and resolves student membership on its home bay", async () => {
@@ -148,6 +163,7 @@ describe("project course info helpers", () => {
     const STUDENT_PROJECT_ID = "44444444-4444-4444-8444-444444444444";
     const STUDENT_ACCOUNT_ID = "55555555-5555-4555-8555-555555555555";
     const SECOND_MANAGER_ID = "66666666-6666-4666-8666-666666666666";
+    const STUDENT_ID = "77777777-7777-4777-8777-777777777777";
     resolveCourseReferenceMock.mockResolvedValue({
       project_id: COURSE_PROJECT_ID,
       title: "Linear Algebra",
@@ -196,9 +212,20 @@ describe("project course info helpers", () => {
         membership_class: "student",
         seat_count: 30,
         metadata: { course_project_id: COURSE_PROJECT_ID },
-        assignments: [],
-        active_assignment_count: 0,
-        available_seat_count: 30,
+        assignments: [
+          {
+            id: "reserved-assignment",
+            package_id: "local-package",
+            email_address: "private-invite@example.com",
+            metadata: {
+              course_project_id: COURSE_PROJECT_ID,
+              project_id: STUDENT_PROJECT_ID,
+              student_id: STUDENT_ID,
+            },
+          },
+        ],
+        active_assignment_count: 1,
+        available_seat_count: 29,
       },
     ]);
     interBayGetMembershipPackagesMock.mockResolvedValue([
@@ -254,6 +281,20 @@ describe("project course info helpers", () => {
     ]);
     expect(interBayGetMembershipMock).toHaveBeenCalledWith({
       account_id: STUDENT_ACCOUNT_ID,
+    });
+    expect(overview.packages[0].assignments).toEqual([
+      expect.objectContaining({
+        id: "reserved-assignment",
+        metadata: expect.objectContaining({ student_id: STUDENT_ID }),
+      }),
+    ]);
+    expect(overview.packages[0].assignments[0].email_address).toBeUndefined();
+    expect(
+      claimMembershipPackageSeatWithVerifiedEmailsOnLocalBayMock,
+    ).toHaveBeenCalledWith({
+      package_id: "local-package",
+      account_id: STUDENT_ACCOUNT_ID,
+      verified_email_addresses: ["private-invite@example.com"],
     });
   });
 

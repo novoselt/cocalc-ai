@@ -31,7 +31,7 @@ import {
 import { trunc_middle } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
 import {
-  getActiveMembershipPackageAssignmentForAccount,
+  getActiveMembershipPackageAssignmentForStudent,
   isMembershipPackageCurrentlyActive,
 } from "../membership-packages";
 
@@ -137,22 +137,16 @@ export function ManageSeats({
   const selectedRows = rows.filter((student) =>
     selectedStudentIds.includes(student.student_id),
   );
+  const getSeatAssignment = (student: ManageSeatsStudent) =>
+    getActiveMembershipPackageAssignmentForStudent(membershipPackage, student);
   const assignableRows = selectedRows.filter(
     (student) =>
-      student.account_id &&
       student.project_id &&
-      !getActiveMembershipPackageAssignmentForAccount(
-        membershipPackage,
-        student.account_id,
-      ),
+      (student.account_id || student.email_address) &&
+      !getSeatAssignment(student),
   );
   const revokableRows = selectedRows.filter(
-    (student) =>
-      student.account_id &&
-      getActiveMembershipPackageAssignmentForAccount(
-        membershipPackage,
-        student.account_id,
-      ),
+    (student) => !!getSeatAssignment(student),
   );
 
   async function mutateSeats(
@@ -172,13 +166,12 @@ export function ManageSeats({
           targetRows,
           4,
           async (student) => {
-            if (!student.account_id) {
-              return;
-            }
             if (action === "assign") {
               await assignMembershipPackageSeat({
                 package_id: membershipPackage.id,
-                target_account_id: student.account_id,
+                ...(student.account_id
+                  ? { target_account_id: student.account_id }
+                  : { target_email_address: student.email_address }),
                 metadata: {
                   course_project_id: courseProjectId,
                   project_id: student.project_id,
@@ -186,9 +179,12 @@ export function ManageSeats({
                 },
               });
             } else {
+              const assignment = getSeatAssignment(student);
               await revokeMembershipPackageSeat({
                 package_id: membershipPackage.id,
-                target_account_id: student.account_id,
+                ...(assignment?.account_id
+                  ? { target_account_id: assignment.account_id }
+                  : { target_email_address: student.email_address }),
               });
             }
             setCompleted((value) => value + 1);
@@ -274,7 +270,7 @@ export function ManageSeats({
                     value={membershipPackage.seat_count}
                   />
                   <Statistic
-                    title="Assigned"
+                    title="Assigned or reserved"
                     value={membershipPackage.active_assignment_count}
                   />
                   <Statistic
@@ -296,6 +292,11 @@ export function ManageSeats({
                     </>
                   ) : undefined}
                   .
+                </Paragraph>
+                <Paragraph type="secondary">
+                  Seats assigned before a student joins are reserved against the
+                  course invitation and are transferred to whichever CoCalc
+                  account accepts that invitation.
                 </Paragraph>
                 {!packageActive && (
                   <Alert
@@ -380,7 +381,9 @@ export function ManageSeats({
                 onChange: (keys) =>
                   setSelectedStudentIds(keys.map((key) => `${key}`)),
                 getCheckboxProps: (student) => ({
-                  disabled: !student.account_id || !student.project_id,
+                  disabled:
+                    !student.project_id ||
+                    (!student.account_id && !student.email_address),
                 }),
               }}
               columns={[
@@ -398,19 +401,43 @@ export function ManageSeats({
                 {
                   title: "Paid seat",
                   key: "seat",
-                  render: (_, student) =>
-                    !student.account_id ? (
-                      <Tag>Hasn't joined course</Tag>
-                    ) : getActiveMembershipPackageAssignmentForAccount(
-                        membershipPackage,
-                        student.account_id,
-                      ) ? (
-                      <Tag color={packageActive ? "green" : "orange"}>
-                        {packageActive ? "Assigned" : "Assigned, inactive"}
+                  render: (_, student) => {
+                    const assignment = getSeatAssignment(student);
+                    if (assignment) {
+                      const reserved = !assignment.account_id;
+                      const accountMismatch =
+                        !!assignment.account_id &&
+                        assignment.account_id !== student.account_id;
+                      return (
+                        <Tag
+                          color={
+                            accountMismatch
+                              ? "red"
+                              : packageActive
+                                ? "green"
+                                : "orange"
+                          }
+                        >
+                          {accountMismatch
+                            ? "Claimed by another account"
+                            : reserved
+                              ? packageActive
+                                ? "Reserved"
+                                : "Reserved, inactive"
+                              : packageActive
+                                ? "Assigned"
+                                : "Assigned, inactive"}
+                        </Tag>
+                      );
+                    }
+                    return (
+                      <Tag>
+                        {student.account_id
+                          ? "Not assigned"
+                          : "Hasn't joined course"}
                       </Tag>
-                    ) : (
-                      <Tag>Not assigned</Tag>
-                    ),
+                    );
+                  },
                 },
               ]}
             />

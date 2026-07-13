@@ -42,7 +42,7 @@ import { COLORS } from "@cocalc/util/theme";
 import { CourseActions } from "../actions";
 import { StudentAssignmentInfo, StudentAssignmentInfoHeader } from "../common";
 import {
-  getActiveMembershipPackageAssignmentForAccount,
+  getActiveMembershipPackageAssignmentForStudent,
   isMembershipPackageCurrentlyActive,
 } from "../membership-packages";
 import {
@@ -146,25 +146,28 @@ export function Student({
   const institutePayEnabled = !!store.getIn(["settings", "institute_pay"]);
   const studentAccountId = student.get("account_id");
   const studentProjectId = student.get("project_id");
+  const studentEmailAddress = student.get("email_address");
   const assignedCoursePackage = useMemo(
     () =>
       coursePackages.find(
         (membershipPackage) =>
           isMembershipPackageCurrentlyActive(membershipPackage) &&
-          !!getActiveMembershipPackageAssignmentForAccount(
-            membershipPackage,
-            studentAccountId,
-          ),
+          !!getActiveMembershipPackageAssignmentForStudent(membershipPackage, {
+            account_id: studentAccountId,
+            project_id: studentProjectId,
+            student_id,
+          }),
       ),
-    [coursePackages, studentAccountId],
+    [coursePackages, studentAccountId, studentProjectId, student_id],
   );
   const activeSeatAssignment = useMemo(
     () =>
-      getActiveMembershipPackageAssignmentForAccount(
-        assignedCoursePackage,
-        studentAccountId,
-      ),
-    [assignedCoursePackage, studentAccountId],
+      getActiveMembershipPackageAssignmentForStudent(assignedCoursePackage, {
+        account_id: studentAccountId,
+        project_id: studentProjectId,
+        student_id,
+      }),
+    [assignedCoursePackage, studentAccountId, studentProjectId, student_id],
   );
   const canManageAssignedPackage =
     assignedCoursePackage != null &&
@@ -1140,19 +1143,35 @@ export function Student({
     if (student.get("deleted")) {
       return <Tag>Deleted</Tag>;
     }
-    if (!hasAccount) {
-      return <Tag>Hasn't joined course</Tag>;
-    }
     if (paymentMode === "institute") {
       return (
         <a onClick={onManageSeats}>
           {activeSeatAssignment ? (
-            <Tag color="green">Assigned</Tag>
+            <Tag
+              color={
+                activeSeatAssignment.account_id &&
+                activeSeatAssignment.account_id !== studentAccountId
+                  ? "red"
+                  : "green"
+              }
+            >
+              {activeSeatAssignment.account_id &&
+              activeSeatAssignment.account_id !== studentAccountId
+                ? "Claimed by another account"
+                : activeSeatAssignment.account_id
+                  ? "Assigned"
+                  : "Reserved"}
+            </Tag>
+          ) : !hasAccount ? (
+            <Tag>Hasn't joined course</Tag>
           ) : (
             <Tag color="orange">Not assigned</Tag>
           )}
         </a>
       );
+    }
+    if (!hasAccount) {
+      return <Tag>Hasn't joined course</Tag>;
     }
     if (!studentProjectId) {
       return <Tag>Project not ready</Tag>;
@@ -1251,7 +1270,23 @@ export function Student({
         <Tag color={studentProjectId ? "blue" : "default"}>
           {studentProjectId ? "Project created" : "No project"}
         </Tag>
-        {activeSeatAssignment && <Tag color="green">Paid seat assigned</Tag>}
+        {activeSeatAssignment && (
+          <Tag
+            color={
+              activeSeatAssignment.account_id &&
+              activeSeatAssignment.account_id !== studentAccountId
+                ? "red"
+                : "green"
+            }
+          >
+            {activeSeatAssignment.account_id &&
+            activeSeatAssignment.account_id !== studentAccountId
+              ? "Paid seat claimed by another account"
+              : activeSeatAssignment.account_id
+                ? "Paid seat assigned"
+                : "Paid seat reserved"}
+          </Tag>
+        )}
         {student.get("deleted") && <Tag color="red">Deleted</Tag>}
         <Text type="secondary">{render_student_email()}</Text>
         {!deletedAccount && (
@@ -1311,7 +1346,11 @@ export function Student({
   }
 
   async function assign_institute_paid_seat() {
-    if (!coursePackage || !studentAccountId || !studentProjectId) {
+    if (
+      !coursePackage ||
+      (!studentAccountId && !studentEmailAddress) ||
+      !studentProjectId
+    ) {
       return;
     }
     setSeatLoading(true);
@@ -1320,7 +1359,9 @@ export function Student({
       await runFreshAuthAction(async () => {
         await assignMembershipPackageSeat({
           package_id: coursePackage.id,
-          target_account_id: studentAccountId,
+          ...(studentAccountId
+            ? { target_account_id: studentAccountId }
+            : { target_email_address: studentEmailAddress }),
           metadata: {
             course_project_id: store.get("course_project_id"),
             project_id: studentProjectId,
@@ -1337,7 +1378,7 @@ export function Student({
   }
 
   async function revoke_institute_paid_seat() {
-    if (!assignedCoursePackage || !studentAccountId) {
+    if (!assignedCoursePackage || !activeSeatAssignment) {
       return;
     }
     setSeatLoading(true);
@@ -1346,7 +1387,9 @@ export function Student({
       await runFreshAuthAction(async () => {
         await revokeMembershipPackageSeat({
           package_id: assignedCoursePackage.id,
-          target_account_id: studentAccountId,
+          ...(activeSeatAssignment.account_id
+            ? { target_account_id: activeSeatAssignment.account_id }
+            : { target_email_address: studentEmailAddress }),
         });
         await refreshCoursePackage?.();
       });
@@ -1392,11 +1435,10 @@ export function Student({
             : "No institute-paid course seats have been purchased yet."}
         </span>
       );
-    } else if (!hasAccount) {
+    } else if (!hasAccount && !studentEmailAddress) {
       content = (
         <span style={{ color: COLORS.GRAY_M }}>
-          The student must create a CoCalc account before you can assign a paid
-          seat.
+          Add an email address before reserving a paid seat.
         </span>
       );
     } else if (!studentProjectId) {
@@ -1417,7 +1459,7 @@ export function Student({
             disabled={coursePackage.available_seat_count <= 0}
             onClick={assign_institute_paid_seat}
           >
-            <Icon name="check" /> Assign paid seat
+            <Icon name="check" /> {hasAccount ? "Assign" : "Reserve"} paid seat
           </Button>
           {coursePackage.available_seat_count <= 0 && (
             <span style={{ color: COLORS.GRAY_M }}>No seats available.</span>

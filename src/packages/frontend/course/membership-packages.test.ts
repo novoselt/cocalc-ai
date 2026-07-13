@@ -5,6 +5,7 @@
 
 import {
   getActiveMembershipPackageAssignmentForAccount,
+  getActiveMembershipPackageAssignmentForStudent,
   getCourseMembershipPackage,
   isActiveMembershipPackageAssignment,
   isMembershipPackageCurrentlyActive,
@@ -91,6 +92,39 @@ describe("course membership package helpers", () => {
         "student-1",
       )?.id,
     ).toBe("active");
+  });
+
+  it("finds an email reservation by its stable course student context", () => {
+    const membershipPackage = {
+      id: "package-1",
+      owner_account_id: "owner",
+      kind: "course" as const,
+      membership_class: "student" as const,
+      seat_count: 5,
+      metadata: { course_project_id: "course-1" },
+      assignments: [
+        {
+          id: "reserved",
+          package_id: "package-1",
+          email_address: "invited@example.com",
+          metadata: {
+            course_project_id: "course-1",
+            project_id: "project-1",
+            student_id: "student-1",
+          },
+        },
+      ],
+      active_assignment_count: 1,
+      available_seat_count: 4,
+    };
+
+    expect(
+      getActiveMembershipPackageAssignmentForStudent(membershipPackage, {
+        account_id: "accepted-with-another-email",
+        project_id: "project-1",
+        student_id: "student-1",
+      })?.id,
+    ).toBe("reserved");
   });
 
   it("does not select expired packages ahead of active packages", () => {

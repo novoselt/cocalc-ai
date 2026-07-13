@@ -22,6 +22,7 @@ let resolveMembershipForAccountMock: jest.Mock;
 let createNotificationEventGraphMock: jest.Mock;
 let resolveNotificationTargetHomeBaysMock: jest.Mock;
 let appendProjectLogRowBestEffortMock: jest.Mock;
+let claimCourseMembershipPackageSeatsForAcceptedInviteMock: jest.Mock;
 
 jest.mock("@cocalc/server/conat/project-local-access", () => ({
   __esModule: true,
@@ -130,6 +131,12 @@ jest.mock("@cocalc/server/membership/resolve", () => ({
   __esModule: true,
   resolveMembershipForAccount: (...args: any[]) =>
     resolveMembershipForAccountMock(...args),
+}));
+
+jest.mock("@cocalc/server/membership/packages", () => ({
+  __esModule: true,
+  claimCourseMembershipPackageSeatsForAcceptedInvite: (...args: any[]) =>
+    claimCourseMembershipPackageSeatsForAcceptedInviteMock(...args),
 }));
 
 jest.mock("@cocalc/backend/logger", () => {
@@ -258,6 +265,9 @@ describe("project collaborators local bay access", () => {
       source: "free",
       entitlements: {},
     }));
+    claimCourseMembershipPackageSeatsForAcceptedInviteMock = jest.fn(
+      async () => [],
+    );
     createNotificationEventGraphMock = jest.fn(async () => ({
       event: { event_id: "99999999-9999-4999-8999-999999999999" },
       targets: [],
@@ -1535,6 +1545,8 @@ describe("project collaborators local bay access", () => {
   it("binds accepted course email invites to the student project course field", async () => {
     const inviteId = "77777777-7777-4777-8777-777777777777";
     const token = "course-invite-token";
+    const courseProjectId = "88888888-8888-4888-8888-888888888888";
+    const studentId = "99999999-9999-4999-8999-999999999999";
     assertAccountTrustedForProductAccessMock = jest.fn(async () => {
       throw new Error("verify");
     });
@@ -1558,6 +1570,13 @@ describe("project collaborators local bay access", () => {
               inviter_account_id: TARGET_ACCOUNT_ID,
               status: "pending",
               token_hash: inviteTokenHash(token),
+              scope: "course_student",
+              email_ciphertext: encryptedInviteEmail("invite@example.com"),
+              context: {
+                course_project_id: courseProjectId,
+                student_id: studentId,
+                student_project_id: PROJECT_ID,
+              },
             },
           ],
         };
@@ -1642,6 +1661,15 @@ describe("project collaborators local bay access", () => {
       [PROJECT_ID, ACCOUNT_ID],
     );
     expect(assertAccountTrustedForProductAccessMock).not.toHaveBeenCalled();
+    expect(
+      claimCourseMembershipPackageSeatsForAcceptedInviteMock,
+    ).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+      invited_email_address: "invite@example.com",
+      course_project_id: courseProjectId,
+      student_project_id: PROJECT_ID,
+      student_id: studentId,
+    });
   });
 
   it("rejects email invite acceptance when the sender is no longer a project collaborator", async () => {

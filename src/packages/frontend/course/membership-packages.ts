@@ -75,3 +75,29 @@ export function getActiveMembershipPackageAssignmentForAccount(
       isActiveMembershipPackageAssignment(assignment),
   );
 }
+
+export function getActiveMembershipPackageAssignmentForStudent(
+  membershipPackage: MembershipPackageDetails | undefined,
+  student: {
+    account_id?: string;
+    project_id?: string;
+    student_id: string;
+  },
+): MembershipPackageAssignment | undefined {
+  if (!membershipPackage) {
+    return;
+  }
+  return membershipPackage.assignments.find((assignment) => {
+    if (!isActiveMembershipPackageAssignment(assignment)) {
+      return false;
+    }
+    if (student.account_id && assignment.account_id === student.account_id) {
+      return true;
+    }
+    return (
+      assignment.metadata?.student_id === student.student_id &&
+      (!student.project_id ||
+        assignment.metadata?.project_id === student.project_id)
+    );
+  });
+}

@@ -487,6 +487,11 @@ export interface ClaimableMembershipPackage {
   terms_version_label?: string | null;
   requires_terms_acceptance?: boolean;
   metadata?: Record<string, unknown> | null;
+  course_assignment_context?: {
+    course_project_id: string;
+    project_id: string;
+    student_id: string;
+  };
 }
 
 export interface MembershipPackageRecord {

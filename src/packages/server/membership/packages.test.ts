@@ -52,8 +52,10 @@ import { resolveMembershipForAccount } from "./resolve";
 import { getMembershipClaimIdentity } from "./claim-directory";
 import {
   assignMembershipPackageSeat,
+  claimCourseMembershipPackageSeatsForAcceptedInvite,
   claimMembershipPackageSeat,
   listClaimableMembershipPackagesForAccount,
+  listLocalClaimableMembershipPackagesForVerifiedEmails,
   listMembershipPackageDetailsForOwner,
   resolveMembershipPackageQuote,
   revokeMembershipPackageSeat,
@@ -819,6 +821,75 @@ describe("membership packages", () => {
     const membership = await resolveMembershipForAccount(invited_account_id);
     expect(membership.class).toBe(teamTier);
     expect(membership.source).toBe("grant");
+  });
+
+  it("claims a reserved course seat for the account accepting its invite", async () => {
+    const owner_account_id = uuid();
+    const accepted_account_id = uuid();
+    const course_project_id = uuid();
+    const student_project_id = uuid();
+    const student_id = uuid();
+    await createTestAccount(owner_account_id);
+    await createTestAccount(accepted_account_id);
+    await markVerifiedEmail(accepted_account_id, "different@example.com");
+    await getPool().query(
+      `INSERT INTO projects (project_id, title, users)
+       VALUES ($1, 'Reserved seat test', $2::jsonb)`,
+      [student_project_id, { [owner_account_id]: { group: "owner" } }],
+    );
+
+    const package_id = await createTestMembershipPackage({
+      owner_account_id,
+      kind: "course",
+      membership_class: courseTier,
+      seat_count: 1,
+      metadata: { course_project_id },
+    });
+    await assignMembershipPackageSeat({
+      package_id,
+      email_address: "invited@example.com",
+      assigned_by_account_id: owner_account_id,
+      metadata: {
+        course_project_id,
+        project_id: student_project_id,
+        student_id,
+      },
+    });
+
+    const claimables =
+      await listLocalClaimableMembershipPackagesForVerifiedEmails({
+        account_id: accepted_account_id,
+        verified_email_addresses: ["invited@example.com"],
+      });
+    expect(claimables[0].course_assignment_context).toEqual({
+      course_project_id,
+      project_id: student_project_id,
+      student_id,
+    });
+
+    await expect(
+      claimCourseMembershipPackageSeatsForAcceptedInvite({
+        account_id: accepted_account_id,
+        invited_email_address: "invited@example.com",
+        course_project_id,
+        student_project_id,
+        student_id: uuid(),
+      }),
+    ).resolves.toEqual([]);
+
+    const claimed = await claimCourseMembershipPackageSeatsForAcceptedInvite({
+      account_id: accepted_account_id,
+      invited_email_address: "invited@example.com",
+      course_project_id,
+      student_project_id,
+      student_id,
+    });
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]).toMatchObject({
+      package_id,
+      account_id: accepted_account_id,
+      email_address: "invited@example.com",
+    });
   });
 
   it("routes site claims to the beneficiary home bay when no preassignment exists", async () => {

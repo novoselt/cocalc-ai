@@ -91,6 +91,7 @@ import {
 } from "@cocalc/server/membership/project-limits";
 import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
 import { getEffectiveMembershipUsageLimits } from "@cocalc/server/membership/effective-limits";
+import { claimCourseMembershipPackageSeatsForAcceptedInvite } from "@cocalc/server/membership/packages";
 import { getSecretSettingsKey } from "@cocalc/database/settings/secret-settings";
 import {
   decryptSecretSettingValue,
@@ -1625,6 +1626,8 @@ async function getPendingEmailCollabInviteForToken({
   project_id: string;
   inviter_account_id: string;
   token_hash: string;
+  target_email?: string;
+  context?: Record<string, unknown> | null;
   scope?: string | null;
   invite_role?: string | null;
   read_policy?: ProjectViewerReadPolicy | null;
@@ -1642,12 +1645,15 @@ async function getPendingEmailCollabInviteForToken({
     inviter_account_id: string;
     status: string;
     token_hash: string | null;
+    email_ciphertext?: string | null;
+    context?: Record<string, unknown> | null;
     scope?: string | null;
     invite_role?: string | null;
     read_policy?: ProjectViewerReadPolicy | null;
   }>(
     `SELECT invite_id, project_id, inviter_account_id, status, token_hash,
-            scope, COALESCE(invite_role, 'collaborator') AS invite_role,
+            email_ciphertext, context, scope,
+            COALESCE(invite_role, 'collaborator') AS invite_role,
             read_policy
        FROM project_collab_invites
       WHERE invite_id=$1
@@ -1674,7 +1680,61 @@ async function getPendingEmailCollabInviteForToken({
   if (invite.status !== "pending") {
     throw new Error(`invite is not pending (status=${invite.status})`);
   }
-  return { ...invite, token_hash };
+  const target_email = invite.email_ciphertext
+    ? await decryptInviteValue(EMAIL_INVITE_EMAIL_AAD, invite.email_ciphertext)
+    : undefined;
+  return { ...invite, token_hash, target_email };
+}
+
+async function claimReservedCourseSeatForAcceptedInviteBestEffort({
+  account_id,
+  invite,
+}: {
+  account_id: string;
+  invite: Awaited<ReturnType<typeof getPendingEmailCollabInviteForToken>>;
+}): Promise<void> {
+  if (invite.scope !== COURSE_EMAIL_INVITE_SCOPE || !invite.target_email) {
+    return;
+  }
+  const course_project_id = `${invite.context?.course_project_id ?? ""}`.trim();
+  const student_id = `${invite.context?.student_id ?? ""}`.trim();
+  const student_project_id = `${
+    invite.context?.student_project_id ?? invite.project_id
+  }`.trim();
+  if (
+    !is_valid_uuid_string(course_project_id) ||
+    !is_valid_uuid_string(student_id) ||
+    !is_valid_uuid_string(student_project_id)
+  ) {
+    logger.warn("course invite is missing seat reservation context", {
+      invite_id: invite.invite_id,
+      course_project_id,
+      student_id,
+      student_project_id,
+    });
+    return;
+  }
+  try {
+    await claimCourseMembershipPackageSeatsForAcceptedInvite({
+      account_id,
+      invited_email_address: invite.target_email,
+      course_project_id,
+      student_project_id,
+      student_id,
+    });
+  } catch (err) {
+    logger.warn(
+      "failed to claim reserved course seat after invite acceptance",
+      {
+        account_id,
+        invite_id: invite.invite_id,
+        course_project_id,
+        student_id,
+        student_project_id,
+        err: `${err}`,
+      },
+    );
+  }
 }
 
 async function assertInviteSenderCanStillGrantAccess({
@@ -3578,6 +3638,10 @@ export async function redeemEmailProjectInvite({
     token_hash: invite.token_hash,
     scope: invite.scope,
     status: "accepted",
+  });
+  void claimReservedCourseSeatForAcceptedInviteBestEffort({
+    account_id,
+    invite,
   });
   await publishProjectAccountFeedEventsBestEffort({
     project_id: invite.project_id,

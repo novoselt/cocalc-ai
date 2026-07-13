@@ -466,7 +466,7 @@ export function StudentsPanel({
             }
             description={
               coursePackages.length > 0
-                ? `${coursePackages.reduce((sum, membershipPackage) => sum + membershipPackage.active_assignment_count, 0)} assigned of ${coursePackages.reduce((sum, membershipPackage) => sum + membershipPackage.seat_count, 0)} purchased seats. Use Manage seats to inspect package ownership and change assignments.`
+                ? `${coursePackages.reduce((sum, membershipPackage) => sum + membershipPackage.active_assignment_count, 0)} assigned or reserved of ${coursePackages.reduce((sum, membershipPackage) => sum + membershipPackage.seat_count, 0)} purchased seats. Use Manage seats to inspect package ownership and change assignments.`
                 : "Purchase seats in the course payment configuration, then assign them here."
             }
             action={

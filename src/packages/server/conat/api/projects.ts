@@ -200,6 +200,7 @@ import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
 import { getSeedMembershipTierById } from "@cocalc/server/membership/tiers";
 import {
   assignMembershipPackageSeat,
+  claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay,
   listClaimableMembershipPackagesForAccount,
   listMembershipPackageDetailsForOwner,
 } from "@cocalc/server/membership/packages";
@@ -2687,6 +2688,38 @@ async function listAccountMembershipPackagesAllowRemote(account_id: string) {
   }).getMembershipPackages({ owner_account_id: account_id });
 }
 
+async function repairCourseSeatReservationAllowRemote({
+  owner_account_id,
+  package_id,
+  account_id,
+  invited_email_address,
+}: {
+  owner_account_id: string;
+  package_id: string;
+  account_id: string;
+  invited_email_address: string;
+}) {
+  const location = await resolveAccountHomeBay({
+    account_id: owner_account_id,
+    user_account_id: owner_account_id,
+  });
+  if (location.home_bay_id === getConfiguredBayId()) {
+    return await claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay({
+      package_id,
+      account_id,
+      verified_email_addresses: [invited_email_address],
+    });
+  }
+  return await createInterBayAccountLocalClient({
+    client: getInterBayFabricClient(),
+    dest_bay: location.home_bay_id,
+  }).claimMembershipPackageSeat({
+    package_id,
+    account_id,
+    verified_email_addresses: [invited_email_address],
+  });
+}
+
 export async function getCoursePaymentOverview({
   account_id,
   course_project_id,
@@ -2766,6 +2799,7 @@ export async function getCoursePaymentOverview({
     }
     return value;
   };
+  const linkedStudentProjectIds = new Set<string>();
   const students = await mapWithConcurrency(
     projectIds,
     COURSE_PAYMENT_OVERVIEW_CONCURRENCY,
@@ -2786,6 +2820,7 @@ export async function getCoursePaymentOverview({
             error: "project is not linked to this course",
           };
         }
+        linkedStudentProjectIds.add(project_id);
         const studentAccountId = `${course.account_id ?? ""}`.trim();
         if (!studentAccountId || !isValidUUID(studentAccountId)) {
           return {
@@ -2843,13 +2878,74 @@ export async function getCoursePaymentOverview({
         (studentAccountId): studentAccountId is string => !!studentAccountId,
       ),
   );
+  const studentAccountIdsByProject = new Map(
+    students
+      .filter(
+        (
+          student,
+        ): student is CourseStudentPaymentStatus & {
+          account_id: string;
+        } => !!student.account_id,
+      )
+      .map((student) => [student.project_id, student.account_id]),
+  );
+  await mapWithConcurrency(
+    packageResults.flatMap(({ owner_account_id, packages }) =>
+      packages.flatMap((membershipPackage) =>
+        membershipPackage.assignments
+          .filter(
+            (assignment) =>
+              assignment.account_id == null &&
+              !!assignment.email_address &&
+              `${assignment.metadata?.course_project_id ?? ""}`.trim() ===
+                course_project_id,
+          )
+          .map((assignment) => ({
+            owner_account_id,
+            membershipPackage,
+            assignment,
+          })),
+      ),
+    ),
+    COURSE_PAYMENT_OVERVIEW_CONCURRENCY,
+    async ({ owner_account_id, membershipPackage, assignment }) => {
+      const project_id = `${assignment.metadata?.project_id ?? ""}`.trim();
+      const studentAccountId = studentAccountIdsByProject.get(project_id);
+      if (!studentAccountId || !linkedStudentProjectIds.has(project_id)) {
+        return;
+      }
+      try {
+        const claimed = await repairCourseSeatReservationAllowRemote({
+          owner_account_id,
+          package_id: membershipPackage.id,
+          account_id: studentAccountId,
+          invited_email_address: assignment.email_address!,
+        });
+        Object.assign(assignment, claimed);
+      } catch (err) {
+        log.warn("failed to repair accepted course seat reservation", {
+          course_project_id,
+          project_id,
+          package_id: membershipPackage.id,
+          assignment_id: assignment.id,
+          account_id: studentAccountId,
+          err: `${err}`,
+        });
+      }
+    },
+  );
   const coursePackages = packageResults.flatMap(({ packages }) =>
     packages.map((membershipPackage) => ({
       ...membershipPackage,
       assignments: membershipPackage.assignments
         .filter(
-          ({ account_id: studentAccountId }) =>
-            !!studentAccountId && studentAccountIds.has(studentAccountId),
+          ({ account_id: studentAccountId, metadata }) =>
+            (!!studentAccountId && studentAccountIds.has(studentAccountId)) ||
+            (`${metadata?.course_project_id ?? ""}`.trim() ===
+              course_project_id &&
+              linkedStudentProjectIds.has(
+                `${metadata?.project_id ?? ""}`.trim(),
+              )),
         )
         .map(
           ({

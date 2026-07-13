@@ -243,6 +243,22 @@ function normalizeMetadata(
   return { ...metadata };
 }
 
+function getCourseAssignmentContext(
+  metadata?: Record<string, unknown> | null,
+): ClaimableMembershipPackage["course_assignment_context"] | undefined {
+  const course_project_id = `${metadata?.course_project_id ?? ""}`.trim();
+  const project_id = `${metadata?.project_id ?? ""}`.trim();
+  const student_id = `${metadata?.student_id ?? ""}`.trim();
+  if (
+    !isValidUUID(course_project_id) ||
+    !isValidUUID(project_id) ||
+    !isValidUUID(student_id)
+  ) {
+    return;
+  }
+  return { course_project_id, project_id, student_id };
+}
+
 function normalizeEmailAddress(
   email_address?: string | null,
 ): string | undefined {
@@ -2577,6 +2593,13 @@ export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
           terms_version_label: terms.terms_version_label ?? null,
           requires_terms_acceptance: requiresTermsAcceptance(terms),
           metadata: normalizeMetadata(pkg.metadata),
+          ...(pkg.kind === "course"
+            ? {
+                course_assignment_context: getCourseAssignmentContext(
+                  assignment.metadata,
+                ),
+              }
+            : {}),
         });
       }
     }
@@ -2725,6 +2748,72 @@ async function listClaimableMembershipPackagesAcrossCluster({
     addClaimables(remoteRows, bay_id, (row) => row.kind !== "site");
   }
   return sortClaimableMembershipPackages(Array.from(claimables.values()));
+}
+
+export async function claimCourseMembershipPackageSeatsForAcceptedInvite({
+  account_id,
+  invited_email_address,
+  course_project_id,
+  student_project_id,
+  student_id,
+  client,
+}: {
+  account_id: string;
+  invited_email_address: string;
+  course_project_id: string;
+  student_project_id: string;
+  student_id: string;
+  client?: PoolClient;
+}): Promise<MembershipPackageAssignment[]> {
+  for (const [name, value] of Object.entries({
+    account_id,
+    course_project_id,
+    student_project_id,
+    student_id,
+  })) {
+    if (!isValidUUID(value)) {
+      throw Error(`invalid ${name}`);
+    }
+  }
+  const invitedEmailAddress = normalizeEmailAddress(invited_email_address);
+  if (!invitedEmailAddress) {
+    throw Error("invited_email_address required");
+  }
+  const claimables = await listClaimableMembershipPackagesAcrossCluster({
+    account_id,
+    verified_email_addresses: [invitedEmailAddress],
+    client,
+  });
+  const matching = claimables.filter((claimable) => {
+    const context = claimable.course_assignment_context;
+    return (
+      claimable.kind === "course" &&
+      claimable.reason === "email-assignment" &&
+      context?.course_project_id === course_project_id &&
+      context.project_id === student_project_id &&
+      context.student_id === student_id
+    );
+  });
+  return await Promise.all(
+    matching.map(async ({ package_id, owner_bay_id }) => {
+      if (owner_bay_id === getConfiguredBayId()) {
+        return await claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay({
+          package_id,
+          account_id,
+          verified_email_addresses: [invitedEmailAddress],
+          client,
+        });
+      }
+      return await createInterBayAccountLocalClient({
+        client: getInterBayFabricClient(),
+        dest_bay: owner_bay_id,
+      }).claimMembershipPackageSeat({
+        package_id,
+        account_id,
+        verified_email_addresses: [invitedEmailAddress],
+      });
+    }),
+  );
 }
 
 export async function resolveClaimableMembershipPackageOwnerBay({
