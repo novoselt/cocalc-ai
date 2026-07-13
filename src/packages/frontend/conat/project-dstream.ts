@@ -297,14 +297,20 @@ export async function acquireSharedProjectDStream<T>(
   ensureSessionListeners();
   const key = cacheKey(opts);
   const release = await leaseManager.acquire(key);
+  let released = false;
+  const releaseOnce: SharedProjectDStreamRelease = async (releaseOpts) => {
+    if (released) return;
+    released = true;
+    await release(releaseOpts);
+  };
   try {
     const stream = await ensureSharedProjectDStream<T>(key, opts);
     return {
       stream: applyMaxListeners(stream, opts.maxListeners),
-      release,
+      release: releaseOnce,
     };
   } catch (err) {
-    await release({ immediate: true });
+    await releaseOnce({ immediate: true });
     throw err;
   }
 }

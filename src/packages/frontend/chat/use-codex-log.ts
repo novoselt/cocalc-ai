@@ -1,5 +1,12 @@
 import { delay } from "awaiting";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 import LRUCache from "lru-cache";
 import { appendStreamMessages } from "@cocalc/chat";
 import type { AcpStreamMessage } from "@cocalc/conat/ai/acp/types";
@@ -18,6 +25,8 @@ import { webapp_client } from "@cocalc/frontend/webapp-client";
 const LOG_PERSIST_THROTTLE_MS = 250;
 const LIVE_LOG_FLUSH_MS = 1000;
 const LIVE_ACTIVITY_STATUS_FLUSH_MS = 1000;
+const LIVE_STREAM_STALE_AFTER_MS = 30_000;
+const LIVE_STREAM_WATCHDOG_INTERVAL_MS = 10_000;
 const RECENT_LOG_CACHE_SIZE = 5;
 
 const recentLogCache = new LRUCache<string, any[]>({
@@ -152,6 +161,46 @@ function isDStreamLiveConnected(stream: DStream<any>): boolean {
   );
 }
 
+function useLiveStreamWatchdog({
+  enabled,
+  identity,
+  lastReceiptAtRef,
+  reconnectResourceRef,
+  reason,
+}: {
+  enabled: boolean;
+  identity?: string | null;
+  lastReceiptAtRef: MutableRefObject<number>;
+  reconnectResourceRef: MutableRefObject<RegisteredReconnectResource | null>;
+  reason: string;
+}) {
+  const lastProbeAtRef = useRef(0);
+
+  useEffect(() => {
+    lastReceiptAtRef.current = Date.now();
+    lastProbeAtRef.current = 0;
+    if (!enabled || !identity) return;
+
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (now - lastReceiptAtRef.current < LIVE_STREAM_STALE_AFTER_MS) {
+        return;
+      }
+      if (now - lastProbeAtRef.current < LIVE_STREAM_STALE_AFTER_MS) {
+        return;
+      }
+      lastProbeAtRef.current = now;
+      reconnectResourceRef.current?.requestReconnect({
+        force: true,
+        reason,
+        resetBackoff: true,
+      });
+    }, LIVE_STREAM_WATCHDOG_INTERVAL_MS);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }, [enabled, identity, lastReceiptAtRef, reason, reconnectResourceRef]);
+}
+
 function getSeqKey(evt: any): number | string | undefined {
   return typeof evt?.seq === "number" || typeof evt?.seq === "string"
     ? evt.seq
@@ -236,6 +285,7 @@ export function useCodexLog({
     AcpStreamMessage | AcpStreamMessage[]
   > | null>(null);
   const reconnectResourceRef = useRef<RegisteredReconnectResource | null>(null);
+  const lastLiveReceiptAtRef = useRef(Date.now());
   const mountedRef = useRef<boolean>(true);
   const hasLiveSource =
     generating === true && Boolean(projectId && (liveLogStream || logSubject));
@@ -245,10 +295,19 @@ export function useCodexLog({
     Boolean(liveLogStream || logSubject);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
   }, []);
+
+  useLiveStreamWatchdog({
+    enabled: hasLiveSource && Boolean(liveLogStream),
+    identity: liveLogStream,
+    lastReceiptAtRef: lastLiveReceiptAtRef,
+    reconnectResourceRef,
+    reason: "codex_log_stale_watchdog",
+  });
 
   const setLiveConnectionState = useCallback(
     (connected: boolean, status: CodexLiveLogStatus) => {
@@ -446,6 +505,7 @@ export function useCodexLog({
       webapp_client.conat_client.registerReconnectResource({
         canReconnect: () => canReconnectLive,
         isConnected: () => !hasLiveSource || liveConnectedRef.current,
+        probeOnForeground: () => hasLiveSource,
         priority: () => "foreground",
         reconnect: async () => {
           setLiveConnectionState(false, "reconnecting");
@@ -465,12 +525,26 @@ export function useCodexLog({
             return;
           }
           const liveStream = liveStreamRef.current;
-          if (liveStream != null && !isDStreamLiveConnected(liveStream)) {
+          if (liveStream != null) {
             try {
               await liveStream.recoverNow({
+                force: true,
                 priority: "foreground",
                 reason: "codex_log_reconnect",
               });
+              if (!mountedRef.current) return;
+              const replay = liveStream
+                .getAll()
+                .flatMap((payload) =>
+                  normalizeLiveStreamPayload(payload as any),
+                );
+              if (replay.length > 0) {
+                setLiveLog((prev) => mergeLogs(prev ?? [], replay));
+              }
+              if (isDStreamLiveConnected(liveStream)) {
+                setLiveConnectionState(true, "connected");
+                return;
+              }
             } catch (err) {
               console.warn("codex log stream recovery failed", err);
             }
@@ -490,6 +564,7 @@ export function useCodexLog({
     canReconnectLive,
     fetchPersistedLog,
     hasLiveSource,
+    mergeLogs,
     setLiveConnectionState,
     waitForLiveReconnect,
   ]);
@@ -560,6 +635,7 @@ export function useCodexLog({
           liveStream = lease.stream;
           liveStreamRef.current = liveStream;
           releaseLiveStream = lease.release;
+          lastLiveReceiptAtRef.current = Date.now();
           if (stopped) {
             await releaseLiveStream({ immediate: true });
             return;
@@ -596,6 +672,7 @@ export function useCodexLog({
             payload: AcpStreamMessage | AcpStreamMessage[],
           ) => {
             if (stopped) return;
+            lastLiveReceiptAtRef.current = Date.now();
             const events = normalizeLiveStreamPayload(payload);
             if (events.length === 0) return;
             let immediate = false;
@@ -771,16 +848,26 @@ export function useCodexLiveActivityStatus({
     AcpStreamMessage | AcpStreamMessage[]
   > | null>(null);
   const reconnectResourceRef = useRef<RegisteredReconnectResource | null>(null);
+  const lastLiveReceiptAtRef = useRef(Date.now());
   const latestPendingActivityAtMsRef = useRef<number | undefined>(undefined);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasLiveSource = Boolean(projectId && (liveLogStream || logSubject));
   const canReconnectLive = enabled === true && hasLiveSource;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
   }, []);
+
+  useLiveStreamWatchdog({
+    enabled: canReconnectLive && Boolean(liveLogStream),
+    identity: liveLogStream,
+    lastReceiptAtRef: lastLiveReceiptAtRef,
+    reconnectResourceRef,
+    reason: "codex_activity_stale_watchdog",
+  });
 
   const setLiveConnectionState = useCallback(
     (connected: boolean, status: CodexLiveLogStatus) => {
@@ -877,6 +964,7 @@ export function useCodexLiveActivityStatus({
       webapp_client.conat_client.registerReconnectResource({
         canReconnect: () => canReconnectLive,
         isConnected: () => liveConnectedRef.current,
+        probeOnForeground: () => canReconnectLive,
         priority: () => "foreground",
         reconnect: async () => {
           setLiveConnectionState(false, "reconnecting");
@@ -884,12 +972,29 @@ export function useCodexLiveActivityStatus({
             return;
           }
           const liveStream = liveStreamRef.current;
-          if (liveStream != null && !isDStreamLiveConnected(liveStream)) {
+          if (liveStream != null) {
             try {
               await liveStream.recoverNow({
+                force: true,
                 priority: "foreground",
                 reason: "codex_activity_reconnect",
               });
+              if (!mountedRef.current) return;
+              const replay = liveStream
+                .getAll()
+                .flatMap((payload) =>
+                  normalizeLiveStreamPayload(payload as any),
+                );
+              const latest = getLatestEventTimeFromEvents(replay);
+              if (latest != null) {
+                setLastActivityAtMs((prev) =>
+                  prev == null || latest > prev ? latest : prev,
+                );
+              }
+              if (isDStreamLiveConnected(liveStream)) {
+                setLiveConnectionState(true, "connected");
+                return;
+              }
             } catch (err) {
               console.warn("codex activity stream recovery failed", err);
             }
@@ -956,6 +1061,7 @@ export function useCodexLiveActivityStatus({
           liveStream = lease.stream;
           liveStreamRef.current = liveStream;
           releaseLiveStream = lease.release;
+          lastLiveReceiptAtRef.current = Date.now();
           if (stopped) {
             await releaseLiveStream({ immediate: true });
             return;
@@ -992,6 +1098,7 @@ export function useCodexLiveActivityStatus({
             payload: AcpStreamMessage | AcpStreamMessage[],
           ) => {
             if (stopped) return;
+            lastLiveReceiptAtRef.current = Date.now();
             recordLiveActivity(payload);
           };
           liveStream.on("change", liveStreamListener);
