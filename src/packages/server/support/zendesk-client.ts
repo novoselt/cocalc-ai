@@ -1,11 +1,11 @@
+import { createHash } from "crypto";
 import type { ZendeskClient } from "node-zendesk";
 import { createClient } from "node-zendesk";
 
 import { getServerSettings } from "@cocalc/database/settings";
 
-let client: ZendeskClient | undefined = undefined;
-
-let config = "";
+let client: ZendeskClient | undefined;
+let configFingerprint: string | undefined;
 
 export default async function getClient(): Promise<ZendeskClient> {
   const {
@@ -15,31 +15,36 @@ export default async function getClient(): Promise<ZendeskClient> {
   } = await getServerSettings();
 
   const subdomain = extractSubdomain(zendesk_uri);
-  const config0 = `${token + username + subdomain}`;
-  if (config == config0 && client != null) {
-    return client;
+  if (!token) {
+    throw Error(
+      "Support not available -- admin must configure the Zendesk token",
+    );
   }
-  if (client == null) {
-    // Get the credential from the database.
-    if (!token) {
-      throw Error(
-        "Support not available -- admin must configure the Zendesk token",
-      );
-    }
-    if (!username) {
-      throw Error(
-        "Support not available -- admin must configure the Zendesk username",
-      );
-    }
-    if (!subdomain) {
-      throw Error(
-        "Support not available -- admin must configure the Zendesk subdomain",
-      );
-    }
-    config = config0;
-    client = createClient({ username, token, subdomain });
+  if (!username) {
+    throw Error(
+      "Support not available -- admin must configure the Zendesk username",
+    );
   }
+  if (!subdomain) {
+    throw Error(
+      "Support not available -- admin must configure the Zendesk subdomain",
+    );
+  }
+
+  const nextFingerprint = createHash("sha256")
+    .update(JSON.stringify([token, username, subdomain]))
+    .digest("hex");
+  if (client != null && configFingerprint === nextFingerprint) return client;
+
+  client = createClient({ username, token, subdomain });
+  configFingerprint = nextFingerprint;
   return client;
+}
+
+/** @internal */
+export function resetZendeskClientForTesting(): void {
+  client = undefined;
+  configFingerprint = undefined;
 }
 
 // newer client just wants the subdomain.
