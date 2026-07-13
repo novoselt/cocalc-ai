@@ -131,7 +131,7 @@ import {
 import {
   ProjectDiskQuotaExceededError,
   assertProjectDiskQuotaStartAllowed,
-  isProjectDiskQuotaExceeded,
+  isProjectDiskQuotaStartBlocked,
 } from "../project-start-quota";
 
 const logger = getLogger("project-host:hub:projects");
@@ -1055,7 +1055,7 @@ async function assertStartDiskQuotaAllowed({
       const vol = await getVolume(project_id);
       const quota = await vol.quota.get();
       if (
-        isProjectDiskQuotaExceeded({
+        isProjectDiskQuotaStartBlocked({
           used: quota.used,
           size: requestedDiskBytes,
         })

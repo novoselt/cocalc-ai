@@ -305,4 +305,35 @@ describe("DiskUsage backup UI", () => {
       screen.getByText(/Other projects on this host can read/),
     ).toBeInTheDocument();
   });
+
+  it("explains how to recover when project storage is full", () => {
+    useTypedRedux.mockReturnValue(ImmutableMap());
+    useDiskUsageMock.mockReturnValue({
+      visible: [],
+      live: null,
+      collectedAt: undefined,
+      retained: null,
+      sharedScratch: null,
+      loading: false,
+      error: null,
+      setError: jest.fn(),
+      applyOverview: applyOverviewMock,
+      quotas: [
+        { key: "project", label: "Project quota", used: 100, size: 100 },
+      ],
+    });
+
+    render(<DiskUsage compact project_id="project-1" />);
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(
+      screen.getByText("Project storage is full or nearly full"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/do not need to start the project/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Manage snapshots" }),
+    ).toBeInTheDocument();
+  });
 });

@@ -8,6 +8,8 @@ import { React, useMemo, useTypedRedux, useActions } from "../../app-framework";
 import { Icon } from "../../components";
 import { useProjectRunQuota } from "../use-project-run-quota";
 import { ALERT_STYLE } from "./common";
+import { ProjectDiskQuotaRemediation } from "../disk-usage/quota-remediation";
+import { isProjectDiskQuotaStartBlocked } from "@cocalc/util/project-start-errors";
 
 export const DiskSpaceWarning: React.FC<{ project_id: string }> = ({
   project_id,
@@ -36,6 +38,15 @@ export const DiskSpaceWarning: React.FC<{ project_id: string }> = ({
   }
 
   const disk_free = Math.max(0, quotas.disk_quota - disk_usage);
+
+  if (
+    isProjectDiskQuotaStartBlocked({
+      used: disk_usage * 1_000_000,
+      size: quotas.disk_quota * 1_000_000,
+    })
+  ) {
+    return <ProjectDiskQuotaRemediation project_id={project_id} />;
+  }
 
   return (
     <Alert bsStyle="danger" style={ALERT_STYLE}>
