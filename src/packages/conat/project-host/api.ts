@@ -579,6 +579,7 @@ function subjectForHost(host_id: string): string {
 
 const STATUS_SUBJECT = "project-hosts.status";
 const REGISTRY_SUBJECT = "project-hosts.api";
+const HOST_CONTROL_MAX_PARALLEL_HANDLERS = 64;
 export const ONPREM_REST_TUNNEL_LOCAL_PORT = 9345;
 export const ONPREM_MASTER_CONAT_TUNNEL_LOCAL_PORT = 9346;
 
@@ -893,5 +894,9 @@ export function createHostControlService({
     description: "Control plane for project-host instance",
     client,
     impl,
+    // Project starts use request transport because they can exceed the fast-RPC
+    // timeout. Without parallel dispatch, unrelated starts serialize here.
+    parallel: true,
+    maxParallelHandlers: HOST_CONTROL_MAX_PARALLEL_HANDLERS,
   });
 }

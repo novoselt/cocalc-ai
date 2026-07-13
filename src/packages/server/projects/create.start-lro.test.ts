@@ -336,6 +336,7 @@ describe("projects.createProject start LRO", () => {
       "SELECT state FROM projects WHERE project_id=$1",
       [project_id],
     );
+    expect(delayMock).not.toHaveBeenCalled();
     expect(updateLroMock).toHaveBeenCalledWith(
       expect.objectContaining({
         op_id: "op-1",
@@ -365,6 +366,56 @@ describe("projects.createProject start LRO", () => {
         scope_id: project_id,
         op_id: "op-1",
       }),
+    );
+  });
+
+  it("waits and rechecks before retrying a genuinely non-active start", async () => {
+    let stateReads = 0;
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql === "SELECT state FROM projects WHERE project_id=$1") {
+        stateReads += 1;
+        return {
+          rows: [{ state: { state: stateReads === 1 ? "opened" : "running" } }],
+        };
+      }
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+        return { rows: [], rowCount: null };
+      }
+      if (
+        sql.includes(
+          "SELECT project_id FROM deleted_projects WHERE project_id=$1 LIMIT 1",
+        ) ||
+        sql.includes(
+          "SELECT project_id FROM projects WHERE project_id=$1 LIMIT 1",
+        )
+      ) {
+        return { rows: [] };
+      }
+      if (
+        sql.includes("SELECT COUNT(*)::BIGINT AS count") &&
+        sql.includes("COALESCE(users -> $1::text ->> 'group', '') = 'owner'")
+      ) {
+        return { rows: [{ count: "0" }] };
+      }
+      if (sql.startsWith("INSERT INTO projects ")) {
+        return { rowCount: 1 };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const createProject = (await import("./create")).default;
+    await createProject({
+      title: "Untitled",
+      description: "",
+      account_id: ACCOUNT_ID,
+      start: true,
+    });
+
+    await flushBackgroundStartTask();
+
+    expect(delayMock).toHaveBeenCalledWith(5000);
+    expect(stateReads).toBe(2);
+    expect(getProjectMock.mock.results[0]?.value.start).toHaveBeenCalledTimes(
+      1,
     );
   });
 

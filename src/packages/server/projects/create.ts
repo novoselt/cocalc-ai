@@ -868,32 +868,38 @@ async function startNewProject(
       state: "running",
       ttl_ms: PROJECT_RUNTIME_SLOT_TTL_MS,
     });
-    // Keep a conservative retry for slow host bring-up, but only if the
-    // persisted project state still is not active after a short settle window.
+    // Keep a conservative retry for slow host bring-up, but do not add a fixed
+    // settle delay after the normal synchronous project-host start succeeds.
     // Do not verify via project.state() here: in project-host deployments that
     // goes through the runner control subject (`project.<id>.run`), which can
     // lag or time out even after the project row has already been updated to
     // running and the project is usable.
-    await delay(5000);
-    let state: string | undefined;
-    try {
-      const { rows } = await getPool().query<{ state: any }>(
-        "SELECT state FROM projects WHERE project_id=$1",
-        [project_id],
-      );
-      const rawState = rows[0]?.state;
-      const parsedState =
-        typeof rawState === "string" ? JSON.parse(rawState) : rawState;
-      const nextState = parsedState?.state;
-      state = typeof nextState === "string" ? nextState : undefined;
-    } catch (err) {
-      log.debug(
-        "startNewProject: unable to verify persisted post-start state",
-        {
-          project_id,
-          err: `${err}`,
-        },
-      );
+    const loadPersistedState = async (): Promise<string | undefined> => {
+      try {
+        const { rows } = await getPool().query<{ state: any }>(
+          "SELECT state FROM projects WHERE project_id=$1",
+          [project_id],
+        );
+        const rawState = rows[0]?.state;
+        const parsedState =
+          typeof rawState === "string" ? JSON.parse(rawState) : rawState;
+        const nextState = parsedState?.state;
+        return typeof nextState === "string" ? nextState : undefined;
+      } catch (err) {
+        log.debug(
+          "startNewProject: unable to verify persisted post-start state",
+          {
+            project_id,
+            err: `${err}`,
+          },
+        );
+        return undefined;
+      }
+    };
+    let state = await loadPersistedState();
+    if (state != null && state !== "running" && state !== "starting") {
+      await delay(5000);
+      state = await loadPersistedState();
     }
     if (state != null && state !== "running" && state !== "starting") {
       log.debug("startNewProject: retrying start after non-active state", {
