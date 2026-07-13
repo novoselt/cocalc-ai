@@ -38,6 +38,12 @@ const ROLLUP_FLUSH_INTERVAL_MS = 60_000;
 const ROLLUP_FLUSH_MAX_PENDING = 1000;
 const QUOTA_EXCLUDED_CATEGORIES = new Set<ManagedProjectEgressCategory>([
   "interactive-conat",
+  "backup-upload",
+]);
+// Keep platform-managed backup traffic visible to users and operators even
+// though it must not consume the quota that gates interactive access.
+const REPORTING_EXCLUDED_CATEGORIES = new Set<ManagedProjectEgressCategory>([
+  "interactive-conat",
 ]);
 
 export type ManagedProjectEgressCategory =
@@ -611,7 +617,7 @@ export async function getRecentManagedEgressEventsForAccount(opts: {
     params.push(end);
     where.push(`events.bucket_start < $${params.length}`);
   }
-  params.push([...QUOTA_EXCLUDED_CATEGORIES]);
+  params.push([...REPORTING_EXCLUDED_CATEGORIES]);
   where.push(`events.category <> ALL($${params.length}::text[])`);
   params.push(limit);
   const { rows } = await getPool("medium").query<RawManagedEgressEventRow>(
@@ -673,7 +679,7 @@ async function getManagedEgressAdminOverviewBaseUncached(
   const params: Array<Date | string[]> = [
     query.startDate,
     query.endDate,
-    [...QUOTA_EXCLUDED_CATEGORIES],
+    [...REPORTING_EXCLUDED_CATEGORIES],
   ];
 
   const [
@@ -888,7 +894,7 @@ export async function getManagedEgressAdminHistory(opts: {
   const params: Array<Date | string[]> = [
     query.startDate,
     query.endDate,
-    [...QUOTA_EXCLUDED_CATEGORIES],
+    [...REPORTING_EXCLUDED_CATEGORIES],
   ];
   const bucketExpr = getBucketSql(query.bucket, "events.bucket_start");
 
@@ -1129,7 +1135,7 @@ export async function getManagedEgressHistoryForAccount(opts: {
     params.push(query.project_id);
     where.push(`events.project_id = $${params.length}`);
   }
-  params.push([...QUOTA_EXCLUDED_CATEGORIES]);
+  params.push([...REPORTING_EXCLUDED_CATEGORIES]);
   where.push(`events.category <> ALL($${params.length}::text[])`);
   const whereSql = where.join(" AND ");
   const bucketExpr = getBucketSql(query.bucket, "events.bucket_start");

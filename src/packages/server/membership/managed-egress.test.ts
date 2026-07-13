@@ -65,10 +65,16 @@ describe("managed egress history", () => {
   });
 
   it("aggregates account history into bounded time buckets", async () => {
-    queryMock.mockImplementation(async (sql: string) => {
+    queryMock.mockImplementation(async (sql: string, params?: any[]) => {
       if (isSchemaQuery(sql)) {
         return { rows: [] };
       }
+      const reportingExclusions = sql.includes(
+        "ORDER BY events.last_occurred_at DESC",
+      )
+        ? params?.slice(-2)[0]
+        : params?.slice(-1)[0];
+      expect(reportingExclusions).toEqual(["interactive-conat"]);
       if (
         sql.includes(
           "SELECT events.category, COALESCE(SUM(events.bytes), 0) AS bytes",
@@ -78,6 +84,7 @@ describe("managed egress history", () => {
           rows: [
             { category: "file-download", bytes: "200" },
             { category: "raw-network", bytes: "300" },
+            { category: "backup-upload", bytes: "100" },
           ],
         };
       }
@@ -94,6 +101,11 @@ describe("managed egress history", () => {
               category: "raw-network",
               bytes: "300",
             },
+            {
+              bucket_start: "2026-04-28T11:00:00.000Z",
+              category: "backup-upload",
+              bytes: "100",
+            },
           ],
         };
       }
@@ -103,7 +115,7 @@ describe("managed egress history", () => {
             {
               project_id: "project-1",
               project_title: "Lite One",
-              bytes: "450",
+              bytes: "550",
             },
             {
               project_id: null,
@@ -120,10 +132,10 @@ describe("managed egress history", () => {
               account_id: "account-1",
               project_id: "project-1",
               project_title: "Lite One",
-              category: "raw-network",
-              bytes: "300",
+              category: "backup-upload",
+              bytes: "100",
               occurred_at: "2026-04-28T11:30:00.000Z",
-              metadata: { interface_name: "ens4" },
+              metadata: { backup_id: "backup-1" },
             },
           ],
         };
@@ -143,8 +155,9 @@ describe("managed egress history", () => {
     });
 
     expect(result.account_id).toBe("account-1");
-    expect(result.total_bytes).toBe(500);
+    expect(result.total_bytes).toBe(600);
     expect(result.categories_bytes).toEqual({
+      "backup-upload": 100,
       "file-download": 200,
       "raw-network": 300,
     });
@@ -156,8 +169,8 @@ describe("managed egress history", () => {
     });
     expect(result.points[1]).toMatchObject({
       start: "2026-04-28T11:00:00.000Z",
-      bytes: 300,
-      categories_bytes: { "raw-network": 300 },
+      bytes: 400,
+      categories_bytes: { "backup-upload": 100, "raw-network": 300 },
     });
     expect(result.points[2]).toMatchObject({
       start: "2026-04-28T12:00:00.000Z",
@@ -168,7 +181,7 @@ describe("managed egress history", () => {
       {
         project_id: "project-1",
         project_title: "Lite One",
-        bytes: 450,
+        bytes: 550,
       },
       {
         project_id: null,
@@ -181,10 +194,10 @@ describe("managed egress history", () => {
         account_id: "account-1",
         project_id: "project-1",
         project_title: "Lite One",
-        category: "raw-network",
-        bytes: 300,
+        category: "backup-upload",
+        bytes: 100,
         occurred_at: "2026-04-28T11:30:00.000Z",
-        metadata: { interface_name: "ens4" },
+        metadata: { backup_id: "backup-1" },
       },
     ]);
   });
@@ -202,7 +215,7 @@ describe("managed egress history", () => {
     ).rejects.toThrow("history query is too granular");
   });
 
-  it("computes quota usage from rollups and excludes interactive conat", async () => {
+  it("computes quota usage without interactive or backup traffic", async () => {
     const starts5h = new Date("2026-04-28T07:00:00.000Z");
     const resets5h = new Date("2026-04-28T12:00:00.000Z");
     const starts7d = new Date("2026-04-21T12:00:00.000Z");
@@ -225,7 +238,7 @@ describe("managed egress history", () => {
           resets5h,
           starts7d,
           resets7d,
-          ["interactive-conat"],
+          ["interactive-conat", "backup-upload"],
         ]);
         expect(sql).toContain("category <> ALL($6::text[])");
         return {
@@ -250,6 +263,30 @@ describe("managed egress history", () => {
     });
     expect(result.managed_egress_categories_7d_bytes).toEqual({
       "raw-network": 500,
+    });
+  });
+
+  it("does not open quota windows for backup uploads", async () => {
+    const { recordManagedProjectEgress } = await import("./managed-egress");
+
+    await recordManagedProjectEgress({
+      account_id: "account-1",
+      project_id: "project-1",
+      category: "backup-upload",
+      bytes: 100,
+    });
+    expect(ensureAccountUsageWindowsForEventMock).not.toHaveBeenCalled();
+
+    await recordManagedProjectEgress({
+      account_id: "account-1",
+      project_id: "project-1",
+      category: "raw-network",
+      bytes: 100,
+    });
+    expect(ensureAccountUsageWindowsForEventMock).toHaveBeenCalledTimes(1);
+    expect(ensureAccountUsageWindowsForEventMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      occurred_at: undefined,
     });
   });
 
