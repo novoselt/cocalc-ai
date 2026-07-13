@@ -93,6 +93,7 @@ jest.mock("./limits", () => ({
     cpu_max_quota: "max",
     cpu_max_period: "100000",
     cpu_weight: "100",
+    io_weight: "100",
   })),
 }));
 
@@ -507,6 +508,7 @@ describe("project-runner podman orphan fallback", () => {
         launcher: expect.objectContaining({
           command: "bash",
           argsPrefix: expect.arrayContaining([
+            expect.stringContaining('"${10}"\nshift 10'),
             "cocalc-project-podman",
             project1,
           ]),
@@ -529,6 +531,7 @@ describe("project-runner podman orphan fallback", () => {
           "max",
           "max",
           "100000",
+          "100",
           "100",
         ],
       }),

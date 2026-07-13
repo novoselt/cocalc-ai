@@ -1215,6 +1215,9 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('> "$cgroup/pids.max"', script)
             self.assertIn('> "$cgroup/cpu.max"', script)
             self.assertIn('> "$cgroup/cpu.weight"', script)
+            self.assertIn('> "$cgroup/io.weight"', script)
+            self.assertIn("project-cgroup-io-weight-invalid", script)
+            self.assertIn("for controller in cpu memory pids io", script)
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
             self.assertIn("find_bees_pid()", script)
             self.assertIn("apply_bees_runtime_policy()", script)
@@ -1437,6 +1440,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn("project_pool_cpu_max_value()", rootctl.read_text(encoding="utf-8"))
             self.assertIn('> "${pool}/cpu.max"', rootctl.read_text(encoding="utf-8"))
+            self.assertIn(
+                "for controller in cpu memory pids io",
+                rootctl.read_text(encoding="utf-8"),
+            )
             self.assertIn(
                 "repair_runtime_environment()",
                 rootctl.read_text(encoding="utf-8"),

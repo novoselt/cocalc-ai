@@ -107,8 +107,8 @@ const START_RUNNING_CHECK_INTERVAL_MS = 250;
 const START_FAILURE_LOG_LINES = 80;
 const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
 const PROJECT_CGROUP_LAUNCHER_SCRIPT = `set -euo pipefail
-sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
-shift 9
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}"
+shift 10
 exec podman "$@"`;
 
 const DEFAULT_PROJECT_SCRIPT = join(
@@ -898,6 +898,7 @@ async function attachProjectToCgroup(
         limits.cpu_max_quota,
         limits.cpu_max_period,
         limits.cpu_weight,
+        limits.io_weight,
       ],
       timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
       err_on_exit: false,
@@ -937,6 +938,7 @@ function projectCgroupLauncher(
       limits.cpu_max_quota,
       limits.cpu_max_period,
       limits.cpu_weight,
+      limits.io_weight,
     ],
   };
 }

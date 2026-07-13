@@ -10,6 +10,7 @@ const DEFAULT_MEMORY_RESERVATION_RATIO = 0.8;
 const DEFAULT_MEMORY_HIGH_RATIO = 0.9;
 const MIN_MEMORY_PRESSURE_GAP_RATIO = 0.05;
 const CGROUP_CPU_PERIOD_US = 100_000;
+const DEFAULT_PROJECT_IO_WEIGHT = 100;
 
 export interface ProjectCgroupLimits {
   memory_max: string;
@@ -20,6 +21,7 @@ export interface ProjectCgroupLimits {
   cpu_max_quota: string;
   cpu_max_period: string;
   cpu_weight: string;
+  io_weight: string;
 }
 
 function parseMemoryRatio(
@@ -201,5 +203,6 @@ export function projectCgroupLimitsFromPodmanArgs(
     cpu_max_quota: cpuQuota != null ? `${cpuQuota}` : "max",
     cpu_max_period: `${CGROUP_CPU_PERIOD_US}`,
     cpu_weight: `${cpuWeight}`,
+    io_weight: `${DEFAULT_PROJECT_IO_WEIGHT}`,
   };
 }

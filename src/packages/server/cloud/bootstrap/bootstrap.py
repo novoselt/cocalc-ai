@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260713-v1"
+HELPER_SCHEMA_VERSION = "20260713-v2"
 RUNTIME_WRAPPER_VERSION = "20260711-v12"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -2172,6 +2172,13 @@ configure_project_pool_hierarchy_storage() {
   local pool legacy pid controller attempt
   pool="$(project_pool_cgroup_storage)"
   legacy="$(project_pool_legacy_cgroup_storage)"
+  if [ -w /sys/fs/cgroup/cgroup.subtree_control ]; then
+    for controller in cpu memory pids io; do
+      if grep -qw "$controller" /sys/fs/cgroup/cgroup.controllers; then
+        printf '+%s\n' "$controller" > /sys/fs/cgroup/cgroup.subtree_control || true
+      fi
+    done
+  fi
   mkdir -p "$pool" "$legacy"
 
   # A cgroup with internal processes cannot delegate controllers to children.
@@ -2190,7 +2197,7 @@ configure_project_pool_hierarchy_storage() {
     deny "project-pool-internal-processes-remain" "$pool"
   fi
 
-  for controller in cpu memory pids; do
+  for controller in cpu memory pids io; do
     if grep -qw "$controller" "$pool/cgroup.controllers"; then
       printf '+%s\n' "$controller" > "$pool/cgroup.subtree_control"
     fi
@@ -2208,7 +2215,7 @@ valid_positive_cgroup_limit_storage() {
 configure_project_cgroup_storage() {
   local cgroup="$1" memory_max="$2" memory_high="$3" memory_low="$4"
   local memory_swap_max="$5" pids_max="$6" cpu_quota="$7"
-  local cpu_period="$8" cpu_weight="$9"
+  local cpu_period="$8" cpu_weight="$9" io_weight="${10}"
   for value in "$memory_max" "$memory_high" "$memory_low" "$memory_swap_max" "$pids_max" "$cpu_quota"; do
     if ! valid_cgroup_limit_storage "$value"; then
       deny "project-cgroup-limit-invalid" "$value"
@@ -2220,6 +2227,9 @@ configure_project_cgroup_storage() {
   if ! valid_positive_cgroup_limit_storage "$cpu_weight" || [ "$cpu_weight" -gt 10000 ]; then
     deny "project-cgroup-cpu-weight-invalid" "$cpu_weight"
   fi
+  if ! valid_positive_cgroup_limit_storage "$io_weight" || [ "$io_weight" -gt 10000 ]; then
+    deny "project-cgroup-io-weight-invalid" "$io_weight"
+  fi
   mkdir -p "$cgroup"
   printf '%s\n' "$memory_max" > "$cgroup/memory.max"
   printf '%s\n' "$memory_high" > "$cgroup/memory.high"
@@ -2228,6 +2238,9 @@ configure_project_cgroup_storage() {
   printf '%s\n' "$pids_max" > "$cgroup/pids.max"
   printf '%s %s\n' "$cpu_quota" "$cpu_period" > "$cgroup/cpu.max"
   printf '%s\n' "$cpu_weight" > "$cgroup/cpu.weight"
+  if [ -w "$cgroup/io.weight" ]; then
+    printf 'default %s\n' "$io_weight" > "$cgroup/io.weight" || true
+  fi
   printf '1\n' > "$cgroup/memory.oom.group"
 }
 
@@ -2491,8 +2504,8 @@ escape_overlay_path() {
 
 case "$cmd" in
   prepare-project-cgroup)
-    if [ "$#" -ne 10 ]; then
-      echo "usage: cocalc-runtime-storage prepare-project-cgroup <project-id> <launcher-pid> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight>" >&2
+    if [ "$#" -ne 11 ]; then
+      echo "usage: cocalc-runtime-storage prepare-project-cgroup <project-id> <launcher-pid> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight>" >&2
       exit 2
     fi
     project_id="$1"
@@ -2505,6 +2518,7 @@ case "$cmd" in
     cpu_quota="$8"
     cpu_period="$9"
     cpu_weight="${10}"
+    io_weight="${11}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
@@ -2526,12 +2540,13 @@ case "$cmd" in
       "$pids_max" \
       "$cpu_quota" \
       "$cpu_period" \
-      "$cpu_weight"
+      "$cpu_weight" \
+      "$io_weight"
     attach_pid_to_project_pool_storage "$launcher_pid" "$pool"
     ;;
   attach-project-cgroup)
-    if [ "$#" -ne 10 ]; then
-      echo "usage: cocalc-runtime-storage attach-project-cgroup <project-id> <podman-netns-path|-> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight>" >&2
+    if [ "$#" -ne 11 ]; then
+      echo "usage: cocalc-runtime-storage attach-project-cgroup <project-id> <podman-netns-path|-> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight>" >&2
       exit 2
     fi
     project_id="$1"
@@ -2544,6 +2559,7 @@ case "$cmd" in
     cpu_quota="$8"
     cpu_period="$9"
     cpu_weight="${10}"
+    io_weight="${11}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
@@ -2567,7 +2583,8 @@ case "$cmd" in
       "$pids_max" \
       "$cpu_quota" \
       "$cpu_period" \
-      "$cpu_weight"
+      "$cpu_weight" \
+      "$io_weight"
     while IFS= read -r conmon_pid; do
       attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
     done < <(find_project_conmon_pids "$project_id")
@@ -4779,6 +4796,13 @@ configure_project_pool_cgroup() {
   local pool legacy max_bytes high_bytes cpu_max pid controller attempt
   pool="$(project_pool_cgroup)"
   legacy="${pool}/legacy"
+  if [ -w /sys/fs/cgroup/cgroup.subtree_control ]; then
+    for controller in cpu memory pids io; do
+      if grep -qw "${controller}" /sys/fs/cgroup/cgroup.controllers; then
+        printf '+%s\n' "${controller}" > /sys/fs/cgroup/cgroup.subtree_control || true
+      fi
+    done
+  fi
   mkdir -p "${pool}" "${legacy}"
   max_bytes="$(project_pool_memory_max_bytes)"
   high_bytes="$(project_pool_memory_high_bytes "${max_bytes}")"
@@ -4802,7 +4826,7 @@ configure_project_pool_cgroup() {
     echo "project pool still has internal processes; cannot enable child controllers" >&2
     return 1
   fi
-  for controller in cpu memory pids; do
+  for controller in cpu memory pids io; do
     if grep -qw "${controller}" "${pool}/cgroup.controllers"; then
       printf '+%s\n' "${controller}" > "${pool}/cgroup.subtree_control"
     fi
