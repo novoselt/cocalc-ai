@@ -21,6 +21,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
           db: {},
           adminDb: {},
           adminHost: {},
+          adminSupport: {},
         },
       };
       Object.assign(ctx.hub.system, overrides.system ?? {});
@@ -28,6 +29,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
       Object.assign(ctx.hub.db, overrides.db ?? {});
       Object.assign(ctx.hub.adminDb, overrides.adminDb ?? {});
       Object.assign(ctx.hub.adminHost, overrides.adminHost ?? {});
+      Object.assign(ctx.hub.adminSupport, overrides.adminSupport ?? {});
       return await fn(ctx);
     },
     resolveAccountByIdentifier: async (_ctx: unknown, identifier: string) => ({
@@ -141,6 +143,124 @@ test("admin host logs forwards audited bounded log options", async () => {
     source: "host-agent",
     grep: "reconcile",
     reason: "incident check",
+  });
+});
+
+test("admin support list forwards bounded redacted ticket options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        list: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-1", tickets: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "list",
+    "--since-minutes",
+    "360",
+    "--limit",
+    "25",
+    "--status",
+    "new,open,solved",
+    "--max-bytes",
+    "100000",
+    "--reason",
+    "review support spike",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    since_minutes: 360,
+    limit: 25,
+    statuses: ["new", "open", "solved"],
+    max_bytes: 100000,
+    reason: "review support spike",
+  });
+});
+
+test("admin support show forwards ticket conversation limits", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        show: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-2", comments: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "show",
+    "12345",
+    "--max-comments",
+    "30",
+    "--max-bytes",
+    "200000",
+    "--reason",
+    "inspect probable outage report",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    ticket_id: 12345,
+    max_comments: 30,
+    max_bytes: 200000,
+    reason: "inspect probable outage report",
+  });
+});
+
+test("admin support triage forwards deterministic grouping options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        triage: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-3", groups: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "triage",
+    "--since-minutes",
+    "720",
+    "--status",
+    "new,pending",
+    "--reason",
+    "group active support incidents",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    since_minutes: 720,
+    limit: 50,
+    statuses: ["new", "pending"],
+    max_bytes: 262144,
+    reason: "group active support incidents",
   });
 });
 

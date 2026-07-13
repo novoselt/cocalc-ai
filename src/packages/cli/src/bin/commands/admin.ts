@@ -19,6 +19,10 @@ import type {
 } from "@cocalc/conat/hub/api/admin-data-explorer";
 import type { AdminDbDiagnostic } from "@cocalc/conat/hub/api/admin-db";
 import {
+  ADMIN_SUPPORT_TICKET_STATUSES,
+  type AdminSupportTicketStatus,
+} from "@cocalc/conat/hub/api/admin-support";
+import {
   HOST_RUNTIME_LOG_SOURCES,
   type HostRuntimeLogSource,
 } from "@cocalc/conat/project-host/api";
@@ -112,6 +116,29 @@ function parseAdminDataImportMode(
   if (value == null || value === "" || value === "upsert") return "upsert";
   if (value === "create_only" || value === "create-only") return "create_only";
   throw new Error("--mode must be upsert or create-only");
+}
+
+function parseAdminSupportStatuses(value: string): AdminSupportTicketStatus[] {
+  const allowed = new Set<string>(ADMIN_SUPPORT_TICKET_STATUSES);
+  const statuses = [
+    ...new Set(
+      `${value ?? ""}`
+        .split(",")
+        .map((status) => status.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  if (statuses.length === 0) {
+    throw new Error("--status must contain at least one ticket status");
+  }
+  for (const status of statuses) {
+    if (!allowed.has(status)) {
+      throw new Error(
+        `--status must contain only: ${ADMIN_SUPPORT_TICKET_STATUSES.join(", ")}`,
+      );
+    }
+  }
+  return statuses as AdminSupportTicketStatus[];
 }
 
 async function readAdminDataJson(path: string): Promise<unknown> {
@@ -983,6 +1010,9 @@ export function registerAdminCommand(
   const adminHost = admin
     .command("host")
     .description("audited project-host diagnostics");
+  const adminSupport = admin
+    .command("support")
+    .description("audited redacted support ticket diagnostics");
   const adminSettings = admin
     .command("settings")
     .description("admin site settings inspection");
@@ -1003,6 +1033,52 @@ export function registerAdminCommand(
       throw new Error(`unable to resolve account for '${identifier}'`);
     }
     return userAccountId;
+  }
+
+  function adminSupportListOptions(command: Command): Command {
+    return command
+      .option("--since-minutes <n>", "ticket creation lookback", "1440")
+      .option("--limit <n>", "maximum ticket count", "50")
+      .option(
+        "--status <statuses>",
+        "comma-separated ticket statuses",
+        "new,open,pending,hold",
+      )
+      .option("--max-bytes <n>", "maximum response bytes", "262144")
+      .requiredOption("--reason <reason>", "human-readable audit reason");
+  }
+
+  function adminSupportListRequest(opts: {
+    sinceMinutes?: string;
+    limit?: string;
+    status?: string;
+    maxBytes?: string;
+    reason?: string;
+  }) {
+    return {
+      since_minutes: parsePositiveIntegerOption({
+        name: "--since-minutes",
+        value: opts.sinceMinutes,
+        fallback: 24 * 60,
+        max: 7 * 24 * 60,
+      }),
+      limit: parsePositiveIntegerOption({
+        name: "--limit",
+        value: opts.limit,
+        fallback: 50,
+        max: 100,
+      }),
+      statuses: parseAdminSupportStatuses(
+        opts.status ?? "new,open,pending,hold",
+      ),
+      max_bytes: parsePositiveIntegerOption({
+        name: "--max-bytes",
+        value: opts.maxBytes,
+        fallback: 256 * 1024,
+        max: 1024 * 1024,
+      }),
+      reason: opts.reason,
+    };
   }
 
   function adminDbCommonOptions(command: Command): Command {
@@ -1156,6 +1232,64 @@ export function registerAdminCommand(
         });
       },
     );
+
+  adminSupportListOptions(adminSupport.command("list"))
+    .description("list recent redacted Zendesk tickets")
+    .action(async (opts, command: Command) => {
+      await withContext(command, "admin support list", async (ctx) => {
+        return await ctx.hub.adminSupport.list(adminSupportListRequest(opts));
+      });
+    });
+
+  adminSupport
+    .command("show <ticket-id>")
+    .description("show one redacted ticket conversation")
+    .option("--max-comments <n>", "maximum recent comments", "50")
+    .option("--max-bytes <n>", "maximum response bytes", "262144")
+    .requiredOption("--reason <reason>", "human-readable audit reason")
+    .action(
+      async (
+        ticketId: string,
+        opts: {
+          maxComments?: string;
+          maxBytes?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin support show", async (ctx) => {
+          return await ctx.hub.adminSupport.show({
+            ticket_id: parsePositiveIntegerOption({
+              name: "ticket-id",
+              value: ticketId,
+              fallback: 0,
+              max: Number.MAX_SAFE_INTEGER,
+            }),
+            max_comments: parsePositiveIntegerOption({
+              name: "--max-comments",
+              value: opts.maxComments,
+              fallback: 50,
+              max: 100,
+            }),
+            max_bytes: parsePositiveIntegerOption({
+              name: "--max-bytes",
+              value: opts.maxBytes,
+              fallback: 256 * 1024,
+              max: 1024 * 1024,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminSupportListOptions(adminSupport.command("triage"))
+    .description("group recent tickets by deterministic operational signals")
+    .action(async (opts, command: Command) => {
+      await withContext(command, "admin support triage", async (ctx) => {
+        return await ctx.hub.adminSupport.triage(adminSupportListRequest(opts));
+      });
+    });
 
   adminHost
     .command("describe <host>")
