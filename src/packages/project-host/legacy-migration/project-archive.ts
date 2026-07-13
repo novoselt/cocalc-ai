@@ -35,6 +35,7 @@ import { assertValidSnapshotName } from "@cocalc/util/snapshot-name";
 import { publishLroEvent } from "../lro/stream";
 
 import { normalizeArchivePath } from "../archive-path";
+import { parseTarExtractedLine, parseTarVerboseLine } from "./tar-output";
 
 const PROJECT_ARCHIVE_RESTORE_TIMEOUT_MS = Math.max(
   60 * 60 * 1000,
@@ -258,9 +259,10 @@ function runProjectArchiveTarCommand({
     }, PROJECT_ARCHIVE_RESTORE_TIMEOUT_MS);
     timeout.unref?.();
 
+    child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       if (onStdoutLine == null) return;
-      stdoutBuffer += chunk.toString("utf8");
+      stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/g);
       stdoutBuffer = lines.pop() ?? "";
       for (const line of lines) {
@@ -273,8 +275,9 @@ function runProjectArchiveTarCommand({
         }
       }
     });
+    child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      stderr += chunk;
       if (stderr.length > 20_000) {
         stderr = stderr.slice(stderr.length - 20_000);
       }
@@ -345,36 +348,6 @@ function runProjectArchiveTarCommand({
   });
 }
 
-function parseTarVerboseLine(line: string):
-  | {
-      path: string;
-      size: number;
-      type: ProjectArchiveEntry["type"];
-      mtime?: string;
-    }
-  | undefined {
-  const match = line.match(
-    /^(\S+)\s+\S+\s+(\d+)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)\s+(.+)$/,
-  );
-  if (!match) return;
-  const size = Number(match[2]);
-  if (!Number.isFinite(size) || size < 0) return;
-  const mode = match[1];
-  const name = match[5]
-    .replace(/\s+->\s+.*$/, "")
-    .replace(/\s+link to\s+.*$/, "");
-  const kind = mode[0];
-  const type =
-    kind === "d"
-      ? "directory"
-      : kind === "l"
-        ? "symlink"
-        : kind === "-"
-          ? "file"
-          : "other";
-  return { path: name, size, type, mtime: `${match[3]}T${match[4]}Z` };
-}
-
 async function scanProjectArchiveTar({
   archivePath,
   exclude,
@@ -416,8 +389,8 @@ async function scanProjectArchiveTar({
   try {
     await runProjectArchiveTarCommand({
       archivePath,
-      // The member list is fed back to tar -T; keep backslashes literal.
-      args: ["--quoting-style=literal", "-tvf", "-"],
+      // C quoting keeps control characters from splitting listing records.
+      args: ["--quoting-style=c", "-tvf", "-"],
       onStdoutLine: (line) => {
         const parsed = parseTarVerboseLine(line);
         if (parsed == null) {
@@ -457,7 +430,8 @@ async function scanProjectArchiveTar({
         }
         if (parsed.path.trim()) {
           file_count += 1;
-          memberList?.write(`${parsed.path}\n`);
+          memberList?.write(parsed.path);
+          memberList?.write("\0");
         }
         uncompressed_bytes += parsed.size;
         const now = Date.now();
@@ -526,6 +500,7 @@ async function extractProjectArchiveTar({
     "--no-same-owner",
     "--no-overwrite-dir",
     "--no-wildcards",
+    "--quoting-style=c",
     "-xvf",
     "-",
     "-C",
@@ -533,6 +508,7 @@ async function extractProjectArchiveTar({
   ];
   if (member_list_path != null) {
     args.push(
+      "--null",
       "--verbatim-files-from",
       "--no-recursion",
       "-T",
@@ -550,7 +526,9 @@ async function extractProjectArchiveTar({
       args,
       runAs,
       onStdoutLine: (line) => {
-        const path = normalizeProjectArchiveMemberPath(line);
+        const path = normalizeProjectArchiveMemberPath(
+          parseTarExtractedLine(line),
+        );
         if (!path) return;
         assertSafeArchivePath(path);
         extracted_count += 1;
@@ -829,7 +807,7 @@ async function createSelectedMemberList({
   await mkdir(tmpRoot, { recursive: true });
   const memberListTmpDir = await mkdtemp(join(tmpRoot, `${project_id}-list-`));
   await chmod(memberListTmpDir, 0o711);
-  const member_list_path = join(memberListTmpDir, "selected-members.txt");
+  const member_list_path = join(memberListTmpDir, "selected-members.nul");
   const scan = await scanProjectArchiveTar({
     archivePath,
     exclude,
