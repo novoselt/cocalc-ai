@@ -54,21 +54,21 @@ describe("hub conat managed egress", () => {
     ]);
   });
 
-  it("formats the hub interactive session block message", () => {
+  it("formats the independent control-plane safety block message", () => {
     expect(
       __test__.buildBlockedMessage({
         account_id: "account-1",
-        category: "interactive-conat",
+        category: "control-plane-conat",
         allowed: false,
         blocked_by: "5h",
-        managed_egress_5h_bytes: 373_000_000,
+        managed_egress_5h_bytes: 1_100_000_000,
         managed_egress_7d_bytes: 500_000_000,
-        egress_5h_bytes: 200_000_000,
-        egress_7d_bytes: 1_000_000_000,
+        egress_5h_bytes: 1_000_000_000,
+        egress_7d_bytes: 10_000_000_000,
         managed_egress_categories_5h_bytes: {
-          "interactive-conat": 373_000_000,
+          "control-plane-conat": 1_100_000_000,
         },
       }),
-    ).toContain("Interactive session traffic limit reached for this account.");
+    ).toContain("Account control traffic safety limit reached.");
   });
 });

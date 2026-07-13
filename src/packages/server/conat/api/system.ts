@@ -6800,6 +6800,7 @@ export async function recordManagedProjectEgress({
     | "ws-proxy"
     | "ssh"
     | "interactive-conat"
+    | "control-plane-conat"
     | "raw-network"
     | "backup-upload";
   bytes: number;
@@ -6957,6 +6958,7 @@ export async function getManagedProjectEgressPolicy({
     | "ws-proxy"
     | "ssh"
     | "interactive-conat"
+    | "control-plane-conat"
     | "raw-network"
     | "backup-upload";
 }) {

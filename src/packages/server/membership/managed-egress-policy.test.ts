@@ -5,6 +5,7 @@
 
 const getProjectUsageAccountIdMock = jest.fn();
 const getManagedEgressUsageForAccountMock = jest.fn();
+const getManagedEgressCategoryUsageForAccountMock = jest.fn();
 const resolveMembershipForAccountMock = jest.fn();
 
 jest.mock("./managed-egress", () => ({
@@ -12,6 +13,8 @@ jest.mock("./managed-egress", () => ({
     getProjectUsageAccountIdMock(...args),
   getManagedEgressUsageForAccount: (...args: any[]) =>
     getManagedEgressUsageForAccountMock(...args),
+  getManagedEgressCategoryUsageForAccount: (...args: any[]) =>
+    getManagedEgressCategoryUsageForAccountMock(...args),
 }));
 
 jest.mock("./resolve", () => ({
@@ -22,6 +25,8 @@ jest.mock("./resolve", () => ({
 describe("getManagedProjectEgressPolicy", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    delete process.env.COCALC_CONTROL_PLANE_EGRESS_5H_BYTES;
+    delete process.env.COCALC_CONTROL_PLANE_EGRESS_7D_BYTES;
   });
 
   it("allows managed egress when no usage account can be resolved", async () => {
@@ -162,5 +167,61 @@ describe("getManagedProjectEgressPolicy", () => {
       managed_egress_7d_bytes: 300,
     });
     expect(getProjectUsageAccountIdMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let membership egress exhaustion block control-plane traffic", async () => {
+    getManagedEgressUsageForAccountMock.mockResolvedValue({
+      managed_egress_5h_bytes: 9_000_000_000,
+      managed_egress_7d_bytes: 20_000_000_000,
+      over_managed_egress_5h: true,
+      over_managed_egress_7d: true,
+    });
+    getManagedEgressCategoryUsageForAccountMock.mockResolvedValue({
+      bytes_5h: 100_000_000,
+      bytes_7d: 500_000_000,
+    });
+    const { getManagedProjectEgressPolicy } =
+      await import("./managed-egress-policy");
+
+    await expect(
+      getManagedProjectEgressPolicy({
+        account_id: "account-2",
+        category: "control-plane-conat",
+      }),
+    ).resolves.toMatchObject({
+      account_id: "account-2",
+      category: "control-plane-conat",
+      allowed: true,
+      managed_egress_5h_bytes: 100_000_000,
+      egress_5h_bytes: 1_000_000_000,
+    });
+    expect(resolveMembershipForAccountMock).not.toHaveBeenCalled();
+    expect(getManagedEgressUsageForAccountMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks abnormal control-plane traffic at its independent safety limit", async () => {
+    getManagedEgressCategoryUsageForAccountMock.mockResolvedValue({
+      bytes_5h: 1_100_000_000,
+      bytes_7d: 2_000_000_000,
+    });
+    const { getManagedProjectEgressPolicy } =
+      await import("./managed-egress-policy");
+
+    await expect(
+      getManagedProjectEgressPolicy({
+        account_id: "account-2",
+        category: "control-plane-conat",
+      }),
+    ).resolves.toMatchObject({
+      account_id: "account-2",
+      category: "control-plane-conat",
+      allowed: false,
+      blocked_by: "5h",
+      managed_egress_5h_bytes: 1_100_000_000,
+      egress_5h_bytes: 1_000_000_000,
+      egress_7d_bytes: 10_000_000_000,
+    });
+    expect(resolveMembershipForAccountMock).not.toHaveBeenCalled();
+    expect(getManagedEgressUsageForAccountMock).not.toHaveBeenCalled();
   });
 });

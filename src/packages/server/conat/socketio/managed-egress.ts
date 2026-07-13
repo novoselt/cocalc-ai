@@ -24,7 +24,7 @@ import {
 } from "./managed-egress-runtime";
 
 const DEFAULT_INTERVAL_MS = 5_000;
-const CATEGORY: ManagedProjectEgressCategory = "interactive-conat";
+const CATEGORY: ManagedProjectEgressCategory = "control-plane-conat";
 
 type ConnectionStatsSnapshot = { [id: string]: ConnectionStats };
 
@@ -216,6 +216,7 @@ function formatManagedEgressCategory(category: string): string {
   if (category === "ws-proxy") return "App server WebSocket traffic";
   if (category === "ssh") return "SSH traffic";
   if (category === "interactive-conat") return "Interactive session traffic";
+  if (category === "control-plane-conat") return "Account control traffic";
   if (category === "backup-upload") return "Project backup uploads";
   return capitalize(category.replace(/[-_]/g, " "));
 }
@@ -233,8 +234,8 @@ function buildBlockedMessage(policy: ManagedProjectEgressPolicy): string {
         `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
     );
   const lines = [
-    "Interactive session traffic limit reached for this account.",
-    "New browser session traffic is temporarily blocked until the egress usage window resets.",
+    "Account control traffic safety limit reached.",
+    "New browser control-plane connections are temporarily blocked because this account generated an abnormal amount of control traffic.",
   ];
   if (policy.egress_5h_bytes != null) {
     lines.push(

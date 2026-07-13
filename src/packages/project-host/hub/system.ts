@@ -48,6 +48,7 @@ export function wireSystemApi(): void {
       | "ws-proxy"
       | "ssh"
       | "interactive-conat"
+      | "control-plane-conat"
       | "raw-network"
       | "backup-upload";
   }) => {
@@ -63,6 +64,7 @@ export function wireSystemApi(): void {
       | "ws-proxy"
       | "ssh"
       | "interactive-conat"
+      | "control-plane-conat"
       | "raw-network"
       | "backup-upload";
     bytes: number;

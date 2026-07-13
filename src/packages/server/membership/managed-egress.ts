@@ -38,10 +38,10 @@ const ROLLUP_FLUSH_INTERVAL_MS = 60_000;
 const ROLLUP_FLUSH_MAX_PENDING = 1000;
 const QUOTA_EXCLUDED_CATEGORIES = new Set<ManagedProjectEgressCategory>([
   "interactive-conat",
-  "backup-upload",
+  "control-plane-conat",
 ]);
-// Keep platform-managed backup traffic visible to users and operators even
-// though it must not consume the quota that gates interactive access.
+// Keep control-plane traffic visible to users and operators even though it has
+// an independent safety limit rather than consuming membership egress quota.
 const REPORTING_EXCLUDED_CATEGORIES = new Set<ManagedProjectEgressCategory>([
   "interactive-conat",
 ]);
@@ -52,6 +52,7 @@ export type ManagedProjectEgressCategory =
   | "ws-proxy"
   | "ssh"
   | "interactive-conat"
+  | "control-plane-conat"
   | "raw-network"
   | "backup-upload";
 
@@ -569,6 +570,56 @@ export async function getManagedEgressUsageForAccount(opts: {
         : undefined,
     managed_egress_categories_5h_bytes,
     managed_egress_categories_7d_bytes,
+  };
+}
+
+export async function getManagedEgressCategoryUsageForAccount(opts: {
+  account_id: string;
+  category: ManagedProjectEgressCategory;
+  now?: Date;
+}): Promise<{ bytes_5h: number; bytes_7d: number }> {
+  await ensureSchema();
+  const end = opts.now ?? new Date();
+  const start5h = new Date(end.getTime() - 5 * 60 * 60 * 1000);
+  const start7d = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const { rows } = await getPool("medium").query<{
+    bytes_5h: string | number;
+    bytes_7d: string | number;
+  }>(
+    `
+      SELECT
+        COALESCE(
+          SUM(CASE WHEN bucket_start >= $3 THEN bytes ELSE 0 END),
+          0
+        ) AS bytes_5h,
+        COALESCE(SUM(bytes), 0) AS bytes_7d
+      FROM ${ROLLUP_TABLE}
+      WHERE account_id = $1
+        AND category = $2
+        AND bucket_start >= $4
+        AND bucket_start < $5
+    `,
+    [opts.account_id, opts.category, start5h, start7d, end],
+  );
+  let pending5h = 0;
+  let pending7d = 0;
+  for (const entry of pendingRollups.values()) {
+    if (
+      entry.account_id !== opts.account_id ||
+      entry.category !== opts.category ||
+      entry.bucket_start < start7d ||
+      entry.bucket_start >= end
+    ) {
+      continue;
+    }
+    pending7d += entry.bytes;
+    if (entry.bucket_start >= start5h) {
+      pending5h += entry.bytes;
+    }
+  }
+  return {
+    bytes_5h: Math.max(0, Number(rows[0]?.bytes_5h) || 0) + pending5h,
+    bytes_7d: Math.max(0, Number(rows[0]?.bytes_7d) || 0) + pending7d,
   };
 }
 

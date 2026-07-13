@@ -5,11 +5,36 @@
 
 import type { ManagedProjectEgressCategory } from "@cocalc/server/membership/managed-egress";
 import {
+  getManagedEgressCategoryUsageForAccount,
   getManagedEgressUsageForAccount,
   getProjectUsageAccountId,
 } from "@cocalc/server/membership/managed-egress";
 import { getEffectiveMembershipUsageLimits } from "@cocalc/server/membership/effective-limits";
 import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
+
+export const DEFAULT_CONTROL_PLANE_EGRESS_5H_BYTES = 1_000_000_000;
+export const DEFAULT_CONTROL_PLANE_EGRESS_7D_BYTES = 10_000_000_000;
+
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+function getControlPlaneEgressLimits(): {
+  egress_5h_bytes: number;
+  egress_7d_bytes: number;
+} {
+  return {
+    egress_5h_bytes: positiveIntegerEnv(
+      "COCALC_CONTROL_PLANE_EGRESS_5H_BYTES",
+      DEFAULT_CONTROL_PLANE_EGRESS_5H_BYTES,
+    ),
+    egress_7d_bytes: positiveIntegerEnv(
+      "COCALC_CONTROL_PLANE_EGRESS_7D_BYTES",
+      DEFAULT_CONTROL_PLANE_EGRESS_7D_BYTES,
+    ),
+  };
+}
 
 export interface ManagedProjectEgressPolicy {
   account_id?: string;
@@ -37,6 +62,35 @@ export async function getManagedProjectEgressPolicy(opts: {
     return {
       category: opts.category,
       allowed: true,
+    };
+  }
+  if (opts.category === "control-plane-conat") {
+    const { egress_5h_bytes, egress_7d_bytes } = getControlPlaneEgressLimits();
+    const usage = await getManagedEgressCategoryUsageForAccount({
+      account_id,
+      category: opts.category,
+    });
+    const blocked_by =
+      usage.bytes_5h > egress_5h_bytes
+        ? "5h"
+        : usage.bytes_7d > egress_7d_bytes
+          ? "7d"
+          : undefined;
+    return {
+      account_id,
+      category: opts.category,
+      allowed: blocked_by == null,
+      blocked_by,
+      managed_egress_5h_bytes: usage.bytes_5h,
+      managed_egress_7d_bytes: usage.bytes_7d,
+      egress_5h_bytes,
+      egress_7d_bytes,
+      managed_egress_categories_5h_bytes: {
+        "control-plane-conat": usage.bytes_5h,
+      },
+      managed_egress_categories_7d_bytes: {
+        "control-plane-conat": usage.bytes_7d,
+      },
     };
   }
   const resolution = await resolveMembershipForAccount(account_id);

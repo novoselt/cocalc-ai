@@ -899,6 +899,7 @@ export type ManagedProjectEgressCategory =
   | "ws-proxy"
   | "ssh"
   | "interactive-conat"
+  | "control-plane-conat"
   | "raw-network"
   | "backup-upload";
 

@@ -215,7 +215,7 @@ describe("managed egress history", () => {
     ).rejects.toThrow("history query is too granular");
   });
 
-  it("computes quota usage without interactive or backup traffic", async () => {
+  it("computes membership quota usage without interactive or control traffic", async () => {
     const starts5h = new Date("2026-04-28T07:00:00.000Z");
     const resets5h = new Date("2026-04-28T12:00:00.000Z");
     const starts7d = new Date("2026-04-21T12:00:00.000Z");
@@ -238,7 +238,7 @@ describe("managed egress history", () => {
           resets5h,
           starts7d,
           resets7d,
-          ["interactive-conat", "backup-upload"],
+          ["interactive-conat", "control-plane-conat"],
         ]);
         expect(sql).toContain("category <> ALL($6::text[])");
         return {
@@ -266,7 +266,7 @@ describe("managed egress history", () => {
     });
   });
 
-  it("does not open quota windows for backup uploads", async () => {
+  it("opens quota windows for backups but not control-plane traffic", async () => {
     const { recordManagedProjectEgress } = await import("./managed-egress");
 
     await recordManagedProjectEgress({
@@ -275,12 +275,11 @@ describe("managed egress history", () => {
       category: "backup-upload",
       bytes: 100,
     });
-    expect(ensureAccountUsageWindowsForEventMock).not.toHaveBeenCalled();
+    expect(ensureAccountUsageWindowsForEventMock).toHaveBeenCalledTimes(1);
 
     await recordManagedProjectEgress({
       account_id: "account-1",
-      project_id: "project-1",
-      category: "raw-network",
+      category: "control-plane-conat",
       bytes: 100,
     });
     expect(ensureAccountUsageWindowsForEventMock).toHaveBeenCalledTimes(1);
@@ -288,6 +287,47 @@ describe("managed egress history", () => {
       account_id: "account-1",
       occurred_at: undefined,
     });
+  });
+
+  it("computes a dedicated rolling category usage window", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    queryMock.mockImplementation(async (sql: string, params?: any[]) => {
+      if (isSchemaQuery(sql)) {
+        return { rows: [] };
+      }
+      if (
+        sql.includes("category = $2") &&
+        sql.includes("SUM(CASE WHEN bucket_start >= $3")
+      ) {
+        expect(params).toEqual([
+          "account-1",
+          "control-plane-conat",
+          new Date("2026-04-28T07:00:00.000Z"),
+          new Date("2026-04-21T12:00:00.000Z"),
+          now,
+        ]);
+        return { rows: [{ bytes_5h: "123", bytes_7d: "456" }] };
+      }
+      throw new Error(`unhandled query: ${sql}`);
+    });
+
+    const {
+      getManagedEgressCategoryUsageForAccount,
+      recordManagedProjectEgress,
+    } = await import("./managed-egress");
+    await recordManagedProjectEgress({
+      account_id: "account-1",
+      category: "control-plane-conat",
+      bytes: 10,
+      occurred_at: new Date("2026-04-28T11:59:00.000Z"),
+    });
+    await expect(
+      getManagedEgressCategoryUsageForAccount({
+        account_id: "account-1",
+        category: "control-plane-conat",
+        now,
+      }),
+    ).resolves.toEqual({ bytes_5h: 133, bytes_7d: 466 });
   });
 
   it("aggregates admin-wide top accounts and projects", async () => {
