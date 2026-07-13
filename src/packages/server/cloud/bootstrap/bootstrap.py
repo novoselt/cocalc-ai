@@ -2240,6 +2240,45 @@ find_project_conmon_pids() {
   '
 }
 
+find_project_network_namespace_ids() {
+  local project_id="$1" conmon_pid child_pid namespace_id
+  while IFS= read -r conmon_pid; do
+    [ -n "$conmon_pid" ] || continue
+    while IFS= read -r child_pid; do
+      [ -n "$child_pid" ] || continue
+      namespace_id="$(stat -Lc '%d:%i' "/proc/${child_pid}/ns/net" 2>/dev/null || true)"
+      [ -n "$namespace_id" ] && printf '%s\n' "$namespace_id"
+    done < <(ps -eo pid=,ppid= | awk -v parent="$conmon_pid" '$2 == parent {print $1}')
+  done < <(find_project_conmon_pids "$project_id")
+}
+
+find_project_pasta_pids() {
+  local project_id="$1" namespace_id proc pid comm fd fd_namespace_id
+  while IFS= read -r namespace_id; do
+    [ -n "$namespace_id" ] || continue
+    for proc in /proc/[0-9]*; do
+      pid="${proc##*/}"
+      [ -r "$proc/comm" ] || continue
+      comm="$(cat "$proc/comm" 2>/dev/null || true)"
+      case "$comm" in
+        pasta|pasta.*)
+          ;;
+        *)
+          continue
+          ;;
+      esac
+      for fd in "$proc/fd/"*; do
+        [ -e "$fd" ] || continue
+        fd_namespace_id="$(stat -Lc '%d:%i' "$fd" 2>/dev/null || true)"
+        if [ -n "$fd_namespace_id" ] && [ "$fd_namespace_id" = "$namespace_id" ]; then
+          printf '%s\n' "$pid"
+          break
+        fi
+      done
+    done
+  done < <(find_project_network_namespace_ids "$project_id") | sort -u
+}
+
 allow_path() {
   local path="${1//\\\\:/:}"
   case "$path" in
@@ -2365,6 +2404,9 @@ case "$cmd" in
       while IFS= read -r conmon_pid; do
         attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
       done < <(find_project_conmon_pids "$project_id")
+      while IFS= read -r pasta_pid; do
+        attach_pid_to_project_pool_storage "$pasta_pid" "$pool" || true
+      done < <(find_project_pasta_pids "$project_id")
     done
     ;;
   btrfs)
@@ -4619,7 +4661,7 @@ protect_pid() {
 }
 
 attach_running_project_processes() {
-  local runtime_dir cgroup_manager cid line project_pid conmon_pid
+  local runtime_dir cgroup_manager cid line project_pid conmon_pid project_name project_id
   configure_project_pool_cgroup
   runtime_dir="$(podman_runtime_dir)"
   cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
@@ -4636,12 +4678,21 @@ attach_running_project_processes() {
         XDG_RUNTIME_DIR="${runtime_dir}" \
         COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
         CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-        podman inspect --format '{{.State.Pid}} {{.State.ConmonPid}}' "${cid}" 2>/dev/null || true
+        podman inspect --format '{{.State.Pid}} {{.State.ConmonPid}} {{.Name}}' "${cid}" 2>/dev/null || true
     )"
     project_pid="$(printf '%s\n' "${line}" | awk '{print $1}')"
     conmon_pid="$(printf '%s\n' "${line}" | awk '{print $2}')"
+    project_name="$(printf '%s\n' "${line}" | awk '{print $3}')"
     attach_pid_tree_to_project_pool "${conmon_pid}" || true
     attach_pid_tree_to_project_pool "${project_pid}" || true
+    case "${project_name}" in
+      project-*)
+        project_id="${project_name#project-}"
+        if echo "${project_id}" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' && [ -x /usr/local/sbin/cocalc-runtime-storage ]; then
+          /usr/local/sbin/cocalc-runtime-storage attach-project-cgroup "${project_id}" || true
+        fi
+        ;;
+    esac
   done < <(
     sudo -n -u "${RUNTIME_USER}" -H env \
       XDG_RUNTIME_DIR="${runtime_dir}" \

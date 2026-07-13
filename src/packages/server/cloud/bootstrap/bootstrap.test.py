@@ -1190,6 +1190,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('> "${pool}/cpu.weight"', script)
             self.assertIn('> "${pool}/io.weight"', script)
             self.assertIn('attach_pid_to_project_pool_storage "$$" "$pool"', script)
+            self.assertIn("find_project_network_namespace_ids()", script)
+            self.assertIn("find_project_pasta_pids()", script)
+            self.assertIn("stat -Lc '%d:%i'", script)
+            self.assertIn('case "$comm" in', script)
+            self.assertIn("pasta|pasta.*)", script)
+            self.assertIn(
+                'attach_pid_to_project_pool_storage "$pasta_pid" "$pool"',
+                script,
+            )
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
             self.assertIn("find_bees_pid()", script)
             self.assertIn("apply_bees_runtime_policy()", script)
@@ -1485,6 +1494,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn(
                 "allow_forensics_capture_dir",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "{{.State.Pid}} {{.State.ConmonPid}} {{.Name}}",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                '/usr/local/sbin/cocalc-runtime-storage attach-project-cgroup "${project_id}"',
                 rootctl.read_text(encoding="utf-8"),
             )
             subprocess.run(["bash", "-n", str(rootctl)], check=True)
