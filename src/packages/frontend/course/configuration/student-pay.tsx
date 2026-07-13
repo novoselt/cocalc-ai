@@ -50,7 +50,12 @@ interface MembershipTiersResponse {
 const DEFAULT_GRACE_DAYS = 14;
 type CoursePayChoice = "student" | "institute" | "site_license";
 
-export default function StudentPay({ actions, settings, project_id }) {
+export default function StudentPay({
+  actions,
+  settings,
+  project_id,
+  onManageSeats,
+}) {
   const intl = useIntl();
   const emailAddress = useTypedRedux("account", "email_address");
   const emailAddressVerified = useTypedRedux(
@@ -398,6 +403,7 @@ export default function StudentPay({ actions, settings, project_id }) {
             enabled={selectedPayChoice === "institute"}
             showToggle={false}
             selectedTier={selectedTier}
+            onManageSeats={onManageSeats}
             onToggle={(checked) => {
               actions.configuration.set_pay_choice("institute", checked);
               if (checked) {

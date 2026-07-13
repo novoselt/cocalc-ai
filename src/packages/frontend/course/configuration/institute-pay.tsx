@@ -59,6 +59,7 @@ interface InstitutePaySectionProps {
     course_price?: number;
     course_duration_days?: number;
   } | null;
+  onManageSeats?: () => void;
   onToggle: (checked: boolean) => void;
 }
 
@@ -67,6 +68,7 @@ export function InstitutePaySection({
   enabled,
   showToggle = true,
   selectedTier,
+  onManageSeats,
   onToggle,
 }: InstitutePaySectionProps) {
   const [loading, setLoading] = useState<boolean>(false);
@@ -137,6 +139,11 @@ export function InstitutePaySection({
             <Button onClick={refreshPackages} disabled={loading}>
               <Icon name="refresh" /> Refresh seats
             </Button>
+            {onManageSeats && (
+              <Button onClick={onManageSeats}>
+                <Icon name="users" /> Manage seats
+              </Button>
+            )}
           </Space>
           {loading && <Spin />}
           {membershipPackage ? (

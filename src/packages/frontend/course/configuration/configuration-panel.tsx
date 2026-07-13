@@ -33,6 +33,10 @@ import StudentPay from "./student-pay";
 import { getEmailInviteValidationError } from "./email-invite-validation";
 
 interface Props {
+  frame_id: string;
+  frameActions: {
+    set_frame_type: (frame_id: string, type: string) => void;
+  };
   name: string;
   project_id: string;
   settings: CourseSettingsRecord;
@@ -40,6 +44,8 @@ interface Props {
 }
 
 export function ConfigurationPanel({
+  frame_id,
+  frameActions,
   name,
   project_id,
   settings,
@@ -60,6 +66,10 @@ export function ConfigurationPanel({
             settings={settings}
             actions={actions}
             project_id={project_id}
+            onManageSeats={() => {
+              actions?.set_manage_seats_open(true);
+              frameActions.set_frame_type(frame_id, "course_students");
+            }}
           />
           <br />
           <TitleAndDescription
@@ -122,9 +132,19 @@ export function ConfigurationPanel({
   );
 }
 
-export function UpgradeConfiguration({ settings, actions, project_id }) {
+export function UpgradeConfiguration({
+  settings,
+  actions,
+  project_id,
+  onManageSeats,
+}) {
   return (
-    <StudentPay actions={actions} settings={settings} project_id={project_id} />
+    <StudentPay
+      actions={actions}
+      settings={settings}
+      project_id={project_id}
+      onManageSeats={onManageSeats}
+    />
   );
 }
 

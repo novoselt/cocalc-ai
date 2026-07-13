@@ -106,7 +106,10 @@ export function StudentsPanel({
   const [coursePaymentOverview, setCoursePaymentOverview] =
     useState<CoursePaymentOverview>();
   const [coursePaymentError, setCoursePaymentError] = useState<string>("");
-  const [manageSeatsOpen, setManageSeatsOpen] = useState<boolean>(false);
+  const manageSeatsOpen = !!useRedux(name, "manage_seats_open");
+  const setManageSeatsOpen = (open: boolean) => {
+    actions.set_manage_seats_open(open);
+  };
 
   // the type is copy/paste from what TS infers in the util.parse_students function
   const [students_unordered, set_students_unordered] = useState<

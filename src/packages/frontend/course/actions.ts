@@ -427,4 +427,8 @@ export class CourseActions extends Actions<CourseState> {
     pageFilter = pageFilter.set(page, filter);
     this.setState({ pageFilter });
   };
+
+  set_manage_seats_open = (open: boolean): void => {
+    this.setState({ manage_seats_open: open });
+  };
 }
