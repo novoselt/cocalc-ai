@@ -59,6 +59,12 @@ interface ManageSeatsProps {
   onRefresh: () => Promise<void>;
 }
 
+export const MANAGE_SEATS_MODAL_BODY_STYLE = {
+  maxHeight: "calc(100vh - 180px)",
+  overflowX: "hidden",
+  overflowY: "auto",
+} as const;
+
 async function runWithConcurrency<T>(
   items: T[],
   concurrency: number,
@@ -217,6 +223,9 @@ export function ManageSeats({
         onCancel={onClose}
         footer={null}
         width={920}
+        styles={{
+          body: MANAGE_SEATS_MODAL_BODY_STYLE,
+        }}
         title={
           <Space>
             <Icon name="users" /> Manage paid seats
