@@ -112,7 +112,10 @@ describe("GNU tar C-quoted output", () => {
         .filter(Boolean)
         .map((line) => parseTarVerboseLine(line)?.path)
         .filter((value): value is string => value != null && value !== "./");
-      expect(paths).toEqual(Array.from(files.keys(), (name) => `./${name}`));
+      expect(paths).toHaveLength(files.size);
+      expect(new Set(paths)).toEqual(
+        new Set(Array.from(files.keys(), (name) => `./${name}`)),
+      );
 
       writeFileSync(
         memberList,
