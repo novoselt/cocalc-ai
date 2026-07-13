@@ -1224,34 +1224,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('> "${pool}/cpu.weight"', script)
             self.assertIn('> "${pool}/io.weight"', script)
             self.assertIn('attach_pid_to_project_pool_storage "$$" "$pool"', script)
-            self.assertIn("find_pasta_pids()", script)
-            self.assertIn("find_pasta_pids_for_netns()", script)
-            self.assertIn('ps -eo pid=,comm=', script)
-            self.assertIn('$2 == "pasta" || $2 ~ /^pasta[.]/', script)
-            self.assertIn('case "$arg" in', script)
-            self.assertIn("--netns=*)", script)
-            self.assertIn('tr \'\\0\' \'\\n\' <"$proc/cmdline"', script)
-            self.assertNotIn('for fd in "$proc/fd/"*', script)
             self.assertIn("attach-pasta-cgroups)", script)
+            self.assertIn("prepare-project-cgroup)", script)
+            self.assertIn("attach-project-cgroup)", script)
             self.assertIn(
-                'attach_external_pid_to_project_pool_storage "$pasta_pid" "$pool"',
-                script,
+                "Compatibility for pinned project bundles", script
             )
-            self.assertIn("configure_project_pool_hierarchy_storage()", script)
-            self.assertIn("project_pool_legacy_cgroup_storage()", script)
-            self.assertIn("project_cgroup_storage()", script)
-            self.assertIn('> "$pool/cgroup.subtree_control"', script)
-            self.assertIn("configure_project_cgroup_storage()", script)
-            self.assertIn('> "$cgroup/memory.max"', script)
-            self.assertIn('> "$cgroup/memory.high"', script)
-            self.assertIn('> "$cgroup/memory.low"', script)
-            self.assertIn('> "$cgroup/memory.swap.max"', script)
-            self.assertIn('> "$cgroup/pids.max"', script)
-            self.assertIn('> "$cgroup/cpu.max"', script)
-            self.assertIn('> "$cgroup/cpu.weight"', script)
-            self.assertIn('> "$cgroup/io.weight"', script)
-            self.assertIn("project-cgroup-io-weight-invalid", script)
-            self.assertIn("for controller in cpu memory pids io", script)
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
             self.assertIn("find_bees_pid()", script)
             self.assertIn("apply_bees_runtime_policy()", script)
@@ -1558,6 +1536,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "flatten_project_pool_cgroup()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertNotIn(
                 "/usr/local/sbin/cocalc-runtime-storage attach-pasta-cgroups",
                 rootctl.read_text(encoding="utf-8"),
             )

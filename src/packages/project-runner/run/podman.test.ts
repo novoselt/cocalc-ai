@@ -84,17 +84,6 @@ jest.mock("./rootfs", () => ({
 
 jest.mock("./limits", () => ({
   podmanLimits: jest.fn(async () => []),
-  projectCgroupLimitsFromPodmanArgs: jest.fn(() => ({
-    memory_max: "max",
-    memory_high: "max",
-    memory_low: "0",
-    memory_swap_max: "max",
-    pids_max: "max",
-    cpu_max_quota: "max",
-    cpu_max_period: "100000",
-    cpu_weight: "100",
-    io_weight: "100",
-  })),
 }));
 
 jest.mock("./startup-scripts", () => ({
@@ -452,17 +441,6 @@ describe("project-runner podman orphan fallback", () => {
 
   it("uses caller-provided host ports when starting a project", async () => {
     mockProjectStartPodman(project1);
-    const sandboxPath =
-      "/mnt/cocalc/data/tmp/cocalc-podman-runtime-2000/netns/netns-test";
-    mockExecuteCode.mockImplementation(async ({ command, args }) => {
-      if (
-        command === "podman" &&
-        args?.includes("{{.NetworkSettings.SandboxKey}}")
-      ) {
-        return { stdout: `${sandboxPath}\n` };
-      }
-      return { stdout: "" };
-    });
     const libatomic = `/tmp/cocalc-test-libatomic-${project1}`;
     const compatLibs = `/tmp/cocalc-test-runtime-libs-${project1}`;
     await writeFile(libatomic, "test-libatomic");
@@ -504,37 +482,6 @@ describe("project-runner podman orphan fallback", () => {
         "--init",
         ".local/share/cocalc/startup.sh",
       ]),
-      expect.objectContaining({
-        launcher: expect.objectContaining({
-          command: "bash",
-          argsPrefix: expect.arrayContaining([
-            expect.stringContaining('"${10}"\nshift 10'),
-            "cocalc-project-podman",
-            project1,
-          ]),
-        }),
-      }),
-    );
-    expect(mockExecuteCode).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "sudo",
-        args: [
-          "-n",
-          "/usr/local/sbin/cocalc-runtime-storage",
-          "attach-project-cgroup",
-          project1,
-          sandboxPath,
-          "max",
-          "max",
-          "0",
-          "max",
-          "max",
-          "max",
-          "100000",
-          "100",
-          "100",
-        ],
-      }),
     );
     expect(status).toMatchObject({
       state: "running",

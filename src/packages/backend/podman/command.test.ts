@@ -127,33 +127,4 @@ describe("podman command wrapper", () => {
     await expect(podman(["ps", "-a"], { timeout: 30 })).rejects.toMatch("boom");
     expect(executeCodeMock).toHaveBeenCalledTimes(1);
   });
-
-  it("runs Podman through a pre-exec launcher when requested", async () => {
-    executeCodeMock.mockResolvedValueOnce({
-      stdout: "container-id\n",
-      stderr: "",
-      exit_code: 0,
-    });
-
-    await podman(["run", "example"], {
-      timeout: 30,
-      launcher: {
-        command: "bash",
-        argsPrefix: ["-c", "prepare; exec podman \"$@\"", "launcher"],
-      },
-    });
-
-    expect(executeCodeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "bash",
-        args: [
-          "-c",
-          'prepare; exec podman "$@"',
-          "launcher",
-          "run",
-          "example",
-        ],
-      }),
-    );
-  });
 });

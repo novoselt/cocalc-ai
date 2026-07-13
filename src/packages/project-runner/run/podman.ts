@@ -51,11 +51,7 @@ import { mount as mountRootFs, unmountAll as unmountAllRootFs } from "./rootfs";
 import { type ProjectState } from "@cocalc/conat/project/runner/state";
 import { type Configuration } from "@cocalc/conat/project/runner/types";
 import { DEFAULT_PROJECT_IMAGE } from "@cocalc/util/db-schema/defaults";
-import {
-  podmanLimits,
-  projectCgroupLimitsFromPodmanArgs,
-  type ProjectCgroupLimits,
-} from "./limits";
+import { podmanLimits } from "./limits";
 import { executeCode } from "@cocalc/backend/execute-code";
 import {
   getConmonContainerProcessLists,
@@ -100,17 +96,11 @@ const RESTORE_RPC_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const STOP_RM_TIMEOUT_S = 10;
 const STOP_RM_PODMAN_TERM_S = 5;
 const STOP_INSPECT_TIMEOUT_S = 10;
-const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
 const STOP_FORCE_KILL_SETTLE_MS = 250;
 const START_RUNNING_CHECK_TIMEOUT_MS = 5000;
 const START_RUNNING_CHECK_INTERVAL_MS = 250;
 const START_FAILURE_LOG_LINES = 80;
 const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
-const PROJECT_CGROUP_LAUNCHER_SCRIPT = `set -euo pipefail
-sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}"
-shift 10
-exec podman "$@"`;
-
 const DEFAULT_PROJECT_SCRIPT = join(
   COCALC_SRC,
   "packages/project/bin/cocalc-project.js",
@@ -852,124 +842,6 @@ async function inspectContainerPids(name: string): Promise<number[]> {
       ]),
     ),
   ];
-}
-
-async function inspectContainerSandboxPath(
-  name: string,
-): Promise<string | undefined> {
-  try {
-    const { stdout } = await executeCode({
-      command: "podman",
-      args: ["inspect", "--format", "{{.NetworkSettings.SandboxKey}}", name],
-      timeout: STOP_INSPECT_TIMEOUT_S,
-      err_on_exit: false,
-      env: podmanEnv(),
-    });
-    return `${stdout ?? ""}`.trim() || undefined;
-  } catch (err) {
-    logger.warn("start: failed to inspect project network namespace", {
-      name,
-      err: `${err}`,
-    });
-    return undefined;
-  }
-}
-
-async function attachProjectToCgroup(
-  project_id: string,
-  name: string,
-  limits: ProjectCgroupLimits,
-): Promise<void> {
-  try {
-    const sandboxPath = await inspectContainerSandboxPath(name);
-    const result = await executeCode({
-      command: "sudo",
-      args: [
-        "-n",
-        "/usr/local/sbin/cocalc-runtime-storage",
-        "attach-project-cgroup",
-        project_id,
-        sandboxPath ?? "-",
-        limits.memory_max,
-        limits.memory_high,
-        limits.memory_low,
-        limits.memory_swap_max,
-        limits.pids_max,
-        limits.cpu_max_quota,
-        limits.cpu_max_period,
-        limits.cpu_weight,
-        limits.io_weight,
-      ],
-      timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
-      err_on_exit: false,
-    });
-    const exitCode = Number((result as any)?.exit_code ?? 0);
-    if (exitCode !== 0) {
-      logger.warn("start: failed to attach project container to cgroup", {
-        project_id,
-        exit_code: exitCode,
-        stderr: `${(result as any)?.stderr ?? ""}`.trim(),
-      });
-    }
-  } catch (err) {
-    logger.warn("start: failed to attach project container to cgroup", {
-      project_id,
-      err: `${err}`,
-    });
-  }
-}
-
-function projectCgroupLauncher(
-  project_id: string,
-  limits: ProjectCgroupLimits,
-) {
-  return {
-    command: "bash",
-    argsPrefix: [
-      "-c",
-      PROJECT_CGROUP_LAUNCHER_SCRIPT,
-      "cocalc-project-podman",
-      project_id,
-      limits.memory_max,
-      limits.memory_high,
-      limits.memory_low,
-      limits.memory_swap_max,
-      limits.pids_max,
-      limits.cpu_max_quota,
-      limits.cpu_max_period,
-      limits.cpu_weight,
-      limits.io_weight,
-    ],
-  };
-}
-
-async function cleanupProjectCgroup(project_id: string): Promise<void> {
-  try {
-    const result = await executeCode({
-      command: "sudo",
-      args: [
-        "-n",
-        "/usr/local/sbin/cocalc-runtime-storage",
-        "cleanup-project-cgroup",
-        project_id,
-      ],
-      timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
-      err_on_exit: false,
-    });
-    const exitCode = Number((result as any)?.exit_code ?? 0);
-    if (exitCode !== 0) {
-      logger.warn("stop: failed to clean project cgroup", {
-        project_id,
-        exit_code: exitCode,
-        stderr: `${(result as any)?.stderr ?? ""}`.trim(),
-      });
-    }
-  } catch (err) {
-    logger.warn("stop: failed to clean project cgroup", {
-      project_id,
-      err: `${err}`,
-    });
-  }
 }
 
 function tryKillPid(pid: number, signal: NodeJS.Signals): void {
@@ -1938,7 +1810,6 @@ export async function start({
     }
 
     const limitArgs = await podmanLimits(config);
-    const projectCgroupLimits = projectCgroupLimitsFromPodmanArgs(limitArgs);
     args.push(...limitArgs);
 
     // --init = have podman inject a tiny built in init script so we don't get zombies.
@@ -1950,13 +1821,7 @@ export async function start({
     args.push(projectScript, "--sshd", "--init", PROJECT_STARTUP_SCRIPT_PATH);
 
     logger.debug("start: launching container - ", name);
-    await timings.measure(
-      "podman_run",
-      async () =>
-        await podman(args, {
-          launcher: projectCgroupLauncher(project_id, projectCgroupLimits),
-        }),
-    );
+    await timings.measure("podman_run", async () => await podman(args));
     const started = await timings.measure(
       "verify_container_running",
       async () => await waitForStartedContainer(name),
@@ -1978,8 +1843,6 @@ export async function start({
         `project container ${name} exited before reporting a running state${detail ? `\n${detail}` : ""}`,
       );
     }
-    await attachProjectToCgroup(project_id, name, projectCgroupLimits);
-
     report({
       type: "start-project",
       progress: 85,
@@ -2110,7 +1973,6 @@ export async function stop({
       // mask the correct lowerdir on the next start.
       await unmountAllRootFs(project_id);
       await cleanupProjectSecretsHostPath(project_id);
-      await cleanupProjectCgroup(project_id);
     } catch (err) {
       logger.debug("stop", { err });
       throw err;
