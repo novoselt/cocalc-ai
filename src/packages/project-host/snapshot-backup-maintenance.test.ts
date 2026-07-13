@@ -143,35 +143,46 @@ describe("snapshot-backup-maintenance", () => {
     });
   });
 
-  it("skips maintenance when host memory is below the dynamic threshold", async () => {
+  it("reduces concurrency below preferred memory without starving maintenance", async () => {
     delete process.env
       .COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_MAX_MEMORY_AVAILABLE_BYTES;
     const { _test, runProjectSnapshotBackupMaintenanceSweepOnce } =
       await import("./snapshot-backup-maintenance");
 
     expect(
-      _test.shouldSkipForMemoryPressure(
-        "MemTotal:       65536000 kB\nMemAvailable:    6291456 kB\n",
-      ),
-    ).toMatchObject({
-      skip: true,
-      availableBytes: 6 * 1024 ** 3,
-      thresholdBytes: 16_777_216_000,
-    });
-    expect(
-      _test.shouldSkipForMemoryPressure(
-        "MemTotal:       65536000 kB\nMemAvailable:   20971520 kB\n",
-      ),
+      _test.maintenanceMemoryDecision({
+        configuredParallelism: 4,
+        meminfoText:
+          "MemTotal:       65536000 kB\nMemAvailable:    6291456 kB\n",
+        pressureText: "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+      }),
     ).toMatchObject({
       skip: false,
+      parallelism: 1,
+      availableBytes: 6 * 1024 ** 3,
+      preferredBytes: 16_777_216_000,
+      hardMinBytes: 4 * 1024 ** 3,
+    });
+    expect(
+      _test.maintenanceMemoryDecision({
+        configuredParallelism: 4,
+        meminfoText:
+          "MemTotal:       65536000 kB\nMemAvailable:   20971520 kB\n",
+        pressureText: "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+      }),
+    ).toMatchObject({
+      skip: false,
+      parallelism: 4,
       availableBytes: 20 * 1024 ** 3,
-      thresholdBytes: 16_777_216_000,
+      preferredBytes: 16_777_216_000,
     });
 
     const readFileSyncSpy = jest
       .spyOn(require("node:fs"), "readFileSync")
-      .mockReturnValue(
-        "MemTotal:       65536000 kB\nMemAvailable:    6291456 kB\n",
+      .mockImplementation((path: unknown) =>
+        `${path}` === "/proc/pressure/memory"
+          ? "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+          : "MemTotal:       65536000 kB\nMemAvailable:    6291456 kB\n",
       );
     try {
       await runProjectSnapshotBackupMaintenanceSweepOnce({
@@ -181,9 +192,40 @@ describe("snapshot-backup-maintenance", () => {
       readFileSyncSpy.mockRestore();
     }
 
-    expect(listProjectMaintenanceSchedulesMock).not.toHaveBeenCalled();
-    expect(runScheduledSnapshotMaintenanceMock).not.toHaveBeenCalled();
-    expect(runScheduledBackupMaintenanceMock).not.toHaveBeenCalled();
+    expect(listProjectMaintenanceSchedulesMock).toHaveBeenCalled();
+    expect(runScheduledSnapshotMaintenanceMock).toHaveBeenCalled();
+    expect(runScheduledBackupMaintenanceMock).toHaveBeenCalled();
+  });
+
+  it("skips maintenance below the hard floor or under sustained memory pressure", async () => {
+    delete process.env
+      .COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_MAX_MEMORY_AVAILABLE_BYTES;
+    const { _test } = await import("./snapshot-backup-maintenance");
+
+    expect(
+      _test.maintenanceMemoryDecision({
+        configuredParallelism: 4,
+        meminfoText:
+          "MemTotal:       65536000 kB\nMemAvailable:    3145728 kB\n",
+        pressureText: "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+      }),
+    ).toMatchObject({
+      skip: true,
+      reason: "available_memory",
+      hardMinBytes: 4 * 1024 ** 3,
+    });
+    expect(
+      _test.maintenanceMemoryDecision({
+        configuredParallelism: 4,
+        meminfoText:
+          "MemTotal:       65536000 kB\nMemAvailable:   20971520 kB\n",
+        pressureText: "full avg10=7.50 avg60=3.00 avg300=1.00 total=1\n",
+      }),
+    ).toMatchObject({
+      skip: true,
+      reason: "memory_pressure",
+      pressureFullAvg10: 7.5,
+    });
   });
 
   it("starts a repeating timer and can be stopped", () => {

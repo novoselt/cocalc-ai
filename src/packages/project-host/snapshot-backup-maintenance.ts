@@ -24,6 +24,8 @@ const GIB = 1024 ** 3;
 const DEFAULT_MEMORY_AVAILABLE_RATIO = 0.25;
 const DEFAULT_MEMORY_AVAILABLE_MIN_BYTES = 2 * GIB;
 const DEFAULT_MEMORY_AVAILABLE_MAX_BYTES = 16 * GIB;
+const DEFAULT_MEMORY_AVAILABLE_HARD_MIN_BYTES = 4 * GIB;
+const DEFAULT_MEMORY_PSI_FULL_AVG10_MAX = 5;
 
 const inFlightProjects = new Set<string>();
 
@@ -91,33 +93,116 @@ function memoryMaintenanceThresholdBytes(totalBytes: number): number {
   return Math.min(Math.max(minBytes, ratioBytes), maxBytes);
 }
 
-function shouldSkipForMemoryPressure(
+function parsePressureFullAvg10(text: string): number | undefined {
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("full ")) continue;
+    const match = line.match(/\bavg10=([0-9.]+)/);
+    if (!match) return undefined;
+    const value = Number(match[1]);
+    return Number.isFinite(value) && value >= 0 ? value : undefined;
+  }
+  return undefined;
+}
+
+function readMemoryPressure(): string | undefined {
+  try {
+    return fs.readFileSync("/proc/pressure/memory", "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function maintenanceMemoryDecision({
+  configuredParallelism,
   meminfoText = fs.readFileSync("/proc/meminfo", "utf8"),
-):
+  pressureText = readMemoryPressure(),
+}: {
+  configuredParallelism: number;
+  meminfoText?: string;
+  pressureText?: string;
+}):
   | {
       skip: false;
+      parallelism: number;
       availableBytes?: number;
-      thresholdBytes?: number;
+      preferredBytes?: number;
+      hardMinBytes?: number;
+      pressureFullAvg10?: number;
     }
   | {
       skip: true;
-      availableBytes: number;
-      thresholdBytes: number;
+      reason: "available_memory" | "memory_pressure";
+      availableBytes?: number;
+      preferredBytes?: number;
+      hardMinBytes?: number;
+      pressureFullAvg10?: number;
     } {
   const memory = parseMeminfo(meminfoText);
-  if (!memory) return { skip: false };
-  const thresholdBytes = memoryMaintenanceThresholdBytes(memory.totalBytes);
-  if (memory.availableBytes < thresholdBytes) {
+  if (!memory) {
+    return { skip: false, parallelism: configuredParallelism };
+  }
+  const preferredBytes = memoryMaintenanceThresholdBytes(memory.totalBytes);
+  // A zero preferred threshold is the documented escape hatch used by tests
+  // and constrained development hosts to disable the memory guard.
+  if (preferredBytes <= 0) {
+    return {
+      skip: false,
+      parallelism: configuredParallelism,
+      availableBytes: memory.availableBytes,
+      preferredBytes,
+      hardMinBytes: 0,
+    };
+  }
+  const hardMinBytes = Math.min(
+    preferredBytes,
+    parseNonNegativeInteger(
+      process.env
+        .COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_HARD_MIN_MEMORY_AVAILABLE_BYTES,
+      DEFAULT_MEMORY_AVAILABLE_HARD_MIN_BYTES,
+    ),
+  );
+  const pressureFullAvg10 = pressureText
+    ? parsePressureFullAvg10(pressureText)
+    : undefined;
+  const pressureMax = Number(
+    process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_MEMORY_PSI_FULL_AVG10_MAX,
+  );
+  const effectivePressureMax =
+    Number.isFinite(pressureMax) && pressureMax >= 0
+      ? pressureMax
+      : DEFAULT_MEMORY_PSI_FULL_AVG10_MAX;
+  if (
+    pressureFullAvg10 != null &&
+    effectivePressureMax > 0 &&
+    pressureFullAvg10 >= effectivePressureMax
+  ) {
     return {
       skip: true,
+      reason: "memory_pressure",
       availableBytes: memory.availableBytes,
-      thresholdBytes,
+      preferredBytes,
+      hardMinBytes,
+      pressureFullAvg10,
+    };
+  }
+  if (memory.availableBytes < hardMinBytes) {
+    return {
+      skip: true,
+      reason: "available_memory",
+      availableBytes: memory.availableBytes,
+      preferredBytes,
+      hardMinBytes,
+      pressureFullAvg10,
     };
   }
   return {
     skip: false,
+    parallelism:
+      memory.availableBytes < preferredBytes ? 1 : configuredParallelism,
     availableBytes: memory.availableBytes,
-    thresholdBytes,
+    preferredBytes,
+    hardMinBytes,
+    pressureFullAvg10,
   };
 }
 
@@ -168,12 +253,19 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
 }: {
   hostId: string;
 }) {
-  const memoryGuard = shouldSkipForMemoryPressure();
-  if (memoryGuard.skip) {
+  const configuredParallelism = parsePositiveInteger(
+    process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_PARALLELISM,
+    DEFAULT_PARALLELISM,
+  );
+  const memoryDecision = maintenanceMemoryDecision({ configuredParallelism });
+  if (memoryDecision.skip) {
     logger.info("skipping snapshot/backup maintenance under memory pressure", {
       hostId,
-      memory_available_bytes: memoryGuard.availableBytes,
-      threshold_bytes: memoryGuard.thresholdBytes,
+      reason: memoryDecision.reason,
+      memory_available_bytes: memoryDecision.availableBytes,
+      preferred_bytes: memoryDecision.preferredBytes,
+      hard_min_bytes: memoryDecision.hardMinBytes,
+      memory_psi_full_avg10: memoryDecision.pressureFullAvg10,
     });
     return;
   }
@@ -190,10 +282,17 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
     process.env.COCALC_PROJECT_HOST_MAINTENANCE_ACTIVE_DAYS,
     DEFAULT_ACTIVE_DAYS,
   );
-  const parallelism = parsePositiveInteger(
-    process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_PARALLELISM,
-    DEFAULT_PARALLELISM,
-  );
+  const parallelism = memoryDecision.parallelism;
+  if (parallelism < configuredParallelism) {
+    logger.info("reducing snapshot/backup maintenance parallelism", {
+      hostId,
+      configured_parallelism: configuredParallelism,
+      effective_parallelism: parallelism,
+      memory_available_bytes: memoryDecision.availableBytes,
+      preferred_bytes: memoryDecision.preferredBytes,
+      hard_min_bytes: memoryDecision.hardMinBytes,
+    });
+  }
   const rows = await statusClient.listProjectMaintenanceSchedules({
     host_id: hostId,
     active_days: activeDays,
@@ -324,5 +423,6 @@ export function startProjectSnapshotBackupMaintenance({
 
 export const _test = {
   parseMeminfo,
-  shouldSkipForMemoryPressure,
+  parsePressureFullAvg10,
+  maintenanceMemoryDecision,
 };
