@@ -87,6 +87,8 @@ export interface ProjectArchiveRestoreResult {
   skipped_file_count?: number;
   skipped_bytes?: number;
   skipped_files?: ProjectArchiveEntry[];
+  unsafe_path_count?: number;
+  unsafe_paths?: string[];
   missing_archive_file_count?: number;
   missing_archive_files?: string[];
   duration_ms: number;
@@ -122,6 +124,8 @@ export interface LegacyProjectArchiveRemediationResult {
   uncompressed_bytes?: number;
   skipped_file_count?: number;
   skipped_bytes?: number;
+  unsafe_path_count?: number;
+  unsafe_paths?: string[];
   missing_archive_file_count?: number;
   missing_archive_files?: string[];
   bytes?: number;

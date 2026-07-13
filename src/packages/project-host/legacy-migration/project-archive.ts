@@ -8,7 +8,6 @@ import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
 import { chmod, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
@@ -35,6 +34,10 @@ import { assertValidSnapshotName } from "@cocalc/util/snapshot-name";
 import { publishLroEvent } from "../lro/stream";
 
 import { normalizeArchivePath } from "../archive-path";
+import {
+  assertSafeArchiveMemberPath,
+  unsafeArchiveMemberPathReason,
+} from "./archive-member-path";
 import { parseTarExtractedLine, parseTarVerboseLine } from "./tar-output";
 
 const PROJECT_ARCHIVE_RESTORE_TIMEOUT_MS = Math.max(
@@ -147,26 +150,6 @@ function truncateProgressPath(path: string): string {
   const value = path.trim();
   if (value.length <= 240) return value;
   return `...${value.slice(value.length - 237)}`;
-}
-
-function assertSafeArchivePath(raw: string): void {
-  const value = raw.trim();
-  if (!value || value === ".") return;
-  if (value.includes("\0")) {
-    throw new Error("archive contains a path with a NUL byte");
-  }
-  const slashPath = value.replace(/\\/g, "/");
-  if (slashPath.split("/").includes("..")) {
-    throw new Error(`archive contains a parent-directory path: ${value}`);
-  }
-  const normalized = path.posix.normalize(slashPath);
-  if (path.posix.isAbsolute(value) || path.posix.isAbsolute(normalized)) {
-    throw new Error(`archive contains an absolute path: ${value}`);
-  }
-  const parts = normalized.split("/");
-  if (parts.includes("..")) {
-    throw new Error(`archive contains a parent-directory path: ${value}`);
-  }
 }
 
 function normalizeProjectArchiveMemberPath(raw: string): string {
@@ -366,12 +349,16 @@ async function scanProjectArchiveTar({
   skipped_file_count: number;
   skipped_bytes: number;
   skipped_files: ProjectArchiveEntry[];
+  unsafe_path_count: number;
+  unsafe_paths: string[];
 }> {
   let file_count = 0;
   let uncompressed_bytes = 0;
   let skipped_file_count = 0;
   let skipped_bytes = 0;
   const skipped_files: ProjectArchiveEntry[] = [];
+  let unsafe_path_count = 0;
+  const unsafe_paths: string[] = [];
   const memberList =
     member_list_path != null ? createWriteStream(member_list_path) : undefined;
   let lastProgress = 0;
@@ -399,7 +386,16 @@ async function scanProjectArchiveTar({
           }
           return;
         }
-        assertSafeArchivePath(parsed.path);
+        if (unsafeArchiveMemberPathReason(parsed.path)) {
+          unsafe_path_count += 1;
+          if (
+            PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT === 0 ||
+            unsafe_paths.length < PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT
+          ) {
+            unsafe_paths.push(parsed.path);
+          }
+          return;
+        }
         if (
           !shouldRestoreArchivePath({
             archivePath: parsed.path,
@@ -447,6 +443,7 @@ async function scanProjectArchiveTar({
               uncompressed_bytes,
               skipped_file_count,
               skipped_bytes,
+              unsafe_path_count,
             },
           });
         }
@@ -469,6 +466,8 @@ async function scanProjectArchiveTar({
     skipped_file_count,
     skipped_bytes,
     skipped_files,
+    unsafe_path_count,
+    unsafe_paths,
   };
 }
 
@@ -526,11 +525,10 @@ async function extractProjectArchiveTar({
       args,
       runAs,
       onStdoutLine: (line) => {
-        const path = normalizeProjectArchiveMemberPath(
-          parseTarExtractedLine(line),
-        );
+        const archivePath = parseTarExtractedLine(line);
+        assertSafeArchiveMemberPath(archivePath);
+        const path = normalizeProjectArchiveMemberPath(archivePath);
         if (!path) return;
-        assertSafeArchivePath(path);
         extracted_count += 1;
         const now = Date.now();
         if (now - lastProgress < PROJECT_ARCHIVE_PROGRESS_INTERVAL_MS) return;
@@ -802,6 +800,8 @@ async function createSelectedMemberList({
   skipped_file_count: number;
   skipped_bytes: number;
   skipped_files: ProjectArchiveEntry[];
+  unsafe_path_count: number;
+  unsafe_paths: string[];
 }> {
   const tmpRoot = archiveRestoreTmpRoot();
   await mkdir(tmpRoot, { recursive: true });
@@ -898,6 +898,8 @@ export function createLegacyProjectArchiveHandlers({
             skipped_file_count: number;
             skipped_bytes: number;
             skipped_files: ProjectArchiveEntry[];
+            unsafe_path_count: number;
+            unsafe_paths: string[];
           }
         | undefined;
       let missingArchiveFiles: string[] = [];
@@ -978,6 +980,8 @@ export function createLegacyProjectArchiveHandlers({
           uncompressed_bytes: scan?.uncompressed_bytes,
           skipped_file_count: scan?.skipped_file_count,
           skipped_bytes: scan?.skipped_bytes,
+          unsafe_path_count: scan?.unsafe_path_count,
+          unsafe_paths: scan?.unsafe_paths,
           missing_archive_file_count: missingArchiveFiles.length,
           missing_archive_files: missingArchiveFiles.slice(
             0,
@@ -1148,7 +1152,7 @@ export function createLegacyProjectArchiveHandlers({
           // member list readable/traversable by that user; the archive itself
           // is still streamed over stdin from the project-host process.
           await chmod(memberListTmpDir, 0o711);
-          member_list_path = join(memberListTmpDir, "selected-members.txt");
+          member_list_path = join(memberListTmpDir, "selected-members.nul");
         }
         const {
           file_count,
@@ -1156,6 +1160,8 @@ export function createLegacyProjectArchiveHandlers({
           skipped_file_count,
           skipped_bytes,
           skipped_files,
+          unsafe_path_count,
+          unsafe_paths,
         } = await scanProjectArchiveTar({
           archivePath,
           exclude,
@@ -1213,6 +1219,8 @@ export function createLegacyProjectArchiveHandlers({
             skipped_file_count,
             skipped_bytes,
             skipped_files,
+            unsafe_path_count,
+            unsafe_paths,
             missing_archive_file_count: missingArchiveFiles.length,
             missing_archive_files: missingArchiveFiles.slice(
               0,
@@ -1232,6 +1240,8 @@ export function createLegacyProjectArchiveHandlers({
           skipped_file_count,
           skipped_bytes,
           skipped_files,
+          unsafe_path_count,
+          unsafe_paths,
           missing_archive_file_count: missingArchiveFiles.length,
           missing_archive_files: missingArchiveFiles.slice(
             0,
