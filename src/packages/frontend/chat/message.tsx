@@ -106,6 +106,7 @@ import { getDefaultNewThreadSetup } from "./chatroom-thread-panel";
 import { setChatOverlayOpen } from "./drawer-overlay-state";
 import { formatTurnDuration } from "./turn-duration";
 import { CodexQuotaHelp } from "./codex-quota-help";
+import { formatCodexErrorMarkdown } from "./codex-error-presentation";
 import { AcpPromptModal } from "./acp-prompt-modal";
 import {
   linkifyCommitHashes,
@@ -912,7 +913,7 @@ export default function Message({
     () =>
       is_viewers_message
         ? renderedMessageValue
-        : linkifyCommitHashes(renderedMessageValue),
+        : formatCodexErrorMarkdown(linkifyCommitHashes(renderedMessageValue)),
     [is_viewers_message, renderedMessageValue],
   );
   const acpResubmitParentMessage = (() => {
