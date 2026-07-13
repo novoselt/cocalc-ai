@@ -420,8 +420,8 @@ export const EXTRAS: SettingsExtras = {
     subgroup: "Launch Emergency Controls",
   },
   cryptomining_abuse_heading: {
-    name: "Cryptomining Abuse Detection",
-    desc: "Operator controls for high-confidence cryptomining abuse detection on project hosts. These settings are off by default for self-hosted sites.",
+    name: "Compute Abuse Detection",
+    desc: "Operator controls for high-confidence cryptomining and prohibited QEMU execution detection on project hosts. These settings are off by default for self-hosted sites.",
     default: "",
     type: "header",
     tags: ["Security", "Project Hosts"],
@@ -429,8 +429,8 @@ export const EXTRAS: SettingsExtras = {
     subgroup: "Abuse Detection",
   },
   cryptomining_abuse_enforcement_enabled: {
-    name: "Enable Cryptomining Abuse Enforcement",
-    desc: "When enabled, the hub acts on high-confidence cryptomining evidence from project hosts by stopping the affected project. Leave disabled for self-hosted sites where users may intentionally mine on their own hardware.",
+    name: "Enable Compute Abuse Enforcement",
+    desc: "When enabled, the hub acts on high-confidence cryptomining or prohibited QEMU execution evidence from project hosts by stopping the affected project. Leave disabled for self-hosted sites that intentionally permit these workloads.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -439,8 +439,8 @@ export const EXTRAS: SettingsExtras = {
     subgroup: "Abuse Detection",
   },
   cryptomining_abuse_auto_ban_enabled: {
-    name: "Enable Automatic Cryptomining Bans",
-    desc: "When enabled together with cryptomining abuse enforcement, new free accounts with high-confidence cryptomining evidence are automatically banned using the normal account ban path. Paid or older accounts are stopped but not automatically banned.",
+    name: "Enable Automatic Compute Abuse Bans",
+    desc: "When enabled together with compute abuse enforcement, new free accounts with high-confidence cryptomining evidence and all free accounts executing QEMU system emulators are automatically banned using the normal account ban path. Paid accounts are stopped but not automatically banned.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,

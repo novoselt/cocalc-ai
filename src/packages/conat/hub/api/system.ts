@@ -267,7 +267,8 @@ export type ProjectCryptominingSignalKind =
   | "process_command"
   | "network_endpoint_argument"
   | "known_pool_argument"
-  | "network_endpoint";
+  | "network_endpoint"
+  | "qemu_execution";
 
 export interface ProjectCryptominingSignal {
   kind: ProjectCryptominingSignalKind;
@@ -2756,7 +2757,10 @@ export interface System {
     recorded: boolean;
     account_id?: string;
     stop_project?: {
-      reason: "managed_cpu_budget_exceeded" | "cryptomining_detected";
+      reason:
+        | "managed_cpu_budget_exceeded"
+        | "cryptomining_detected"
+        | "prohibited_qemu_detected";
       blocked_by?: "5h" | "7d";
       membership_class?: string;
       membership_source?: string;

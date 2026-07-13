@@ -23,6 +23,7 @@ export interface ProjectCryptominingAbuseSettings {
 export interface ProjectCryptominingAbuseDecision {
   should_stop_project: boolean;
   auto_banned: boolean;
+  abuse_kind?: "cryptomining" | "prohibited_qemu";
   membership_class?: string;
   membership_source?: string;
   account_age_ms?: number;
@@ -73,8 +74,16 @@ export function sanitizeCryptominingEvidenceMetadata({
 
 export function isHighConfidenceCryptominingEvidence(
   evidence: ProjectCryptominingEvidence | undefined,
-): boolean {
+): evidence is ProjectCryptominingEvidence {
   return evidence?.confidence === "high" && (evidence.signals?.length ?? 0) > 0;
+}
+
+function abuseKind(
+  evidence: ProjectCryptominingEvidence,
+): "cryptomining" | "prohibited_qemu" {
+  return evidence.signals.some((signal) => signal.kind === "qemu_execution")
+    ? "prohibited_qemu"
+    : "cryptomining";
 }
 
 function createdTimeMs(created: unknown): number | undefined {
@@ -123,13 +132,18 @@ export async function handleProjectCryptominingEvidence({
         DEFAULT_NEW_ACCOUNT_MAX_AGE_MS,
       );
   const isFree = membership.class === "free" && membership.source === "free";
+  const detectedAbuseKind = abuseKind(evidence);
   const shouldAutoBan =
-    resolvedSettings.auto_ban_enabled && !account?.banned && isNew && isFree;
+    resolvedSettings.auto_ban_enabled &&
+    !account?.banned &&
+    isFree &&
+    (isNew || detectedAbuseKind === "prohibited_qemu");
 
   if (!shouldAutoBan) {
-    logger.warn("high-confidence cryptomining detected; stopping project", {
+    logger.warn("high-confidence project abuse detected; stopping project", {
       account_id,
       project_id,
+      abuse_kind: detectedAbuseKind,
       membership_class: membership.class,
       membership_source: membership.source,
       account_age_ms: accountAgeMs,
@@ -140,6 +154,7 @@ export async function handleProjectCryptominingEvidence({
     return {
       should_stop_project: true,
       auto_banned: false,
+      abuse_kind: detectedAbuseKind,
       membership_class: membership.class,
       membership_source: membership.source,
       account_age_ms: accountAgeMs,
@@ -147,13 +162,18 @@ export async function handleProjectCryptominingEvidence({
   }
 
   try {
+    const banReason =
+      detectedAbuseKind === "prohibited_qemu"
+        ? "automatic prohibited QEMU execution detection"
+        : "automatic high-confidence cryptomining detection";
     await banClusterAccountAndEquivalentEmails({
       account_id,
       actor_account_id: null,
-      reason: "automatic high-confidence cryptomining detection",
+      reason: banReason,
       metadata: {
         automatic: true,
-        detector: "cryptomining-abuse-v1",
+        detector: "project-abuse-policy-v2",
+        abuse_kind: detectedAbuseKind,
         project_id: project_id ?? null,
         evidence,
         membership_class: membership.class,
@@ -161,9 +181,10 @@ export async function handleProjectCryptominingEvidence({
         account_age_ms: accountAgeMs ?? null,
       },
     });
-    logger.warn("auto-banned new free account for cryptomining", {
+    logger.warn("auto-banned free account for high-confidence project abuse", {
       account_id,
       project_id,
+      abuse_kind: detectedAbuseKind,
       membership_class: membership.class,
       membership_source: membership.source,
       account_age_ms: accountAgeMs,
@@ -172,19 +193,22 @@ export async function handleProjectCryptominingEvidence({
     return {
       should_stop_project: true,
       auto_banned: true,
+      abuse_kind: detectedAbuseKind,
       membership_class: membership.class,
       membership_source: membership.source,
       account_age_ms: accountAgeMs,
     };
   } catch (err) {
-    logger.warn("failed to auto-ban account for cryptomining", {
+    logger.warn("failed to auto-ban account for project abuse", {
       account_id,
       project_id,
+      abuse_kind: detectedAbuseKind,
       err: `${err}`,
     });
     return {
       should_stop_project: true,
       auto_banned: false,
+      abuse_kind: detectedAbuseKind,
       membership_class: membership.class,
       membership_source: membership.source,
       account_age_ms: accountAgeMs,

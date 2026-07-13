@@ -49,6 +49,21 @@ const EVIDENCE: ProjectCryptominingEvidence = {
   ],
 };
 
+const QEMU_EVIDENCE: ProjectCryptominingEvidence = {
+  confidence: "high",
+  detector_version: "test",
+  detected_at: NOW.toISOString(),
+  signals: [
+    {
+      kind: "qemu_execution",
+      pattern: "qemu-system-executable",
+      matched: "qemu-system-x86_64",
+      pid: 1234,
+      command: "qemu-system-x86_64 -m 16000 -smp 16",
+    },
+  ],
+};
+
 describe("cryptomining abuse policy", () => {
   beforeEach(() => {
     getClusterAccountByIdMock.mockReset().mockResolvedValue({
@@ -169,6 +184,68 @@ describe("cryptomining abuse policy", () => {
     expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
   });
 
+  it("auto-bans an old free account that executes QEMU", async () => {
+    getClusterAccountByIdMock.mockResolvedValueOnce({
+      account_id: ACCOUNT_ID,
+      created: NOW.getTime() - 365 * 24 * 60 * 60 * 1000,
+      banned: false,
+    });
+
+    const decision = await handleProjectCryptominingEvidence({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      evidence: QEMU_EVIDENCE,
+      now: NOW,
+    });
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        should_stop_project: true,
+        auto_banned: true,
+        abuse_kind: "prohibited_qemu",
+        membership_class: "free",
+        membership_source: "free",
+      }),
+    );
+    expect(banClusterAccountAndEquivalentEmailsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id: ACCOUNT_ID,
+        actor_account_id: null,
+        reason: "automatic prohibited QEMU execution detection",
+        metadata: expect.objectContaining({
+          automatic: true,
+          detector: "project-abuse-policy-v2",
+          abuse_kind: "prohibited_qemu",
+          project_id: PROJECT_ID,
+          evidence: QEMU_EVIDENCE,
+        }),
+      }),
+    );
+  });
+
+  it("stops but does not auto-ban QEMU when automatic bans are disabled", async () => {
+    getServerSettingsMock.mockResolvedValueOnce({
+      cryptomining_abuse_enforcement_enabled: true,
+      cryptomining_abuse_auto_ban_enabled: false,
+    });
+
+    const decision = await handleProjectCryptominingEvidence({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      evidence: QEMU_EVIDENCE,
+      now: NOW,
+    });
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        should_stop_project: true,
+        auto_banned: false,
+        abuse_kind: "prohibited_qemu",
+      }),
+    );
+    expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
+  });
+
   it("stops but does not auto-ban when automatic bans are disabled", async () => {
     getServerSettingsMock.mockResolvedValueOnce({
       cryptomining_abuse_enforcement_enabled: true,
@@ -211,6 +288,32 @@ describe("cryptomining abuse policy", () => {
       expect.objectContaining({
         should_stop_project: true,
         auto_banned: false,
+        membership_class: "standard",
+        membership_source: "subscription",
+      }),
+    );
+    expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
+  });
+
+  it("stops but does not auto-ban paid accounts that execute QEMU", async () => {
+    resolveMembershipForAccountMock.mockResolvedValueOnce({
+      class: "standard",
+      source: "subscription",
+      entitlements: {},
+    });
+
+    const decision = await handleProjectCryptominingEvidence({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      evidence: QEMU_EVIDENCE,
+      now: NOW,
+    });
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        should_stop_project: true,
+        auto_banned: false,
+        abuse_kind: "prohibited_qemu",
         membership_class: "standard",
         membership_source: "subscription",
       }),

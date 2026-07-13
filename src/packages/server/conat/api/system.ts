@@ -6897,7 +6897,10 @@ export async function recordManagedProjectCpuUsage({
       return {
         ...result,
         stop_project: {
-          reason: "cryptomining_detected" as const,
+          reason:
+            abuseDecision.abuse_kind === "prohibited_qemu"
+              ? ("prohibited_qemu_detected" as const)
+              : ("cryptomining_detected" as const),
           membership_class: abuseDecision.membership_class,
           membership_source: abuseDecision.membership_source,
           auto_banned: abuseDecision.auto_banned,

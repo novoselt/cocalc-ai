@@ -214,7 +214,7 @@ describe("project-host CPU usage accounting", () => {
     expect(sample[0]?.cryptomining_evidence).toEqual(
       expect.objectContaining({
         confidence: "high",
-        detector_version: "project-host-cryptomining-v1",
+        detector_version: "project-host-cryptomining-v2",
         signals: expect.arrayContaining([
           expect.objectContaining({
             kind: "process_command",
@@ -227,6 +227,65 @@ describe("project-host CPU usage accounting", () => {
             pid: 1235,
           }),
         ]),
+      }),
+    );
+  });
+
+  it("attaches prohibited QEMU evidence from a project process tree", async () => {
+    const sample = await collectRunningProjectCpuSamples({
+      podmanCommand: jest
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify([
+            {
+              Id: "ctr-1",
+              Names: ["project-11111111-1111-4111-8111-111111111111"],
+            },
+          ]),
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify([
+            {
+              Name: "/project-11111111-1111-4111-8111-111111111111",
+              State: { Pid: 1234 },
+            },
+          ]),
+        }),
+      readdirFn: jest.fn().mockResolvedValue(["1234", "1235"]),
+      readFileFn: jest.fn().mockImplementation(async (path: string) => {
+        if (path === "/proc/1234/stat") {
+          return procStat({ pid: 1234, ppid: 1, utime: 120, stime: 30 });
+        }
+        if (path === "/proc/1235/stat") {
+          return procStat({ pid: 1235, ppid: 1234, utime: 50, stime: 0 });
+        }
+        if (path === "/proc/1234/cmdline") {
+          return "bash\0";
+        }
+        if (path === "/proc/1235/cmdline") {
+          return [
+            "/usr/bin/qemu-system-x86_64",
+            "-m",
+            "16000",
+            "-smp",
+            "16",
+          ].join("\0");
+        }
+        throw new Error(`unexpected path: ${path}`);
+      }),
+    });
+
+    expect(sample[0]?.cryptomining_evidence).toEqual(
+      expect.objectContaining({
+        confidence: "high",
+        detector_version: "project-host-cryptomining-v2",
+        signals: [
+          expect.objectContaining({
+            kind: "qemu_execution",
+            pattern: "qemu-system-executable",
+            pid: 1235,
+          }),
+        ],
       }),
     );
   });
@@ -275,7 +334,7 @@ describe("project-host CPU usage accounting", () => {
     expect(sample[0]?.cryptomining_evidence).toEqual(
       expect.objectContaining({
         confidence: "high",
-        detector_version: "project-host-cryptomining-v1",
+        detector_version: "project-host-cryptomining-v2",
         signals: [
           expect.objectContaining({
             kind: "network_endpoint",

@@ -9,7 +9,7 @@ import type {
 } from "@cocalc/conat/hub/api/system";
 import { lookup } from "node:dns/promises";
 
-const DETECTOR_VERSION = "project-host-cryptomining-v1";
+const DETECTOR_VERSION = "project-host-cryptomining-v2";
 const MAX_COMMAND_LENGTH = 500;
 const MAX_SIGNALS = 8;
 const KNOWN_POOL_ADDRESS_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -41,6 +41,13 @@ type Pattern = {
 };
 
 const COMMAND_PATTERNS: Pattern[] = [
+  {
+    id: "qemu-system-executable",
+    kind: "qemu_execution",
+    // Match argv0 only. Merely mentioning QEMU in a shell, editor, or grep
+    // command must never become high-confidence enforcement evidence.
+    regex: /^(?:\S*\/)?(?:qemu-system-[a-z0-9_.+-]+|qemu-kvm)(?:$|\s)/i,
+  },
   {
     id: "xmrig-binary",
     kind: "process_command",
