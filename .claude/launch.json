@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hub-proxy",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [".claude/hub-proxy.js"],
+      "autoPort": true,
+      "port": 9199
+    }
+  ]
+}
