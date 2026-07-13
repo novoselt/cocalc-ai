@@ -1334,6 +1334,100 @@ describe("PublicAuthApp", () => {
     );
   });
 
+  it("does not ask for or submit a password when CLI elevation uses a second factor", async () => {
+    mockedPostAuthApi
+      .mockResolvedValueOnce({
+        challenge_id: "challenge-2",
+        kind: "elevate",
+        account_id: "acct-viewer",
+        email_address: "alice@example.com",
+        display_name: "Alice Example",
+        current_account_id: "acct-viewer",
+        current_email_address: "alice@example.com",
+        current_display_name: "Alice Example",
+        current_matches_account: true,
+        state: "pending",
+        expires_at: "2026-05-08T18:00:00.000Z",
+      } as any)
+      .mockResolvedValueOnce({
+        mode: "account",
+        enabled: true,
+        methods: ["totp", "recovery_code"],
+        has_password: true,
+        email_address: "alice@example.com",
+      } as any)
+      .mockResolvedValueOnce({ approved: true } as any);
+
+    render(
+      <PublicAuthApp
+        config={config({ is_authenticated: true })}
+        initialRoute={{ challengeId: "challenge-2", kind: "auth-cli-elevate" }}
+      />,
+    );
+
+    expect(await screen.findByText("Second factor")).not.toBeNull();
+    expect(screen.queryByText("Current password")).toBeNull();
+    expect(
+      screen.queryByPlaceholderText("Enter your current password"),
+    ).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("123456"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve CLI Elevation" }),
+    );
+    await waitFor(() =>
+      expect(mockedPostAuthApi).toHaveBeenCalledWith({
+        endpoint: "auth/cli/elevate/approve",
+        body: {
+          challenge_id: "challenge-2",
+          current_password: "",
+          method: "totp",
+          code: "123456",
+        },
+      }),
+    );
+  });
+
+  it("requires a password when CLI elevation has no second factor", async () => {
+    mockedPostAuthApi
+      .mockResolvedValueOnce({
+        challenge_id: "challenge-2",
+        kind: "elevate",
+        account_id: "acct-viewer",
+        email_address: "alice@example.com",
+        display_name: "Alice Example",
+        current_account_id: "acct-viewer",
+        current_email_address: "alice@example.com",
+        current_display_name: "Alice Example",
+        current_matches_account: true,
+        state: "pending",
+        expires_at: "2026-05-08T18:00:00.000Z",
+      } as any)
+      .mockResolvedValueOnce({
+        mode: "account",
+        enabled: false,
+        methods: [],
+        has_password: true,
+        email_address: "alice@example.com",
+      } as any);
+
+    render(
+      <PublicAuthApp
+        config={config({ is_authenticated: true })}
+        initialRoute={{ challengeId: "challenge-2", kind: "auth-cli-elevate" }}
+      />,
+    );
+
+    expect(
+      await screen.findByPlaceholderText("Enter your current password"),
+    ).not.toBeNull();
+    expect(screen.queryByText("Second factor")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Approve CLI Elevation" }),
+    ).toBeDisabled();
+  });
+
   it("prompts for fresh auth before approving a CLI login when required", async () => {
     mockedPostAuthApi.mockResolvedValueOnce({
       challenge_id: "challenge-1",
