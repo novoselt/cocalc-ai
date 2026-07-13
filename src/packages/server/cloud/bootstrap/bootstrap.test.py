@@ -1200,9 +1200,21 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertNotIn('for fd in "$proc/fd/"*', script)
             self.assertIn("attach-pasta-cgroups)", script)
             self.assertIn(
-                'attach_pid_to_project_pool_storage "$pasta_pid" "$pool"',
+                'attach_external_pid_to_project_pool_storage "$pasta_pid" "$pool"',
                 script,
             )
+            self.assertIn("configure_project_pool_hierarchy_storage()", script)
+            self.assertIn("project_pool_legacy_cgroup_storage()", script)
+            self.assertIn("project_cgroup_storage()", script)
+            self.assertIn('> "$pool/cgroup.subtree_control"', script)
+            self.assertIn("configure_project_cgroup_storage()", script)
+            self.assertIn('> "$cgroup/memory.max"', script)
+            self.assertIn('> "$cgroup/memory.high"', script)
+            self.assertIn('> "$cgroup/memory.low"', script)
+            self.assertIn('> "$cgroup/memory.swap.max"', script)
+            self.assertIn('> "$cgroup/pids.max"', script)
+            self.assertIn('> "$cgroup/cpu.max"', script)
+            self.assertIn('> "$cgroup/cpu.weight"', script)
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
             self.assertIn("find_bees_pid()", script)
             self.assertIn("apply_bees_runtime_policy()", script)

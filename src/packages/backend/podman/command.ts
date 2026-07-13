@@ -11,6 +11,10 @@ type PodmanOpts =
       // treated as milliseconds and converted to seconds.
       timeout?: number;
       sudo?: boolean;
+      launcher?: {
+        command: string;
+        argsPrefix: string[];
+      };
     };
 
 const DEFAULT_PODMAN_TIMEOUT_S = 30 * 60;
@@ -37,21 +41,28 @@ function normalizeTimeoutSeconds(timeout?: number): number {
 }
 
 export default async function podman(args: string[], opts: PodmanOpts = {}) {
-  const { timeout: rawTimeout, sudo } =
-    typeof opts === "number" ? { timeout: opts, sudo: false } : opts;
+  const { timeout: rawTimeout, sudo, launcher } =
+    typeof opts === "number"
+      ? { timeout: opts, sudo: false, launcher: undefined }
+      : opts;
   const timeout = normalizeTimeoutSeconds(rawTimeout);
-  return await runPodman(args, timeout, Boolean(sudo), false);
+  return await runPodman(args, timeout, Boolean(sudo), launcher, false);
 }
 
 async function runPodman(
   args: string[],
   timeout: number,
   sudo: boolean,
+  launcher: { command: string; argsPrefix: string[] } | undefined,
   retried: boolean,
 ) {
   logger.debug(`${sudo ? "sudo " : ""}podman`, summarizePodmanInvocation(args));
-  const command = sudo ? "sudo" : "podman";
-  const cmdArgs = sudo ? ["podman", ...args] : args;
+  const command = launcher?.command ?? (sudo ? "sudo" : "podman");
+  const cmdArgs = launcher
+    ? [...launcher.argsPrefix, ...args]
+    : sudo
+      ? ["podman", ...args]
+      : args;
   try {
     const x = await executeCode({
       verbose: false,
@@ -67,7 +78,7 @@ async function runPodman(
           "podman reported stale pause-process state; running `podman system migrate` and retrying once",
         );
         await repairStalePodmanState(timeout, sudo);
-        return await runPodman(args, timeout, sudo, true);
+        return await runPodman(args, timeout, sudo, launcher, true);
       }
       throw formatPodmanExitError(command, cmdArgs, x.exit_code, x.stderr);
     }

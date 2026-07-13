@@ -11,6 +11,7 @@ import type {
   HostResourcePressureProjectSummary,
 } from "@cocalc/conat/hub/api/hosts";
 import { listProjects, type ProjectRow } from "./sqlite/projects";
+import { getFreshProjectMemoryUsage } from "./resource-pressure";
 import {
   getProjectStopState,
   listProjectStopPolicies,
@@ -66,6 +67,14 @@ const STARTUP_PROTECTION_MS = Math.max(
   Number(
     process.env.COCALC_PROJECT_HOST_PRESSURE_STARTUP_PROTECTION_MS ??
       10 * 60_000,
+  ),
+);
+const STARTUP_MEMORY_PRESSURE_BYPASS_BYTES = Math.max(
+  1,
+  clampNonNegativeInteger(
+    process.env.COCALC_PROJECT_HOST_PRESSURE_STARTUP_MEMORY_BYPASS_BYTES ??
+      256 * 1024 ** 2,
+    256 * 1024 ** 2,
   ),
 );
 const PRESSURE_PROJECT_COOLDOWN_MS = Math.max(
@@ -163,6 +172,7 @@ type StopCandidate = {
   authoritative_last_edited_ms: number;
   last_started_ms: number;
   projected_memory_limit_mb: number;
+  memory_current_bytes: number;
   explanation: string[];
 };
 
@@ -670,6 +680,7 @@ export function buildStopCandidates({
   zone,
   now,
   directResourceOffenders,
+  projectMemoryBytes,
 }: {
   projects: ProjectRow[];
   policies: Map<string, ProjectStopPolicyRow>;
@@ -677,6 +688,7 @@ export function buildStopCandidates({
   zone: HostPressureZone;
   now: number;
   directResourceOffenders?: Map<string, DirectResourceOffender>;
+  projectMemoryBytes?: Map<string, number>;
 }): StopCandidate[] {
   const candidates: StopCandidate[] = [];
   for (const row of projects) {
@@ -688,13 +700,24 @@ export function buildStopCandidates({
     const project_id = `${row.project_id ?? ""}`.trim();
     if (!project_id) continue;
     const directResourceOffender = directResourceOffenders?.get(project_id);
+    const memoryCurrentBytes = Math.max(
+      0,
+      projectMemoryBytes?.get(project_id) ?? 0,
+    );
+    const startupMemoryBypass =
+      memoryCurrentBytes >= STARTUP_MEMORY_PRESSURE_BYPASS_BYTES;
     const policy = policies.get(project_id);
     const stopState = getStopState(project_id);
     const startupProtected =
       STARTUP_PROTECTION_MS > 0 &&
       stopState?.last_started_ms != null &&
       now - stopState.last_started_ms < STARTUP_PROTECTION_MS;
-    if (startupProtected && zone !== "emergency" && !directResourceOffender) {
+    if (
+      startupProtected &&
+      zone !== "emergency" &&
+      !directResourceOffender &&
+      !startupMemoryBypass
+    ) {
       continue;
     }
     const protectOverride = policy?.stop_override === "protect";
@@ -730,6 +753,9 @@ export function buildStopCandidates({
     if (directResourceOffender) {
       explanation.push(`direct:${directResourceOffender.reason}`);
     }
+    if (memoryCurrentBytes > 0) {
+      explanation.push(`memory_current_bytes:${memoryCurrentBytes}`);
+    }
     explanation.push(
       `priority:${Math.max(0, policy?.shared_compute_priority ?? 0)}`,
     );
@@ -754,6 +780,7 @@ export function buildStopCandidates({
       ),
       last_started_ms: Math.max(0, stopState?.last_started_ms ?? 0),
       projected_memory_limit_mb: projectedMemoryLimitMb,
+      memory_current_bytes: memoryCurrentBytes,
       explanation,
     });
   }
@@ -766,6 +793,9 @@ export function buildStopCandidates({
     }
     if (left.shared_compute_priority !== right.shared_compute_priority) {
       return left.shared_compute_priority - right.shared_compute_priority;
+    }
+    if (left.memory_current_bytes !== right.memory_current_bytes) {
+      return right.memory_current_bytes - left.memory_current_bytes;
     }
     if (left.startup_protected !== right.startup_protected) {
       return Number(left.startup_protected) - Number(right.startup_protected);
@@ -934,6 +964,7 @@ export function startHostPressureController({
       zone: classified.zone,
       now,
       directResourceOffenders,
+      projectMemoryBytes: getFreshProjectMemoryUsage(now),
     });
     for (const candidate of candidates) {
       upsertProjectStopState({

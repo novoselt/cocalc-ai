@@ -51,7 +51,11 @@ import { mount as mountRootFs, unmountAll as unmountAllRootFs } from "./rootfs";
 import { type ProjectState } from "@cocalc/conat/project/runner/state";
 import { type Configuration } from "@cocalc/conat/project/runner/types";
 import { DEFAULT_PROJECT_IMAGE } from "@cocalc/util/db-schema/defaults";
-import { podmanLimits } from "./limits";
+import {
+  podmanLimits,
+  projectCgroupLimitsFromPodmanArgs,
+  type ProjectCgroupLimits,
+} from "./limits";
 import { executeCode } from "@cocalc/backend/execute-code";
 import {
   getConmonContainerProcessLists,
@@ -102,6 +106,10 @@ const START_RUNNING_CHECK_TIMEOUT_MS = 5000;
 const START_RUNNING_CHECK_INTERVAL_MS = 250;
 const START_FAILURE_LOG_LINES = 80;
 const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
+const PROJECT_CGROUP_LAUNCHER_SCRIPT = `set -euo pipefail
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
+shift 9
+exec podman "$@"`;
 
 const DEFAULT_PROJECT_SCRIPT = join(
   COCALC_SRC,
@@ -870,6 +878,7 @@ async function inspectContainerSandboxPath(
 async function attachProjectToCgroup(
   project_id: string,
   name: string,
+  limits: ProjectCgroupLimits,
 ): Promise<void> {
   try {
     const sandboxPath = await inspectContainerSandboxPath(name);
@@ -880,7 +889,15 @@ async function attachProjectToCgroup(
         "/usr/local/sbin/cocalc-runtime-storage",
         "attach-project-cgroup",
         project_id,
-        ...(sandboxPath ? [sandboxPath] : []),
+        sandboxPath ?? "-",
+        limits.memory_max,
+        limits.memory_high,
+        limits.memory_low,
+        limits.memory_swap_max,
+        limits.pids_max,
+        limits.cpu_max_quota,
+        limits.cpu_max_period,
+        limits.cpu_weight,
       ],
       timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
       err_on_exit: false,
@@ -895,6 +912,58 @@ async function attachProjectToCgroup(
     }
   } catch (err) {
     logger.warn("start: failed to attach project container to cgroup", {
+      project_id,
+      err: `${err}`,
+    });
+  }
+}
+
+function projectCgroupLauncher(
+  project_id: string,
+  limits: ProjectCgroupLimits,
+) {
+  return {
+    command: "bash",
+    argsPrefix: [
+      "-c",
+      PROJECT_CGROUP_LAUNCHER_SCRIPT,
+      "cocalc-project-podman",
+      project_id,
+      limits.memory_max,
+      limits.memory_high,
+      limits.memory_low,
+      limits.memory_swap_max,
+      limits.pids_max,
+      limits.cpu_max_quota,
+      limits.cpu_max_period,
+      limits.cpu_weight,
+    ],
+  };
+}
+
+async function cleanupProjectCgroup(project_id: string): Promise<void> {
+  try {
+    const result = await executeCode({
+      command: "sudo",
+      args: [
+        "-n",
+        "/usr/local/sbin/cocalc-runtime-storage",
+        "cleanup-project-cgroup",
+        project_id,
+      ],
+      timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
+      err_on_exit: false,
+    });
+    const exitCode = Number((result as any)?.exit_code ?? 0);
+    if (exitCode !== 0) {
+      logger.warn("stop: failed to clean project cgroup", {
+        project_id,
+        exit_code: exitCode,
+        stderr: `${(result as any)?.stderr ?? ""}`.trim(),
+      });
+    }
+  } catch (err) {
+    logger.warn("stop: failed to clean project cgroup", {
       project_id,
       err: `${err}`,
     });
@@ -1866,7 +1935,9 @@ export async function start({
       args.push("-e", `${key}=${env[key]}`);
     }
 
-    args.push(...(await podmanLimits(config)));
+    const limitArgs = await podmanLimits(config);
+    const projectCgroupLimits = projectCgroupLimitsFromPodmanArgs(limitArgs);
+    args.push(...limitArgs);
 
     // --init = have podman inject a tiny built in init script so we don't get zombies.
     args.push("--init");
@@ -1877,7 +1948,13 @@ export async function start({
     args.push(projectScript, "--sshd", "--init", PROJECT_STARTUP_SCRIPT_PATH);
 
     logger.debug("start: launching container - ", name);
-    await timings.measure("podman_run", async () => await podman(args));
+    await timings.measure(
+      "podman_run",
+      async () =>
+        await podman(args, {
+          launcher: projectCgroupLauncher(project_id, projectCgroupLimits),
+        }),
+    );
     const started = await timings.measure(
       "verify_container_running",
       async () => await waitForStartedContainer(name),
@@ -1899,7 +1976,7 @@ export async function start({
         `project container ${name} exited before reporting a running state${detail ? `\n${detail}` : ""}`,
       );
     }
-    await attachProjectToCgroup(project_id, name);
+    await attachProjectToCgroup(project_id, name, projectCgroupLimits);
 
     report({
       type: "start-project",
@@ -2031,6 +2108,7 @@ export async function stop({
       // mask the correct lowerdir on the next start.
       await unmountAllRootFs(project_id);
       await cleanupProjectSecretsHostPath(project_id);
+      await cleanupProjectCgroup(project_id);
     } catch (err) {
       logger.debug("stop", { err });
       throw err;

@@ -9,6 +9,18 @@ import { getContainerSwapSizeMb } from "@cocalc/backend/podman/memory";
 const DEFAULT_MEMORY_RESERVATION_RATIO = 0.8;
 const DEFAULT_MEMORY_HIGH_RATIO = 0.9;
 const MIN_MEMORY_PRESSURE_GAP_RATIO = 0.05;
+const CGROUP_CPU_PERIOD_US = 100_000;
+
+export interface ProjectCgroupLimits {
+  memory_max: string;
+  memory_high: string;
+  memory_low: string;
+  memory_swap_max: string;
+  pids_max: string;
+  cpu_max_quota: string;
+  cpu_max_period: string;
+  cpu_weight: string;
+}
 
 function parseMemoryRatio(
   name: string,
@@ -135,4 +147,59 @@ export async function podmanLimits(config?: Configuration): Promise<string[]> {
   }
 
   return args;
+}
+
+function argumentValue(args: string[], prefix: string): string | undefined {
+  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+}
+
+function integerArgument(args: string[], prefix: string): number | undefined {
+  const value = Number(argumentValue(args, prefix));
+  if (!Number.isSafeInteger(value) || value < 0) return undefined;
+  return value;
+}
+
+function cpuSharesToWeight(shares: number): number {
+  const normalized = Math.max(2, Math.min(262_144, Math.floor(shares)));
+  return 1 + Math.floor(((normalized - 2) * 9_999) / 262_142);
+}
+
+/**
+ * Translate the already-validated Podman flags into cgroup-v2 controller
+ * values. Rootless Podman can record these flags without enforcing them when
+ * launched outside a delegated cgroup, so the project-host root helper applies
+ * the same values after attaching the runtime to its project leaf.
+ */
+export function projectCgroupLimitsFromPodmanArgs(
+  args: string[],
+): ProjectCgroupLimits {
+  const memoryMax = integerArgument(args, "--memory=");
+  const memoryHigh = integerArgument(args, "--cgroup-conf=memory.high=");
+  const memoryLow = integerArgument(args, "--memory-reservation=");
+  const memorySwapTotal = integerArgument(args, "--memory-swap=");
+  const pidsMax = integerArgument(args, "--pids-limit=");
+  const cpus = Number(argumentValue(args, "--cpus="));
+  const cpuShares = Number(argumentValue(args, "--cpu-shares="));
+  const cpuQuota =
+    Number.isFinite(cpus) && cpus > 0
+      ? Math.max(1, Math.round(cpus * CGROUP_CPU_PERIOD_US))
+      : undefined;
+  const cpuWeight =
+    Number.isFinite(cpuShares) && cpuShares > 0
+      ? cpuSharesToWeight(cpuShares)
+      : 100;
+
+  return {
+    memory_max: memoryMax != null ? `${memoryMax}` : "max",
+    memory_high: memoryHigh != null ? `${memoryHigh}` : "max",
+    memory_low: memoryLow != null ? `${memoryLow}` : "0",
+    memory_swap_max:
+      memoryMax != null && memorySwapTotal != null
+        ? `${Math.max(0, memorySwapTotal - memoryMax)}`
+        : "max",
+    pids_max: pidsMax != null ? `${pidsMax}` : "max",
+    cpu_max_quota: cpuQuota != null ? `${cpuQuota}` : "max",
+    cpu_max_period: `${CGROUP_CPU_PERIOD_US}`,
+    cpu_weight: `${cpuWeight}`,
+  };
 }

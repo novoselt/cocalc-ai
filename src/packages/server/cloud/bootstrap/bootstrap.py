@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260710-v1"
+HELPER_SCHEMA_VERSION = "20260713-v1"
 RUNTIME_WRAPPER_VERSION = "20260711-v12"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -2140,6 +2140,97 @@ project_pool_cgroup_storage() {
   esac
 }
 
+project_pool_legacy_cgroup_storage() {
+  printf '%s/legacy\n' "$(project_pool_cgroup_storage)"
+}
+
+project_cgroup_storage() {
+  local project_id="$1"
+  printf '%s/project-%s\n' "$(project_pool_cgroup_storage)" "$project_id"
+}
+
+pid_cgroup_path_storage() {
+  local pid="$1"
+  awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true
+}
+
+pid_in_project_pool_storage() {
+  local pid="$1" pool rel
+  pool="$(project_pool_cgroup_storage)"
+  rel="$(pid_cgroup_path_storage "$pid")"
+  case "/sys/fs/cgroup${rel}" in
+    "$pool"|"$pool"/*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+configure_project_pool_hierarchy_storage() {
+  local pool legacy pid controller attempt
+  pool="$(project_pool_cgroup_storage)"
+  legacy="$(project_pool_legacy_cgroup_storage)"
+  mkdir -p "$pool" "$legacy"
+
+  # A cgroup with internal processes cannot delegate controllers to children.
+  # Preserve already-running flattened workloads in a legacy leaf so upgrades
+  # do not require restarting every project.
+  for attempt in 1 2 3 4 5; do
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      attach_pid_to_project_pool_storage "$pid" "$legacy" || true
+    done < "$pool/cgroup.procs"
+    if [ -z "$(cat "$pool/cgroup.procs")" ]; then
+      break
+    fi
+  done
+  if [ -n "$(cat "$pool/cgroup.procs")" ]; then
+    deny "project-pool-internal-processes-remain" "$pool"
+  fi
+
+  for controller in cpu memory pids; do
+    if grep -qw "$controller" "$pool/cgroup.controllers"; then
+      printf '+%s\n' "$controller" > "$pool/cgroup.subtree_control"
+    fi
+  done
+}
+
+valid_cgroup_limit_storage() {
+  [ "$1" = "max" ] || echo "$1" | grep -Eq '^[0-9]+$'
+}
+
+valid_positive_cgroup_limit_storage() {
+  echo "$1" | grep -Eq '^[0-9]+$' && [ "$1" -gt 0 ]
+}
+
+configure_project_cgroup_storage() {
+  local cgroup="$1" memory_max="$2" memory_high="$3" memory_low="$4"
+  local memory_swap_max="$5" pids_max="$6" cpu_quota="$7"
+  local cpu_period="$8" cpu_weight="$9"
+  for value in "$memory_max" "$memory_high" "$memory_low" "$memory_swap_max" "$pids_max" "$cpu_quota"; do
+    if ! valid_cgroup_limit_storage "$value"; then
+      deny "project-cgroup-limit-invalid" "$value"
+    fi
+  done
+  if ! valid_positive_cgroup_limit_storage "$cpu_period"; then
+    deny "project-cgroup-cpu-period-invalid" "$cpu_period"
+  fi
+  if ! valid_positive_cgroup_limit_storage "$cpu_weight" || [ "$cpu_weight" -gt 10000 ]; then
+    deny "project-cgroup-cpu-weight-invalid" "$cpu_weight"
+  fi
+  mkdir -p "$cgroup"
+  printf '%s\n' "$memory_max" > "$cgroup/memory.max"
+  printf '%s\n' "$memory_high" > "$cgroup/memory.high"
+  printf '%s\n' "$memory_low" > "$cgroup/memory.low"
+  printf '%s\n' "$memory_swap_max" > "$cgroup/memory.swap.max"
+  printf '%s\n' "$pids_max" > "$cgroup/pids.max"
+  printf '%s %s\n' "$cpu_quota" "$cpu_period" > "$cgroup/cpu.max"
+  printf '%s\n' "$cpu_weight" > "$cgroup/cpu.weight"
+  printf '1\n' > "$cgroup/memory.oom.group"
+}
+
 project_storage_cgroup() {
   printf '%s\n' "${STORAGE_CGROUP_DEFAULT}"
 }
@@ -2168,6 +2259,14 @@ attach_pid_to_project_pool_storage() {
     return 0
   fi
   printf '%s\n' "$pid" > "$pool/cgroup.procs"
+}
+
+attach_external_pid_to_project_pool_storage() {
+  local pid="$1" pool="$2"
+  if pid_in_project_pool_storage "$pid"; then
+    return 0
+  fi
+  attach_pid_to_project_pool_storage "$pid" "$pool"
 }
 
 find_bees_pid() {
@@ -2226,6 +2325,14 @@ attach_pid_tree_to_project_pool_storage() {
       pending="${pending:+${pending} }${child}"
     done < <(ps -eo pid=,ppid= | awk -v parent="$pid" '$2 == parent {print $1}')
   done
+}
+
+attach_external_pid_tree_to_project_pool_storage() {
+  local root_pid="$1" pool="$2"
+  if pid_in_project_pool_storage "$root_pid"; then
+    return 0
+  fi
+  attach_pid_tree_to_project_pool_storage "$root_pid" "$pool"
 }
 
 find_project_conmon_pids() {
@@ -2383,17 +2490,64 @@ escape_overlay_path() {
 }
 
 case "$cmd" in
-  attach-project-cgroup)
-    if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-      echo "usage: cocalc-runtime-storage attach-project-cgroup <project-id> [podman-netns-path]" >&2
+  prepare-project-cgroup)
+    if [ "$#" -ne 10 ]; then
+      echo "usage: cocalc-runtime-storage prepare-project-cgroup <project-id> <launcher-pid> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight>" >&2
       exit 2
     fi
     project_id="$1"
-    netns_path="${2:-}"
+    launcher_pid="$2"
+    memory_max="$3"
+    memory_high="$4"
+    memory_low="$5"
+    memory_swap_max="$6"
+    pids_max="$7"
+    cpu_quota="$8"
+    cpu_period="$9"
+    cpu_weight="${10}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
-    if [ -n "$netns_path" ]; then
+    if ! echo "$launcher_pid" | grep -Eq '^[0-9]+$' || ! kill -0 "$launcher_pid" 2>/dev/null; then
+      deny "project-cgroup-launcher-invalid" "$launcher_pid"
+    fi
+    launcher_uid="$(stat -c %u "/proc/${launcher_pid}" 2>/dev/null || true)"
+    if [ -z "${SUDO_UID:-}" ] || [ "$launcher_uid" != "$SUDO_UID" ]; then
+      deny "project-cgroup-launcher-owner-invalid" "pid=${launcher_pid},uid=${launcher_uid},sudo_uid=${SUDO_UID:-missing}"
+    fi
+    configure_project_pool_hierarchy_storage
+    pool="$(project_cgroup_storage "$project_id")"
+    configure_project_cgroup_storage \
+      "$pool" \
+      "$memory_max" \
+      "$memory_high" \
+      "$memory_low" \
+      "$memory_swap_max" \
+      "$pids_max" \
+      "$cpu_quota" \
+      "$cpu_period" \
+      "$cpu_weight"
+    attach_pid_to_project_pool_storage "$launcher_pid" "$pool"
+    ;;
+  attach-project-cgroup)
+    if [ "$#" -ne 10 ]; then
+      echo "usage: cocalc-runtime-storage attach-project-cgroup <project-id> <podman-netns-path|-> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight>" >&2
+      exit 2
+    fi
+    project_id="$1"
+    netns_path="$2"
+    memory_max="$3"
+    memory_high="$4"
+    memory_low="$5"
+    memory_swap_max="$6"
+    pids_max="$7"
+    cpu_quota="$8"
+    cpu_period="$9"
+    cpu_weight="${10}"
+    if ! is_project_uuid "$project_id"; then
+      deny "project-id-invalid" "$project_id"
+    fi
+    if [ "$netns_path" != "-" ]; then
       case "$netns_path" in
         /mnt/cocalc/data/tmp/cocalc-podman-runtime-*/netns/netns-*)
           ;;
@@ -2402,15 +2556,39 @@ case "$cmd" in
           ;;
       esac
     fi
-    pool="$(project_pool_cgroup_storage)"
-    mkdir -p "$pool"
+    configure_project_pool_hierarchy_storage
+    pool="$(project_cgroup_storage "$project_id")"
+    configure_project_cgroup_storage \
+      "$pool" \
+      "$memory_max" \
+      "$memory_high" \
+      "$memory_low" \
+      "$memory_swap_max" \
+      "$pids_max" \
+      "$cpu_quota" \
+      "$cpu_period" \
+      "$cpu_weight"
     while IFS= read -r conmon_pid; do
       attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
     done < <(find_project_conmon_pids "$project_id")
-    if [ -n "$netns_path" ]; then
+    if [ "$netns_path" != "-" ]; then
       while IFS= read -r pasta_pid; do
         attach_pid_to_project_pool_storage "$pasta_pid" "$pool" || true
       done < <(find_pasta_pids_for_netns "$netns_path")
+    fi
+    ;;
+  cleanup-project-cgroup)
+    if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then
+      deny "project-id-invalid" "${1:-missing}"
+    fi
+    pool="$(project_cgroup_storage "$1")"
+    if [ -d "$pool" ]; then
+      for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if rmdir "$pool" 2>/dev/null; then
+          break
+        fi
+        sleep 0.1
+      done
     fi
     ;;
   attach-pasta-cgroups)
@@ -2418,10 +2596,10 @@ case "$cmd" in
       echo "usage: cocalc-runtime-storage attach-pasta-cgroups" >&2
       exit 2
     fi
-    pool="$(project_pool_cgroup_storage)"
-    mkdir -p "$pool"
+    configure_project_pool_hierarchy_storage
+    pool="$(project_pool_legacy_cgroup_storage)"
     while IFS= read -r pasta_pid; do
-      attach_pid_to_project_pool_storage "$pasta_pid" "$pool" || true
+      attach_external_pid_to_project_pool_storage "$pasta_pid" "$pool" || true
     done < <(find_pasta_pids)
     ;;
   btrfs)
@@ -4598,9 +4776,10 @@ project_pool_cpu_max_value() {
 }
 
 configure_project_pool_cgroup() {
-  local pool max_bytes high_bytes cpu_max
+  local pool legacy max_bytes high_bytes cpu_max pid controller attempt
   pool="$(project_pool_cgroup)"
-  mkdir -p "${pool}"
+  legacy="${pool}/legacy"
+  mkdir -p "${pool}" "${legacy}"
   max_bytes="$(project_pool_memory_max_bytes)"
   high_bytes="$(project_pool_memory_high_bytes "${max_bytes}")"
   printf '%s\n' "${max_bytes}" > "${pool}/memory.max"
@@ -4609,23 +4788,48 @@ configure_project_pool_cgroup() {
   if [ -w "${pool}/cpu.max" ]; then
     printf '%s\n' "${cpu_max}" > "${pool}/cpu.max" || true
   fi
+
+  for attempt in 1 2 3 4 5; do
+    while IFS= read -r pid; do
+      [ -n "${pid}" ] || continue
+      printf '%s\n' "${pid}" > "${legacy}/cgroup.procs" || true
+    done < "${pool}/cgroup.procs"
+    if [ -z "$(cat "${pool}/cgroup.procs")" ]; then
+      break
+    fi
+  done
+  if [ -n "$(cat "${pool}/cgroup.procs")" ]; then
+    echo "project pool still has internal processes; cannot enable child controllers" >&2
+    return 1
+  fi
+  for controller in cpu memory pids; do
+    if grep -qw "${controller}" "${pool}/cgroup.controllers"; then
+      printf '+%s\n' "${controller}" > "${pool}/cgroup.subtree_control"
+    fi
+  done
 }
 
 attach_pid_to_project_pool() {
-  local pid="$1"
-  local pool
+  local pid="$1" target="${2:-}"
   if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
     return 0
   fi
-  pool="$(project_pool_cgroup)"
-  printf '%s\n' "${pid}" > "${pool}/cgroup.procs"
+  if [ -z "${target}" ]; then
+    target="$(project_pool_cgroup)/legacy"
+  fi
+  printf '%s\n' "${pid}" > "${target}/cgroup.procs"
 }
 
 attach_pid_tree_to_project_pool() {
-  local root_pid="$1" pending pid child
+  local root_pid="$1" target="${2:-}" pending pid child
   if [ -z "${root_pid}" ] || ! kill -0 "${root_pid}" 2>/dev/null; then
     return 0
   fi
+  case "/sys/fs/cgroup$(awk -F: '$1 == "0" {print $3}' "/proc/${root_pid}/cgroup" 2>/dev/null || true)" in
+    "$(project_pool_cgroup)"|"$(project_pool_cgroup)"/*)
+      return 0
+      ;;
+  esac
   pending="${root_pid}"
   while [ -n "${pending}" ]; do
     pid="${pending%% *}"
@@ -4634,7 +4838,7 @@ attach_pid_tree_to_project_pool() {
     else
       pending="${pending#* }"
     fi
-    attach_pid_to_project_pool "${pid}" || true
+    attach_pid_to_project_pool "${pid}" "${target}" || true
     while IFS= read -r child; do
       [ -n "${child}" ] || continue
       pending="${pending:+${pending} }${child}"
@@ -4676,8 +4880,9 @@ protect_pid() {
 }
 
 attach_running_project_processes() {
-  local runtime_dir cgroup_manager cid line project_pid conmon_pid
+  local runtime_dir cgroup_manager cid line project_pid conmon_pid legacy
   configure_project_pool_cgroup
+  legacy="$(project_pool_cgroup)/legacy"
   runtime_dir="$(podman_runtime_dir)"
   cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
   if [ -z "${cgroup_manager}" ]; then
@@ -4697,8 +4902,8 @@ attach_running_project_processes() {
     )"
     project_pid="$(printf '%s\n' "${line}" | awk '{print $1}')"
     conmon_pid="$(printf '%s\n' "${line}" | awk '{print $2}')"
-    attach_pid_tree_to_project_pool "${conmon_pid}" || true
-    attach_pid_tree_to_project_pool "${project_pid}" || true
+    attach_pid_tree_to_project_pool "${conmon_pid}" "${legacy}" || true
+    attach_pid_tree_to_project_pool "${project_pid}" "${legacy}" || true
   done < <(
     sudo -n -u "${RUNTIME_USER}" -H env \
       XDG_RUNTIME_DIR="${runtime_dir}" \

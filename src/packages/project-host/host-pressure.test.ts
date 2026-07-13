@@ -238,6 +238,40 @@ describe("host pressure controller helpers", () => {
     ]);
   });
 
+  it("bypasses startup protection for a current memory consumer", () => {
+    const now = 2_000_000;
+    const candidates = buildStopCandidates({
+      zone: "pressure",
+      now,
+      projects: [
+        { project_id: "proj-small", state: "running" },
+        { project_id: "proj-large", state: "running" },
+        { project_id: "proj-old", state: "running" },
+      ],
+      policies: new Map(),
+      projectMemoryBytes: new Map([
+        ["proj-small", 64 * 1024 ** 2],
+        ["proj-large", 512 * 1024 ** 2],
+        ["proj-old", 128 * 1024 ** 2],
+      ]),
+      getStopState: (project_id) =>
+        project_id.startsWith("proj-") && project_id !== "proj-old"
+          ? {
+              project_id,
+              last_started_ms: now - 60_000,
+            }
+          : undefined,
+    });
+
+    expect(candidates.map((candidate) => candidate.project_id)).toEqual([
+      "proj-large",
+      "proj-old",
+    ]);
+    expect(candidates[0].explanation).toContain(
+      `memory_current_bytes:${512 * 1024 ** 2}`,
+    );
+  });
+
   it("allows emergency ranking to bypass startup protection and protect override", () => {
     const now = 2_000_000;
     const candidates = buildStopCandidates({

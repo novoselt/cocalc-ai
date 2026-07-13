@@ -634,6 +634,7 @@ export interface HostResourcePressureProjectSummary {
   sockets: number;
   inotify_instances: number;
   inotify_watches: number;
+  memory_current_bytes?: number;
   truncated?: boolean;
   error?: string;
 }
@@ -661,6 +662,7 @@ export interface HostResourcePressureMetrics {
   largest_sockets?: HostResourcePressureProjectSummary;
   largest_inotify_instances?: HostResourcePressureProjectSummary;
   largest_inotify_watches?: HostResourcePressureProjectSummary;
+  largest_memory_current?: HostResourcePressureProjectSummary;
 }
 
 export interface HostCurrentMetrics {
