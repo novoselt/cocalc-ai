@@ -365,6 +365,26 @@ export function computeHostOperationalAvailability(row: any): {
     };
   }
 
+  const runtimeHealth = row?.metadata?.runtime_health;
+  const runtimeStatus = `${runtimeHealth?.status ?? ""}`.trim();
+  if (
+    runtimeStatus &&
+    (runtimeStatus !== "ready" || runtimeHealth?.ready !== true)
+  ) {
+    const runtimeError = `${runtimeHealth?.error ?? ""}`.trim();
+    return {
+      operational: false,
+      online: true,
+      status,
+      reason_unavailable:
+        runtimeStatus === "starting"
+          ? "Host project runtime is still starting."
+          : runtimeError
+            ? `Host project runtime is degraded: ${runtimeError}`
+            : `Host project runtime is ${runtimeStatus}.`,
+    };
+  }
+
   return { operational: true, online: true, status };
 }
 

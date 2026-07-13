@@ -909,6 +909,7 @@ export type HostAvailabilityCategory =
   | "overload"
   | "user_stopped"
   | "host_stale"
+  | "runtime_degraded"
   | "unknown";
 
 export interface HostAvailabilityEvent {

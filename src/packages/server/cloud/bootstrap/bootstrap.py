@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260713-v2"
+HELPER_SCHEMA_VERSION = "20260713-v3"
 RUNTIME_WRAPPER_VERSION = "20260711-v12"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -4637,6 +4637,15 @@ podman_info_once() {
     podman info >/dev/null
 }
 
+podman_ps_once() {
+  local runtime_dir="$1" cgroup_manager="$2"
+  /usr/bin/timeout 15s sudo -n -u "${RUNTIME_USER}" -H env \
+    XDG_RUNTIME_DIR="${runtime_dir}" \
+    COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
+    CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
+    podman ps -a --format '{{.ID}}' >/dev/null
+}
+
 podman_runtime_namespace_error() {
   grep -qiE 'cannot re-exec process to join the existing user namespace|cannot join.*user namespace|invalid internal status' <<< "$1"
 }
@@ -4869,7 +4878,19 @@ attach_pid_to_project_pool() {
   if [ -z "${target}" ]; then
     target="$(project_pool_cgroup)/legacy"
   fi
-  printf '%s\n' "${pid}" > "${target}/cgroup.procs"
+  if ! printf '%s\n' "${pid}" > "${target}/cgroup.procs" 2>/dev/null; then
+    local marker="/run/cocalc-runtime-storage-cgroup-attach-warning"
+    local now last=0
+    now="$(date +%s)"
+    if [ -e "${marker}" ]; then
+      last="$(stat -c %Y "${marker}" 2>/dev/null || echo 0)"
+    fi
+    if [ $((now - last)) -ge 60 ]; then
+      echo "cgroup attach failed: pid=${pid} target=${target}" >&2
+      touch "${marker}" 2>/dev/null || true
+    fi
+    return 1
+  fi
 }
 
 attach_pid_tree_to_project_pool() {
@@ -5107,6 +5128,12 @@ doctor() {
     return "${status}"
   }
   printf 'podman info: ok\n'
+  output="$(podman_ps_once "${runtime_dir}" "${cgroup_manager}" 2>&1)" || {
+    printf 'podman ps: failed\n%s\n' "${output}"
+    status=1
+    return "${status}"
+  }
+  printf 'podman ps: ok\n'
   return "${status}"
 }
 

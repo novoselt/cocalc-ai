@@ -76,6 +76,42 @@ describe("classifyHostAvailabilitySnapshot", () => {
     );
   });
 
+  it("treats a fresh heartbeat with a failed runtime probe as degraded", () => {
+    const observation = classifyHostAvailabilitySnapshot({
+      id: "7b1fa6e1-032d-4e90-bd20-00568c67d5d0",
+      status: "running",
+      last_seen: new Date().toISOString(),
+      metadata: {
+        desired_state: "running",
+        runtime_health: {
+          status: "degraded",
+          ready: false,
+          consecutive_failures: 3,
+          error: "podman ps timed out",
+        },
+      },
+    });
+
+    expect(observation.state).toBe("degraded");
+    expect(observation.planned).toBe(false);
+    expect(observation.category).toBe("runtime_degraded");
+    expect(observation.summary).toContain("podman ps timed out");
+  });
+
+  it("treats a fresh heartbeat with a starting runtime as recovering", () => {
+    const observation = classifyHostAvailabilitySnapshot({
+      id: "7b1fa6e1-032d-4e90-bd20-00568c67d5d0",
+      status: "running",
+      last_seen: new Date().toISOString(),
+      metadata: {
+        runtime_health: { status: "starting", ready: false },
+      },
+    });
+
+    expect(observation.state).toBe("recovering");
+    expect(observation.category).toBe("runtime_degraded");
+  });
+
   it("formats running-but-stale host alert bodies", () => {
     expect(_test.formatStaleDuration(125 * 60_000)).toBe("2h5m");
     const body = _test.formatRunningStaleHostAlertBody([

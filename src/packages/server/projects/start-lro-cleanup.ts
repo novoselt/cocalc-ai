@@ -23,6 +23,7 @@ const ORPHANED_RESTORE_START_LRO_GRACE_MS = Math.max(
     3 * 60 * 60_000,
 );
 const RECENT_STARTING_STATE_MS = 5 * 60_000;
+const HOST_SESSION_CLOCK_SKEW_MS = 1_000;
 
 type ProjectStartLroRow = {
   op_id: string;
@@ -197,14 +198,30 @@ export async function cancelStaleProjectStartLros({
 
   let projectState: string | undefined;
   let projectStateTimeMs: number | undefined;
+  let hostSessionStartedAtMs: number | undefined;
   try {
-    const result = await getPool().query<{ state: any }>(
-      "SELECT state FROM projects WHERE project_id=$1",
+    const result = await getPool().query<{
+      state: any;
+      host_session_started_at?: string | null;
+    }>(
+      `SELECT
+         p.state,
+         h.metadata ->> 'host_session_started_at' AS host_session_started_at
+       FROM projects p
+       LEFT JOIN project_hosts h ON h.id=p.host_id AND h.deleted IS NULL
+       WHERE p.project_id=$1`,
       [project_id],
     );
     const parsed = parseProjectState(result.rows[0]?.state);
     projectState = parsed.state;
     projectStateTimeMs = parsed.timeMs;
+    const sessionStartedAt = result.rows[0]?.host_session_started_at;
+    const parsedSessionStartedAtMs = sessionStartedAt
+      ? new Date(sessionStartedAt).getTime()
+      : undefined;
+    hostSessionStartedAtMs = Number.isFinite(parsedSessionStartedAtMs)
+      ? parsedSessionStartedAtMs
+      : undefined;
   } catch (err) {
     log.warn("unable to inspect project state while cleaning start lros", {
       project_id,
@@ -224,6 +241,38 @@ export async function cancelStaleProjectStartLros({
     if (!opId || opId === targetOpId) {
       continue;
     }
+    const createdAtMs = row.created_at
+      ? new Date(row.created_at).getTime()
+      : undefined;
+    const ageMs =
+      createdAtMs != null && Number.isFinite(createdAtMs)
+        ? nowMs - createdAtMs
+        : undefined;
+    const fromPreviousHostSession =
+      createdAtMs != null &&
+      hostSessionStartedAtMs != null &&
+      createdAtMs + HOST_SESSION_CLOCK_SKEW_MS < hostSessionStartedAtMs;
+    if (fromPreviousHostSession) {
+      await cancelOrFailProjectStartLro({
+        project_id,
+        row,
+        context: "project start operation belongs to a previous host process",
+      });
+      if (opId === currentActiveOpId) {
+        await clearProjectActiveOperation({
+          project_id,
+          op_id: opId,
+        }).catch((err) => {
+          log.warn("unable to clear previous-session project operation", {
+            project_id,
+            op_id: opId,
+            err: `${err}`,
+          });
+        });
+      }
+      canceled += 1;
+      continue;
+    }
     if (currentActiveStartOpId) {
       if (opId === currentActiveStartOpId) {
         continue;
@@ -237,13 +286,6 @@ export async function cancelStaleProjectStartLros({
       continue;
     }
 
-    const createdAtMs = row.created_at
-      ? new Date(row.created_at).getTime()
-      : undefined;
-    const ageMs =
-      createdAtMs != null && Number.isFinite(createdAtMs)
-        ? nowMs - createdAtMs
-        : undefined;
     if (ageMs == null || ageMs < orphanGraceMs(row)) {
       continue;
     }

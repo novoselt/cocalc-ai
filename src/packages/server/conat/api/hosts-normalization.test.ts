@@ -3,7 +3,10 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { parseRow } from "./hosts-normalization";
+import {
+  computeHostOperationalAvailability,
+  parseRow,
+} from "./hosts-normalization";
 
 describe("parseRow host metrics normalization", () => {
   it("preserves sampled shared scratch metrics", () => {
@@ -365,5 +368,38 @@ describe("parseRow bootstrap lifecycle normalization", () => {
 
     expect(host.machine?.metadata?.shared_disk_id).toBe("host-scratch-disk");
     expect(host.machine?.metadata?.shared_disk_name).toBe("host-scratch-disk");
+  });
+});
+
+describe("computeHostOperationalAvailability", () => {
+  it("keeps old hosts without runtime-health metadata operational", () => {
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: new Date(),
+        metadata: {},
+      }),
+    ).toMatchObject({ operational: true, online: true });
+  });
+
+  it("excludes a heartbeat-fresh host with degraded Podman", () => {
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: new Date(),
+        metadata: {
+          runtime_health: {
+            status: "degraded",
+            ready: false,
+            error: "podman ps timed out",
+          },
+        },
+      }),
+    ).toMatchObject({
+      operational: false,
+      online: true,
+      reason_unavailable:
+        "Host project runtime is degraded: podman ps timed out",
+    });
   });
 });

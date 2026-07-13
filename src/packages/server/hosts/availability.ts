@@ -45,6 +45,13 @@ const RUNNING_STALE_REPAIR_SUPPRESS_MS = Math.max(
   ),
 );
 const PRESSURE_ALERT_LIMIT = 25;
+const RUNTIME_DEGRADED_ALERT_LIMIT = 25;
+const RUNTIME_DEGRADED_ALERT_FAILURES = Math.max(
+  2,
+  Math.floor(
+    Number(process.env.COCALC_HOST_RUNTIME_DEGRADED_ALERT_FAILURES ?? 2),
+  ) || 2,
+);
 const PRESSURE_ALERT_STALE_EVALUATION_MS = Math.max(
   5 * 60_000,
   Number(
@@ -120,6 +127,10 @@ type HostPressureAlertRow = ProjectHostAvailabilitySnapshot & {
   pressure_reason?: string;
 };
 
+type RuntimeDegradedHostRow = ProjectHostAvailabilitySnapshot & {
+  public_url?: string | null;
+};
+
 function pool() {
   return getPool();
 }
@@ -193,6 +204,7 @@ function normalizeCategory(value?: string | null): HostAvailabilityCategory {
     case "overload":
     case "user_stopped":
     case "host_stale":
+    case "runtime_degraded":
       return value;
     default:
       return "unknown";
@@ -360,6 +372,8 @@ export function classifyHostAvailabilitySnapshot(
   const metadata = row.metadata ?? {};
   const desiredState = metadata.desired_state;
   const recoveryPhase = metadata.spot_recovery_state?.phase;
+  const runtimeHealth = metadata.runtime_health ?? {};
+  const runtimeStatus = `${runtimeHealth.status ?? ""}`.trim();
   const status = `${row.status ?? ""}`.trim();
   const lastSeen = normalizeDate(row.last_seen);
   const heartbeatFresh =
@@ -373,6 +387,7 @@ export function classifyHostAvailabilitySnapshot(
       desired_state: desiredState,
       last_seen: lastSeen?.toISOString(),
       recovery_phase: recoveryPhase,
+      runtime_health: runtimeHealth,
     },
   };
   if (row.deleted) {
@@ -382,6 +397,31 @@ export function classifyHostAvailabilitySnapshot(
       planned: true,
       category: "user_stopped",
       summary: "Host is deleted.",
+    };
+  }
+  if (status === "running" && heartbeatFresh && runtimeStatus === "starting") {
+    return {
+      ...base,
+      state: "recovering",
+      planned: false,
+      category: "runtime_degraded",
+      summary: "Host project runtime is starting.",
+    };
+  }
+  if (
+    status === "running" &&
+    heartbeatFresh &&
+    runtimeStatus &&
+    (runtimeStatus !== "ready" || runtimeHealth.ready !== true)
+  ) {
+    return {
+      ...base,
+      state: "degraded",
+      planned: false,
+      category: "runtime_degraded",
+      summary: runtimeHealth.error
+        ? `Host project runtime is degraded: ${runtimeHealth.error}`
+        : `Host project runtime is ${runtimeStatus}.`,
     };
   }
   if (isServingSpotFallbackPhase(recoveryPhase)) {
@@ -855,6 +895,79 @@ export async function runHostPressureAlertCheck(): Promise<number> {
   return rows.length;
 }
 
+function runtimeDegradedHostName(row: RuntimeDegradedHostRow): string {
+  return (
+    `${row.metadata?.name ?? row.metadata?.display_name ?? ""}`.trim() || row.id
+  );
+}
+
+function formatRuntimeDegradedHostAlertBody(
+  rows: RuntimeDegradedHostRow[],
+): string {
+  return [
+    `${rows.length} project host${rows.length === 1 ? " has" : "s have"} fresh heartbeats but a failing container-runtime probe.`,
+    "",
+    "These hosts are excluded from project placement and restart recovery. Investigate the captured project-host diagnostics before rebooting so the underlying failure is not erased.",
+    "",
+    "Hosts:",
+    "",
+    ...rows.slice(0, RUNTIME_DEGRADED_ALERT_LIMIT).map((row) => {
+      const runtime = row.metadata?.runtime_health ?? {};
+      return [
+        `- ${runtimeDegradedHostName(row)}`,
+        `host_id=${row.id}`,
+        `failures=${runtime.consecutive_failures ?? "unknown"}`,
+        runtime.checked_at ? `checked_at=${runtime.checked_at}` : undefined,
+        runtime.error ? `error=${runtime.error}` : undefined,
+        row.public_url ? `url=${row.public_url}` : undefined,
+      ]
+        .filter((part) => part != null)
+        .join(" ");
+    }),
+    rows.length > RUNTIME_DEGRADED_ALERT_LIMIT
+      ? `- ... ${rows.length - RUNTIME_DEGRADED_ALERT_LIMIT} more`
+      : undefined,
+  ]
+    .filter((line) => line != null)
+    .join("\n");
+}
+
+async function getRuntimeDegradedHosts(): Promise<RuntimeDegradedHostRow[]> {
+  const { rows } = await pool().query<RuntimeDegradedHostRow>(
+    `
+      SELECT id, status, deleted, last_seen, metadata, public_url
+      FROM project_hosts
+      WHERE deleted IS NULL
+        AND status = 'running'
+        AND COALESCE(last_seen, to_timestamp(0)) >= NOW() - ($1::double precision * INTERVAL '1 millisecond')
+        AND metadata -> 'runtime_health' ->> 'status' = 'degraded'
+        AND COALESCE(
+          (metadata -> 'runtime_health' ->> 'consecutive_failures')::integer,
+          0
+        ) >= $2
+      ORDER BY last_seen DESC
+      LIMIT $3
+    `,
+    [
+      HOST_AVAILABILITY_HEARTBEAT_GRACE_MS,
+      RUNTIME_DEGRADED_ALERT_FAILURES,
+      RUNTIME_DEGRADED_ALERT_LIMIT + 1,
+    ],
+  );
+  return rows;
+}
+
+export async function runRuntimeDegradedHostAlertCheck(): Promise<number> {
+  const rows = await getRuntimeDegradedHosts();
+  if (!rows.length) return 0;
+  await adminAlert({
+    subject: "Project hosts have degraded container runtimes",
+    body: formatRuntimeDegradedHostAlertBody(rows),
+    dedupMinutes: 15,
+  });
+  return rows.length;
+}
+
 export function startHostAvailabilityMaintenance({
   interval_ms = DEFAULT_MAINTENANCE_INTERVAL_MS,
 }: { interval_ms?: number } = {}): void {
@@ -865,6 +978,7 @@ export function startHostAvailabilityMaintenance({
       const count = await reconcileCurrentHostAvailability();
       const staleRunning = await runRunningStaleHostAlertCheck();
       const pressureProblems = await runHostPressureAlertCheck();
+      const runtimeProblems = await runRuntimeDegradedHostAlertCheck();
       logger.debug("host availability maintenance complete", { count });
       if (staleRunning) {
         logger.warn("running project hosts are not reporting", {
@@ -874,6 +988,11 @@ export function startHostAvailabilityMaintenance({
       if (pressureProblems) {
         logger.warn("project hosts have unresolved pressure actions", {
           count: pressureProblems,
+        });
+      }
+      if (runtimeProblems) {
+        logger.warn("project hosts have degraded container runtimes", {
+          count: runtimeProblems,
         });
       }
     } catch (err) {
@@ -1096,6 +1215,7 @@ export async function annotateHostAvailabilityEvent({
 
 export const _test = {
   formatHostPressureAlertBody,
+  formatRuntimeDegradedHostAlertBody,
   formatRunningStaleHostAlertBody,
   formatStaleDuration,
   pressureAlertRow,
