@@ -131,7 +131,7 @@ describe("listHostProjectMaintenanceSchedules", () => {
     delete process.env.COCALC_DEV_GCP_REVERSE_TUNNEL;
   });
 
-  it("lists only provisioned active projects for the host and maps timestamps", async () => {
+  it("lists active and backup-due provisioned projects for the host", async () => {
     queryMock
       .mockResolvedValueOnce({ rows: [{ id: "host-1" }] })
       .mockResolvedValueOnce({
@@ -175,6 +175,11 @@ describe("listHostProjectMaintenanceSchedules", () => {
       expect.stringContaining("provisioned IS TRUE"),
       ["host-1", 2],
     );
+    const maintenanceSql = queryMock.mock.calls[1][0];
+    expect(maintenanceSql).toContain("last_backup IS NULL");
+    expect(maintenanceSql).toContain("> last_backup");
+    expect(maintenanceSql).toContain("backups->>'disabled'");
+    expect(maintenanceSql).toContain("INTERVAL '1 day'");
   });
 });
 

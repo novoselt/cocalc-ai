@@ -56,7 +56,16 @@ export async function listHostProjectMaintenanceSchedules({
   let activeWhere = "";
   if (normalizedActiveDays > 0) {
     params.push(normalizedActiveDays);
-    activeWhere = ` AND COALESCE((to_jsonb(projects)->>'last_changed')::TIMESTAMP, last_edited) >= NOW() - ($2::int * INTERVAL '1 day')`;
+    activeWhere = ` AND (
+      COALESCE((to_jsonb(projects)->>'last_changed')::TIMESTAMP, last_edited) >= NOW() - ($2::int * INTERVAL '1 day')
+      OR (
+        COALESCE(backups->>'disabled', 'false') <> 'true'
+        AND (
+          last_backup IS NULL
+          OR COALESCE((to_jsonb(projects)->>'last_changed')::TIMESTAMP, last_edited) > last_backup
+        )
+      )
+    )`;
   }
   const { rows } = await getPool().query<{
     project_id: string;
