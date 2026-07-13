@@ -1132,8 +1132,18 @@ async function prepareNodeRuntimeCompatLibs(): Promise<
     DEFAULT_NODE_RUNTIME_COMPAT_LIBS_ROOT;
   await mkdir(root, { recursive: true, mode: 0o755 });
   const target = join(root, "libatomic.so.1");
-  await copyFile(libatomic, target);
-  await chmod(target, 0o644).catch(() => {});
+  const staging = await mkdtemp(join(root, ".libatomic-"));
+  const stagedTarget = join(staging, "libatomic.so.1");
+  try {
+    // Never truncate the published library: running Node processes may have
+    // this inode mmap'ed, and truncation causes SIGBUS/SIGSEGV under parallel
+    // project starts. A same-filesystem rename publishes the complete copy.
+    await copyFile(libatomic, stagedTarget);
+    await chmod(stagedTarget, 0o644).catch(() => {});
+    await rename(stagedTarget, target);
+  } finally {
+    await rm(staging, { recursive: true, force: true }).catch(() => {});
+  }
   return { source: root, target: COCALC_RUNTIME_LIB };
 }
 
