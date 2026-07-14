@@ -30,14 +30,13 @@ describe("podmanLimits memory pressure controls", () => {
     }
   });
 
-  it("adds default memory reservation and memory.high below the hard limit", async () => {
+  it("adds a default memory reservation without reclaim throttling", async () => {
     const { podmanLimits } = await import("./run/limits");
 
     await expect(podmanLimits({ memory: 1000 })).resolves.toEqual([
       "--cpu-shares=1024",
       "--memory=1000",
       "--memory-reservation=800",
-      "--cgroup-conf=memory.high=900",
     ]);
   });
 
@@ -75,7 +74,6 @@ describe("podmanLimits memory pressure controls", () => {
       "--cpu-shares=1024",
       "--memory=1000",
       "--memory-reservation=800",
-      "--cgroup-conf=memory.high=900",
       "--memory-swap=1200",
     ]);
   });
@@ -95,6 +93,38 @@ describe("podmanLimits memory pressure controls", () => {
       "--pids-limit=4096",
       "--ulimit=nofile=8192:8192",
       "--ulimit=core=0:0",
+      "--shm-size=64m",
+    ]);
+  });
+
+  it("translates Podman limits into cgroup-v2 leaf controls", async () => {
+    getContainerSwapSizeMb.mockResolvedValue(200);
+    const {
+      podmanLimits,
+      projectCgroupLimitsFromPodmanArgs,
+      withoutPodmanCgroupLimits,
+    } = await import("./run/limits");
+    const args = await podmanLimits({
+      memory: 1000,
+      swap: true,
+      pids: 4096,
+      nofile: 8192,
+      shmSize: "64m",
+    });
+
+    expect(projectCgroupLimitsFromPodmanArgs(args)).toEqual({
+      memory_max: "1000",
+      memory_high: "max",
+      memory_low: "800",
+      memory_swap_max: "200",
+      pids_max: "4096",
+      cpu_max_quota: "max",
+      cpu_max_period: "100000",
+      cpu_weight: "39",
+      io_weight: "100",
+    });
+    expect(withoutPodmanCgroupLimits(args)).toEqual([
+      "--ulimit=nofile=8192:8192",
       "--shm-size=64m",
     ]);
   });

@@ -13,6 +13,7 @@ export const DEFAULT_RUNTIME_RETENTION_POLICY: Record<
   HostRuntimeArtifactRetentionPolicy
 > = Object.freeze({
   "project-host": { keep_count: 10 },
+  "container-runtime": { keep_count: 3 },
   "project-bundle": { keep_count: 3 },
   tools: { keep_count: 3 },
 });

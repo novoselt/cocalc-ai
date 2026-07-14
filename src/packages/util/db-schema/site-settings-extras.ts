@@ -1515,7 +1515,7 @@ export const EXTRAS: SettingsExtras = {
   },
   project_hosts_software_base_url: {
     name: "Project Hosts: Software Base URL",
-    desc: "Base URL for project-host software artifacts. This must contain manifests like `project-host/latest-linux.json`, `project/latest-linux.json`, and `tools/latest-linux-amd64.json` (e.g., https://software.cocalc.ai/software). Optional version indexes for history listing are `project-host/versions-latest-linux.json`, `project/versions-latest-linux.json`, and `tools/versions-latest-linux-amd64.json`.",
+    desc: "Base URL for project-host software artifacts. This must contain manifests like `project-host/latest-linux.json`, `container-runtime/latest-linux-amd64.json`, `project/latest-linux.json`, and `tools/latest-linux-amd64.json` (e.g., https://software.cocalc.ai/software). Optional version indexes use the corresponding `versions-latest-*.json` names.",
     default: "https://software.cocalc.ai/software",
     to_val: to_trimmed_str,
     tags: ["Project Hosts", "Cloud"],
@@ -1525,9 +1525,9 @@ export const EXTRAS: SettingsExtras = {
   },
   project_hosts_runtime_retention_policy: {
     name: "Project Hosts: Runtime Retention Policy",
-    desc: 'Controls how many installed project-host runtime artifacts are retained locally for rollback and recovery. Example: `{"project-host":{"keep_count":10},"project-bundle":{"keep_count":3},"tools":{"keep_count":3}}`. Optional `max_bytes` per artifact can retain extra recent versions while under budget.',
+    desc: 'Controls how many installed project-host runtime artifacts are retained locally for rollback and recovery. Example: `{"project-host":{"keep_count":10},"container-runtime":{"keep_count":3},"project-bundle":{"keep_count":3},"tools":{"keep_count":3}}`. Optional `max_bytes` per artifact can retain extra recent versions while under budget.',
     default:
-      '{"project-host":{"keep_count":10},"project-bundle":{"keep_count":3},"tools":{"keep_count":3}}',
+      '{"project-host":{"keep_count":10},"container-runtime":{"keep_count":3},"project-bundle":{"keep_count":3},"tools":{"keep_count":3}}',
     multiline: 6,
     to_val: from_json,
     valid: parsableJson,

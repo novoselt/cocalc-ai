@@ -1242,6 +1242,7 @@ export function parseRow(
     project_bundle_version: software.project_bundle,
     project_bundle_build_id: software.project_bundle_build_id,
     tools_version: software.tools,
+    container_runtime_version: software.container_runtime,
     host_session_id: metadata.host_session_id,
     host_session_started_at: metadata.host_session_started_at,
     metrics:

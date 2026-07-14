@@ -65,6 +65,14 @@ export function normalizeHostSoftwareArtifactValue(
     return "project-host";
   }
   if (
+    normalized === "container-runtime" ||
+    normalized === "container" ||
+    normalized === "podman" ||
+    normalized === "runtime"
+  ) {
+    return "container-runtime";
+  }
+  if (
     normalized === "project" ||
     normalized === "project-bundle" ||
     normalized === "bundle"
@@ -82,7 +90,7 @@ export function normalizeHostSoftwareArtifactValue(
     return "bootstrap-environment";
   }
   throw new Error(
-    `invalid artifact '${value}'; expected one of: project-host, project, tools, bootstrap-environment`,
+    `invalid artifact '${value}'; expected one of: project-host, container-runtime, project, tools, bootstrap-environment`,
   );
 }
 
@@ -90,6 +98,7 @@ export function parseHostSoftwareArtifactsOption(
   values?: string[],
 ): HostSoftwareArtifact[] {
   if (!values?.length) {
+    // Container runtime upgrades are intentionally never implicit.
     return ["project-host", "project", "tools"];
   }
   const artifacts = values.map((value) =>

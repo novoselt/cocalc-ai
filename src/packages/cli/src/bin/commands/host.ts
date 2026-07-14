@@ -466,13 +466,14 @@ function parseRuntimeDeploymentTarget(opts: {
   }
   const allowed = new Set([
     "project-host",
+    "container-runtime",
     "project-bundle",
     "tools",
     "bootstrap-environment",
   ]);
   if (!allowed.has(artifact)) {
     throw new Error(
-      "invalid --artifact; expected project-host, project-bundle, tools, or bootstrap-environment",
+      "invalid --artifact; expected project-host, container-runtime, project-bundle, tools, or bootstrap-environment",
     );
   }
   return {
@@ -2471,7 +2472,7 @@ export function registerHostCommand(
     )
     .option(
       "--artifact <artifact...>",
-      "artifact(s): project-host, project, tools, bootstrap-environment (default: all software artifacts)",
+      "artifact(s): project-host, container-runtime, project, tools, bootstrap-environment (container-runtime is explicit-only)",
     )
     .option(
       "--channel <channel...>",
@@ -2540,7 +2541,7 @@ export function registerHostCommand(
     .description("upgrade host software")
     .option(
       "--artifact <artifact...>",
-      "artifact(s): project-host, project, tools, bootstrap-environment (default: all software artifacts)",
+      "artifact(s): project-host, container-runtime, project, tools, bootstrap-environment (container-runtime is explicit-only)",
     )
     .option("--channel <channel>", "channel: latest or staging", "latest")
     .option(
@@ -3338,7 +3339,7 @@ does not yet have the required runtime artifact version installed.
     )
     .option(
       "--artifact <artifact>",
-      "artifact: project-host, project-bundle, tools, bootstrap-environment",
+      "artifact: project-host, container-runtime, project-bundle, tools, bootstrap-environment",
     )
     .option("--to-version <version>", "explicit rollback version override")
     .option(
@@ -3456,7 +3457,7 @@ version when available, or \`--to-version\` to force a specific published versio
     )
     .option(
       "--artifact <artifact>",
-      "artifact: project-host, project-bundle, tools, bootstrap-environment",
+      "artifact: project-host, container-runtime, project-bundle, tools, bootstrap-environment",
     )
     .addHelpText(
       "after",
@@ -3546,7 +3547,7 @@ automatic reconcile or artifact upgrade work.
     )
     .option(
       "--artifact <artifact>",
-      "artifact: project-host, project-bundle, tools, bootstrap-environment",
+      "artifact: project-host, container-runtime, project-bundle, tools, bootstrap-environment",
     )
     .option("--policy <policy>", "restart_now or drain_then_replace")
     .option(

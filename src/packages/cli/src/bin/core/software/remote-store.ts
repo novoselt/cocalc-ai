@@ -116,7 +116,11 @@ export type SoftwareReleaseChannelManifest = {
   version: string;
 };
 
-type HostCompatibilityArtifact = "project-host" | "project" | "tools";
+type HostCompatibilityArtifact =
+  | "project-host"
+  | "container-runtime"
+  | "project"
+  | "tools";
 
 type HostCompatibilityManifest = {
   url: string;
@@ -592,12 +596,14 @@ export async function publishHostCompatibilityArtifact({
     "/",
   )[2] as HostCompatibilityArtifact;
   if (
-    !["project-host", "project", "tools"].includes(artifact) ||
+    !["project-host", "container-runtime", "project", "tools"].includes(
+      artifact,
+    ) ||
     (artifact !== "tools" && entry.files.length !== 1) ||
     entry.files.length < 1
   ) {
     throw new Error(
-      `software host compatibility publish expected project-host/project to have one file and tools to have one or more files in ${entry.artifact_id}`,
+      `software host compatibility publish expected project-host/container-runtime/project to have one file and tools to have one or more files in ${entry.artifact_id}`,
     );
   }
   const urls: string[] = [];
@@ -699,6 +705,11 @@ function hostCompatibilityPlatform({
   if (artifact === "project-host" || artifact === "project") {
     const match = /^bundle-(linux)\.tar\.xz$/.exec(fileName);
     if (match) return { os: "linux" };
+  } else if (artifact === "container-runtime") {
+    const match = /^container-runtime-(linux)-(amd64|arm64)\.tar\.xz$/.exec(
+      fileName,
+    );
+    if (match) return { os: "linux", arch: match[2] as "amd64" | "arm64" };
   } else {
     const match = /^tools-(linux)-(amd64|arm64)\.tar\.xz$/.exec(fileName);
     if (match) return { os: "linux", arch: match[2] as "amd64" | "arm64" };
@@ -717,9 +728,9 @@ function hostCompatibilityLatestKey({
   os: "linux";
   arch?: "amd64" | "arm64";
 }): string {
-  if (artifact === "tools") {
+  if (artifact === "tools" || artifact === "container-runtime") {
     if (!arch)
-      throw new Error("tools host compatibility catalog requires arch");
+      throw new Error(`${artifact} host compatibility catalog requires arch`);
     return `software/${artifact}/latest-${os}-${arch}.json`;
   }
   return `software/${artifact}/latest-${os}.json`;
@@ -734,9 +745,9 @@ function hostCompatibilityVersionsKey({
   os: "linux";
   arch?: "amd64" | "arm64";
 }): string {
-  if (artifact === "tools") {
+  if (artifact === "tools" || artifact === "container-runtime") {
     if (!arch)
-      throw new Error("tools host compatibility catalog requires arch");
+      throw new Error(`${artifact} host compatibility catalog requires arch`);
     return `software/${artifact}/versions-latest-${os}-${arch}.json`;
   }
   return `software/${artifact}/versions-latest-${os}.json`;

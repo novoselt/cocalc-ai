@@ -4,6 +4,21 @@ const mockGetConmonContainerProcesses = jest.fn();
 const mockGetConmonContainerProcessLists = jest.fn();
 const mockUnmountAll = jest.fn();
 const mockFileServerClient = jest.fn();
+const mockPodmanLimits = jest.fn(async () => [] as string[]);
+const mockProjectCgroupLimitsFromPodmanArgs = jest.fn(() => ({
+  memory_max: "max",
+  memory_high: "max",
+  memory_low: "0",
+  memory_swap_max: "max",
+  pids_max: "max",
+  cpu_max_quota: "max",
+  cpu_max_period: "100000",
+  cpu_weight: "100",
+  io_weight: "100",
+}));
+const mockConfiguredContainerRuntimeCurrent = jest.fn<string | undefined, []>(
+  () => undefined,
+);
 let processKillSpy: jest.SpyInstance;
 
 jest.mock("@cocalc/backend/logger", () => {
@@ -41,6 +56,8 @@ jest.mock(
 );
 
 jest.mock("@cocalc/backend/podman/env", () => ({
+  configuredContainerRuntimeCurrent: () =>
+    mockConfiguredContainerRuntimeCurrent(),
   podmanEnv: jest.fn(() => ({})),
 }));
 
@@ -83,7 +100,10 @@ jest.mock("./rootfs", () => ({
 }));
 
 jest.mock("./limits", () => ({
-  podmanLimits: jest.fn(async () => []),
+  podmanLimits: (...args: any[]) => mockPodmanLimits(...args),
+  projectCgroupLimitsFromPodmanArgs: (...args: any[]) =>
+    mockProjectCgroupLimitsFromPodmanArgs(...args),
+  withoutPodmanCgroupLimits: (args: string[]) => args,
 }));
 
 jest.mock("./startup-scripts", () => ({
@@ -96,7 +116,15 @@ jest.mock("./conat-client", () => ({
 
 import getPort from "@cocalc/backend/get-port";
 import { mountArg } from "@cocalc/backend/podman";
-import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import {
   cleanupProjectSecretsHostPath,
   cleanupStaleProjectContainers,
@@ -105,6 +133,7 @@ import {
   projectSecretsHostPath,
   PROJECT_SECRETS_HOST_ROOT,
   refreshProjectSecretsHostPath,
+  podmanRuntimeArgs,
   redactConfigurationForLog,
   start,
   state,
@@ -112,6 +141,25 @@ import {
   verifyProjectContainerInPool,
   writeProjectSecretsHostPath,
 } from "./podman";
+
+describe("project-runner Podman runtime selection", () => {
+  it("uses crun from the active CoCalc container runtime", async () => {
+    const current = await mkdtemp("/tmp/cocalc-container-runtime-");
+    try {
+      await mkdir(`${current}/bin`);
+      await writeFile(`${current}/bin/crun`, "#!/bin/sh\n", { mode: 0o755 });
+      mockConfiguredContainerRuntimeCurrent.mockReturnValue(current);
+
+      await expect(podmanRuntimeArgs()).resolves.toEqual([
+        "--runtime",
+        `${current}/bin/crun`,
+      ]);
+    } finally {
+      mockConfiguredContainerRuntimeCurrent.mockReturnValue(undefined);
+      await rm(current, { recursive: true, force: true });
+    }
+  });
+});
 
 function mockProjectStartPodman(project_id: string) {
   const name = `project-${project_id}`;
@@ -548,7 +596,7 @@ describe("project-runner podman orphan fallback", () => {
         project_id: project1,
         name: `project-${project1}`,
       }),
-    ).rejects.toThrow("escaped aggregate cgroup containment");
+    ).rejects.toThrow("escaped project cgroup containment");
   });
 
   it("does not set project quota twice when localPath already applied it", async () => {

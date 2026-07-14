@@ -280,6 +280,7 @@ export type ManagedComponentArtifact = "project-host";
 
 export type HostInstalledRuntimeArtifact =
   | "project-host"
+  | "container-runtime"
   | "project-bundle"
   | "tools";
 
@@ -700,6 +701,7 @@ export interface HostProjectPressureActionReport {
 
 export type SoftwareArtifact =
   | "project-host"
+  | "container-runtime"
   | "project"
   | "project-bundle"
   | "tools";

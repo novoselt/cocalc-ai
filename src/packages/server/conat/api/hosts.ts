@@ -489,6 +489,7 @@ async function loadHostRuntimeExceptionSummaries(
 
 type HostRuntimeDesiredArtifactsSummary = {
   project_host?: string;
+  container_runtime?: string;
   project_bundle?: string;
   tools?: string;
   updated_at?: string;
@@ -519,7 +520,10 @@ async function loadHostRuntimeDesiredArtifactSummaries(
        AND target_type='artifact'
        AND host_id::text = ANY($1::text[])
        AND target = ANY($2::text[])`,
-    [uniqueHostIds, ["project-host", "project-bundle", "tools"]],
+    [
+      uniqueHostIds,
+      ["project-host", "container-runtime", "project-bundle", "tools"],
+    ],
   );
   const setSummaryValue = (
     summary: HostRuntimeDesiredArtifactsSummary,
@@ -530,6 +534,9 @@ async function loadHostRuntimeDesiredArtifactSummaries(
     switch (target) {
       case "project-host":
         summary.project_host = desired_version;
+        break;
+      case "container-runtime":
+        summary.container_runtime = desired_version;
         break;
       case "project-bundle":
         summary.project_bundle = desired_version;
@@ -7256,6 +7263,12 @@ function desiredSoftwareTargetsForReconcile(
       undefined,
   );
   maybePush(
+    "container-runtime",
+    "container-runtime",
+    `${desiredArtifacts?.container_runtime ?? software.container_runtime ?? ""}`.trim() ||
+      undefined,
+  );
+  maybePush(
     "project",
     "project-bundle",
     `${desiredArtifacts?.project_bundle ?? software.project_bundle ?? ""}`.trim() ||
@@ -7777,6 +7790,10 @@ export async function reconcileHostSoftwareInternal({
         switch (`${record.target ?? ""}`.trim()) {
           case "project-host":
             desiredArtifacts.project_host =
+              `${record.desired_version ?? ""}`.trim() || undefined;
+            break;
+          case "container-runtime":
+            desiredArtifacts.container_runtime =
               `${record.desired_version ?? ""}`.trim() || undefined;
             break;
           case "project-bundle":

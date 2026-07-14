@@ -1,7 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createHostHelpers } from "./host-helpers";
+import {
+  createHostHelpers,
+  normalizeHostSoftwareArtifactValue,
+  parseHostSoftwareArtifactsOption,
+} from "./host-helpers";
+
+test("container runtime host upgrades are explicit-only", () => {
+  assert.equal(
+    normalizeHostSoftwareArtifactValue("podman"),
+    "container-runtime",
+  );
+  assert.deepEqual(parseHostSoftwareArtifactsOption(), [
+    "project-host",
+    "project",
+    "tools",
+  ]);
+  assert.deepEqual(parseHostSoftwareArtifactsOption(["container-runtime"]), [
+    "container-runtime",
+  ]);
+});
 
 test("waitForHostCreateReady waits for a heartbeat after running status", async () => {
   let calls = 0;

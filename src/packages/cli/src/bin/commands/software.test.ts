@@ -122,6 +122,21 @@ function makeDeps({
         );
       } else if (
         command === "pnpm" &&
+        args.includes("@cocalc/backend") &&
+        args.includes("build:container-runtime")
+      ) {
+        const arch = process.arch === "arm64" ? "arm64" : "amd64";
+        bundle = join(
+          resolvedRepoRoot,
+          "src",
+          "packages",
+          "backend",
+          "podman",
+          "build",
+          `container-runtime-linux-${arch}.tar.xz`,
+        );
+      } else if (
+        command === "pnpm" &&
         args.includes("@cocalc/project") &&
         args.includes("build:bundle")
       ) {
@@ -752,6 +767,40 @@ test("software build project runs the package bundle builder", async () => {
   );
 });
 
+test("software build container-runtime runs the pinned backend builder", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-container-runtime-build-"));
+  const localStore = join(dir, "store");
+  const runs: CapturedRun[] = [];
+  const program = createProgram(makeDeps({ localStore, runs, cwd: dir }));
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "--quiet",
+    "software",
+    "build",
+    "container-runtime",
+    "runtime-test",
+  ]);
+
+  const arch = process.arch === "arm64" ? "arm64" : "amd64";
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].args.includes("@cocalc/backend"), true);
+  assert.equal(runs[0].args.includes("build:container-runtime"), true);
+  assert.equal(
+    existsSync(
+      join(
+        localStore,
+        "container-runtime",
+        "20260614T235912Z-e882d124-runtime-test",
+        "files",
+        `container-runtime-linux-${arch}.tar.xz`,
+      ),
+    ),
+    true,
+  );
+});
+
 test("software build tools runs the package tools builder", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-tools-build-"));
   const localStore = join(dir, "store");
@@ -1115,6 +1164,62 @@ test("software push uploads files manifest and component index", async () => {
   assert.equal(payload.command, "software push");
   assert.equal(payload.data.tag, "push-test");
   assert.equal(payload.data.duration, "0ms");
+});
+
+test("software push publishes an immutable host bootstrap selector", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-push-host-bootstrap-"));
+  const localStore = join(dir, "store");
+  const bootstrapSource = join(
+    dir,
+    "src",
+    "packages",
+    "server",
+    "cloud",
+    "bootstrap",
+    "bootstrap.py",
+  );
+  const bootstrapBody = "#!/usr/bin/env python3\nprint('bootstrap')\n";
+  mkdirSync(dirname(bootstrapSource), { recursive: true });
+  writeFileSync(bootstrapSource, bootstrapBody);
+  const r2 = makeR2Client();
+  const program = createProgram(
+    makeDeps({
+      localStore,
+      cwd: dir,
+      repoRoot: dir,
+      env: r2Env,
+      r2Client: r2.client,
+    }),
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "--quiet",
+    "software",
+    "build",
+    "host-bootstrap:immutable",
+  ]);
+  await program.parseAsync([
+    "node",
+    "test",
+    "--quiet",
+    "software",
+    "push",
+    "host-bootstrap:immutable",
+    "--env-file",
+    join(dir, "missing.env"),
+  ]);
+
+  const artifactId = "20260614T235912Z-e882d124-immutable";
+  const key = `software/bootstrap/${artifactId}/bootstrap.py`;
+  assert.equal(r2.objects.get(key)!.toString("utf8"), bootstrapBody);
+  const sha256 = createHash("sha256").update(bootstrapBody).digest("hex");
+  assert.equal(
+    r2.objects.get(`${key}.sha256`)!.toString("utf8"),
+    `${sha256}  bootstrap.py\n`,
+  );
+  assert.equal(r2.objects.has("software/bootstrap/latest/bootstrap.py"), false);
 });
 
 test("software push publishes host compatibility catalog for project bundle", async () => {
@@ -3426,6 +3531,64 @@ test("software deploy tools publishes both architecture compatibility objects", 
   );
   assert.equal(history.deployments[0].status, "succeeded");
   assert.equal(history.deployments[0].artifact_id, artifactId);
+});
+
+test("software deploy container-runtime publishes an arch catalog without rolling out", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-deploy-runtime-"));
+  const localStore = join(dir, "store");
+  const runs: CapturedRun[] = [];
+  const r2 = makeR2Client();
+  const program = createProgram(
+    makeDeps({ localStore, runs, cwd: dir, env: r2Env, r2Client: r2.client }),
+  );
+  const originalArgv1 = process.argv[1];
+  process.argv[1] = "software";
+
+  try {
+    await program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "build",
+      "container-runtime",
+      "runtime-deploy",
+    ]);
+    await program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "container-runtime",
+      "runtime-deploy",
+      "staging",
+      "--env-file",
+      join(dir, "missing.env"),
+    ]);
+  } finally {
+    process.argv[1] = originalArgv1;
+  }
+
+  const arch = process.arch === "arm64" ? "arm64" : "amd64";
+  const artifactId = "20260614T235912Z-e882d124-runtime-deploy";
+  const fileName = `container-runtime-linux-${arch}.tar.xz`;
+  assert.equal(
+    r2.objects.has(`software/container-runtime/${artifactId}/${fileName}`),
+    true,
+  );
+  const latest = JSON.parse(
+    r2.objects
+      .get(`software/container-runtime/latest-linux-${arch}.json`)!
+      .toString("utf8"),
+  );
+  assert.equal(latest.version, artifactId);
+  assert.equal(latest.arch, arch);
+  assert.equal(
+    latest.url,
+    `https://software.example.test/software/container-runtime/${artifactId}/${fileName}`,
+  );
+  assert.equal(runs.length, 1);
 });
 
 test("software deploy bay-conat-router uses bay artifact and one-service Rocket flag", async () => {

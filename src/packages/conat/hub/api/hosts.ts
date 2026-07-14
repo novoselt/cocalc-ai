@@ -797,6 +797,7 @@ export interface Host {
   project_bundle_version?: string;
   project_bundle_build_id?: string;
   tools_version?: string;
+  container_runtime_version?: string;
   host_session_id?: string;
   host_session_started_at?: string;
   metrics?: HostMetrics;
@@ -989,6 +990,7 @@ export interface HostSoftwareAvailableVersion {
 
 export type HostSoftwareArtifact =
   | "project-host"
+  | "container-runtime"
   | "project"
   | "project-bundle"
   | "tools"
@@ -1020,6 +1022,7 @@ export interface HostSoftwareUpgradeResponse {
 
 export const HOST_RUNTIME_ARTIFACTS = [
   "project-host",
+  "container-runtime",
   "project-bundle",
   "tools",
   "bootstrap-environment",

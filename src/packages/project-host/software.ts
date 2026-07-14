@@ -10,10 +10,12 @@ export type SoftwareVersions = {
   project_bundle?: string;
   project_bundle_build_id?: string;
   tools?: string;
+  container_runtime?: string;
 };
 
 export type InstalledRuntimeArtifact =
   | "project-host"
+  | "container-runtime"
   | "project-bundle"
   | "tools";
 
@@ -37,6 +39,8 @@ export type InstalledRuntimeArtifactStatus = {
 const DEFAULT_BUNDLE_ROOT = "/opt/cocalc/project-bundles";
 const DEFAULT_TOOLS_CURRENT = "/opt/cocalc/tools/current";
 const DEFAULT_PROJECT_HOST_CURRENT = "/opt/cocalc/project-host/current";
+const DEFAULT_CONTAINER_RUNTIME_CURRENT =
+  "/opt/cocalc/container-runtime/current";
 
 function versionFromCurrentPath(currentPath: string): string | undefined {
   try {
@@ -222,6 +226,13 @@ function getToolsVersion(): string | undefined {
   return versionFromCurrentPath(toolsPath);
 }
 
+function getContainerRuntimeVersion(): string | undefined {
+  const current =
+    process.env.COCALC_CONTAINER_RUNTIME_CURRENT ??
+    DEFAULT_CONTAINER_RUNTIME_CURRENT;
+  return versionFromCurrentPath(current);
+}
+
 function runtimeProjectHostVersion(): string | undefined {
   const runtimeRoot = path.resolve(__dirname, "..");
   const bundleRoot = path.dirname(runtimeRoot);
@@ -273,6 +284,7 @@ export function getSoftwareVersions(): SoftwareVersions {
     project_bundle: getProjectBundleVersion(),
     project_bundle_build_id: readBuildIdFromCurrentPath(projectBundleCurrent),
     tools: getToolsVersion(),
+    container_runtime: getContainerRuntimeVersion(),
   };
 }
 
@@ -289,6 +301,18 @@ export function getInstalledRuntimeArtifacts(opts?: {
   const include_sizes = opts?.include_sizes === true;
   const retentionPolicy = effectiveRuntimeRetentionPolicy();
   return [
+    describeInstalledArtifact({
+      artifact: "container-runtime",
+      currentPath:
+        process.env.COCALC_CONTAINER_RUNTIME_CURRENT ??
+        DEFAULT_CONTAINER_RUNTIME_CURRENT,
+      roots: siblingInventoryRoots(
+        process.env.COCALC_CONTAINER_RUNTIME_CURRENT ??
+          DEFAULT_CONTAINER_RUNTIME_CURRENT,
+      ),
+      include_sizes,
+      retention_policy: retentionPolicy["container-runtime"],
+    }),
     describeInstalledArtifact({
       artifact: "project-host",
       currentPath: projectHostCurrent,

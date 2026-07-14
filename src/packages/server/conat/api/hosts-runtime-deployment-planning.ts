@@ -88,6 +88,7 @@ export function normalizeRuntimeArtifactTarget(
   }
   if (
     artifact === "project-host" ||
+    artifact === "container-runtime" ||
     artifact === "tools" ||
     artifact === "bootstrap-environment"
   ) {

@@ -20,6 +20,7 @@ function normalizeSoftwareArtifact(
   if (artifact === "project-bundle") return "project";
   if (
     artifact === "project-host" ||
+    artifact === "container-runtime" ||
     artifact === "project" ||
     artifact === "tools" ||
     artifact === "bootstrap-environment"

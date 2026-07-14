@@ -403,6 +403,12 @@ const SOFTWARE_ARTIFACTS: Array<{
     desiredLabel: "Host runtime",
   },
   {
+    artifact: "container-runtime",
+    sourceArtifact: "container-runtime",
+    label: "Container runtime",
+    desiredLabel: "Podman runtime",
+  },
+  {
     artifact: "project-bundle",
     sourceArtifact: "project",
     label: "Project bundle",
@@ -475,6 +481,9 @@ function runningVersion(
   artifact: HostRuntimeArtifact,
 ): string | undefined {
   if (artifact === "project-host") return host.version;
+  if (artifact === "container-runtime") {
+    return host.container_runtime_version;
+  }
   if (artifact === "project-bundle") return host.project_bundle_version;
   return host.tools_version;
 }
@@ -623,6 +632,9 @@ function runtimeArtifactForSoftwareArtifact(
   }
   if (artifact === "project-host") {
     return "project-host";
+  }
+  if (artifact === "container-runtime") {
+    return "container-runtime";
   }
   return "tools";
 }
@@ -3334,6 +3346,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
         runtimeControlContent ??
         (deploymentStatus ||
         host?.version ||
+        host?.container_runtime_version ||
         host?.project_bundle_version ||
         host?.tools_version ||
         softwareVersions ? (

@@ -722,6 +722,46 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
         self.assertEqual(calls[0][1], bootstrap.RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S)
         self.assertNotIn("uid_map", contract)
 
+    def test_runtime_user_contract_uses_managed_podman(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            cfg = replace(cfg, ssh_user=pwd.getpwuid(os.getuid()).pw_name)
+            current = Path(tmpdir) / "runtime" / "current"
+            podman = current / "bin" / "podman"
+            conf = current / "etc" / "containers" / "containers.conf"
+            podman.parent.mkdir(parents=True)
+            conf.parent.mkdir(parents=True)
+            podman.write_text("#!/bin/sh\n", encoding="utf-8")
+            podman.chmod(0o755)
+            conf.write_text("[engine]\n", encoding="utf-8")
+            calls = []
+            original_current = os.environ.get("COCALC_CONTAINER_RUNTIME_CURRENT")
+            original_probe = bootstrap.run_bounded_capture
+            try:
+                os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = str(current)
+
+                def fake_probe(args, timeout_s):
+                    calls.append((args, timeout_s))
+                    map_text = "0 2000 1\n1 231072 65536\n65537 327680 4128768\n"
+                    return subprocess.CompletedProcess(args, 0, map_text, "")
+
+                bootstrap.run_bounded_capture = fake_probe
+                contract = bootstrap.read_current_runtime_user_contract(cfg)
+            finally:
+                bootstrap.run_bounded_capture = original_probe
+                if original_current is None:
+                    os.environ.pop("COCALC_CONTAINER_RUNTIME_CURRENT", None)
+                else:
+                    os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = original_current
+
+            self.assertEqual(len(calls), 2)
+            self.assertIn(str(podman), calls[0][0][-1])
+            self.assertIn(
+                f"CONTAINERS_CONF_OVERRIDE={conf}",
+                calls[0][0],
+            )
+            self.assertIn("fingerprint", contract)
+
     def test_verify_runtime_user_contract_raises_on_drift(self) -> None:
         cfg = make_cfg(tempfile.mkdtemp())
         original_expected = bootstrap.expected_runtime_user_contract
@@ -1308,13 +1348,19 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('attach_pid_to_project_pool_storage "$$" "$pool"', script)
             self.assertIn("attach-pasta-cgroups)", script)
             self.assertIn("prepare-project-cgroup)", script)
+            self.assertIn("enter-project-cgroup)", script)
             self.assertIn("verify-project-pool)", script)
             self.assertIn("attach-project-cgroup)", script)
             self.assertIn(
-                'attach_project_launcher_to_pool "$launcher_pid"', script
+                'pool="$(project_cgroup "$project_id")"', script
             )
+            self.assertIn("configure_project_pool_hierarchy", script)
+            self.assertIn('> "$cgroup/memory.max"', script)
+            self.assertIn('> "$cgroup/memory.oom.group"', script)
+            self.assertIn('> "$pool/cgroup.kill"', script)
+            self.assertIn('deny "project-cgroup-cleanup-failed"', script)
+            self.assertIn("cocalc-project-cgroups.lock", script)
             self.assertIn('PROJECT_PROCESS_OOM_SCORE_ADJ="500"', script)
-            self.assertIn("project pool has no finite memory.max", script)
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
             self.assertIn("find_bees_pid()", script)
             self.assertIn("apply_bees_runtime_policy()", script)
@@ -1604,7 +1650,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "podman info >/dev/null", rootctl.read_text(encoding="utf-8")
+                "run_podman_as_runtime()", rootctl.read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                'CONTAINERS_CONF_OVERRIDE="${container_runtime}/etc/containers/containers.conf"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'podman_bin="${container_runtime}/bin/podman"',
+                rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
                 "capture-forensics)",
@@ -1643,7 +1697,11 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "flatten_project_pool_cgroup()",
+                "enable_project_pool_controllers()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'legacy="${pool}/legacy"',
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(

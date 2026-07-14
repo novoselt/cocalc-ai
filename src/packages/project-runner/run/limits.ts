@@ -7,8 +7,25 @@ import { FAIR_CPU_MODE } from "@cocalc/util/upgrade-spec";
 import { getContainerSwapSizeMb } from "@cocalc/backend/podman/memory";
 
 const DEFAULT_MEMORY_RESERVATION_RATIO = 0.8;
-const DEFAULT_MEMORY_HIGH_RATIO = 0.9;
+// memory.high forces synchronous reclaim in the allocating process. For
+// interactive projects that can look like a frozen kernel for tens of seconds
+// before memory.max is reached, so leave it disabled unless explicitly tuned.
+const DEFAULT_MEMORY_HIGH_RATIO = 1;
 const MIN_MEMORY_PRESSURE_GAP_RATIO = 0.05;
+const CGROUP_CPU_PERIOD_US = 100_000;
+const DEFAULT_PROJECT_IO_WEIGHT = 100;
+
+export interface ProjectCgroupLimits {
+  memory_max: string;
+  memory_high: string;
+  memory_low: string;
+  memory_swap_max: string;
+  pids_max: string;
+  cpu_max_quota: string;
+  cpu_max_period: string;
+  cpu_weight: string;
+  io_weight: string;
+}
 
 function parseMemoryRatio(
   name: string,
@@ -135,4 +152,71 @@ export async function podmanLimits(config?: Configuration): Promise<string[]> {
   }
 
   return args;
+}
+
+function argumentValue(args: string[], prefix: string): string | undefined {
+  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+}
+
+function integerArgument(args: string[], prefix: string): number | undefined {
+  const value = Number(argumentValue(args, prefix));
+  if (!Number.isSafeInteger(value) || value < 0) return undefined;
+  return value;
+}
+
+function cpuSharesToWeight(shares: number): number {
+  const normalized = Math.max(2, Math.min(262_144, Math.floor(shares)));
+  return 1 + Math.floor(((normalized - 2) * 9_999) / 262_142);
+}
+
+export function projectCgroupLimitsFromPodmanArgs(
+  args: string[],
+): ProjectCgroupLimits {
+  const memoryMax = integerArgument(args, "--memory=");
+  const memoryHigh = integerArgument(args, "--cgroup-conf=memory.high=");
+  const memoryLow = integerArgument(args, "--memory-reservation=");
+  const memorySwapTotal = integerArgument(args, "--memory-swap=");
+  const pidsMax = integerArgument(args, "--pids-limit=");
+  const cpus = Number(argumentValue(args, "--cpus="));
+  const cpuShares = Number(argumentValue(args, "--cpu-shares="));
+  const cpuQuota =
+    Number.isFinite(cpus) && cpus > 0
+      ? Math.max(1, Math.round(cpus * CGROUP_CPU_PERIOD_US))
+      : undefined;
+  const cpuWeight =
+    Number.isFinite(cpuShares) && cpuShares > 0
+      ? cpuSharesToWeight(cpuShares)
+      : 100;
+
+  return {
+    memory_max: memoryMax != null ? `${memoryMax}` : "max",
+    memory_high: memoryHigh != null ? `${memoryHigh}` : "max",
+    memory_low: memoryLow != null ? `${memoryLow}` : "0",
+    memory_swap_max:
+      memoryMax != null && memorySwapTotal != null
+        ? `${Math.max(0, memorySwapTotal - memoryMax)}`
+        : "max",
+    pids_max: pidsMax != null ? `${pidsMax}` : "max",
+    cpu_max_quota: cpuQuota != null ? `${cpuQuota}` : "max",
+    cpu_max_period: `${CGROUP_CPU_PERIOD_US}`,
+    cpu_weight: `${cpuWeight}`,
+    io_weight: `${DEFAULT_PROJECT_IO_WEIGHT}`,
+  };
+}
+
+const CGROUP_LIMIT_PREFIXES = [
+  "--cpu-shares=",
+  "--cpus=",
+  "--memory=",
+  "--memory-reservation=",
+  "--memory-swap=",
+  "--cgroup-conf=",
+  "--pids-limit=",
+];
+
+/** Keep limits that do not require Podman to create a cgroup. */
+export function withoutPodmanCgroupLimits(args: string[]): string[] {
+  return args.filter(
+    (arg) => !CGROUP_LIMIT_PREFIXES.some((prefix) => arg.startsWith(prefix)),
+  );
 }

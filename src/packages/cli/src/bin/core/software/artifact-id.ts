@@ -17,6 +17,7 @@ export function parseSoftwareBuildComponent(
     case "bay":
     case "host-bootstrap":
     case "project-host":
+    case "container-runtime":
     case "project":
     case "tools":
     case "tools-minimal":
