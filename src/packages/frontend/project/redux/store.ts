@@ -259,12 +259,14 @@ export class ProjectStore extends Store<ProjectStoreState> {
       projects.on("change", this._projects_store_change);
       this.projectsStoreSubscribed = true;
     }
-    console.info("[project-runtime-recovery] project store initialized", {
-      project_id: this.project_id,
-      project_record_present: project != null,
-      subscribed: this.projectsStoreSubscribed,
-      runstate: this.previous_runstate,
-    });
+    console.info(
+      `[project-runtime-recovery] project store initialized ${JSON.stringify({
+        project_id: this.project_id,
+        project_record_present: project != null,
+        subscribed: this.projectsStoreSubscribed,
+        runstate: this.previous_runstate,
+      })}`,
+    );
   };
 
   destroy = (): void => {
@@ -304,15 +306,19 @@ export class ProjectStore extends Store<ProjectStoreState> {
         runtimeExitReason != null ||
         (this.previous_runstate === "running" && new_state !== "running")
       ) {
-        console.info("[project-runtime-recovery] project store transition", {
-          project_id: this.project_id,
-          previous_runstate: this.previous_runstate,
-          new_runstate: new_state,
-          runtime_exit_reason: runtimeExitReason,
-          runtime_exit_key: runtimeExitKey,
-          recovery_eligible: recoverRuntimeExitReason != null,
-          new_runtime_exit: hasNewRuntimeExit,
-        });
+        console.info(
+          `[project-runtime-recovery] project store transition ${JSON.stringify(
+            {
+              project_id: this.project_id,
+              previous_runstate: this.previous_runstate,
+              new_runstate: new_state,
+              runtime_exit_reason: runtimeExitReason,
+              runtime_exit_key: runtimeExitKey,
+              recovery_eligible: recoverRuntimeExitReason != null,
+              new_runtime_exit: hasNewRuntimeExit,
+            },
+          )}`,
+        );
       }
       //log(this.previous_runstate, "=>", new_state);
       // fire started or stopped when certain state transitions happen

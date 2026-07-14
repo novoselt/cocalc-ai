@@ -4,6 +4,11 @@
  */
 
 import type { DStreamOptions, DStream } from "@cocalc/conat/sync/dstream";
+import {
+  accountFeedLiveSubject,
+  accountFeedStreamName,
+  type AccountFeedEvent,
+} from "@cocalc/conat/hub/api/account-feed";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import jsonStableStringify from "json-stable-stringify";
 
@@ -18,6 +23,7 @@ type SharedDStreamOptions = Omit<
 type SharedDStreamEntry = {
   account_id: string;
   stream: DStream<any>;
+  liveSubscription?: { close: () => void };
 };
 
 const sharedStreams = new Map<string, SharedDStreamEntry>();
@@ -67,6 +73,9 @@ function closeSharedStreams(
       continue;
     }
     sharedStreams.delete(key);
+    try {
+      entry.liveSubscription?.close();
+    } catch {}
     try {
       entry.stream.close?.();
     } catch {}
@@ -152,21 +161,47 @@ export async function getSharedAccountDStream<T>(
       ...opts,
       account_id: opts.account_id,
     })
-    .then((stream) => {
+    .then(async (stream) => {
       if (sharedStreamsInFlight.get(key) !== promise) {
         try {
           stream.close?.();
         } catch {}
         return stream;
       }
+      let liveSubscription: { close: () => void } | undefined;
+      if (opts.name === accountFeedStreamName()) {
+        try {
+          const sub = await webapp_client.conat_client
+            .conat()
+            .subscribe(accountFeedLiveSubject(opts.account_id));
+          liveSubscription = sub;
+          if (sharedStreamsInFlight.get(key) !== promise) {
+            sub.close();
+            try {
+              stream.close?.();
+            } catch {}
+            return stream;
+          }
+          void (async () => {
+            for await (const mesg of sub) {
+              stream.emit("change", mesg.data as AccountFeedEvent);
+            }
+          })().catch(() => undefined);
+        } catch {
+          // The DStream replay/repair path remains available if the optional
+          // low-latency relay cannot be attached.
+        }
+      }
       sharedStreamsInFlight.delete(key);
       sharedStreams.set(key, {
         account_id: opts.account_id,
         stream,
+        liveSubscription,
       });
       stream.once?.("closed", () => {
         const cached = sharedStreams.get(key);
         if (cached?.stream === stream) {
+          cached.liveSubscription?.close();
           sharedStreams.delete(key);
         }
       });

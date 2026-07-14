@@ -2801,11 +2801,13 @@ export class ProjectActions extends Actions<ProjectStoreState> {
   }: {
     runtime_exit_reason?: string;
   } = {}) => {
-    console.info("[project-runtime-recovery] recovery invoked", {
-      project_id: this.project_id,
-      runtime_exit_reason,
-      recovery_already_in_flight: this.runtimeLossRecoveryInFlight != null,
-    });
+    console.info(
+      `[project-runtime-recovery] recovery invoked ${JSON.stringify({
+        project_id: this.project_id,
+        runtime_exit_reason,
+        recovery_already_in_flight: this.runtimeLossRecoveryInFlight != null,
+      })}`,
+    );
     this.projectStatusNeedsRuntimeReconnect = true;
     this.projectRuntimeTracker.reset();
     this.projectStatusSub?.close();
