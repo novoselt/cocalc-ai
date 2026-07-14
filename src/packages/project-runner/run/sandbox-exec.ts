@@ -215,10 +215,9 @@ export async function sandboxExec({
     }
 
     logger.debug("podman", argsJoin(args));
-    return await runPodman(
-      args,
-      useEphemeral ? projectPoolPodmanLauncher(project_id) : undefined,
-    );
+    // With Podman cgroups disabled, exec processes inherit the caller's
+    // cgroup. Admit both run and exec launchers so no project command escapes.
+    return await runPodman(args, projectPoolPodmanLauncher(project_id));
   } finally {
     if (rootfs) {
       // Decrement overlay mount refcount; actual unmount happens only when

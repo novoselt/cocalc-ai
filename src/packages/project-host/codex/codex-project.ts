@@ -1281,7 +1281,8 @@ export async function spawnCodexInProjectContainer({
   }
   execArgs.push(info.name, info.codexPath, ...codexArgs);
   logger.debug("codex project: podman exec", redactPodmanArgs(execArgs));
-  const proc = spawn("podman", execArgs, {
+  const launcher = projectPoolPodmanLauncher(projectId);
+  const proc = spawn(launcher.command, [...launcher.argsPrefix, ...execArgs], {
     stdio: ["pipe", "pipe", "pipe"],
     env: podmanEnv(),
   });
@@ -1462,7 +1463,8 @@ async function spawnCodexAppServerInProjectRuntime({
     loginType: appServerLogin?.type,
     cmd: redactPodmanArgs(execArgs),
   });
-  const proc = spawn("podman", execArgs, {
+  const launcher = projectPoolPodmanLauncher(projectId);
+  const proc = spawn(launcher.command, [...launcher.argsPrefix, ...execArgs], {
     stdio: ["pipe", "pipe", "pipe"],
     env: podmanEnv(),
   });

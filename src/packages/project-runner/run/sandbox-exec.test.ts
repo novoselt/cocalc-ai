@@ -59,8 +59,9 @@ describe("sandboxExec", () => {
 
     expect(podmanEnvMock).toHaveBeenCalledTimes(1);
     expect(execFileMock).toHaveBeenCalledWith(
-      "podman",
+      "bash",
       expect.arrayContaining([
+        "cocalc-project-podman",
         "exec",
         "project-00000000-0000-4000-8000-000000000001",
       ]),
