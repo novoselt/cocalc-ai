@@ -258,8 +258,13 @@ describe("connected terminal resizing", () => {
   });
 
   it("routes terminal socket reconnects through the shared reconnect coordinator", async () => {
-    const { Terminal, ptys, reconnectResources, terminalClient } =
-      loadTerminalModule();
+    const {
+      Terminal,
+      ptys,
+      reconnectResources,
+      terminalClient,
+      registerReconnectResource,
+    } = loadTerminalModule();
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     const actions = {
@@ -282,6 +287,7 @@ describe("connected terminal resizing", () => {
     } as any;
 
     const terminal = new Terminal(actions, 0, "term-1", parent);
+    terminal.is_visible = true;
     await terminal.connect();
 
     expect(terminalClient).toHaveBeenCalledWith(
@@ -289,6 +295,14 @@ describe("connected terminal resizing", () => {
         project_id: "project-1",
       }),
     );
+
+    const reconnectOptions = registerReconnectResource.mock.calls[0][0];
+    expect(reconnectOptions.probeOnForeground()).toBe(true);
+    terminalClient.mockClear();
+    await reconnectOptions.reconnect();
+    expect(ptys[0].state).toHaveBeenCalled();
+    expect(terminalClient).not.toHaveBeenCalled();
+
     expect(terminal["terminal"].write).toHaveBeenCalledWith(
       expect.stringContaining("Connecting terminal"),
       expect.any(Function),

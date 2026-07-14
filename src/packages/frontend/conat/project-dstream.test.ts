@@ -47,7 +47,7 @@ describe("shared project dstream cache", () => {
     webappClient.removeAllListeners();
   });
 
-  it("reuses the same project stream while multiple leases are held", async () => {
+  it("reuses a project stream and ignores duplicate lease releases", async () => {
     const stream = new FakeDStream();
     directDstreamMock.mockResolvedValue(stream);
 
@@ -81,6 +81,7 @@ describe("shared project dstream cache", () => {
       );
       expect(directDstreamMock).toHaveBeenCalledTimes(1);
 
+      await first.release();
       await first.release();
       expect(stream.close).not.toHaveBeenCalled();
 

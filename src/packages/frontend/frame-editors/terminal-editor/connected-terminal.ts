@@ -408,8 +408,18 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       webapp_client.conat_client.registerReconnectResource({
         canReconnect: () => !this.isClosed() && !this.ptyExited,
         isConnected: () => this.pty?.socket.state === "ready",
+        probeOnForeground: () => this.is_visible,
         priority: () => (this.is_visible ? "foreground" : "background"),
         reconnect: async () => {
+          const pty = this.pty;
+          if (pty?.socket.state === "ready") {
+            try {
+              await pty.state();
+              return;
+            } catch {
+              // A ready-looking socket can have a dead request path.
+            }
+          }
           await this.connect();
         },
       });

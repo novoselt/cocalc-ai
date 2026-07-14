@@ -93,10 +93,17 @@ class FakeDstream extends EventEmitter {
   close = jest.fn();
   getAll = jest.fn(() => [...this.messages]);
   getRecoveryState = jest.fn(() => this.recoveryState);
+  recoverNow = jest.fn(async () => {
+    this.setRecoveryState("ready");
+  });
 
   push(message: any) {
     this.messages = [...this.messages, message];
     this.emit("change", message, message?.seq);
+  }
+
+  pushSilently(message: any) {
+    this.messages = [...this.messages, message];
   }
 
   setRecoveryState(state: string) {
@@ -746,6 +753,96 @@ describe("useCodexLog", () => {
     });
   });
 
+  it("forces recovery when a running dstream silently stops receiving events", async () => {
+    jest.useFakeTimers();
+    const stream = new FakeDstream();
+    dstreamMock.mockResolvedValue(stream);
+    conatMock.mockReturnValue({
+      subscribe: jest.fn(),
+      sync: {
+        akv: () => ({ get: jest.fn().mockResolvedValue(null) }),
+      },
+    });
+
+    render(
+      <StatusComponent
+        generating={true}
+        logKey="log-key-stale-watchdog"
+        liveLogStream="live-stream-stale-watchdog"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(reconnectRegisterMock).toHaveBeenCalledTimes(1);
+      expect(dstreamMock).toHaveBeenCalledTimes(1);
+    });
+    const options = reconnectRegisterMock.mock.calls[0][0];
+    expect(options.probeOnForeground()).toBe(true);
+    reconnectResource.requestReconnect.mockClear();
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(reconnectResource.requestReconnect).toHaveBeenCalledWith({
+      force: true,
+      reason: "codex_log_stale_watchdog",
+      resetBackoff: true,
+    });
+  });
+
+  it("reconciles hook state after forcing a ready-looking dstream recovery", async () => {
+    const stream = new FakeDstream([
+      {
+        type: "event",
+        seq: 1,
+        time: 10,
+        event: { type: "message", text: "Hello", delta: false },
+      },
+    ]);
+    dstreamMock.mockResolvedValue(stream);
+    conatMock.mockReturnValue({
+      subscribe: jest.fn(),
+      sync: {
+        akv: () => ({ get: jest.fn().mockResolvedValue(null) }),
+      },
+    });
+
+    render(
+      <LiveResponseComponent
+        generating={true}
+        logKey="log-key-ready-looking"
+        liveLogStream="live-stream-ready-looking"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("live-response").textContent).toBe("Hello");
+    });
+    stream.pushSilently({
+      type: "event",
+      seq: 2,
+      time: 20,
+      event: { type: "message", text: "Hello again", delta: false },
+    });
+    const options = reconnectRegisterMock.mock.calls[0][0];
+
+    await act(async () => {
+      await options.reconnect();
+    });
+
+    expect(stream.recoverNow).toHaveBeenCalledWith({
+      force: true,
+      priority: "foreground",
+      reason: "codex_log_reconnect",
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("live-response").textContent).toBe(
+        "Hello again",
+      );
+    });
+  });
+
   it("tracks live activity time without materializing the full log", async () => {
     jest.useFakeTimers();
     const stream = new FakeDstream([
@@ -795,9 +892,44 @@ describe("useCodexLog", () => {
     });
   });
 
+  it("forces recovery when the full activity stream goes quiet", async () => {
+    jest.useFakeTimers();
+    const stream = new FakeDstream();
+    dstreamMock.mockResolvedValue(stream);
+    conatMock.mockReturnValue({
+      subscribe: jest.fn(),
+      sync: {
+        akv: () => ({ get: jest.fn().mockResolvedValue(null) }),
+      },
+    });
+
+    render(
+      <ActivityStatusComponent liveLogStream="live-stream-activity-stale" />,
+    );
+
+    await waitFor(() => {
+      expect(reconnectRegisterMock).toHaveBeenCalledTimes(1);
+      expect(dstreamMock).toHaveBeenCalledTimes(1);
+    });
+    const options = reconnectRegisterMock.mock.calls[0][0];
+    expect(options.probeOnForeground()).toBe(true);
+    reconnectResource.requestReconnect.mockClear();
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(reconnectResource.requestReconnect).toHaveBeenCalledWith({
+      force: true,
+      reason: "codex_activity_stale_watchdog",
+      resetBackoff: true,
+    });
+  });
+
   it("reconnect resource refetches persisted log and resubscribes", async () => {
     const first = new FakeDstream();
     const second = new FakeDstream();
+    first.recoverNow.mockRejectedValueOnce(new Error("stale stream"));
     const get = jest.fn().mockResolvedValue([
       {
         type: "event",
@@ -829,17 +961,22 @@ describe("useCodexLog", () => {
 
     const options = reconnectRegisterMock.mock.calls[0][0];
 
-    let reconnectPromise: Promise<void>;
-    await act(async () => {
-      reconnectPromise = options.reconnect();
-    });
+    let reconnectPromise!: Promise<void>;
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await act(async () => {
+        reconnectPromise = options.reconnect();
+      });
 
-    expect(get).toHaveBeenCalledWith("log-key-live-reconnect");
-    await waitFor(() => {
-      expect(dstreamMock).toHaveBeenCalledTimes(2);
-    });
-    await act(async () => {
-      await reconnectPromise;
-    });
+      expect(get).toHaveBeenCalledWith("log-key-live-reconnect");
+      await waitFor(() => {
+        expect(dstreamMock).toHaveBeenCalledTimes(2);
+      });
+      await act(async () => {
+        await reconnectPromise;
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
