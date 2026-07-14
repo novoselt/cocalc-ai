@@ -34,7 +34,9 @@ import {
 import {
   networkArgument,
   podmanRuntimeArgs,
+  projectPoolPodmanLauncher,
   resolveSharedScratchMount,
+  verifyProjectContainerInPool,
 } from "@cocalc/project-runner/run/podman";
 import { mountArg } from "@cocalc/backend/podman";
 import { getEnvironment } from "@cocalc/project-runner/run/env";
@@ -621,12 +623,17 @@ async function podman(
   {
     timeoutMs = PODMAN_TIMEOUT_MS,
     label,
-  }: { timeoutMs?: number; label?: string } = {},
+    launcher,
+  }: {
+    timeoutMs?: number;
+    label?: string;
+    launcher?: ReturnType<typeof projectPoolPodmanLauncher>;
+  } = {},
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     execFile(
-      "podman",
-      args,
+      launcher?.command ?? "podman",
+      launcher ? [...launcher.argsPrefix, ...args] : args,
       {
         timeout: timeoutMs,
         maxBuffer: 8 * 1024 * 1024,
@@ -925,18 +932,36 @@ async function ensureContainer({
         });
       }
     } else {
-      return {
-        name,
-        rootfs,
-        codexPath: containerPath,
-        home,
-        scratch,
-      };
+      try {
+        await verifyProjectContainerInPool({ project_id: projectId, name });
+        return {
+          name,
+          rootfs,
+          codexPath: containerPath,
+          home,
+          scratch,
+        };
+      } catch (err) {
+        logger.warn("running codex container is outside project pool", {
+          projectId,
+          name,
+          err: `${err}`,
+        });
+        await podman(["rm", "-f", "-t", "0", name], {
+          label: "container rm uncontained",
+        });
+      }
     }
   }
 
   const args: string[] = [];
-  args.push("run", ...(await podmanRuntimeArgs()), "--detach", "--rm");
+  args.push(
+    "run",
+    ...(await podmanRuntimeArgs()),
+    "--cgroups=disabled",
+    "--detach",
+    "--rm",
+  );
   // Codex should see the same sudo-capable project environment as terminals.
   args.push(
     `--userns=keep-id:uid=${DEFAULT_PROJECT_RUNTIME_UID},gid=${DEFAULT_PROJECT_RUNTIME_GID}`,
@@ -1113,7 +1138,18 @@ async function ensureContainer({
     auth: redactCodexAuthRuntime(authRuntime),
     cmd: redactPodmanArgs(args),
   });
-  await podman(args, { label: "container run" });
+  await podman(args, {
+    label: "container run",
+    launcher: projectPoolPodmanLauncher(projectId),
+  });
+  try {
+    await verifyProjectContainerInPool({ project_id: projectId, name });
+  } catch (err) {
+    await podman(["rm", "-f", "-t", "0", name], {
+      label: "container rm uncontained",
+    }).catch(() => {});
+    throw err;
+  }
 
   return {
     name,
@@ -1245,7 +1281,8 @@ export async function spawnCodexInProjectContainer({
   }
   execArgs.push(info.name, info.codexPath, ...codexArgs);
   logger.debug("codex project: podman exec", redactPodmanArgs(execArgs));
-  const proc = spawn("podman", execArgs, {
+  const launcher = projectPoolPodmanLauncher(projectId);
+  const proc = spawn(launcher.command, [...launcher.argsPrefix, ...execArgs], {
     stdio: ["pipe", "pipe", "pipe"],
     env: podmanEnv(),
   });
@@ -1426,7 +1463,8 @@ async function spawnCodexAppServerInProjectRuntime({
     loginType: appServerLogin?.type,
     cmd: redactPodmanArgs(execArgs),
   });
-  const proc = spawn("podman", execArgs, {
+  const launcher = projectPoolPodmanLauncher(projectId);
+  const proc = spawn(launcher.command, [...launcher.argsPrefix, ...execArgs], {
     stdio: ["pipe", "pipe", "pipe"],
     env: podmanEnv(),
   });

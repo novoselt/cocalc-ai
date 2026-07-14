@@ -89,6 +89,11 @@ import {
 } from "@cocalc/frontend/project_configuration";
 import { ModalInfo, ProjectStore, ProjectStoreState } from "./store";
 import { downloadProjectFile } from "./download-file";
+import {
+  PROJECT_RUNTIME_RECOVERY_EVENT,
+  ProjectRuntimeTracker,
+  type RuntimeRecoveryNotice,
+} from "../runtime-recovery";
 
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
@@ -375,6 +380,7 @@ export class ProjectActions extends Actions<ProjectStoreState> {
   // these are all potentially expensive
   public open_files?: OpenFiles;
   private projectStatusSub?;
+  private projectRuntimeTracker = new ProjectRuntimeTracker();
   private projectLogStream?: DStream<ProjectLogRow>;
   private releaseProjectLogStream?: SharedProjectDStreamRelease;
   private copyOpsManager: CopyOpsManager;
@@ -2733,7 +2739,17 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     this.filesystemPromise = undefined;
   };
 
-  resetProjectHostRuntime = () => {
+  resetProjectHostRuntime = (opts?: {
+    reason?: "host_session_changed";
+    recovery_id?: string;
+  }) => {
+    if (opts?.reason != null) {
+      this.publishRuntimeRecoveryNotice({
+        id: opts.recovery_id ?? misc.uuid(),
+        reason: opts.reason,
+        occurred_at: Date.now(),
+      });
+    }
     this.clearFilesystemClient();
     disconnect_from_project(this.project_id);
     this.projectStatusSub?.close();
@@ -2763,6 +2779,75 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     if (this.initialized) {
       this.initProjectStatus();
     }
+  };
+
+  dismissRuntimeRecoveryNotice = () => {
+    this.setState({ runtime_recovery_notice: undefined });
+  };
+
+  noteProjectRuntimeChanged = ({ recovery_id }: { recovery_id: string }) => {
+    this.publishRuntimeRecoveryNotice({
+      id: recovery_id,
+      reason: "project_runtime_changed",
+      occurred_at: Date.now(),
+    });
+  };
+
+  private projectStatusNeedsRuntimeReconnect = false;
+  private runtimeLossRecoveryInFlight?: Promise<void>;
+
+  noteProjectRuntimeLost = ({
+    runtime_exit_reason,
+  }: {
+    runtime_exit_reason?: string;
+  } = {}) => {
+    console.info(
+      `[project-runtime-recovery] recovery invoked ${JSON.stringify({
+        project_id: this.project_id,
+        runtime_exit_reason,
+        recovery_already_in_flight: this.runtimeLossRecoveryInFlight != null,
+      })}`,
+    );
+    this.projectStatusNeedsRuntimeReconnect = true;
+    this.projectRuntimeTracker.reset();
+    this.projectStatusSub?.close();
+    delete this.projectStatusSub;
+    this.publishRuntimeRecoveryNotice({
+      id: `${this.project_id}:runtime-lost:${Date.now()}`,
+      reason: "project_runtime_lost",
+      occurred_at: Date.now(),
+      runtime_exit_reason,
+    });
+    if (this.runtimeLossRecoveryInFlight != null) {
+      return;
+    }
+    this.runtimeLossRecoveryInFlight = Promise.resolve(
+      (this.redux.getActions("projects") as any)?.start_project?.(
+        this.project_id,
+        { autostart: true },
+      ),
+    )
+      .catch((err) => {
+        this.setState({
+          control_error: `The project runtime stopped unexpectedly and could not be restarted: ${err}`,
+        });
+      })
+      .finally(() => {
+        this.runtimeLossRecoveryInFlight = undefined;
+      });
+  };
+
+  resumeProjectStatusAfterRuntimeLoss = () => {
+    if (!this.projectStatusNeedsRuntimeReconnect || !this.initialized) {
+      return;
+    }
+    this.projectStatusNeedsRuntimeReconnect = false;
+    void this.initProjectStatus();
+  };
+
+  private publishRuntimeRecoveryNotice = (notice: RuntimeRecoveryNotice) => {
+    this.setState({ runtime_recovery_notice: notice });
+    this.get_store()?.emit(PROJECT_RUNTIME_RECOVERY_EVENT, notice);
   };
 
   private recoverOpenFileRuntimeInFlight = new globalThis.Map<
@@ -3611,10 +3696,11 @@ export class ProjectActions extends Actions<ProjectStoreState> {
         project_id: this.project_id,
         caller: "ProjectActions.initProjectStatus",
       });
-      this.projectStatusSub = await getProjectStatus({
+      const subscription = await getProjectStatus({
         client,
         project_id: this.project_id,
       });
+      this.projectStatusSub = subscription;
       this.collaboratorRealtimeRetryCount = 0;
       this.clearCollaboratorRealtimeRetry();
     } catch (err) {
@@ -3628,8 +3714,18 @@ export class ProjectActions extends Actions<ProjectStoreState> {
       console.warn(`unable to subscribe to project status updates: `, err);
       return;
     }
-    for await (const mesg of this.projectStatusSub) {
+    const subscription = this.projectStatusSub;
+    for await (const mesg of subscription) {
+      if (this.projectStatusSub !== subscription) {
+        break;
+      }
       const status = mesg.data;
+      const changedRuntimeId = this.projectRuntimeTracker.observe(status);
+      if (changedRuntimeId != null) {
+        this.noteProjectRuntimeChanged({
+          recovery_id: `${this.project_id}:${changedRuntimeId}`,
+        });
+      }
       this.setState({ status });
     }
   };

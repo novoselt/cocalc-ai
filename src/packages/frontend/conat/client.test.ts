@@ -4024,6 +4024,7 @@ describe("ConatClient routed project-host reconnect", () => {
         return hostInfo.get("host-1");
       },
     );
+    const resetProjectHostRuntime = jest.fn();
 
     jest.resetModules();
 
@@ -4044,6 +4045,7 @@ describe("ConatClient routed project-host reconnect", () => {
         getActions: jest.fn(() => ({
           ensure_host_info: ensureHostInfo,
         })),
+        getProjectActions: jest.fn(() => ({ resetProjectHostRuntime })),
       },
     }));
 
@@ -4152,6 +4154,10 @@ describe("ConatClient routed project-host reconnect", () => {
     expect(ensureHostInfo).toHaveBeenCalledWith("host-1", true);
     expect(close1).not.toHaveBeenCalled();
     expect(client.routedHubClients["host-1"].host_session_id).toBe("session-2");
+    expect(resetProjectHostRuntime).toHaveBeenCalledWith({
+      reason: "host_session_changed",
+      recovery_id: "host-1:session-2",
+    });
     jest.advanceTimersByTime(50);
     expect(reconnectSpy).not.toHaveBeenCalled();
     expect(client.routedHubClients["host-1"].client).toBe(routedClient1);

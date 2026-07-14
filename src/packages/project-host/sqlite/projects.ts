@@ -91,6 +91,7 @@ export interface ProjectRow {
   title?: string;
   state?: string;
   state_reported?: boolean;
+  runtime_exit_reason?: string | null;
   image?: string;
   disk?: number;
   scratch?: number;
@@ -122,6 +123,7 @@ function ensureProjectsTable() {
       title TEXT,
       state TEXT,
       state_reported INTEGER,
+      runtime_exit_reason TEXT,
       image TEXT,
       disk INTEGER,
       scratch INTEGER,
@@ -143,6 +145,9 @@ function ensureProjectsTable() {
   } catch (err) {
     // ignore - column already exists
   }
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN runtime_exit_reason TEXT");
+  } catch {}
   try {
     db.exec("ALTER TABLE projects ADD COLUMN http_port INTEGER");
   } catch {}
@@ -182,7 +187,7 @@ export function upsertProject(row: ProjectRow) {
   const existingProjectsRow =
     db
       .prepare(
-        "SELECT state, state_reported, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names FROM projects WHERE project_id=?",
+        "SELECT state, state_reported, runtime_exit_reason, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names FROM projects WHERE project_id=?",
       )
       .get(row.project_id) || {};
   const existing = getRow("projects", pk) || {};
@@ -191,6 +196,15 @@ export function upsertProject(row: ProjectRow) {
   const existingState: string | null =
     row.state ?? existingProjectsRow.state ?? existing.state?.state ?? null;
   const state = existingState;
+  const hasRuntimeExitReason = Object.prototype.hasOwnProperty.call(
+    row,
+    "runtime_exit_reason",
+  );
+  const runtime_exit_reason = hasRuntimeExitReason
+    ? (row.runtime_exit_reason ?? null)
+    : row.state !== undefined
+      ? null
+      : (existingProjectsRow.runtime_exit_reason ?? null);
   const image = row.image ?? (existing as any).image ?? null;
   const incomingRunQuota = parseRunQuota(row.run_quota);
   const existingRunQuota = parseRunQuota(
@@ -260,7 +274,9 @@ export function upsertProject(row: ProjectRow) {
     state_reported = row.state_reported ? 1 : 0;
   }
   const stateChanged =
-    row.state !== undefined && row.state !== existingProjectsRow.state;
+    (row.state !== undefined && row.state !== existingProjectsRow.state) ||
+    (hasRuntimeExitReason &&
+      runtime_exit_reason !== existingProjectsRow.runtime_exit_reason);
   if (state_reported === undefined) {
     if (stateChanged) {
       state_reported = 0;
@@ -272,12 +288,13 @@ export function upsertProject(row: ProjectRow) {
   }
 
   const stmt = db.prepare(`
-    INSERT INTO projects(project_id, title, state, state_reported, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO projects(project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project_id) DO UPDATE SET
       title=excluded.title,
       state=excluded.state,
       state_reported=excluded.state_reported,
+      runtime_exit_reason=excluded.runtime_exit_reason,
       image=excluded.image,
       disk=excluded.disk,
       scratch=excluded.scratch,
@@ -297,6 +314,7 @@ export function upsertProject(row: ProjectRow) {
     title,
     state,
     state_reported,
+    runtime_exit_reason,
     image,
     disk,
     scratch,
@@ -317,7 +335,12 @@ export function upsertProject(row: ProjectRow) {
     ...existing,
     project_id: row.project_id,
     title: title ?? row.project_id,
-    state: state ? { state } : existing.state,
+    state: state
+      ? {
+          state,
+          ...(runtime_exit_reason ? { runtime_exit_reason } : {}),
+        }
+      : existing.state,
     disk_quota: disk ?? existing.disk_quota,
     scratch: scratch ?? existing.scratch,
     last_edited: updated_at,
@@ -340,7 +363,7 @@ export function listProjects(): ProjectRow[] {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, title, state, state_reported, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, run_quota, secret_names FROM projects",
+    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, run_quota, secret_names FROM projects",
   );
   return stmt.all().map((row: any) => ({
     ...row,
@@ -353,7 +376,7 @@ export function getProject(project_id: string): ProjectRow | undefined {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, title, state, state_reported, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names FROM projects WHERE project_id=?",
+    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names FROM projects WHERE project_id=?",
   );
   const row = stmt.get(project_id) as any;
   if (!row) {
@@ -400,22 +423,35 @@ export function listUnreportedProjects(): ProjectRow[] {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, state FROM projects WHERE state_reported = 0",
+    "SELECT project_id, state, runtime_exit_reason FROM projects WHERE state_reported = 0",
   );
-  return stmt.all() as ProjectRow[];
+  return stmt.all().map((row: any) => ({
+    project_id: row.project_id,
+    state: row.state,
+    ...(row.runtime_exit_reason
+      ? { runtime_exit_reason: row.runtime_exit_reason }
+      : {}),
+  })) as ProjectRow[];
 }
 
 export function markProjectStateReported(
   project_id: string,
   expected_state: string,
+  expected_runtime_exit_reason?: string,
 ): boolean {
   ensureProjectsTable();
   const db = getDatabase();
   const current = db
-    .prepare("SELECT state FROM projects WHERE project_id=?")
-    .get(project_id) as { state?: string | null } | undefined;
+    .prepare(
+      "SELECT state, runtime_exit_reason FROM projects WHERE project_id=?",
+    )
+    .get(project_id) as
+    | { state?: string | null; runtime_exit_reason?: string | null }
+    | undefined;
   if (!current) return false;
-  const matched = current.state === expected_state;
+  const matched =
+    current.state === expected_state &&
+    (current.runtime_exit_reason ?? undefined) === expected_runtime_exit_reason;
   db.prepare("UPDATE projects SET state_reported=? WHERE project_id=?").run(
     matched ? 1 : 0,
     project_id,

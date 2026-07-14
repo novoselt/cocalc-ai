@@ -39,6 +39,7 @@ import { version as smcVersion } from "@cocalc/util/smc-version";
 import { ProjectInfo } from "@cocalc/util/types/project-info/types";
 import { get_ProjectInfoServer, ProjectInfoServer } from "../project-info";
 import { getIdentity } from "@cocalc/project/conat/connection";
+import { session_id } from "@cocalc/project/consts";
 
 // TODO: only return the "next" value, if it is significantly different from "prev"
 //function threshold(prev?: number, next?: number): number | undefined {
@@ -322,7 +323,12 @@ export class ProjectStatusServer extends EventEmitter {
           mem_tot: this.mem_tot,
         };
 
-    this.status = { alerts, usage, version: smcVersion };
+    this.status = {
+      alerts,
+      usage,
+      version: smcVersion,
+      runtime_id: session_id,
+    };
   }
 
   private async get_status(): Promise<ProjectStatus | undefined> {

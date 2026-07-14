@@ -4,7 +4,11 @@ import { argsJoin } from "@cocalc/util/args";
 import { localPath } from "./filesystem";
 import { getImageNamePath, mount as mountRootFs, unmount } from "./rootfs";
 import { readFile } from "fs/promises";
-import { networkArgument, podmanRuntimeArgs } from "./podman";
+import {
+  networkArgument,
+  podmanRuntimeArgs,
+  projectPoolPodmanLauncher,
+} from "./podman";
 import { mountArg } from "@cocalc/backend/podman";
 import { podmanEnv } from "@cocalc/backend/podman/env";
 import { getEnvironment } from "./env";
@@ -101,11 +105,14 @@ export async function sandboxExec({
     }
   };
 
-  const runPodman = async (args: string[]): Promise<SandboxExecResult> => {
+  const runPodman = async (
+    args: string[],
+    launcher?: ReturnType<typeof projectPoolPodmanLauncher>,
+  ): Promise<SandboxExecResult> => {
     return await new Promise((resolve) => {
       execFile(
-        "podman",
-        args,
+        launcher?.command ?? "podman",
+        launcher ? [...launcher.argsPrefix, ...args] : args,
         {
           timeout: timeoutMs,
           maxBuffer: Math.max(1024, maxOutputBytes ?? 10 * 1024 * 1024),
@@ -143,7 +150,13 @@ export async function sandboxExec({
       });
 
       // Build a one-off container run.
-      args.push("run", ...(await podmanRuntimeArgs()), "--rm", "-i");
+      args.push(
+        "run",
+        ...(await podmanRuntimeArgs()),
+        "--cgroups=disabled",
+        "--rm",
+        "-i",
+      );
       // Match the main project runtime so sudo and setuid helpers behave the
       // same way in ephemeral sidecars.
       args.push(
@@ -202,7 +215,9 @@ export async function sandboxExec({
     }
 
     logger.debug("podman", argsJoin(args));
-    return await runPodman(args);
+    // With Podman cgroups disabled, exec processes inherit the caller's
+    // cgroup. Admit both run and exec launchers so no project command escapes.
+    return await runPodman(args, projectPoolPodmanLauncher(project_id));
   } finally {
     if (rootfs) {
       // Decrement overlay mount refcount; actual unmount happens only when

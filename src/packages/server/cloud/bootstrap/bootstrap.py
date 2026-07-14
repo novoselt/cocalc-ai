@@ -41,8 +41,8 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260714-v5"
-RUNTIME_WRAPPER_VERSION = "20260711-v12"
+HELPER_SCHEMA_VERSION = "20260714-v6"
+RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
 BUNDLE_RETENTION_COUNT = 3
@@ -2160,6 +2160,8 @@ STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"
 STORAGE_CGROUP_CPU_MAX="100000 100000"
 STORAGE_CGROUP_CPU_WEIGHT="1"
 STORAGE_CGROUP_IO_WEIGHT="1"
+PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
+PROJECT_PROCESS_OOM_SCORE_ADJ="500"
 
 deny() {
   local code="$1"
@@ -2170,6 +2172,56 @@ deny() {
 
 is_project_uuid() {
   echo "$1" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+}
+
+require_live_pid() {
+  local pid="$1"
+  if ! echo "$pid" | grep -Eq '^[0-9]+$' || [ "$pid" -le 1 ] || ! kill -0 "$pid" 2>/dev/null; then
+    deny "project-pid-invalid" "$pid"
+  fi
+}
+
+require_runtime_owned_pid() {
+  local pid="$1" expected_uid="${SUDO_UID:-}" actual_uid
+  require_live_pid "$pid"
+  if ! echo "$expected_uid" | grep -Eq '^[0-9]+$' || [ "$expected_uid" -eq 0 ]; then
+    deny "project-runtime-uid-invalid" "${expected_uid:-missing}"
+  fi
+  actual_uid="$(awk '/^Uid:/ {print $2}' "/proc/${pid}/status" 2>/dev/null || true)"
+  if [ "$actual_uid" != "$expected_uid" ]; then
+    deny "project-pid-owner-mismatch" "pid=${pid},expected=${expected_uid},actual=${actual_uid:-missing}"
+  fi
+}
+
+project_pool_relative_path() {
+  printf '%s\n' "${PROJECT_POOL_CGROUP_DEFAULT#/sys/fs/cgroup}"
+}
+
+verify_project_pid_in_pool() {
+  local pid="$1" actual expected
+  actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
+  expected="$(project_pool_relative_path)"
+  if [ "$actual" != "$expected" ]; then
+    echo "project cgroup verification failed: pid=${pid} expected=${expected} actual=${actual:-missing}" >&2
+    return 1
+  fi
+}
+
+attach_project_launcher_to_pool() {
+  local pid="$1" max_value
+  require_runtime_owned_pid "$pid"
+  if [ ! -d "$PROJECT_POOL_CGROUP_DEFAULT" ]; then
+    echo "project pool is not configured: ${PROJECT_POOL_CGROUP_DEFAULT}" >&2
+    return 1
+  fi
+  max_value="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)"
+  if ! echo "$max_value" | grep -Eq '^[0-9]+$'; then
+    echo "project pool has no finite memory.max: ${max_value:-missing}" >&2
+    return 1
+  fi
+  printf '%s\n' "$pid" > "${PROJECT_POOL_CGROUP_DEFAULT}/cgroup.procs"
+  printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${pid}/oom_score_adj"
+  verify_project_pid_in_pool "$pid"
 }
 
 project_storage_cgroup() {
@@ -2369,10 +2421,20 @@ case "$cmd" in
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
-    # Compatibility for pinned project bundles deployed during the hierarchical
-    # cgroup experiment. The host root controller now enforces the known-stable
-    # flat aggregate pool, while Podman enforces per-container limits.
-    exit 0
+    # Preserve the historical argument contract for pinned project bundles,
+    # but only use it to admit the launcher into the flat aggregate pool.
+    # Descendants inherit both containment and the project OOM policy.
+    attach_project_launcher_to_pool "$launcher_pid"
+    ;;
+  verify-project-pool)
+    if [ "$#" -ne 2 ] || ! is_project_uuid "$1"; then
+      echo "usage: cocalc-runtime-storage verify-project-pool <project-id> <pid>" >&2
+      exit 2
+    fi
+    # Container init uses a subordinate UID under rootless keep-id. This is a
+    # read-only containment check, so only require a live PID here.
+    require_live_pid "$2"
+    verify_project_pid_in_pool "$2"
     ;;
   attach-project-cgroup)
     if [ "$#" -ne 11 ]; then
@@ -4350,6 +4412,7 @@ RUNTIME_BIN="$RUNTIME_ROOT/bin/project-host"
 PID_FILE="/mnt/cocalc/data/daemon.pid"
 HOST_AGENT_PID_FILE="/mnt/cocalc/data/host-agent.pid"
 OOM_ADJ="${COCALC_PROJECT_HOST_OOM_SCORE_ADJ:__OOM_ADJ_LITERAL__}"
+PROJECT_OOM_ADJ="500"
 ENV_FILE="/etc/cocalc/project-host.env"
 LOCAL_ENV_FILE="/etc/cocalc/project-host.local.env"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
@@ -4798,6 +4861,7 @@ attach_pid_to_project_pool() {
     fi
     return 1
   fi
+  printf '%s\n' "${PROJECT_OOM_ADJ}" > "/proc/${pid}/oom_score_adj" 2>/dev/null || true
 }
 
 attach_pid_tree_to_project_pool() {
@@ -4805,11 +4869,6 @@ attach_pid_tree_to_project_pool() {
   if [ -z "${root_pid}" ] || ! kill -0 "${root_pid}" 2>/dev/null; then
     return 0
   fi
-  case "/sys/fs/cgroup$(awk -F: '$1 == "0" {print $3}' "/proc/${root_pid}/cgroup" 2>/dev/null || true)" in
-    "$(project_pool_cgroup)")
-      return 0
-      ;;
-  esac
   pending="${root_pid}"
   while [ -n "${pending}" ]; do
     pid="${pending%% *}"

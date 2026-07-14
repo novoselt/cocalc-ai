@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { closeDatabase } from "@cocalc/lite/hub/sqlite/database";
 import { reconcileOnce, resetReconcileStateForTests } from "./reconcile";
+import { setProjectStateReporter } from "./project-state-reporter";
 import { getProject, upsertProject } from "./sqlite/projects";
 
 const mockSpawn = jest.fn();
@@ -128,6 +129,7 @@ describe("reconcileOnce", () => {
     closeDatabase();
     resetReconcileStateForTests();
     mockPodmanPs();
+    setProjectStateReporter(jest.fn(async () => undefined));
   });
 
   afterEach(() => {
@@ -161,6 +163,7 @@ describe("reconcileOnce", () => {
     expect(getProject(project_id)).toMatchObject({
       project_id,
       state: "opened",
+      runtime_exit_reason: "container_missing",
       http_port: null,
       ssh_port: null,
     });
@@ -188,6 +191,7 @@ describe("reconcileOnce", () => {
     expect(getProject(project_id)).toMatchObject({
       project_id,
       state: "opened",
+      runtime_exit_reason: "container_missing",
       http_port: null,
       ssh_port: null,
     });

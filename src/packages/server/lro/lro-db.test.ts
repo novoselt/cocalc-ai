@@ -78,6 +78,91 @@ describe("expireDueLros", () => {
   });
 });
 
+describe("createLroDetailed", () => {
+  beforeEach(() => {
+    jest.resetModules();
+    queryMock = jest.fn(async () => ({ rows: [] }));
+  });
+
+  it("serializes deduplicated creation and reports a reused operation", async () => {
+    const existing = {
+      op_id: "11111111-1111-4111-8111-111111111111",
+      kind: "project-start",
+      scope_type: "project",
+      scope_id: "22222222-2222-4222-8222-222222222222",
+      status: "running",
+    };
+    connectQueryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("pg_try_advisory_lock")) {
+        return { rows: [{ acquired: false }] };
+      }
+      if (sql.includes("SELECT *") && sql.includes("dedupe_key=$3")) {
+        return { rows: [existing] };
+      }
+      return { rows: [] };
+    });
+    const { createLroDetailed } = await import("./lro-db");
+
+    await expect(
+      createLroDetailed({
+        kind: "project-start",
+        scope_type: "project",
+        scope_id: existing.scope_id,
+        dedupe_key: "project-start:start:default",
+      }),
+    ).resolves.toEqual({ lro: existing, created: false });
+
+    const sql = connectQueryMock.mock.calls.map(
+      ([statement]) => `${statement}`,
+    );
+    expect(sql).toContain("BEGIN");
+    expect(
+      sql.some((statement) => statement.includes("pg_advisory_xact_lock")),
+    ).toBe(true);
+    expect(sql).toContain("COMMIT");
+    expect(sql.some((statement) => statement.includes("INSERT INTO"))).toBe(
+      false,
+    );
+  });
+
+  it("creates exactly one operation while holding the dedupe lock", async () => {
+    const created = {
+      op_id: "11111111-1111-4111-8111-111111111111",
+      kind: "project-start",
+      scope_type: "project",
+      scope_id: "22222222-2222-4222-8222-222222222222",
+      status: "queued",
+    };
+    connectQueryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("pg_try_advisory_lock")) {
+        return { rows: [{ acquired: false }] };
+      }
+      if (sql.includes("INSERT INTO")) {
+        return { rows: [created] };
+      }
+      return { rows: [] };
+    });
+    const { createLroDetailed } = await import("./lro-db");
+
+    await expect(
+      createLroDetailed({
+        kind: "project-start",
+        scope_type: "project",
+        scope_id: created.scope_id,
+        dedupe_key: "project-start:start:default",
+      }),
+    ).resolves.toEqual({ lro: created, created: true });
+
+    const sql = connectQueryMock.mock.calls.map(
+      ([statement]) => `${statement}`,
+    );
+    expect(sql.indexOf("BEGIN")).toBeLessThan(
+      sql.findIndex((statement) => statement.includes("INSERT INTO")),
+    );
+    expect(sql).toContain("COMMIT");
+  });
+});
+
 describe("claimLroOps", () => {
   beforeEach(() => {
     jest.resetModules();

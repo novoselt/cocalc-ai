@@ -41,6 +41,9 @@ export type AlertType = Alert["type"];
 
 export interface ProjectStatus {
   version: number;
+  // Identifies the project daemon process that produced this status. A change
+  // means container-backed sessions from the previous runtime are gone.
+  runtime_id?: string;
   alerts: Alert[];
   usage: {
     disk_mb?: number;

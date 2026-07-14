@@ -211,6 +211,10 @@ export function accountFeedStreamName(): string {
   return "account-feed";
 }
 
+export function accountFeedLiveSubject(account_id: string): string {
+  return `account.${account_id}.account-feed-live`;
+}
+
 export const ACCOUNT_FEED_STREAM_CONFIG: Partial<Configuration> = {
   max_msgs: 1000,
   max_age: 15 * 60 * 1000,

@@ -286,9 +286,27 @@ export async function initHostStatusService() {
           await client.query("BEGIN");
           const result = await client.query(
             `UPDATE projects
-                SET state=$2::jsonb
+                SET state=$2::jsonb || jsonb_strip_nulls(jsonb_build_object(
+                  'runtime_generation',
+                  CASE
+                    WHEN state->>'runtime_generation' ~ '^[0-9]+$'
+                      THEN (state->>'runtime_generation')::bigint
+                    ELSE NULL
+                  END,
+                  'started_at', state->>'started_at'
+                ))
               WHERE project_id=$1
-                AND state IS DISTINCT FROM $2::jsonb`,
+                AND state IS DISTINCT FROM (
+                  $2::jsonb || jsonb_strip_nulls(jsonb_build_object(
+                    'runtime_generation',
+                    CASE
+                      WHEN state->>'runtime_generation' ~ '^[0-9]+$'
+                        THEN (state->>'runtime_generation')::bigint
+                      ELSE NULL
+                    END,
+                    'started_at', state->>'started_at'
+                  ))
+                )`,
             [project_id, stateObj],
           );
           if ((result.rowCount ?? 0) > 0) {
