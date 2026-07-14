@@ -1156,7 +1156,7 @@ function recordDaemonEvent(
   }
 }
 
-function observeProjectHostChild(
+function observeProjectHostSpawn(
   dataDir: string,
   child: childProcess.ChildProcess,
   selectedVersion?: string,
@@ -1174,22 +1174,6 @@ function observeProjectHostChild(
       metadata: {
         error_name: err.name,
         error_message: err.message,
-      },
-    });
-  });
-  child.once("exit", (code, signal) => {
-    const outcome = signal
-      ? `signal ${signal}`
-      : `exit code ${code ?? "unknown"}`;
-    recordDaemonEvent(dataDir, {
-      component: "project-host",
-      action: "process_exit",
-      message: `project-host child exited with ${outcome}`,
-      pid: child.pid,
-      selected_version: selectedVersion,
-      metadata: {
-        exit_code: code,
-        signal,
       },
     });
   });
@@ -1581,6 +1565,26 @@ function resolveExec(root: string): { command: string; args: string[] } {
     }
   }
   return { command, args };
+}
+
+function resolveSupervisedProjectHostExec({
+  root,
+  command,
+  args,
+}: {
+  root: string;
+  command: string;
+  args: string[];
+}): { command: string; args: string[]; supervised: boolean } {
+  const supervisor = path.join(root, "supervisor", "index.js");
+  if (!fs.existsSync(supervisor)) {
+    return { command, args, supervised: false };
+  }
+  return {
+    command: process.execPath,
+    args: [supervisor],
+    supervised: true,
+  };
 }
 
 function withoutHostAgentEnv(
@@ -2423,7 +2427,11 @@ export function startDaemon(index = 0): void {
   ensurePodmanHealthy(env);
   const root = projectHostRuntimeRoot(env);
   const selectedVersion = selectedProjectHostVersion(env);
-  const { command, args } = resolveExec(root);
+  const appExec = resolveExec(root);
+  const { command, args, supervised } = resolveSupervisedProjectHostExec({
+    root,
+    ...appExec,
+  });
   const childEnv = withoutHostAgentEnv(env);
   const child = processRuntime.spawn(command, args, {
     cwd: root,
@@ -2436,12 +2444,24 @@ export function startDaemon(index = 0): void {
             COCALC_PROJECT_HOST_PUBLIC_HTTP_PORT: String(httpPort),
           }
         : {}),
+      ...(supervised
+        ? {
+            COCALC_PROJECT_HOST_SUPERVISED_COMMAND: appExec.command,
+            COCALC_PROJECT_HOST_SUPERVISED_ARGS: JSON.stringify(appExec.args),
+            COCALC_PROJECT_HOST_SUPERVISED_CWD: root,
+            COCALC_PROJECT_HOST_SUPERVISED_VERSION: selectedVersion ?? "",
+            COCALC_PROJECT_HOST_APP_PID_PATH: path.join(
+              dataDir,
+              "project-host-app.pid",
+            ),
+          }
+        : {}),
     },
     argv0: getProjectHostProcessTitle({ env: childEnv }),
     detached: true,
     stdio: ["ignore", stdout, stderr],
   });
-  observeProjectHostChild(dataDir, child, selectedVersion);
+  observeProjectHostSpawn(dataDir, child, selectedVersion);
   child.unref();
   fs.writeFileSync(pidPath, String(child.pid));
   try {
@@ -3040,6 +3060,7 @@ export const __test__ = {
   matchingSshpiperdPids,
   parsePort,
   processRuntime,
+  resolveSupervisedProjectHostExec,
   resetHealthFailureStreaks: () => healthFailureStreaks.clear(),
   resolveEnv,
   rootctlPath,

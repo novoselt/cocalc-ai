@@ -49,13 +49,20 @@ function snapshot(nowMs = Date.now()): ProjectHostActivitySnapshot {
     }
   }
   return {
-    pid: process.pid,
+    pid: activityOwnerPid(),
     active_operations: activeOperations.size,
     active_starts: activeStarts,
     active_stops: activeStops,
     last_activity_ms: lastActivityMs || nowMs,
     updated_at: new Date(nowMs).toISOString(),
   };
+}
+
+function activityOwnerPid(): number {
+  const supervisorPid = Number(process.env.COCALC_PROJECT_HOST_SUPERVISOR_PID);
+  return Number.isInteger(supervisorPid) && supervisorPid > 0
+    ? supervisorPid
+    : process.pid;
 }
 
 function writeSnapshot(opts?: { force?: boolean }): void {

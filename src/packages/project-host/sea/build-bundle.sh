@@ -136,6 +136,11 @@ ncc build packages/project-host/dist/main.js \
   --external bufferutil \
   --external utf-8-validate
 
+echo "- Bundle persistent app supervisor"
+ncc build packages/project-host/dist/app-supervisor.js \
+  -o "$OUT"/supervisor \
+  --source-map
+
 echo "- Copy compiled project-host dist/"
 if [ -d "packages/project-host/dist" ]; then
   mkdir -p "$OUT"/dist

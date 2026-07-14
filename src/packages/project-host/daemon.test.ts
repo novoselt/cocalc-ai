@@ -103,7 +103,7 @@ describe("project-host daemon stop", () => {
     ).toHaveLength(2);
   });
 
-  it("records the project-host child exit code and signal", () => {
+  it("records an immediate project-host spawn failure", () => {
     const dataDir = mkTempDir("cocalc-project-host-daemon-");
     process.env.COCALC_DATA = dataDir;
     process.env.PORT = "9002";
@@ -118,7 +118,7 @@ describe("project-host daemon stop", () => {
     mockSpawn().mockReturnValue(child as any);
 
     startDaemon(0);
-    child.emit("exit", null, "SIGSEGV");
+    child.emit("error", new Error("spawn failed"));
 
     const events = fs
       .readFileSync(path.join(dataDir, "supervision-events.jsonl"), "utf8")
@@ -127,12 +127,30 @@ describe("project-host daemon stop", () => {
       .map((line) => JSON.parse(line));
     expect(events.at(-1)).toMatchObject({
       component: "project-host",
-      action: "process_exit",
+      action: "spawn_failed",
       pid: 4646,
       metadata: {
-        exit_code: null,
-        signal: "SIGSEGV",
+        error_name: "Error",
+        error_message: "spawn failed",
       },
+    });
+  });
+
+  it("uses the persistent app supervisor when the bundle provides it", () => {
+    const root = mkTempDir("cocalc-project-host-bundle-");
+    fs.mkdirSync(path.join(root, "supervisor"));
+    fs.writeFileSync(path.join(root, "supervisor", "index.js"), "");
+
+    expect(
+      __test__.resolveSupervisedProjectHostExec({
+        root,
+        command: "/usr/bin/node",
+        args: [path.join(root, "main", "index.js")],
+      }),
+    ).toEqual({
+      command: process.execPath,
+      args: [path.join(root, "supervisor", "index.js")],
+      supervised: true,
     });
   });
 
