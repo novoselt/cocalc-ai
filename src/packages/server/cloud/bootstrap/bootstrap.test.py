@@ -472,6 +472,88 @@ class BootstrapInotifyLimitsTest(unittest.TestCase):
             )
 
 
+class BootstrapJournaldLimitsTest(unittest.TestCase):
+    def test_unchanged_limits_do_not_restart_or_vacuum_journald(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            dropin_dir = Path(tmpdir) / "journald.conf.d"
+            dropin_dir.mkdir()
+            (dropin_dir / "90-cocalc-root-disk.conf").write_text(
+                "[Journal]\nSystemMaxUse=200M\nRuntimeMaxUse=100M\n",
+                encoding="utf-8",
+            )
+            calls = []
+            original_run_best_effort = bootstrap.run_best_effort
+            original_which = bootstrap.shutil.which
+            try:
+                bootstrap.run_best_effort = lambda *args, **kwargs: calls.append(
+                    (args, kwargs)
+                )
+                bootstrap.shutil.which = lambda _name: "/usr/bin/systemctl"
+                bootstrap.configure_journald_limits(
+                    cfg,
+                    dropin_dir=dropin_dir,
+                )
+            finally:
+                bootstrap.run_best_effort = original_run_best_effort
+                bootstrap.shutil.which = original_which
+
+            self.assertEqual(calls, [])
+
+    def test_changed_limits_use_nonblocking_bounded_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            dropin_dir = Path(tmpdir) / "journald.conf.d"
+            calls = []
+            original_run_best_effort = bootstrap.run_best_effort
+            original_which = bootstrap.shutil.which
+            try:
+                bootstrap.run_best_effort = lambda *args, **kwargs: calls.append(
+                    (args, kwargs)
+                )
+                bootstrap.shutil.which = lambda _name: "/usr/bin/tool"
+                bootstrap.configure_journald_limits(
+                    cfg,
+                    dropin_dir=dropin_dir,
+                )
+            finally:
+                bootstrap.run_best_effort = original_run_best_effort
+                bootstrap.shutil.which = original_which
+
+            self.assertEqual(
+                (dropin_dir / "90-cocalc-root-disk.conf").read_text(
+                    encoding="utf-8"
+                ),
+                "[Journal]\nSystemMaxUse=200M\nRuntimeMaxUse=100M\n",
+            )
+            self.assertEqual(
+                calls,
+                [
+                    (
+                        (
+                            cfg,
+                            [
+                                "systemctl",
+                                "restart",
+                                "--no-block",
+                                "systemd-journald",
+                            ],
+                            "queue systemd-journald restart",
+                        ),
+                        {"timeout": 15},
+                    ),
+                    (
+                        (
+                            cfg,
+                            ["journalctl", "--vacuum-size=200M"],
+                            "vacuum systemd journal",
+                        ),
+                        {"timeout": 60},
+                    ),
+                ],
+            )
+
+
 class BootstrapSubidAllocationTest(unittest.TestCase):
     def test_rewrites_user_subid_ranges_to_the_exact_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

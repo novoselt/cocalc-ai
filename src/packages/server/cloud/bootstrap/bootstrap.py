@@ -1006,9 +1006,15 @@ def run_cmd(
     return result
 
 
-def run_best_effort(cfg: BootstrapConfig, args: list[str], desc: str) -> None:
+def run_best_effort(
+    cfg: BootstrapConfig,
+    args: list[str],
+    desc: str,
+    *,
+    timeout: int | None = None,
+) -> None:
     try:
-        run_cmd(cfg, args, desc, check=False)
+        run_cmd(cfg, args, desc, check=False, timeout=timeout)
     except Exception as exc:
         log_line(cfg, f"bootstrap: {desc} failed (ignored): {exc}")
 
@@ -1199,26 +1205,37 @@ def configure_chrony(cfg: BootstrapConfig) -> None:
     run_best_effort(cfg, ["systemctl", "restart", "chrony"], "restart chrony")
 
 
-def configure_journald_limits(cfg: BootstrapConfig) -> None:
+def configure_journald_limits(
+    cfg: BootstrapConfig,
+    *,
+    dropin_dir: Path = Path("/etc/systemd/journald.conf.d"),
+) -> None:
     if shutil.which("systemctl") is None:
         return
     log_line(cfg, "bootstrap: configuring journald disk limits")
-    dropin_dir = Path("/etc/systemd/journald.conf.d")
     dropin_dir.mkdir(parents=True, exist_ok=True)
-    (dropin_dir / "90-cocalc-root-disk.conf").write_text(
-        "[Journal]\nSystemMaxUse=200M\nRuntimeMaxUse=100M\n",
-        encoding="utf-8",
-    )
+    dropin = dropin_dir / "90-cocalc-root-disk.conf"
+    content = "[Journal]\nSystemMaxUse=200M\nRuntimeMaxUse=100M\n"
+    try:
+        changed = dropin.read_text(encoding="utf-8") != content
+    except OSError:
+        changed = True
+    if not changed:
+        log_line(cfg, "bootstrap: journald disk limits already current")
+        return
+    dropin.write_text(content, encoding="utf-8")
     run_best_effort(
         cfg,
-        ["systemctl", "restart", "systemd-journald"],
-        "restart systemd-journald",
+        ["systemctl", "restart", "--no-block", "systemd-journald"],
+        "queue systemd-journald restart",
+        timeout=15,
     )
     if shutil.which("journalctl") is not None:
         run_best_effort(
             cfg,
             ["journalctl", "--vacuum-size=200M"],
             "vacuum systemd journal",
+            timeout=60,
         )
 
 
