@@ -4552,6 +4552,44 @@ podman_runtime_dir() {
   fi
 }
 
+container_runtime_current() {
+  local value
+  value="$(read_env_value COCALC_CONTAINER_RUNTIME_CURRENT)"
+  if [ -z "${value}" ]; then
+    value="/opt/cocalc/container-runtime/current"
+  fi
+  if [ -x "${value}/bin/podman" ]; then
+    printf '%s\n' "${value}"
+  fi
+}
+
+run_podman_as_runtime() {
+  local timeout_value="$1" runtime_dir="$2" cgroup_manager="$3"
+  local container_runtime podman_bin
+  local -a timeout_args=()
+  shift 3
+  if [ "${timeout_value}" != "0" ]; then
+    timeout_args=(/usr/bin/timeout "${timeout_value}")
+  fi
+  container_runtime="$(container_runtime_current)"
+  if [ -n "${container_runtime}" ]; then
+    podman_bin="${container_runtime}/bin/podman"
+    "${timeout_args[@]}" sudo -n -u "${RUNTIME_USER}" -H env \
+      XDG_RUNTIME_DIR="${runtime_dir}" \
+      COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
+      CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
+      CONTAINERS_CONF_OVERRIDE="${container_runtime}/etc/containers/containers.conf" \
+      PATH="${container_runtime}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      "${podman_bin}" "$@"
+    return
+  fi
+  "${timeout_args[@]}" sudo -n -u "${RUNTIME_USER}" -H env \
+    XDG_RUNTIME_DIR="${runtime_dir}" \
+    COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
+    CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
+    podman "$@"
+}
+
 ensure_owned_runtime_dir() {
   local path="$1" uid gid
   uid="$(runtime_uid)"
@@ -4584,20 +4622,14 @@ repair_runtime_environment() {
 
 podman_info_once() {
   local runtime_dir="$1" cgroup_manager="$2"
-  sudo -n -u "${RUNTIME_USER}" -H env \
-    XDG_RUNTIME_DIR="${runtime_dir}" \
-    COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
-    CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-    podman info >/dev/null
+  run_podman_as_runtime 0 "${runtime_dir}" "${cgroup_manager}" \
+    info >/dev/null
 }
 
 podman_ps_once() {
   local runtime_dir="$1" cgroup_manager="$2"
-  /usr/bin/timeout 15s sudo -n -u "${RUNTIME_USER}" -H env \
-    XDG_RUNTIME_DIR="${runtime_dir}" \
-    COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
-    CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-    podman ps -a --format '{{.ID}}' >/dev/null
+  run_podman_as_runtime 15s "${runtime_dir}" "${cgroup_manager}" \
+    ps -a --format '{{.ID}}' >/dev/null
 }
 
 podman_runtime_namespace_error() {
@@ -4645,7 +4677,8 @@ cleanup_podman_runtime_state() {
 
 preflight_podman_runtime() {
   local runtime_dir cgroup_manager output status
-  if ! command -v podman >/dev/null 2>&1; then
+  if [ -z "$(container_runtime_current)" ] && \
+     ! command -v podman >/dev/null 2>&1; then
     echo "podman not found" >&2
     exit 1
   fi
@@ -4937,22 +4970,16 @@ attach_running_project_processes() {
   while IFS= read -r cid; do
     [ -n "${cid}" ] || continue
     line="$(
-      sudo -n -u "${RUNTIME_USER}" -H env \
-        XDG_RUNTIME_DIR="${runtime_dir}" \
-        COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
-        CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-        podman inspect --format '{{.State.Pid}} {{.State.ConmonPid}}' "${cid}" 2>/dev/null || true
+      run_podman_as_runtime 0 "${runtime_dir}" "${cgroup_manager}" \
+        inspect --format '{{.State.Pid}} {{.State.ConmonPid}}' "${cid}" 2>/dev/null || true
     )"
     project_pid="$(printf '%s\n' "${line}" | awk '{print $1}')"
     conmon_pid="$(printf '%s\n' "${line}" | awk '{print $2}')"
     attach_pid_tree_to_project_pool "${conmon_pid}" || true
     attach_pid_tree_to_project_pool "${project_pid}" || true
   done < <(
-    sudo -n -u "${RUNTIME_USER}" -H env \
-      XDG_RUNTIME_DIR="${runtime_dir}" \
-      COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
-      CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-      podman ps -q 2>/dev/null || true
+    run_podman_as_runtime 0 "${runtime_dir}" "${cgroup_manager}" \
+      ps -q 2>/dev/null || true
   )
 }
 

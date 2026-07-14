@@ -1604,7 +1604,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "podman info >/dev/null", rootctl.read_text(encoding="utf-8")
+                "run_podman_as_runtime()", rootctl.read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                'CONTAINERS_CONF_OVERRIDE="${container_runtime}/etc/containers/containers.conf"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'podman_bin="${container_runtime}/bin/podman"',
+                rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
                 "capture-forensics)",
