@@ -7,7 +7,10 @@ import { FAIR_CPU_MODE } from "@cocalc/util/upgrade-spec";
 import { getContainerSwapSizeMb } from "@cocalc/backend/podman/memory";
 
 const DEFAULT_MEMORY_RESERVATION_RATIO = 0.8;
-const DEFAULT_MEMORY_HIGH_RATIO = 0.9;
+// memory.high forces synchronous reclaim in the allocating process. For
+// interactive projects that can look like a frozen kernel for tens of seconds
+// before memory.max is reached, so leave it disabled unless explicitly tuned.
+const DEFAULT_MEMORY_HIGH_RATIO = 1;
 const MIN_MEMORY_PRESSURE_GAP_RATIO = 0.05;
 const CGROUP_CPU_PERIOD_US = 100_000;
 const DEFAULT_PROJECT_IO_WEIGHT = 100;

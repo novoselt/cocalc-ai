@@ -30,14 +30,13 @@ describe("podmanLimits memory pressure controls", () => {
     }
   });
 
-  it("adds default memory reservation and memory.high below the hard limit", async () => {
+  it("adds a default memory reservation without reclaim throttling", async () => {
     const { podmanLimits } = await import("./run/limits");
 
     await expect(podmanLimits({ memory: 1000 })).resolves.toEqual([
       "--cpu-shares=1024",
       "--memory=1000",
       "--memory-reservation=800",
-      "--cgroup-conf=memory.high=900",
     ]);
   });
 
@@ -75,7 +74,6 @@ describe("podmanLimits memory pressure controls", () => {
       "--cpu-shares=1024",
       "--memory=1000",
       "--memory-reservation=800",
-      "--cgroup-conf=memory.high=900",
       "--memory-swap=1200",
     ]);
   });
@@ -116,7 +114,7 @@ describe("podmanLimits memory pressure controls", () => {
 
     expect(projectCgroupLimitsFromPodmanArgs(args)).toEqual({
       memory_max: "1000",
-      memory_high: "900",
+      memory_high: "max",
       memory_low: "800",
       memory_swap_max: "200",
       pids_max: "4096",
