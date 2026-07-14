@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import getLogger from "@cocalc/backend/logger";
 import { getConmonContainerProcesses } from "@cocalc/backend/podman/conmon";
 import { podmanEnv } from "@cocalc/backend/podman/env";
 import { getGeneration } from "@cocalc/file-server/btrfs/subvolume-snapshots";
 import { DEFAULT_PROJECT_PROXY_PORT } from "@cocalc/project-runner/run/env";
+import { pidFilename, pidUpdateIntervalMs } from "@cocalc/util/project-info";
 import { listProjects, upsertProject } from "./sqlite/projects";
 import {
   markProjectLastChangedRunning,
@@ -16,10 +18,17 @@ import { reportProjectStateImmediately } from "./project-state-reporter";
 
 const DEFAULT_INTERVAL = 15_000;
 const DEFAULT_MISSING_CYCLES_BEFORE_OPENED = 2;
+const DEFAULT_STALE_HEARTBEAT_MS = pidUpdateIntervalMs * 2.5;
+const DEFAULT_STALE_HEARTBEAT_CYCLES = 3;
 const DEFAULT_PROJECT_PROXY_PORT_NUMBER = Number(DEFAULT_PROJECT_PROXY_PORT);
 
 const logger = getLogger("project-host:reconcile");
 const missingSince = new Map<string, number>();
+const staleHeartbeatCycles = new Map<string, number>();
+
+export interface ReconcileOptions {
+  recoverStaleRuntime?: (project_id: string) => Promise<string | undefined>;
+}
 
 interface ContainerState {
   project_id: string;
@@ -135,7 +144,51 @@ export async function getContainerStates(): Promise<ContainerProbeResult> {
   });
 }
 
-export async function reconcileOnce() {
+function projectHeartbeatAgeMs(
+  mountPoint: string,
+  project_id: string,
+  now: number,
+): number | undefined {
+  try {
+    const heartbeatPath = join(
+      mountPoint,
+      `project-${project_id}`,
+      ".cache",
+      "cocalc",
+      "project",
+      pidFilename,
+    );
+    const mtimeMs = statSync(heartbeatPath).mtimeMs;
+    return Number.isFinite(mtimeMs) ? Math.max(0, now - mtimeMs) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function reportRuntimeLost(project_id: string, now: number) {
+  upsertProject({
+    project_id,
+    state: "opened",
+    runtime_exit_reason: "container_missing",
+    http_port: null,
+    ssh_port: null,
+    updated_at: now,
+    last_seen: now,
+  });
+  void reportProjectStateImmediately(project_id, {
+    state: "opened",
+    time: new Date(now),
+    runtime_exit_reason: "container_missing",
+  }).catch((err) =>
+    logger.debug("immediate runtime-loss report failed", {
+      project_id,
+      err: `${err}`,
+    }),
+  );
+  resetProjectLastChangedRunning(project_id);
+}
+
+export async function reconcileOnce(options: ReconcileOptions = {}) {
   const now = Date.now();
   const knownProjects = listProjects();
   const knownIds = new Set(knownProjects.map((p) => p.project_id));
@@ -179,8 +232,53 @@ export async function reconcileOnce() {
     }
     upsertProject(row);
     if (info.state === "running") {
+      const base = resolveMountPoint();
+      const heartbeatAgeMs = base
+        ? projectHeartbeatAgeMs(base, info.project_id, now)
+        : undefined;
+      if (
+        heartbeatAgeMs != null &&
+        heartbeatAgeMs <= staleProjectHeartbeatMs()
+      ) {
+        staleHeartbeatCycles.delete(info.project_id);
+      } else if (options.recoverStaleRuntime != null && base != null) {
+        const cycles = (staleHeartbeatCycles.get(info.project_id) ?? 0) + 1;
+        staleHeartbeatCycles.set(info.project_id, cycles);
+        if (cycles >= staleProjectHeartbeatCycles()) {
+          logger.warn(
+            "running project daemon heartbeat is stale; recovering runtime",
+            {
+              project_id: info.project_id,
+              heartbeat_age_ms: heartbeatAgeMs,
+              stale_after_ms: staleProjectHeartbeatMs(),
+              stale_cycles: cycles,
+            },
+          );
+          try {
+            const recoveredState = await options.recoverStaleRuntime(
+              info.project_id,
+            );
+            if (recoveredState === "opened") {
+              staleHeartbeatCycles.delete(info.project_id);
+              await reportRuntimeLost(info.project_id, now);
+              continue;
+            }
+            logger.debug(
+              "stale project runtime recovery did not reach opened state",
+              {
+                project_id: info.project_id,
+                state: recoveredState,
+              },
+            );
+          } catch (err) {
+            logger.warn("stale project runtime recovery failed", {
+              project_id: info.project_id,
+              err: `${err}`,
+            });
+          }
+        }
+      }
       if (shouldCheckProjectLastChangedRunning(info.project_id)) {
-        const base = resolveMountPoint();
         if (!base) {
           if (mountPointError && !loggedMountPointError) {
             logger.debug("running generation check skipped (no mountpoint)", {
@@ -202,6 +300,7 @@ export async function reconcileOnce() {
         }
       }
     } else {
+      staleHeartbeatCycles.delete(info.project_id);
       resetProjectLastChangedRunning(info.project_id);
     }
   }
@@ -226,26 +325,8 @@ export async function reconcileOnce() {
         );
         continue;
       }
-      upsertProject({
-        project_id: row.project_id,
-        state: "opened",
-        runtime_exit_reason: "container_missing",
-        http_port: null,
-        ssh_port: null,
-        updated_at: now,
-        last_seen: now,
-      });
-      void reportProjectStateImmediately(row.project_id, {
-        state: "opened",
-        time: new Date(now),
-        runtime_exit_reason: "container_missing",
-      }).catch((err) =>
-        logger.debug("immediate runtime-loss report failed", {
-          project_id: row.project_id,
-          err: `${err}`,
-        }),
-      );
-      resetProjectLastChangedRunning(row.project_id);
+      staleHeartbeatCycles.delete(row.project_id);
+      await reportRuntimeLost(row.project_id, now);
     }
   }
 }
@@ -258,17 +339,48 @@ function missingCyclesBeforeOpened(): number {
   return Math.max(1, Math.floor(raw));
 }
 
-export function resetReconcileStateForTests(): void {
-  missingSince.clear();
+function staleProjectHeartbeatMs(): number {
+  const raw = Number(
+    process.env.COCALC_PROJECT_HOST_RECONCILE_STALE_HEARTBEAT_MS,
+  );
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_STALE_HEARTBEAT_MS;
+  }
+  return Math.max(pidUpdateIntervalMs, Math.floor(raw));
 }
 
-export function startReconciler(intervalMs = DEFAULT_INTERVAL): () => void {
+function staleProjectHeartbeatCycles(): number {
+  const raw = Number(
+    process.env.COCALC_PROJECT_HOST_RECONCILE_STALE_HEARTBEAT_CYCLES,
+  );
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_STALE_HEARTBEAT_CYCLES;
+  }
+  return Math.max(1, Math.floor(raw));
+}
+
+export function resetReconcileStateForTests(): void {
+  missingSince.clear();
+  staleHeartbeatCycles.clear();
+}
+
+export function startReconciler(
+  intervalMs = DEFAULT_INTERVAL,
+  options: ReconcileOptions = {},
+): () => void {
   let timer: NodeJS.Timeout | undefined;
+  let running = false;
   const tick = async () => {
+    if (running) {
+      return;
+    }
+    running = true;
     try {
-      await reconcileOnce();
+      await reconcileOnce(options);
     } catch (err) {
       logger.debug("reconcileOnce failed", { err: `${err}` });
+    } finally {
+      running = false;
     }
   };
   timer = setInterval(tick, intervalMs);

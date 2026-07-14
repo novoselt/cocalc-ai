@@ -1549,7 +1549,15 @@ export async function main(
       });
     },
   });
-  const stopReconciler = startReconciler();
+  const stopReconciler = startReconciler(undefined, {
+    recoverStaleRuntime: async (project_id) => {
+      const stopped = await runnerApi.stop({ project_id, force: true });
+      if (stopped?.state === "opened") {
+        return stopped.state;
+      }
+      return (await runnerApi.status({ project_id }))?.state;
+    },
+  });
   const stopDataPermissionHardener = startDataPermissionHardener(dataDir);
 
   // file server must be started AFTER master registration, since it connects
