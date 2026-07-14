@@ -26,8 +26,45 @@ ordinary CPU pressure or a previously recurring independent Podman failure.
 
 The immediate code changes fail closed, preserve diagnostics, and prevent a
 single unhealthy runtime from causing a recovery storm. They do not claim to
-eliminate the underlying runtime failure. The next step is a controlled staging
-canary that changes one variable at a time.
+eliminate the underlying runtime failure. Subsequent staging work established a
+healthy reverted baseline; the remaining experiments must continue to change
+one variable at a time.
+
+## Current status (2026-07-14)
+
+The immediate production containment work is complete:
+
+- `6201405c0c` added the functional runtime-health gate, bounded diagnostics,
+  alerts, recovery canaries, and stale project-start LRO cancellation.
+- `6932477e26` removed the unsafe hierarchical per-project PID-migration path
+  and restored the previously stable aggregate cgroup containment model.
+- `425d1eac4f` fixed an independent compatibility-library publication race.
+  Project starts had been copying the shared `libatomic.so.1` directly over a
+  live file. Concurrent starts could therefore expose a partially written ELF
+  library to unrelated running Node processes, causing synchronized `SIGBUS`
+  and `SIGSEGV` failures. The library is now published atomically.
+
+All 15 registered production hosts received the compatibility-library fix. At
+the latest fleet audit, all 11 active project hosts were running, had fresh
+heartbeats, reported healthy runtime probes, and had no host-specific
+project-host software overrides. Host placement now excludes a host whose
+Podman data plane is unhealthy even if its Node heartbeat remains fresh.
+
+The disposable staging canary also established a useful baseline:
+
+- A `t2d-standard-32` host with adequate disk admitted 50 projects.
+- An explicit 20-project start burst completed in approximately 5.5 seconds.
+- An explicit 50-project start burst completed in approximately 11.5 seconds.
+- After a controlled VM reboot, runtime readiness returned approximately 48
+  seconds after boot and all 50 projects started within a 9.7-second window.
+- Before the atomic library fix, concurrent project churn reproduced widespread
+  Node crashes both inside projects and in unrelated CLI processes. The same
+  workload no longer reproduced those crashes after the fix.
+
+This establishes that the reverted runtime can recover projects quickly in
+parallel. It does not yet satisfy the long-duration promotion gate below, and a
+degraded runtime is currently quarantined and alerted rather than automatically
+hard-rebooted.
 
 ## Incident timeline
 
@@ -153,10 +190,11 @@ Production hosts currently use:
 - systemd linger for the project-host user;
 - a root-owned `/sys/fs/cgroup/cocalc-project-pool` hierarchy.
 
-Before launching a container, CoCalc moves the Podman launcher into the
-project's root-owned cgroup. It then reconciles conmon/container PIDs into that
-cgroup. This provides aggregate and per-project resource control, but it is a
-substantial deviation from the normal rootless Podman plus systemd lifecycle.
+The reverted production implementation uses the older flat aggregate project
+cgroup together with Podman's native per-container limits and the host pressure
+controller. It no longer moves Podman, conmon, container, or pasta PIDs into
+per-project child cgroups. The July 13 hierarchical implementation did those
+migrations and remains disabled pending isolated staging tests.
 
 Podman documents that rootless operation uses a pause process to preserve the
 user namespace and that `podman system migrate` stops that process when runtime
@@ -170,6 +208,8 @@ References:
 
 - [Podman system migrate](https://docs.podman.io/en/stable/markdown/podman-system-migrate.1.html)
 - [Podman global cgroup-manager configuration](https://docs.podman.io/en/latest/markdown/podman.1.html)
+- [Podman installation and runtime requirements](https://podman.io/docs/installation)
+- [Current stable Podman version](https://podman.io/)
 - [Podman rootless troubleshooting](https://github.com/containers/podman/blob/main/troubleshooting.md)
 - [Podman issue 16641: invalid internal status after reboot](https://github.com/containers/podman/issues/16641)
 - [Current Podman releases](https://github.com/containers/podman/releases)
@@ -226,18 +266,82 @@ then make comparative changes in staging.
 
 ## Immediate production recommendation
 
-1. Roll back or default-disable the July 13 hierarchical per-project cgroup and
-   pasta PID-migration path.
-2. Retain Podman's native per-container memory, CPU, and PID limits, the older
-   aggregate `cocalc-project-pool` cap, and the host pressure controller. These
-   are the established containment layers; this is not a return to uncontained
-   projects.
-3. Deploy the runtime readiness, diagnostics, alerting, recovery throttling, and
-   stale-LRO fixes independently.
-4. Do not combine the production rollback with a Podman upgrade or a switch to
-   systemd cgroups. Those are staging experiments.
-5. Keep the temporary eastern host recovery concurrency cap until the safer
-   project-host code is deployed.
+1. **Complete:** roll back the July 13 hierarchical per-project cgroup and pasta
+   PID-migration path.
+2. **Complete:** retain Podman's native per-container memory, CPU, and PID
+   limits, the older aggregate `cocalc-project-pool` cap, and the host pressure
+   controller. This is not a return to uncontained projects.
+3. **Complete:** deploy runtime readiness, diagnostics, alerting, recovery
+   throttling, and stale-LRO fixes independently.
+4. **Complete:** deploy the atomic compatibility-library publication fix to the
+   fleet and remove temporary host-specific software overrides.
+5. **Still required:** validate synthetic runtime probes, automated quarantine,
+   forensic capture, and alert delivery under deliberately injected failures.
+6. **Still required:** add bounded automatic hard-reboot recovery after the
+   diagnostic window, without allowing reboot loops.
+
+Do not combine this production stabilization with a Podman upgrade, a switch to
+systemd cgroups, or a networking-backend change. Those remain separate staging
+experiments.
+
+## Podman upgrade program
+
+Podman should be upgraded, but the production health and recovery controls come
+first. The current incidents do not show that Podman itself is the wrong
+runtime: the two identified regressions were CoCalc's nonstandard cgroup PID
+migration and a shared-library publication race. Nevertheless, Podman 4.9.3 is
+old enough that remaining indefinitely on the Ubuntu package would forfeit
+relevant rootless lifecycle, reboot, storage, and security fixes.
+
+The upgrade program is:
+
+1. Finish synthetic host probes, placement quarantine, forensic capture,
+   alerts, stale-LRO cleanup, and bounded automatic reboot recovery.
+2. Build a reproducible and pinned runtime bundle containing Podman and matching
+   versions of crun, conmon, containers/storage, containers/common, and related
+   configuration. Do not upgrade only the Podman binary. In particular, current
+   upstream Podman requires at least crun `1.14.3`, which is newer than
+   production's `1.14.1`.
+3. Test the latest Podman 5.8.x patch release on fresh staging hosts while
+   retaining CNI, forced `cgroupfs`, the custom runtime directory, SQLite, and
+   the flat aggregate cgroup. Podman 5.8 is the controlled bridge because it can
+   migrate legacy BoltDB state before Podman 6 removes BoltDB support.
+4. Test Podman 6.0.1 as a separate staging variant. Verify the configured
+   database backend and all persistent storage metadata before allowing a host
+   to serve projects.
+5. Require at least 200 automated VM/process interruption cycles and 1,000
+   project start/stop cycles, with the assertions below, before promoting a
+   runtime bundle.
+6. Roll out the selected bundle first when provisioning replacement Spot hosts.
+   Do not silently change the runtime version merely because an existing VM
+   rebooted.
+
+### Spot replacement and reboot policy
+
+Spot churn is a good deployment mechanism only when it creates a clean runtime
+host. Project data is durable and separate, but Podman's graph root, run root,
+container database, pause/user-namespace state, network state, and OCI runtime
+metadata may persist across an ordinary reboot on the same attached disk.
+Installing a new major Podman stack during that reboot is therefore still an
+in-place upgrade.
+
+Each host boot must use a versioned runtime-state contract:
+
+- A freshly provisioned host with no Podman state may install the promoted
+  bundle and join the canary cohort.
+- A host whose recorded runtime-state version exactly matches the bundle may
+  start normally.
+- A tested, explicit state migration may run only for a declared source and
+  destination version pair, followed by the full runtime acceptance probe.
+- An unknown or incompatible state must fail closed and stay out of placement;
+  it must not attempt a best-effort automatic upgrade.
+- Rollback must mean replacing the host with one using a compatible state, not
+  downgrading binaries over metadata already migrated by a newer major version.
+
+This makes frequent Spot replacement an advantage: new hosts can enter the
+upgraded cohort naturally, while existing persistent Podman state is never
+implicitly mutated. CNI-to-Netavark, `cgroupfs`-to-systemd, and custom-to-standard
+runtime-directory changes must remain independent later experiments.
 
 ## Staging canary design
 
@@ -253,16 +357,18 @@ Run these variants in order, changing one dimension at a time:
    runtime directory, forced `cgroupfs`, and the older aggregate project cgroup.
 2. **Regression reproduction:** the same runtime with the July 13 hierarchical
    and pasta PID-migration changes. This directly tests the leading cause.
-3. **Runtime upgrade:** a pinned current Podman 5.8.x/crun package set, with all
+3. **Podman 5 bridge:** a pinned current Podman 5.8.x runtime bundle, with all
    other CoCalc settings unchanged.
-4. **Standard runtime directory:** upgraded runtime using `/run/user/2000`, with
+4. **Podman 6:** a pinned Podman 6.0.1 runtime bundle, again with all other
+   CoCalc settings unchanged and the runtime-state contract validated.
+5. **Standard runtime directory:** upgraded runtime using `/run/user/2000`, with
    linger and user-manager readiness explicitly verified.
-5. **Systemd cgroups:** upgraded runtime with the supported `systemd` cgroup
+6. **Systemd cgroups:** upgraded runtime with the supported `systemd` cgroup
    manager. Preserve project limits through a delegated systemd slice/cgroup
    parent design; do not manually move arbitrary runtime PIDs after launch.
-6. **Network backend:** switch the successful upgraded variant from legacy CNI
+7. **Network backend:** switch the successful upgraded variant from legacy CNI
    to Netavark.
-7. **Alternative engine:** use the same workload contract on a small
+8. **Alternative engine:** use the same workload contract on a small
    Docker/containerd canary. This requires a narrow runner abstraction, not a
    production rewrite.
 
@@ -306,14 +412,19 @@ systemd, Podman, conmon/crun, and CoCalc.
 
 ## Remaining work
 
-- Deploy the readiness/diagnostic changes to staging and verify that a simulated
-  failed probe removes the host from placement and creates exactly one alert.
-- Build the disposable-host fault-injection harness and baseline the current
-  runtime before upgrading it.
-- Decide how to package a current Podman version reproducibly for Ubuntu hosts.
+- Verify with a simulated failure that the deployed readiness/diagnostic path
+  removes a host from placement, preserves one bounded forensic bundle, and
+  creates exactly one deduplicated alert.
+- Add a fleet-level synthetic project start/exec/file-write/stop probe after
+  each host boot and periodically thereafter, so user traffic is not the first
+  indication of a degraded host.
+- Implement bounded automatic hard-reboot recovery after repeated failed probes
+  and a diagnostic window, with reboot-loop protection.
+- Build the disposable-host fault-injection harness and complete the 200
+  interruption and 1,000 project-cycle baseline on the reverted runtime.
+- Package pinned Podman 5.8.x and Podman 6.0.1 runtime bundles, including their
+  matching OCI runtime and containers libraries.
+- Implement and validate the versioned runtime-state contract used when Spot
+  hosts boot or are replaced.
 - Design the systemd-slice equivalent of `cocalc-project-pool` before testing the
   `systemd` cgroup manager.
-- After forensic capture is validated, define a controlled hard-reboot policy,
-  for example after three failed probes and a two-minute diagnostic window.
-- Add fleet-level synthetic project start/exec probes so user traffic is not the
-  first indication of a degraded host.
