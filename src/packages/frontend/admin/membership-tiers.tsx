@@ -822,12 +822,13 @@ function useMembershipTiers() {
 
   React.useEffect(() => {
     if (editing != null) {
+      form.resetFields();
       form.setFieldsValue(tierToFormValues(editing));
     }
     if (last_saved != null) {
       set_last_saved(null);
     }
-  }, [editing]);
+  }, [editing, form]);
 
   async function save(values): Promise<boolean> {
     const formValues = form.getFieldsValue(true);
@@ -917,7 +918,7 @@ function useMembershipTiers() {
   }: {
     id: string;
     source: Tier;
-  }): Promise<boolean> {
+  }): Promise<Tier | null> {
     const trimmedId = id.trim();
     if (data[trimmedId] != null) {
       throw Error(`membership tier "${trimmedId}" already exists`);
@@ -937,14 +938,10 @@ function useMembershipTiers() {
           tier: payload,
         });
       });
-      if (completed) {
-        set_editing(
-          applyMembershipTierTemplateFallbacks(
-            payload as Partial<Tier> & { id: string },
-          ) as Tier,
-        );
-      }
-      return completed;
+      if (!completed) return null;
+      return applyMembershipTierTemplateFallbacks(
+        payload as Partial<Tier> & { id: string },
+      ) as Tier;
     } catch (err) {
       set_error(err.message ?? String(err));
       throw err;
@@ -1482,6 +1479,12 @@ export function MembershipTiers() {
 
     return (
       <>
+        <div style={{ margin: "16px 0 4px" }}>
+          <Text type="secondary">Editing membership tier</Text>
+          <Typography.Title level={3} style={{ margin: "2px 0 0" }}>
+            {editing?.id} · {editing?.label?.trim() || "No display name"}
+          </Typography.Title>
+        </div>
         <Form
           layout="vertical"
           style={{ margin: "20px 0" }}
@@ -3293,13 +3296,16 @@ export function MembershipTiers() {
     if (editing == null) return;
     try {
       const values = await duplicateTierForm.validateFields();
-      const completed = await duplicate_tier({
+      const duplicate = await duplicate_tier({
         id: values.id,
         source: editing,
       });
-      if (!completed) return;
+      if (duplicate == null) return;
       setDuplicateTierOpen(false);
       duplicateTierForm.resetFields();
+      form.resetFields();
+      form.setFieldsValue(tierToFormValues(duplicate));
+      set_editing(duplicate);
     } catch (err) {
       if (err?.errorFields != null) return;
       const message = err?.message ?? String(err);
