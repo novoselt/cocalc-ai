@@ -390,13 +390,14 @@ export const TABLE_OWNERSHIP = {
     },
   ),
 
-  ...entries(["cloud_vm_work"], {
+  ...entries(["account_presence_locations", "cloud_vm_work"], {
     ownership: "ephemeral",
     authority: "local",
     portability: "rebuildable",
     notes:
-      "Transient worker coordination state. It must be safe to lose during bay drain or service restart.",
-    rebuild: "Workers may recreate or requeue work from durable source state.",
+      "Transient bay-local state. It must be safe to lose during bay drain or service restart.",
+    rebuild:
+      "Recreate from a later browser presence observation or durable worker source state.",
   }),
 } satisfies Record<string, TableOwnershipEntry>;
 

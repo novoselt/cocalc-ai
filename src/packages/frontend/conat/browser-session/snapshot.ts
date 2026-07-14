@@ -4,13 +4,39 @@ Browser-session snapshot helpers for open projects/files metadata.
 
 import { redux, project_redux_name } from "@cocalc/frontend/app-framework";
 import type { WebappClient } from "@cocalc/frontend/client/client";
-import type { BrowserOpenProjectState } from "@cocalc/conat/hub/api/system";
+import type {
+  BrowserOpenProjectState,
+  BrowserSessionLocation,
+} from "@cocalc/conat/hub/api/system";
 import type { BrowserOpenFileInfo } from "@cocalc/conat/service/browser-session";
 import { isValidUUID } from "@cocalc/util/misc";
 import { asStringArray, toAbsolutePath } from "./common-utils";
 
 const SPAWN_MARKER_QUERY_PARAM = "_cocalc_browser_spawn";
 const SPAWN_MARKER_STORAGE_KEY = "cocalc-browser-spawn-marker";
+
+function snapshotText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function collectBrowserSessionLocation():
+  | BrowserSessionLocation
+  | undefined {
+  const customize = redux.getStore("customize");
+  const location: BrowserSessionLocation = {
+    country_code: snapshotText(customize?.get("country")),
+    region_code: snapshotText(customize?.get("cloudflare_region_code")),
+    region: snapshotText(customize?.get("cloudflare_region")),
+    city: snapshotText(customize?.get("cloudflare_city")),
+    continent: snapshotText(customize?.get("cloudflare_continent")),
+    timezone: snapshotText(customize?.get("cloudflare_timezone")),
+    latitude: snapshotText(customize?.get("cloudflare_latitude")),
+    longitude: snapshotText(customize?.get("cloudflare_longitude")),
+  };
+  return Object.values(location).some((value) => value != null)
+    ? location
+    : undefined;
+}
 
 export function getActiveProjectIdFallback(opts: {
   openProjectIds: string[];
@@ -93,6 +119,7 @@ export function buildSessionSnapshot(
   spawn_marker?: string;
   active_project_id?: string;
   open_projects: BrowserOpenProjectState[];
+  location?: BrowserSessionLocation;
 } {
   const open_projects = collectOpenProjects({
     maxOpenProjects: opts?.maxOpenProjects,
@@ -108,12 +135,14 @@ export function buildSessionSnapshot(
     url,
   });
   const spawn_marker = resolveBrowserSpawnMarker();
+  const browserLocation = collectBrowserSessionLocation();
   return {
     browser_id: client.browser_id,
     ...(session_name ? { session_name } : {}),
     ...(url ? { url } : {}),
     ...(spawn_marker ? { spawn_marker } : {}),
     ...(active_project_id ? { active_project_id } : {}),
+    ...(browserLocation ? { location: browserLocation } : {}),
     open_projects,
   };
 }

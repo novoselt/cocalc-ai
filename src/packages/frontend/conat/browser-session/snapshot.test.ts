@@ -1,15 +1,43 @@
+const mockGetStore = jest.fn(() => ({
+  get: jest.fn(() => undefined),
+}));
+
 jest.mock("@cocalc/frontend/app-framework", () => ({
   redux: {
-    getStore: jest.fn(() => ({
-      get: jest.fn(() => undefined),
-    })),
+    getStore: mockGetStore,
   },
   project_redux_name: (project_id: string) => `project-${project_id}`,
 }));
 
-import { getActiveProjectIdFallback, getProjectIdFromUrl } from "./snapshot";
+import {
+  collectBrowserSessionLocation,
+  getActiveProjectIdFallback,
+  getProjectIdFromUrl,
+} from "./snapshot";
 
 describe("browser-session snapshot helpers", () => {
+  beforeEach(() => {
+    mockGetStore.mockReturnValue({ get: jest.fn(() => undefined) });
+  });
+
+  it("collects Cloudflare location from customize state", () => {
+    const values = new Map<string, string>([
+      ["country", "US"],
+      ["cloudflare_city", "Seattle"],
+      ["cloudflare_latitude", "47.61"],
+      ["cloudflare_longitude", "-122.33"],
+    ]);
+    mockGetStore.mockReturnValue({
+      get: jest.fn((key: string) => values.get(key)),
+    });
+    expect(collectBrowserSessionLocation()).toMatchObject({
+      country_code: "US",
+      city: "Seattle",
+      latitude: "47.61",
+      longitude: "-122.33",
+    });
+  });
+
   it("extracts a project id from a project-scoped URL", () => {
     expect(
       getProjectIdFromUrl(
