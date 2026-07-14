@@ -2306,7 +2306,9 @@ configure_project_cgroup() {
   if [ -w "$cgroup/io.weight" ]; then
     printf 'default %s\n' "$io_weight" > "$cgroup/io.weight"
   fi
-  printf '1\n' > "$cgroup/memory.oom.group"
+  # Keep the hard project cap, but let the kernel kill the process that caused
+  # the OOM instead of terminating every terminal, kernel, and project daemon.
+  printf '0\n' > "$cgroup/memory.oom.group"
 }
 
 verify_project_pid_in_pool() {

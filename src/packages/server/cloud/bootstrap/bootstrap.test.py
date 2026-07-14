@@ -1377,7 +1377,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn("configure_project_pool_hierarchy", script)
             self.assertIn('> "$cgroup/memory.max"', script)
-            self.assertIn('> "$cgroup/memory.oom.group"', script)
+            self.assertIn(
+                "printf '0\n' > \"$cgroup/memory.oom.group\"", script
+            )
+            self.assertNotIn(
+                "printf '1\n' > \"$cgroup/memory.oom.group\"", script
+            )
             self.assertIn('> "$pool/cgroup.kill"', script)
             self.assertIn('deny "project-cgroup-cleanup-failed"', script)
             self.assertIn("cocalc-project-cgroups.lock", script)
