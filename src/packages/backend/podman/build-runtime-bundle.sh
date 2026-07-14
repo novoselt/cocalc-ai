@@ -103,7 +103,7 @@ apt-get install -y --no-install-recommends \
   autoconf automake ca-certificates curl gcc git jq libapparmor-dev \
   libassuan-dev libbtrfs-dev libcap-dev libdevmapper-dev libglib2.0-dev \
   libgpg-error-dev libgpgme-dev libseccomp-dev libsystemd-dev libtool \
-  libyajl-dev make pkg-config xz-utils
+  libyajl-dev make pkg-config protobuf-compiler xz-utils
 rm -rf /var/lib/apt/lists/*
 
 fetch() {
