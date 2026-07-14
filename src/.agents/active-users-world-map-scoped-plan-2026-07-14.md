@@ -20,8 +20,9 @@ For this version, an active user means only:
 accounts.last_active >= now() - selected_window
 ```
 
-The supported windows are 5, 15, and 60 minutes. The default is 15 minutes.
-Connected Conat or websocket state is not part of the definition.
+The supported windows are 5, 15, and 60 minutes, plus 1 day (1440 minutes).
+The default is 15 minutes. Connected Conat or websocket state is not part of
+the definition.
 
 ## Explicit Scope
 
@@ -40,7 +41,7 @@ This version does not include:
 
 - cross-bay aggregation
 - websocket or Conat connection status
-- historical movement or location history
+- historical movement, snapshots, or location history
 - city-level bubbles
 - names or email addresses permanently drawn over the map
 - map pan, zoom, tiles, or an external map service
@@ -100,16 +101,17 @@ Hard requirements:
 10. Stop collecting when the feature is disabled; existing rows then disappear
     through expiration.
 
-Use a two-hour logical TTL:
+Use a 26-hour logical TTL. This provides the 24-hour active view plus a
+two-hour margin for delayed activity and cleanup processing:
 
 ```text
-expire = observed_at + interval '2 hours'
+expire = observed_at + interval '26 hours'
 ```
 
 The existing Launchpad cleanup loop runs every two hours by default, so an
-observation normally remains physically present for less than four hours after
+observation normally remains physically present for less than 28 hours after
 the final refresh. Queries must still require `expire > NOW()` so the logical
-retention boundary is exactly two hours regardless of cleanup timing.
+retention boundary is exactly 26 hours regardless of cleanup timing.
 
 Production rollout must verify that
 `COCALC_DELETE_EXPIRED_INTERVAL_S` is no greater than 7200. If production ever
@@ -136,7 +138,7 @@ When disabled:
 - browser-session updates must not persist location
 - the admin page should explain that collection is disabled
 - existing rows must not be returned
-- existing rows are allowed to age out through their two-hour expiration
+- existing rows are allowed to age out through their 26-hour expiration
 
 Enable it on `cocalc.ai` only after Cloudflare visitor-location headers pass the
 existing admin configuration test. Other sites should not begin collecting
@@ -153,7 +155,7 @@ Suggested shape:
   account_id: uuid,          // primary key; exactly one current row per account
   bay_id: uuid,              // bay that observed this location
   observed_at: timestamp,    // server timestamp of the accepted observation
-  expire: timestamp,         // non-null; observed_at + 2 hours
+  expire: timestamp,         // non-null; observed_at + 26 hours
   country_code: string,      // ISO alpha-2, plus existing K1/XX conventions
   region_code: string | null,
   region: string | null,
@@ -227,8 +229,8 @@ Server rules:
 11. Failure to write location must never fail the browser-session heartbeat.
     Log only a generic error and account-independent diagnostic code.
 
-The five-minute write throttle and two-hour TTL leave ample margin while the
-existing one-minute browser heartbeat is healthy.
+The five-minute write throttle and 26-hour TTL preserve enough location state
+for the 1-day view while the existing one-minute browser heartbeat is healthy.
 
 ## Admin RPC
 
@@ -239,7 +241,7 @@ Input:
 
 ```ts
 {
-  active_minutes: 5 | 15 | 60;
+  active_minutes: 5 | 15 | 60 | 1440;
 }
 ```
 
@@ -249,7 +251,7 @@ Response:
 {
   checked_at: string;
   bay_id: string;
-  active_minutes: 5 | 15 | 60;
+  active_minutes: 5 | 15 | 60 | 1440;
   total_active: number;
   mapped_active: number;
   unknown_location: number;
@@ -311,7 +313,7 @@ Add `active-users` to the typed admin routing and add an Operations card named
 The page layout should contain:
 
 1. A title and a small `Current bay` label.
-2. A segmented active-window control for 5, 15, and 60 minutes.
+2. A segmented active-window control for 5, 15, and 60 minutes, and 1 day.
 3. A Refresh button and `Last refreshed ...` timestamp.
 4. Summary cards for total active, mapped, and location unavailable.
 5. A responsive world map with one bubble per country.
@@ -381,7 +383,7 @@ No websocket subscription is needed.
 2. Add the customize-derived location to `buildSessionSnapshot`.
 3. Validate and normalize only on the backend.
 4. Add a five-minute server-side write throttle.
-5. Upsert current location with a two-hour expiration.
+5. Upsert current location with a 26-hour expiration.
 6. Ensure location failures do not affect browser-session health.
 
 ### Phase 3: Admin Read API
@@ -419,7 +421,7 @@ No websocket subscription is needed.
 
 - table is registered in `SCHEMA`
 - `expire` is a timestamp and participates in generic cleanup
-- every upsert assigns a non-null expiration two hours in the future
+- every upsert assigns a non-null expiration 26 hours in the future
 - one account has at most one row
 - newer observations replace older observations
 - delayed observations cannot replace newer ones
@@ -441,7 +443,7 @@ No websocket subscription is needed.
 ### Admin RPC
 
 - non-admin callers are rejected
-- only 5, 15, and 60 minute windows are accepted
+- only 5, 15, 60, and 1440 minute windows are accepted
 - `last_active` alone determines inclusion
 - expired location rows count as unknown
 - total equals mapped plus unknown
@@ -482,7 +484,8 @@ metrics such as mapped/unknown counts are sufficient.
 
 The scoped feature is complete when:
 
-1. An admin can open `/admin/active-users` and select 5, 15, or 60 minutes.
+1. An admin can open `/admin/active-users` and select 5, 15, or 60 minutes, or
+   1 day.
 2. The total exactly reflects current-bay `accounts.last_active` for that
    window.
 3. Active users with current location appear in country count bubbles.
@@ -493,7 +496,7 @@ The scoped feature is complete when:
 7. Refresh works manually and every 60 seconds while visible.
 8. No websocket-connected state is queried.
 9. No IP address or historical location is stored.
-10. Every location row becomes logically unavailable after two hours without a
+10. Every location row becomes logically unavailable after 26 hours without a
     refresh and is physically removed by existing expiration maintenance.
 
 ## Future Extension Boundary
@@ -503,3 +506,10 @@ aggregation design. It must not reinterpret this local RPC as globally
 authoritative. The expiring location table can remain bay-local and
 rebuildable; a future seed-level admin aggregator may request bounded summaries
 from each bay and merge them by account ID.
+
+Showing how activity evolved during the day is also a separate future feature.
+The scoped table intentionally stores only the latest location per account, so
+it cannot reconstruct an intraday timeline. Adding that capability would
+require a new aggregate-snapshot design, a separate short retention policy, and
+an explicit privacy review; it should not be implemented by turning the current
+location table into an unbounded event history.
