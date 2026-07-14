@@ -8,10 +8,11 @@ import type { CourseSecretRecipientPreview } from "@cocalc/conat/hub/api/project
 export function selectableRecipientIds(
   preview: CourseSecretRecipientPreview[],
 ): string[] {
-  return preview
-    .filter(
-      ({ approved, eligible, reason }) =>
-        !approved && eligible && reason === "not_approved",
-    )
-    .map(({ target_project_id }) => target_project_id);
+  return (
+    preview
+      // The coordinator sets eligible=true only after approval. An unapproved
+      // target that passed association checks is identified by this reason.
+      .filter(({ approved, reason }) => !approved && reason === "not_approved")
+      .map(({ target_project_id }) => target_project_id)
+  );
 }
