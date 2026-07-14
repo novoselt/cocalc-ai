@@ -931,8 +931,12 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   function renderRuntimeRecoveryBanner() {
     if (runtimeRecoveryNotice == null || hardDeleteBlocked) return;
     const reason = runtimeRecoveryNotice?.get?.("reason");
+    const runtimeExitReason = runtimeRecoveryNotice?.get?.(
+      "runtime_exit_reason",
+    );
     const projectRestarted = reason === "project_runtime_changed";
     const projectRuntimeLost = reason === "project_runtime_lost";
+    const hostPressure = runtimeExitReason === "host_pressure";
     return (
       <Alert
         showIcon
@@ -941,14 +945,18 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         banner
         message={
           projectRuntimeLost
-            ? "Project runtime stopped unexpectedly"
+            ? hostPressure
+              ? "Project stopped to protect host stability"
+              : "Project runtime stopped unexpectedly"
             : projectRestarted
               ? "Project restarted"
               : "Project host connection recovered"
         }
         description={
           projectRuntimeLost
-            ? "The project container exited, so previous terminals and notebook kernels ended. CoCalc is restarting the project and reconnecting active terminals automatically; files and collaborative documents remain available."
+            ? hostPressure
+              ? "The host ran critically low on resources, so this project runtime was stopped. Previous terminals and notebook kernels ended. CoCalc is restarting the project and reconnecting active terminals automatically; files and collaborative documents remain available."
+              : "The project container exited, so previous terminals and notebook kernels ended. CoCalc is restarting the project and reconnecting active terminals automatically; files and collaborative documents remain available."
             : projectRestarted
               ? "The project runtime restarted, so previous terminals and notebook kernels ended. CoCalc is reconnecting them automatically; files and collaborative documents remain available."
               : "The project host restarted or reconnected. CoCalc rebuilt this tab's files, terminals, notebooks, and other live connections automatically. Existing terminal processes and kernels may have ended."

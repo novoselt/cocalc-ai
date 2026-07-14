@@ -2796,7 +2796,11 @@ export class ProjectActions extends Actions<ProjectStoreState> {
   private projectStatusNeedsRuntimeReconnect = false;
   private runtimeLossRecoveryInFlight?: Promise<void>;
 
-  noteProjectRuntimeLost = () => {
+  noteProjectRuntimeLost = ({
+    runtime_exit_reason,
+  }: {
+    runtime_exit_reason?: string;
+  } = {}) => {
     this.projectStatusNeedsRuntimeReconnect = true;
     this.projectRuntimeTracker.reset();
     this.projectStatusSub?.close();
@@ -2805,6 +2809,7 @@ export class ProjectActions extends Actions<ProjectStoreState> {
       id: `${this.project_id}:runtime-lost:${Date.now()}`,
       reason: "project_runtime_lost",
       occurred_at: Date.now(),
+      runtime_exit_reason,
     });
     if (this.runtimeLossRecoveryInFlight != null) {
       return;

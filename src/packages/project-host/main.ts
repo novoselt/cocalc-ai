@@ -1542,7 +1542,11 @@ export async function main(
         pressure_zone,
         reason,
       });
-      await hubApi.projects.stop({ project_id, force });
+      await hubApi.projects.stop({
+        project_id,
+        force,
+        runtime_exit_reason: "host_pressure",
+      });
     },
   });
   const stopReconciler = startReconciler();

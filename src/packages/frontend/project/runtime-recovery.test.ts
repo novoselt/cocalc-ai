@@ -9,6 +9,7 @@ import {
   ProjectRuntimeTracker,
   projectRuntimeExitReason,
   projectRuntimeId,
+  shouldRecoverFromProjectRuntimeExit,
 } from "./runtime-recovery";
 
 describe("project runtime recovery", () => {
@@ -44,5 +45,24 @@ describe("project runtime recovery", () => {
       ),
     ).toBe("container_missing");
     expect(projectRuntimeExitReason({ state: {} })).toBeUndefined();
+  });
+
+  it("recovers only from runtime-loss stop reasons", () => {
+    expect(
+      shouldRecoverFromProjectRuntimeExit({
+        state: { runtime_exit_reason: "container_missing" },
+      }),
+    ).toBe(true);
+    expect(
+      shouldRecoverFromProjectRuntimeExit({
+        state: { runtime_exit_reason: "host_pressure" },
+      }),
+    ).toBe(true);
+    expect(
+      shouldRecoverFromProjectRuntimeExit({
+        state: { runtime_exit_reason: "user_stop" },
+      }),
+    ).toBe(false);
+    expect(shouldRecoverFromProjectRuntimeExit({ state: {} })).toBe(false);
   });
 });

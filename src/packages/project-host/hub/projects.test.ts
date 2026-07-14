@@ -385,6 +385,39 @@ describe("project host start ACP rehydrate ordering", () => {
     );
   });
 
+  it("reports host-pressure stops with a durable runtime exit reason", async () => {
+    const runnerApi = {
+      start: jest.fn(),
+      stop: jest.fn(async () => ({ state: "opened" })),
+      status: jest.fn(async () => ({ state: "opened" })),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await expect(
+      hubApi.projects.stop({
+        project_id,
+        force: true,
+        runtime_exit_reason: "host_pressure",
+      }),
+    ).resolves.toBeUndefined();
+    expect(upsertProject).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        project_id,
+        state: "opened",
+        runtime_exit_reason: "host_pressure",
+      }),
+    );
+    expect(reportProjectStateToMaster).toHaveBeenLastCalledWith(
+      project_id,
+      expect.objectContaining({
+        state: "opened",
+        runtime_exit_reason: "host_pressure",
+      }),
+    );
+  });
+
   it("fails stop when the runner still reports the project as active", async () => {
     const runnerApi = {
       start: jest.fn(),

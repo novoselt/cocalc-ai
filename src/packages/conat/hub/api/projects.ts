@@ -1863,6 +1863,7 @@ export interface Projects {
     account_id?: string;
     project_id: string;
     force?: boolean;
+    runtime_exit_reason?: ProjectState["runtime_exit_reason"];
   }) => Promise<void>;
   status?: (opts: { account_id?: string; project_id: string }) => Promise<{
     state?: string;

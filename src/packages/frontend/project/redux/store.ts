@@ -43,6 +43,7 @@ import {
 import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
 import {
   projectRuntimeExitReason,
+  shouldRecoverFromProjectRuntimeExit,
   type RuntimeRecoveryNotice,
 } from "../runtime-recovery";
 export { FILE_ACTIONS as file_actions, type FileAction, ProjectActions };
@@ -287,10 +288,13 @@ export class ProjectStore extends Store<ProjectStoreState> {
         }
         if (this.previous_runstate == "running" && new_state != "running") {
           this.emit("stopped");
-          if (projectRuntimeExitReason(change) === "container_missing") {
+          const runtimeExitReason = projectRuntimeExitReason(change);
+          if (shouldRecoverFromProjectRuntimeExit(change)) {
             this.redux
               .getProjectActions(this.project_id)
-              ?.noteProjectRuntimeLost?.();
+              ?.noteProjectRuntimeLost?.({
+                runtime_exit_reason: runtimeExitReason,
+              });
           }
         }
       } else {

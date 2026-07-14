@@ -26,7 +26,10 @@ import {
   syncProjectSecretsCache,
 } from "../project-secrets-cache";
 import { upsertProjectStopState } from "../sqlite/stop-policy";
-import { type CreateProjectOptions } from "@cocalc/util/db-schema/projects";
+import {
+  type CreateProjectOptions,
+  type ProjectState,
+} from "@cocalc/util/db-schema/projects";
 import type {
   ChatStoreArchivedRow,
   ChatStoreDeleteResult,
@@ -825,6 +828,7 @@ export function ensureProjectRow({
   tools_version,
   authorized_keys,
   secret_names,
+  runtime_exit_reason,
 }: {
   project_id: string;
   opts?: LocalProjectOptions;
@@ -835,6 +839,7 @@ export function ensureProjectRow({
   tools_version?: string | null;
   authorized_keys?: string;
   secret_names?: string[];
+  runtime_exit_reason?: ProjectState["runtime_exit_reason"];
 }) {
   logger.debug("ensureProjectRow", {
     project_id,
@@ -851,6 +856,9 @@ export function ensureProjectRow({
     updated_at: now,
     last_seen: now,
   };
+  if (runtime_exit_reason != null) {
+    row.runtime_exit_reason = runtime_exit_reason;
+  }
   const run_quota = normalizeRunQuota((opts as any)?.run_quota);
   if (run_quota) {
     row.run_quota = run_quota;
@@ -922,7 +930,16 @@ export function ensureProjectRow({
     if (syntheticRuntimeProbeProjects.has(project_id)) {
       markProjectStateReported(project_id, state);
     } else {
-      reportProjectStateToMaster(project_id, state);
+      reportProjectStateToMaster(
+        project_id,
+        runtime_exit_reason == null
+          ? state
+          : {
+              state: state as any,
+              time: new Date(now),
+              runtime_exit_reason,
+            },
+      );
     }
   }
 }
@@ -1793,9 +1810,11 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
   async function stop({
     project_id,
     force,
+    runtime_exit_reason,
   }: {
     project_id: string;
     force?: boolean;
+    runtime_exit_reason?: ProjectState["runtime_exit_reason"];
   }): Promise<void> {
     const activity_id = `stop:${project_id}:${Date.now()}`;
     beginProjectHostActivity(activity_id, "stop");
@@ -1823,6 +1842,9 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         state: finalState,
         http_port: undefined,
         ssh_port: undefined,
+        ...(finalState === "opened" && runtime_exit_reason != null
+          ? { runtime_exit_reason }
+          : {}),
       });
       if (finalState !== "opened") {
         throw new Error(

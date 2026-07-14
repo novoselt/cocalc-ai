@@ -12,6 +12,7 @@ export interface RuntimeRecoveryNotice {
     | "project_runtime_changed"
     | "project_runtime_lost";
   occurred_at: number;
+  runtime_exit_reason?: string;
 }
 
 export function projectRuntimeExitReason(project: unknown): string | undefined {
@@ -19,6 +20,11 @@ export function projectRuntimeExitReason(project: unknown): string | undefined {
   const reason =
     state?.get?.("runtime_exit_reason") ?? state?.runtime_exit_reason;
   return typeof reason === "string" && reason.length > 0 ? reason : undefined;
+}
+
+export function shouldRecoverFromProjectRuntimeExit(project: unknown): boolean {
+  const reason = projectRuntimeExitReason(project);
+  return reason === "container_missing" || reason === "host_pressure";
 }
 
 export function projectRuntimeId(status: unknown): string | undefined {
