@@ -4,6 +4,9 @@ const mockGetConmonContainerProcesses = jest.fn();
 const mockGetConmonContainerProcessLists = jest.fn();
 const mockUnmountAll = jest.fn();
 const mockFileServerClient = jest.fn();
+const mockConfiguredContainerRuntimeCurrent = jest.fn<string | undefined, []>(
+  () => undefined,
+);
 let processKillSpy: jest.SpyInstance;
 
 jest.mock("@cocalc/backend/logger", () => {
@@ -41,6 +44,8 @@ jest.mock(
 );
 
 jest.mock("@cocalc/backend/podman/env", () => ({
+  configuredContainerRuntimeCurrent: () =>
+    mockConfiguredContainerRuntimeCurrent(),
   podmanEnv: jest.fn(() => ({})),
 }));
 
@@ -96,7 +101,15 @@ jest.mock("./conat-client", () => ({
 
 import getPort from "@cocalc/backend/get-port";
 import { mountArg } from "@cocalc/backend/podman";
-import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import {
   cleanupProjectSecretsHostPath,
   cleanupStaleProjectContainers,
@@ -104,6 +117,7 @@ import {
   getAll,
   projectSecretsHostPath,
   PROJECT_SECRETS_HOST_ROOT,
+  podmanRuntimeArgs,
   redactConfigurationForLog,
   start,
   state,
@@ -111,6 +125,25 @@ import {
   verifyProjectContainerInPool,
   writeProjectSecretsHostPath,
 } from "./podman";
+
+describe("project-runner Podman runtime selection", () => {
+  it("uses crun from the active CoCalc container runtime", async () => {
+    const current = await mkdtemp("/tmp/cocalc-container-runtime-");
+    try {
+      await mkdir(`${current}/bin`);
+      await writeFile(`${current}/bin/crun`, "#!/bin/sh\n", { mode: 0o755 });
+      mockConfiguredContainerRuntimeCurrent.mockReturnValue(current);
+
+      await expect(podmanRuntimeArgs()).resolves.toEqual([
+        "--runtime",
+        `${current}/bin/crun`,
+      ]);
+    } finally {
+      mockConfiguredContainerRuntimeCurrent.mockReturnValue(undefined);
+      await rm(current, { recursive: true, force: true });
+    }
+  });
+});
 
 function mockProjectStartPodman(project_id: string) {
   const name = `project-${project_id}`;
