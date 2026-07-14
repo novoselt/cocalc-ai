@@ -68,6 +68,30 @@ function emptyCounts() {
   };
 }
 
+describe("assertRootfsSlugAvailable", () => {
+  beforeEach(() => {
+    queryMock = jest.fn(async () => ({ rows: [] }));
+  });
+
+  it("rejects a slug already used by another catalog image", async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ image_id: "existing-image" }] });
+    const { assertRootfsSlugAvailable } = await import("./catalog");
+
+    await expect(assertRootfsSlugAvailable({ slug: "basic" })).rejects.toThrow(
+      "rootfs slug 'basic' is already in use",
+    );
+  });
+
+  it("does not query for a blank generated slug", async () => {
+    const { assertRootfsSlugAvailable } = await import("./catalog");
+
+    await expect(assertRootfsSlugAvailable({ slug: "" })).resolves.toBe(
+      undefined,
+    );
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("publishProjectRootfsCatalogEntry", () => {
   beforeEach(() => {
     queryMock = jest.fn(async (sql: string) => {
