@@ -51,7 +51,6 @@ import { mount as mountRootFs, unmountAll as unmountAllRootFs } from "./rootfs";
 import { type ProjectState } from "@cocalc/conat/project/runner/state";
 import { type Configuration } from "@cocalc/conat/project/runner/types";
 import { DEFAULT_PROJECT_IMAGE } from "@cocalc/util/db-schema/defaults";
-import { podmanLimits } from "./limits";
 import { executeCode } from "@cocalc/backend/execute-code";
 import {
   getConmonContainerProcessLists,
@@ -101,6 +100,11 @@ const START_RUNNING_CHECK_TIMEOUT_MS = 5000;
 const START_RUNNING_CHECK_INTERVAL_MS = 250;
 const START_FAILURE_LOG_LINES = 80;
 const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
+const VERIFY_PROJECT_POOL_TIMEOUT_S = 10;
+const PROJECT_POOL_LAUNCHER_SCRIPT = `set -euo pipefail
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" max max 0 max max max 100000 100
+shift
+exec podman "$@"`;
 const DEFAULT_PROJECT_SCRIPT = join(
   COCALC_SRC,
   "packages/project/bin/cocalc-project.js",
@@ -641,6 +645,57 @@ async function syncSshProxyKeyForDropbear({
 
 function projectContainerName(project_id) {
   return `project-${project_id}`;
+}
+
+export function projectPoolPodmanLauncher(project_id: string) {
+  if (!isValidUUID(project_id)) {
+    throw Error("project pool launcher: project_id must be valid");
+  }
+  return {
+    command: "bash",
+    argsPrefix: [
+      "-c",
+      PROJECT_POOL_LAUNCHER_SCRIPT,
+      "cocalc-project-podman",
+      project_id,
+    ],
+  };
+}
+
+export async function verifyProjectContainerInPool({
+  project_id,
+  name,
+}: {
+  project_id: string;
+  name: string;
+}): Promise<void> {
+  const { stdout } = await podman([
+    "inspect",
+    "--format",
+    "{{.State.Pid}}",
+    name,
+  ]);
+  const pid = Number(`${stdout ?? ""}`.trim());
+  if (!Number.isInteger(pid) || pid <= 1) {
+    throw Error(`unable to inspect init pid for ${name}`);
+  }
+  const result = await executeCode({
+    command: "sudo",
+    args: [
+      "-n",
+      "/usr/local/sbin/cocalc-runtime-storage",
+      "verify-project-pool",
+      project_id,
+      `${pid}`,
+    ],
+    timeout: VERIFY_PROJECT_POOL_TIMEOUT_S,
+    err_on_exit: false,
+  });
+  if (result.exit_code != null && result.exit_code !== 0) {
+    throw Error(
+      `project container ${name} escaped aggregate cgroup containment: ${result.stderr || result.stdout || `verification exited ${result.exit_code}`}`,
+    );
+  }
 }
 
 async function containerExists(name: string): Promise<boolean> {
@@ -1667,6 +1722,10 @@ export async function start({
     const args: string[] = [];
     args.push("run");
     args.push(...(await podmanRuntimeArgs()));
+    // Podman 4.9 cannot reliably enforce rootless per-container limits on the
+    // production cgroup layout. Keep it from moving descendants out of the
+    // root-owned aggregate pool; the pre-exec launcher provides containment.
+    args.push("--cgroups=disabled");
     // Leave setuid/setgid working inside the project so passwordless sudo can
     // elevate to container root under the rootless user namespace.
     args.push(
@@ -1819,9 +1878,6 @@ export async function start({
       args.push("-e", `${key}=${env[key]}`);
     }
 
-    const limitArgs = await podmanLimits(config);
-    args.push(...limitArgs);
-
     // --init = have podman inject a tiny built in init script so we don't get zombies.
     args.push("--init");
     args.push("--init-path", "/usr/bin/catatonit");
@@ -1831,7 +1887,13 @@ export async function start({
     args.push(projectScript, "--sshd", "--init", PROJECT_STARTUP_SCRIPT_PATH);
 
     logger.debug("start: launching container - ", name);
-    await timings.measure("podman_run", async () => await podman(args));
+    await timings.measure(
+      "podman_run",
+      async () =>
+        await podman(args, {
+          launcher: projectPoolPodmanLauncher(project_id),
+        }),
+    );
     const started = await timings.measure(
       "verify_container_running",
       async () => await waitForStartedContainer(name),
@@ -1852,6 +1914,17 @@ export async function start({
       throw Error(
         `project container ${name} exited before reporting a running state${detail ? `\n${detail}` : ""}`,
       );
+    }
+    try {
+      await timings.measure(
+        "verify_aggregate_cgroup",
+        async () => await verifyProjectContainerInPool({ project_id, name }),
+      );
+    } catch (err) {
+      await podman(["rm", "-f", "-t", "0", name], { timeout: 10 }).catch(
+        () => {},
+      );
+      throw err;
     }
     report({
       type: "start-project",

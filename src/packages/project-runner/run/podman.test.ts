@@ -108,12 +108,20 @@ import {
   start,
   state,
   stop,
+  verifyProjectContainerInPool,
   writeProjectSecretsHostPath,
 } from "./podman";
 
 function mockProjectStartPodman(project_id: string) {
   const name = `project-${project_id}`;
   mockPodman.mockImplementation(async (args: string[]) => {
+    if (
+      args[0] === "inspect" &&
+      args.includes("{{.State.Pid}}") &&
+      args.includes(name)
+    ) {
+      return { stdout: "4242\n" };
+    }
     if (
       args[0] === "ps" &&
       args.includes(`name=${name}`) &&
@@ -484,6 +492,7 @@ describe("project-runner podman orphan fallback", () => {
     expect(getPort).not.toHaveBeenCalled();
     expect(mockPodman).toHaveBeenCalledWith(
       expect.arrayContaining([
+        "--cgroups=disabled",
         "-p",
         "127.0.0.1:30123:22",
         "-p",
@@ -496,12 +505,49 @@ describe("project-runner podman orphan fallback", () => {
         "--init",
         ".local/share/cocalc/startup.sh",
       ]),
+      expect.objectContaining({
+        launcher: expect.objectContaining({
+          command: "bash",
+          argsPrefix: expect.arrayContaining([
+            "cocalc-project-podman",
+            project1,
+          ]),
+        }),
+      }),
+    );
+    expect(mockExecuteCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "sudo",
+        args: [
+          "-n",
+          "/usr/local/sbin/cocalc-runtime-storage",
+          "verify-project-pool",
+          project1,
+          "4242",
+        ],
+      }),
     );
     expect(status).toMatchObject({
       state: "running",
       ssh_port: 30123,
       http_port: 45123,
     });
+  });
+
+  it("fails closed when the container init is outside the project pool", async () => {
+    mockPodman.mockResolvedValueOnce({ stdout: "4242\n" });
+    mockExecuteCode.mockResolvedValueOnce({
+      exit_code: 1,
+      stdout: "",
+      stderr: "project cgroup verification failed",
+    });
+
+    await expect(
+      verifyProjectContainerInPool({
+        project_id: project1,
+        name: `project-${project1}`,
+      }),
+    ).rejects.toThrow("escaped aggregate cgroup containment");
   });
 
   it("does not set project quota twice when localPath already applied it", async () => {
