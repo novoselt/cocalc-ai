@@ -1377,6 +1377,16 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn("configure_project_pool_hierarchy", script)
             self.assertIn('> "$cgroup/memory.max"', script)
+            self.assertIn("effective_project_memory_max()", script)
+            self.assertIn(
+                'PROJECT_LEAF_POOL_HEADROOM_BYTES="$((2 * 1024 * 1024 * 1024))"',
+                script,
+            )
+            self.assertIn(
+                'memory_max="$(effective_project_memory_max "$memory_max")"',
+                script,
+            )
+            self.assertIn("project-pool-memory-headroom-insufficient", script)
             self.assertIn(
                 "printf '0\n' > \"$cgroup/memory.oom.group\"", script
             )

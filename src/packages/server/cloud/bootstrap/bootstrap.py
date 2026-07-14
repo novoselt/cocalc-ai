@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260714-v10"
+HELPER_SCHEMA_VERSION = "20260714-v11"
 RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -2187,6 +2187,8 @@ STORAGE_CGROUP_CPU_WEIGHT="1"
 STORAGE_CGROUP_IO_WEIGHT="1"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_PROCESS_OOM_SCORE_ADJ="500"
+PROJECT_LEAF_POOL_HEADROOM_BYTES="$((2 * 1024 * 1024 * 1024))"
+MIN_PROJECT_LEAF_MEMORY_MAX_BYTES="$((512 * 1024 * 1024))"
 
 deny() {
   local code="$1"
@@ -2281,10 +2283,25 @@ valid_positive_cgroup_limit() {
   echo "$1" | grep -Eq '^[0-9]+$' && [ "$1" -gt 0 ]
 }
 
+effective_project_memory_max() {
+  local requested="$1" pool_max ceiling
+  pool_max="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)"
+  valid_positive_cgroup_limit "$pool_max" || deny "project-pool-memory-max-unbounded" "${pool_max:-missing}"
+  ceiling="$((pool_max - PROJECT_LEAF_POOL_HEADROOM_BYTES))"
+  if [ "$ceiling" -lt "$MIN_PROJECT_LEAF_MEMORY_MAX_BYTES" ]; then
+    deny "project-pool-memory-headroom-insufficient" "pool_max=${pool_max},ceiling=${ceiling}"
+  fi
+  if [ "$requested" = "max" ] || [ "$requested" -gt "$ceiling" ]; then
+    printf '%s\n' "$ceiling"
+  else
+    printf '%s\n' "$requested"
+  fi
+}
+
 configure_project_cgroup() {
   local cgroup="$1" memory_max="$2" memory_high="$3" memory_low="$4"
   local memory_swap_max="$5" pids_max="$6" cpu_quota="$7"
-  local cpu_period="$8" cpu_weight="$9" io_weight="${10}" value
+  local cpu_period="$8" cpu_weight="$9" io_weight="${10}" value requested_memory_max
   for value in "$memory_max" "$memory_high" "$memory_low" "$memory_swap_max" "$pids_max" "$cpu_quota"; do
     valid_cgroup_limit "$value" || deny "project-cgroup-limit-invalid" "$value"
   done
@@ -2294,6 +2311,17 @@ configure_project_cgroup() {
   fi
   if ! valid_positive_cgroup_limit "$io_weight" || [ "$io_weight" -gt 10000 ]; then
     deny "project-cgroup-io-weight-invalid" "$io_weight"
+  fi
+  requested_memory_max="$memory_max"
+  memory_max="$(effective_project_memory_max "$memory_max")"
+  if [ "$memory_high" != "max" ] && [ "$memory_high" -gt "$memory_max" ]; then
+    memory_high="$memory_max"
+  fi
+  if [ "$memory_low" != "max" ] && [ "$memory_low" -gt "$memory_max" ]; then
+    memory_low="$memory_max"
+  fi
+  if [ "$requested_memory_max" != "$memory_max" ]; then
+    echo "project cgroup memory limit clamped: requested=${requested_memory_max} effective=${memory_max}" >&2
   fi
   mkdir -p "$cgroup"
   printf '%s\n' "$memory_max" > "$cgroup/memory.max"
