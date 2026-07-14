@@ -42,7 +42,7 @@ export function podmanEnv(
   if (runtimeCurrent) {
     const bin = `${runtimeCurrent}/bin`;
     env.PATH = `${bin}:${env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}`;
-    env.CONTAINERS_CONF ??= `${runtimeCurrent}/etc/containers/containers.conf`;
+    env.CONTAINERS_CONF_OVERRIDE ??= `${runtimeCurrent}/etc/containers/containers.conf`;
     env.COCALC_PODMAN_BIN ??= `${bin}/podman`;
   }
   const uid =

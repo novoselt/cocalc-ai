@@ -268,7 +268,7 @@ class BootstrapRuntimeShellEnvTest(unittest.TestCase):
                 f'export PATH="{runtime_current / "bin"}:$PATH"', text
             )
             self.assertIn(
-                f'export CONTAINERS_CONF="{runtime_current / "etc" / "containers" / "containers.conf"}"',
+                f'export CONTAINERS_CONF_OVERRIDE="{runtime_current / "etc" / "containers" / "containers.conf"}"',
                 text,
             )
 
@@ -775,7 +775,7 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
             self.assertEqual(len(calls), 2)
             self.assertIn(str(podman), calls[0][0][-1])
             self.assertIn(
-                f"CONTAINERS_CONF={conf}",
+                f"CONTAINERS_CONF_OVERRIDE={conf}",
                 calls[0][0],
             )
             self.assertTrue(
@@ -1679,7 +1679,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 "run_podman_as_runtime()", rootctl.read_text(encoding="utf-8")
             )
             self.assertIn(
-                'CONTAINERS_CONF="${container_runtime}/etc/containers/containers.conf"',
+                'CONTAINERS_CONF_OVERRIDE="${container_runtime}/etc/containers/containers.conf"',
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(

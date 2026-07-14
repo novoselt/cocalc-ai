@@ -755,7 +755,7 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
         )
         runtime_env = [
             f"PATH={runtime_current / 'bin'}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            f"CONTAINERS_CONF={managed_conf}",
+            f"CONTAINERS_CONF_OVERRIDE={managed_conf}",
             f"XDG_RUNTIME_DIR={runtime_dir}",
             f"COCALC_PODMAN_RUNTIME_DIR={runtime_dir}",
             'CONTAINERS_CGROUP_MANAGER=cgroupfs',
@@ -3995,7 +3995,7 @@ def runtime_podman_env_lines(cfg: BootstrapConfig) -> list[str]:
         lines.extend(
             [
                 f'export PATH="{runtime_current / "bin"}:$PATH"',
-                f'export CONTAINERS_CONF="{managed_conf}"',
+                f'export CONTAINERS_CONF_OVERRIDE="{managed_conf}"',
             ]
         )
     return lines
@@ -4825,7 +4825,7 @@ run_podman_as_runtime() {
       XDG_RUNTIME_DIR="${runtime_dir}" \
       COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
       CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-      CONTAINERS_CONF="${container_runtime}/etc/containers/containers.conf" \
+      CONTAINERS_CONF_OVERRIDE="${container_runtime}/etc/containers/containers.conf" \
       PATH="${container_runtime}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
       "${podman_bin}" "$@"
     return
