@@ -23,6 +23,7 @@ import "./account-resource-quarantine-audit-log";
 import "./account-notification-index";
 import "./account-project-index";
 import "./account-profiles";
+import "./account-presence-locations";
 import "./accounts";
 import "./api-keys";
 import "./auth";

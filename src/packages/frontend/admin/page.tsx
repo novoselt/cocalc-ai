@@ -40,6 +40,7 @@ import { AdminPurchaseAdmin } from "./admin-purchase";
 import { UsageStatistics } from "./stats/page";
 import { AdminDataExplorer } from "./admin-data-explorer";
 import { RetentionAdminOverview } from "./retention-overview";
+import { ActiveUsersMapAdmin } from "./active-users-map";
 import {
   getAdminUrlPath,
   normalizeAdminRoute,
@@ -388,6 +389,14 @@ function getAdminSections({
       icon: "users",
       group: "operations",
       component: () => <UserSearch />,
+    },
+    {
+      key: "active-users",
+      title: "Active Users Map",
+      description: "See where recently active users are around the world.",
+      icon: "map",
+      group: "operations",
+      component: () => <ActiveUsersMapAdmin />,
     },
     {
       key: "managed-cpu",
