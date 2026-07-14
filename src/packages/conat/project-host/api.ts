@@ -13,6 +13,7 @@ import type { HostPressureZone } from "@cocalc/conat/hub/api/hosts";
 import type { ManagedProjectEgressOverride } from "@cocalc/conat/files/file-server";
 import type {
   ProjectSecretsRuntimeCache,
+  ProjectSecretsRuntimeRefreshResult,
   ProjectSecretSshKeySetupResult,
 } from "@cocalc/util/project-secrets";
 import type {
@@ -480,7 +481,7 @@ export interface HostControlApi {
   syncProjectSecretsCache: (opts: {
     project_id: string;
     cache: ProjectSecretsRuntimeCache;
-  }) => Promise<{ secret_names: string[] }>;
+  }) => Promise<ProjectSecretsRuntimeRefreshResult>;
   setupProjectSecretSshKey: (opts: {
     project_id: string;
     secret_name: string;

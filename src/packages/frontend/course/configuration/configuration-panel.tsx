@@ -29,6 +29,7 @@ import { Nbgrader } from "./nbgrader";
 import { Parallel } from "./parallel";
 import { StudentProjectHostConfig } from "./student-project-host";
 import { StudentProjectRootfsConfig } from "./student-project-rootfs";
+import { SharedSecrets } from "./shared-secrets";
 import StudentPay from "./student-pay";
 import { getEmailInviteValidationError } from "./email-invite-validation";
 
@@ -119,6 +120,13 @@ export function ConfigurationPanel({
             actions={actions}
             settings={settings}
             project_id={project_id}
+          />
+          <br />
+          <SharedSecrets
+            actions={actions}
+            name={name}
+            project_id={project_id}
+            settings={settings}
           />
           <br />
           <ConfigurationCopying

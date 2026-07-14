@@ -23,6 +23,8 @@ import {
 } from "../sqlite/projects";
 import {
   getCachedProjectSecretsForRuntime,
+  getProjectSecretsCacheState,
+  markProjectSecretsCacheMaterialized,
   syncProjectSecretsCache,
 } from "../project-secrets-cache";
 import { upsertProjectStopState } from "../sqlite/stop-policy";
@@ -658,6 +660,7 @@ type StartMetadata = {
   env?: ProjectEnv;
   autostart_enabled?: boolean | null;
   secrets?: Record<string, string>;
+  secrets_generation?: number;
   project_secrets_cache?: ProjectSecretsRuntimeCache;
   secret_names?: string[];
 };
@@ -716,6 +719,7 @@ async function resolveStartMetadata({
 }): Promise<StartMetadata> {
   const existing = getProject(project_id);
   const cachedSecretNames = (existing as any)?.secret_names;
+  const cachedSecretsState = getProjectSecretsCacheState(project_id);
   let cachedSecrets: Record<string, string> | undefined;
   if (Array.isArray(cachedSecretNames)) {
     if (cachedSecretNames.length === 0) {
@@ -740,6 +744,7 @@ async function resolveStartMetadata({
     env: (existing as any)?.env,
     autostart_enabled: (existing as any)?.autostart_enabled,
     secrets: cachedSecrets,
+    secrets_generation: cachedSecretsState.cached_generation,
     secret_names: cachedSecretNames,
   };
   const needsMaster =
@@ -760,11 +765,14 @@ async function resolveStartMetadata({
           authoritative.secrets == null
             ? undefined
             : Object.keys(authoritative.secrets).sort();
+        let secrets_generation = resolved.secrets_generation;
         if (authoritative.project_secrets_cache != null) {
-          secret_names = syncProjectSecretsCache({
+          const synced = syncProjectSecretsCache({
             project_id,
             cache: authoritative.project_secrets_cache,
           });
+          secret_names = synced.secret_names;
+          secrets_generation = synced.cached_generation;
           secrets = getCachedProjectSecretsForRuntime({ project_id }) ?? {};
         }
         resolved = {
@@ -778,6 +786,7 @@ async function resolveStartMetadata({
           autostart_enabled:
             authoritative.autostart_enabled ?? resolved.autostart_enabled,
           secrets: secrets ?? resolved.secrets,
+          secrets_generation,
           secret_names,
         };
       }
@@ -941,7 +950,12 @@ async function getRunnerConfig(
   project_id: string,
   resolved: Pick<
     StartMetadata,
-    "image" | "authorized_keys" | "run_quota" | "env" | "secrets"
+    | "image"
+    | "authorized_keys"
+    | "run_quota"
+    | "env"
+    | "secrets"
+    | "secrets_generation"
   >,
   opts?: {
     restore?: "none" | "auto" | "required";
@@ -981,6 +995,7 @@ async function getRunnerConfig(
     run_quota,
     env: resolved.env ?? undefined,
     secrets: resolved.secrets ?? undefined,
+    secrets_generation: resolved.secrets_generation,
     restore: opts?.restore,
     restore_backup_id: opts?.restore_backup_id,
     lro_op_id: opts?.lro_op_id,
@@ -1615,6 +1630,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
             run_quota: startMetadata.run_quota,
             env: startMetadata.env,
             secrets: startMetadata.secrets,
+            secrets_generation: startMetadata.secrets_generation,
           },
           {
             restore,
@@ -1667,6 +1683,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
                 run_quota: startMetadata.run_quota,
                 env: startMetadata.env,
                 secrets: startMetadata.secrets,
+                secrets_generation: startMetadata.secrets_generation,
               },
               {
                 restore,
@@ -1701,6 +1718,15 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         });
       });
       const status = started.status;
+      if (
+        status?.state === "running" &&
+        startMetadata.secrets_generation != null
+      ) {
+        markProjectSecretsCacheMaterialized({
+          project_id,
+          generation: startMetadata.secrets_generation,
+        });
+      }
       runnerPhaseTimings = (status as any)?.phase_timings_ms;
       ensureProjectRow({
         project_id,
