@@ -36,6 +36,10 @@ import {
   classifyProjectReadinessUxSegment,
   ensure_project_running,
 } from "@cocalc/frontend/project/project-start-warning";
+import {
+  PROJECT_RUNTIME_RECOVERY_EVENT,
+  type RuntimeRecoveryNotice,
+} from "@cocalc/frontend/project/runtime-recovery";
 import { close, filename_extension, replace_all } from "@cocalc/util/misc";
 import {
   BaseEditorActions as Actions,
@@ -336,12 +340,10 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
 
   private title?: string;
   private projectsStore?;
+  private projectStore?;
   private lastProjectState?: string;
-  private lastProjectRuntimeGeneration?: number;
-  private pendingRuntimeRecoveryNotice?: {
-    id: string;
-    reason: "host_session_changed" | "project_runtime_changed";
-  };
+  private lastRuntimeRecoveryId?: string;
+  private pendingRuntimeRecoveryNotice?: RuntimeRecoveryNotice;
   private projectStartingRetryTimer?: ReturnType<typeof setTimeout>;
   private autoStartProjectOnNextConnect = false;
   private connectGeneration = 0;
@@ -385,7 +387,9 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       this.pendingRuntimeRecoveryNotice = {
         id: recoveryNoticeId,
         reason: recoveryReason,
+        occurred_at: recoveryOccurredAt,
       };
+      this.lastRuntimeRecoveryId = recoveryNoticeId;
     }
     this.path = actions.path;
     this.command = normalizeTerminalCommand(command);
@@ -868,6 +872,10 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       "change",
       this.handleProjectsStoreChange,
     );
+    this.projectStore?.removeListener(
+      PROJECT_RUNTIME_RECOVERY_EVENT,
+      this.handleRuntimeRecovery,
+    );
     this.terminal.dispose();
     close(this);
     this.state = "closed";
@@ -880,10 +888,12 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     }
     this.projectsStore = projectsStore;
     this.lastProjectState = projectsStore.get_state(this.project_id);
-    this.lastProjectRuntimeGeneration = projectsStore.get_runtime_generation?.(
-      this.project_id,
-    );
     projectsStore.on("change", this.handleProjectsStoreChange);
+    this.projectStore = redux.getProjectStore?.(this.project_id);
+    this.projectStore?.on(
+      PROJECT_RUNTIME_RECOVERY_EVENT,
+      this.handleRuntimeRecovery,
+    );
   };
 
   private handleProjectsStoreChange = (): void => {
@@ -891,42 +901,11 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       return;
     }
     const nextState = this.projectsStore?.get_state(this.project_id);
-    const nextRuntimeGeneration = this.projectsStore?.get_runtime_generation?.(
-      this.project_id,
-    );
-    if (
-      nextState === this.lastProjectState &&
-      nextRuntimeGeneration === this.lastProjectRuntimeGeneration
-    ) {
+    if (nextState === this.lastProjectState) {
       return;
     }
     const prevState = this.lastProjectState;
-    const prevRuntimeGeneration = this.lastProjectRuntimeGeneration;
     this.lastProjectState = nextState;
-    this.lastProjectRuntimeGeneration = nextRuntimeGeneration;
-
-    if (
-      prevState === "running" &&
-      nextState === "running" &&
-      nextRuntimeGeneration != null &&
-      nextRuntimeGeneration !== prevRuntimeGeneration
-    ) {
-      this.pty?.close();
-      this.pty = null;
-      this.set_connection_status("disconnected");
-      this.ptyExited = false;
-      this.clearProjectStartingRetry();
-      void this.showRuntimeRecoveryMessage(
-        projectRuntimeRestartedTerminalMessage(this.terminal.cols),
-      ).then(() => {
-        void this.connect();
-        this.reconnectResource?.requestReconnect({
-          reason: "project_runtime_changed",
-          resetBackoff: true,
-        });
-      });
-      return;
-    }
 
     if (prevState === "running" && nextState !== "running") {
       this.pty?.close();
@@ -944,6 +923,31 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
         resetBackoff: true,
       });
     }
+  };
+
+  private handleRuntimeRecovery = (notice: RuntimeRecoveryNotice): void => {
+    if (
+      this.isClosed() ||
+      notice.reason !== "project_runtime_changed" ||
+      notice.id === this.lastRuntimeRecoveryId
+    ) {
+      return;
+    }
+    this.lastRuntimeRecoveryId = notice.id;
+    this.pty?.close();
+    this.pty = null;
+    this.set_connection_status("disconnected");
+    this.ptyExited = false;
+    this.clearProjectStartingRetry();
+    void this.showRuntimeRecoveryMessage(
+      projectRuntimeRestartedTerminalMessage(this.terminal.cols),
+    ).then(() => {
+      void this.connect();
+      this.reconnectResource?.requestReconnect({
+        reason: "project_runtime_changed",
+        resetBackoff: true,
+      });
+    });
   };
 
   private clearProjectStartingRetry = (): void => {

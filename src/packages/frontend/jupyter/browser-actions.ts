@@ -114,6 +114,10 @@ import { ensureProjectRunningForJupyter } from "./project-start";
 import { getProjectStartPolicyBlockFromError } from "@cocalc/frontend/projects/runtime-start-policy";
 import { classifyProjectReadinessUxSegment } from "@cocalc/frontend/project/project-start-warning";
 import {
+  PROJECT_RUNTIME_RECOVERY_EVENT,
+  type RuntimeRecoveryNotice,
+} from "@cocalc/frontend/project/runtime-recovery";
+import {
   elapsedUxMs,
   recordUxLatencyEvent,
   startUxTimer,
@@ -202,8 +206,8 @@ export class JupyterActions extends JupyterActions0 {
   private kernelStatusRefreshTimeout?: ReturnType<typeof setTimeout>;
   private completedLiveRunIds = new globalThis.Map<string, number>();
   private reconnectResource?: RegisteredReconnectResource;
-  private projectsStore?: any;
-  private lastProjectRuntimeGeneration?: number;
+  private projectStore?: any;
+  private lastRuntimeRecoveryId?: string;
   private handleSyncdbDisconnected = () => {
     this.reconnectResource?.requestReconnect({
       reason: "jupyter_syncdb_disconnected",
@@ -1496,11 +1500,11 @@ export class JupyterActions extends JupyterActions0 {
       if (this.isClosed()) return;
       this.reconnectResource?.close();
       this.reconnectResource = undefined;
-      this.projectsStore?.removeListener?.(
-        "change",
+      this.projectStore?.removeListener?.(
+        PROJECT_RUNTIME_RECOVERY_EVENT,
         this.handleProjectRuntimeChange,
       );
-      this.projectsStore = undefined;
+      this.projectStore = undefined;
       this.syncdb?.removeListener?.(
         "disconnected",
         this.handleSyncdbDisconnected,
@@ -1570,35 +1574,34 @@ export class JupyterActions extends JupyterActions0 {
   }
 
   private initProjectRuntimeWatcher(): void {
-    const projectsStore = this.redux.getStore("projects") as any;
-    if (projectsStore == null) {
+    const projectStore = this.redux.getProjectStore?.(this.project_id) as any;
+    if (projectStore == null) {
       return;
     }
-    this.projectsStore = projectsStore;
-    this.lastProjectRuntimeGeneration = projectsStore.get_runtime_generation?.(
-      this.project_id,
-    );
+    this.projectStore = projectStore;
+    const notice = projectStore.get?.("runtime_recovery_notice");
+    const noticeId = notice?.get?.("id");
+    if (typeof noticeId === "string") {
+      this.lastRuntimeRecoveryId = noticeId;
+    }
     this.handleProjectRuntimeChange =
       this.handleProjectRuntimeChange.bind(this);
-    projectsStore.on?.("change", this.handleProjectRuntimeChange);
+    projectStore.on?.(
+      PROJECT_RUNTIME_RECOVERY_EVENT,
+      this.handleProjectRuntimeChange,
+    );
   }
 
-  private handleProjectRuntimeChange(): void {
-    if (this.isClosed()) {
+  private handleProjectRuntimeChange(notice: RuntimeRecoveryNotice): void {
+    if (
+      this.isClosed() ||
+      notice.reason !== "project_runtime_changed" ||
+      notice.id === this.lastRuntimeRecoveryId
+    ) {
       return;
     }
-    const nextRuntimeGeneration = this.projectsStore?.get_runtime_generation?.(
-      this.project_id,
-    );
-    if (nextRuntimeGeneration === this.lastProjectRuntimeGeneration) {
-      return;
-    }
-    const previousRuntimeGeneration = this.lastProjectRuntimeGeneration;
-    this.lastProjectRuntimeGeneration = nextRuntimeGeneration;
-    if (previousRuntimeGeneration == null || nextRuntimeGeneration == null) {
-      return;
-    }
-    this.closeJupyterClient("project_runtime_generation_changed");
+    this.lastRuntimeRecoveryId = notice.id;
+    this.closeJupyterClient("project_runtime_changed");
     this.clearRunQueue();
     this.runningNow = false;
     this.clear_all_cell_run_state();

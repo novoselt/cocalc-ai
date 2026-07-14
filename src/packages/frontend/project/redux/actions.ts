@@ -89,6 +89,11 @@ import {
 } from "@cocalc/frontend/project_configuration";
 import { ModalInfo, ProjectStore, ProjectStoreState } from "./store";
 import { downloadProjectFile } from "./download-file";
+import {
+  PROJECT_RUNTIME_RECOVERY_EVENT,
+  ProjectRuntimeTracker,
+  type RuntimeRecoveryNotice,
+} from "../runtime-recovery";
 
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
@@ -375,6 +380,7 @@ export class ProjectActions extends Actions<ProjectStoreState> {
   // these are all potentially expensive
   public open_files?: OpenFiles;
   private projectStatusSub?;
+  private projectRuntimeTracker = new ProjectRuntimeTracker();
   private projectLogStream?: DStream<ProjectLogRow>;
   private releaseProjectLogStream?: SharedProjectDStreamRelease;
   private copyOpsManager: CopyOpsManager;
@@ -2738,12 +2744,10 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     recovery_id?: string;
   }) => {
     if (opts?.reason != null) {
-      this.setState({
-        runtime_recovery_notice: {
-          id: opts.recovery_id ?? misc.uuid(),
-          reason: opts.reason,
-          occurred_at: Date.now(),
-        },
+      this.publishRuntimeRecoveryNotice({
+        id: opts.recovery_id ?? misc.uuid(),
+        reason: opts.reason,
+        occurred_at: Date.now(),
       });
     }
     this.clearFilesystemClient();
@@ -2782,13 +2786,16 @@ export class ProjectActions extends Actions<ProjectStoreState> {
   };
 
   noteProjectRuntimeChanged = ({ recovery_id }: { recovery_id: string }) => {
-    this.setState({
-      runtime_recovery_notice: {
-        id: recovery_id,
-        reason: "project_runtime_changed",
-        occurred_at: Date.now(),
-      },
+    this.publishRuntimeRecoveryNotice({
+      id: recovery_id,
+      reason: "project_runtime_changed",
+      occurred_at: Date.now(),
     });
+  };
+
+  private publishRuntimeRecoveryNotice = (notice: RuntimeRecoveryNotice) => {
+    this.setState({ runtime_recovery_notice: notice });
+    this.get_store()?.emit(PROJECT_RUNTIME_RECOVERY_EVENT, notice);
   };
 
   private recoverOpenFileRuntimeInFlight = new globalThis.Map<
@@ -3637,10 +3644,11 @@ export class ProjectActions extends Actions<ProjectStoreState> {
         project_id: this.project_id,
         caller: "ProjectActions.initProjectStatus",
       });
-      this.projectStatusSub = await getProjectStatus({
+      const subscription = await getProjectStatus({
         client,
         project_id: this.project_id,
       });
+      this.projectStatusSub = subscription;
       this.collaboratorRealtimeRetryCount = 0;
       this.clearCollaboratorRealtimeRetry();
     } catch (err) {
@@ -3654,8 +3662,18 @@ export class ProjectActions extends Actions<ProjectStoreState> {
       console.warn(`unable to subscribe to project status updates: `, err);
       return;
     }
-    for await (const mesg of this.projectStatusSub) {
+    const subscription = this.projectStatusSub;
+    for await (const mesg of subscription) {
+      if (this.projectStatusSub !== subscription) {
+        break;
+      }
       const status = mesg.data;
+      const changedRuntimeId = this.projectRuntimeTracker.observe(status);
+      if (changedRuntimeId != null) {
+        this.noteProjectRuntimeChanged({
+          recovery_id: `${this.project_id}:${changedRuntimeId}`,
+        });
+      }
       this.setState({ status });
     }
   };

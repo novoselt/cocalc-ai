@@ -53,34 +53,36 @@ describe("JupyterActions reconnect coordination", () => {
   });
 
   it("drops only the kernel execution client when the project runtime changes", () => {
-    class ProjectsStore extends EventEmitter {
-      generation = 1;
-      get_runtime_generation = () => this.generation;
+    class ProjectStore extends EventEmitter {
+      get = () => undefined;
     }
-    const projectsStore = new ProjectsStore();
+    const projectStore = new ProjectStore();
     const closeJupyterClient = jest.fn();
     const clearRunQueue = jest.fn();
     const clear_all_cell_run_state = jest.fn();
     const target: any = {
       project_id: "project-1",
       redux: {
-        getStore: jest.fn(() => projectsStore),
+        getProjectStore: jest.fn(() => projectStore),
       },
       isClosed: jest.fn(() => false),
       closeJupyterClient,
       clearRunQueue,
       clear_all_cell_run_state,
     };
-    target.handleProjectRuntimeChange = () =>
-      JupyterActions.prototype["handleProjectRuntimeChange"].call(target);
-
+    target.handleProjectRuntimeChange = (notice) =>
+      JupyterActions.prototype["handleProjectRuntimeChange"].call(
+        target,
+        notice,
+      );
     JupyterActions.prototype["initProjectRuntimeWatcher"].call(target);
-    projectsStore.generation = 2;
-    projectsStore.emit("change");
+    projectStore.emit("runtime-recovery", {
+      id: "project-1:runtime-2",
+      reason: "project_runtime_changed",
+      occurred_at: Date.now(),
+    });
 
-    expect(closeJupyterClient).toHaveBeenCalledWith(
-      "project_runtime_generation_changed",
-    );
+    expect(closeJupyterClient).toHaveBeenCalledWith("project_runtime_changed");
     expect(clearRunQueue).toHaveBeenCalled();
     expect(clear_all_cell_run_state).toHaveBeenCalled();
     expect(target.runningNow).toBe(false);

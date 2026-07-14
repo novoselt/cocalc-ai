@@ -832,13 +832,12 @@ describe("connected terminal resizing", () => {
     }
   });
 
-  it("reconnects immediately when running project runtime generation changes", async () => {
+  it("reconnects immediately when the project runtime is replaced", async () => {
     let terminal: any;
     try {
       const { Terminal, ptys, projectStore, reconnectResources } =
         loadTerminalModule({
           projectState: "running",
-          runtimeGeneration: 1,
         });
       const parent = document.createElement("div");
       document.body.appendChild(parent);
@@ -865,7 +864,11 @@ describe("connected terminal resizing", () => {
       await terminal.connect();
       expect(ptys[0].close).not.toHaveBeenCalled();
 
-      projectStore.setStatus("running", 2);
+      projectStore.emit("runtime-recovery", {
+        id: "project-1:runtime-2",
+        reason: "project_runtime_changed",
+        occurred_at: Date.now(),
+      });
 
       await new Promise((resolve) => setTimeout(resolve, 0));
 
