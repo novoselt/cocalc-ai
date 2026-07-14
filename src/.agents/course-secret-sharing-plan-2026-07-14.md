@@ -57,6 +57,240 @@ The existing project-secrets guarantees remain in force:
 Course sharing adds authorization, provenance, recipient approval, and audit
 state around the existing copy mechanics.
 
+## General Project-Secret Live Runtime Refresh
+
+Course sharing should not inherit the current requirement to restart every
+student project after installing or rotating a secret. Besides being expensive
+for a large course, that requirement is difficult to explain: the project
+secret mutation succeeds immediately, but the mounted file remains stale until
+an apparently unrelated project restart.
+
+Implement live runtime refresh for project secrets generally before enabling
+course distribution. This is a project-secrets capability, not course-specific
+logic. Ordinary set, replace, delete, copy, generated SSH-key, and
+course-managed mutations must all use the same host synchronization path.
+
+This is also a deliberate advantage over environment variables. CoCalc exposes
+secrets as files, so the host can change what future pathname reads return.
+There is no reliable general mechanism for changing the inherited environment
+of every already-running process.
+
+### Current Runtime Path
+
+The existing implementation already performs most of the required routing:
+
+1. The owning bay commits a project-secret mutation in Postgres.
+2. It builds a full encrypted runtime cache and sends it to the project's
+   assigned host.
+3. The project-host replaces its encrypted SQLite cache.
+4. At project start, the project runner decrypts the cache, creates a private
+   host directory under `/tmp/cocalc-project-secrets/<project_id>`, and bind
+   mounts it read-only at `/run/secrets/cocalc`.
+
+The missing operation is step 5: when the container is already running, update
+the existing host directory after accepting the new encrypted cache.
+
+A read-only bind mount prevents writes from inside the project container. It
+does not prevent the trusted project-host from changing the bind mount's source
+files. Those changes are visible to future pathname lookups in the running
+container without changing Podman configuration.
+
+### Required Semantics
+
+- Setting or replacing a secret makes the new file contents visible to a
+  running project without restarting the project.
+- Deleting a secret removes its pathname from a running project without
+  restarting the project.
+- A stopped project only updates its encrypted host cache; its next start
+  materializes the latest generation.
+- A project that is starting or stopping is synchronized with the refresh so
+  cleanup and materialization cannot race.
+- Each individual secret file changes atomically. A reader sees either the old
+  complete value or the new complete value, never a partial write.
+- A process that already opened a deleted file may retain its open file
+  descriptor, and an application that cached a value may retain that value.
+  CoCalc guarantees live mounted-file refresh, not forced application reload.
+- No project restart is automatically scheduled. An application-specific
+  reload or restart may still be appropriate when that application reads its
+  secret only once at startup.
+
+### Ordered Cache Generations
+
+The current full-cache payload has no project-level revision. Concurrent
+mutations can build cache snapshots that arrive at the host out of order. This
+is already a cache correctness risk and must be fixed before the cache directly
+updates a running runtime.
+
+Add an authoritative, monotonically increasing per-project secrets runtime
+generation. A separate durable `project_secrets_runtime_state` row is cleaner
+than deriving a generation from `MAX(updated_at)`, because deleting the final
+secret must also advance the generation.
+
+Suggested fields:
+
+```sql
+project_id UUID PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,
+generation BIGINT NOT NULL DEFAULT 0,
+updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+```
+
+Rules:
+
+- every transaction that changes a secret value or membership in the runtime
+  set increments the generation exactly once;
+- this includes set, replace, delete, import, generic copy, generated SSH keys,
+  course-managed install/update/delete, and project clone initialization;
+- metadata-only changes such as `allow_course_sharing` do not increment it;
+- the owning bay reads the generation and complete encrypted entry set from one
+  consistent database snapshot, so a cache payload cannot pair a new
+  generation with old entries or the reverse;
+- `ProjectSecretsRuntimeCache` carries the generation;
+- project-host SQLite persists both the encrypted `cached_generation` and the
+  last successfully applied `materialized_generation`;
+- the host rejects an older generation and treats an equal generation as an
+  idempotent cache replay, but still retries live materialization when
+  `materialized_generation` is behind;
+- the host returns cached generation, materialized generation, and runtime
+  refresh outcome.
+
+Update table ownership, hard-delete, backup/restore, and rehome handling for the
+runtime-state row. It is authoritative on the same bay as the project.
+
+### Live Materialization Algorithm
+
+Do not reuse the startup helper's whole-directory replacement for a running
+project. A bind mount remains attached to the directory inode that existed when
+the container started; renaming a new directory over the host pathname does not
+retarget that existing mount.
+
+For an accepted cache generation:
+
+1. Serialize refreshes with a per-project lock shared with project start,
+   stop, runtime cleanup, and host-side SSH secret setup.
+2. Validate and decrypt the complete cache in memory before modifying the live
+   directory.
+3. Commit the encrypted cache and `cached_generation` to project-host SQLite.
+4. Determine the real local runtime state under the same lifecycle lock.
+5. If the project is not running, return `cached_for_next_start`.
+6. If it is running, verify that its secret bind mount points at the expected
+   private host path. Fail closed on a mismatched or missing mount.
+7. Create a private sibling staging directory, never a temporary file inside
+   the mounted directory.
+8. Write every new or changed value into staging with the existing private
+   ownership and `0400` mode; flush and validate all files before publishing.
+9. Atomically rename each staged file over its destination in the existing
+   mounted directory.
+10. Remove destination names absent from the new generation only after all
+    additions and replacements have succeeded.
+11. Persist `materialized_generation`, remove staging, and return
+    `updated_live` with both generations equal.
+
+This provides atomicity per secret file. A multi-secret refresh may have a very
+short mixed-generation interval while individual renames complete. That is an
+acceptable initial contract because secrets are independently addressed files;
+document it and test that no partial file content is observable. If a future
+consumer requires all files to switch as one snapshot, introduce a versioned
+directory plus an atomically replaced in-mount indirection rather than trying
+to replace the bind-mounted directory itself.
+
+Never leave staging files or old plaintext generations visible in the mounted
+directory. Cleanup must run on success, failure, project stop, startup failure,
+and project-host startup garbage collection.
+
+### Lifecycle And Failure Handling
+
+The live refresh must be coordinated with the existing `starting` and
+`stopping` states. Merely checking those sets without a shared lock leaves a
+time-of-check/time-of-use race.
+
+Use one per-project asynchronous lifecycle lock for:
+
+- startup materialization and container launch;
+- live secret refresh;
+- stop and runtime-directory cleanup;
+- generated SSH-key symlink setup where ordering matters.
+
+The central Postgres mutation remains authoritative if host synchronization
+fails. Do not roll back a successfully stored secret merely because a host is
+temporarily unavailable. Instead:
+
+- return a value-free runtime outcome such as `updated_live`,
+  `cached_for_next_start`, `retry_pending`, or `stale_ignored`;
+- record desired, cached, and materialized generations, never values or
+  ciphertext;
+- retain a retryable dirty/pending state for an assigned running project;
+- retry on host reconnect/reconciliation and allow an explicit UI retry;
+- always fetch the latest authoritative generation during retry rather than
+  replaying a stale plaintext payload;
+- use the next project start as the final fallback.
+
+The current server path logs and suppresses host cache-sync failures. That is
+not sufficient once the UI promises immediate visibility. Account-facing
+mutation responses should include a safe runtime-refresh result, or a separate
+status query must make it available. A successful central write with
+`retry_pending` is still a successful secret mutation, but the UI must clearly
+say that the running mount has not caught up yet.
+
+Course sync results should record this runtime outcome per destination. A host
+refresh failure must not be reported as a failed encrypted database install,
+and it must not trigger a project restart fanout.
+
+### Security Properties
+
+Live refresh does not broaden the existing trust boundary: project-host already
+decrypts and materializes every value at project start. Preserve these rules:
+
+- plaintext exists only in project-host memory, the private staging area, and
+  the private runtime mount source;
+- staging and runtime paths remain outside project home, RootFS state, backup
+  roots, snapshots, downloads, and public-share paths;
+- no plaintext, ciphertext, or value-derived digest appears in RPC results,
+  durable retry state, audit rows, errors, or logs;
+- validate every secret name before path construction;
+- use same-filesystem atomic renames and never follow project-controlled
+  symlinks in the host runtime tree;
+- verify permissions after replacement and fail closed if the runtime path or
+  mount identity is unexpected;
+- deletion removes new pathname access but cannot revoke a value already read
+  by a process or collaborator.
+
+### General UI Changes
+
+- Remove the unconditional `Restart this project` warning after ordinary set,
+  delete, and copy operations.
+- Show a concise success state when the running mount was updated.
+- Show a retryable warning only when runtime synchronization is pending or
+  failed.
+- Change generated SSH deploy-key setup to create the symlink and refresh the
+  mounted private key without restarting the project.
+- Remove `restart_required` from the SSH-key result contract, or replace it
+  with the common runtime-refresh result.
+- Explain that long-running applications may need to reload their own
+  configuration after rotation, without implying that the whole CoCalc project
+  must restart.
+
+### Live Refresh Test Matrix
+
+- a running container sees a newly added secret by pathname without restart;
+- a running container sees an atomically replaced value without restart;
+- a running container no longer sees a deleted secret by pathname;
+- an already-open file descriptor has the documented Unix behavior;
+- stopped projects return `cached_for_next_start` and start with the latest
+  generation;
+- out-of-order and duplicate cache deliveries cannot roll back host state;
+- concurrent set/delete/copy operations converge to the authoritative latest
+  generation;
+- refresh racing start or stop cannot expose stale values, resurrect deleted
+  files, or leave plaintext directories behind;
+- no staging filename is visible from inside the container;
+- permission, symlink, mount-identity, and malformed-name attacks fail closed;
+- host disconnect produces `retry_pending`, then reconciliation applies only
+  the newest generation;
+- generated SSH deploy keys become usable without a project restart;
+- representative logs, RPC responses, retry records, backups, snapshots, and
+  RootFS publication contain no canary value;
+- same-bay and cross-bay mutations produce identical refresh semantics.
+
 ## Goals
 
 - Let an instructor explicitly select a small set of source-project secrets to
@@ -71,6 +305,8 @@ state around the existing copy mechanics.
 - Allow safe updates of course-managed secrets without overwriting unrelated
   destination secrets.
 - Support same-bay and cross-bay student projects.
+- Make installed, updated, and removed secret files visible to running student
+  projects without restarting those projects.
 - Provide durable, value-free audit records for policy changes and sync runs.
 - Make disabling, cleanup, rotation, conflicts, and partial failures visible.
 - Fail closed when policy, identity, authorization, or project association is
@@ -88,8 +324,12 @@ state around the existing copy mechanics.
   exactly the project containing the `.course` file.
 - Do not support destination aliases initially. Source and destination secret
   names are identical.
-- Do not perform scheduled or background synchronization initially.
-- Do not restart student projects automatically after secret changes.
+- Do not perform scheduled or background course distribution initially. This
+  does not prohibit retrying a failed project-host runtime refresh for a secret
+  already committed to one destination project.
+- Do not restart student projects automatically after secret changes. Use the
+  general live mounted-file refresh path, with application-specific reloads
+  left to applications that cache values.
 - Do not copy course-sharing eligibility or policies when cloning or copying
   projects or secrets.
 
@@ -204,6 +444,8 @@ The implementation is not complete unless all of these remain true:
     progress at its next bounded checkpoint.
 15. Generic project clone and secret-copy operations do not copy course policy,
     shareability, recipient approval, or managed provenance.
+16. Runtime cache generations never move backward, and updating the mounted
+    files of a running project never requires a project restart.
 
 ## Course Identity
 
@@ -531,7 +773,7 @@ Responses include only:
 - validation and conflict status;
 - revision numbers;
 - aggregate and per-target result codes;
-- restart-required indicators.
+- runtime-refresh outcomes and generations.
 
 No account-facing response returns a source or destination value.
 
@@ -557,13 +799,16 @@ Use the course/source owning bay as coordinator.
     fences, secret limits, and provenance conflicts.
 13. In one target-bay transaction, encrypt for the target project, write or
     update `project_secrets`, and write managed provenance.
-14. Refresh the destination host's encrypted secrets cache.
+14. Refresh the destination host's encrypted secrets cache and, when the
+    project is running, atomically refresh the mounted secret files through the
+    general live runtime path.
 15. Record a value-free result and publish project secret metadata
     invalidation.
 16. Between bounded batches, recheck policy generation and enabled state.
 17. If policy generation or a source revision changed, stop with `stale_policy`
     or `stale_source_revision`; do not mix revisions silently.
-18. Complete the run with aggregate counts and restart-required status.
+18. Complete the run with aggregate counts and value-free runtime-refresh
+    status, including any destinations pending host retry.
 
 Plaintext values must never be persisted in the durable run. If a worker
 restarts, it revalidates and decrypts the pinned current revision again. If the
@@ -593,7 +838,8 @@ Do not offer `overwrite anything` in the course UI.
 
 Ownership:
 
-- source `project_secrets`: source project owning bay;
+- source `project_secrets` and `project_secrets_runtime_state`: source project
+  owning bay;
 - course policies, grants, recipients, and sync runs: course project owning bay;
 - destination `project_secrets` and managed provenance: destination project
   owning bay.
@@ -653,7 +899,7 @@ The card shows:
 - new/unapproved student project count;
 - conflicts and invalid course associations;
 - last sync actor, time, and summary;
-- restart-required count;
+- live-updated, next-start, and retry-pending counts;
 - disabled/revoked state.
 
 Actions:
@@ -708,8 +954,9 @@ the panel, reviews new recipients, and explicitly shares.
 ### Source Value Update
 
 Replacing a source secret increments its revision but does not push it. The
-course panel shows that approved projects are out of date. An instructor runs
-an explicit update.
+source project's own running mount refreshes normally, but no student copy is
+changed. The course panel shows that approved projects are out of date. An
+instructor runs an explicit update.
 
 ### Disable Source Eligibility
 
@@ -751,7 +998,7 @@ Record durable events for:
 - sync started/completed/failed/stopped stale;
 - destination created/updated/conflicted/skipped;
 - cleanup started/completed/failed;
-- runtime cache refresh failed.
+- runtime cache or live mount refresh completed/pending/failed.
 
 Each event includes relevant IDs, actor, source revision, policy generation,
 counts, and timestamps. No event includes plaintext or ciphertext.
@@ -786,6 +1033,8 @@ Reject over-limit requests before decrypting any value.
 
 - existing secrets migrate with `allow_course_sharing=FALSE`;
 - existing secrets get a stable initial revision;
+- runtime-state generations advance on every value-set change, including
+  deletion of the final secret;
 - policy tables enforce uniqueness and foreign keys;
 - provenance cannot exist without a destination secret;
 - all durable tables appear in table ownership and hard-delete manifests;
@@ -845,6 +1094,8 @@ Reject over-limit requests before decrypting any value.
 - revocation during a run stops after a bounded checkpoint;
 - project rehome fence prevents writes to stale ownership;
 - target cache refresh and invalidation occur after successful writes;
+- running targets see installed and updated files without a project restart;
+- out-of-order target cache delivery cannot roll back the accepted generation;
 - one target failure does not hide successful/failed per-target results;
 - durable run records survive coordinator restart without stored plaintext.
 
@@ -855,8 +1106,9 @@ Reject over-limit requests before decrypting any value.
 - cleanup removes only exact managed provenance matches;
 - cleanup does not remove unmanaged or other-policy secrets;
 - cleanup works after destination is no longer course-linked;
-- cache invalidation runs after deletion;
-- restart-required status is reported.
+- cache invalidation and live mount removal run after deletion;
+- runtime refresh pending/failure status is reported without scheduling a
+  project restart.
 
 ### Leak Tests
 
@@ -886,13 +1138,16 @@ Use recognizable canary values and assert they do not appear in:
    and preserves it.
 6. Start a large sync, then revoke the policy. Verify bounded termination and
    accurate partial results.
-7. Rotate a source key, sync explicitly, restart a student project, and verify
-   the new value is mounted while the browser and logs never saw it.
+7. Rotate a source key and sync explicitly. Verify a running student project
+   sees the new complete value without restart while the browser and logs never
+   saw it.
 
 ## Implementation Phases
 
 ### Phase 0: Security Prerequisites
 
+- implement and audit the general ordered project-secret live runtime refresh,
+  including lifecycle locking, retry status, and the live refresh test matrix;
 - harden `setCourseInfo` for new course associations;
 - add canonical course-path normalization shared by frontend and backend;
 - add `course_id` initialization and duplicate-identity handling;
@@ -924,7 +1179,7 @@ Do not proceed to value transfer until this phase is reviewed.
 - implement same-bay coordinator and target transaction;
 - add managed provenance and collision rules;
 - add durable run/results without plaintext;
-- add cache refresh and restart-required reporting;
+- add ordered cache and live mounted-file refresh with retry-pending reporting;
 - complete unit, integration, replay, and leak tests.
 
 ### Phase 4: Cross-Bay Transfer And Rehome
@@ -971,8 +1226,10 @@ The feature is ready only when:
 - unmanaged destination values are never overwritten;
 - copied values retain managed provenance and can be updated or cleaned safely;
 - all mutation paths require fresh authentication and durable audit records;
-- same-bay, cross-bay, restart, retry, partial failure, revocation, and rehome
-  behavior are tested;
+- same-bay, cross-bay, live refresh, next-start fallback, retry, partial
+  failure, revocation, and rehome behavior are tested;
+- running student projects receive added, rotated, and removed mounted secret
+  files without project restarts;
 - canary values are absent from files, browser state, logs, durable jobs, and
   audit records;
 - the UI plainly states that students can read distributed provider keys and
