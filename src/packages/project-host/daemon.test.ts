@@ -73,6 +73,35 @@ describe("project-host daemon stop", () => {
     process.env = originalEnv;
   });
 
+  it("archives the previous project-host log before a new daemon starts", () => {
+    const dataDir = mkTempDir("cocalc-project-host-daemon-");
+    const logPath = path.join(dataDir, "log");
+    fs.writeFileSync(logPath, "last line before crash\n", { mode: 0o600 });
+
+    const archived = __test__.archivePreviousDaemonLog(dataDir, logPath);
+
+    expect(archived).toBeDefined();
+    expect(fs.existsSync(logPath)).toBe(false);
+    expect(fs.readFileSync(archived!, "utf8")).toBe("last line before crash\n");
+    expect(path.dirname(archived!)).toBe(path.join(dataDir, "log-history"));
+  });
+
+  it("bounds retained project-host log history", () => {
+    const dataDir = mkTempDir("cocalc-project-host-daemon-");
+    const logPath = path.join(dataDir, "log");
+    process.env.COCALC_PROJECT_HOST_LOG_HISTORY_LIMIT = "2";
+    for (let i = 0; i < 4; i += 1) {
+      fs.writeFileSync(logPath, `log ${i}\n`, { mode: 0o600 });
+      __test__.archivePreviousDaemonLog(dataDir, logPath);
+    }
+
+    expect(
+      fs
+        .readdirSync(path.join(dataDir, "log-history"))
+        .filter((name) => name.endsWith(".log")),
+    ).toHaveLength(2);
+  });
+
   it("waits for SIGTERM exit before removing the pid file", () => {
     const dataDir = mkTempDir("cocalc-project-host-daemon-");
     const pidPath = path.join(dataDir, "daemon.pid");

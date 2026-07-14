@@ -53,6 +53,8 @@ const PODMAN_RUNTIME_NAMESPACE_ERROR_PATTERNS = [
   /invalid internal status/i,
 ];
 const FORENSICS_DIR = "forensics";
+const PROJECT_HOST_LOG_HISTORY_DIR = "log-history";
+const PROJECT_HOST_LOG_HISTORY_PREFIX = "project-host-";
 const DEFAULT_PROJECT_HOST_ROOTCTL =
   "/usr/local/sbin/cocalc-project-host-rootctl";
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
@@ -995,6 +997,47 @@ function matchingSshpiperdPids(sshPort?: number): number[] {
 function getPositiveIntEnv(name: string, fallback: number): number {
   const raw = Number(process.env[name]);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
+function archivePreviousDaemonLog(
+  dataDir: string,
+  logPath: string,
+): string | undefined {
+  if (!fs.existsSync(logPath)) {
+    return;
+  }
+  const historyDir = path.join(dataDir, PROJECT_HOST_LOG_HISTORY_DIR);
+  fs.mkdirSync(historyDir, { recursive: true, mode: 0o700 });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const base = `${PROJECT_HOST_LOG_HISTORY_PREFIX}${timestamp}`;
+  let archivePath = path.join(historyDir, `${base}.log`);
+  for (let suffix = 1; fs.existsSync(archivePath); suffix += 1) {
+    archivePath = path.join(historyDir, `${base}-${suffix}.log`);
+  }
+  fs.renameSync(logPath, archivePath);
+  try {
+    fs.chmodSync(archivePath, 0o600);
+  } catch {
+    // best effort
+  }
+
+  const keep = Math.min(
+    50,
+    getPositiveIntEnv("COCALC_PROJECT_HOST_LOG_HISTORY_LIMIT", 5),
+  );
+  const archived = fs
+    .readdirSync(historyDir)
+    .filter(
+      (name) =>
+        name.startsWith(PROJECT_HOST_LOG_HISTORY_PREFIX) &&
+        name.endsWith(".log"),
+    )
+    .sort()
+    .reverse();
+  for (const name of archived.slice(keep)) {
+    fs.rmSync(path.join(historyDir, name), { force: true });
+  }
+  return archivePath;
 }
 
 function sleepMs(ms: number): void {
@@ -2322,12 +2365,14 @@ export function startDaemon(index = 0): void {
   } catch {
     // best effort
   }
+  let previousLogPath: string | undefined;
   try {
-    if (fs.existsSync(logPath)) {
-      fs.unlinkSync(logPath);
-    }
+    previousLogPath = archivePreviousDaemonLog(dataDir, logPath);
   } catch (err) {
-    console.error(`warning: unable to truncate log at ${logPath}:`, err);
+    console.error(
+      `warning: unable to archive existing log at ${logPath}; preserving it by appending:`,
+      err,
+    );
   }
   const stdout = fs.openSync(logPath, "a");
   const stderr = fs.openSync(logPath, "a");
@@ -2375,6 +2420,7 @@ export function startDaemon(index = 0): void {
       app_port: projectHostPort ?? httpPort ?? 9002,
       public_http_port: httpPort,
       log_path: logPath,
+      previous_log_path: previousLogPath,
     },
   });
   console.log(`project-host started (pid ${child.pid}); log=${logPath}`);
@@ -2563,6 +2609,7 @@ function ensureDaemonWithOptions(index = 0, options?: EnsureOptions): void {
       component: "project-host",
       action: "stale_pid",
       message: "project-host pid file was stale",
+      pid: Number.isInteger(pid) ? pid : undefined,
       metadata: { pid_path: pidPath },
     });
   } else {
@@ -2933,6 +2980,7 @@ export function handleDaemonCli(argv: string[]): boolean {
 }
 
 export const __test__ = {
+  archivePreviousDaemonLog,
   captureProcessForensics,
   checkHealthSync,
   cleanupStrayProcesses,

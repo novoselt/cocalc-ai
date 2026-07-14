@@ -32,7 +32,7 @@ const SYNTHETIC_PROBE_CLAIM_TIMEOUT_MS = Math.max(
 );
 const SYNTHETIC_PROBE_RPC_TIMEOUT_MS = Math.max(
   2 * 60_000,
-  Number(process.env.COCALC_HOST_SYNTHETIC_PROBE_RPC_TIMEOUT_MS ?? 15 * 60_000),
+  Number(process.env.COCALC_HOST_SYNTHETIC_PROBE_RPC_TIMEOUT_MS ?? 2 * 60_000),
 );
 const SYNTHETIC_PROBE_ALERT_INTERVAL_MS = Math.max(
   60_000,
@@ -141,6 +141,21 @@ function errorText(err: unknown): string {
 
 function hostName(row: RuntimeHostRow): string {
   return `${row.name ?? row.metadata?.name ?? row.id}`.trim() || row.id;
+}
+
+function deploymentLabel(row: RuntimeHostRow): string {
+  if (!row.public_url) {
+    return "unknown-site";
+  }
+  try {
+    const hostname = new URL(row.public_url).hostname;
+    const hostPrefix = `host-${row.id}-`;
+    return hostname.startsWith(hostPrefix)
+      ? hostname.slice(hostPrefix.length)
+      : hostname;
+  } catch {
+    return row.public_url;
+  }
 }
 
 function cloudProvider(row: RuntimeHostRow): string | undefined {
@@ -482,10 +497,12 @@ async function executeSyntheticProbe(
       err: errorText(err),
     });
     if (alertDue) {
+      const site = deploymentLabel(row);
       await adminAlert({
-        subject: `Project-host synthetic probe failed: ${hostName(row)}`,
+        subject: `[${site}] Project-host synthetic probe failed: ${hostName(row)}`,
         body: [
           `A full synthetic project lifecycle probe failed on ${hostName(row)}.`,
+          `site=${site}`,
           `host_id=${row.id}`,
           `error=${errorText(err)}`,
           row.public_url ? `url=${row.public_url}` : undefined,
@@ -788,6 +805,7 @@ export async function runProjectHostRuntimeMaintenance(): Promise<void> {
 
 export const _test = {
   autoRebootDecision,
+  deploymentLabel,
   recentRebootAttempts,
   recoveredAutoRebootState,
   syntheticProbeFailureAlertDue,

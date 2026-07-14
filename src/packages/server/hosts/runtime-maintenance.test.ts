@@ -159,4 +159,21 @@ describe("project-host runtime maintenance policy", () => {
     ).toISOString();
     expect(_test.syntheticProbeFailureAlertDue(row, NOW)).toBe(true);
   });
+
+  it("identifies the deployment from the project-host public URL", () => {
+    const id = "c2c1bb5b-d5fb-4a06-8904-4549f4089ac2";
+    expect(
+      _test.deploymentLabel({
+        id,
+        public_url: `https://host-${id}-lite4b.cocalc.ai`,
+      }),
+    ).toBe("lite4b.cocalc.ai");
+    expect(
+      _test.deploymentLabel({
+        id,
+        public_url: "https://project-host.example.com",
+      }),
+    ).toBe("project-host.example.com");
+    expect(_test.deploymentLabel({ id })).toBe("unknown-site");
+  });
 });

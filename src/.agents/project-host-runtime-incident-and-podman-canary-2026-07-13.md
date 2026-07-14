@@ -127,6 +127,39 @@ deployed to production. Staging project-host targets currently use explicit
 host overrides because the canary artifact has not been promoted to the fleet
 default. Remove those overrides only after an intentional global promotion.
 
+### Lite4b synthetic-process exit (2026-07-14)
+
+The first lifecycle probe on Lite4b host `host1`
+(`c2c1bb5b-d5fb-4a06-8904-4549f4089ac2`) exposed a separate failure. The
+synthetic Podman create/start/exec/stop/remove sequence completed in about one
+second, but the project-host process handling the RPC disappeared immediately
+after container removal and before Btrfs volume cleanup. The host-agent found
+the stale PID and started a replacement process. The original controller call
+then remained pending until its 15-minute RPC timeout, quarantined the host, and
+sent an alert. The retry passed in under two seconds and automatically cleared
+the quarantine; no automatic VM reboot occurred.
+
+The evidence excludes host memory pressure and a kernel OOM kill. The host had
+about 7.3 GB available after the process exit, modest load, and no OOM or
+segfault record in the kernel journal. The project-host process maps the system
+`libatomic.so.1`, so this event does not match the previously fixed shared
+compatibility-library publication race. The exact native exit remains unknown:
+core dumps were disabled and project-host startup deleted the previous daemon
+log before the replacement process started.
+
+The follow-up hardening therefore:
+
+- reduces the default synthetic RPC timeout from 15 minutes to 2 minutes;
+- includes the deployment hostname in synthetic-failure alert subjects and
+  bodies, avoiding confusion between Lite4b, staging, and production;
+- rotates up to five prior project-host logs under `log-history/` instead of
+  deleting the previous log on every restart; and
+- records the dead PID in stale-process supervision events.
+
+This makes the next occurrence both faster to detect and materially more
+diagnosable. It does not claim that the unexplained process exit itself has been
+fixed.
+
 ## Incident timeline
 
 All times are UTC on 2026-07-13.
