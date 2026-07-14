@@ -118,9 +118,13 @@ history or cooldown.
 
 Staging artifacts currently under test are:
 
-- project-host `20260714T010012Z-224ad432-runtime-hardening-sandbox-env`;
-- hub controller commits `bd2b7002a7` and `a3c5a0582b`, with the current staging
-  release built from `a3c5a0582b`.
+- project-host
+  `20260714T042331Z-8fcbe4ad-explicit-component-restart`, containing the
+  synthetic-probe support, forensic log retention, durable app supervisor, and
+  explicit operator restart fix;
+- hub controller commits `bd2b7002a7`, `a3c5a0582b`, `892520ca00`, and
+  `43ef81e0c9`, with synthetic probes now due after every project-host process
+  session as well as every boot and normal interval.
 
 No synthetic-probe or automatic-reboot hardening code from this phase has been
 deployed to production. Staging project-host targets currently use explicit
@@ -161,6 +165,52 @@ The follow-up hardening therefore:
 This makes the next occurrence both faster to detect and materially more
 diagnosable. It does not claim that the unexplained process exit itself has been
 fixed.
+
+### Durable app-exit evidence and recovery test (2026-07-14)
+
+The first exit-observer implementation attached a Node `ChildProcess` listener
+in whichever process launched project-host. A controlled `SIGSEGV` test showed
+that this was not durable: during an artifact transition, the old host-agent
+launched the new app and was then replaced by the new host-agent. The app
+survived, but the in-memory listener disappeared with its former parent.
+
+Commit `35af3a54db` therefore added a small persistent app supervisor to every
+project-host artifact. The daemon PID now identifies the supervisor, while a
+separate `project-host-app.pid` identifies the actual app child. The supervisor:
+
+- remains the app's parent independently of host-agent replacement;
+- records the actual child exit code or signal in `supervision-events.jsonl`;
+- forwards normal shutdown signals and records which signal it forwarded;
+- attributes active project start/stop heartbeats to the durable daemon PID;
+  and
+- exits after the app so the existing host-agent stale-PID recovery path starts
+  a fresh supervisor and app.
+
+Commit `8fcbe4adbb` also fixed operator component rollouts. The prior delayed
+command ran `daemon ensure`, which did nothing when the current daemon was
+healthy; the rollout RPC could therefore report success without changing the
+process. It now runs the explicit `daemon restart-project-host` action.
+
+Both fixes were deployed only to staging. On staging host `host2`, the verified
+process tree was supervisor PID `451721`, app PID `451729`, and independent
+host-agent PID `451728`. A controlled `SIGSEGV` sent only to the app produced:
+
+- a durable `process_exit` event naming app PID `451729`, supervisor PID
+  `451721`, and signal `SIGSEGV` at `04:25:07` UTC;
+- stale-supervisor detection at `04:25:11`;
+- replacement supervisor start at `04:25:12`;
+- a ready health endpoint with app activity correctly attributed to the new
+  supervisor; and
+- a full synthetic create/start/exec/write/read/stop/delete probe that passed
+  in 740 ms (1.106 seconds including controller work) for the new process
+  session.
+
+A subsequent explicit component rollout changed the supervisor PID from
+`452707` to `454936`. The old supervisor recorded child exit code 0 with
+`forwarded_signal=SIGTERM`, and the replacement became healthy. This validates
+both crash recovery and the normal operator restart path. Core dumps remain
+disabled; the durable signal evidence narrows future failures, but bounded
+staging core capture is still needed for native stack diagnosis.
 
 ## Incident timeline
 
@@ -531,6 +581,14 @@ systemd, Podman, conmon/crun, and CoCalc.
   reboot attempt budget.
 - Verify the metadata-backed 15-minute alert limiter under a continuous staged
   failure.
+- Enable bounded, retained project-host app core dumps on staging and verify a
+  controlled native crash produces a usable core without allowing project
+  containers or unrelated host processes to fill the data disk.
+- **Complete on staging:** durable app supervision records an actual child
+  `SIGSEGV`, host-agent restarts the process in about five seconds, and the new
+  process session passes a full synthetic lifecycle probe.
+- **Complete on staging:** an explicit operator project-host component rollout
+  performs a real graceful restart rather than a healthy `ensure` no-op.
 - Build the disposable-host fault-injection harness and complete the 200
   interruption and 1,000 project-cycle baseline on the reverted runtime.
 - Package pinned Podman 5.8.x and Podman 6.0.1 runtime bundles, including their
