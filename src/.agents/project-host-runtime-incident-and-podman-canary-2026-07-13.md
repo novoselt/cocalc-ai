@@ -62,9 +62,28 @@ The disposable staging canary also established a useful baseline:
   workload no longer reproduced those crashes after the fix.
 
 This establishes that the reverted runtime can recover projects quickly in
-parallel. It does not yet satisfy the long-duration promotion gate below, and a
-degraded runtime is currently quarantined and alerted rather than automatically
-hard-rebooted.
+parallel. It does not yet satisfy the long-duration promotion gate below.
+
+The next hardening layer is implemented in code on 2026-07-14 and is pending
+staging deployment and fault-injection validation:
+
+- the placement contract now fails closed when runtime-health metadata is
+  missing instead of treating an old or incomplete heartbeat as healthy;
+- each host advertises support for a synthetic project lifecycle probe;
+- the owning bay periodically creates a host-local temporary project, starts
+  its real container, executes inside it, writes and reads a mounted file, then
+  stops it and deletes its local volume without creating a central project;
+- failed synthetic probes quarantine the host until a later probe passes;
+- forensic capture publishes requested, completed, and failed timestamps in
+  runtime-health metadata instead of existing only as an unstructured log;
+- every host process-session transition proactively cancels all active
+  project-start and restore LROs that predate the new session;
+- a fresh-heartbeat cloud host with repeated runtime failures can be hard
+  rebooted only after forensic capture completes, with a 15-minute per-host
+  cooldown, at most two attempts in six hours, and at most one fleet-wide
+  automatic reboot in ten minutes;
+- every synthetic failure, automatic reboot, and exhausted recovery budget
+  produces a deduplicated operator alert.
 
 ## Incident timeline
 
@@ -240,12 +259,12 @@ References:
 10. Cgroup attachment failures remain visible but are rate-limited instead of
     flooding logs.
 11. Project-start LROs created before the current host process session are
-    canceled immediately, including restore LROs.
-
-Automatic hard reboot is intentionally not part of this first change. The first
-priority is to capture the state before destroying it. Once diagnostic capture
-is proven, a separate policy can hard-reboot after repeated failures and a
-bounded investigation window.
+    canceled immediately, including restore LROs. The new host-session sweep
+    does this proactively for every assigned project with an active start LRO.
+12. Full synthetic start/exec/file-write/stop probes and bounded automatic hard
+    reboot recovery are implemented but remain staging-only until deliberate
+    failure tests verify quarantine, forensic preservation, alerting, recovery,
+    and the fleet circuit breaker.
 
 ## Is Podman the wrong runtime?
 
@@ -275,10 +294,10 @@ then make comparative changes in staging.
    throttling, and stale-LRO fixes independently.
 4. **Complete:** deploy the atomic compatibility-library publication fix to the
    fleet and remove temporary host-specific software overrides.
-5. **Still required:** validate synthetic runtime probes, automated quarantine,
-   forensic capture, and alert delivery under deliberately injected failures.
-6. **Still required:** add bounded automatic hard-reboot recovery after the
-   diagnostic window, without allowing reboot loops.
+5. **Implemented; staging validation required:** synthetic runtime probes,
+   automated quarantine, durable forensic completion state, and alert delivery.
+6. **Implemented; staging validation required:** bounded automatic hard-reboot
+   recovery after forensic capture, with per-host and fleet-wide loop guards.
 
 Do not combine this production stabilization with a Podman upgrade, a switch to
 systemd cgroups, or a networking-backend change. Those remain separate staging
@@ -295,8 +314,9 @@ relevant rootless lifecycle, reboot, storage, and security fixes.
 
 The upgrade program is:
 
-1. Finish synthetic host probes, placement quarantine, forensic capture,
-   alerts, stale-LRO cleanup, and bounded automatic reboot recovery.
+1. Validate the implemented synthetic host probes, placement quarantine,
+   forensic capture, alerts, stale-LRO cleanup, and bounded automatic reboot
+   recovery on staging before any production rollout.
 2. Build a reproducible and pinned runtime bundle containing Podman and matching
    versions of crun, conmon, containers/storage, containers/common, and related
    configuration. Do not upgrade only the Podman binary. In particular, current
@@ -412,12 +432,21 @@ systemd, Podman, conmon/crun, and CoCalc.
 
 ## Remaining work
 
-- Verify with a simulated failure that the deployed readiness/diagnostic path
-  removes a host from placement, preserves one bounded forensic bundle, and
-  creates exactly one deduplicated alert.
-- Add a fleet-level synthetic project start/exec/file-write/stop probe after
-  each host boot and periodically thereafter, so user traffic is not the first
-  indication of a degraded host.
+- Deploy the hardening layer to staging only. Confirm a healthy synthetic probe
+  leaves no central project row, local SQLite row, container, volume, port
+  lease, or last-edited event behind.
+- Inject a synthetic lifecycle failure and a passive `podman ps` failure.
+  Verify each removes the host from placement and preserves one bounded
+  forensic capture before any reboot is queued.
+- Verify failed synthetic probes retry after 90 seconds, successful probes clear
+  quarantine, and healthy hosts are probed at most once every 30 minutes.
+- Verify a host process restart proactively cancels pre-session normal and
+  restore-backed start LROs without waiting for user traffic.
+- Verify automatic hard reboot requires two failures and completed diagnostics,
+  then enforces the 15-minute per-host cooldown, two-attempt six-hour budget,
+  and one-reboot-per-ten-minute fleet circuit breaker.
+- Confirm deduplicated alerts for synthetic failure, automatic reboot, and
+  exhausted recovery reach the production-equivalent staging alert channel.
 - Implement bounded automatic hard-reboot recovery after repeated failed probes
   and a diagnostic window, with reboot-loop protection.
 - Build the disposable-host fault-injection harness and complete the 200

@@ -1221,8 +1221,43 @@ export async function startMasterRegistration({
     await runtimeHealth.assertReady();
   };
 
+  let syntheticRuntimeProbeInflight:
+    | Promise<{
+        project_id: string;
+        started_at: string;
+        finished_at: string;
+        duration_ms: number;
+      }>
+    | undefined;
+
   // Control plane for this host (master can ask us to create/start/stop projects).
   const controlImpl: HostControlApi = {
+    async runSyntheticRuntimeProbe() {
+      await awaitReadyForControl("runSyntheticRuntimeProbe", waitUntilReady);
+      if (syntheticRuntimeProbeInflight) {
+        return await syntheticRuntimeProbeInflight;
+      }
+      const startedAt = Date.now();
+      syntheticRuntimeProbeInflight = (async () => {
+        try {
+          const fn = (hubApi.projects as any)?.runSyntheticRuntimeProbe;
+          if (typeof fn !== "function") {
+            throw new Error("synthetic runtime probe is not available");
+          }
+          const result = await fn();
+          runtimeHealth.recordSyntheticProbe({ startedAt });
+          return result;
+        } catch (err) {
+          runtimeHealth.recordSyntheticProbe({ startedAt, error: err });
+          throw err;
+        }
+      })();
+      try {
+        return await syntheticRuntimeProbeInflight;
+      } finally {
+        syntheticRuntimeProbeInflight = undefined;
+      }
+    },
     async createProject(opts) {
       if (opts.start || opts.ensure_volume !== false) {
         await awaitRuntimeReadyForControl("createProject");

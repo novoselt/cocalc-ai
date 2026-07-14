@@ -18,6 +18,7 @@ const ERROR_LIMIT = 1000;
 export type ProjectHostRuntimeHealthStatus = "starting" | "ready" | "degraded";
 
 export interface ProjectHostRuntimeHealthSnapshot {
+  synthetic_probe_supported: true;
   status: ProjectHostRuntimeHealthStatus;
   ready: boolean;
   checked_at?: string;
@@ -25,6 +26,15 @@ export interface ProjectHostRuntimeHealthSnapshot {
   consecutive_failures: number;
   error?: string;
   diagnostics_requested_at?: string;
+  diagnostics_completed_at?: string;
+  diagnostics_error?: string;
+  synthetic_probe?: {
+    status: "running" | "passed" | "failed";
+    checked_at: string;
+    latency_ms?: number;
+    consecutive_failures: number;
+    error?: string;
+  };
 }
 
 export type ProjectHostRuntimeProbe = () => Promise<void>;
@@ -149,6 +159,7 @@ export function createProjectHostRuntimeHealthMonitor({
   captureDiagnostics?: ProjectHostRuntimeDiagnostics;
 }) {
   let snapshot: ProjectHostRuntimeHealthSnapshot = {
+    synthetic_probe_supported: true,
     status: "starting",
     ready: false,
     consecutive_failures: 0,
@@ -156,6 +167,45 @@ export function createProjectHostRuntimeHealthMonitor({
   let inflight: Promise<ProjectHostRuntimeHealthSnapshot> | undefined;
   let diagnosticsInflight = false;
   let lastDiagnosticsAt = 0;
+
+  const requestDiagnostics = () => {
+    if (
+      diagnosticsInflight ||
+      Date.now() - lastDiagnosticsAt < DIAGNOSTIC_COOLDOWN_MS
+    ) {
+      return;
+    }
+    diagnosticsInflight = true;
+    lastDiagnosticsAt = Date.now();
+    snapshot = {
+      ...snapshot,
+      diagnostics_requested_at: new Date().toISOString(),
+      diagnostics_completed_at: undefined,
+      diagnostics_error: undefined,
+    };
+    void captureDiagnostics()
+      .then(() => {
+        snapshot = {
+          ...snapshot,
+          diagnostics_completed_at: new Date().toISOString(),
+          diagnostics_error: undefined,
+        };
+      })
+      .catch((diagnosticErr) => {
+        const diagnosticsError = errorText(diagnosticErr);
+        snapshot = {
+          ...snapshot,
+          diagnostics_completed_at: new Date().toISOString(),
+          diagnostics_error: diagnosticsError,
+        };
+        logger.error("unable to capture project-host runtime diagnostics", {
+          err: diagnosticsError,
+        });
+      })
+      .finally(() => {
+        diagnosticsInflight = false;
+      });
+  };
 
   const refresh = async (): Promise<ProjectHostRuntimeHealthSnapshot> => {
     if (!isApplicationReady()) {
@@ -173,12 +223,18 @@ export function createProjectHostRuntimeHealthMonitor({
       const started = Date.now();
       try {
         await probe();
+        const syntheticFailed = snapshot.synthetic_probe?.status === "failed";
         snapshot = {
-          status: "ready",
-          ready: true,
+          ...snapshot,
+          status: syntheticFailed ? "degraded" : "ready",
+          ready: !syntheticFailed,
           checked_at: new Date().toISOString(),
           podman_latency_ms: Date.now() - started,
           consecutive_failures: 0,
+          error: syntheticFailed
+            ? (snapshot.synthetic_probe?.error ??
+              "synthetic runtime probe failed")
+            : undefined,
         };
       } catch (err) {
         const consecutiveFailures = snapshot.consecutive_failures + 1;
@@ -186,34 +242,18 @@ export function createProjectHostRuntimeHealthMonitor({
           consecutiveFailures >= 2 &&
           !diagnosticsInflight &&
           Date.now() - lastDiagnosticsAt >= DIAGNOSTIC_COOLDOWN_MS;
-        const diagnosticsRequestedAt = shouldCaptureDiagnostics
-          ? new Date().toISOString()
-          : snapshot.diagnostics_requested_at;
         snapshot = {
+          ...snapshot,
           status: "degraded",
           ready: false,
           checked_at: new Date().toISOString(),
           podman_latency_ms: Date.now() - started,
           consecutive_failures: consecutiveFailures,
           error: errorText(err),
-          diagnostics_requested_at: diagnosticsRequestedAt,
         };
         logger.warn("project-host Podman runtime probe failed", snapshot);
         if (shouldCaptureDiagnostics) {
-          diagnosticsInflight = true;
-          lastDiagnosticsAt = Date.now();
-          void captureDiagnostics()
-            .catch((diagnosticErr) => {
-              logger.error(
-                "unable to capture project-host runtime diagnostics",
-                {
-                  err: errorText(diagnosticErr),
-                },
-              );
-            })
-            .finally(() => {
-              diagnosticsInflight = false;
-            });
+          requestDiagnostics();
         }
       }
       return snapshot;
@@ -234,9 +274,50 @@ export function createProjectHostRuntimeHealthMonitor({
     }
   };
 
+  const recordSyntheticProbe = ({
+    startedAt,
+    error,
+  }: {
+    startedAt: number;
+    error?: unknown;
+  }): ProjectHostRuntimeHealthSnapshot => {
+    const failed = error != null;
+    const consecutiveFailures = failed
+      ? (snapshot.synthetic_probe?.consecutive_failures ?? 0) + 1
+      : 0;
+    const syntheticError = failed ? errorText(error) : undefined;
+    snapshot = {
+      ...snapshot,
+      status: failed
+        ? "degraded"
+        : snapshot.consecutive_failures
+          ? "degraded"
+          : "ready",
+      ready: !failed && snapshot.consecutive_failures === 0,
+      error: failed
+        ? syntheticError
+        : snapshot.consecutive_failures
+          ? snapshot.error
+          : undefined,
+      synthetic_probe: {
+        status: failed ? "failed" : "passed",
+        checked_at: new Date().toISOString(),
+        latency_ms: Math.max(0, Date.now() - startedAt),
+        consecutive_failures: consecutiveFailures,
+        error: syntheticError,
+      },
+    };
+    if (failed) {
+      logger.warn("project-host synthetic runtime probe failed", snapshot);
+      requestDiagnostics();
+    }
+    return { ...snapshot };
+  };
+
   return {
     refresh,
     assertReady,
+    recordSyntheticProbe,
     getSnapshot: () => ({ ...snapshot }),
   };
 }

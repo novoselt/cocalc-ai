@@ -444,6 +444,12 @@ export interface HostStaticAppPathInspection {
 }
 
 export interface HostControlApi {
+  runSyntheticRuntimeProbe: () => Promise<{
+    project_id: string;
+    started_at: string;
+    finished_at: string;
+    duration_ms: number;
+  }>;
   createProject: (
     opts: HostCreateProjectRequest,
   ) => Promise<HostCreateProjectResponse>;

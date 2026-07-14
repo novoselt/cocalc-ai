@@ -29,6 +29,8 @@ export async function getRoutedHostControlClient({
       timeout_ms: timeout,
     });
     return {
+      runSyntheticRuntimeProbe: async () =>
+        await bridge.runSyntheticRuntimeProbe({ host_id }),
       createProject: async (create) => {
         if (!account_id) {
           throw new Error(

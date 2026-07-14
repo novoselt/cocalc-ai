@@ -24,6 +24,7 @@ const ORPHANED_RESTORE_START_LRO_GRACE_MS = Math.max(
 );
 const RECENT_STARTING_STATE_MS = 5 * 60_000;
 const HOST_SESSION_CLOCK_SKEW_MS = 1_000;
+const HOST_SESSION_CLEANUP_CONCURRENCY = 8;
 
 type ProjectStartLroRow = {
   op_id: string;
@@ -302,6 +303,72 @@ export async function cancelStaleProjectStartLros({
   }
 
   return canceled;
+}
+
+export async function cancelStaleProjectStartLrosForHostSession({
+  host_id,
+  host_session_started_at,
+}: {
+  host_id: string;
+  host_session_started_at: string;
+}): Promise<{ projects: number; operations: number }> {
+  const sessionStartedAt = new Date(host_session_started_at);
+  if (Number.isNaN(sessionStartedAt.getTime())) {
+    throw new Error("host_session_started_at must be a valid timestamp");
+  }
+  const { rows } = await getPool().query<{ project_id: string }>(
+    `
+      SELECT DISTINCT l.scope_id AS project_id
+      FROM long_running_operations l
+      JOIN projects p ON p.project_id=l.scope_id
+      WHERE l.kind='project-start'
+        AND l.scope_type='project'
+        AND l.dismissed_at IS NULL
+        AND l.status = ANY($1::text[])
+        AND l.created_at + ($4::double precision * INTERVAL '1 millisecond') < $3
+        AND p.host_id=$2
+      ORDER BY l.scope_id
+    `,
+    [
+      ACTIVE_START_STATUSES,
+      host_id,
+      sessionStartedAt,
+      HOST_SESSION_CLOCK_SKEW_MS,
+    ],
+  );
+  let operations = 0;
+  for (
+    let index = 0;
+    index < rows.length;
+    index += HOST_SESSION_CLEANUP_CONCURRENCY
+  ) {
+    const batch = rows.slice(index, index + HOST_SESSION_CLEANUP_CONCURRENCY);
+    const counts = await Promise.all(
+      batch.map(({ project_id }) =>
+        cancelStaleProjectStartLros({ project_id }).catch((err) => {
+          log.warn(
+            "unable to clean stale start lros after host session change",
+            {
+              host_id,
+              project_id,
+              err: `${err}`,
+            },
+          );
+          return 0;
+        }),
+      ),
+    );
+    operations += counts.reduce((sum, count) => sum + count, 0);
+  }
+  if (rows.length || operations) {
+    log.warn("cleaned project-start lros from a previous host session", {
+      host_id,
+      host_session_started_at,
+      projects: rows.length,
+      operations,
+    });
+  }
+  return { projects: rows.length, operations };
 }
 
 export async function supersedeOlderProjectStartLros({

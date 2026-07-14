@@ -10,6 +10,7 @@ import getPool from "@cocalc/database/pool";
 import { ensureProjectHostMetricsSamplesSchema } from "@cocalc/database/postgres/project-host-metrics";
 import { createLro, ensureLroSchema } from "@cocalc/server/lro/lro-db";
 import adminAlert from "@cocalc/server/messages/admin-alert";
+import { runProjectHostRuntimeMaintenance } from "./runtime-maintenance";
 import type {
   HostAvailabilityCategory,
   HostAvailabilityEvent,
@@ -373,6 +374,7 @@ export function classifyHostAvailabilitySnapshot(
   const desiredState = metadata.desired_state;
   const recoveryPhase = metadata.spot_recovery_state?.phase;
   const runtimeHealth = metadata.runtime_health ?? {};
+  const syntheticProbe = metadata.runtime_synthetic_probe ?? {};
   const runtimeStatus = `${runtimeHealth.status ?? ""}`.trim();
   const status = `${row.status ?? ""}`.trim();
   const lastSeen = normalizeDate(row.last_seen);
@@ -397,6 +399,21 @@ export function classifyHostAvailabilitySnapshot(
       planned: true,
       category: "user_stopped",
       summary: "Host is deleted.",
+    };
+  }
+  if (
+    status === "running" &&
+    heartbeatFresh &&
+    `${syntheticProbe.status ?? ""}` === "failed"
+  ) {
+    return {
+      ...base,
+      state: "degraded",
+      planned: false,
+      category: "runtime_degraded",
+      summary: syntheticProbe.error
+        ? `Host synthetic project probe failed: ${syntheticProbe.error}`
+        : "Host synthetic project probe failed.",
     };
   }
   if (status === "running" && heartbeatFresh && runtimeStatus === "starting") {
@@ -979,6 +996,11 @@ export function startHostAvailabilityMaintenance({
       const staleRunning = await runRunningStaleHostAlertCheck();
       const pressureProblems = await runHostPressureAlertCheck();
       const runtimeProblems = await runRuntimeDegradedHostAlertCheck();
+      void runProjectHostRuntimeMaintenance().catch((err) => {
+        logger.warn("project-host runtime maintenance failed", {
+          err: `${err}`,
+        });
+      });
       logger.debug("host availability maintenance complete", { count });
       if (staleRunning) {
         logger.warn("running project hosts are not reporting", {

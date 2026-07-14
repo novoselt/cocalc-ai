@@ -15,8 +15,10 @@ import {
 } from "@cocalc/backend/chat-store/sqlite-offload";
 import { uuid, isValidUUID } from "@cocalc/util/misc";
 import {
+  deleteProjectLocal,
   getProject,
   getOrCreateProjectLocalSecretToken,
+  markProjectStateReported,
   upsertProject,
 } from "../sqlite/projects";
 import {
@@ -55,6 +57,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   writeManagedAuthorizedKeys,
+  deleteVolume,
   getVolume,
   ensureVolume,
   getMountPoint,
@@ -128,6 +131,7 @@ import {
   endProjectHostActivity,
   noteProjectHostActivityProgress,
 } from "../health-progress";
+import { sandboxExec } from "@cocalc/project-runner/run/sandbox-exec";
 import {
   ProjectDiskQuotaExceededError,
   assertProjectDiskQuotaStartAllowed,
@@ -611,6 +615,7 @@ async function getSshProxyPublicKey(): Promise<string | undefined> {
 }
 
 type RunnerApi = ReturnType<typeof projectRunnerClient>;
+const syntheticRuntimeProbeProjects = new Set<string>();
 
 function fileServer(_project_id: string) {
   const client = getMasterConatClient();
@@ -914,7 +919,11 @@ export function ensureProjectRow({
   }
   upsertProject(row);
   if (state) {
-    reportProjectStateToMaster(project_id, state);
+    if (syntheticRuntimeProbeProjects.has(project_id)) {
+      markProjectStateReported(project_id, state);
+    } else {
+      reportProjectStateToMaster(project_id, state);
+    }
   }
 }
 
@@ -1298,6 +1307,73 @@ async function startRunnerWithPortRetry({
 }
 
 export function wireProjectsApi(runnerApi: RunnerApi) {
+  async function runSyntheticRuntimeProbe(): Promise<{
+    project_id: string;
+    started_at: string;
+    finished_at: string;
+    duration_ms: number;
+  }> {
+    const project_id = uuid();
+    const marker = uuid();
+    const startedAt = Date.now();
+    syntheticRuntimeProbeProjects.add(project_id);
+    try {
+      await createProject({
+        project_id,
+        title: "CoCalc host runtime probe",
+        image: DEFAULT_PROJECT_IMAGE,
+        ensure_volume: true,
+        start: true,
+        run_quota: {
+          cpu_limit: 1,
+          memory: 512,
+          memory_request: 128,
+          disk_quota: 256,
+        },
+      } as CreateProjectOptions);
+      const status = await runnerApi.status({ project_id });
+      if (status?.state !== "running") {
+        throw new Error(
+          `synthetic project did not reach running state (state=${status?.state ?? "unknown"})`,
+        );
+      }
+      const result = await sandboxExec({
+        project_id,
+        script: `mkdir -p .cocalc && printf '%s' '${marker}' > .cocalc/host-runtime-probe && cat .cocalc/host-runtime-probe`,
+        timeoutMs: 30_000,
+        maxOutputBytes: 4096,
+      });
+      if (result.code !== 0 || result.stdout.trim() !== marker) {
+        throw new Error(
+          `synthetic project exec/file check failed (code=${result.code}, signal=${result.signal ?? "none"}): ${result.stderr || result.stdout}`,
+        );
+      }
+      return {
+        project_id,
+        started_at: new Date(startedAt).toISOString(),
+        finished_at: new Date().toISOString(),
+        duration_ms: Date.now() - startedAt,
+      };
+    } finally {
+      await runnerApi.stop({ project_id, force: true }).catch((err) => {
+        logger.warn("synthetic runtime probe failed to stop its project", {
+          project_id,
+          err: `${err}`,
+        });
+      });
+      await deleteVolume(project_id, { reportProvisioned: false }).catch(
+        (err) => {
+          logger.warn("synthetic runtime probe failed to delete its volume", {
+            project_id,
+            err: `${err}`,
+          });
+        },
+      );
+      deleteProjectLocal(project_id);
+      syntheticRuntimeProbeProjects.delete(project_id);
+    }
+  }
+
   async function rehydrateAcpAutomations(
     project_id: string,
     context: string,
@@ -1395,7 +1471,9 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           tools_version: (status as any)?.tools_version,
           secret_names: resolved.secret_names,
         });
-        kickOffAcpRehydrate(project_id, "createProject: post-start");
+        if (!syntheticRuntimeProbeProjects.has(project_id)) {
+          kickOffAcpRehydrate(project_id, "createProject: post-start");
+        }
       } finally {
         endProjectHostActivity(activity_id);
       }
@@ -1749,19 +1827,23 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           `project stop did not converge; runner still reports state='${finalState}'`,
         );
       }
-      try {
-        const base = getMountPoint();
-        const projectPath = join(base, `project-${project_id}`);
-        const generation = await getGeneration(projectPath);
-        markProjectLastChangedRunning(project_id, generation, { force: true });
-        await reportPendingProjectTouches();
-      } catch (err) {
-        logger.debug("stop last_changed check failed", {
-          project_id,
-          err: `${err}`,
-        });
-      } finally {
-        resetProjectLastChangedRunning(project_id);
+      if (!syntheticRuntimeProbeProjects.has(project_id)) {
+        try {
+          const base = getMountPoint();
+          const projectPath = join(base, `project-${project_id}`);
+          const generation = await getGeneration(projectPath);
+          markProjectLastChangedRunning(project_id, generation, {
+            force: true,
+          });
+          await reportPendingProjectTouches();
+        } catch (err) {
+          logger.debug("stop last_changed check failed", {
+            project_id,
+            err: `${err}`,
+          });
+        } finally {
+          resetProjectLastChangedRunning(project_id);
+        }
       }
       logger.debug("stop: project-host request finished", {
         project_id,
@@ -2493,6 +2575,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
   hubApi.projects.start = start;
   hubApi.projects.stop = stop;
   hubApi.projects.status = status;
+  (hubApi.projects as any).runSyntheticRuntimeProbe = runSyntheticRuntimeProbe;
   hubApi.projects.getSshKeys = getSshKeys;
   hubApi.projects.createBackup = createBackup;
   hubApi.projects.deleteBackup = deleteBackup;

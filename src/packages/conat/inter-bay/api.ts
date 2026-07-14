@@ -2954,6 +2954,9 @@ type HostControlArg<K extends keyof HostControlApi> = Parameters<
 >[0];
 
 export interface InterBayHostControlApi {
+  runSyntheticRuntimeProbe: (opts: {
+    host_id: string;
+  }) => ReturnType<HostControlApi["runSyntheticRuntimeProbe"]>;
   createProject: (opts: {
     account_id: string;
     host_id: string;

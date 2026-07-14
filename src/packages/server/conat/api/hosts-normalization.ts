@@ -367,10 +367,15 @@ export function computeHostOperationalAvailability(row: any): {
 
   const runtimeHealth = row?.metadata?.runtime_health;
   const runtimeStatus = `${runtimeHealth?.status ?? ""}`.trim();
-  if (
-    runtimeStatus &&
-    (runtimeStatus !== "ready" || runtimeHealth?.ready !== true)
-  ) {
+  if (!runtimeStatus || typeof runtimeHealth?.ready !== "boolean") {
+    return {
+      operational: false,
+      online: true,
+      status,
+      reason_unavailable: "Host has not reported project runtime health.",
+    };
+  }
+  if (runtimeStatus !== "ready" || runtimeHealth?.ready !== true) {
     const runtimeError = `${runtimeHealth?.error ?? ""}`.trim();
     return {
       operational: false,
@@ -382,6 +387,19 @@ export function computeHostOperationalAvailability(row: any): {
           : runtimeError
             ? `Host project runtime is degraded: ${runtimeError}`
             : `Host project runtime is ${runtimeStatus}.`,
+    };
+  }
+
+  const syntheticProbe = row?.metadata?.runtime_synthetic_probe;
+  if (`${syntheticProbe?.status ?? ""}`.trim() === "failed") {
+    const syntheticError = `${syntheticProbe?.error ?? ""}`.trim();
+    return {
+      operational: false,
+      online: true,
+      status,
+      reason_unavailable: syntheticError
+        ? `Host synthetic project probe failed: ${syntheticError}`
+        : "Host synthetic project probe failed.",
     };
   }
 
