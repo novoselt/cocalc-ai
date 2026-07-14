@@ -31,6 +31,8 @@ export type SupervisionEvent = {
     | "restart_completed"
     | "missing_process"
     | "stale_pid"
+    | "process_exit"
+    | "spawn_failed"
     | "rollback_tracking"
     | "rollback_completed"
     | "rollback_accepted"

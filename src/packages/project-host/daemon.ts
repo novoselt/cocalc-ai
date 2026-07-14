@@ -1156,6 +1156,45 @@ function recordDaemonEvent(
   }
 }
 
+function observeProjectHostChild(
+  dataDir: string,
+  child: childProcess.ChildProcess,
+  selectedVersion?: string,
+): void {
+  if (typeof child.once !== "function") {
+    return;
+  }
+  child.once("error", (err) => {
+    recordDaemonEvent(dataDir, {
+      component: "project-host",
+      action: "spawn_failed",
+      message: `project-host child process error: ${err.message}`,
+      pid: child.pid,
+      selected_version: selectedVersion,
+      metadata: {
+        error_name: err.name,
+        error_message: err.message,
+      },
+    });
+  });
+  child.once("exit", (code, signal) => {
+    const outcome = signal
+      ? `signal ${signal}`
+      : `exit code ${code ?? "unknown"}`;
+    recordDaemonEvent(dataDir, {
+      component: "project-host",
+      action: "process_exit",
+      message: `project-host child exited with ${outcome}`,
+      pid: child.pid,
+      selected_version: selectedVersion,
+      metadata: {
+        exit_code: code,
+        signal,
+      },
+    });
+  });
+}
+
 function projectHostRuntimeRoot(env: Record<string, string>): string {
   try {
     return fs.realpathSync(projectHostCurrentLinkPath(env));
@@ -2402,6 +2441,7 @@ export function startDaemon(index = 0): void {
     detached: true,
     stdio: ["ignore", stdout, stderr],
   });
+  observeProjectHostChild(dataDir, child, selectedVersion);
   child.unref();
   fs.writeFileSync(pidPath, String(child.pid));
   try {

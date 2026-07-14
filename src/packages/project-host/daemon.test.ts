@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -100,6 +101,39 @@ describe("project-host daemon stop", () => {
         .readdirSync(path.join(dataDir, "log-history"))
         .filter((name) => name.endsWith(".log")),
     ).toHaveLength(2);
+  });
+
+  it("records the project-host child exit code and signal", () => {
+    const dataDir = mkTempDir("cocalc-project-host-daemon-");
+    process.env.COCALC_DATA = dataDir;
+    process.env.PORT = "9002";
+    process.env.COCALC_PROJECT_HOST_EXTERNAL_CONAT_PERSIST = "0";
+    jest
+      .spyOn(__test__.processRuntime, "spawnSync")
+      .mockReturnValue({ status: 0 } as any);
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4646,
+      unref: jest.fn(),
+    });
+    mockSpawn().mockReturnValue(child as any);
+
+    startDaemon(0);
+    child.emit("exit", null, "SIGSEGV");
+
+    const events = fs
+      .readFileSync(path.join(dataDir, "supervision-events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.at(-1)).toMatchObject({
+      component: "project-host",
+      action: "process_exit",
+      pid: 4646,
+      metadata: {
+        exit_code: null,
+        signal: "SIGSEGV",
+      },
+    });
   });
 
   it("waits for SIGTERM exit before removing the pid file", () => {
