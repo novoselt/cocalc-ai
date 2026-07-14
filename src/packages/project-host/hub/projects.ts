@@ -1408,7 +1408,9 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     });
 
     if (opts.ensure_volume !== false || opts.start) {
-      await ensureVolume(project_id);
+      await ensureVolume(project_id, undefined, {
+        reportProvisioned: !syntheticRuntimeProbeProjects.has(project_id),
+      });
     }
 
     if (opts.start) {
