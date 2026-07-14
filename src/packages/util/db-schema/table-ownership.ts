@@ -390,13 +390,14 @@ export const TABLE_OWNERSHIP = {
     },
   ),
 
-  ...entries(["cloud_vm_work"], {
+  ...entries(["account_presence_locations", "cloud_vm_work"], {
     ownership: "ephemeral",
     authority: "local",
     portability: "rebuildable",
     notes:
-      "Transient worker coordination state. It must be safe to lose during bay drain or service restart.",
-    rebuild: "Workers may recreate or requeue work from durable source state.",
+      "Transient bay-local state. It must be safe to lose during bay drain or service restart.",
+    rebuild:
+      "Recreate from a later browser presence observation or durable worker source state.",
   }),
 } satisfies Record<string, TableOwnershipEntry>;
 
@@ -517,7 +518,15 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
       "project_copies",
       "project_moves",
       "public_project_path_viewer_grants",
+      "course_secret_audit_events",
+      "course_secret_grants",
+      "course_secret_policies",
+      "course_secret_recipients",
+      "course_secret_sync_results",
+      "course_secret_sync_runs",
+      "project_secret_managed_sources",
       "project_secrets",
+      "project_secrets_runtime_state",
     ],
     {
       ownership: "project-owning",

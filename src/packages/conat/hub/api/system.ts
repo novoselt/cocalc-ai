@@ -55,6 +55,7 @@ export const system = {
   getGlobalConfigPropagationStatus: authFirstRequireAccount,
   setBayProjectOwnershipAdmission: authFirstRequireAccount,
   getBayLoad: authFirst,
+  getActiveUserMap: authFirst,
   recordUxLatencyEvent: authFirst,
   getUxLatencySummary: authFirstRequireAccount,
   getLaunchHealth: authFirstRequireAccount,
@@ -243,6 +244,68 @@ export interface VisitorLocationHeaderTestResult {
     latitude: string;
     longitude: string;
   };
+}
+
+export type ActiveUserMapWindowMinutes = 5 | 15 | 60 | 1440;
+
+export interface ActiveUserMapQuery {
+  account_id?: string;
+  active_minutes: ActiveUserMapWindowMinutes;
+}
+
+export interface BrowserSessionLocation {
+  country_code?: string;
+  region_code?: string;
+  region?: string;
+  city?: string;
+  continent?: string;
+  timezone?: string;
+  latitude?: string;
+  longitude?: string;
+}
+
+export interface ActiveUserMapUser {
+  account_id: string;
+  bay_id: string;
+  display_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  email_address: string | null;
+  last_active: string;
+  region_code: string | null;
+  region: string | null;
+  city: string | null;
+  timezone: string | null;
+}
+
+export interface ActiveUserMapBayStatus {
+  bay_id: string;
+  ok: boolean;
+  enabled?: boolean;
+  total_active?: number;
+  error?: string;
+}
+
+export interface ActiveUserMapCountry {
+  country_code: string;
+  latitude: number;
+  longitude: number;
+  count: number;
+  users: ActiveUserMapUser[];
+}
+
+export interface ActiveUserMapOverview {
+  enabled: boolean;
+  checked_at: string;
+  bay_id: string;
+  current_bay_id: string;
+  active_minutes: ActiveUserMapWindowMinutes;
+  total_active: number;
+  mapped_active: number;
+  unknown_location: number;
+  countries: ActiveUserMapCountry[];
+  unknown_users: ActiveUserMapUser[];
+  bays: ActiveUserMapBayStatus[];
 }
 
 export type UxLatencyEventType = "project_start" | "file_open" | string;
@@ -1828,6 +1891,10 @@ export interface System {
     bay_id?: string;
   }) => Promise<BayLoadInfo>;
 
+  getActiveUserMap: (
+    opts: ActiveUserMapQuery,
+  ) => Promise<ActiveUserMapOverview>;
+
   recordUxLatencyEvent: (opts: {
     account_id?: string;
     event: UxLatencyEventInput;
@@ -2676,6 +2743,7 @@ export interface System {
     spawn_marker?: string;
     active_project_id?: string;
     open_projects?: BrowserOpenProjectState[];
+    location?: BrowserSessionLocation;
   }) => Promise<{
     browser_id: string;
     created_at: string;

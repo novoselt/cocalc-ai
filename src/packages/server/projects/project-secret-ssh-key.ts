@@ -16,11 +16,8 @@ import {
 } from "@cocalc/util/project-secrets";
 import { getAssignedProjectHostInfo } from "@cocalc/server/conat/project-host-assignment";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
-import {
-  getProjectSecretsRuntimeCache,
-  listProjectSecrets,
-  setProjectSecret,
-} from "./project-secrets";
+import { listProjectSecrets, setProjectSecret } from "./project-secrets";
+import { syncProjectSecretsRuntimeOnAssignedHost } from "./project-secrets-runtime";
 
 const execFileAsync = promisify(execFile);
 const logger = getLogger("server:projects:project-secret-ssh-key");
@@ -94,16 +91,9 @@ export async function generateProjectSshKeySecretLocal({
     overwrite: false,
   });
 
-  try {
-    const cache = await getProjectSecretsRuntimeCache({ project_id });
-    await client.syncProjectSecretsCache({ project_id, cache });
-  } catch (err) {
-    logger.warn("generateProjectSshKeySecretLocal: cache sync failed", {
-      project_id,
-      host_id,
-      err: `${err}`,
-    });
-  }
+  const runtime_refresh = await syncProjectSecretsRuntimeOnAssignedHost({
+    project_id,
+  });
 
   try {
     const setup = await client.setupProjectSecretSshKey({
@@ -116,7 +106,8 @@ export async function generateProjectSshKeySecretLocal({
       secret_name: normalizedSecretName,
       public_key,
       setup: { ok: true, ...setup },
-      restart_required: true,
+      restart_required: false,
+      runtime_refresh,
     };
   } catch (err) {
     logger.warn("generateProjectSshKeySecretLocal: host setup failed", {
@@ -129,7 +120,8 @@ export async function generateProjectSshKeySecretLocal({
       secret_name: normalizedSecretName,
       public_key,
       setup: { ok: false, ...preflight, error: `${err}` },
-      restart_required: true,
+      restart_required: false,
+      runtime_refresh,
     };
   }
 }

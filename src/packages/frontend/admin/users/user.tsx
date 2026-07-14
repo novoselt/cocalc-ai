@@ -23,6 +23,7 @@ import { CreatePaymentButton } from "./create-payment";
 import { AdminBalanceAdjustmentButton } from "../admin-purchase";
 import { CopyToClipBoard } from "@cocalc/frontend/components";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
+import { COLORS } from "@cocalc/util/theme";
 import Money from "./money";
 import { AdminMembership } from "./admin-membership";
 import {
@@ -96,45 +97,41 @@ export function UserResult({
 
   return (
     <Card
-      style={{ margin: "15px 0", background: "#fafafa" }}
+      style={{ margin: "15px 0", background: COLORS.GRAY_LLL }}
       styles={{
         body: { padding: "0 24px" },
-        title: { padding: "0" },
+        title: {
+          overflow: "visible",
+          padding: "0",
+          textOverflow: "clip",
+          whiteSpace: "normal",
+        },
       }}
       title={
         <div
-          style={{ cursor: "pointer" }}
+          style={{
+            alignItems: "center",
+            cursor: "pointer",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "8px 16px",
+            minWidth: 0,
+          }}
           onClick={details ? undefined : () => setDetails(true)}
         >
           <Icon
             onClick={() => setDetails(!details)}
             name={details ? "minus-square" : "plus-square"}
-            style={{ marginRight: "15px" }}
+            style={{ flex: "0 0 auto" }}
           />
-          <div
-            style={{
-              alignItems: "center",
-              color: "#666",
-              display: "flex",
-              float: "right",
-              gap: "8px",
-            }}
-            onClick={(e) => e.stopPropagation()}
+          <Space
+            wrap
+            style={{ color: COLORS.GRAY_M, flex: "1 1 360px", minWidth: 0 }}
           >
-            <ManagedEgressHistoryButton
-              user_account_id={account_id}
-              buttonText="Egress history"
-              size="small"
-            />
-            <span>
-              Active {renderLastActive()} (Created {renderCreated()})
-            </span>
-          </div>
-          <Space style={{ color: "#666" }}>
             {userName}{" "}
             {email_address ? (
               <CopyToClipBoard
-                style={{ color: "#666" }}
+                style={{ color: COLORS.GRAY_M }}
                 value={email_address}
               />
             ) : (
@@ -151,36 +148,69 @@ export function UserResult({
             />
             {is_admin && <Tag color="gold">ADMIN</Tag>}
           </Space>
+          <div
+            style={{
+              alignItems: "center",
+              color: COLORS.GRAY_M,
+              display: "flex",
+              flex: "0 1 auto",
+              flexWrap: "wrap",
+              gap: "8px",
+              justifyContent: "flex-end",
+              marginLeft: "auto",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ManagedEgressHistoryButton
+              user_account_id={account_id}
+              buttonText="Egress history"
+              size="small"
+            />
+            <span>
+              Active {renderLastActive()} (Created {renderCreated()})
+            </span>
+          </div>
         </div>
       }
     >
       {details && (
         <div>
-          <div style={{ float: "right" }}>
-            <CopyToClipBoard
-              copyTip={"Copied account_id!"}
-              style={{ color: "#666" }}
-              value={account_id}
-            />
-            <AccountStatusTags
-              account={{
-                banned,
-                membership_class,
-                membership_label,
-                membership_source,
-              }}
-            />
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flexWrap: "wrap-reverse",
+              gap: "8px 16px",
+              justifyContent: "space-between",
+              marginTop: "5px",
+            }}
+          >
+            <Space wrap>
+              {renderMoreLink("impersonate")}
+              {renderMoreLink("password")}
+              {renderMoreLink("ban")}
+              {renderMoreLink("projects")}
+              {renderMoreLink("purchases")}
+              {renderMoreLink("egress")}
+              {renderMoreLink("membership")}
+              {renderMoreLink("migration")}
+            </Space>
+            <Space wrap>
+              <CopyToClipBoard
+                copyTip={"Copied account_id!"}
+                style={{ color: COLORS.GRAY_M }}
+                value={account_id}
+              />
+              <AccountStatusTags
+                account={{
+                  banned,
+                  membership_class,
+                  membership_label,
+                  membership_source,
+                }}
+              />
+            </Space>
           </div>
-          <Space style={{ marginTop: "5px" }}>
-            {renderMoreLink("impersonate")}
-            {renderMoreLink("password")}
-            {renderMoreLink("ban")}
-            {renderMoreLink("projects")}
-            {renderMoreLink("purchases")}
-            {renderMoreLink("egress")}
-            {renderMoreLink("membership")}
-            {renderMoreLink("migration")}
-          </Space>
           {activeMore === "impersonate" && (
             <Impersonate account_id={account_id} display_name={userName} />
           )}

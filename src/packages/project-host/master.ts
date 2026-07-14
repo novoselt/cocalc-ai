@@ -46,7 +46,12 @@ import {
   isMounted as isRootfsMounted,
 } from "@cocalc/project-runner/run/rootfs";
 import { deleteProjectLocal, upsertProject } from "./sqlite/projects";
-import { syncProjectSecretsCache as syncProjectSecretsCacheLocal } from "./project-secrets-cache";
+import {
+  getCachedProjectSecretsForRuntime,
+  markProjectSecretsCacheMaterialized,
+  syncProjectSecretsCache as syncProjectSecretsCacheLocal,
+} from "./project-secrets-cache";
+import { refreshProjectSecretsHostPath } from "@cocalc/project-runner/run/podman";
 import { setupProjectSecretSshKey } from "./project-secret-ssh-key";
 import { setProjectHostAuthPublicKey } from "./auth-public-key";
 import { matchAppRequest } from "./app-public-access";
@@ -1341,12 +1346,50 @@ export async function startMasterRegistration({
     },
     async syncProjectSecretsCache({ project_id, cache }) {
       await awaitReadyForControl("syncProjectSecretsCache", waitUntilReady);
-      const secret_names = syncProjectSecretsCacheLocal({
+      const synced = syncProjectSecretsCacheLocal({
         project_id,
         cache,
       });
-      upsertProject({ project_id, secret_names });
-      return { secret_names };
+      upsertProject({ project_id, secret_names: synced.secret_names });
+      if (!synced.accepted) {
+        return { status: "stale_ignored", ...synced };
+      }
+      if (synced.materialized_generation >= synced.cached_generation) {
+        return { status: "already_current", ...synced };
+      }
+      try {
+        const secrets = getCachedProjectSecretsForRuntime({ project_id });
+        if (secrets == null) {
+          throw new Error("project secrets cache key is unavailable");
+        }
+        const status = await refreshProjectSecretsHostPath({
+          project_id,
+          secrets,
+        });
+        if (status === "updated_live") {
+          const state = markProjectSecretsCacheMaterialized({
+            project_id,
+            generation: synced.cached_generation,
+          });
+          return {
+            status,
+            secret_names: synced.secret_names,
+            ...state,
+          };
+        }
+        return { status, ...synced };
+      } catch (err) {
+        logger.warn("live project secrets refresh failed", {
+          project_id,
+          cached_generation: synced.cached_generation,
+          err: `${err}`,
+        });
+        return {
+          status: "retry_pending",
+          ...synced,
+          error_code: "refresh_failed",
+        };
+      }
     },
     async setupProjectSecretSshKey(opts) {
       await awaitReadyForControl("setupProjectSecretSshKey", waitUntilReady);

@@ -504,6 +504,38 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-not-required",
     reason: ORDINARY_AUTHZ,
   },
+  "projects.approveCourseSecretRecipients": {
+    decision: "fresh-auth-required",
+    reason: "approves projects to receive course-managed credential copies",
+  },
+  "projects.revokeCourseSecretPolicy": {
+    decision: "fresh-auth-required",
+    reason: "revokes course credential distribution authority",
+  },
+  "projects.revokeCourseSecretRecipients": {
+    decision: "fresh-auth-required",
+    reason: "revokes course credential distribution recipients",
+  },
+  "projects.setCourseSecretGrants": {
+    decision: "fresh-auth-required",
+    reason: "selects project credentials for course distribution",
+  },
+  "projects.setCourseSecretPolicy": {
+    decision: "fresh-auth-required",
+    reason: "changes course credential distribution authority",
+  },
+  "projects.setProjectSecretCourseSharing": {
+    decision: "fresh-auth-required",
+    reason: "makes a project credential eligible for course distribution",
+  },
+  "projects.startCourseSecretCleanup": {
+    decision: "fresh-auth-required",
+    reason: "removes course-managed credential copies from student projects",
+  },
+  "projects.startCourseSecretSync": {
+    decision: "fresh-auth-required",
+    reason: "distributes selected credentials to approved student projects",
+  },
   "projects.deleteProjectSshKey": {
     decision: "fresh-auth-required",
     reason: "project SSH trust revocation",

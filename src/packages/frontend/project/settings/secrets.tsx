@@ -26,7 +26,6 @@ import {
 } from "@cocalc/frontend/auth/fresh-auth";
 import {
   React,
-  redux,
   useIsMountedRef,
   useMemo,
   useState,
@@ -41,6 +40,7 @@ import { useProjectSecrets } from "@cocalc/frontend/project/use-project-secrets"
 import { SelectProject } from "@cocalc/frontend/projects/select-project";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { humanSize } from "@cocalc/util/misc";
+import type { ProjectSecretsRuntimeRefreshResult } from "@cocalc/util/project-secrets";
 import {
   PROJECT_SECRETS_ENV,
   PROJECT_SECRETS_MAX_COUNT,
@@ -144,11 +144,8 @@ export const ProjectSecrets: React.FC<Props> = ({
   );
   const [sshKeyResult, setSshKeyResult] =
     useState<GenerateProjectSshKeySecretResult | null>(null);
-  const [sshRestartState, setSshRestartState] = useState<
-    "queued" | "failed" | null
-  >(null);
-  const [sshRestartError, setSshRestartError] = useState<string>("");
-  const [showRestartWarning, setShowRestartWarning] = useState<boolean>(false);
+  const [runtimeRefresh, setRuntimeRefresh] =
+    useState<ProjectSecretsRuntimeRefreshResult | null>(null);
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   const trimmedName = name.trim();
@@ -165,8 +162,6 @@ export const ProjectSecrets: React.FC<Props> = ({
 
   function clearSshKeyResult(): void {
     setSshKeyResult(null);
-    setSshRestartState(null);
-    setSshRestartError("");
   }
 
   async function setSecret(): Promise<void> {
@@ -193,8 +188,8 @@ export const ProjectSecrets: React.FC<Props> = ({
     setSaving(true);
     setError("");
     setCopyResult(null);
+    setRuntimeRefresh(null);
     clearSshKeyResult();
-    setShowRestartWarning(false);
     try {
       const metadata =
         await webapp_client.conat_client.hub.projects.setProjectSecret({
@@ -203,10 +198,11 @@ export const ProjectSecrets: React.FC<Props> = ({
           value,
         });
       if (!isMountedRef.current) return;
-      setSecrets(upsertMetadata(secrets, metadata));
+      const { runtime_refresh, ...secretMetadata } = metadata;
+      setSecrets(upsertMetadata(secrets, secretMetadata));
+      setRuntimeRefresh(runtime_refresh ?? null);
       setName("");
       setValue("");
-      setShowRestartWarning(true);
       publishProjectDetailInvalidation({
         project_id,
         fields: ["secrets"],
@@ -225,8 +221,8 @@ export const ProjectSecrets: React.FC<Props> = ({
     setSaving(true);
     setError("");
     setCopyResult(null);
+    setRuntimeRefresh(null);
     clearSshKeyResult();
-    setShowRestartWarning(false);
     try {
       const result =
         await webapp_client.conat_client.hub.projects.deleteProjectSecret({
@@ -236,8 +232,8 @@ export const ProjectSecrets: React.FC<Props> = ({
       if (!isMountedRef.current) return;
       if (result.deleted) {
         setSecrets(removeMetadata(secrets, secretName));
-        setShowRestartWarning(true);
       }
+      setRuntimeRefresh(result.runtime_refresh ?? null);
       publishProjectDetailInvalidation({
         project_id,
         fields: ["secrets"],
@@ -269,8 +265,8 @@ export const ProjectSecrets: React.FC<Props> = ({
     setSaving(true);
     setError("");
     setCopyResult(null);
+    setRuntimeRefresh(null);
     clearSshKeyResult();
-    setShowRestartWarning(false);
     try {
       const result =
         await webapp_client.conat_client.hub.projects.copyProjectSecrets({
@@ -281,6 +277,7 @@ export const ProjectSecrets: React.FC<Props> = ({
         });
       if (!isMountedRef.current) return;
       setCopyResult(result);
+      setRuntimeRefresh(result.runtime_refresh ?? null);
       if (result.copied.length > 0) {
         const nextSecrets =
           await webapp_client.conat_client.hub.projects.listProjectSecrets({
@@ -288,7 +285,6 @@ export const ProjectSecrets: React.FC<Props> = ({
           });
         if (!isMountedRef.current) return;
         setSecrets(nextSecrets);
-        setShowRestartWarning(true);
       }
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -317,8 +313,8 @@ export const ProjectSecrets: React.FC<Props> = ({
       setSaving(true);
       setError("");
       setCopyResult(null);
+      setRuntimeRefresh(null);
       clearSshKeyResult();
-      setShowRestartWarning(false);
       try {
         const result =
           await webapp_client.conat_client.hub.projects.generateProjectSshKeySecret(
@@ -334,18 +330,6 @@ export const ProjectSecrets: React.FC<Props> = ({
           project_id,
           fields: ["secrets"],
         });
-        try {
-          await redux.getActions("projects").restart_project(project_id);
-          if (!isMountedRef.current) return;
-          setSshRestartState("queued");
-          setSshRestartError("");
-          setShowRestartWarning(false);
-        } catch (err) {
-          if (!isMountedRef.current) return;
-          setSshRestartState("failed");
-          setSshRestartError(`${err}`);
-          setShowRestartWarning(result.restart_required);
-        }
       } catch (err) {
         if (isFreshAuthRequiredError(err)) {
           throw err;
@@ -358,6 +342,50 @@ export const ProjectSecrets: React.FC<Props> = ({
         }
       }
     });
+  }
+
+  async function setCourseSharingEligibility(
+    secret: ProjectSecretMetadata,
+    allow: boolean,
+  ): Promise<void> {
+    await runFreshAuthAction(async () => {
+      setSaving(true);
+      setError("");
+      try {
+        const metadata =
+          await webapp_client.conat_client.hub.projects.setProjectSecretCourseSharing(
+            {
+              browser_id: webapp_client.browser_id,
+              project_id,
+              name: secret.name,
+              allow,
+            },
+          );
+        if (!isMountedRef.current) return;
+        setSecrets(upsertMetadata(secrets, metadata));
+      } catch (err) {
+        if (isFreshAuthRequiredError(err)) throw err;
+        if (isMountedRef.current) setError(`${err}`);
+      } finally {
+        if (isMountedRef.current) setSaving(false);
+      }
+    });
+  }
+
+  async function retryRuntimeRefresh(): Promise<void> {
+    setSaving(true);
+    setError("");
+    try {
+      const result =
+        await webapp_client.conat_client.hub.projects.refreshProjectSecretsRuntime(
+          { project_id },
+        );
+      if (isMountedRef.current) setRuntimeRefresh(result);
+    } catch (err) {
+      if (isMountedRef.current) setError(`${err}`);
+    } finally {
+      if (isMountedRef.current) setSaving(false);
+    }
   }
 
   const help = (
@@ -416,6 +444,16 @@ export const ProjectSecrets: React.FC<Props> = ({
               <Typography.Text type="secondary">
                 Updated {formatDate(secret.updated_at)}
               </Typography.Text>
+              <br />
+              <Checkbox
+                checked={secret.allow_course_sharing}
+                disabled={saving}
+                onChange={(event) =>
+                  void setCourseSharingEligibility(secret, event.target.checked)
+                }
+              >
+                Allow explicit sharing through courses
+              </Checkbox>
             </div>
             <Popconfirm
               title={`Delete secret "${secret.name}"?`}
@@ -459,25 +497,47 @@ export const ProjectSecrets: React.FC<Props> = ({
     );
   }
 
+  function renderRuntimeRefresh(): React.JSX.Element | undefined {
+    if (!runtimeRefresh) return;
+    const pending = runtimeRefresh.status === "retry_pending";
+    const cached = runtimeRefresh.status === "cached_for_next_start";
+    const message = pending
+      ? "The secret was saved, but the running project mount has not refreshed yet."
+      : cached
+        ? "The secret was saved and will be mounted the next time this project starts."
+        : "The project secret mount is current.";
+    return (
+      <Alert
+        banner
+        showIcon
+        type={pending ? "warning" : "success"}
+        message={message}
+        description="Programs that already cached a credential may still need their own reload."
+        action={
+          pending ? (
+            <Button
+              disabled={saving}
+              onClick={() => void retryRuntimeRefresh()}
+            >
+              Retry mount refresh
+            </Button>
+          ) : undefined
+        }
+      />
+    );
+  }
+
   function renderSshKeyResult(): React.JSX.Element | undefined {
     if (!sshKeyResult) return;
     return (
       <Alert
         banner
         showIcon
-        type={
-          sshKeyResult.setup.ok && sshRestartState !== "failed"
-            ? "success"
-            : "warning"
-        }
+        type={sshKeyResult.setup.ok ? "success" : "warning"}
         message={
-          sshRestartState === "queued"
-            ? "Generated SSH deploy key secret and queued project restart."
-            : sshRestartState === "failed"
-              ? "Generated SSH deploy key secret, but project restart needs attention."
-              : sshKeyResult.setup.ok
-                ? "Generated SSH deploy key secret."
-                : "Generated SSH deploy key secret, but project file setup needs attention."
+          sshKeyResult.setup.ok
+            ? "Generated SSH deploy key secret."
+            : "Generated SSH deploy key secret, but project file setup needs attention."
         }
         description={
           <Space direction="vertical" style={{ width: "100%" }}>
@@ -502,23 +562,10 @@ export const ProjectSecrets: React.FC<Props> = ({
                 Setup error: {sshKeyResult.setup.error}
               </Typography.Text>
             ) : undefined}
-            {sshRestartState === "queued" ? (
-              <Typography.Text>
-                Project restart has been queued. The private key will be
-                available at{" "}
-                <Typography.Text code>
-                  {secretPath(sshKeyResult.secret_name)}
-                </Typography.Text>{" "}
-                after the restart completes.
-              </Typography.Text>
-            ) : undefined}
-            {sshRestartState === "failed" ? (
-              <Typography.Text type="warning">
-                The SSH key was generated, but the project restart was not
-                queued: {sshRestartError}. Restart this project manually before
-                using the key.
-              </Typography.Text>
-            ) : undefined}
+            <Typography.Text>
+              Runtime mount: {sshKeyResult.runtime_refresh.status}. Programs
+              that cache credentials may need their own reload.
+            </Typography.Text>
             <div>
               <Typography.Text strong>
                 Public key to add to GitHub/GitLab:
@@ -544,6 +591,7 @@ export const ProjectSecrets: React.FC<Props> = ({
             <Typography.Text strong>{title}</Typography.Text>
           ) : undefined}
           {error ? <ErrorDisplay banner error={error} /> : undefined}
+          {renderRuntimeRefresh()}
           {nameError ? <ErrorDisplay banner error={nameError} /> : undefined}
           {valueTooLarge ? (
             <ErrorDisplay
@@ -641,7 +689,7 @@ export const ProjectSecrets: React.FC<Props> = ({
                 title={
                   <Space direction="vertical" style={{ maxWidth: 440 }}>
                     <Typography.Text strong>
-                      Generate an SSH keypair and restart this project?
+                      Generate an SSH keypair?
                     </Typography.Text>
                     <Typography.Text>
                       This creates a new ed25519 keypair, stores the private key
@@ -657,12 +705,12 @@ export const ProjectSecrets: React.FC<Props> = ({
                       <Typography.Text code>
                         {PROJECT_SECRETS_SSH_PRIVATE_KEY_PATH}
                       </Typography.Text>{" "}
-                      as a symlink to the mounted secret, and restarts this
-                      project so SSH can use it.
+                      as a symlink to the mounted secret. The mounted secret is
+                      refreshed without restarting the project.
                     </Typography.Text>
                   </Space>
                 }
-                okText="Generate and Restart"
+                okText="Generate"
                 cancelText="Cancel"
                 onConfirm={generateSshKeySecret}
               >
@@ -673,9 +721,7 @@ export const ProjectSecrets: React.FC<Props> = ({
                     sortedSecrets.length >= PROJECT_SECRETS_MAX_COUNT
                   }
                 >
-                  {saving
-                    ? "Generating..."
-                    : "Generate SSH Key Secret and Restart Project"}
+                  {saving ? "Generating..." : "Generate SSH Key Secret"}
                 </Button>
               </Popconfirm>
               {sshSecretExists ? (
@@ -721,14 +767,6 @@ export const ProjectSecrets: React.FC<Props> = ({
               {renderCopyResult()}
             </Space>
           </div>
-          {showRestartWarning ? (
-            <Alert
-              banner
-              showIcon
-              type="warning"
-              message="Restart this project for mounted secret file changes to take effect."
-            />
-          ) : undefined}
           <FreshAuthModal {...freshAuthModalProps} />
         </Space>
       </div>

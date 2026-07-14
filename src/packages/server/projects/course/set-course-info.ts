@@ -17,9 +17,12 @@ metadata and does not compute or preserve legacy quota-derived payment fields.
 */
 
 import { assertLocalProjectCollaborator } from "@cocalc/server/conat/project-local-access";
+import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import getPool, { PoolClient } from "@cocalc/database/pool";
 import { publishProjectDetailInvalidationBestEffort } from "@cocalc/server/account/project-detail-feed";
 import type { CourseInfo } from "@cocalc/util/db-schema/projects";
+import { normalizeCoursePath } from "@cocalc/util/course-path";
+import { isValidUUID } from "@cocalc/util/misc";
 
 interface Options {
   account_id: string; // who is setting the course field
@@ -42,6 +45,16 @@ export default async function setCourseInfo({
     // just in case
     throw Error("course must be an object of type CourseInfo");
   }
+  if (
+    !["student", "shared", "nbgrader"].includes(course.type) ||
+    !isValidUUID(course.project_id)
+  ) {
+    throw new Error("invalid course association");
+  }
+  const normalizedCourse: CourseInfo = {
+    ...course,
+    path: normalizeCoursePath(course.path),
+  };
   const pool = client ?? getPool();
 
   // get current value of course:
@@ -56,19 +69,25 @@ export default async function setCourseInfo({
   const currentCourse: CourseInfo | undefined = rows[0].course;
   if (!noCheck && currentCourse?.project_id != null) {
     // check that account_id is a collab, so allowed to edit course field.
-    await assertLocalProjectCollaborator({
+    await assertProjectCollaboratorAccessAllowRemote({
       account_id,
       project_id: currentCourse.project_id,
     });
   }
+  if (!noCheck) {
+    await assertProjectCollaboratorAccessAllowRemote({
+      account_id,
+      project_id: normalizedCourse.project_id,
+    });
+  }
 
   await pool.query("UPDATE projects SET course=$1 WHERE project_id=$2", [
-    course,
+    normalizedCourse,
     project_id,
   ]);
   await publishProjectDetailInvalidationBestEffort({
     project_id,
     fields: ["course"],
   });
-  return { course };
+  return { course: normalizedCourse };
 }
