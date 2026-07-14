@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260714-v9"
+HELPER_SCHEMA_VERSION = "20260714-v10"
 RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -2665,10 +2665,16 @@ case "$cmd" in
     flock -x 9
     pool="$(project_cgroup "$1")"
     if [ -d "$pool" ]; then
-      for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+      if [ -w "$pool/cgroup.kill" ]; then
+        printf '1\n' > "$pool/cgroup.kill" 2>/dev/null || true
+      fi
+      for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
         rmdir "$pool" 2>/dev/null && break
         sleep 0.1
       done
+      if [ -d "$pool" ]; then
+        deny "project-cgroup-cleanup-failed" "$1"
+      fi
     fi
     ;;
   attach-pasta-cgroups)

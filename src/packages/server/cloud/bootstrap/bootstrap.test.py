@@ -1357,6 +1357,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("configure_project_pool_hierarchy", script)
             self.assertIn('> "$cgroup/memory.max"', script)
             self.assertIn('> "$cgroup/memory.oom.group"', script)
+            self.assertIn('> "$pool/cgroup.kill"', script)
+            self.assertIn('deny "project-cgroup-cleanup-failed"', script)
             self.assertIn("cocalc-project-cgroups.lock", script)
             self.assertIn('PROJECT_PROCESS_OOM_SCORE_ADJ="500"', script)
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
