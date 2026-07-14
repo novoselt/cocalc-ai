@@ -722,6 +722,46 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
         self.assertEqual(calls[0][1], bootstrap.RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S)
         self.assertNotIn("uid_map", contract)
 
+    def test_runtime_user_contract_uses_managed_podman(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            cfg = replace(cfg, ssh_user=pwd.getpwuid(os.getuid()).pw_name)
+            current = Path(tmpdir) / "runtime" / "current"
+            podman = current / "bin" / "podman"
+            conf = current / "etc" / "containers" / "containers.conf"
+            podman.parent.mkdir(parents=True)
+            conf.parent.mkdir(parents=True)
+            podman.write_text("#!/bin/sh\n", encoding="utf-8")
+            podman.chmod(0o755)
+            conf.write_text("[engine]\n", encoding="utf-8")
+            calls = []
+            original_current = os.environ.get("COCALC_CONTAINER_RUNTIME_CURRENT")
+            original_probe = bootstrap.run_bounded_capture
+            try:
+                os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = str(current)
+
+                def fake_probe(args, timeout_s):
+                    calls.append((args, timeout_s))
+                    map_text = "0 2000 1\n1 231072 65536\n65537 327680 4128768\n"
+                    return subprocess.CompletedProcess(args, 0, map_text, "")
+
+                bootstrap.run_bounded_capture = fake_probe
+                contract = bootstrap.read_current_runtime_user_contract(cfg)
+            finally:
+                bootstrap.run_bounded_capture = original_probe
+                if original_current is None:
+                    os.environ.pop("COCALC_CONTAINER_RUNTIME_CURRENT", None)
+                else:
+                    os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = original_current
+
+            self.assertEqual(len(calls), 2)
+            self.assertIn(str(podman), calls[0][0][-1])
+            self.assertIn(
+                f"CONTAINERS_CONF_OVERRIDE={conf}",
+                calls[0][0],
+            )
+            self.assertIn("fingerprint", contract)
+
     def test_verify_runtime_user_contract_raises_on_drift(self) -> None:
         cfg = make_cfg(tempfile.mkdtemp())
         original_expected = bootstrap.expected_runtime_user_contract

@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260714-v7"
+HELPER_SCHEMA_VERSION = "20260714-v8"
 RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -736,13 +736,29 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     contract["subgid_ranges"] = [
         f"{start}:{length}" for start, length in read_user_subid_ranges(Path("/etc/subgid"), cfg.ssh_user)
     ]
-    podman = shutil.which("podman")
+    runtime_current = Path(
+        os.environ.get(
+            "COCALC_CONTAINER_RUNTIME_CURRENT",
+            "/opt/cocalc/container-runtime/current",
+        )
+    )
+    managed_podman = runtime_current / "bin" / "podman"
+    managed_conf = runtime_current / "etc" / "containers" / "containers.conf"
+    runtime_env: list[str] = []
+    if managed_podman.is_file() and os.access(managed_podman, os.X_OK):
+        podman = str(managed_podman)
+        runtime_env = [
+            f"PATH={runtime_current / 'bin'}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            f"CONTAINERS_CONF_OVERRIDE={managed_conf}",
+        ]
+    else:
+        podman = shutil.which("podman")
     if not podman:
         return contract
     if os.geteuid() == 0 and cfg.ssh_user != "root":
-        prefix = ["sudo", "-u", cfg.ssh_user, "-H"]
+        prefix = ["sudo", "-u", cfg.ssh_user, "-H", "env", *runtime_env]
     else:
-        prefix = []
+        prefix = ["env", *runtime_env] if runtime_env else []
     uid_proc = run_bounded_capture(
         prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman} unshare cat /proc/self/uid_map'],
         RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
