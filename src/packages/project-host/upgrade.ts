@@ -22,6 +22,10 @@ import {
 } from "./runtime-retention-policy";
 import { listRuntimeArtifactReferences } from "./sqlite/projects";
 import { podmanEnv } from "@cocalc/backend/podman/env";
+import {
+  beginProjectRuntimeMaintenance,
+  endProjectRuntimeMaintenance,
+} from "./runtime-maintenance";
 
 const logger = getLogger("project-host:upgrade");
 
@@ -33,6 +37,7 @@ const PROJECT_HOST_ROOT = "/opt/cocalc/project-host";
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 const DEFAULT_UPGRADE_FETCH_TIMEOUT_MS = 30_000;
 const DEFAULT_UPGRADE_DOWNLOAD_TIMEOUT_MS = 8 * 60 * 1000;
+const CONTAINER_QUIESCE_TIMEOUT_MS = 2 * 60_000;
 
 type CanonicalArtifact =
   | "project-host"
@@ -492,6 +497,60 @@ async function assertContainerRuntimeMigrationIsSafe(
   }
 }
 
+async function quiesceProjectContainersForRuntimeMigration(
+  contract: ContainerRuntimeContract,
+): Promise<(() => void) | undefined> {
+  const env = podmanEnv();
+  const databaseBackend = await podmanInfoField("DatabaseBackend", env);
+  if (databaseBackend !== contract.database_backend) {
+    throw new Error(
+      `container runtime activation requires existing Podman state to use ${contract.database_backend}; found ${databaseBackend || "unknown"}`,
+    );
+  }
+  const networkBackend = await podmanInfoField("NetworkBackend", env);
+  if (networkBackend === contract.network_backend) return undefined;
+
+  beginProjectRuntimeMaintenance({
+    reason: `container-runtime migration ${networkBackend || "unknown"}->${contract.network_backend}`,
+  });
+  let release = true;
+  try {
+    const runningBefore = await listRunningPodmanContainerIdsStrict(env);
+    logger.warn("upgrade: quiescing project containers for runtime migration", {
+      from: networkBackend || "unknown",
+      to: contract.network_backend,
+      running_containers: runningBefore.length,
+    });
+    if (runningBefore.length > 0) {
+      try {
+        await runCommandCapture("podman", ["stop", "--all", "--time", "5"], {
+          timeoutMs: CONTAINER_QUIESCE_TIMEOUT_MS,
+          env,
+        });
+      } catch (err) {
+        logger.warn("upgrade: podman stop --all reported an error", {
+          err: describeError(err),
+        });
+      }
+    }
+    const deadline = Date.now() + CONTAINER_QUIESCE_TIMEOUT_MS;
+    let running = await listRunningPodmanContainerIdsStrict(env);
+    while (running.length > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      running = await listRunningPodmanContainerIdsStrict(env);
+    }
+    if (running.length > 0) {
+      throw new Error(
+        `container runtime migration could not quiesce ${running.length} running container${running.length === 1 ? "" : "s"}`,
+      );
+    }
+    release = false;
+    return () => endProjectRuntimeMaintenance();
+  } finally {
+    if (release) endProjectRuntimeMaintenance();
+  }
+}
+
 async function validateContainerRuntimeVersion(
   versionDir: string,
 ): Promise<ContainerRuntimeContract> {
@@ -709,16 +768,22 @@ async function listInstalledArtifactVersions(root: string): Promise<string[]> {
     .sort();
 }
 
+async function listRunningPodmanContainerIdsStrict(
+  env = podmanEnv(),
+): Promise<string[]> {
+  const { stdout } = await runCommandCapture("podman", ["ps", "-q"], {
+    timeoutMs: 15_000,
+    env,
+  });
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 async function listRunningPodmanContainerIds(): Promise<string[]> {
   try {
-    const { stdout } = await runCommandCapture("podman", ["ps", "-q"], {
-      timeoutMs: 15_000,
-      env: podmanEnv(),
-    });
-    return stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    return await listRunningPodmanContainerIdsStrict();
   } catch (err) {
     logger.warn("upgrade: unable to list running podman containers", {
       err: describeError(err),
@@ -1144,52 +1209,61 @@ async function downloadAndInstall(
   const previousTarget = await fs.promises
     .realpath(resolved.currentLink)
     .catch(() => undefined);
+  let releaseRuntimeMaintenance: (() => void) | undefined;
   if (resolved.canonicalArtifact === "container-runtime") {
     const contract = await validateContainerRuntimeVersion(resolved.versionDir);
+    releaseRuntimeMaintenance =
+      await quiesceProjectContainersForRuntimeMigration(contract);
     await assertContainerRuntimeMigrationIsSafe(contract);
     resolved.containerRuntimeContract = contract;
   }
-  await replaceSymlink(resolved.currentLink, resolved.versionDir);
-  if (resolved.canonicalArtifact === "container-runtime") {
-    try {
-      await verifyActivatedContainerRuntime(resolved.containerRuntimeContract!);
-    } catch (err) {
-      if (previousTarget) {
-        await replaceSymlink(resolved.currentLink, previousTarget);
-      } else {
-        await fs.promises.rm(resolved.currentLink, { force: true });
+  try {
+    await replaceSymlink(resolved.currentLink, resolved.versionDir);
+    if (resolved.canonicalArtifact === "container-runtime") {
+      try {
+        await verifyActivatedContainerRuntime(
+          resolved.containerRuntimeContract!,
+        );
+      } catch (err) {
+        if (previousTarget) {
+          await replaceSymlink(resolved.currentLink, previousTarget);
+        } else {
+          await fs.promises.rm(resolved.currentLink, { force: true });
+        }
+        throw new Error(
+          `activated container runtime failed Podman state verification and was rolled back: ${describeError(err)}`,
+        );
       }
-      throw new Error(
-        `activated container runtime failed Podman state verification and was rolled back: ${describeError(err)}`,
-      );
     }
-  }
-  const retentionPolicy = retentionPolicyForArtifact(
-    resolved.artifact === "project" ? "project-bundle" : resolved.artifact,
-    resolved.retentionPolicy,
-  );
-  await pruneVersionDirs({
-    root: resolved.root,
-    currentLink: resolved.currentLink,
-    desiredDir: resolved.versionDir,
-    protectedVersions: await protectedArtifactVersions({
-      artifact: resolved.canonicalArtifact,
-      desiredVersion: resolved.version,
+    const retentionPolicy = retentionPolicyForArtifact(
+      resolved.artifact === "project" ? "project-bundle" : resolved.artifact,
+      resolved.retentionPolicy,
+    );
+    await pruneVersionDirs({
       root: resolved.root,
-    }),
-    keep: retentionPolicy.keep_count,
-    maxBytes: retentionPolicy.max_bytes,
-  });
-  logger.info("upgrade: updated current symlink", {
-    artifact: resolved.artifact,
-    version: resolved.version,
-    current: resolved.currentLink,
-  });
-  return {
-    artifact: resolved.artifact,
-    version: resolved.version,
-    status: "updated",
-  };
+      currentLink: resolved.currentLink,
+      desiredDir: resolved.versionDir,
+      protectedVersions: await protectedArtifactVersions({
+        artifact: resolved.canonicalArtifact,
+        desiredVersion: resolved.version,
+        root: resolved.root,
+      }),
+      keep: retentionPolicy.keep_count,
+      maxBytes: retentionPolicy.max_bytes,
+    });
+    logger.info("upgrade: updated current symlink", {
+      artifact: resolved.artifact,
+      version: resolved.version,
+      current: resolved.currentLink,
+    });
+    return {
+      artifact: resolved.artifact,
+      version: resolved.version,
+      status: "updated",
+    };
+  } finally {
+    releaseRuntimeMaintenance?.();
+  }
 }
 
 export async function scheduleProjectHostRestart() {

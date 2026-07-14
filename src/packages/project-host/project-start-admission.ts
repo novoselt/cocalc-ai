@@ -7,6 +7,7 @@ import callHub from "@cocalc/conat/hub/call-hub";
 import { getMasterConatClient } from "./master-status";
 import { getLocalHostId } from "./sqlite/hosts";
 import { getProjectStopState } from "./sqlite/stop-policy";
+import { getProjectRuntimeMaintenanceState } from "./runtime-maintenance";
 
 function formatDuration(ms: number): string {
   const minutes = Math.max(1, Math.ceil(ms / 60_000));
@@ -33,6 +34,12 @@ export async function startProjectWithAdmission({
   const project = `${project_id ?? ""}`.trim();
   if (!project) {
     throw new Error("project id is required to start a project");
+  }
+  const maintenance = getProjectRuntimeMaintenanceState();
+  if (maintenance) {
+    throw new Error(
+      "Project start is temporarily paused while this host upgrades its container runtime. CoCalc will retry after maintenance finishes; files and collaborative documents remain available.",
+    );
   }
   const stopState = getProjectStopState(project);
   const pressureCooldownUntilMs = stopState?.pressure_cooldown_until_ms;

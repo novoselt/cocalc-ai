@@ -7,6 +7,7 @@ let callHubMock: jest.Mock;
 let getMasterConatClientMock: jest.Mock;
 let getLocalHostIdMock: jest.Mock;
 let getProjectStopStateMock: jest.Mock;
+let getProjectRuntimeMaintenanceStateMock: jest.Mock;
 
 jest.mock("@cocalc/conat/hub/call-hub", () => ({
   __esModule: true,
@@ -28,6 +29,12 @@ jest.mock("./sqlite/stop-policy", () => ({
   getProjectStopState: (...args: any[]) => getProjectStopStateMock(...args),
 }));
 
+jest.mock("./runtime-maintenance", () => ({
+  __esModule: true,
+  getProjectRuntimeMaintenanceState: (...args: any[]) =>
+    getProjectRuntimeMaintenanceStateMock(...args),
+}));
+
 describe("startProjectWithAdmission", () => {
   beforeEach(() => {
     jest.resetModules();
@@ -35,6 +42,7 @@ describe("startProjectWithAdmission", () => {
     getMasterConatClientMock = jest.fn(() => ({ id: "client-1" }));
     getLocalHostIdMock = jest.fn(() => "host-1");
     getProjectStopStateMock = jest.fn(() => undefined);
+    getProjectRuntimeMaintenanceStateMock = jest.fn(() => undefined);
   });
 
   afterEach(() => {
@@ -90,6 +98,25 @@ describe("startProjectWithAdmission", () => {
     ).rejects.toThrow(
       "temporarily blocked because this project was recently stopped",
     );
+    expect(callHubMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks project starts during container runtime maintenance", async () => {
+    getProjectRuntimeMaintenanceStateMock = jest.fn(() => ({
+      reason: "container-runtime migration cni->netavark",
+      started_at: "2026-07-14T21:00:00.000Z",
+      expires_at: "2026-07-14T21:05:00.000Z",
+      pid: 123,
+    }));
+    const { startProjectWithAdmission } =
+      await import("./project-start-admission");
+
+    await expect(
+      startProjectWithAdmission({
+        account_id: "acct-1",
+        project_id: "proj-1",
+      }),
+    ).rejects.toThrow("container runtime");
     expect(callHubMock).not.toHaveBeenCalled();
   });
 

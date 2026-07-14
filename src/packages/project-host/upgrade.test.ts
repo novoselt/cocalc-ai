@@ -96,6 +96,8 @@ function installFakeExistingPodman(
   const binDir = path.join(versionDir, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const podman = path.join(binDir, "podman");
+  const runningMarker = path.join(versionDir, "running");
+  if (running) fs.writeFileSync(runningMarker, "running\n");
   fs.writeFileSync(
     podman,
     `#!/bin/sh
@@ -103,7 +105,8 @@ case "$*" in
   *DatabaseBackend*) echo sqlite ;;
   *NetworkBackend*) echo cni ;;
   *CgroupManager*) echo cgroupfs ;;
-  "ps -q") ${running ? "echo running-container" : ":"} ;;
+  "ps -q") test -f ${JSON.stringify(runningMarker)} && echo running-container ;;
+  "stop --all --time 5") rm -f ${JSON.stringify(runningMarker)} ;;
 esac
 exit 0
 `,
@@ -298,7 +301,7 @@ describe("project host upgrade installer", () => {
     }
   }, 30_000);
 
-  it("refuses a CNI to Netavark migration while a container is running", async () => {
+  it("quiesces running containers before a CNI to Netavark migration", async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "cocalc-runtime-test-"));
     const archivePath = createContainerRuntimeArchive(base);
     const served = await serveFile(archivePath);
@@ -309,7 +312,6 @@ describe("project host upgrade installer", () => {
       fs.mkdirSync(runtimeRoot, { recursive: true });
       fs.mkdirSync(runtimeDir);
       installFakeExistingPodman(currentLink, { running: true });
-      const previousTarget = fs.realpathSync(currentLink);
       process.env.COCALC_DATA = path.join(base, "data");
       process.env.COCALC_CONTAINER_RUNTIME_ROOT = runtimeRoot;
       process.env.COCALC_CONTAINER_RUNTIME_CURRENT = currentLink;
@@ -326,8 +328,22 @@ describe("project host upgrade installer", () => {
           versionDir: path.join(runtimeRoot, "5.8.2"),
           currentLink,
         } as any),
-      ).rejects.toThrow("requires zero running containers");
-      expect(fs.realpathSync(currentLink)).toBe(previousTarget);
+      ).resolves.toEqual({
+        artifact: "container-runtime",
+        version: "5.8.2",
+        status: "updated",
+      });
+      expect(fs.realpathSync(currentLink)).toBe(
+        path.join(runtimeRoot, "5.8.2"),
+      );
+      expect(
+        fs.existsSync(
+          path.join(
+            process.env.COCALC_DATA,
+            "project-runtime-maintenance.json",
+          ),
+        ),
+      ).toBe(false);
     } finally {
       await served.close();
       fs.rmSync(base, { recursive: true, force: true });
