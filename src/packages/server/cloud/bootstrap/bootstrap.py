@@ -356,9 +356,7 @@ def load_config(bootstrap_dir: str) -> BootstrapConfig:
             remote=_ensure_str(bundle_host.get("remote"), "project_host_bundle.remote"),
             root=_ensure_str(bundle_host.get("root"), "project_host_bundle.root"),
             dir=_ensure_str(bundle_host.get("dir"), "project_host_bundle.dir"),
-            current=_ensure_str(
-                bundle_host.get("current"), "project_host_bundle.current"
-            ),
+            current=_ensure_str(bundle_host.get("current"), "project_host_bundle.current"),
             version=bundle_host.get("version"),
             manifest_url=bundle_host.get("manifest_url") or None,
         ),
@@ -368,9 +366,7 @@ def load_config(bootstrap_dir: str) -> BootstrapConfig:
             remote=_ensure_str(bundle_project.get("remote"), "project_bundle.remote"),
             root=_ensure_str(bundle_project.get("root"), "project_bundle.root"),
             dir=_ensure_str(bundle_project.get("dir"), "project_bundle.dir"),
-            current=_ensure_str(
-                bundle_project.get("current"), "project_bundle.current"
-            ),
+            current=_ensure_str(bundle_project.get("current"), "project_bundle.current"),
             version=bundle_project.get("version"),
             manifest_url=bundle_project.get("manifest_url") or None,
         ),
@@ -683,9 +679,7 @@ def expected_runtime_userns_map(cfg: BootstrapConfig) -> tuple[list[str], list[s
 def expected_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     desired_uid, desired_gid = resolve_runtime_user_identity(cfg)
     uid_map, gid_map = expected_runtime_userns_map(cfg)
-    subid_ranges = [
-        f"{start}:{length}" for start, length in PROJECT_HOST_RUNTIME_SUBID_RANGES
-    ]
+    subid_ranges = [f"{start}:{length}" for start, length in PROJECT_HOST_RUNTIME_SUBID_RANGES]
     return {
         "user": cfg.ssh_user,
         "identity": f"{cfg.ssh_user}:{desired_uid}:{desired_gid}",
@@ -737,12 +731,10 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     contract["host_gid"] = pw.pw_gid
     contract["identity"] = f"{cfg.ssh_user}:{pw.pw_uid}:{pw.pw_gid}"
     contract["subuid_ranges"] = [
-        f"{start}:{length}"
-        for start, length in read_user_subid_ranges(Path("/etc/subuid"), cfg.ssh_user)
+        f"{start}:{length}" for start, length in read_user_subid_ranges(Path("/etc/subuid"), cfg.ssh_user)
     ]
     contract["subgid_ranges"] = [
-        f"{start}:{length}"
-        for start, length in read_user_subid_ranges(Path("/etc/subgid"), cfg.ssh_user)
+        f"{start}:{length}" for start, length in read_user_subid_ranges(Path("/etc/subgid"), cfg.ssh_user)
     ]
     runtime_current = Path(
         os.environ.get(
@@ -768,12 +760,7 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     else:
         prefix = ["env", *runtime_env] if runtime_env else []
     uid_proc = run_bounded_capture(
-        prefix
-        + [
-            "bash",
-            "-lc",
-            f'cd "$HOME" && exec {podman} unshare cat /proc/self/uid_map',
-        ],
+        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman} unshare cat /proc/self/uid_map'],
         RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
     )
     if uid_proc.returncode != 0:
@@ -784,12 +771,7 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
         )
         return contract
     gid_proc = run_bounded_capture(
-        prefix
-        + [
-            "bash",
-            "-lc",
-            f'cd "$HOME" && exec {podman} unshare cat /proc/self/gid_map',
-        ],
+        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman} unshare cat /proc/self/gid_map'],
         RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
     )
     if uid_proc.returncode == 0 and gid_proc.returncode == 0:
@@ -920,9 +902,7 @@ def build_desired_state(cfg: BootstrapConfig) -> dict[str, Any]:
     }
 
 
-def refresh_installed_state(
-    cfg: BootstrapConfig, base: dict[str, Any] | None = None
-) -> dict[str, Any]:
+def refresh_installed_state(cfg: BootstrapConfig, base: dict[str, Any] | None = None) -> dict[str, Any]:
     state = dict(base or {})
     state["schema_version"] = STATE_SCHEMA_VERSION
     state["recorded_at"] = now_iso()
@@ -1084,9 +1064,7 @@ def ensure_platform(cfg: BootstrapConfig) -> None:
     else:
         raise RuntimeError(f"unsupported architecture {arch_raw}")
     if arch != cfg.expected_arch:
-        raise RuntimeError(
-            f"unsupported architecture {arch} (expected {cfg.expected_arch})"
-        )
+        raise RuntimeError(f"unsupported architecture {arch} (expected {cfg.expected_arch})")
 
 
 def compute_root_reserve_gb(cfg: BootstrapConfig) -> int:
@@ -1119,36 +1097,14 @@ def compute_image_size(cfg: BootstrapConfig) -> int:
 
 def disable_unattended(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: disabling unattended upgrades")
-    run_best_effort(
-        cfg,
-        [
-            "systemctl",
-            "stop",
-            "apt-daily.service",
-            "apt-daily-upgrade.service",
-            "unattended-upgrades.service",
-        ],
-        "stop unattended-upgrades",
-    )
-    run_best_effort(
-        cfg,
-        ["systemctl", "stop", "apt-daily.timer", "apt-daily-upgrade.timer"],
-        "stop apt timers",
-    )
+    run_best_effort(cfg, ["systemctl", "stop", "apt-daily.service", "apt-daily-upgrade.service", "unattended-upgrades.service"], "stop unattended-upgrades")
+    run_best_effort(cfg, ["systemctl", "stop", "apt-daily.timer", "apt-daily-upgrade.timer"], "stop apt timers")
     run_best_effort(cfg, ["pkill", "-9", "apt-get"], "kill apt-get")
-    run_best_effort(
-        cfg, ["pkill", "-f", "-9", "unattended-upgrade"], "kill unattended-upgrade"
-    )
-    run_best_effort(
-        cfg,
-        ["apt-get", "remove", "-y", "unattended-upgrades"],
-        "remove unattended-upgrades",
-    )
+    run_best_effort(cfg, ["pkill", "-f", "-9", "unattended-upgrade"], "kill unattended-upgrade")
+    run_best_effort(cfg, ["apt-get", "remove", "-y", "unattended-upgrades"], "remove unattended-upgrades")
 
 
-def apt_run(
-    cfg: BootstrapConfig, args: list[str], desc: str, retries: int, timeout: int
-) -> None:
+def apt_run(cfg: BootstrapConfig, args: list[str], desc: str, retries: int, timeout: int) -> None:
     for attempt in range(1, retries + 1):
         try:
             run_cmd(cfg, args, desc, timeout=timeout)
@@ -1156,9 +1112,7 @@ def apt_run(
         except Exception as exc:
             if attempt == retries:
                 raise
-            log_line(
-                cfg, f"bootstrap: {desc} failed (attempt {attempt}/{retries}): {exc}"
-            )
+            log_line(cfg, f"bootstrap: {desc} failed (attempt {attempt}/{retries}): {exc}")
             time.sleep(5 if desc == "apt-get update" else 10)
 
 
@@ -1227,7 +1181,9 @@ def apt_update_install(cfg: BootstrapConfig) -> None:
     )
     log_line(cfg, "bootstrap: installing base packages")
     apt_install_opts = (
-        apt_opts + ["--no-install-recommends", "install"] + effective_apt_packages(cfg)
+        apt_opts
+        + ["--no-install-recommends", "install"]
+        + effective_apt_packages(cfg)
     )
     apt_run(
         cfg,
@@ -1258,9 +1214,7 @@ def effective_apt_packages(cfg: BootstrapConfig) -> list[str]:
 
 def configure_chrony(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: configuring time sync")
-    run_best_effort(
-        cfg, ["systemctl", "disable", "--now", "systemd-timesyncd"], "disable timesyncd"
-    )
+    run_best_effort(cfg, ["systemctl", "disable", "--now", "systemd-timesyncd"], "disable timesyncd")
     run_best_effort(cfg, ["systemctl", "enable", "--now", "chrony"], "enable chrony")
     chrony_conf = "pool pool.ntp.org iburst maxsources 4\nmakestep 1.0 -1\nrtcsync\n"
     Path("/etc/chrony/chrony.conf").write_text(chrony_conf, encoding="utf-8")
@@ -1301,8 +1255,9 @@ def configure_journald_limits(
         )
 
 
-ALGIF_AEAD_DISABLE_CONF = "install algif_aead /bin/false\n"
-
+ALGIF_AEAD_DISABLE_CONF = (
+    'install algif_aead /bin/false\n'
+)
 
 def configure_kernel_module_hardening(
     cfg: BootstrapConfig,
@@ -1325,14 +1280,8 @@ def configure_kernel_key_limits(
     sysctl_dir.mkdir(parents=True, exist_ok=True)
     conf = sysctl_dir / "60-cocalc-project-host-keyring.conf"
     conf.unlink(missing_ok=True)
-    run_best_effort(
-        cfg, ["sysctl", "-w", "kernel.keys.maxkeys=20000"], "sysctl kernel.keys.maxkeys"
-    )
-    run_best_effort(
-        cfg,
-        ["sysctl", "-w", "kernel.keys.maxbytes=25000000"],
-        "sysctl kernel.keys.maxbytes",
-    )
+    run_best_effort(cfg, ["sysctl", "-w", "kernel.keys.maxkeys=20000"], "sysctl kernel.keys.maxkeys")
+    run_best_effort(cfg, ["sysctl", "-w", "kernel.keys.maxbytes=25000000"], "sysctl kernel.keys.maxbytes")
 
 
 def configure_inotify_limits(
@@ -1386,9 +1335,7 @@ def substitute_public_ip(cfg: BootstrapConfig) -> None:
 
 def enable_userns(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: enabling unprivileged user namespaces")
-    run_best_effort(
-        cfg, ["sysctl", "-w", "kernel.unprivileged_userns_clone=1"], "sysctl userns"
-    )
+    run_best_effort(cfg, ["sysctl", "-w", "kernel.unprivileged_userns_clone=1"], "sysctl userns")
 
 
 def ensure_runtime_user(cfg: BootstrapConfig) -> None:
@@ -1424,10 +1371,7 @@ def ensure_runtime_user(cfg: BootstrapConfig) -> None:
                 f"runtime uid {desired_uid} is already owned by user {existing.pw_name}; reprovision the host"
             )
         except KeyError:
-            log_line(
-                cfg,
-                f"bootstrap: creating runtime user {user} uid={desired_uid} gid={desired_gid}",
-            )
+            log_line(cfg, f"bootstrap: creating runtime user {user} uid={desired_uid} gid={desired_gid}")
             run_cmd(
                 cfg,
                 [
@@ -1488,9 +1432,7 @@ def ensure_exact_subid_file(
     expected_lines = [f"{user}:{start}:{length}" for start, length in ranges]
     if user_lines == expected_lines:
         return False
-    path.write_text(
-        "\n".join([*preserved_lines, *expected_lines]) + "\n", encoding="utf-8"
-    )
+    path.write_text("\n".join([*preserved_lines, *expected_lines]) + "\n", encoding="utf-8")
     return True
 
 
@@ -1507,10 +1449,7 @@ def ensure_subuids(cfg: BootstrapConfig) -> None:
             cfg,
             "bootstrap: set exact subuid/subgid allocation "
             f"for {cfg.ssh_user} to "
-            + ", ".join(
-                f"{start}:{length}"
-                for start, length in PROJECT_HOST_RUNTIME_SUBID_RANGES
-            ),
+            + ", ".join(f"{start}:{length}" for start, length in PROJECT_HOST_RUNTIME_SUBID_RANGES),
         )
 
 
@@ -1595,11 +1534,7 @@ def prepare_dirs(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: preparing cocalc directories")
     for path in ["/opt/cocalc", "/var/lib/cocalc", "/etc/cocalc", "/mnt/cocalc"]:
         Path(path).mkdir(parents=True, exist_ok=True)
-    run_best_effort(
-        cfg,
-        ["chown", f"{cfg.ssh_user}:{cfg.ssh_user}", "/opt/cocalc", "/var/lib/cocalc"],
-        "chown cocalc dirs",
-    )
+    run_best_effort(cfg, ["chown", f"{cfg.ssh_user}:{cfg.ssh_user}", "/opt/cocalc", "/var/lib/cocalc"], "chown cocalc dirs")
 
 
 def tree_has_unexpected_ownership(path: Path, uid: int, gid: int) -> bool:
@@ -1664,9 +1599,8 @@ def repair_host_data_ownership(cfg: BootstrapConfig) -> None:
         for child in data_root.iterdir():
             if not child.is_file():
                 continue
-            if (
-                child.name not in HOST_OWNED_DATA_FILES
-                and not HOST_OWNED_SQLITE_RE.match(child.name)
+            if child.name not in HOST_OWNED_DATA_FILES and not HOST_OWNED_SQLITE_RE.match(
+                child.name
             ):
                 continue
             if path_has_unexpected_ownership(child, desired_uid, desired_gid):
@@ -1906,7 +1840,9 @@ def live_mounted_bundle_versions(root: Path) -> set[str]:
             fields = line.split(" ")
             if len(fields) < 5:
                 continue
-            source_root = strip_deleted_mount_suffix(decode_mountinfo_path(fields[3]))
+            source_root = strip_deleted_mount_suffix(
+                decode_mountinfo_path(fields[3])
+            )
             if source_root == root_text:
                 continue
             if not source_root.startswith(f"{root_text}/"):
@@ -1930,9 +1866,7 @@ def pick_unmounted_or_target_disk(
             continue
         try:
             mountpoints = (
-                subprocess.check_output(
-                    ["lsblk", "-nr", "-o", "MOUNTPOINT", dev], text=True
-                )
+                subprocess.check_output(["lsblk", "-nr", "-o", "MOUNTPOINT", dev], text=True)
                 .strip()
                 .splitlines()
             )
@@ -1983,18 +1917,14 @@ def setup_btrfs(cfg: BootstrapConfig, image_size_gb: int) -> None:
             time.sleep(10)
     if data_disk:
         log_line(cfg, f"bootstrap: using data disk {data_disk}")
-        fstype = subprocess.check_output(
-            ["lsblk", "-no", "FSTYPE", data_disk], text=True
-        ).strip()
+        fstype = subprocess.check_output(["lsblk", "-no", "FSTYPE", data_disk], text=True).strip()
         if not fstype:
             run_cmd(cfg, ["mkfs.btrfs", "-f", data_disk], "mkfs.btrfs")
         elif fstype != "btrfs":
             raise RuntimeError(f"refusing to format {data_disk} (filesystem={fstype})")
         if not Path("/mnt/cocalc").is_mount():
             run_cmd(cfg, ["mount", data_disk, "/mnt/cocalc"], "mount data disk")
-        uuid = subprocess.check_output(
-            ["blkid", "-s", "UUID", "-o", "value", data_disk], text=True
-        ).strip()
+        uuid = subprocess.check_output(["blkid", "-s", "UUID", "-o", "value", data_disk], text=True).strip()
         fstab_line = f"UUID={uuid} /mnt/cocalc btrfs defaults,nofail 0 0"
         update_fstab(fstab_line)
         ensure_legacy_btrfs_link(cfg)
@@ -2006,21 +1936,11 @@ def setup_btrfs(cfg: BootstrapConfig, image_size_gb: int) -> None:
         image_path = legacy_image_path
     image_path.parent.mkdir(parents=True, exist_ok=True)
     if not image_path.exists():
-        run_cmd(
-            cfg,
-            ["truncate", "-s", f"{image_size_gb}G", str(image_path)],
-            "truncate btrfs image",
-        )
+        run_cmd(cfg, ["truncate", "-s", f"{image_size_gb}G", str(image_path)], "truncate btrfs image")
         run_cmd(cfg, ["mkfs.btrfs", "-f", str(image_path)], "mkfs.btrfs image")
     if not Path("/mnt/cocalc").is_mount():
-        run_cmd(
-            cfg,
-            ["mount", "-o", "loop", str(image_path), "/mnt/cocalc"],
-            "mount btrfs image",
-        )
-    fstab_line = (
-        f"{image_path} /mnt/cocalc btrfs loop,defaults,nofail 0 0 # cocalc-btrfs"
-    )
+        run_cmd(cfg, ["mount", "-o", "loop", str(image_path), "/mnt/cocalc"], "mount btrfs image")
+    fstab_line = f"{image_path} /mnt/cocalc btrfs loop,defaults,nofail 0 0 # cocalc-btrfs"
     update_fstab(fstab_line)
     ensure_legacy_btrfs_link(cfg)
 
@@ -2036,9 +1956,7 @@ def setup_shared_scratch(cfg: BootstrapConfig) -> None:
     scratch_mount.mkdir(parents=True, exist_ok=True)
     devices = [d for d in cfg.shared_scratch_devices.split() if d]
     if not devices:
-        raise RuntimeError(
-            "shared scratch is enabled but no candidate devices were configured"
-        )
+        raise RuntimeError("shared scratch is enabled but no candidate devices were configured")
 
     log_line(cfg, "bootstrap: waiting for shared scratch disk (up to 600s)")
     scratch_disk = None
@@ -2079,15 +1997,15 @@ def setup_shared_scratch(cfg: BootstrapConfig) -> None:
         ["blkid", "-s", "UUID", "-o", "value", scratch_disk],
         text=True,
     ).strip()
-    fstab_line = f"UUID={uuid} {cfg.shared_scratch_mount} ext4 defaults,nofail 0 2 # cocalc-scratch"
+    fstab_line = (
+        f"UUID={uuid} {cfg.shared_scratch_mount} ext4 defaults,nofail 0 2 # cocalc-scratch"
+    )
     update_fstab(
         fstab_line,
         mountpoint=cfg.shared_scratch_mount,
         marker="cocalc-scratch",
     )
-    run_best_effort(
-        cfg, ["resize2fs", scratch_disk], "resize shared scratch filesystem"
-    )
+    run_best_effort(cfg, ["resize2fs", scratch_disk], "resize shared scratch filesystem")
     os.chmod(cfg.shared_scratch_mount, 0o1777)
 
 
@@ -3837,32 +3755,18 @@ def reconcile_bees_runtime_policy(cfg: BootstrapConfig) -> None:
 def ensure_btrfs_data(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: ensuring /mnt/cocalc/data subvolume")
     try:
-        run_cmd(
-            cfg,
-            ["btrfs", "subvolume", "show", "/mnt/cocalc/data"],
-            "btrfs subvolume show",
-            check=False,
-        )
+        run_cmd(cfg, ["btrfs", "subvolume", "show", "/mnt/cocalc/data"], "btrfs subvolume show", check=False)
     except Exception:
         pass
     if not Path("/mnt/cocalc/data").exists():
         try:
-            run_cmd(
-                cfg,
-                ["btrfs", "subvolume", "create", "/mnt/cocalc/data"],
-                "btrfs subvolume create",
-                check=False,
-            )
+            run_cmd(cfg, ["btrfs", "subvolume", "create", "/mnt/cocalc/data"], "btrfs subvolume create", check=False)
         except Exception:
             Path("/mnt/cocalc/data").mkdir(parents=True, exist_ok=True)
     Path("/mnt/cocalc/data/secrets").mkdir(parents=True, exist_ok=True)
     Path("/mnt/cocalc/data/tmp").mkdir(parents=True, exist_ok=True)
     os.chmod("/mnt/cocalc/data/tmp", 0o1777)
-    for path in [
-        "/mnt/cocalc/data",
-        "/mnt/cocalc/data/secrets",
-        "/mnt/cocalc/data/tmp",
-    ]:
+    for path in ["/mnt/cocalc/data", "/mnt/cocalc/data/secrets", "/mnt/cocalc/data/tmp"]:
         run_best_effort(
             cfg,
             ["chown", f"{cfg.ssh_user}:{cfg.ssh_user}", path],
@@ -3877,14 +3781,15 @@ def configure_podman(cfg: BootstrapConfig) -> None:
     Path("/mnt/cocalc/data/containers/root/run").mkdir(parents=True, exist_ok=True)
     Path("/etc/containers").mkdir(parents=True, exist_ok=True)
     Path("/etc/containers/storage.conf").write_text(
-        "[storage]\n"
+        '[storage]\n'
         'driver = "overlay"\n'
         'runroot = "/mnt/cocalc/data/containers/root/run"\n'
         'graphroot = "/mnt/cocalc/data/containers/root/storage"\n',
         encoding="utf-8",
     )
     Path("/etc/containers/containers.conf").write_text(
-        '[engine]\ncgroup_manager = "cgroupfs"\n',
+        '[engine]\n'
+        'cgroup_manager = "cgroupfs"\n',
         encoding="utf-8",
     )
     if cfg.ssh_user != "root":
@@ -3924,7 +3829,7 @@ def configure_podman(cfg: BootstrapConfig) -> None:
             "chown rootless podman path roots",
         )
         (user_config / "storage.conf").write_text(
-            "[storage]\n"
+            '[storage]\n'
             'driver = "overlay"\n'
             f'runroot = "{rootless_run}"\n'
             f'graphroot = "{rootless_storage}"\n',
@@ -3940,7 +3845,8 @@ def configure_podman(cfg: BootstrapConfig) -> None:
             "chown storage.conf",
         )
         (user_config / "containers.conf").write_text(
-            '[engine]\ncgroup_manager = "cgroupfs"\n',
+            '[engine]\n'
+            'cgroup_manager = "cgroupfs"\n',
             encoding="utf-8",
         )
         run_best_effort(
@@ -3988,11 +3894,7 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
     if uid is not None:
         runtime_dir = default_podman_runtime_dir(uid)
         Path(runtime_dir).mkdir(parents=True, exist_ok=True)
-        run_best_effort(
-            cfg,
-            ["chown", f"{cfg.ssh_user}:{cfg.ssh_user}", runtime_dir],
-            "chown runtime dir",
-        )
+        run_best_effort(cfg, ["chown", f"{cfg.ssh_user}:{cfg.ssh_user}", runtime_dir], "chown runtime dir")
         env_assignments["COCALC_PODMAN_RUNTIME_DIR"] = runtime_dir
     env_assignments["COCALC_BTRFS_ROOT_RESERVE_GB"] = str(compute_root_reserve_gb(cfg))
     env_assignments.setdefault(
@@ -4209,10 +4111,7 @@ def setup_master_conat_token(cfg: BootstrapConfig) -> None:
             data = resp.read()
         path.write_bytes(data)
     except Exception as err:
-        log_line(
-            cfg,
-            f"bootstrap: master-conat-token fetch failed via urllib ({err}); trying curl",
-        )
+        log_line(cfg, f"bootstrap: master-conat-token fetch failed via urllib ({err}); trying curl")
         if shutil.which("curl") is None:
             raise
         run_cmd(
@@ -4322,9 +4221,7 @@ def fetch_json(cfg: BootstrapConfig, url: str) -> dict[str, Any]:
             payload = response.read().decode("utf-8")
             return json.loads(payload)
     except Exception as err:
-        log_line(
-            cfg, f"bootstrap: manifest fetch via urllib failed ({err}); trying curl"
-        )
+        log_line(cfg, f"bootstrap: manifest fetch via urllib failed ({err}); trying curl")
     if shutil.which("curl") is None:
         raise RuntimeError("curl not available for manifest fetch fallback")
     payload = subprocess.check_output(["curl", "-fsSL", url], text=True)
@@ -4433,11 +4330,11 @@ def install_node(cfg: BootstrapConfig) -> None:
         f'export NVM_DIR="{nvm_dir}"; '
         f'if [ ! -s "$NVM_DIR/nvm.sh" ] || '
         f'! ( . "$NVM_DIR/nvm.sh"; [ "$(nvm --version)" = "{NVM_VERSION}" ] ); then '
-        f"curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v{NVM_VERSION}/install.sh | PROFILE=/dev/null bash; "
-        f"fi; "
+        f'curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v{NVM_VERSION}/install.sh | PROFILE=/dev/null bash; '
+        f'fi; '
         f'. "$NVM_DIR/nvm.sh"; '
-        f"nvm install {cfg.node_version}; "
-        f"nvm alias default {cfg.node_version}"
+        f'nvm install {cfg.node_version}; '
+        f'nvm alias default {cfg.node_version}'
     )
     run_cmd(cfg, ["bash", "-lc", install_cmd], "install node", as_user=cfg.ssh_user)
 
@@ -4451,7 +4348,7 @@ def write_wrapper(cfg: BootstrapConfig) -> None:
         bundle_root = str(host_dir / "bundles" / "current")
     bundle_entry = f"{bundle_root}/bundle/index.js"
     runtime_home_dir = runtime_home(cfg)
-    node_glob = f"$NVM_DIR/versions/node/v{cfg.node_version}*/bin/node"
+    node_glob = f'$NVM_DIR/versions/node/v{cfg.node_version}*/bin/node'
     wrapper = f"""#!/usr/bin/env bash
 set -euo pipefail
 RUNTIME_HOME="{runtime_home_dir}"
@@ -4481,12 +4378,7 @@ exec "$NODE_BIN" "{bundle_entry}" "$@"
     if cfg.ssh_user and cfg.ssh_user != "root":
         run_best_effort(
             cfg,
-            [
-                "chown",
-                f"{cfg.ssh_user}:{cfg.ssh_user}",
-                str(bin_dir),
-                str(wrapper_path),
-            ],
+            ["chown", f"{cfg.ssh_user}:{cfg.ssh_user}", str(bin_dir), str(wrapper_path)],
             "chown project-host wrapper",
         )
 
@@ -5546,7 +5438,9 @@ esac
     rootctl = rootctl.replace(
         "__OOM_ADJ_LITERAL__", f"--{abs(HOST_CRITICAL_OOM_SCORE_ADJ)}"
     )
-    rootctl = rootctl.replace("__PROJECT_POOL_CGROUP__", DEFAULT_PROJECT_POOL_CGROUP)
+    rootctl = rootctl.replace(
+        "__PROJECT_POOL_CGROUP__", DEFAULT_PROJECT_POOL_CGROUP
+    )
     rootctl = rootctl.replace(
         "__PROJECT_POOL_MEMORY_RESERVE_MB__",
         str(DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB),
@@ -5638,9 +5532,7 @@ exec python3 "{bootstrap_py}" --bootstrap-dir "{bootstrap_dir}" --only project_h
 set -euo pipefail
 exec python3 "{bootstrap_py}" --bootstrap-dir "{bootstrap_dir}" --only tools_bundle
 """
-    (bin_dir / "fetch-project-bundle.sh").write_text(
-        fetch_project_bundle, encoding="utf-8"
-    )
+    (bin_dir / "fetch-project-bundle.sh").write_text(fetch_project_bundle, encoding="utf-8")
     (bin_dir / "fetch-project-host.sh").write_text(fetch_project_host, encoding="utf-8")
     (bin_dir / "fetch-tools.sh").write_text(fetch_tools, encoding="utf-8")
     for name in ["fetch-project-bundle.sh", "fetch-project-host.sh", "fetch-tools.sh"]:
@@ -5882,16 +5774,14 @@ OOMScoreAdjust={HOST_CRITICAL_OOM_SCORE_ADJ}
         dropin_dir.mkdir(parents=True, exist_ok=True)
         dropin_path = dropin_dir / "cocalc-oom-protect.conf"
         dropin_path.write_text(dropin_text, encoding="utf-8")
-    run_best_effort(
-        cfg, ["systemctl", "daemon-reload"], "reload systemd after OOM drop-ins"
-    )
+    run_best_effort(cfg, ["systemctl", "daemon-reload"], "reload systemd after OOM drop-ins")
     run_best_effort(
         cfg,
         [
             "bash",
             "-lc",
             (
-                f"for pid in $(pgrep -x sshd 2>/dev/null || true); do "
+                f'for pid in $(pgrep -x sshd 2>/dev/null || true); do '
                 f'/usr/bin/choom -n {HOST_CRITICAL_OOM_SCORE_ADJ} -p "$pid" >/dev/null 2>&1 || '
                 f'printf "%s\\n" {HOST_CRITICAL_OOM_SCORE_ADJ} >"/proc/$pid/oom_score_adj" 2>/dev/null || true; '
                 "done"
@@ -5986,7 +5876,6 @@ def configure_cloudflared_with_options(
             write_text_if_changed(token_path, token + "\n") or service_changed
         )
         os.chmod(token_path, 0o600)
-
     def yaml_quote(value: str) -> str:
         return json.dumps(value)
 
@@ -6033,9 +5922,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 """
-    unit += (
-        "ExecStart=/usr/bin/cloudflared --config /etc/cloudflared/config.yml tunnel run"
-    )
+    unit += "ExecStart=/usr/bin/cloudflared --config /etc/cloudflared/config.yml tunnel run"
     if not use_credentials:
         unit += f" --token-file {token_path}"
     unit += "\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n"
@@ -6068,18 +5955,8 @@ def install_gpu_support(cfg: BootstrapConfig) -> None:
     if not cfg.has_gpu:
         return
     log_line(cfg, "bootstrap: installing nvidia container toolkit")
-    apt_run(
-        cfg,
-        ["apt-get", "-y", "install", "ca-certificates", "gnupg"],
-        "install nvidia deps",
-        retries=3,
-        timeout=120,
-    )
-    run_best_effort(
-        cfg,
-        ["rm", "-f", "/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"],
-        "remove old nvidia keyring",
-    )
+    apt_run(cfg, ["apt-get", "-y", "install", "ca-certificates", "gnupg"], "install nvidia deps", retries=3, timeout=120)
+    run_best_effort(cfg, ["rm", "-f", "/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"], "remove old nvidia keyring")
     run_cmd(
         cfg,
         [
@@ -6101,13 +5978,7 @@ def install_gpu_support(cfg: BootstrapConfig) -> None:
         ],
         "write nvidia repo",
     )
-    apt_run(
-        cfg,
-        ["apt-get", "-y", "update"],
-        "apt-get update (nvidia)",
-        retries=3,
-        timeout=60,
-    )
+    apt_run(cfg, ["apt-get", "-y", "update"], "apt-get update (nvidia)", retries=3, timeout=60)
     apt_run(
         cfg,
         [
@@ -6123,15 +5994,9 @@ def install_gpu_support(cfg: BootstrapConfig) -> None:
     )
     run_best_effort(cfg, ["ldconfig"], "ldconfig")
     install_nvidia_cdi_normalizer()
-    run_best_effort(
-        cfg,
-        ["nvidia-ctk", "cdi", "generate", "--output=/etc/cdi/nvidia.yaml"],
-        "nvidia cdi generate",
-    )
+    run_best_effort(cfg, ["nvidia-ctk", "cdi", "generate", "--output=/etc/cdi/nvidia.yaml"], "nvidia cdi generate")
     normalize_nvidia_cdi_for_podman(cfg)
-    run_best_effort(
-        cfg, ["usermod", "-aG", "video,render", cfg.ssh_user], "usermod nvidia groups"
-    )
+    run_best_effort(cfg, ["usermod", "-aG", "video,render", cfg.ssh_user], "usermod nvidia groups")
     helper = """#!/usr/bin/env bash
 set -euo pipefail
 if [ "$(id -u)" -ne 0 ]; then
@@ -6165,9 +6030,7 @@ def start_project_host(cfg: BootstrapConfig) -> None:
     ctl_cwd = runtime_home(cfg)
     # Sanity check: bundle must contain a compiled entrypoint.
     bundle_candidates = [
-        Path(cfg.project_host_bundle.current)
-        if cfg.project_host_bundle.current
-        else None,
+        Path(cfg.project_host_bundle.current) if cfg.project_host_bundle.current else None,
         Path(cfg.project_host_bundle.dir) if cfg.project_host_bundle.dir else None,
     ]
     bundle_candidates = [p for p in bundle_candidates if p]
@@ -6187,14 +6050,8 @@ def start_project_host(cfg: BootstrapConfig) -> None:
             break
     if not entry_found:
         roots = ", ".join(str(p) for p in bundle_candidates if p) or "unknown"
-        log_line(
-            cfg,
-            f"bootstrap: missing project-host entrypoint (searched: bundle/index.js, main/index.js, dist/main.js) in {roots}",
-        )
-        log_line(
-            cfg,
-            "bootstrap: project-host bundle appears incomplete; re-run bundle build/publish and re-bootstrap",
-        )
+        log_line(cfg, f"bootstrap: missing project-host entrypoint (searched: bundle/index.js, main/index.js, dist/main.js) in {roots}")
+        log_line(cfg, "bootstrap: project-host bundle appears incomplete; re-run bundle build/publish and re-bootstrap")
         raise RuntimeError("project-host bundle missing entrypoint")
     ensure_runtime_user_manager(cfg)
     if Path(ctl_path).exists():
@@ -6250,23 +6107,8 @@ def start_project_host(cfg: BootstrapConfig) -> None:
 
 
 def reenable_unattended(cfg: BootstrapConfig) -> None:
-    run_best_effort(
-        cfg,
-        ["apt-get", "install", "-y", "unattended-upgrades"],
-        "install unattended-upgrades",
-    )
-    run_best_effort(
-        cfg,
-        [
-            "systemctl",
-            "enable",
-            "--now",
-            "apt-daily.timer",
-            "apt-daily-upgrade.timer",
-            "unattended-upgrades.service",
-        ],
-        "enable unattended-upgrades",
-    )
+    run_best_effort(cfg, ["apt-get", "install", "-y", "unattended-upgrades"], "install unattended-upgrades")
+    run_best_effort(cfg, ["systemctl", "enable", "--now", "apt-daily.timer", "apt-daily-upgrade.timer", "unattended-upgrades.service"], "enable unattended-upgrades")
 
 
 def touch_paths(paths: list[str]) -> None:
@@ -6398,10 +6240,7 @@ def main(argv: list[str]) -> int:
     cfg = load_config(bootstrap_dir)
     only = parse_only(args.only)
     log_line(cfg, "bootstrap: starting python bootstrap")
-    log_line(
-        cfg,
-        f"bootstrap: user={cfg.bootstrap_user} home={cfg.bootstrap_home} root={cfg.bootstrap_root}",
-    )
+    log_line(cfg, f"bootstrap: user={cfg.bootstrap_user} home={cfg.bootstrap_home} root={cfg.bootstrap_root}")
     try:
         if only:
             with bootstrap_operation_lock(cfg):
@@ -6424,9 +6263,7 @@ def main(argv: list[str]) -> int:
         if args.mode == "status":
             write_bootstrap_state_files(cfg)
             sys.stdout.write(
-                json.dumps(
-                    json_load(bootstrap_state_path(cfg)), indent=2, sort_keys=True
-                )
+                json.dumps(json_load(bootstrap_state_path(cfg)), indent=2, sort_keys=True)
                 + "\n"
             )
             return 0
