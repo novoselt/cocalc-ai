@@ -2733,7 +2733,19 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     this.filesystemPromise = undefined;
   };
 
-  resetProjectHostRuntime = () => {
+  resetProjectHostRuntime = (opts?: {
+    reason?: "host_session_changed";
+    recovery_id?: string;
+  }) => {
+    if (opts?.reason != null) {
+      this.setState({
+        runtime_recovery_notice: {
+          id: opts.recovery_id ?? misc.uuid(),
+          reason: opts.reason,
+          occurred_at: Date.now(),
+        },
+      });
+    }
     this.clearFilesystemClient();
     disconnect_from_project(this.project_id);
     this.projectStatusSub?.close();
@@ -2763,6 +2775,20 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     if (this.initialized) {
       this.initProjectStatus();
     }
+  };
+
+  dismissRuntimeRecoveryNotice = () => {
+    this.setState({ runtime_recovery_notice: undefined });
+  };
+
+  noteProjectRuntimeChanged = ({ recovery_id }: { recovery_id: string }) => {
+    this.setState({
+      runtime_recovery_notice: {
+        id: recovery_id,
+        reason: "project_runtime_changed",
+        occurred_at: Date.now(),
+      },
+    });
   };
 
   private recoverOpenFileRuntimeInFlight = new globalThis.Map<

@@ -61,6 +61,12 @@ export interface ActiveFileSort {
   is_descending: boolean;
 }
 
+export interface RuntimeRecoveryNotice {
+  id: string;
+  reason: "host_session_changed" | "project_runtime_changed";
+  occurred_at: number;
+}
+
 export interface ProjectStoreState {
   // Shared
   current_path_abs: string;
@@ -96,6 +102,7 @@ export interface ProjectStoreState {
   restart_request?: immutable.Map<string, any>;
   move_lro?: immutable.Map<string, any>;
   move_reopen_required?: boolean;
+  runtime_recovery_notice?: RuntimeRecoveryNotice;
   open_snapshot_schedule?: boolean;
   open_restore_snapshot?: boolean;
   open_backup_schedule?: boolean;
@@ -207,6 +214,7 @@ export interface ProjectStoreState {
 export class ProjectStore extends Store<ProjectStoreState> {
   public project_id: string;
   private previous_runstate: string | undefined;
+  private previous_runtime_generation: number | undefined;
 
   // Function to call to initialize one of the tables in this store.
   // This is purely an optimization, so project_log and project_log_all
@@ -238,6 +246,14 @@ export class ProjectStore extends Store<ProjectStoreState> {
         ? projects.getIn(["project_map", this.project_id])
         : undefined) != null
     ) {
+      const runtimeGeneration = projects.getIn([
+        "project_map",
+        this.project_id,
+        "state",
+        "runtime_generation",
+      ]);
+      this.previous_runtime_generation =
+        typeof runtimeGeneration === "number" ? runtimeGeneration : undefined;
       // console.log('ProjectStore::_init projects.on("change", ... )');
       // only do this if we are on project in the first place!
       projects.on("change", this._projects_store_change);
@@ -268,6 +284,15 @@ export class ProjectStore extends Store<ProjectStoreState> {
       (this.redux.getActions("page") as any).close_project_tab(this.project_id);
     } else {
       const new_state = change.getIn(["state", "state"]);
+      const nextRuntimeGeneration = change.getIn([
+        "state",
+        "runtime_generation",
+      ]);
+      const runtimeChanged =
+        new_state === "running" &&
+        typeof this.previous_runtime_generation === "number" &&
+        typeof nextRuntimeGeneration === "number" &&
+        this.previous_runtime_generation !== nextRuntimeGeneration;
       //log(this.previous_runstate, "=>", new_state);
       // fire started or stopped when certain state transitions happen
       if (this.previous_runstate != null) {
@@ -284,6 +309,17 @@ export class ProjectStore extends Store<ProjectStoreState> {
         }
       }
       this.previous_runstate = new_state;
+      this.previous_runtime_generation =
+        typeof nextRuntimeGeneration === "number"
+          ? nextRuntimeGeneration
+          : undefined;
+      if (runtimeChanged) {
+        this.redux
+          .getProjectActions(this.project_id)
+          ?.noteProjectRuntimeChanged?.({
+            recovery_id: `${this.project_id}:${nextRuntimeGeneration}`,
+          });
+      }
     }
   }
 

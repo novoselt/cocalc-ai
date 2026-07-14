@@ -224,6 +224,10 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     { project_id },
     "move_reopen_required",
   );
+  const runtimeRecoveryNotice = useTypedRedux(
+    { project_id },
+    "runtime_recovery_notice",
+  ) as any;
   const moveStatusVisible = shouldRenderMoveStatus(moveLro, moveReopenRequired);
   const hostUnavailable = !!host_id && hostOperational.state === "unavailable";
   const lifecycle = useMemo(
@@ -924,6 +928,31 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     );
   }
 
+  function renderRuntimeRecoveryBanner() {
+    if (runtimeRecoveryNotice == null || hardDeleteBlocked) return;
+    const reason = runtimeRecoveryNotice?.get?.("reason");
+    const projectRestarted = reason === "project_runtime_changed";
+    return (
+      <Alert
+        showIcon
+        closable
+        type="warning"
+        banner
+        message={
+          projectRestarted
+            ? "Project restarted"
+            : "Project host connection recovered"
+        }
+        description={
+          projectRestarted
+            ? "The project runtime restarted, so previous terminals and notebook kernels ended. CoCalc is reconnecting them automatically; files and collaborative documents remain available."
+            : "The project host restarted or reconnected. CoCalc rebuilt this tab's files, terminals, notebooks, and other live connections automatically. Existing terminal processes and kernels may have ended."
+        }
+        onClose={() => actions?.dismissRuntimeRecoveryNotice?.()}
+      />
+    );
+  }
+
   function renderActivityBarButtons() {
     if (fullscreen && fullscreen !== "project") return;
 
@@ -1058,6 +1087,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
           <PublicDirectoryShareBanner share={props.publicDirectoryShare} />
         ) : null}
         {renderHostUnavailableBanner()}
+        {renderRuntimeRecoveryBanner()}
         {renderTopRow()}
         <div
           style={{

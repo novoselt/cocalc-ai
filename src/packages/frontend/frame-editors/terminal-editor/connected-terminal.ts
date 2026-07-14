@@ -67,6 +67,7 @@ const MAX_INITIAL_OUTPUT_RECONNECTS = 2;
 const TRANSIENT_RECONNECT_OPACITY = "0.62";
 const TERMINAL_DEBUG_STORAGE_KEY = "cocalc.debug.terminal";
 const TERMINAL_DEBUG_SESSION_LIST_TIMEOUT = 1500;
+const RUNTIME_RECOVERY_NOTICE_MAX_AGE_MS = 5 * 60 * 1000;
 
 const EXIT_MESSAGE = "\r\n[Process completed - press any key]\r\n";
 const ANSI_RESET = "\x1b[0m";
@@ -222,6 +223,29 @@ function connectingTerminalMessage(cols: number | undefined): string {
   });
 }
 
+function projectRuntimeRestartedTerminalMessage(
+  cols: number | undefined,
+): string {
+  return terminalStatusBox(cols, {
+    title: "Project restarted",
+    primary: "The previous terminal session ended.",
+    secondary: ["Connecting to a new terminal session..."],
+  });
+}
+
+function projectHostReconnectedTerminalMessage(
+  cols: number | undefined,
+): string {
+  return terminalStatusBox(cols, {
+    title: "Project host reconnected",
+    primary: "This tab's live connection was reset.",
+    secondary: [
+      "Reconnecting the terminal automatically...",
+      "Earlier terminal processes may have ended.",
+    ],
+  });
+}
+
 function terminalStatusBox(
   cols: number | undefined,
   {
@@ -314,6 +338,10 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
   private projectsStore?;
   private lastProjectState?: string;
   private lastProjectRuntimeGeneration?: number;
+  private pendingRuntimeRecoveryNotice?: {
+    id: string;
+    reason: "host_session_changed" | "project_runtime_changed";
+  };
   private projectStartingRetryTimer?: ReturnType<typeof setTimeout>;
   private autoStartProjectOnNextConnect = false;
   private connectGeneration = 0;
@@ -341,6 +369,24 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     }
     this.terminal_settings = Map(); // what was last set.
     this.project_id = actions.project_id;
+    const recoveryNotice = redux
+      .getProjectStore?.(this.project_id)
+      ?.get?.("runtime_recovery_notice");
+    const recoveryNoticeId = recoveryNotice?.get?.("id");
+    const recoveryOccurredAt = recoveryNotice?.get?.("occurred_at");
+    const recoveryReason = recoveryNotice?.get?.("reason");
+    if (
+      typeof recoveryNoticeId === "string" &&
+      typeof recoveryOccurredAt === "number" &&
+      (recoveryReason === "host_session_changed" ||
+        recoveryReason === "project_runtime_changed") &&
+      Date.now() - recoveryOccurredAt <= RUNTIME_RECOVERY_NOTICE_MAX_AGE_MS
+    ) {
+      this.pendingRuntimeRecoveryNotice = {
+        id: recoveryNoticeId,
+        reason: recoveryReason,
+      };
+    }
     this.path = actions.path;
     this.command = normalizeTerminalCommand(command);
     this.args = normalizeTerminalArgs(args);
@@ -870,10 +916,14 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       this.set_connection_status("disconnected");
       this.ptyExited = false;
       this.clearProjectStartingRetry();
-      void this.connect();
-      this.reconnectResource?.requestReconnect({
-        reason: "project_runtime_changed",
-        resetBackoff: true,
+      void this.showRuntimeRecoveryMessage(
+        projectRuntimeRestartedTerminalMessage(this.terminal.cols),
+      ).then(() => {
+        void this.connect();
+        this.reconnectResource?.requestReconnect({
+          reason: "project_runtime_changed",
+          resetBackoff: true,
+        });
       });
       return;
     }
@@ -986,6 +1036,27 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     );
   };
 
+  private showRuntimeRecoveryMessage = async (
+    message: string,
+  ): Promise<void> => {
+    this.setTransientReconnectStyle(false);
+    this.terminal.reset();
+    await this.handleDataFromProject(message);
+  };
+
+  private showPendingRuntimeRecoveryMessage = async (): Promise<void> => {
+    if (this.pendingRuntimeRecoveryNotice == null) {
+      return;
+    }
+    const { reason } = this.pendingRuntimeRecoveryNotice;
+    this.pendingRuntimeRecoveryNotice = undefined;
+    await this.showRuntimeRecoveryMessage(
+      reason === "project_runtime_changed"
+        ? projectRuntimeRestartedTerminalMessage(this.terminal.cols)
+        : projectHostReconnectedTerminalMessage(this.terminal.cols),
+    );
+  };
+
   connect = reuseInFlight(async (options: TerminalConnectOptions = {}) => {
     if (this.isClosed() || this.ptyExited) return;
     const generation = ++this.connectGeneration;
@@ -1004,6 +1075,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     });
 
     try {
+      await this.showPendingRuntimeRecoveryMessage();
       const projectState =
         redux.getProjectsStore?.()?.get_state?.(this.project_id) ??
         redux.getStore("projects")?.get_state?.(this.project_id);

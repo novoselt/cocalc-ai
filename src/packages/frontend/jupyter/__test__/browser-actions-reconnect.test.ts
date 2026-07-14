@@ -1,5 +1,7 @@
 /** @jest-environment jsdom */
 
+import { EventEmitter } from "events";
+
 const registerReconnectResource = jest.fn();
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
@@ -48,5 +50,39 @@ describe("JupyterActions reconnect coordination", () => {
     await options.reconnect();
     expect(wait_until_live_connected).toHaveBeenCalled();
     expect(wait_until_ready).toHaveBeenCalled();
+  });
+
+  it("drops only the kernel execution client when the project runtime changes", () => {
+    class ProjectsStore extends EventEmitter {
+      generation = 1;
+      get_runtime_generation = () => this.generation;
+    }
+    const projectsStore = new ProjectsStore();
+    const closeJupyterClient = jest.fn();
+    const clearRunQueue = jest.fn();
+    const clear_all_cell_run_state = jest.fn();
+    const target: any = {
+      project_id: "project-1",
+      redux: {
+        getStore: jest.fn(() => projectsStore),
+      },
+      isClosed: jest.fn(() => false),
+      closeJupyterClient,
+      clearRunQueue,
+      clear_all_cell_run_state,
+    };
+    target.handleProjectRuntimeChange = () =>
+      JupyterActions.prototype["handleProjectRuntimeChange"].call(target);
+
+    JupyterActions.prototype["initProjectRuntimeWatcher"].call(target);
+    projectsStore.generation = 2;
+    projectsStore.emit("change");
+
+    expect(closeJupyterClient).toHaveBeenCalledWith(
+      "project_runtime_generation_changed",
+    );
+    expect(clearRunQueue).toHaveBeenCalled();
+    expect(clear_all_cell_run_state).toHaveBeenCalled();
+    expect(target.runningNow).toBe(false);
   });
 });

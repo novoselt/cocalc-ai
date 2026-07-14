@@ -6,10 +6,16 @@ import { Map } from "immutable";
 function loadTerminalModule({
   projectState = "running",
   runtimeGeneration,
+  runtimeRecoveryNotice,
   project,
 }: {
   projectState?: string;
   runtimeGeneration?: number;
+  runtimeRecoveryNotice?: {
+    id: string;
+    reason: "host_session_changed" | "project_runtime_changed";
+    occurred_at: number;
+  };
   project?: any;
 } = {}) {
   class MockProjectStore extends EventEmitter {
@@ -19,6 +25,9 @@ function loadTerminalModule({
         runtime_generation: runtimeGeneration,
       }),
       project_map: Map(project ? { "project-1": Map(project) } : {}),
+      runtime_recovery_notice: runtimeRecoveryNotice
+        ? Map(runtimeRecoveryNotice)
+        : undefined,
     });
 
     get = (key: string) => this.data.get(key);
@@ -148,6 +157,7 @@ function loadTerminalModule({
           name === "projects" ? projectStore : accountStore,
         ),
         getProjectsStore: jest.fn(() => projectStore),
+        getProjectStore: jest.fn(() => projectStore),
         getProjectActions: jest.fn(() => projectActions),
       },
     };
@@ -857,6 +867,8 @@ describe("connected terminal resizing", () => {
 
       projectStore.setStatus("running", 2);
 
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
       expect(ptys[0].close).toHaveBeenCalled();
       expect(actions.set_connection_status).toHaveBeenCalledWith(
         "term-1",
@@ -866,8 +878,49 @@ describe("connected terminal resizing", () => {
         reason: "project_runtime_changed",
         resetBackoff: true,
       });
+      expect(terminal["terminal"].write).toHaveBeenCalledWith(
+        expect.stringContaining("Project restarted"),
+        expect.any(Function),
+      );
     } finally {
       terminal?.close();
     }
+  });
+
+  it("explains a recent project-host session replacement before reconnecting", async () => {
+    const { Terminal } = loadTerminalModule({
+      runtimeRecoveryNotice: {
+        id: "host-1:session-2",
+        reason: "host_session_changed",
+        occurred_at: Date.now(),
+      },
+    });
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const actions = {
+      project_id: "project-1",
+      path: "/tmp/example.term",
+      get_term_env: jest.fn(() => ({})),
+      set_connection_status: jest.fn(),
+      set_title: jest.fn(),
+      set_error: jest.fn(),
+      _tree_is_single_leaf: jest.fn(() => false),
+      close_frame: jest.fn(),
+      open_code_editor_frame: jest.fn(),
+      _get_project_actions: jest.fn(() => ({})),
+    } as any;
+
+    const terminal = new Terminal(actions, 0, "term-1", parent);
+    await terminal.connect();
+
+    expect(terminal["terminal"].write).toHaveBeenCalledWith(
+      expect.stringContaining("Project host reconnected"),
+      expect.any(Function),
+    );
+    expect(terminal["terminal"].write).toHaveBeenCalledWith(
+      expect.stringContaining("live connection was reset"),
+      expect.any(Function),
+    );
+    terminal.close();
   });
 });

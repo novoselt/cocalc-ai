@@ -202,6 +202,8 @@ export class JupyterActions extends JupyterActions0 {
   private kernelStatusRefreshTimeout?: ReturnType<typeof setTimeout>;
   private completedLiveRunIds = new globalThis.Map<string, number>();
   private reconnectResource?: RegisteredReconnectResource;
+  private projectsStore?: any;
+  private lastProjectRuntimeGeneration?: number;
   private handleSyncdbDisconnected = () => {
     this.reconnectResource?.requestReconnect({
       reason: "jupyter_syncdb_disconnected",
@@ -1211,6 +1213,7 @@ export class JupyterActions extends JupyterActions0 {
   protected init2(): void {
     this.noteOpenInitPhase("init2.start");
     this.initReconnectResource();
+    this.initProjectRuntimeWatcher();
     this.syncdbPath = syncdbPath(this.path);
     this.liveRunPath = canonicalJupyterLiveRunPath(this.path);
     this.setState({
@@ -1493,6 +1496,11 @@ export class JupyterActions extends JupyterActions0 {
       if (this.isClosed()) return;
       this.reconnectResource?.close();
       this.reconnectResource = undefined;
+      this.projectsStore?.removeListener?.(
+        "change",
+        this.handleProjectRuntimeChange,
+      );
+      this.projectsStore = undefined;
       this.syncdb?.removeListener?.(
         "disconnected",
         this.handleSyncdbDisconnected,
@@ -1559,6 +1567,41 @@ export class JupyterActions extends JupyterActions0 {
           }
         },
       });
+  }
+
+  private initProjectRuntimeWatcher(): void {
+    const projectsStore = this.redux.getStore("projects") as any;
+    if (projectsStore == null) {
+      return;
+    }
+    this.projectsStore = projectsStore;
+    this.lastProjectRuntimeGeneration = projectsStore.get_runtime_generation?.(
+      this.project_id,
+    );
+    this.handleProjectRuntimeChange =
+      this.handleProjectRuntimeChange.bind(this);
+    projectsStore.on?.("change", this.handleProjectRuntimeChange);
+  }
+
+  private handleProjectRuntimeChange(): void {
+    if (this.isClosed()) {
+      return;
+    }
+    const nextRuntimeGeneration = this.projectsStore?.get_runtime_generation?.(
+      this.project_id,
+    );
+    if (nextRuntimeGeneration === this.lastProjectRuntimeGeneration) {
+      return;
+    }
+    const previousRuntimeGeneration = this.lastProjectRuntimeGeneration;
+    this.lastProjectRuntimeGeneration = nextRuntimeGeneration;
+    if (previousRuntimeGeneration == null || nextRuntimeGeneration == null) {
+      return;
+    }
+    this.closeJupyterClient("project_runtime_generation_changed");
+    this.clearRunQueue();
+    this.runningNow = false;
+    this.clear_all_cell_run_state();
   }
 
   private isSyncdbLiveConnected(): boolean {

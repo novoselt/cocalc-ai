@@ -1261,15 +1261,20 @@ export class ConatClient extends EventEmitter {
         routing.host_session_id != null &&
         current.host_session_id !== routing.host_session_id;
       current.public_directory_share_id = share_id;
-      current.host_session_id = routing.host_session_id;
       current.address = routing.address;
-      if (shareChanged || hostSessionChanged) {
+      this.registerTrackedProjectForHost(routing.host_id, current, project_id);
+      if (hostSessionChanged) {
+        this.updateRoutedHostSession({
+          state: current,
+          host_session_id: routing.host_session_id!,
+          project_ids: [project_id],
+        });
+      } else if (shareChanged) {
         this.invalidateProjectHostToken(routing.host_id, {
           resetFailureState: true,
         });
         this.invalidateProjectHostBrowserSession(routing.routing_key);
       }
-      this.registerTrackedProjectForHost(routing.host_id, current, project_id);
     }
   }
 
@@ -1686,6 +1691,40 @@ export class ConatClient extends EventEmitter {
     }
     state.project_ids.add(project_id);
     state.last_project_id = project_id;
+  };
+
+  private updateRoutedHostSession = ({
+    state,
+    host_session_id,
+    project_ids,
+  }: {
+    state: RoutedHubClientState;
+    host_session_id: string;
+    project_ids?: Iterable<string | undefined>;
+  }): void => {
+    const previousHostSessionId = state.host_session_id;
+    if (previousHostSessionId === host_session_id) {
+      return;
+    }
+    state.host_session_id = host_session_id;
+    this.invalidateProjectHostToken(state.host_id, { resetFailureState: true });
+    this.invalidateProjectHostBrowserSession(state.routing_key);
+    if (!previousHostSessionId) {
+      return;
+    }
+    const affectedProjectIds = new Set(state.project_ids);
+    for (const project_id of project_ids ?? []) {
+      if (project_id && isValidUUID(project_id)) {
+        affectedProjectIds.add(project_id);
+      }
+    }
+    const recovery_id = `${state.host_id}:${host_session_id}`;
+    for (const project_id of affectedProjectIds) {
+      redux.getProjectActions?.(project_id)?.resetProjectHostRuntime?.({
+        reason: "host_session_changed",
+        recovery_id,
+      });
+    }
   };
 
   private pickTrackedProjectForHost = (
@@ -2323,11 +2362,11 @@ export class ConatClient extends EventEmitter {
       refreshed?.host_session_id != null &&
       refreshed.host_session_id !== state.host_session_id
     ) {
-      state.host_session_id = refreshed.host_session_id;
-      this.invalidateProjectHostToken(host_id, {
-        resetFailureState: true,
+      this.updateRoutedHostSession({
+        state,
+        host_session_id: refreshed.host_session_id,
+        project_ids: [project_id],
       });
-      this.invalidateProjectHostBrowserSession(routing_key);
     }
     if (
       refreshed?.public_directory_share_id != null &&
@@ -2545,13 +2584,21 @@ export class ConatClient extends EventEmitter {
   }): ReturnType<typeof connectToConat> => {
     const current = this.routedHubClients[routing_key];
     if (current && current.address === address) {
+      this.registerTrackedProjectForHost(host_id, current, project_id);
+      if (project_ids) {
+        for (const id of project_ids) {
+          this.registerTrackedProjectForHost(host_id, current, id);
+        }
+      }
       if (
         host_session_id != null &&
         current.host_session_id !== host_session_id
       ) {
-        current.host_session_id = host_session_id;
-        this.invalidateProjectHostToken(host_id, { resetFailureState: true });
-        this.invalidateProjectHostBrowserSession(routing_key);
+        this.updateRoutedHostSession({
+          state: current,
+          host_session_id,
+          project_ids: [project_id, ...(project_ids ?? [])],
+        });
       }
       if (
         current.public_directory_share_id !== public_directory_share_id &&
@@ -2560,12 +2607,6 @@ export class ConatClient extends EventEmitter {
         current.public_directory_share_id = public_directory_share_id;
         this.invalidateProjectHostToken(host_id, { resetFailureState: true });
         this.invalidateProjectHostBrowserSession(routing_key);
-      }
-      this.registerTrackedProjectForHost(host_id, current, project_id);
-      if (project_ids) {
-        for (const id of project_ids) {
-          this.registerTrackedProjectForHost(host_id, current, id);
-        }
       }
       return current.client;
     }
