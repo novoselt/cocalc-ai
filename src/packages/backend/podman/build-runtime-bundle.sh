@@ -141,7 +141,8 @@ fetch "https://static.rust-lang.org/dist/2024-11-28/rust-${RUST_VERSION}-${RUST_
 tar -xzf "$RUST_ARCHIVE" -C "$SRC"
 "$SRC/rust-${RUST_VERSION}-${RUST_TARGET}/install.sh" --prefix=/usr/local --disable-ldconfig
 
-make -C "$SRC/podman-$PODMAN_VERSION" -j"$(nproc)" BUILDTAGS="seccomp apparmor"
+make -C "$SRC/podman-$PODMAN_VERSION" -j"$(nproc)" \
+  BUILDTAGS="seccomp apparmor systemd" bin/podman
 install -m 0755 "$SRC/podman-$PODMAN_VERSION/bin/podman" "$STAGE/bin/podman"
 
 make -C "$SRC/conmon-$CONMON_VERSION" -j"$(nproc)"
