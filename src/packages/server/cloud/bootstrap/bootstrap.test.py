@@ -94,7 +94,9 @@ class ProjectHostStartTest(unittest.TestCase):
                 bootstrap.start_project_host(cfg)
             finally:
                 bootstrap.run_cmd = original_run_cmd
-                bootstrap.ensure_runtime_user_manager = original_ensure_runtime_user_manager
+                bootstrap.ensure_runtime_user_manager = (
+                    original_ensure_runtime_user_manager
+                )
 
             self.assertEqual(
                 [call[1] for call in calls],
@@ -123,7 +125,9 @@ class ProjectHostStartTest(unittest.TestCase):
                 bootstrap.start_project_host(cfg)
             finally:
                 bootstrap.run_cmd = original_run_cmd
-                bootstrap.ensure_runtime_user_manager = original_ensure_runtime_user_manager
+                bootstrap.ensure_runtime_user_manager = (
+                    original_ensure_runtime_user_manager
+                )
 
             self.assertEqual(
                 [call[1] for call in calls],
@@ -177,13 +181,11 @@ class BootstrapSharedScratchTest(unittest.TestCase):
 
             try:
                 subprocess.check_output = fake_check_output
-                bootstrap.run_cmd = lambda _cfg, args, desc, **_kwargs: run_calls.append(
-                    (args, desc)
+                bootstrap.run_cmd = lambda _cfg, args, desc, **_kwargs: (
+                    run_calls.append((args, desc))
                 )
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc, **_kwargs: best_effort_calls.append(
-                        (args, desc)
-                    )
+                bootstrap.run_best_effort = lambda _cfg, args, desc, **_kwargs: (
+                    best_effort_calls.append((args, desc))
                 )
                 bootstrap.update_fstab = lambda line, **_kwargs: fstab_lines.append(
                     line
@@ -210,7 +212,9 @@ class BootstrapSharedScratchTest(unittest.TestCase):
             )
             self.assertEqual(
                 fstab_lines,
-                [f"UUID=scratch-uuid {mount} ext4 defaults,nofail 0 2 # cocalc-scratch"],
+                [
+                    f"UUID=scratch-uuid {mount} ext4 defaults,nofail 0 2 # cocalc-scratch"
+                ],
             )
             self.assertIn(
                 (["resize2fs", str(device)], "resize shared scratch filesystem"),
@@ -304,6 +308,7 @@ class BootstrapBundleManifestResolutionTest(unittest.TestCase):
             original_run_cmd = bootstrap.run_cmd
             original_sleep = bootstrap.time.sleep
             try:
+
                 def fail_urlopen(*_args, **_kwargs):
                     raise RuntimeError("urllib failed")
 
@@ -365,8 +370,8 @@ class BootstrapKernelModuleHardeningTest(unittest.TestCase):
             calls: list[tuple[list[str], str]] = []
 
             original = bootstrap.run_best_effort
-            bootstrap.run_best_effort = (
-                lambda _cfg, args, desc: calls.append((args, desc))
+            bootstrap.run_best_effort = lambda _cfg, args, desc: calls.append(
+                (args, desc)
             )
             try:
                 bootstrap.configure_kernel_module_hardening(
@@ -378,7 +383,7 @@ class BootstrapKernelModuleHardeningTest(unittest.TestCase):
             conf = Path(tmpdir) / "modprobe.d" / "disable-algif-aead.conf"
             self.assertEqual(
                 conf.read_text(encoding="utf-8"),
-                'install algif_aead /bin/false\n',
+                "install algif_aead /bin/false\n",
             )
             self.assertEqual(
                 calls,
@@ -395,13 +400,11 @@ class BootstrapKernelKeyLimitsTest(unittest.TestCase):
                 Path(tmpdir) / "sysctl.d" / "60-cocalc-project-host-keyring.conf"
             )
             stale_conf.parent.mkdir(parents=True)
-            stale_conf.write_text(
-                "[kernel]\nkeys.maxkeys = 100\n", encoding="utf-8"
-            )
+            stale_conf.write_text("[kernel]\nkeys.maxkeys = 100\n", encoding="utf-8")
 
             original = bootstrap.run_best_effort
-            bootstrap.run_best_effort = (
-                lambda _cfg, args, desc: calls.append((args, desc))
+            bootstrap.run_best_effort = lambda _cfg, args, desc: calls.append(
+                (args, desc)
             )
             try:
                 bootstrap.configure_kernel_key_limits(
@@ -441,8 +444,8 @@ class BootstrapInotifyLimitsTest(unittest.TestCase):
             )
 
             original = bootstrap.run_best_effort
-            bootstrap.run_best_effort = (
-                lambda _cfg, args, desc: calls.append((args, desc))
+            bootstrap.run_best_effort = lambda _cfg, args, desc: calls.append(
+                (args, desc)
             )
             try:
                 bootstrap.configure_inotify_limits(
@@ -521,9 +524,7 @@ class BootstrapJournaldLimitsTest(unittest.TestCase):
                 bootstrap.shutil.which = original_which
 
             self.assertEqual(
-                (dropin_dir / "90-cocalc-root-disk.conf").read_text(
-                    encoding="utf-8"
-                ),
+                (dropin_dir / "90-cocalc-root-disk.conf").read_text(encoding="utf-8"),
                 "[Journal]\nSystemMaxUse=200M\nRuntimeMaxUse=100M\n",
             )
             self.assertEqual(
@@ -686,7 +687,9 @@ class BootstrapStateFilesTest(unittest.TestCase):
                     ],
                 ),
             )
-            self.assertEqual(state["runtime_user_contract"]["user"], "missing-runtime-user")
+            self.assertEqual(
+                state["runtime_user_contract"]["user"], "missing-runtime-user"
+            )
             self.assertIn("installed", state)
 
 
@@ -783,7 +786,9 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
                 "gid_map": ["0 1003 1", "1 231072 65536", "65537 327680 4128768"],
                 "fingerprint": "different",
             }
-            with self.assertRaisesRegex(RuntimeError, "runtime userns contract mismatch"):
+            with self.assertRaisesRegex(
+                RuntimeError, "runtime userns contract mismatch"
+            ):
                 bootstrap.verify_runtime_user_contract(cfg)
         finally:
             bootstrap.expected_runtime_user_contract = original_expected
@@ -807,8 +812,8 @@ class BootstrapRootlessPodmanResetTest(unittest.TestCase):
             original_has_unexpected = bootstrap.tree_has_unexpected_ownership
             original_rmtree = bootstrap.shutil.rmtree
             try:
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
                 bootstrap.runtime_home = lambda _cfg: str(Path(tmpdir) / "home")
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
@@ -816,8 +821,8 @@ class BootstrapRootlessPodmanResetTest(unittest.TestCase):
                     (str(self), text)
                 )
                 bootstrap.tree_has_unexpected_ownership = lambda *_args, **_kwargs: True
-                bootstrap.shutil.rmtree = lambda path, ignore_errors=False: removed.append(
-                    (str(path), ignore_errors)
+                bootstrap.shutil.rmtree = lambda path, ignore_errors=False: (
+                    removed.append((str(path), ignore_errors))
                 )
                 bootstrap.configure_podman(cfg)
             finally:
@@ -939,7 +944,9 @@ class BootstrapLogRotationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
             log_path = Path(cfg.log_file)
-            log_path.write_text("x" * (bootstrap.BOOTSTRAP_LOG_MAX_BYTES + 1), encoding="utf-8")
+            log_path.write_text(
+                "x" * (bootstrap.BOOTSTRAP_LOG_MAX_BYTES + 1), encoding="utf-8"
+            )
 
             bootstrap.rotate_bootstrap_log(cfg)
 
@@ -1041,8 +1048,8 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
             original_run_best_effort = bootstrap.run_best_effort
             original_geteuid = bootstrap.os.geteuid
             try:
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
                 bootstrap.os.geteuid = lambda: 0
                 bootstrap.ensure_bootstrap_paths(cfg)
@@ -1076,8 +1083,8 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
             original_run_best_effort = bootstrap.run_best_effort
             original_run_cmd = bootstrap.run_cmd
             try:
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
                 bootstrap.run_cmd = lambda *args, **kwargs: None
                 # The function targets absolute paths, so just assert on the commands
@@ -1100,7 +1107,14 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
             for args, _desc in recorded:
                 self.assertNotIn("-R", args)
             self.assertIn(
-                (["chown", "missing-runtime-user:missing-runtime-user", "/mnt/cocalc/data"], "chown /mnt/cocalc/data"),
+                (
+                    [
+                        "chown",
+                        "missing-runtime-user:missing-runtime-user",
+                        "/mnt/cocalc/data",
+                    ],
+                    "chown /mnt/cocalc/data",
+                ),
                 recorded,
             )
 
@@ -1119,8 +1133,8 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
             original_has_unexpected = bootstrap.tree_has_unexpected_ownership
             original_path_has_unexpected = bootstrap.path_has_unexpected_ownership
             try:
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
                 bootstrap.run_cmd = lambda *args, **kwargs: None
                 Path.exists = lambda self: True  # type: ignore[method-assign]
@@ -1132,10 +1146,13 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
                         Path("/mnt/cocalc/data/daemon.pid"),
                     ]
                 )  # type: ignore[method-assign]
-                Path.is_file = lambda self: str(self) in {  # type: ignore[method-assign]
-                    "/mnt/cocalc/data/sync-fs.sqlite",
-                    "/mnt/cocalc/data/daemon.pid",
-                }
+                Path.is_file = lambda self: (
+                    str(self)
+                    in {  # type: ignore[method-assign]
+                        "/mnt/cocalc/data/sync-fs.sqlite",
+                        "/mnt/cocalc/data/daemon.pid",
+                    }
+                )
 
                 def fake_has_unexpected(path: Path, _uid: int, _gid: int) -> bool:
                     return str(path) in {
@@ -1206,8 +1223,8 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
             original_mkdir = Path.mkdir
             original_write_text = Path.write_text
             try:
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
                 bootstrap.runtime_home = lambda _cfg: str(Path(tmpdir) / "home")
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
@@ -1230,7 +1247,13 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
             )
             self.assertIn(
                 (
-                    str(Path(tmpdir) / "home" / ".config" / "containers" / "containers.conf"),
+                    str(
+                        Path(tmpdir)
+                        / "home"
+                        / ".config"
+                        / "containers"
+                        / "containers.conf"
+                    ),
                     '[engine]\ncgroup_manager = "cgroupfs"\n',
                 ),
                 writes,
@@ -1351,9 +1374,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("enter-project-cgroup)", script)
             self.assertIn("verify-project-pool)", script)
             self.assertIn("attach-project-cgroup)", script)
-            self.assertIn(
-                'pool="$(project_cgroup "$project_id")"', script
-            )
+            self.assertIn('pool="$(project_cgroup "$project_id")"', script)
             self.assertIn("configure_project_pool_hierarchy", script)
             self.assertIn('> "$cgroup/memory.max"', script)
             self.assertIn('> "$cgroup/memory.oom.group"', script)
@@ -1426,8 +1447,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             recorded = []
             original_run_best_effort = bootstrap.run_best_effort
             try:
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
                 bootstrap.reconcile_bees_runtime_policy(cfg)
             finally:
@@ -1488,12 +1509,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_rootctl_path = bootstrap.project_host_rootctl_path
             original_geteuid = bootstrap.os.geteuid
             try:
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
-                bootstrap.project_host_runtime_root = lambda _cfg: Path(tmpdir) / "runtime-root"
-                bootstrap.project_host_rootctl_path = (
-                    lambda _cfg=None: Path(tmpdir) / "usr-local-sbin" / "cocalc-project-host-rootctl"
+                bootstrap.project_host_runtime_root = lambda _cfg: (
+                    Path(tmpdir) / "runtime-root"
+                )
+                bootstrap.project_host_rootctl_path = lambda _cfg=None: (
+                    Path(tmpdir) / "usr-local-sbin" / "cocalc-project-host-rootctl"
                 )
                 bootstrap.os.geteuid = lambda: 0
                 bootstrap.write_helpers(cfg)
@@ -1542,9 +1565,11 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertTrue(rootctl.exists())
             self.assertTrue(core_handler.exists())
-            self.assertIn(str(rootctl), (runtime_bin / "ctl").read_text(encoding="utf-8"))
             self.assertIn(
-                'COCALC_PROJECT_HOST_OOM_SCORE_ADJ:--900',
+                str(rootctl), (runtime_bin / "ctl").read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                "COCALC_PROJECT_HOST_OOM_SCORE_ADJ:--900",
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
@@ -1583,7 +1608,9 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 f'MIN_PROJECT_POOL_CPU_CORES="{bootstrap.MIN_PROJECT_POOL_CPU_CORES}"',
                 rootctl.read_text(encoding="utf-8"),
             )
-            self.assertIn("project_pool_cpu_max_value()", rootctl.read_text(encoding="utf-8"))
+            self.assertIn(
+                "project_pool_cpu_max_value()", rootctl.read_text(encoding="utf-8")
+            )
             self.assertIn('> "${pool}/cpu.max"', rootctl.read_text(encoding="utf-8"))
             self.assertIn(
                 "for controller in cpu memory pids io",
@@ -1749,7 +1776,9 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             finally:
                 bootstrap.project_host_rootctl_path = original_rootctl_path
 
-    def test_write_env_sets_project_pool_defaults_without_overriding_existing_values(self) -> None:
+    def test_write_env_sets_project_pool_defaults_without_overriding_existing_values(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = replace(
                 make_cfg(tmpdir),
@@ -1784,9 +1813,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text,
             )
             self.assertIn("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS=1", text)
-            self.assertIn(
-                "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC=5", text
-            )
+            self.assertIn("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC=5", text)
             local_env_text = env_path.with_name("project-host.local.env").read_text(
                 encoding="utf-8"
             )
@@ -1858,7 +1885,9 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 env_path.read_text(encoding="utf-8"),
             )
 
-    def test_write_env_ignores_malformed_existing_lines_and_preserves_valid_defaults(self) -> None:
+    def test_write_env_ignores_malformed_existing_lines_and_preserves_valid_defaults(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = replace(
                 make_cfg(tmpdir),
@@ -1887,7 +1916,9 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertNotIn("c.projecthosts.internal:9102", text)
 
-    def test_write_env_rejects_invalid_assignments_without_clobbering_existing_file(self) -> None:
+    def test_write_env_rejects_invalid_assignments_without_clobbering_existing_file(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = replace(
                 make_cfg(tmpdir),
@@ -1920,10 +1951,11 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_chmod = bootstrap.Path.chmod
             original_run_best_effort = bootstrap.run_best_effort
             try:
-                bootstrap.project_host_runtime_root = lambda _cfg: Path(tmpdir) / "runtime-root"
-                bootstrap.Path.write_text = (
-                    lambda self, data, encoding="utf-8": captured.__setitem__(str(self), data)
-                    or len(data)
+                bootstrap.project_host_runtime_root = lambda _cfg: (
+                    Path(tmpdir) / "runtime-root"
+                )
+                bootstrap.Path.write_text = lambda self, data, encoding="utf-8": (
+                    captured.__setitem__(str(self), data) or len(data)
                 )
                 bootstrap.Path.chmod = lambda *_args, **_kwargs: None
                 bootstrap.run_best_effort = lambda *_args, **_kwargs: None
@@ -1934,16 +1966,18 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 bootstrap.Path.chmod = original_chmod
                 bootstrap.run_best_effort = original_run_best_effort
 
-            script = captured[str(Path(tmpdir) / "runtime-root" / "bin" / "project-host")]
+            script = captured[
+                str(Path(tmpdir) / "runtime-root" / "bin" / "project-host")
+            ]
             self.assertIn(f'RUNTIME_HOME="{cfg.bootstrap_home}"', script)
             self.assertIn('export NVM_DIR="$RUNTIME_HOME/.nvm"', script)
-            self.assertIn('nvm use --silent default >/dev/null 2>&1 || true', script)
+            self.assertIn("nvm use --silent default >/dev/null 2>&1 || true", script)
             self.assertIn(
-                'NODE_CANDIDATES=( $NVM_DIR/versions/node/v20*/bin/node )',
+                "NODE_CANDIDATES=( $NVM_DIR/versions/node/v20*/bin/node )",
                 script,
             )
             self.assertIn(
-                'node not found for project-host wrapper (looked in PATH and $NVM_DIR/versions/node/v20*/bin/node)',
+                "node not found for project-host wrapper (looked in PATH and $NVM_DIR/versions/node/v20*/bin/node)",
                 script,
             )
             self.assertIn('exec "$NODE_BIN"', script)
@@ -1955,10 +1989,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
 
             original_run_cmd = bootstrap.run_cmd
             try:
-                bootstrap.run_cmd = (
-                    lambda _cfg, args, desc, **kwargs: recorded.append(
-                        (args, desc, kwargs)
-                    )
+                bootstrap.run_cmd = lambda _cfg, args, desc, **kwargs: recorded.append(
+                    (args, desc, kwargs)
                 )
                 bootstrap.install_node(cfg)
             finally:
@@ -1974,12 +2006,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh",
                 script,
             )
-            self.assertIn('PROFILE=/dev/null bash', script)
+            self.assertIn("PROFILE=/dev/null bash", script)
             self.assertIn('nvm --version)" = "0.40.4"', script)
             self.assertIn("nvm install 20", script)
             self.assertIn("nvm alias default 20", script)
 
-    def test_configure_autostart_installs_systemd_watchdog_and_removes_cron(self) -> None:
+    def test_configure_autostart_installs_systemd_watchdog_and_removes_cron(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
             runtime_root = Path(tmpdir) / "runtime-root"
@@ -1991,15 +2025,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_write_text = bootstrap.Path.write_text
             original_chmod = bootstrap.os.chmod
             try:
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
                 bootstrap.project_host_runtime_root = lambda _cfg: runtime_root
-                bootstrap.Path.write_text = (
-                    lambda self, data, encoding="utf-8": writes.append(
-                        (str(self), data, encoding)
-                    )
-                    or len(data)
+                bootstrap.Path.write_text = lambda self, data, encoding="utf-8": (
+                    writes.append((str(self), data, encoding)) or len(data)
                 )
                 bootstrap.os.chmod = lambda *_args, **_kwargs: None
                 bootstrap.configure_autostart(cfg)
@@ -2101,14 +2132,11 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_chmod = bootstrap.os.chmod
             try:
                 bootstrap.project_host_rootctl_path = lambda _cfg=None: rootctl
-                bootstrap.run_cmd = (
-                    lambda _cfg, args, desc, **kwargs: recorded.append((args, desc))
+                bootstrap.run_cmd = lambda _cfg, args, desc, **kwargs: recorded.append(
+                    (args, desc)
                 )
-                bootstrap.Path.write_text = (
-                    lambda self, data, encoding="utf-8": writes.append(
-                        (str(self), data, encoding)
-                    )
-                    or len(data)
+                bootstrap.Path.write_text = lambda self, data, encoding="utf-8": (
+                    writes.append((str(self), data, encoding)) or len(data)
                 )
                 bootstrap.os.chmod = lambda *_args, **_kwargs: None
                 bootstrap.configure_runtime_sudoers(cfg)
@@ -2118,18 +2146,31 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 bootstrap.Path.write_text = original_write_text
                 bootstrap.os.chmod = original_chmod
 
-            sudoers = next(data for path, data, _ in writes if path == "/etc/sudoers.d/cocalc-project-host-runtime")
-            self.assertIn(f"Cmnd_Alias COCALC_RUNTIME_PROJECT_HOST = {rootctl}", sudoers)
+            sudoers = next(
+                data
+                for path, data, _ in writes
+                if path == "/etc/sudoers.d/cocalc-project-host-runtime"
+            )
+            self.assertIn(
+                f"Cmnd_Alias COCALC_RUNTIME_PROJECT_HOST = {rootctl}", sudoers
+            )
             self.assertIn("COCALC_RUNTIME_PROJECT_HOST", sudoers)
             self.assertIn(
                 (
-                    ["visudo", "-c", "-f", "/etc/sudoers.d/cocalc-project-host-runtime"],
+                    [
+                        "visudo",
+                        "-c",
+                        "-f",
+                        "/etc/sudoers.d/cocalc-project-host-runtime",
+                    ],
                     "validate runtime sudoers",
                 ),
                 recorded,
             )
 
-    def test_configure_critical_service_oom_protection_writes_dropins_and_applies_choom(self) -> None:
+    def test_configure_critical_service_oom_protection_writes_dropins_and_applies_choom(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = replace(
                 make_cfg(tmpdir),
@@ -2143,19 +2184,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_write_text = bootstrap.Path.write_text
             original_run_best_effort = bootstrap.run_best_effort
             try:
-                bootstrap.Path.mkdir = (
-                    lambda self, parents=False, exist_ok=False: mkdirs.append(
-                        (str(self), parents, exist_ok)
-                    )
+                bootstrap.Path.mkdir = lambda self, parents=False, exist_ok=False: (
+                    mkdirs.append((str(self), parents, exist_ok))
                 )
-                bootstrap.Path.write_text = (
-                    lambda self, data, encoding="utf-8": writes.append(
-                        (str(self), data, encoding)
-                    )
-                    or len(data)
+                bootstrap.Path.write_text = lambda self, data, encoding="utf-8": (
+                    writes.append((str(self), data, encoding)) or len(data)
                 )
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
                 bootstrap.configure_critical_service_oom_protection(cfg)
             finally:
@@ -2234,21 +2270,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_write_text = Path.write_text
             original_chmod = bootstrap.os.chmod
             try:
-                bootstrap.run_cmd = (
-                    lambda _cfg, args, desc, **kwargs: recorded.append((args, desc))
+
+                def record_run(_cfg, args, desc, **kwargs):
+                    recorded.append((args, desc, kwargs))
+                    return bootstrap.subprocess.CompletedProcess(args, 0)
+
+                bootstrap.run_cmd = record_run
+                bootstrap.download_file = lambda _cfg, url, dest, **kwargs: (
+                    downloads.append((url, dest, kwargs))
                 )
-                bootstrap.download_file = (
-                    lambda _cfg, url, dest, **kwargs: downloads.append(
-                        (url, dest, kwargs)
-                    )
+                bootstrap.shutil.which = lambda name: (
+                    None if name == "cloudflared" else original_which(name)
                 )
-                bootstrap.shutil.which = lambda name: None if name == "cloudflared" else original_which(name)
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
                 Path.write_text = lambda self, _text, encoding="utf-8": 0  # type: ignore[method-assign]
                 bootstrap.os.chmod = lambda *_args, **_kwargs: None
-                bootstrap.configure_cloudflared_with_options(
-                    cfg, install_package=False
-                )
+                bootstrap.configure_cloudflared_with_options(cfg, install_package=False)
             finally:
                 bootstrap.run_cmd = original_run_cmd
                 bootstrap.download_file = original_download_file
@@ -2265,7 +2302,21 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 ),
                 downloads,
             )
-            self.assertIn((["dpkg", "-i", "/tmp/cloudflared.deb"], "install cloudflared"), recorded)
+            self.assertTrue(
+                any(
+                    args == ["dpkg", "-i", "/tmp/cloudflared.deb"]
+                    and desc == "install cloudflared"
+                    for args, desc, _kwargs in recorded
+                )
+            )
+            self.assertTrue(
+                any(
+                    args == ["systemctl", "restart", "cocalc-cloudflared"]
+                    and desc == "restart cloudflared"
+                    and kwargs.get("timeout") == 45
+                    for args, desc, kwargs in recorded
+                )
+            )
 
     def test_configure_cloudflared_prefers_credentials_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2289,17 +2340,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_exists = Path.exists
             original_chmod = bootstrap.os.chmod
             try:
-                bootstrap.run_cmd = lambda *_args, **_kwargs: None
+                bootstrap.run_cmd = lambda _cfg, args, _desc, **_kwargs: (
+                    bootstrap.subprocess.CompletedProcess(args, 0)
+                )
                 bootstrap.shutil.which = lambda name: "/usr/bin/cloudflared"
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
-                Path.write_text = lambda self, text, encoding="utf-8": writes.append(  # type: ignore[method-assign]
-                    (str(self), text, encoding)
-                ) or len(text)
-                Path.exists = lambda self: str(self) == "/etc/cloudflared/tunnel-id.json"  # type: ignore[method-assign]
-                bootstrap.os.chmod = lambda *_args, **_kwargs: None
-                bootstrap.configure_cloudflared_with_options(
-                    cfg, install_package=False
+                Path.write_text = lambda self, text, encoding="utf-8": (
+                    writes.append(  # type: ignore[method-assign]
+                        (str(self), text, encoding)
+                    )
+                    or len(text)
                 )
+                Path.exists = lambda self: (
+                    str(self) == "/etc/cloudflared/tunnel-id.json"
+                )  # type: ignore[method-assign]
+                bootstrap.os.chmod = lambda *_args, **_kwargs: None
+                bootstrap.configure_cloudflared_with_options(cfg, install_package=False)
             finally:
                 bootstrap.run_cmd = original_run_cmd
                 bootstrap.shutil.which = original_which
@@ -2308,8 +2364,16 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 Path.exists = original_exists  # type: ignore[method-assign]
                 bootstrap.os.chmod = original_chmod
 
-            config = next(data for path, data, _ in writes if path == "/etc/cloudflared/config.yml")
-            unit = next(data for path, data, _ in writes if path == "/etc/systemd/system/cocalc-cloudflared.service")
+            config = next(
+                data
+                for path, data, _ in writes
+                if path == "/etc/cloudflared/config.yml"
+            )
+            unit = next(
+                data
+                for path, data, _ in writes
+                if path == "/etc/systemd/system/cocalc-cloudflared.service"
+            )
             self.assertIn("credentials-file: /etc/cloudflared/tunnel-id.json", config)
             self.assertNotIn("--token", unit)
             self.assertNotIn("EnvironmentFile=/etc/cloudflared/token.env", unit)
@@ -2335,17 +2399,20 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_exists = Path.exists
             original_chmod = bootstrap.os.chmod
             try:
-                bootstrap.run_cmd = lambda *_args, **_kwargs: None
+                bootstrap.run_cmd = lambda _cfg, args, _desc, **_kwargs: (
+                    bootstrap.subprocess.CompletedProcess(args, 0)
+                )
                 bootstrap.shutil.which = lambda name: "/usr/bin/cloudflared"
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
-                Path.write_text = lambda self, text, encoding="utf-8": writes.append(  # type: ignore[method-assign]
-                    (str(self), text, encoding)
-                ) or len(text)
+                Path.write_text = lambda self, text, encoding="utf-8": (
+                    writes.append(  # type: ignore[method-assign]
+                        (str(self), text, encoding)
+                    )
+                    or len(text)
+                )
                 Path.exists = lambda self: False  # type: ignore[method-assign]
                 bootstrap.os.chmod = lambda *_args, **_kwargs: None
-                bootstrap.configure_cloudflared_with_options(
-                    cfg, install_package=False
-                )
+                bootstrap.configure_cloudflared_with_options(cfg, install_package=False)
             finally:
                 bootstrap.run_cmd = original_run_cmd
                 bootstrap.shutil.which = original_which
@@ -2354,17 +2421,118 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 Path.exists = original_exists  # type: ignore[method-assign]
                 bootstrap.os.chmod = original_chmod
 
-            token = next(data for path, data, _ in writes if path == "/etc/cloudflared/token")
-            config = next(data for path, data, _ in writes if path == "/etc/cloudflared/config.yml")
-            unit = next(data for path, data, _ in writes if path == "/etc/systemd/system/cocalc-cloudflared.service")
+            token = next(
+                data for path, data, _ in writes if path == "/etc/cloudflared/token"
+            )
+            config = next(
+                data
+                for path, data, _ in writes
+                if path == "/etc/cloudflared/config.yml"
+            )
+            unit = next(
+                data
+                for path, data, _ in writes
+                if path == "/etc/systemd/system/cocalc-cloudflared.service"
+            )
             self.assertEqual(token, "token\n")
             self.assertNotIn("credentials-file:", config)
             self.assertIn("--token-file /etc/cloudflared/token", unit)
             self.assertNotIn("EnvironmentFile=/etc/cloudflared/token.env", unit)
 
+    def test_reconcile_cloudflared_keeps_active_unchanged_tunnel_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = replace(
+                make_cfg(tmpdir),
+                cloudflared=bootstrap.CloudflaredSpec(
+                    True,
+                    hostname="host.example.test",
+                    port=9002,
+                    token="token",
+                    tunnel_id="tunnel-id",
+                    creds_json='{"TunnelSecret":"secret"}',
+                ),
+            )
+            stored: dict[str, str] = {}
+            commands = []
+            events = []
+
+            original_run_cmd = bootstrap.run_cmd
+            original_log_line = bootstrap.log_line
+            original_which = bootstrap.shutil.which
+            original_mkdir = Path.mkdir
+            original_write_text = Path.write_text
+            original_read_text = Path.read_text
+            original_exists = Path.exists
+            original_chmod = bootstrap.os.chmod
+            try:
+
+                def record_run(_cfg, args, desc, **kwargs):
+                    commands.append((args, desc, kwargs))
+                    return bootstrap.subprocess.CompletedProcess(args, 0)
+
+                bootstrap.run_cmd = record_run
+                bootstrap.log_line = lambda _cfg, message: events.append(message)
+                bootstrap.shutil.which = lambda _name: "/usr/bin/cloudflared"
+                Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
+                Path.write_text = lambda self, text, encoding="utf-8": (
+                    stored.__setitem__(str(self), text) or len(text)
+                )  # type: ignore[method-assign]
+
+                def read_stored(self, encoding="utf-8"):
+                    try:
+                        return stored[str(self)]
+                    except KeyError as exc:
+                        raise FileNotFoundError(str(self)) from exc
+
+                Path.read_text = read_stored  # type: ignore[method-assign]
+                Path.exists = lambda self: (
+                    str(self) in stored
+                    or str(self) == "/etc/cloudflared/tunnel-id.json"
+                )  # type: ignore[method-assign]
+                bootstrap.os.chmod = lambda *_args, **_kwargs: None
+
+                bootstrap.configure_cloudflared_with_options(cfg, install_package=False)
+                commands.clear()
+                events.clear()
+                bootstrap.configure_cloudflared_with_options(cfg, install_package=False)
+            finally:
+                bootstrap.run_cmd = original_run_cmd
+                bootstrap.log_line = original_log_line
+                bootstrap.shutil.which = original_which
+                Path.mkdir = original_mkdir  # type: ignore[method-assign]
+                Path.write_text = original_write_text  # type: ignore[method-assign]
+                Path.read_text = original_read_text  # type: ignore[method-assign]
+                Path.exists = original_exists  # type: ignore[method-assign]
+                bootstrap.os.chmod = original_chmod
+
+            self.assertFalse(
+                any(
+                    args[:2] == ["systemctl", "restart"]
+                    for args, _desc, _kwargs in commands
+                )
+            )
+            self.assertFalse(
+                any(
+                    args[:2] == ["systemctl", "daemon-reload"]
+                    for args, _desc, _kwargs in commands
+                )
+            )
+            self.assertTrue(
+                any(
+                    args[:3] == ["systemctl", "is-active", "--quiet"]
+                    for args, _desc, _kwargs in commands
+                )
+            )
+            self.assertIn(
+                "bootstrap: cloudflared config unchanged; keeping tunnel running",
+                events,
+            )
+
 
 class BootstrapModesTest(unittest.TestCase):
-    def test_bootstrap_operation_lock_times_out_when_another_process_holds_it(self) -> None:
+    def test_bootstrap_operation_lock_times_out_when_another_process_holds_it(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
             events: list[str] = []
@@ -2553,7 +2721,10 @@ class BootstrapModesTest(unittest.TestCase):
             patch("write_helpers", lambda _cfg: None)
             patch("configure_runtime_sudoers", lambda _cfg: None)
             patch("verify_runtime_sudoers", lambda _cfg: None)
-            patch("configure_cloudflared_with_options", lambda _cfg, install_package=False: None)
+            patch(
+                "configure_cloudflared_with_options",
+                lambda _cfg, install_package=False: None,
+            )
             patch("configure_critical_service_oom_protection", lambda _cfg: None)
             patch("configure_autostart", lambda _cfg: None)
             patch("start_project_host", lambda _cfg: None)
@@ -2627,14 +2798,14 @@ devices:
             original_write_text = bootstrap.Path.write_text
             original_chmod = bootstrap.os.chmod
             try:
-                bootstrap.apt_run = (
-                    lambda _cfg, args, desc, **kwargs: recorded.append((args, desc))
+                bootstrap.apt_run = lambda _cfg, args, desc, **kwargs: recorded.append(
+                    (args, desc)
                 )
-                bootstrap.run_cmd = (
-                    lambda _cfg, args, desc, **kwargs: recorded.append((args, desc))
+                bootstrap.run_cmd = lambda _cfg, args, desc, **kwargs: recorded.append(
+                    (args, desc)
                 )
-                bootstrap.run_best_effort = (
-                    lambda _cfg, args, desc: recorded.append((args, desc))
+                bootstrap.run_best_effort = lambda _cfg, args, desc: recorded.append(
+                    (args, desc)
                 )
                 bootstrap.Path.write_text = lambda self, _data, encoding="utf-8": 0
                 bootstrap.os.chmod = lambda *_args, **_kwargs: None
@@ -2669,7 +2840,9 @@ devices:
 
 
 class AptBootstrapTest(unittest.TestCase):
-    def test_reconcile_gce_ubuntu_apt_sources_rewrites_security_to_gce_mirror(self) -> None:
+    def test_reconcile_gce_ubuntu_apt_sources_rewrites_security_to_gce_mirror(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)
             sources = Path(tmpdir) / "ubuntu.sources"
@@ -2700,7 +2873,9 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
                 sources.read_text(encoding="utf-8"),
             )
 
-    def test_apt_update_install_reconciles_gce_ubuntu_sources_before_update(self) -> None:
+    def test_apt_update_install_reconciles_gce_ubuntu_sources_before_update(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = replace(make_cfg(tmpdir), apt_packages=["curl", "git"])
             recorded = []
@@ -2708,13 +2883,11 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
             original_apt_run = bootstrap.apt_run
             original_reconcile = bootstrap.reconcile_gce_ubuntu_apt_sources
             try:
-                bootstrap.reconcile_gce_ubuntu_apt_sources = (
-                    lambda _cfg: recorded.append(("reconcile",))
+                bootstrap.reconcile_gce_ubuntu_apt_sources = lambda _cfg: (
+                    recorded.append(("reconcile",))
                 )
-                bootstrap.apt_run = (
-                    lambda _cfg, args, desc, retries, timeout: recorded.append(
-                        (args, desc, retries, timeout)
-                    )
+                bootstrap.apt_run = lambda _cfg, args, desc, retries, timeout: (
+                    recorded.append((args, desc, retries, timeout))
                 )
                 bootstrap.apt_update_install(cfg)
             finally:
@@ -2732,10 +2905,8 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
             original_apt_run = bootstrap.apt_run
             try:
-                bootstrap.apt_run = (
-                    lambda _cfg, args, desc, retries, timeout: recorded.append(
-                        (args, desc, retries, timeout)
-                    )
+                bootstrap.apt_run = lambda _cfg, args, desc, retries, timeout: (
+                    recorded.append((args, desc, retries, timeout))
                 )
                 bootstrap.apt_update_install(cfg)
             finally:
@@ -2793,15 +2964,15 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
     def test_apt_update_install_adds_node26_runtime_library(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = replace(make_cfg(tmpdir), apt_packages=["curl"], node_version="26.2.0")
+            cfg = replace(
+                make_cfg(tmpdir), apt_packages=["curl"], node_version="26.2.0"
+            )
             recorded = []
 
             original_apt_run = bootstrap.apt_run
             try:
-                bootstrap.apt_run = (
-                    lambda _cfg, args, desc, retries, timeout: recorded.append(
-                        (args, desc, retries, timeout)
-                    )
+                bootstrap.apt_run = lambda _cfg, args, desc, retries, timeout: (
+                    recorded.append((args, desc, retries, timeout))
                 )
                 bootstrap.apt_update_install(cfg)
             finally:
