@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Modal,
   Popconfirm,
   Space,
   Tag,
@@ -33,6 +34,7 @@ import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { uuid } from "@cocalc/util/misc";
 import type { CourseActions } from "../actions";
 import type { CourseSettingsRecord, StudentsMap } from "../store";
+import { selectableRecipientIds } from "./shared-secrets-selection";
 
 interface Props {
   actions: CourseActions;
@@ -61,6 +63,7 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
   const [selectedRecipients, setSelectedRecipients] = useState<string[]>([]);
   const [lastRun, setLastRun] = useState<CourseSecretSyncRun | null>(null);
+  const [recipientsOpen, setRecipientsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -210,6 +213,38 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
   const enabled = policyState?.policy.enabled === true;
   const revoked = policyState?.policy.revoked_at != null;
   const cleanupRecipients = policyState?.recipients ?? [];
+  const selectableRecipients = useMemo(
+    () => selectableRecipientIds(preview),
+    [preview],
+  );
+  const selectableRecipientSet = useMemo(
+    () => new Set(selectableRecipients),
+    [selectableRecipients],
+  );
+  const selectedRecipientCount = selectedRecipients.filter((projectId) =>
+    selectableRecipientSet.has(projectId),
+  ).length;
+
+  async function approveSelectedRecipients(): Promise<void> {
+    const recipientIds = selectedRecipients.filter((projectId) =>
+      selectableRecipientSet.has(projectId),
+    );
+    if (recipientIds.length === 0) return;
+    await mutate(async () => {
+      await webapp_client.conat_client.hub.projects.approveCourseSecretRecipients(
+        {
+          ...identity,
+          browser_id: webapp_client.browser_id,
+          recipients: recipientIds.map((target_project_id) => ({
+            target_project_id,
+            student_account_id:
+              rosterByProject.get(target_project_id)?.account_id,
+          })),
+        },
+      );
+      setSelectedRecipients([]);
+    });
+  }
 
   return (
     <Card
@@ -297,113 +332,14 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
         </div>
 
         <div>
-          <Typography.Text strong>
-            Recipients ({activeRecipients.length} approved)
-          </Typography.Text>
-          <Space
-            direction="vertical"
-            size={6}
-            style={{ display: "flex", marginTop: 8 }}
-          >
-            {preview.map((item) => {
-              const row = rosterByProject.get(item.target_project_id);
-              return (
-                <div
-                  key={item.target_project_id}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(180px, 1fr) auto auto",
-                    gap: 8,
-                    alignItems: "center",
-                  }}
-                >
-                  <div>
-                    <Typography.Text>
-                      {row?.label ?? "Former recipient"}
-                    </Typography.Text>
-                    <br />
-                    <Typography.Text type="secondary" code>
-                      {item.target_project_id}
-                    </Typography.Text>
-                  </div>
-                  {item.approved ? (
-                    <Tag
-                      color={item.reason === "eligible" ? "green" : "orange"}
-                    >
-                      {item.reason === "eligible" ? "Approved" : item.reason}
-                    </Tag>
-                  ) : (
-                    <Checkbox
-                      disabled={
-                        busy || revoked || item.reason !== "not_approved"
-                      }
-                      checked={selectedRecipients.includes(
-                        item.target_project_id,
-                      )}
-                      onChange={(event) =>
-                        setSelectedRecipients((current) =>
-                          event.target.checked
-                            ? [...new Set([...current, item.target_project_id])]
-                            : current.filter(
-                                (id) => id !== item.target_project_id,
-                              ),
-                        )
-                      }
-                    >
-                      Approve
-                    </Checkbox>
-                  )}
-                  {item.approved ? (
-                    <Popconfirm
-                      title="Revoke this recipient? Existing copies remain until cleanup."
-                      onConfirm={() =>
-                        mutate(async () => {
-                          await webapp_client.conat_client.hub.projects.revokeCourseSecretRecipients(
-                            {
-                              ...identity,
-                              browser_id: webapp_client.browser_id,
-                              target_project_ids: [item.target_project_id],
-                            },
-                          );
-                        })
-                      }
-                    >
-                      <Button size="small" danger disabled={busy}>
-                        Revoke
-                      </Button>
-                    </Popconfirm>
-                  ) : (
-                    <Typography.Text type="secondary">
-                      {item.reason === "not_approved"
-                        ? "Eligible"
-                        : item.reason}
-                    </Typography.Text>
-                  )}
-                </div>
-              );
-            })}
-          </Space>
+          <Typography.Text strong>Recipients</Typography.Text>
+          <br />
           <Button
             style={{ marginTop: 8 }}
-            disabled={busy || revoked || selectedRecipients.length === 0}
-            onClick={() =>
-              void mutate(async () => {
-                await webapp_client.conat_client.hub.projects.approveCourseSecretRecipients(
-                  {
-                    ...identity,
-                    browser_id: webapp_client.browser_id,
-                    recipients: selectedRecipients.map((target_project_id) => ({
-                      target_project_id,
-                      student_account_id:
-                        rosterByProject.get(target_project_id)?.account_id,
-                    })),
-                  },
-                );
-                setSelectedRecipients([]);
-              })
-            }
+            onClick={() => setRecipientsOpen(true)}
           >
-            Approve Selected Recipients
+            Manage Recipients ({activeRecipients.length} approved,{" "}
+            {selectableRecipients.length} eligible)
           </Button>
         </div>
 
@@ -517,6 +453,156 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
             description={`Copied/removed ${lastRun.copied_count}; unchanged ${lastRun.unchanged_count}; conflicts ${lastRun.conflict_count}; skipped ${lastRun.skipped_count}; failed ${lastRun.failed_count}.`}
           />
         ) : undefined}
+        <Modal
+          destroyOnHidden
+          footer={
+            <Space>
+              <Button onClick={() => setRecipientsOpen(false)}>Done</Button>
+              <Button
+                type="primary"
+                disabled={busy || revoked || selectedRecipientCount === 0}
+                onClick={() => void approveSelectedRecipients()}
+              >
+                Approve {selectedRecipientCount} Selected
+              </Button>
+            </Space>
+          }
+          onCancel={() => setRecipientsOpen(false)}
+          open={recipientsOpen}
+          title="Secret Recipients"
+          width={860}
+        >
+          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+            <Space wrap>
+              <Button
+                disabled={
+                  busy ||
+                  revoked ||
+                  selectableRecipients.length === 0 ||
+                  selectedRecipientCount === selectableRecipients.length
+                }
+                onClick={() => setSelectedRecipients([...selectableRecipients])}
+              >
+                Select All Eligible
+              </Button>
+              <Button
+                disabled={busy || selectedRecipientCount === 0}
+                onClick={() => setSelectedRecipients([])}
+              >
+                Clear Selection
+              </Button>
+              <Typography.Text type="secondary">
+                {activeRecipients.length} approved;{" "}
+                {selectableRecipients.length} eligible; {selectedRecipientCount}{" "}
+                selected
+              </Typography.Text>
+            </Space>
+            <div
+              style={{
+                maxHeight: "60vh",
+                overflowY: "auto",
+                paddingRight: 8,
+              }}
+            >
+              <Space direction="vertical" size={6} style={{ display: "flex" }}>
+                {preview.length ? (
+                  preview.map((item) => {
+                    const row = rosterByProject.get(item.target_project_id);
+                    return (
+                      <div
+                        key={item.target_project_id}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "minmax(180px, 1fr) auto auto",
+                          gap: 8,
+                          alignItems: "center",
+                        }}
+                      >
+                        <div>
+                          <Typography.Text>
+                            {row?.label ?? "Former recipient"}
+                          </Typography.Text>
+                          <br />
+                          <Typography.Text type="secondary" code>
+                            {item.target_project_id}
+                          </Typography.Text>
+                        </div>
+                        {item.approved ? (
+                          <Tag
+                            color={
+                              item.reason === "eligible" ? "green" : "orange"
+                            }
+                          >
+                            {item.reason === "eligible"
+                              ? "Approved"
+                              : item.reason}
+                          </Tag>
+                        ) : (
+                          <Checkbox
+                            disabled={
+                              busy || revoked || item.reason !== "not_approved"
+                            }
+                            checked={selectedRecipients.includes(
+                              item.target_project_id,
+                            )}
+                            onChange={(event) =>
+                              setSelectedRecipients((current) =>
+                                event.target.checked
+                                  ? [
+                                      ...new Set([
+                                        ...current,
+                                        item.target_project_id,
+                                      ]),
+                                    ]
+                                  : current.filter(
+                                      (id) => id !== item.target_project_id,
+                                    ),
+                              )
+                            }
+                          >
+                            Approve
+                          </Checkbox>
+                        )}
+                        {item.approved ? (
+                          <Popconfirm
+                            title="Revoke this recipient? Existing copies remain until cleanup."
+                            onConfirm={() =>
+                              mutate(async () => {
+                                await webapp_client.conat_client.hub.projects.revokeCourseSecretRecipients(
+                                  {
+                                    ...identity,
+                                    browser_id: webapp_client.browser_id,
+                                    target_project_ids: [
+                                      item.target_project_id,
+                                    ],
+                                  },
+                                );
+                              })
+                            }
+                          >
+                            <Button size="small" danger disabled={busy}>
+                              Revoke
+                            </Button>
+                          </Popconfirm>
+                        ) : (
+                          <Typography.Text type="secondary">
+                            {item.reason === "not_approved"
+                              ? "Eligible"
+                              : item.reason}
+                          </Typography.Text>
+                        )}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <Typography.Text type="secondary">
+                    No student projects are available.
+                  </Typography.Text>
+                )}
+              </Space>
+            </div>
+          </Space>
+        </Modal>
         <FreshAuthModal {...freshAuthModalProps} />
       </Space>
     </Card>
