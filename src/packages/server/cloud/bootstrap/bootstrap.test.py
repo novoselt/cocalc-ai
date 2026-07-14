@@ -1377,6 +1377,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 self.assertNotIn("-R", args)
             runtime_bin = Path(tmpdir) / "runtime-root" / "bin"
             rootctl = Path(tmpdir) / "usr-local-sbin" / "cocalc-project-host-rootctl"
+            core_handler = rootctl.with_name("cocalc-project-host-core-handler")
             self.assertIn(
                 (
                     [
@@ -1409,6 +1410,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 recorded,
             )
             self.assertTrue(rootctl.exists())
+            self.assertTrue(core_handler.exists())
             self.assertIn(str(rootctl), (runtime_bin / "ctl").read_text(encoding="utf-8"))
             self.assertIn(
                 'COCALC_PROJECT_HOST_OOM_SCORE_ADJ:--900',
@@ -1520,6 +1522,18 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "reconcile_app_core_dumps",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'rm -f "${LEGACY_CORE_SUDOERS_CONFIG_PATH}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "kernel.core_pipe_limit = 4",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "fs.inotify.max_user_instances = 8192",
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -1544,6 +1558,19 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             subprocess.run(["bash", "-n", str(rootctl)], check=True)
+            core_handler_text = core_handler.read_text(encoding="utf-8")
+            self.assertNotIn("\0", core_handler_text)
+            self.assertIn(
+                'pid_file="/mnt/cocalc/data/project-host-app.pid"',
+                core_handler_text,
+            )
+            self.assertIn(
+                'parent_pid="$(sed -n',
+                core_handler_text,
+            )
+            self.assertIn("count=1024 conv=sparse", core_handler_text)
+            self.assertIn('"${kept}" -gt 3', core_handler_text)
+            subprocess.run(["bash", "-n", str(core_handler)], check=True)
 
     def test_helper_schema_installed_reads_rootctl_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

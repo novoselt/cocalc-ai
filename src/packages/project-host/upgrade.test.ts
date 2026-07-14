@@ -61,13 +61,13 @@ afterEach(() => {
 });
 
 describe("project host upgrade installer", () => {
-  it("reconciles through the host-agent so supervisor and app switch bundles together", () => {
+  it("schedules an explicit project-host restart after returning the RPC response", () => {
     expect(
       __test__.scheduledProjectHostReconcileCommand(
         "/opt/cocalc/project-host/current/cocalc-project-host",
       ),
     ).toBe(
-      "sleep 3; /opt/cocalc/project-host/current/cocalc-project-host daemon ensure || true",
+      "sleep 3; /opt/cocalc/project-host/current/cocalc-project-host daemon restart-project-host || true",
     );
   });
 

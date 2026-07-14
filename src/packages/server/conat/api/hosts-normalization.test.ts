@@ -372,14 +372,18 @@ describe("parseRow bootstrap lifecycle normalization", () => {
 });
 
 describe("computeHostOperationalAvailability", () => {
-  it("keeps old hosts without runtime-health metadata operational", () => {
+  it("quarantines hosts without runtime-health metadata", () => {
     expect(
       computeHostOperationalAvailability({
         status: "running",
         last_seen: new Date(),
         metadata: {},
       }),
-    ).toMatchObject({ operational: true, online: true });
+    ).toMatchObject({
+      operational: false,
+      online: true,
+      reason_unavailable: "Host has not reported project runtime health.",
+    });
   });
 
   it("excludes a heartbeat-fresh host with degraded Podman", () => {
@@ -400,6 +404,27 @@ describe("computeHostOperationalAvailability", () => {
       online: true,
       reason_unavailable:
         "Host project runtime is degraded: podman ps timed out",
+    });
+  });
+
+  it("excludes a host whose synthetic project probe failed", () => {
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: new Date(),
+        metadata: {
+          runtime_health: { status: "ready", ready: true },
+          runtime_synthetic_probe: {
+            status: "failed",
+            error: "project exec timed out",
+          },
+        },
+      }),
+    ).toMatchObject({
+      operational: false,
+      online: true,
+      reason_unavailable:
+        "Host synthetic project probe failed: project exec timed out",
     });
   });
 });

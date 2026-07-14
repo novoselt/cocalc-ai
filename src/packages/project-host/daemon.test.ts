@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -71,6 +72,86 @@ describe("project-host daemon stop", () => {
 
   afterAll(() => {
     process.env = originalEnv;
+  });
+
+  it("archives the previous project-host log before a new daemon starts", () => {
+    const dataDir = mkTempDir("cocalc-project-host-daemon-");
+    const logPath = path.join(dataDir, "log");
+    fs.writeFileSync(logPath, "last line before crash\n", { mode: 0o600 });
+
+    const archived = __test__.archivePreviousDaemonLog(dataDir, logPath);
+
+    expect(archived).toBeDefined();
+    expect(fs.existsSync(logPath)).toBe(false);
+    expect(fs.readFileSync(archived!, "utf8")).toBe("last line before crash\n");
+    expect(path.dirname(archived!)).toBe(path.join(dataDir, "log-history"));
+  });
+
+  it("bounds retained project-host log history", () => {
+    const dataDir = mkTempDir("cocalc-project-host-daemon-");
+    const logPath = path.join(dataDir, "log");
+    process.env.COCALC_PROJECT_HOST_LOG_HISTORY_LIMIT = "2";
+    for (let i = 0; i < 4; i += 1) {
+      fs.writeFileSync(logPath, `log ${i}\n`, { mode: 0o600 });
+      __test__.archivePreviousDaemonLog(dataDir, logPath);
+    }
+
+    expect(
+      fs
+        .readdirSync(path.join(dataDir, "log-history"))
+        .filter((name) => name.endsWith(".log")),
+    ).toHaveLength(2);
+  });
+
+  it("records an immediate project-host spawn failure", () => {
+    const dataDir = mkTempDir("cocalc-project-host-daemon-");
+    process.env.COCALC_DATA = dataDir;
+    process.env.PORT = "9002";
+    process.env.COCALC_PROJECT_HOST_EXTERNAL_CONAT_PERSIST = "0";
+    jest
+      .spyOn(__test__.processRuntime, "spawnSync")
+      .mockReturnValue({ status: 0 } as any);
+    const child = Object.assign(new EventEmitter(), {
+      pid: 4646,
+      unref: jest.fn(),
+    });
+    mockSpawn().mockReturnValue(child as any);
+
+    startDaemon(0);
+    child.emit("error", new Error("spawn failed"));
+
+    const events = fs
+      .readFileSync(path.join(dataDir, "supervision-events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.at(-1)).toMatchObject({
+      component: "project-host",
+      action: "spawn_failed",
+      pid: 4646,
+      metadata: {
+        error_name: "Error",
+        error_message: "spawn failed",
+      },
+    });
+  });
+
+  it("uses the persistent app supervisor when the bundle provides it", () => {
+    const root = mkTempDir("cocalc-project-host-bundle-");
+    fs.mkdirSync(path.join(root, "supervisor"));
+    fs.writeFileSync(path.join(root, "supervisor", "index.js"), "");
+
+    expect(
+      __test__.resolveSupervisedProjectHostExec({
+        root,
+        command: "/usr/bin/node",
+        args: [path.join(root, "main", "index.js")],
+      }),
+    ).toEqual({
+      command: process.execPath,
+      args: [path.join(root, "supervisor", "index.js")],
+      supervised: true,
+    });
   });
 
   it("waits for SIGTERM exit before removing the pid file", () => {

@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260713-v4"
+HELPER_SCHEMA_VERSION = "20260714-v5"
 RUNTIME_WRAPPER_VERSION = "20260711-v12"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -4089,6 +4089,7 @@ def write_helpers(cfg: BootstrapConfig) -> None:
     bin_dir = runtime_root / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     rootctl_path = project_host_rootctl_path(cfg)
+    core_handler_path = rootctl_path.with_name("cocalc-project-host-core-handler")
     ctl = """#!/usr/bin/env bash
 set -euo pipefail
 cmd="${1:-status}"
@@ -4254,6 +4255,69 @@ case "$cmd" in
     ;;
 esac
 """
+    core_handler = """#!/usr/bin/env bash
+set -euo pipefail
+pid="${1:-}"
+uid="${2:-}"
+gid="${3:-}"
+signal="${4:-}"
+timestamp="${5:-}"
+executable="${6:-project-host}"
+runtime_user="__RUNTIME_USER__"
+pid_file="/mnt/cocalc/data/project-host-app.pid"
+core_dir="/mnt/cocalc/data/forensics/core-dumps"
+max_bytes=$((1024 * 1024 * 1024))
+
+if ! [[ "${pid}" =~ ^[0-9]+$ ]] || ! [[ "${uid}" =~ ^[0-9]+$ ]]; then
+  exit 0
+fi
+expected_uid="$(id -u "${runtime_user}" 2>/dev/null || true)"
+expected_pid="$(cat "${pid_file}" 2>/dev/null || true)"
+if [ -z "${expected_uid}" ] || [ "${uid}" != "${expected_uid}" ] || [ "${pid}" != "${expected_pid}" ]; then
+  exit 0
+fi
+supervisor_pid="$(tr '\\0' '\\n' < "/proc/${pid}/environ" 2>/dev/null | sed -n 's/^COCALC_PROJECT_HOST_SUPERVISOR_PID=//p' | tail -n1 || true)"
+parent_pid="$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/${pid}/status" 2>/dev/null || true)"
+if ! [[ "${supervisor_pid}" =~ ^[0-9]+$ ]] || [ "${parent_pid}" != "${supervisor_pid}" ]; then
+  exit 0
+fi
+
+install -d -o root -g root -m 0700 "${core_dir}"
+exec 9>"${core_dir}/capture.lock"
+flock -x 9
+safe_executable="$(printf '%s' "${executable}" | tr -cd 'A-Za-z0-9._:-' | cut -c1-48)"
+[ -n "${safe_executable}" ] || safe_executable="project-host"
+[[ "${timestamp}" =~ ^[0-9]+$ ]] || timestamp="$(date +%s)"
+base="core.${safe_executable}.${pid}.${timestamp}"
+tmp="$(mktemp "${core_dir}/.${base}.XXXXXX")"
+chmod 0600 "${tmp}"
+dd iflag=fullblock bs=1048576 count=1024 conv=sparse of="${tmp}" status=none || true
+if [ ! -s "${tmp}" ]; then
+  rm -f "${tmp}"
+  exit 0
+fi
+mv "${tmp}" "${core_dir}/${base}"
+cat > "${core_dir}/${base}.meta" <<META
+captured_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+pid=${pid}
+uid=${uid}
+gid=${gid}
+signal=${signal}
+executable=${safe_executable}
+supervisor_pid=${supervisor_pid}
+max_bytes=${max_bytes}
+META
+chmod 0600 "${core_dir}/${base}" "${core_dir}/${base}.meta"
+
+kept=0
+while IFS= read -r name; do
+  kept=$((kept + 1))
+  if [ "${kept}" -gt 3 ]; then
+    rm -f -- "${core_dir}/${name}" "${core_dir}/${name}.meta"
+  fi
+done < <(find "${core_dir}" -maxdepth 1 -type f -name 'core.*' ! -name '*.meta' -printf '%T@ %f\\n' | sort -nr | cut -d' ' -f2-)
+"""
+    core_handler = core_handler.replace("__RUNTIME_USER__", cfg.ssh_user)
     rootctl = """#!/usr/bin/env bash
 set -euo pipefail
 if [ "$(id -u)" -ne 0 ]; then
@@ -4270,6 +4334,7 @@ PID_FILE="/mnt/cocalc/data/daemon.pid"
 HOST_AGENT_PID_FILE="/mnt/cocalc/data/host-agent.pid"
 OOM_ADJ="${COCALC_PROJECT_HOST_OOM_SCORE_ADJ:__OOM_ADJ_LITERAL__}"
 ENV_FILE="/etc/cocalc/project-host.env"
+LOCAL_ENV_FILE="/etc/cocalc/project-host.local.env"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_POOL_MEMORY_RESERVE_MB_DEFAULT="__PROJECT_POOL_MEMORY_RESERVE_MB__"
 PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB="__PROJECT_POOL_MEMORY_RESERVE_DYNAMIC_MIN_MB__"
@@ -4281,6 +4346,12 @@ PROJECT_POOL_CPU_RESERVE_DYNAMIC_MAX_CORES="__PROJECT_POOL_CPU_RESERVE_DYNAMIC_M
 MIN_PROJECT_POOL_CPU_CORES="__MIN_PROJECT_POOL_CPU_CORES__"
 PROJECT_POOL_CPU_PERIOD_US="__PROJECT_POOL_CPU_PERIOD_US__"
 SYSCTL_CONFIG_PATH="/etc/sysctl.d/90-cocalc-project-host.conf"
+CORE_SYSCTL_CONFIG_PATH="/etc/sysctl.d/91-cocalc-project-host-core.conf"
+LEGACY_CORE_SUDOERS_CONFIG_PATH="/etc/sudoers.d/cocalc-project-host-core"
+CORE_HANDLER="/usr/local/sbin/cocalc-project-host-core-handler"
+CORE_ORIGINAL_PATTERN="/var/lib/cocalc/project-host-core-pattern.original"
+CORE_ORIGINAL_PIPE_LIMIT="/var/lib/cocalc/project-host-core-pipe-limit.original"
+CORE_PATTERN="|/usr/local/sbin/cocalc-project-host-core-handler %P %u %g %s %t %e"
 HELPER_SCHEMA_VERSION="__HELPER_SCHEMA_VERSION__"
 
 run_daemon() {
@@ -4306,10 +4377,69 @@ SYSCTL
   sysctl -p "${SYSCTL_CONFIG_PATH}"
 }
 
+read_env_file_value() {
+  local file="$1" key="$2"
+  if [ -r "${file}" ]; then
+    grep -E "^${key}=" "${file}" | tail -n1 | cut -d= -f2- || true
+  fi
+}
+
 read_env_value() {
   local key="$1"
-  if [ -r "${ENV_FILE}" ]; then
-    grep -E "^${key}=" "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true
+  if [ -r "${LOCAL_ENV_FILE}" ] && grep -qE "^${key}=" "${LOCAL_ENV_FILE}"; then
+    read_env_file_value "${LOCAL_ENV_FILE}" "${key}"
+    return
+  fi
+  read_env_file_value "${ENV_FILE}" "${key}"
+}
+
+env_value_is_true() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+reconcile_app_core_dumps() {
+  local desired current original original_pipe_limit
+  rm -f "${LEGACY_CORE_SUDOERS_CONFIG_PATH}"
+  desired="$(read_env_value COCALC_PROJECT_HOST_APP_CORE_DUMPS)"
+  current="$(cat /proc/sys/kernel/core_pattern 2>/dev/null || true)"
+  if env_value_is_true "${desired}"; then
+    if [ ! -x "${CORE_HANDLER}" ]; then
+      echo "missing project-host core handler: ${CORE_HANDLER}" >&2
+      return 1
+    fi
+    install -d -o root -g root -m 0755 "$(dirname "${CORE_ORIGINAL_PATTERN}")"
+    if [ ! -e "${CORE_ORIGINAL_PATTERN}" ]; then
+      printf '%s\n' "${current}" > "${CORE_ORIGINAL_PATTERN}"
+      chmod 0600 "${CORE_ORIGINAL_PATTERN}"
+    fi
+    if [ ! -e "${CORE_ORIGINAL_PIPE_LIMIT}" ]; then
+      cat /proc/sys/kernel/core_pipe_limit > "${CORE_ORIGINAL_PIPE_LIMIT}"
+      chmod 0600 "${CORE_ORIGINAL_PIPE_LIMIT}"
+    fi
+    cat > "${CORE_SYSCTL_CONFIG_PATH}" <<SYSCTL
+# Managed by CoCalc project-host. The handler accepts only the supervised app PID.
+kernel.core_pattern = ${CORE_PATTERN}
+kernel.core_pipe_limit = 4
+SYSCTL
+    chmod 0644 "${CORE_SYSCTL_CONFIG_PATH}"
+    sysctl -w "kernel.core_pattern=${CORE_PATTERN}" >/dev/null
+    sysctl -w kernel.core_pipe_limit=4 >/dev/null
+    return
+  fi
+  if [ -e "${CORE_SYSCTL_CONFIG_PATH}" ] || [ "${current}" = "${CORE_PATTERN}" ]; then
+    rm -f "${CORE_SYSCTL_CONFIG_PATH}"
+    original="$(cat "${CORE_ORIGINAL_PATTERN}" 2>/dev/null || true)"
+    if [ -n "${original}" ]; then
+      sysctl -w "kernel.core_pattern=${original}" >/dev/null
+    fi
+    original_pipe_limit="$(cat "${CORE_ORIGINAL_PIPE_LIMIT}" 2>/dev/null || true)"
+    if [[ "${original_pipe_limit}" =~ ^[0-9]+$ ]]; then
+      sysctl -w "kernel.core_pipe_limit=${original_pipe_limit}" >/dev/null
+    fi
+    rm -f "${CORE_ORIGINAL_PATTERN}" "${CORE_ORIGINAL_PIPE_LIMIT}"
   fi
 }
 
@@ -4878,6 +5008,16 @@ doctor() {
     cgroup_manager="cgroupfs"
   fi
   printf 'podman_runtime_dir: %s\n' "${runtime_dir}"
+  if env_value_is_true "$(read_env_value COCALC_PROJECT_HOST_APP_CORE_DUMPS)"; then
+    if [ "$(cat /proc/sys/kernel/core_pattern 2>/dev/null || true)" = "${CORE_PATTERN}" ]; then
+      printf 'project-host app core dumps: enabled\n'
+    else
+      printf 'project-host app core dumps: misconfigured\n'
+      status=1
+    fi
+  else
+    printf 'project-host app core dumps: disabled\n'
+  fi
   output="$(podman_info_once "${runtime_dir}" "${cgroup_manager}" 2>&1)" || {
     printf 'podman info: failed\n%s\n' "${output}"
     status=1
@@ -4897,6 +5037,7 @@ case "${cmd}" in
   start|ensure)
     repair_runtime_environment
     preflight_podman_runtime
+    reconcile_app_core_dumps
     run_daemon "${cmd}" "$@"
     protect_pid
     attach_running_project_processes || true
@@ -4904,6 +5045,7 @@ case "${cmd}" in
   restart)
     repair_runtime_environment
     preflight_podman_runtime
+    reconcile_app_core_dumps
     run_daemon stop "$@" || true
     run_daemon start "$@"
     protect_pid
@@ -4912,6 +5054,7 @@ case "${cmd}" in
   protect)
     repair_runtime_environment
     preflight_podman_runtime
+    reconcile_app_core_dumps
     protect_pid
     attach_running_project_processes || true
     ;;
@@ -4924,6 +5067,7 @@ case "${cmd}" in
     ;;
   apply-sysctls)
     apply_project_host_sysctls
+    reconcile_app_core_dumps
     ;;
   noop)
     exit 0
@@ -5011,6 +5155,8 @@ esac
     (bin_dir / "ctl-cf").write_text(ctl_cf_script, encoding="utf-8")
     rootctl_path.parent.mkdir(parents=True, exist_ok=True)
     rootctl_path.write_text(rootctl, encoding="utf-8")
+    core_handler_path.parent.mkdir(parents=True, exist_ok=True)
+    core_handler_path.write_text(core_handler, encoding="utf-8")
     for name in [
         "ctl",
         "start-project-host",
@@ -5022,6 +5168,7 @@ esac
     ]:
         (bin_dir / name).chmod(0o755)
     rootctl_path.chmod(0o755)
+    core_handler_path.chmod(0o755)
     if cfg.ssh_user and cfg.ssh_user != "root":
         helper_paths = [
             bin_dir / "ctl",

@@ -40,6 +40,7 @@ import {
 import { sleep } from "@cocalc/util/async-utils";
 import { notifyProjectHostUpdate } from "./route-project";
 import { recordHostAvailabilityObservation } from "@cocalc/server/hosts/availability";
+import { cancelStaleProjectStartLrosForHostSession } from "@cocalc/server/projects/start-lro-cleanup";
 
 const logger = getLogger("server:conat:host-registry");
 const pool = () => getPool();
@@ -94,9 +95,7 @@ function getHostRuntimeHealth(metadata: any): {
   const status = `${runtime?.status ?? ""}`.trim() || undefined;
   return {
     status,
-    // Missing runtime_health is accepted while older project-host bundles are
-    // still in service. New bundles always report it before registration.
-    ready: status == null || (status === "ready" && runtime?.ready === true),
+    ready: status === "ready" && runtime?.ready === true,
     error: `${runtime?.error ?? ""}`.trim() || undefined,
   };
 }
@@ -968,8 +967,29 @@ async function ensureHostRestartRecovery({
   next_metadata?: any;
   source: "register" | "heartbeat";
 }): Promise<void> {
+  const sessionChanged =
+    !!previous_session_id &&
+    !!next_session_id &&
+    previous_session_id !== next_session_id;
   const bootChanged =
     !!previous_boot_id && !!next_boot_id && previous_boot_id !== next_boot_id;
+  if (sessionChanged) {
+    const sessionStartedAt =
+      `${next_metadata?.host_session_started_at ?? ""}`.trim();
+    if (sessionStartedAt) {
+      await cancelStaleProjectStartLrosForHostSession({
+        host_id,
+        host_session_started_at: sessionStartedAt,
+      }).catch((err) => {
+        logger.warn("failed proactive stale project-start lro cleanup", {
+          host_id,
+          previous_session_id,
+          next_session_id,
+          err: `${err}`,
+        });
+      });
+    }
+  }
   const pending = isRestartRecoveryPendingForBoot(
     previous_metadata,
     next_boot_id,

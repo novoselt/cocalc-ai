@@ -1024,13 +1024,17 @@ async function getOrEnsureVolume(project_id: string) {
   return vol;
 }
 
-export async function ensureVolume(project_id: string, scratch?: boolean) {
+export async function ensureVolume(
+  project_id: string,
+  scratch?: boolean,
+  opts: { reportProvisioned?: boolean } = {},
+) {
   if (fs == null) {
     throw Error("file server not initialized");
   }
   const vol = await fs.subvolumes.ensure(volumeName(project_id, scratch));
   invalidateProjectFsServer(project_id);
-  if (!scratch) {
+  if (!scratch && opts.reportProvisioned !== false) {
     queueProjectProvisioned(project_id, true);
   }
   return vol;

@@ -26,8 +26,242 @@ ordinary CPU pressure or a previously recurring independent Podman failure.
 
 The immediate code changes fail closed, preserve diagnostics, and prevent a
 single unhealthy runtime from causing a recovery storm. They do not claim to
-eliminate the underlying runtime failure. The next step is a controlled staging
-canary that changes one variable at a time.
+eliminate the underlying runtime failure. Subsequent staging work established a
+healthy reverted baseline; the remaining experiments must continue to change
+one variable at a time.
+
+## Current status (2026-07-14)
+
+The immediate production containment work is complete:
+
+- `6201405c0c` added the functional runtime-health gate, bounded diagnostics,
+  alerts, recovery canaries, and stale project-start LRO cancellation.
+- `6932477e26` removed the unsafe hierarchical per-project PID-migration path
+  and restored the previously stable aggregate cgroup containment model.
+- `425d1eac4f` fixed an independent compatibility-library publication race.
+  Project starts had been copying the shared `libatomic.so.1` directly over a
+  live file. Concurrent starts could therefore expose a partially written ELF
+  library to unrelated running Node processes, causing synchronized `SIGBUS`
+  and `SIGSEGV` failures. The library is now published atomically.
+
+All 15 registered production hosts received the compatibility-library fix. At
+the latest fleet audit, all 11 active project hosts were running, had fresh
+heartbeats, reported healthy runtime probes, and had no host-specific
+project-host software overrides. Host placement now excludes a host whose
+Podman data plane is unhealthy even if its Node heartbeat remains fresh.
+
+The disposable staging canary also established a useful baseline:
+
+- A `t2d-standard-32` host with adequate disk admitted 50 projects.
+- An explicit 20-project start burst completed in approximately 5.5 seconds.
+- An explicit 50-project start burst completed in approximately 11.5 seconds.
+- After a controlled VM reboot, runtime readiness returned approximately 48
+  seconds after boot and all 50 projects started within a 9.7-second window.
+- Before the atomic library fix, concurrent project churn reproduced widespread
+  Node crashes both inside projects and in unrelated CLI processes. The same
+  workload no longer reproduced those crashes after the fix.
+
+This establishes that the reverted runtime can recover projects quickly in
+parallel. It does not yet satisfy the long-duration promotion gate below.
+
+The next hardening layer was deployed to staging only on 2026-07-14:
+
+- the placement contract now fails closed when runtime-health metadata is
+  missing instead of treating an old or incomplete heartbeat as healthy;
+- each host advertises support for a synthetic project lifecycle probe;
+- the owning bay periodically creates a host-local temporary project, starts
+  its real container, executes inside it, writes and reads a mounted file, then
+  stops it and deletes its local volume without creating a central project;
+- failed synthetic probes quarantine the host until a later probe passes;
+- forensic capture publishes requested, completed, and failed timestamps in
+  runtime-health metadata instead of existing only as an unstructured log;
+- every host process-session transition proactively cancels all active
+  project-start and restore LROs that predate the new session;
+- a fresh-heartbeat cloud host with repeated runtime failures can be hard
+  rebooted only after forensic capture completes, with a 15-minute per-host
+  cooldown, at most two attempts in six hours, and at most one fleet-wide
+  automatic reboot in ten minutes;
+- every synthetic failure, automatic reboot, and exhausted recovery budget
+  produces a deduplicated operator alert.
+
+The first staging lifecycle probes exposed a real configuration bug rather than
+an artificial failure: project start used CoCalc's persistent Podman runtime
+directory, while container exec invoked Podman without the shared environment
+and therefore searched under `/run/user/2000`. Both canary hosts were correctly
+quarantined, completed forensic capture, and retried. One host received the
+bounded automatic hard reboot; the fleet-wide spacing gate prevented the second
+host from rebooting concurrently. `224ad4323c` fixed sandbox exec to use the
+same runtime environment and suppressed central provisioned-state reporting for
+synthetic volumes.
+
+After that fix, both staging hosts passed complete create/start/exec/write/read/
+stop/delete probes in about 1.2 seconds. The generated projects left no central
+PostgreSQL project row, host-local SQLite project row, Podman container, or
+Btrfs home/scratch subvolume. Both hosts returned to runtime `ready`, and a
+read-only audit found no active project-start LRO predating either current host
+session.
+
+The next scheduled 30-minute cycle passed again on both hosts on 2026-07-14 at
+01:32 UTC. The lifecycle durations were 0.83 and 0.67 seconds, controller
+durations were 1.25 and 1.00 seconds, and both newly generated project IDs again
+left no central project row. The rebooted host's automatic-recovery metadata
+changed from `scheduled` to `recovered` and retained the completed work ID,
+prior boot ID, attempt history, and cooldown.
+
+The failure run also verified delivery of synthetic-failure and automatic-
+reboot admin alerts. It revealed that random temporary project identifiers in
+the error text defeated exact-body message deduplication and produced repeated
+alerts. `bd2b7002a7` persists a per-host alert timestamp, limits continuous
+failure alerts to one per 15 minutes, and marks a scheduled reboot as recovered
+after a successful probe on the new boot without discarding its rolling attempt
+history or cooldown.
+
+Staging artifacts currently under test are:
+
+- project-host
+  `20260714T042331Z-8fcbe4ad-explicit-component-restart`, containing the
+  synthetic-probe support, forensic log retention, durable app supervisor, and
+  explicit operator restart fix;
+- hub controller commits `bd2b7002a7`, `a3c5a0582b`, `892520ca00`, and
+  `43ef81e0c9`, with synthetic probes now due after every project-host process
+  session as well as every boot and normal interval.
+
+No synthetic-probe or automatic-reboot hardening code from this phase has been
+deployed to production. Staging project-host targets currently use explicit
+host overrides because the canary artifact has not been promoted to the fleet
+default. Remove those overrides only after an intentional global promotion.
+
+### Lite4b synthetic-process exit (2026-07-14)
+
+The first lifecycle probe on Lite4b host `host1`
+(`c2c1bb5b-d5fb-4a06-8904-4549f4089ac2`) exposed a separate failure. The
+synthetic Podman create/start/exec/stop/remove sequence completed in about one
+second, but the project-host process handling the RPC disappeared immediately
+after container removal and before Btrfs volume cleanup. The host-agent found
+the stale PID and started a replacement process. The original controller call
+then remained pending until its 15-minute RPC timeout, quarantined the host, and
+sent an alert. The retry passed in under two seconds and automatically cleared
+the quarantine; no automatic VM reboot occurred.
+
+The evidence excludes host memory pressure and a kernel OOM kill. The host had
+about 7.3 GB available after the process exit, modest load, and no OOM or
+segfault record in the kernel journal. The project-host process maps the system
+`libatomic.so.1`, so this event does not match the previously fixed shared
+compatibility-library publication race. The exact native exit remains unknown:
+core dumps were disabled and project-host startup deleted the previous daemon
+log before the replacement process started.
+
+The follow-up hardening therefore:
+
+- reduces the default synthetic RPC timeout from 15 minutes to 2 minutes;
+- schedules a new lifecycle probe after every project-host process-session
+  transition, not only after a VM boot or the normal 30-minute interval;
+- includes the deployment hostname in synthetic-failure alert subjects and
+  bodies, avoiding confusion between Lite4b, staging, and production;
+- rotates up to five prior project-host logs under `log-history/` instead of
+  deleting the previous log on every restart; and
+- records the dead PID in stale-process supervision events.
+
+This makes the next occurrence both faster to detect and materially more
+diagnosable. It does not claim that the unexplained process exit itself has been
+fixed.
+
+### Durable app-exit evidence and recovery test (2026-07-14)
+
+The first exit-observer implementation attached a Node `ChildProcess` listener
+in whichever process launched project-host. A controlled `SIGSEGV` test showed
+that this was not durable: during an artifact transition, the old host-agent
+launched the new app and was then replaced by the new host-agent. The app
+survived, but the in-memory listener disappeared with its former parent.
+
+Commit `35af3a54db` therefore added a small persistent app supervisor to every
+project-host artifact. The daemon PID now identifies the supervisor, while a
+separate `project-host-app.pid` identifies the actual app child. The supervisor:
+
+- remains the app's parent independently of host-agent replacement;
+- records the actual child exit code or signal in `supervision-events.jsonl`;
+- forwards normal shutdown signals and records which signal it forwarded;
+- attributes active project start/stop heartbeats to the durable daemon PID;
+  and
+- exits after the app so the existing host-agent stale-PID recovery path starts
+  a fresh supervisor and app.
+
+Commit `8fcbe4adbb` also fixed operator component rollouts. The prior delayed
+command ran `daemon ensure`, which did nothing when the current daemon was
+healthy; the rollout RPC could therefore report success without changing the
+process. It now runs the explicit `daemon restart-project-host` action.
+
+Both fixes were deployed only to staging. On staging host `host2`, the verified
+process tree was supervisor PID `451721`, app PID `451729`, and independent
+host-agent PID `451728`. A controlled `SIGSEGV` sent only to the app produced:
+
+- a durable `process_exit` event naming app PID `451729`, supervisor PID
+  `451721`, and signal `SIGSEGV` at `04:25:07` UTC;
+- stale-supervisor detection at `04:25:11`;
+- replacement supervisor start at `04:25:12`;
+- a ready health endpoint with app activity correctly attributed to the new
+  supervisor; and
+- a full synthetic create/start/exec/write/read/stop/delete probe that passed
+  in 740 ms (1.106 seconds including controller work) for the new process
+  session.
+
+A subsequent explicit component rollout changed the supervisor PID from
+`452707` to `454936`. The old supervisor recorded child exit code 0 with
+`forwarded_signal=SIGTERM`, and the replacement became healthy. This validates
+both crash recovery and the normal operator restart path.
+
+### Bounded app-only core capture (2026-07-14)
+
+Commits `78edbe1330`, `d2f13eb915`, `d8e1b280f0`, `10bce8b608`, and
+`7ead589418` developed and staged opt-in project-host app core capture. The
+final design deliberately does not use `RLIMIT_CORE`: Linux ignores that limit
+when `core_pattern` pipes a core to a userspace handler. The staging test also
+showed that a piped 693 MiB logical core consumed 437 MiB when written densely.
+
+The bootstrap-installed handler now:
+
+- runs only when `COCALC_PROJECT_HOST_APP_CORE_DUMPS=1` is present in the
+  durable local project-host environment;
+- accepts a core only when the kernel PID equals `project-host-app.pid`, the
+  UID is the runtime host UID, and `/proc` confirms the recorded persistent
+  supervisor is the app's actual parent;
+- closes rejected pipes immediately, so unrelated host processes and project
+  containers cannot write forensic files or force the handler to drain their
+  core streams;
+- writes accepted cores and metadata as root-owned mode-0600 files under
+  `/mnt/cocalc/data/forensics/core-dumps`;
+- caps each input stream at 1 GiB, writes zero blocks sparsely, and retains only
+  the three newest captures; and
+- records and restores the prior kernel core pattern and `core_pipe_limit` when
+  the feature is disabled.
+
+The final staging artifacts are host-bootstrap
+`20260714T044833Z-7ead5894-sparse-app-cores-7ead5894` and project-host
+`20260714T044857Z-7ead5894-sparse-app-cores-7ead5894`. On staging `host2`:
+
+- an unrelated runtime-user Python process deliberately raised its own limit
+  and died with `SIGSEGV`; the accepted-core count remained unchanged;
+- the supervised app had soft and hard core limits of zero, yet its controlled
+  `SIGSEGV` produced a valid x86-64 ELF core because the pipe handler is the
+  authoritative bound;
+- the 719 MiB logical sparse test core used 143 MiB physically;
+- a fourth accepted crash left exactly three cores and removed the oldest core
+  plus metadata sidecar; and
+- after every crash the durable supervisor recorded `SIGSEGV`, the host-agent
+  replaced the app, `rootctl doctor` passed, and the final artifact was accepted
+  as the host's last-known-good project-host version.
+
+After removing the deliberately dense pre-fix test artifact, two retained
+sparse cores used 275 MiB physically. The automatic probe for the final app
+process session passed at `04:54:40` UTC using synthetic project
+`8758e745-edc0-45f0-bb0d-91ab868cc339`: host lifecycle work took 762 ms,
+controller work took 1.103 seconds, and the central failure count remained zero.
+
+One rollout attempt exposed a mixed-version hazard: new bootstrap policy was
+installed while the old app artifact still expected a temporary `prlimit`
+scheme. Disabling the feature restored the host, the final artifact then rolled
+out cleanly, and current bootstrap reconciliation removes that obsolete
+sudoers fragment. This feature remains staging-only and opt-in.
 
 ## Incident timeline
 
@@ -153,10 +387,11 @@ Production hosts currently use:
 - systemd linger for the project-host user;
 - a root-owned `/sys/fs/cgroup/cocalc-project-pool` hierarchy.
 
-Before launching a container, CoCalc moves the Podman launcher into the
-project's root-owned cgroup. It then reconciles conmon/container PIDs into that
-cgroup. This provides aggregate and per-project resource control, but it is a
-substantial deviation from the normal rootless Podman plus systemd lifecycle.
+The reverted production implementation uses the older flat aggregate project
+cgroup together with Podman's native per-container limits and the host pressure
+controller. It no longer moves Podman, conmon, container, or pasta PIDs into
+per-project child cgroups. The July 13 hierarchical implementation did those
+migrations and remains disabled pending isolated staging tests.
 
 Podman documents that rootless operation uses a pause process to preserve the
 user namespace and that `podman system migrate` stops that process when runtime
@@ -170,6 +405,8 @@ References:
 
 - [Podman system migrate](https://docs.podman.io/en/stable/markdown/podman-system-migrate.1.html)
 - [Podman global cgroup-manager configuration](https://docs.podman.io/en/latest/markdown/podman.1.html)
+- [Podman installation and runtime requirements](https://podman.io/docs/installation)
+- [Current stable Podman version](https://podman.io/)
 - [Podman rootless troubleshooting](https://github.com/containers/podman/blob/main/troubleshooting.md)
 - [Podman issue 16641: invalid internal status after reboot](https://github.com/containers/podman/issues/16641)
 - [Current Podman releases](https://github.com/containers/podman/releases)
@@ -200,12 +437,12 @@ References:
 10. Cgroup attachment failures remain visible but are rate-limited instead of
     flooding logs.
 11. Project-start LROs created before the current host process session are
-    canceled immediately, including restore LROs.
-
-Automatic hard reboot is intentionally not part of this first change. The first
-priority is to capture the state before destroying it. Once diagnostic capture
-is proven, a separate policy can hard-reboot after repeated failures and a
-bounded investigation window.
+    canceled immediately, including restore LROs. The new host-session sweep
+    does this proactively for every assigned project with an active start LRO.
+12. Full synthetic start/exec/file-write/stop probes and bounded automatic hard
+    reboot recovery are implemented but remain staging-only until deliberate
+    failure tests verify quarantine, forensic preservation, alerting, recovery,
+    and the fleet circuit breaker.
 
 ## Is Podman the wrong runtime?
 
@@ -226,18 +463,85 @@ then make comparative changes in staging.
 
 ## Immediate production recommendation
 
-1. Roll back or default-disable the July 13 hierarchical per-project cgroup and
-   pasta PID-migration path.
-2. Retain Podman's native per-container memory, CPU, and PID limits, the older
-   aggregate `cocalc-project-pool` cap, and the host pressure controller. These
-   are the established containment layers; this is not a return to uncontained
-   projects.
-3. Deploy the runtime readiness, diagnostics, alerting, recovery throttling, and
-   stale-LRO fixes independently.
-4. Do not combine the production rollback with a Podman upgrade or a switch to
-   systemd cgroups. Those are staging experiments.
-5. Keep the temporary eastern host recovery concurrency cap until the safer
-   project-host code is deployed.
+1. **Complete:** roll back the July 13 hierarchical per-project cgroup and pasta
+   PID-migration path.
+2. **Complete:** retain Podman's native per-container memory, CPU, and PID
+   limits, the older aggregate `cocalc-project-pool` cap, and the host pressure
+   controller. This is not a return to uncontained projects.
+3. **Complete:** deploy runtime readiness, diagnostics, alerting, recovery
+   throttling, and stale-LRO fixes independently.
+4. **Complete:** deploy the atomic compatibility-library publication fix to the
+   fleet and remove temporary host-specific software overrides.
+5. **Staging-validated:** synthetic runtime probes, automated quarantine,
+   durable forensic completion state, cleanup, retry, and alert delivery.
+6. **Partially staging-validated:** bounded automatic hard-reboot recovery ran
+   once after forensic capture and the fleet gate blocked a concurrent second
+   reboot. Cooldown and rolling-budget exhaustion remain covered by tests but
+   require deliberate multi-reboot staging fault injection before production.
+
+Do not combine this production stabilization with a Podman upgrade, a switch to
+systemd cgroups, or a networking-backend change. Those remain separate staging
+experiments.
+
+## Podman upgrade program
+
+Podman should be upgraded, but the production health and recovery controls come
+first. The current incidents do not show that Podman itself is the wrong
+runtime: the two identified regressions were CoCalc's nonstandard cgroup PID
+migration and a shared-library publication race. Nevertheless, Podman 4.9.3 is
+old enough that remaining indefinitely on the Ubuntu package would forfeit
+relevant rootless lifecycle, reboot, storage, and security fixes.
+
+The upgrade program is:
+
+1. Validate the implemented synthetic host probes, placement quarantine,
+   forensic capture, alerts, stale-LRO cleanup, and bounded automatic reboot
+   recovery on staging before any production rollout.
+2. Build a reproducible and pinned runtime bundle containing Podman and matching
+   versions of crun, conmon, containers/storage, containers/common, and related
+   configuration. Do not upgrade only the Podman binary. In particular, current
+   upstream Podman requires at least crun `1.14.3`, which is newer than
+   production's `1.14.1`.
+3. Test the latest Podman 5.8.x patch release on fresh staging hosts while
+   retaining CNI, forced `cgroupfs`, the custom runtime directory, SQLite, and
+   the flat aggregate cgroup. Podman 5.8 is the controlled bridge because it can
+   migrate legacy BoltDB state before Podman 6 removes BoltDB support.
+4. Test Podman 6.0.1 as a separate staging variant. Verify the configured
+   database backend and all persistent storage metadata before allowing a host
+   to serve projects.
+5. Require at least 200 automated VM/process interruption cycles and 1,000
+   project start/stop cycles, with the assertions below, before promoting a
+   runtime bundle.
+6. Roll out the selected bundle first when provisioning replacement Spot hosts.
+   Do not silently change the runtime version merely because an existing VM
+   rebooted.
+
+### Spot replacement and reboot policy
+
+Spot churn is a good deployment mechanism only when it creates a clean runtime
+host. Project data is durable and separate, but Podman's graph root, run root,
+container database, pause/user-namespace state, network state, and OCI runtime
+metadata may persist across an ordinary reboot on the same attached disk.
+Installing a new major Podman stack during that reboot is therefore still an
+in-place upgrade.
+
+Each host boot must use a versioned runtime-state contract:
+
+- A freshly provisioned host with no Podman state may install the promoted
+  bundle and join the canary cohort.
+- A host whose recorded runtime-state version exactly matches the bundle may
+  start normally.
+- A tested, explicit state migration may run only for a declared source and
+  destination version pair, followed by the full runtime acceptance probe.
+- An unknown or incompatible state must fail closed and stay out of placement;
+  it must not attempt a best-effort automatic upgrade.
+- Rollback must mean replacing the host with one using a compatible state, not
+  downgrading binaries over metadata already migrated by a newer major version.
+
+This makes frequent Spot replacement an advantage: new hosts can enter the
+upgraded cohort naturally, while existing persistent Podman state is never
+implicitly mutated. CNI-to-Netavark, `cgroupfs`-to-systemd, and custom-to-standard
+runtime-directory changes must remain independent later experiments.
 
 ## Staging canary design
 
@@ -253,16 +557,18 @@ Run these variants in order, changing one dimension at a time:
    runtime directory, forced `cgroupfs`, and the older aggregate project cgroup.
 2. **Regression reproduction:** the same runtime with the July 13 hierarchical
    and pasta PID-migration changes. This directly tests the leading cause.
-3. **Runtime upgrade:** a pinned current Podman 5.8.x/crun package set, with all
+3. **Podman 5 bridge:** a pinned current Podman 5.8.x runtime bundle, with all
    other CoCalc settings unchanged.
-4. **Standard runtime directory:** upgraded runtime using `/run/user/2000`, with
+4. **Podman 6:** a pinned Podman 6.0.1 runtime bundle, again with all other
+   CoCalc settings unchanged and the runtime-state contract validated.
+5. **Standard runtime directory:** upgraded runtime using `/run/user/2000`, with
    linger and user-manager readiness explicitly verified.
-5. **Systemd cgroups:** upgraded runtime with the supported `systemd` cgroup
+6. **Systemd cgroups:** upgraded runtime with the supported `systemd` cgroup
    manager. Preserve project limits through a delegated systemd slice/cgroup
    parent design; do not manually move arbitrary runtime PIDs after launch.
-6. **Network backend:** switch the successful upgraded variant from legacy CNI
+7. **Network backend:** switch the successful upgraded variant from legacy CNI
    to Netavark.
-7. **Alternative engine:** use the same workload contract on a small
+8. **Alternative engine:** use the same workload contract on a small
    Docker/containerd canary. This requires a narrow runner abstraction, not a
    production rewrite.
 
@@ -306,14 +612,40 @@ systemd, Podman, conmon/crun, and CoCalc.
 
 ## Remaining work
 
-- Deploy the readiness/diagnostic changes to staging and verify that a simulated
-  failed probe removes the host from placement and creates exactly one alert.
-- Build the disposable-host fault-injection harness and baseline the current
-  runtime before upgrading it.
-- Decide how to package a current Podman version reproducibly for Ubuntu hosts.
+- **Complete on staging:** healthy synthetic probes leave no central project
+  row, local SQLite row, container, or home/scratch subvolume.
+- **Complete on staging:** lifecycle failure quarantines placement, records
+  bounded forensic completion, retries after 90 seconds, and a later pass clears
+  quarantine.
+- **Complete in tests and staging audit:** host-session transitions proactively
+  cancel pre-session normal and restore-backed project-start LROs. No stale
+  active start LRO remained after the canary reboot and rollout.
+- **Complete on staging:** two failures plus completed diagnostics queued one
+  hard reboot, and the ten-minute fleet gate prevented a concurrent reboot.
+- Deliberately fault one staging host through the complete two-attempt/six-hour
+  exhaustion path and verify the 15-minute per-host cooldown and exhausted-
+  budget alert. Do not run this production experiment.
+- Inject a separate passive `podman ps` failure so the passive detector is
+  validated independently of the full lifecycle probe.
+- **Complete on staging:** a successful new-boot probe changes automatic
+  recovery state from `scheduled` to `recovered` while preserving the rolling
+  reboot attempt budget.
+- Verify the metadata-backed 15-minute alert limiter under a continuous staged
+  failure.
+- **Complete on staging:** bounded, sparse, three-file project-host app core
+  capture produced valid ELF cores while an unrelated runtime-user crash was
+  rejected without creating a file. Production remains disabled pending the
+  broader promotion gate.
+- **Complete on staging:** durable app supervision records an actual child
+  `SIGSEGV`, host-agent restarts the process in about five seconds, and the new
+  process session passes a full synthetic lifecycle probe.
+- **Complete on staging:** an explicit operator project-host component rollout
+  performs a real graceful restart rather than a healthy `ensure` no-op.
+- Build the disposable-host fault-injection harness and complete the 200
+  interruption and 1,000 project-cycle baseline on the reverted runtime.
+- Package pinned Podman 5.8.x and Podman 6.0.1 runtime bundles, including their
+  matching OCI runtime and containers libraries.
+- Implement and validate the versioned runtime-state contract used when Spot
+  hosts boot or are replaced.
 - Design the systemd-slice equivalent of `cocalc-project-pool` before testing the
   `systemd` cgroup manager.
-- After forensic capture is validated, define a controlled hard-reboot policy,
-  for example after three failed probes and a two-minute diagnostic window.
-- Add fleet-level synthetic project start/exec probes so user traffic is not the
-  first indication of a degraded host.

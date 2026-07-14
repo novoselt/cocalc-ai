@@ -6635,6 +6635,10 @@ describe("hosts.listHosts bootstrap normalization", () => {
                 gpu: false,
                 pricing_model: "spot",
                 interruption_restore_policy: "immediate",
+                runtime_health: {
+                  status: "ready",
+                  ready: true,
+                },
                 runtime: {
                   instance_id: "provider-instance-secret",
                   public_ip: "203.0.113.10",

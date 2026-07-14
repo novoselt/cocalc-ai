@@ -490,4 +490,51 @@ describe("supersedeOlderProjectStartLros", () => {
       op_id: "restore-op-1",
     });
   });
+
+  it("proactively cleans all pre-session starts assigned to a restarted host", async () => {
+    queryMock = jest.fn(async (sql: string, params: any[]) => {
+      if (sql.includes("SELECT DISTINCT l.scope_id")) {
+        return { rows: [{ project_id: "proj-1" }, { project_id: "proj-2" }] };
+      }
+      if (sql.includes("FROM long_running_operations")) {
+        return {
+          rows: [
+            {
+              op_id: `restore-${params[0]}`,
+              scope_type: "project",
+              scope_id: params[0],
+              input: { restore_backup_id: "legacy-backup" },
+              created_at: "2026-07-13T20:00:00.000Z",
+            },
+          ],
+        };
+      }
+      if (sql.includes("FROM projects p")) {
+        return {
+          rows: [
+            {
+              state: { state: "starting", time: "2026-07-13T20:00:00Z" },
+              host_session_started_at: "2026-07-13T21:00:00.000Z",
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { cancelStaleProjectStartLrosForHostSession } =
+      await import("./start-lro-cleanup");
+    const result = await cancelStaleProjectStartLrosForHostSession({
+      host_id: "dab25958-64df-4bea-803b-77319d7839f6",
+      host_session_started_at: "2026-07-13T21:00:00.000Z",
+    });
+
+    expect(result).toEqual({ projects: 2, operations: 2 });
+    expect(updateLroMock).toHaveBeenCalledTimes(2);
+    expect(updateLroMock).toHaveBeenCalledWith({
+      op_id: "restore-proj-1",
+      status: "canceled",
+      error: "project start operation belongs to a previous host process",
+    });
+  });
 });

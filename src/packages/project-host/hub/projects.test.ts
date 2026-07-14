@@ -11,6 +11,8 @@ const applyPendingCopies = jest.fn();
 const upsertProject = jest.fn();
 const getProject = jest.fn();
 const getOrCreateProjectLocalSecretToken = jest.fn();
+const deleteProjectLocal = jest.fn();
+const markProjectStateReported = jest.fn();
 const reportProjectStateToMaster = jest.fn();
 const writeManagedAuthorizedKeys = jest.fn();
 const pullRootfsCacheEntry = jest.fn(async () => undefined);
@@ -24,6 +26,8 @@ const getLocalHostId = jest.fn(() => "host-1");
 const getMasterConatClient = jest.fn();
 const fileServerCreateBackup = jest.fn();
 const ensureVolume = jest.fn();
+const deleteVolume = jest.fn();
+const sandboxExec = jest.fn();
 const getVolume = jest.fn(async () => ({ path: "/mnt/cocalc/project-test" }));
 const resolveProjectContainerPath = jest.fn(async (_project_id, p) => p);
 const getChatStoreStats = jest.fn();
@@ -81,9 +85,12 @@ jest.mock("node:fs/promises", () => ({
   readFile: (...args: any[]) => readFile(...args),
 }));
 jest.mock("../sqlite/projects", () => ({
+  deleteProjectLocal: (...args: any[]) => deleteProjectLocal(...args),
   getProject: (...args: any[]) => getProject(...args),
   getOrCreateProjectLocalSecretToken: (...args: any[]) =>
     getOrCreateProjectLocalSecretToken(...args),
+  markProjectStateReported: (...args: any[]) =>
+    markProjectStateReported(...args),
   upsertProject: (...args: any[]) => upsertProject(...args),
 }));
 jest.mock("../sqlite/stop-policy", () => ({
@@ -99,9 +106,13 @@ jest.mock("../file-server", () => ({
     writeManagedAuthorizedKeys(...args),
   getVolume: (...args: any[]) => getVolume(...args),
   ensureVolume: (...args: any[]) => ensureVolume(...args),
+  deleteVolume: (...args: any[]) => deleteVolume(...args),
   getMountPoint: jest.fn(() => "/mnt/cocalc"),
   resolveProjectContainerPath: (...args: any[]) =>
     resolveProjectContainerPath(...args),
+}));
+jest.mock("@cocalc/project-runner/run/sandbox-exec", () => ({
+  sandboxExec: (...args: any[]) => sandboxExec(...args),
 }));
 jest.mock("@cocalc/backend/chat-store/sqlite-offload", () => ({
   getChatStoreStats: (...args: any[]) => getChatStoreStats(...args),
@@ -560,6 +571,40 @@ describe("project host start ACP rehydrate ordering", () => {
         last_started_ms: expect.any(Number),
       }),
     );
+  });
+
+  it("keeps synthetic runtime probe storage and state host-local", async () => {
+    const runnerApi = {
+      start: jest.fn(async () => ({ state: "running" })),
+      status: jest.fn(async () => ({ state: "running" })),
+      stop: jest.fn(async () => ({ state: "opened" })),
+    } as any;
+    sandboxExec.mockImplementation(async ({ script }: { script: string }) => {
+      const marker = script.match(/printf '%s' '([^']+)'/)?.[1];
+      return { stdout: marker ?? "", stderr: "", code: 0 };
+    });
+    deleteVolume.mockResolvedValue(undefined);
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await expect(
+      (hubApi.projects as any).runSyntheticRuntimeProbe(),
+    ).resolves.toMatchObject({
+      project_id: expect.any(String),
+      duration_ms: expect.any(Number),
+    });
+
+    const syntheticProjectId = runnerApi.start.mock.calls[0][0].project_id;
+    expect(ensureVolume).toHaveBeenCalledWith(syntheticProjectId, undefined, {
+      reportProvisioned: false,
+    });
+    expect(markProjectStateReported).toHaveBeenCalled();
+    expect(reportProjectStateToMaster).not.toHaveBeenCalled();
+    expect(deleteVolume).toHaveBeenCalledWith(syntheticProjectId, {
+      reportProvisioned: false,
+    });
+    expect(deleteProjectLocal).toHaveBeenCalledWith(syntheticProjectId);
   });
 
   it("does not wait for ACP rehydrate before returning from start()", async () => {

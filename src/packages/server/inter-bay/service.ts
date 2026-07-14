@@ -2467,6 +2467,10 @@ async function startHostControlService(): Promise<void> {
       timeout,
     });
   const impl: InterBayHostControlApi = {
+    runSyntheticRuntimeProbe: async ({ host_id }) =>
+      await (
+        await getHostClient(host_id, 15 * 60 * 1000)
+      ).runSyntheticRuntimeProbe(),
     createProject: async ({ account_id, host_id, create }) => {
       const connection = await resolveHostConnectionLocal({
         account_id,

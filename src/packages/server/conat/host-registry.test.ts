@@ -732,6 +732,7 @@ describe("host-registry automatic convergence retry", () => {
       host_session_id: "session-new",
       host_boot_id: "boot-new",
       machine: { cloud: "gcp" },
+      runtime_health: { status: "ready", ready: true },
     };
     resolveMembershipForAccountMock = jest.fn(async (account_id: string) => ({
       effective_limits: {
