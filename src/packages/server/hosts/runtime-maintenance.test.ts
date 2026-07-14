@@ -66,6 +66,49 @@ describe("project-host runtime maintenance policy", () => {
     ).toEqual({ action: "exhausted", attempts });
   });
 
+  it("marks a completed reboot recovery without discarding its budget", () => {
+    const attempts = [
+      {
+        at: new Date(NOW - 5 * 60_000).toISOString(),
+        host_boot_id: "boot-2",
+        work_id: "work-1",
+      },
+    ];
+    const row = degradedCloudHost({
+      host_boot_id: "boot-3",
+      host_session_id: "session-3",
+      runtime_auto_recovery: {
+        status: "scheduled",
+        host_boot_id: "boot-2",
+        work_id: "work-1",
+        cooldown_until: new Date(NOW + 5 * 60_000).toISOString(),
+        attempts,
+      },
+    });
+    expect(_test.recoveredAutoRebootState(row, NOW)).toEqual({
+      status: "recovered",
+      recovered_at: new Date(NOW).toISOString(),
+      host_boot_id: "boot-3",
+      host_session_id: "session-3",
+      previous_status: "scheduled",
+      previous_host_boot_id: "boot-2",
+      work_id: "work-1",
+      cooldown_until: new Date(NOW + 5 * 60_000).toISOString(),
+      attempts,
+    });
+  });
+
+  it("does not claim recovery until the host has a new boot", () => {
+    const row = degradedCloudHost({
+      runtime_auto_recovery: {
+        status: "scheduled",
+        host_boot_id: "boot-3",
+        attempts: [],
+      },
+    });
+    expect(_test.recoveredAutoRebootState(row, NOW)).toBeUndefined();
+  });
+
   it("does not automatically reboot local or stale hosts", () => {
     expect(
       _test.autoRebootDecision(
@@ -101,5 +144,19 @@ describe("project-host runtime maintenance policy", () => {
       NOW - 5 * 60_000,
     ).toISOString();
     expect(_test.syntheticProbeDue(row, NOW)).toBe(false);
+  });
+
+  it("rate limits repeated synthetic failure alerts by host metadata", () => {
+    const row = degradedCloudHost({
+      runtime_synthetic_probe: {
+        status: "failed",
+        alerted_at: new Date(NOW - 5 * 60_000).toISOString(),
+      },
+    });
+    expect(_test.syntheticProbeFailureAlertDue(row, NOW)).toBe(false);
+    row.metadata.runtime_synthetic_probe.alerted_at = new Date(
+      NOW - 16 * 60_000,
+    ).toISOString();
+    expect(_test.syntheticProbeFailureAlertDue(row, NOW)).toBe(true);
   });
 });

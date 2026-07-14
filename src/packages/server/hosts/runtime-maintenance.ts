@@ -34,6 +34,12 @@ const SYNTHETIC_PROBE_RPC_TIMEOUT_MS = Math.max(
   2 * 60_000,
   Number(process.env.COCALC_HOST_SYNTHETIC_PROBE_RPC_TIMEOUT_MS ?? 15 * 60_000),
 );
+const SYNTHETIC_PROBE_ALERT_INTERVAL_MS = Math.max(
+  60_000,
+  Number(
+    process.env.COCALC_HOST_SYNTHETIC_PROBE_ALERT_INTERVAL_MS ?? 15 * 60_000,
+  ),
+);
 const SYNTHETIC_PROBE_CONCURRENCY = Math.max(
   1,
   Math.min(
@@ -105,6 +111,12 @@ type AutoRebootDecision =
   | { action: "exhausted"; attempts: RebootAttempt[] }
   | { action: "reboot"; attempts: RebootAttempt[] };
 
+const RECOVERABLE_AUTO_REBOOT_STATUSES = new Set([
+  "scheduled",
+  "exhausted",
+  "enqueue_failed",
+]);
+
 function pool() {
   return getPool();
 }
@@ -157,6 +169,18 @@ function syntheticProbeDue(row: RuntimeHostRow, nowMs = Date.now()): boolean {
   return nowMs - checkedAt >= SYNTHETIC_PROBE_SUCCESS_INTERVAL_MS;
 }
 
+function syntheticProbeFailureAlertDue(
+  row: RuntimeHostRow,
+  nowMs = Date.now(),
+): boolean {
+  const alertedAt = timestampMs(
+    row.metadata?.runtime_synthetic_probe?.alerted_at,
+  );
+  return (
+    alertedAt == null || nowMs - alertedAt >= SYNTHETIC_PROBE_ALERT_INTERVAL_MS
+  );
+}
+
 function recentRebootAttempts(metadata: any, nowMs: number): RebootAttempt[] {
   const attempts = Array.isArray(metadata?.runtime_auto_recovery?.attempts)
     ? metadata.runtime_auto_recovery.attempts
@@ -165,6 +189,35 @@ function recentRebootAttempts(metadata: any, nowMs: number): RebootAttempt[] {
     const at = timestampMs(attempt?.at);
     return at != null && nowMs - at < AUTO_REBOOT_WINDOW_MS;
   });
+}
+
+function recoveredAutoRebootState(
+  row: RuntimeHostRow,
+  nowMs = Date.now(),
+): Record<string, any> | undefined {
+  const current = row.metadata?.runtime_auto_recovery ?? {};
+  const status = `${current.status ?? ""}`.trim();
+  const currentBootId = `${row.metadata?.host_boot_id ?? ""}`.trim();
+  const recoveryBootId = `${current.host_boot_id ?? ""}`.trim();
+  if (
+    !RECOVERABLE_AUTO_REBOOT_STATUSES.has(status) ||
+    !currentBootId ||
+    !recoveryBootId ||
+    currentBootId === recoveryBootId
+  ) {
+    return undefined;
+  }
+  return {
+    status: "recovered",
+    recovered_at: new Date(nowMs).toISOString(),
+    host_boot_id: currentBootId,
+    host_session_id: row.metadata?.host_session_id,
+    previous_status: status,
+    previous_host_boot_id: recoveryBootId,
+    work_id: current.work_id,
+    cooldown_until: current.cooldown_until,
+    attempts: recentRebootAttempts(row.metadata, nowMs),
+  };
 }
 
 function autoRebootDecision(
@@ -298,6 +351,7 @@ async function finishSyntheticProbe({
   startedAt,
   error,
   result,
+  alerted_at,
 }: {
   row: RuntimeHostRow;
   claim_id: string;
@@ -305,6 +359,7 @@ async function finishSyntheticProbe({
   startedAt: number;
   error?: unknown;
   result?: Record<string, any>;
+  alerted_at?: string;
 }): Promise<void> {
   const failed = error != null;
   const probe = {
@@ -317,6 +372,9 @@ async function finishSyntheticProbe({
     consecutive_failures: failed ? previous_failures + 1 : 0,
     error: failed ? errorText(error) : undefined,
     result: failed ? undefined : result,
+    alerted_at: failed
+      ? (alerted_at ?? row.metadata?.runtime_synthetic_probe?.alerted_at)
+      : undefined,
   };
   await pool().query(
     `
@@ -332,6 +390,43 @@ async function finishSyntheticProbe({
     `,
     [row.id, claim_id, JSON.stringify(probe)],
   );
+}
+
+async function markAutoRebootRecovered(row: RuntimeHostRow): Promise<void> {
+  const state = recoveredAutoRebootState(row);
+  if (!state) return;
+  const { rowCount } = await pool().query(
+    `
+      UPDATE project_hosts
+      SET metadata=jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{runtime_auto_recovery}',
+        $4::jsonb,
+        true
+      ), updated=NOW()
+      WHERE id=$1
+        AND deleted IS NULL
+        AND metadata ->> 'host_boot_id'=$2
+        AND metadata -> 'runtime_auto_recovery' ->> 'host_boot_id'=$3
+        AND metadata -> 'runtime_auto_recovery' ->> 'status' = ANY($5::text[])
+    `,
+    [
+      row.id,
+      row.metadata?.host_boot_id,
+      row.metadata?.runtime_auto_recovery?.host_boot_id,
+      JSON.stringify(state),
+      Array.from(RECOVERABLE_AUTO_REBOOT_STATUSES),
+    ],
+  );
+  if (rowCount) {
+    logger.info("project-host automatic reboot recovery completed", {
+      host_id: row.id,
+      host_name: hostName(row),
+      previous_status: state.previous_status,
+      previous_host_boot_id: state.previous_host_boot_id,
+      host_boot_id: state.host_boot_id,
+    });
+  }
 }
 
 async function executeSyntheticProbe(
@@ -358,6 +453,7 @@ async function executeSyntheticProbe(
       startedAt,
       result,
     });
+    await markAutoRebootRecovered(row);
     logger.info("project-host synthetic runtime probe passed", {
       host_id: row.id,
       host_name: hostName(row),
@@ -365,11 +461,13 @@ async function executeSyntheticProbe(
     });
     return true;
   } catch (err) {
+    const alertDue = syntheticProbeFailureAlertDue(row);
     await finishSyntheticProbe({
       row,
       ...claim,
       startedAt,
       error: err,
+      alerted_at: alertDue ? new Date().toISOString() : undefined,
     });
     logger.warn("project-host synthetic runtime probe failed", {
       host_id: row.id,
@@ -377,19 +475,21 @@ async function executeSyntheticProbe(
       duration_ms: Date.now() - startedAt,
       err: errorText(err),
     });
-    await adminAlert({
-      subject: `Project-host synthetic probe failed: ${hostName(row)}`,
-      body: [
-        `A full synthetic project lifecycle probe failed on ${hostName(row)}.`,
-        `host_id=${row.id}`,
-        `error=${errorText(err)}`,
-        row.public_url ? `url=${row.public_url}` : undefined,
-        "The host is quarantined from placement until a later probe succeeds.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      dedupMinutes: 15,
-    });
+    if (alertDue) {
+      await adminAlert({
+        subject: `Project-host synthetic probe failed: ${hostName(row)}`,
+        body: [
+          `A full synthetic project lifecycle probe failed on ${hostName(row)}.`,
+          `host_id=${row.id}`,
+          `error=${errorText(err)}`,
+          row.public_url ? `url=${row.public_url}` : undefined,
+          "The host is quarantined from placement until a later probe succeeds.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        dedupMinutes: 15,
+      });
+    }
     return false;
   }
 }
@@ -683,5 +783,7 @@ export async function runProjectHostRuntimeMaintenance(): Promise<void> {
 export const _test = {
   autoRebootDecision,
   recentRebootAttempts,
+  recoveredAutoRebootState,
+  syntheticProbeFailureAlertDue,
   syntheticProbeDue,
 };
