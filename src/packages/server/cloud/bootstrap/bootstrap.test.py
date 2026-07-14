@@ -1526,6 +1526,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                'rm -f "${LEGACY_CORE_SUDOERS_CONFIG_PATH}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "kernel.core_pipe_limit = 4",
                 rootctl.read_text(encoding="utf-8"),
             )

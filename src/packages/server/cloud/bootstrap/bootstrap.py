@@ -4347,6 +4347,7 @@ MIN_PROJECT_POOL_CPU_CORES="__MIN_PROJECT_POOL_CPU_CORES__"
 PROJECT_POOL_CPU_PERIOD_US="__PROJECT_POOL_CPU_PERIOD_US__"
 SYSCTL_CONFIG_PATH="/etc/sysctl.d/90-cocalc-project-host.conf"
 CORE_SYSCTL_CONFIG_PATH="/etc/sysctl.d/91-cocalc-project-host-core.conf"
+LEGACY_CORE_SUDOERS_CONFIG_PATH="/etc/sudoers.d/cocalc-project-host-core"
 CORE_HANDLER="/usr/local/sbin/cocalc-project-host-core-handler"
 CORE_ORIGINAL_PATTERN="/var/lib/cocalc/project-host-core-pattern.original"
 CORE_ORIGINAL_PIPE_LIMIT="/var/lib/cocalc/project-host-core-pipe-limit.original"
@@ -4401,6 +4402,7 @@ env_value_is_true() {
 
 reconcile_app_core_dumps() {
   local desired current original original_pipe_limit
+  rm -f "${LEGACY_CORE_SUDOERS_CONFIG_PATH}"
   desired="$(read_env_value COCALC_PROJECT_HOST_APP_CORE_DUMPS)"
   current="$(cat /proc/sys/kernel/core_pattern 2>/dev/null || true)"
   if env_value_is_true "${desired}"; then
