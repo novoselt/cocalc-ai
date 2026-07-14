@@ -621,15 +621,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
     }
     switch (event.type) {
       case "project.upsert":
-        if (event.project.state?.runtime_exit_reason != null) {
-          console.info(
-            `[project-runtime-recovery] account feed received ${JSON.stringify({
-              project_id: event.project.project_id,
-              seq,
-              state: event.project.state,
-            })}`,
-          );
-        }
         this.queueProjectFeedUpsert(event.project, event.ts);
         break;
       case "project.remove":
@@ -2026,17 +2017,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
       });
       if (preserveNewerLocalState) {
         nextProject = nextProject.set("state", currentProject.get("state"));
-      }
-      if (row.state?.runtime_exit_reason != null) {
-        console.info(
-          `[project-runtime-recovery] account feed merged ${JSON.stringify({
-            project_id: row.project_id,
-            current_state: currentProject.get("state")?.toJS?.(),
-            incoming_state: row.state,
-            merged_state: nextProject.get("state")?.toJS?.(),
-            preserved_newer_local_state: preserveNewerLocalState,
-          })}`,
-        );
       }
       if (
         this.shouldPreserveNewerLocalLastEdited({
