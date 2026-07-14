@@ -2,7 +2,7 @@
 
 Date: 2026-07-14
 
-Status: design plan; no implementation has started
+Status: implemented; pending deployment and live multibay validation
 
 Issue: https://github.com/sagemathinc/cocalc-ai/issues/188
 

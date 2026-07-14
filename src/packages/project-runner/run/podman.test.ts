@@ -104,6 +104,7 @@ import {
   getAll,
   projectSecretsHostPath,
   PROJECT_SECRETS_HOST_ROOT,
+  refreshProjectSecretsHostPath,
   redactConfigurationForLog,
   start,
   state,
@@ -713,6 +714,43 @@ describe("project-runner podman orphan fallback", () => {
 
     await cleanupProjectSecretsHostPath(project1);
     await expect(stat(`${path}/API_KEY`)).rejects.toThrow();
+  });
+
+  it("atomically refreshes and removes mounted secrets for a running project", async () => {
+    await cleanupProjectSecretsHostPath(project1);
+    const path = await writeProjectSecretsHostPath({
+      project_id: project1,
+      secrets: { API_KEY: "old", REMOVE_ME: "gone" },
+    });
+    mockPodman.mockImplementation(async (args: string[]) => {
+      if (args[0] === "ps") {
+        return { stdout: `project-${project1} running\n` };
+      }
+      if (args[0] === "inspect") {
+        return {
+          stdout: JSON.stringify([
+            {
+              Source: path,
+              Destination: "/run/secrets/cocalc",
+            },
+          ]),
+        };
+      }
+      return { stdout: "" };
+    });
+
+    await expect(
+      refreshProjectSecretsHostPath({
+        project_id: project1,
+        secrets: { API_KEY: "new", ADDED: "value" },
+      }),
+    ).resolves.toBe("updated_live");
+    await expect(readFile(`${path}/API_KEY`, "utf8")).resolves.toBe("new");
+    await expect(readFile(`${path}/ADDED`, "utf8")).resolves.toBe("value");
+    await expect(stat(`${path}/REMOVE_ME`)).rejects.toThrow();
+    expect((await stat(`${path}/API_KEY`)).mode & 0o777).toBe(0o400);
+
+    await cleanupProjectSecretsHostPath(project1);
   });
 
   it("removes stale project secret runtime directories on startup cleanup", async () => {

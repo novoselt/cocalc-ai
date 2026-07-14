@@ -155,6 +155,10 @@ import type {
   ProjectCreated,
   ProjectDirectorySummary,
   ProjectEnv,
+  CourseSecretPolicyState,
+  CourseSecretSyncPreview,
+  CourseSecretSyncRun,
+  CourseSecretSyncStatusResult,
   ProjectSecretMetadata,
   CopyProjectSecretsResult,
   GenerateProjectSshKeySecretResult,
@@ -191,16 +195,32 @@ import type {
 } from "@cocalc/conat/hub/api/projects";
 import { listProjectedProjectsForAccount } from "@cocalc/database/postgres/account-project-index";
 import { validateProjectEnv } from "@cocalc/util/project-secrets";
+import type { ProjectSecretsRuntimeRefreshResult } from "@cocalc/util/project-secrets";
 import { parseRootfsConfigExport } from "@cocalc/util/rootfs-images";
 import {
   copyProjectSecrets as copyProjectSecretsInDb,
   deleteProjectSecret as deleteProjectSecretInDb,
   exportProjectSecretsForCopy,
   importProjectSecretsForCopy,
+  listCourseShareableSecrets as listCourseShareableSecretsInDb,
   listProjectSecrets as listProjectSecretsInDb,
-  getProjectSecretsRuntimeCache,
+  setProjectSecretCourseSharing as setProjectSecretCourseSharingInDb,
   setProjectSecret as setProjectSecretInDb,
 } from "@cocalc/server/projects/project-secrets";
+import {
+  getCourseSecretPolicyState as getCourseSecretPolicyStateInDb,
+  getCourseSecretRunStatus as getCourseSecretRunStatusInDb,
+  revokeCourseSecretPolicy as revokeCourseSecretPolicyInDb,
+  revokeCourseSecretRecipients as revokeCourseSecretRecipientsInDb,
+  setCourseSecretGrants as setCourseSecretGrantsInDb,
+  setCourseSecretPolicyEnabled,
+} from "@cocalc/server/projects/course-secret-sharing";
+import {
+  approveCourseSecretRecipientsLocal,
+  previewCourseSecretSyncLocal,
+  startCourseSecretRunLocal,
+} from "@cocalc/server/projects/course-secret-sharing-coordinator";
+import { syncProjectSecretsRuntimeOnAssignedHost } from "@cocalc/server/projects/project-secrets-runtime";
 import { generateProjectSshKeySecretLocal } from "@cocalc/server/projects/project-secret-ssh-key";
 import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
 import { getSeedMembershipTierById } from "@cocalc/server/membership/tiers";
@@ -919,37 +939,6 @@ async function getProjectRuntimeLogInfo(project_id: string): Promise<{
     host_id: row.host_id ?? null,
     state: row.state ?? "",
   };
-}
-
-async function syncProjectSecretsCacheOnAssignedHost({
-  project_id,
-}: {
-  project_id: string;
-}): Promise<void> {
-  let host_id: string;
-  try {
-    host_id = await getProjectHostId(project_id);
-  } catch (err) {
-    log.debug("project secrets cache sync skipped; no assigned host", {
-      project_id,
-      err: `${err}`,
-    });
-    return;
-  }
-  try {
-    const cache = await getProjectSecretsRuntimeCache({ project_id });
-    const client = await getRoutedHostControlClient({
-      host_id,
-      timeout: 30_000,
-    });
-    await client.syncProjectSecretsCache({ project_id, cache });
-  } catch (err) {
-    log.warn("project secrets cache sync to host failed", {
-      project_id,
-      host_id,
-      err: `${err}`,
-    });
-  }
 }
 
 async function resolvePublicImportSource({
@@ -2103,6 +2092,394 @@ export async function listProjectSecrets({
   return await listProjectSecretsInDb({ project_id });
 }
 
+export async function refreshProjectSecretsRuntime({
+  account_id,
+  project_id,
+}: {
+  account_id?: string;
+  project_id: string;
+}): Promise<ProjectSecretsRuntimeRefreshResult> {
+  const actor = requireAccountId(account_id);
+  const ownership = await resolveRequiredProjectBay(project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .refreshRuntime({
+        account_id: actor,
+        project_id,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({ account_id: actor, project_id });
+  return await syncProjectSecretsRuntimeOnAssignedHost({ project_id });
+}
+
+export async function listCourseShareableSecrets({
+  account_id,
+  course_project_id,
+}: {
+  account_id?: string;
+  course_project_id: string;
+}): Promise<ProjectSecretMetadata[]> {
+  const actor = requireAccountId(account_id);
+  const ownership = await resolveRequiredProjectBay(course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .listCourseShareable({
+        account_id: actor,
+        course_project_id,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({ account_id: actor, project_id: course_project_id });
+  return await listCourseShareableSecretsInDb({
+    project_id: course_project_id,
+  });
+}
+
+export async function getCourseSecretPolicy({
+  account_id,
+  course_project_id,
+  course_id,
+  course_path,
+}: {
+  account_id?: string;
+  course_project_id: string;
+  course_id: string;
+  course_path: string;
+}): Promise<CourseSecretPolicyState | null> {
+  const actor = requireAccountId(account_id);
+  const ownership = await resolveRequiredProjectBay(course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .getCoursePolicy({
+        account_id: actor,
+        course_project_id,
+        course_id,
+        course_path,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({ account_id: actor, project_id: course_project_id });
+  return await getCourseSecretPolicyStateInDb({
+    course_project_id,
+    course_id,
+    course_path,
+  });
+}
+
+export async function previewCourseSecretSync({
+  account_id,
+  course_project_id,
+  course_id,
+  course_path,
+  target_project_ids,
+}: {
+  account_id?: string;
+  course_project_id: string;
+  course_id: string;
+  course_path: string;
+  target_project_ids: string[];
+}): Promise<CourseSecretSyncPreview> {
+  const actor = requireAccountId(account_id);
+  const ownership = await resolveRequiredProjectBay(course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .previewCourseSync({
+        account_id: actor,
+        course_project_id,
+        course_id,
+        course_path,
+        target_project_ids,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({ account_id: actor, project_id: course_project_id });
+  return await previewCourseSecretSyncLocal({
+    course_project_id,
+    course_id,
+    course_path,
+    target_project_ids,
+  });
+}
+
+async function freshCourseSecretMutation({
+  account_id,
+  browser_id,
+  session_hash,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+}): Promise<{ actor: string; session_hash?: string | null }> {
+  const actor = requireAccountId(account_id);
+  const auth = await requireDangerousProjectMutationAuth({
+    account_id: actor,
+    browser_id,
+    session_hash,
+  });
+  return { actor, session_hash: auth?.session_hash ?? session_hash };
+}
+
+export async function setProjectSecretCourseSharing({
+  account_id,
+  browser_id,
+  session_hash,
+  project_id,
+  name,
+  allow,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  project_id: string;
+  name: string;
+  allow: boolean;
+}): Promise<ProjectSecretMetadata> {
+  const auth = await freshCourseSecretMutation({
+    account_id,
+    browser_id,
+    session_hash,
+  });
+  const ownership = await resolveRequiredProjectBay(project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .setCourseSharing({
+        account_id: auth.actor,
+        session_hash: auth.session_hash,
+        project_id,
+        name,
+        allow,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({ account_id: auth.actor, project_id });
+  const result = await setProjectSecretCourseSharingInDb({
+    project_id,
+    name,
+    allow,
+    account_id: auth.actor,
+  });
+  await publishProjectDetailInvalidationBestEffort({
+    project_id,
+    fields: ["secrets"],
+  });
+  return result;
+}
+
+type CoursePolicyMutationAuth = {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  course_project_id: string;
+  course_id: string;
+  course_path: string;
+};
+
+export async function setCourseSecretPolicy(
+  opts: CoursePolicyMutationAuth & { enabled: boolean },
+): Promise<CourseSecretPolicyState> {
+  const auth = await freshCourseSecretMutation(opts);
+  const ownership = await resolveRequiredProjectBay(opts.course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .setCoursePolicy({
+        ...opts,
+        account_id: auth.actor,
+        session_hash: auth.session_hash,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({
+    account_id: auth.actor,
+    project_id: opts.course_project_id,
+  });
+  return await setCourseSecretPolicyEnabled({
+    ...opts,
+    account_id: auth.actor,
+  });
+}
+
+export async function setCourseSecretGrants(
+  opts: CoursePolicyMutationAuth & { names: string[] },
+): Promise<CourseSecretPolicyState> {
+  const auth = await freshCourseSecretMutation(opts);
+  const ownership = await resolveRequiredProjectBay(opts.course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .setCourseGrants({
+        ...opts,
+        account_id: auth.actor,
+        session_hash: auth.session_hash,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({
+    account_id: auth.actor,
+    project_id: opts.course_project_id,
+  });
+  return await setCourseSecretGrantsInDb({ ...opts, account_id: auth.actor });
+}
+
+export async function approveCourseSecretRecipients(
+  opts: CoursePolicyMutationAuth & {
+    recipients: Array<{
+      target_project_id: string;
+      student_account_id?: string | null;
+    }>;
+  },
+): Promise<CourseSecretPolicyState> {
+  const auth = await freshCourseSecretMutation(opts);
+  const ownership = await resolveRequiredProjectBay(opts.course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .approveCourseRecipients({
+        ...opts,
+        account_id: auth.actor,
+        session_hash: auth.session_hash,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({
+    account_id: auth.actor,
+    project_id: opts.course_project_id,
+  });
+  return await approveCourseSecretRecipientsLocal({
+    ...opts,
+    account_id: auth.actor,
+  });
+}
+
+export async function revokeCourseSecretRecipients(
+  opts: CoursePolicyMutationAuth & { target_project_ids: string[] },
+): Promise<CourseSecretPolicyState> {
+  const auth = await freshCourseSecretMutation(opts);
+  const ownership = await resolveRequiredProjectBay(opts.course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .revokeCourseRecipients({
+        ...opts,
+        account_id: auth.actor,
+        session_hash: auth.session_hash,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({
+    account_id: auth.actor,
+    project_id: opts.course_project_id,
+  });
+  return await revokeCourseSecretRecipientsInDb({
+    ...opts,
+    account_id: auth.actor,
+  });
+}
+
+async function startCourseSecretOperation(
+  opts: CoursePolicyMutationAuth,
+  mode: "sync" | "cleanup",
+): Promise<CourseSecretSyncRun> {
+  const auth = await freshCourseSecretMutation(opts);
+  const ownership = await resolveRequiredProjectBay(opts.course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    const client = getInterBayBridge().projectSecrets(ownership.bay_id);
+    const routed = {
+      ...opts,
+      account_id: auth.actor,
+      session_hash: auth.session_hash,
+      epoch: ownership.epoch,
+    };
+    return mode === "sync"
+      ? await client.startCourseSync(routed)
+      : await client.startCourseCleanup(routed);
+  }
+  await assertCollab({
+    account_id: auth.actor,
+    project_id: opts.course_project_id,
+  });
+  return await startCourseSecretRunLocal({
+    ...opts,
+    account_id: auth.actor,
+    mode,
+  });
+}
+
+export async function startCourseSecretSync(
+  opts: CoursePolicyMutationAuth,
+): Promise<CourseSecretSyncRun> {
+  return await startCourseSecretOperation(opts, "sync");
+}
+
+export async function startCourseSecretCleanup(
+  opts: CoursePolicyMutationAuth,
+): Promise<CourseSecretSyncRun> {
+  return await startCourseSecretOperation(opts, "cleanup");
+}
+
+export async function getCourseSecretSyncStatus({
+  account_id,
+  course_project_id,
+  course_id,
+  run_id,
+}: {
+  account_id?: string;
+  course_project_id: string;
+  course_id: string;
+  run_id?: string;
+}): Promise<CourseSecretSyncStatusResult | null> {
+  const actor = requireAccountId(account_id);
+  const ownership = await resolveRequiredProjectBay(course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .getCourseSyncStatus({
+        account_id: actor,
+        course_project_id,
+        course_id,
+        run_id,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({ account_id: actor, project_id: course_project_id });
+  return await getCourseSecretRunStatusInDb({
+    course_project_id,
+    course_id,
+    run_id,
+  });
+}
+
+export async function revokeCourseSecretPolicy(
+  opts: CoursePolicyMutationAuth,
+): Promise<CourseSecretPolicyState> {
+  const auth = await freshCourseSecretMutation(opts);
+  const ownership = await resolveRequiredProjectBay(opts.course_project_id);
+  if (ownership.bay_id !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectSecrets(ownership.bay_id)
+      .revokeCoursePolicy({
+        ...opts,
+        account_id: auth.actor,
+        session_hash: auth.session_hash,
+        epoch: ownership.epoch,
+      });
+  }
+  await assertCollab({
+    account_id: auth.actor,
+    project_id: opts.course_project_id,
+  });
+  return await revokeCourseSecretPolicyInDb({
+    ...opts,
+    account_id: auth.actor,
+  });
+}
+
 export async function setProjectSecret({
   account_id,
   project_id,
@@ -2139,8 +2516,10 @@ export async function setProjectSecret({
     project_id,
     fields: ["secrets"],
   });
-  await syncProjectSecretsCacheOnAssignedHost({ project_id });
-  return result;
+  const runtime_refresh = await syncProjectSecretsRuntimeOnAssignedHost({
+    project_id,
+  });
+  return { ...result, runtime_refresh };
 }
 
 export async function deleteProjectSecret({
@@ -2151,7 +2530,10 @@ export async function deleteProjectSecret({
   account_id?: string;
   project_id: string;
   name: string;
-}): Promise<{ deleted: boolean }> {
+}): Promise<{
+  deleted: boolean;
+  runtime_refresh?: ProjectSecretsRuntimeRefreshResult;
+}> {
   const actor = requireAccountId(account_id);
   const ownership = await resolveRequiredProjectBay(project_id);
   if (ownership.bay_id !== getConfiguredBayId()) {
@@ -2172,10 +2554,10 @@ export async function deleteProjectSecret({
     project_id,
     fields: ["secrets"],
   });
-  if (deleted) {
-    await syncProjectSecretsCacheOnAssignedHost({ project_id });
-  }
-  return { deleted };
+  const runtime_refresh = deleted
+    ? await syncProjectSecretsRuntimeOnAssignedHost({ project_id })
+    : undefined;
+  return { deleted, runtime_refresh };
 }
 
 export async function copyProjectSecrets({
@@ -2277,9 +2659,11 @@ export async function copyProjectSecrets({
         fields: ["secrets"],
       }),
     ]);
-    await syncProjectSecretsCacheOnAssignedHost({
-      project_id: target_project_id,
-    });
+    if (result.runtime_refresh == null) {
+      result.runtime_refresh = await syncProjectSecretsRuntimeOnAssignedHost({
+        project_id: target_project_id,
+      });
+    }
   }
   return result;
 }

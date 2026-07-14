@@ -37,7 +37,10 @@ import type {
   ExecuteCodeOutput,
 } from "@cocalc/util/types/execute-code";
 import type { LroStatus } from "./lro";
-import type { ProjectSecretSshKeySetupResult } from "@cocalc/util/project-secrets";
+import type {
+  ProjectSecretSshKeySetupResult,
+  ProjectSecretsRuntimeRefreshResult,
+} from "@cocalc/util/project-secrets";
 import type {
   HostRootfsBuildCancelResponse,
   HostRootfsBuildLogResponse,
@@ -710,15 +713,117 @@ export interface ProjectSecretMetadata {
   project_id: string;
   name: string;
   value_bytes: number;
+  allow_course_sharing: boolean;
+  revision: number;
   created_by: string | null;
   updated_by: string | null;
   created_at: Date | string;
   updated_at: Date | string;
+  runtime_refresh?: ProjectSecretsRuntimeRefreshResult;
+}
+export interface CourseSecretPolicy {
+  policy_id: string;
+  course_project_id: string;
+  course_id: string;
+  course_path: string;
+  enabled: boolean;
+  generation: number;
+  created_by: string;
+  updated_by: string;
+  created_at: Date | string;
+  updated_at: Date | string;
+  revoked_at: Date | string | null;
+}
+export interface CourseSecretGrant {
+  grant_id: string;
+  name: string;
+  enabled: boolean;
+  created_at: Date | string;
+  updated_at: Date | string;
+  revoked_at: Date | string | null;
+}
+export interface CourseSecretRecipient {
+  target_project_id: string;
+  student_account_id: string | null;
+  approved_by: string;
+  approved_at: Date | string;
+  revoked_by: string | null;
+  revoked_at: Date | string | null;
+}
+export interface CourseSecretPolicyState {
+  policy: CourseSecretPolicy;
+  grants: CourseSecretGrant[];
+  recipients: CourseSecretRecipient[];
+}
+export type CourseSecretSyncStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "partial"
+  | "failed"
+  | "cancelled";
+export interface CourseSecretSyncRun {
+  run_id: string;
+  policy_id: string;
+  policy_generation: number;
+  mode: "sync" | "cleanup";
+  status: CourseSecretSyncStatus;
+  requested_secret_names: string[];
+  requested_target_count: number;
+  copied_count: number;
+  unchanged_count: number;
+  conflict_count: number;
+  skipped_count: number;
+  failed_count: number;
+  created_at: Date | string;
+  started_at: Date | string | null;
+  finished_at: Date | string | null;
+  error_code: string | null;
+}
+export interface CourseSecretSyncResult {
+  run_id: string;
+  target_project_id: string;
+  secret_name: string;
+  source_revision: number | null;
+  status:
+    | "copied"
+    | "unchanged"
+    | "removed"
+    | "conflict"
+    | "skipped"
+    | "failed";
+  error_code: string | null;
+  runtime_status: ProjectSecretsRuntimeRefreshResult["status"] | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+export interface CourseSecretSyncStatusResult {
+  run: CourseSecretSyncRun;
+  results: CourseSecretSyncResult[];
+}
+export interface CourseSecretRecipientPreview {
+  target_project_id: string;
+  approved: boolean;
+  eligible: boolean;
+  reason:
+    | "eligible"
+    | "not_approved"
+    | "not_found"
+    | "not_collaborator"
+    | "not_student_project"
+    | "wrong_course_project"
+    | "wrong_course_path";
+}
+export interface CourseSecretSyncPreview {
+  policy: CourseSecretPolicy | null;
+  grants: CourseSecretGrant[];
+  recipients: CourseSecretRecipientPreview[];
 }
 export interface CopyProjectSecretsResult {
   copied: string[];
   conflicts: string[];
   missing: string[];
+  runtime_refresh?: ProjectSecretsRuntimeRefreshResult;
 }
 export interface GenerateProjectSshKeySecretResult {
   secret: ProjectSecretMetadata;
@@ -731,6 +836,7 @@ export interface GenerateProjectSshKeySecretResult {
         error: string;
       });
   restart_required: boolean;
+  runtime_refresh: ProjectSecretsRuntimeRefreshResult;
 }
 export interface ProjectRootfsConfig {
   image: string;
@@ -989,6 +1095,19 @@ export const projects = {
   setProjectMetadata: authFirstRequireAccount,
   setProjectManageUsersOwnerOnly: authFirstRequireAccount,
   listProjectSecrets: authFirstRequireAccount,
+  refreshProjectSecretsRuntime: authFirstRequireAccount,
+  listCourseShareableSecrets: authFirstRequireAccount,
+  getCourseSecretPolicy: authFirstRequireAccount,
+  previewCourseSecretSync: authFirstRequireAccount,
+  setProjectSecretCourseSharing: authFirstRequireAccount,
+  setCourseSecretPolicy: authFirstRequireAccount,
+  setCourseSecretGrants: authFirstRequireAccount,
+  approveCourseSecretRecipients: authFirstRequireAccount,
+  revokeCourseSecretRecipients: authFirstRequireAccount,
+  startCourseSecretSync: authFirstRequireAccount,
+  startCourseSecretCleanup: authFirstRequireAccount,
+  getCourseSecretSyncStatus: authFirstRequireAccount,
+  revokeCourseSecretPolicy: authFirstRequireAccount,
   setProjectSecret: authFirstRequireAccount,
   deleteProjectSecret: authFirstRequireAccount,
   copyProjectSecrets: authFirstRequireAccount,
@@ -1201,6 +1320,112 @@ export interface Projects {
     project_id: string;
   }) => Promise<ProjectSecretMetadata[]>;
 
+  listCourseShareableSecrets: (opts: {
+    account_id?: string;
+    course_project_id: string;
+  }) => Promise<ProjectSecretMetadata[]>;
+
+  getCourseSecretPolicy: (opts: {
+    account_id?: string;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+  }) => Promise<CourseSecretPolicyState | null>;
+
+  previewCourseSecretSync: (opts: {
+    account_id?: string;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    target_project_ids: string[];
+  }) => Promise<CourseSecretSyncPreview>;
+
+  setProjectSecretCourseSharing: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    project_id: string;
+    name: string;
+    allow: boolean;
+  }) => Promise<ProjectSecretMetadata>;
+
+  setCourseSecretPolicy: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    enabled: boolean;
+  }) => Promise<CourseSecretPolicyState>;
+
+  setCourseSecretGrants: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    names: string[];
+  }) => Promise<CourseSecretPolicyState>;
+
+  approveCourseSecretRecipients: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    recipients: Array<{
+      target_project_id: string;
+      student_account_id?: string | null;
+    }>;
+  }) => Promise<CourseSecretPolicyState>;
+
+  revokeCourseSecretRecipients: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    target_project_ids: string[];
+  }) => Promise<CourseSecretPolicyState>;
+
+  startCourseSecretSync: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+  }) => Promise<CourseSecretSyncRun>;
+
+  startCourseSecretCleanup: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+  }) => Promise<CourseSecretSyncRun>;
+
+  getCourseSecretSyncStatus: (opts: {
+    account_id?: string;
+    course_project_id: string;
+    course_id: string;
+    run_id?: string;
+  }) => Promise<CourseSecretSyncStatusResult | null>;
+
+  revokeCourseSecretPolicy: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+  }) => Promise<CourseSecretPolicyState>;
+
   setProjectSecret: (opts: {
     account_id?: string;
     project_id: string;
@@ -1208,11 +1433,19 @@ export interface Projects {
     value: string;
   }) => Promise<ProjectSecretMetadata>;
 
+  refreshProjectSecretsRuntime: (opts: {
+    account_id?: string;
+    project_id: string;
+  }) => Promise<ProjectSecretsRuntimeRefreshResult>;
+
   deleteProjectSecret: (opts: {
     account_id?: string;
     project_id: string;
     name: string;
-  }) => Promise<{ deleted: boolean }>;
+  }) => Promise<{
+    deleted: boolean;
+    runtime_refresh?: ProjectSecretsRuntimeRefreshResult;
+  }>;
 
   copyProjectSecrets: (opts: {
     account_id?: string;

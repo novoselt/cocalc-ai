@@ -41,6 +41,7 @@ import {
   mkdtemp,
   rename,
   access,
+  lstat,
 } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { getCoCalcMounts, COCALC_SRC } from "./mounts";
@@ -131,6 +132,30 @@ export const PROJECT_SECRETS_HOST_ROOT = join(
   tmpdir(),
   "cocalc-project-secrets",
 );
+
+const projectLifecycleTails = new Map<string, Promise<void>>();
+
+async function withProjectLifecycleLock<T>(
+  project_id: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = projectLifecycleTails.get(project_id) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.catch(() => undefined).then(() => current);
+  projectLifecycleTails.set(project_id, tail);
+  await previous.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (projectLifecycleTails.get(project_id) === tail) {
+      projectLifecycleTails.delete(project_id);
+    }
+  }
+}
 
 // if computing status of a project shows pod is
 // somehow messed up, this will cleanly kill it.  It's
@@ -326,6 +351,79 @@ export async function writeProjectSecretsHostPath({
   }
   await chmod(path, 0o700);
   return path;
+}
+
+export async function refreshProjectSecretsHostPath({
+  project_id,
+  secrets,
+}: {
+  project_id: string;
+  secrets: Record<string, string>;
+}): Promise<"updated_live" | "cached_for_next_start"> {
+  if (!isValidUUID(project_id)) {
+    throw new Error("invalid project id for project secrets refresh");
+  }
+  return await withProjectLifecycleLock(project_id, async () => {
+    if ((await state(project_id, true)) !== "running") {
+      return "cached_for_next_start";
+    }
+    const path = projectSecretsHostPath(project_id);
+    const pathInfo = await lstat(path).catch((err) => {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw err;
+    });
+    if (!pathInfo?.isDirectory() || pathInfo.isSymbolicLink()) {
+      throw new Error("running project secrets runtime path is unavailable");
+    }
+    const inspected = await podman([
+      "inspect",
+      "--format",
+      "{{json .Mounts}}",
+      projectContainerName(project_id),
+    ]);
+    const mounts = JSON.parse(`${inspected.stdout ?? "[]"}`) as PodmanMount[];
+    const expectedSource = await realpath(path);
+    const mounted = mounts.find(
+      ({ Destination }) => Destination === PROJECT_SECRETS_MOUNT_PATH,
+    );
+    if (
+      !mounted?.Source ||
+      (await realpath(mounted.Source).catch(() => "")) !== expectedSource
+    ) {
+      throw new Error("running project secrets mount identity mismatch");
+    }
+
+    const staging = await mkdtemp(join(PROJECT_SECRETS_HOST_ROOT, ".sync-"));
+    try {
+      await chmod(staging, 0o700);
+      const normalized = new Map<string, string>();
+      for (const [rawName, value] of Object.entries(secrets)) {
+        const name = normalizeProjectSecretName(rawName);
+        normalized.set(name, value);
+        const file = join(staging, name);
+        await writeFile(file, value, { mode: 0o400, flag: "wx" });
+        await chmod(file, 0o400);
+      }
+      for (const name of [...normalized.keys()].sort()) {
+        await rename(join(staging, name), join(path, name));
+        await chmod(join(path, name), 0o400);
+      }
+      const keep = new Set(normalized.keys());
+      for (const entry of await readdir(path, { withFileTypes: true })) {
+        const name = normalizeProjectSecretName(entry.name);
+        if (!entry.isFile() || entry.isSymbolicLink()) {
+          throw new Error("unexpected entry in project secrets runtime path");
+        }
+        if (!keep.has(name)) {
+          await rm(join(path, name), { force: true });
+        }
+      }
+      await chmod(path, 0o700);
+      return "updated_live";
+    } finally {
+      await rm(staging, { recursive: true, force: true }).catch(() => {});
+    }
+  });
 }
 
 export function redactConfigurationForLog(
@@ -1429,27 +1527,38 @@ export function publishHost(): string {
   return "127.0.0.1";
 }
 
-export async function start({
-  project_id,
-  config = {},
-  localPath,
-  sshServers: _sshServers,
-}: {
+type StartOptions = {
   project_id: string;
   config?: Configuration;
   localPath: LocalPathFunction;
   sshServers?: SshServersFunction;
-}): Promise<{
+};
+
+type StartResult = {
   state: ProjectState;
   ssh_port: number;
   http_port: number;
   project_bundle_version?: string;
   tools_version?: string;
   phase_timings_ms?: Record<string, number>;
-}> {
-  if (!isValidUUID(project_id)) {
+};
+
+export async function start(opts: StartOptions): Promise<StartResult> {
+  if (!isValidUUID(opts.project_id)) {
     throw Error("start: project_id must be valid");
   }
+  return await withProjectLifecycleLock(
+    opts.project_id,
+    async () => await startUnlocked(opts),
+  );
+}
+
+async function startUnlocked({
+  project_id,
+  config = {},
+  localPath,
+  sshServers: _sshServers,
+}: StartOptions): Promise<StartResult> {
   logger.debug("start", {
     project_id,
     config: redactConfigurationForLog(config),
@@ -1969,20 +2078,21 @@ export async function start({
 
 // projects we are definitely stopping right now
 export const stopping = new Set<string>();
-export async function stop({
-  project_id,
-  force,
-}: {
-  project_id?: string;
-  force?: boolean;
-}) {
-  if (!project_id) {
-    await stopAll(force);
+export async function stop(opts: { project_id?: string; force?: boolean }) {
+  if (!opts.project_id) {
+    await stopAll(opts.force);
     return;
   }
-  if (!isValidUUID(project_id)) {
-    throw Error(`stop: project_id '${project_id}' must be a uuid`);
+  if (!isValidUUID(opts.project_id)) {
+    throw Error(`stop: project_id '${opts.project_id}' must be a uuid`);
   }
+  return await withProjectLifecycleLock(
+    opts.project_id,
+    async () => await stopUnlocked({ project_id: opts.project_id! }),
+  );
+}
+
+async function stopUnlocked({ project_id }: { project_id: string }) {
   logger.debug("stop", { project_id });
   if (stopping.has(project_id) || starting.has(project_id)) {
     return;

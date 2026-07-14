@@ -292,13 +292,29 @@ import {
   handleProjectControlStop,
 } from "@cocalc/server/inter-bay/project-control";
 import {
+  handleProjectSecretsApproveCourseRecipients,
   handleProjectSecretsCopy,
   handleProjectSecretsDelete,
   handleProjectSecretsExportForCopy,
   handleProjectSecretsGenerateSshKeySecret,
+  handleProjectSecretsGetCoursePolicy,
+  handleProjectSecretsGetCourseSyncStatus,
   handleProjectSecretsImportForCopy,
+  handleProjectSecretsInstallCourseManaged,
   handleProjectSecretsList,
+  handleProjectSecretsListCourseShareable,
+  handleProjectSecretsPreviewCourseSync,
+  handleProjectSecretsRemoveCourseManaged,
+  handleProjectSecretsRefreshRuntime,
+  handleProjectSecretsRevokeCoursePolicy,
+  handleProjectSecretsRevokeCourseRecipients,
   handleProjectSecretsSet,
+  handleProjectSecretsSetCourseGrants,
+  handleProjectSecretsSetCoursePolicy,
+  handleProjectSecretsSetCourseSharing,
+  handleProjectSecretsStartCourseCleanup,
+  handleProjectSecretsStartCourseSync,
+  handleProjectSecretsValidateCourseTarget,
 } from "@cocalc/server/inter-bay/project-secrets";
 import {
   HOST_DANGEROUS_INTERNAL_AUTH,
@@ -1758,6 +1774,10 @@ async function startProjectSecretsService(): Promise<void> {
   const client = getInterBayFabricClient({ noCache: true });
   const impl: InterBayProjectSecretsApi = {
     list: async (opts) => await handleProjectSecretsList(opts),
+    refreshRuntime: async (opts) =>
+      await handleProjectSecretsRefreshRuntime(opts),
+    validateCourseTarget: async (opts) =>
+      await handleProjectSecretsValidateCourseTarget(opts),
     set: async (opts) => await handleProjectSecretsSet(opts),
     delete: async (opts) => await handleProjectSecretsDelete(opts),
     copy: async (opts) => await handleProjectSecretsCopy(opts),
@@ -1767,6 +1787,34 @@ async function startProjectSecretsService(): Promise<void> {
       await handleProjectSecretsImportForCopy(opts),
     generateSshKeySecret: async (opts) =>
       await handleProjectSecretsGenerateSshKeySecret(opts),
+    listCourseShareable: async (opts) =>
+      await handleProjectSecretsListCourseShareable(opts),
+    getCoursePolicy: async (opts) =>
+      await handleProjectSecretsGetCoursePolicy(opts),
+    previewCourseSync: async (opts) =>
+      await handleProjectSecretsPreviewCourseSync(opts),
+    setCourseSharing: async (opts) =>
+      await handleProjectSecretsSetCourseSharing(opts),
+    setCoursePolicy: async (opts) =>
+      await handleProjectSecretsSetCoursePolicy(opts),
+    setCourseGrants: async (opts) =>
+      await handleProjectSecretsSetCourseGrants(opts),
+    approveCourseRecipients: async (opts) =>
+      await handleProjectSecretsApproveCourseRecipients(opts),
+    revokeCourseRecipients: async (opts) =>
+      await handleProjectSecretsRevokeCourseRecipients(opts),
+    startCourseSync: async (opts) =>
+      await handleProjectSecretsStartCourseSync(opts),
+    startCourseCleanup: async (opts) =>
+      await handleProjectSecretsStartCourseCleanup(opts),
+    getCourseSyncStatus: async (opts) =>
+      await handleProjectSecretsGetCourseSyncStatus(opts),
+    revokeCoursePolicy: async (opts) =>
+      await handleProjectSecretsRevokeCoursePolicy(opts),
+    installCourseManaged: async (opts) =>
+      await handleProjectSecretsInstallCourseManaged(opts),
+    removeCourseManaged: async (opts) =>
+      await handleProjectSecretsRemoveCourseManaged(opts),
   };
   services.push(
     ...createInterBayProjectSecretsHandlers({

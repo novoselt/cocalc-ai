@@ -14,22 +14,36 @@ import type {
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { publishProjectDetailInvalidationBestEffort } from "@cocalc/server/account/project-detail-feed";
 import { assertLocalProjectCollaborator } from "@cocalc/server/conat/project-local-access";
-import { getAssignedProjectHostInfo } from "@cocalc/server/conat/project-host-assignment";
 import { resolveProjectBayDirect } from "@cocalc/server/inter-bay/directory";
-import getLogger from "@cocalc/backend/logger";
-import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 import {
   copyProjectSecrets,
   deleteProjectSecret,
   exportProjectSecretsForCopy,
-  getProjectSecretsRuntimeCache,
+  installCourseManagedProjectSecrets,
   importProjectSecretsForCopy,
+  listCourseShareableSecrets,
   listProjectSecrets,
+  removeCourseManagedProjectSecrets,
+  setProjectSecretCourseSharing,
   setProjectSecret,
+  validateCourseSecretTargetAssociation,
 } from "@cocalc/server/projects/project-secrets";
+import {
+  getCourseSecretPolicyState,
+  getCourseSecretRunStatus,
+  revokeCourseSecretPolicy,
+  revokeCourseSecretRecipients,
+  setCourseSecretGrants,
+  setCourseSecretPolicyEnabled,
+} from "@cocalc/server/projects/course-secret-sharing";
+import {
+  approveCourseSecretRecipientsLocal,
+  previewCourseSecretSyncLocal,
+  startCourseSecretRunLocal,
+} from "@cocalc/server/projects/course-secret-sharing-coordinator";
 import { generateProjectSshKeySecretLocal } from "@cocalc/server/projects/project-secret-ssh-key";
-
-const logger = getLogger("server:inter-bay:project-secrets");
+import { syncProjectSecretsRuntimeOnAssignedHost } from "@cocalc/server/projects/project-secrets-runtime";
+import { requireDangerousProjectMutationAuth } from "@cocalc/server/conat/api/project-dangerous-auth";
 
 async function assertCurrentProjectOwnership({
   project_id,
@@ -66,35 +80,11 @@ async function assertLocalProjectSecretAccess({
   await assertLocalProjectCollaborator({ account_id, project_id });
 }
 
-async function syncProjectSecretsCacheOnAssignedHost({
-  project_id,
-}: {
-  project_id: string;
-}): Promise<void> {
-  let host_id: string;
-  try {
-    host_id = (await getAssignedProjectHostInfo(project_id)).host_id;
-  } catch (err) {
-    logger.debug("project secrets cache sync skipped; no assigned host", {
-      project_id,
-      err: `${err}`,
-    });
-    return;
-  }
-  try {
-    const cache = await getProjectSecretsRuntimeCache({ project_id });
-    const client = await getRoutedHostControlClient({
-      host_id,
-      timeout: 30_000,
-    });
-    await client.syncProjectSecretsCache({ project_id, cache });
-  } catch (err) {
-    logger.warn("project secrets cache sync to host failed", {
-      project_id,
-      host_id,
-      err: `${err}`,
-    });
-  }
+async function assertFreshCourseMutation(
+  account_id: string,
+  session_hash?: string | null,
+): Promise<void> {
+  await requireDangerousProjectMutationAuth({ account_id, session_hash });
 }
 
 export async function handleProjectSecretsList({
@@ -106,6 +96,30 @@ export async function handleProjectSecretsList({
 > {
   await assertLocalProjectSecretAccess({ account_id, project_id, epoch });
   return await listProjectSecrets({ project_id });
+}
+
+export async function handleProjectSecretsRefreshRuntime({
+  account_id,
+  project_id,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["refreshRuntime"]>[0]) {
+  await assertLocalProjectSecretAccess({ account_id, project_id, epoch });
+  return await syncProjectSecretsRuntimeOnAssignedHost({ project_id });
+}
+
+export async function handleProjectSecretsValidateCourseTarget({
+  project_id,
+  course_project_id,
+  course_path,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["validateCourseTarget"]>[0]) {
+  await assertCurrentProjectOwnership({ project_id, epoch });
+  const reason = await validateCourseSecretTargetAssociation({
+    project_id,
+    course_project_id,
+    course_path,
+  });
+  return { eligible: reason === "eligible", reason };
 }
 
 export async function handleProjectSecretsSet({
@@ -128,8 +142,10 @@ export async function handleProjectSecretsSet({
     project_id,
     fields: ["secrets"],
   });
-  await syncProjectSecretsCacheOnAssignedHost({ project_id });
-  return result;
+  const runtime_refresh = await syncProjectSecretsRuntimeOnAssignedHost({
+    project_id,
+  });
+  return { ...result, runtime_refresh };
 }
 
 export async function handleProjectSecretsDelete({
@@ -139,6 +155,9 @@ export async function handleProjectSecretsDelete({
   epoch,
 }: Parameters<InterBayProjectSecretsApi["delete"]>[0]): Promise<{
   deleted: boolean;
+  runtime_refresh?: Awaited<
+    ReturnType<typeof syncProjectSecretsRuntimeOnAssignedHost>
+  >;
 }> {
   await assertLocalProjectSecretAccess({ account_id, project_id, epoch });
   const deleted = await deleteProjectSecret({ project_id, name, account_id });
@@ -146,11 +165,12 @@ export async function handleProjectSecretsDelete({
     project_id,
     fields: ["secrets"],
   });
-  if (deleted) {
-    await syncProjectSecretsCacheOnAssignedHost({ project_id });
-  }
+  const runtime_refresh = deleted
+    ? await syncProjectSecretsRuntimeOnAssignedHost({ project_id })
+    : undefined;
   return {
     deleted,
+    runtime_refresh,
   };
 }
 
@@ -193,7 +213,7 @@ export async function handleProjectSecretsCopy({
         fields: ["secrets"],
       }),
     ]);
-    await syncProjectSecretsCacheOnAssignedHost({
+    result.runtime_refresh = await syncProjectSecretsRuntimeOnAssignedHost({
       project_id: target_project_id,
     });
   }
@@ -233,7 +253,9 @@ export async function handleProjectSecretsImportForCopy({
       project_id,
       fields: ["secrets"],
     });
-    await syncProjectSecretsCacheOnAssignedHost({ project_id });
+    result.runtime_refresh = await syncProjectSecretsRuntimeOnAssignedHost({
+      project_id,
+    });
   }
   return result;
 }
@@ -257,4 +279,273 @@ export async function handleProjectSecretsGenerateSshKeySecret({
     fields: ["secrets"],
   });
   return result;
+}
+
+export async function handleProjectSecretsListCourseShareable({
+  account_id,
+  course_project_id,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["listCourseShareable"]>[0]) {
+  await assertLocalProjectSecretAccess({
+    account_id,
+    project_id: course_project_id,
+    epoch,
+  });
+  return await listCourseShareableSecrets({ project_id: course_project_id });
+}
+
+export async function handleProjectSecretsGetCoursePolicy({
+  account_id,
+  course_project_id,
+  course_id,
+  course_path,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["getCoursePolicy"]>[0]) {
+  await assertLocalProjectSecretAccess({
+    account_id,
+    project_id: course_project_id,
+    epoch,
+  });
+  return await getCourseSecretPolicyState({
+    course_project_id,
+    course_id,
+    course_path,
+  });
+}
+
+export async function handleProjectSecretsPreviewCourseSync({
+  account_id,
+  course_project_id,
+  course_id,
+  course_path,
+  target_project_ids,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["previewCourseSync"]>[0]) {
+  await assertLocalProjectSecretAccess({
+    account_id,
+    project_id: course_project_id,
+    epoch,
+  });
+  return await previewCourseSecretSyncLocal({
+    course_project_id,
+    course_id,
+    course_path,
+    target_project_ids,
+  });
+}
+
+export async function handleProjectSecretsSetCourseSharing({
+  account_id,
+  session_hash,
+  project_id,
+  name,
+  allow,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["setCourseSharing"]>[0]) {
+  await assertFreshCourseMutation(account_id, session_hash);
+  await assertLocalProjectSecretAccess({ account_id, project_id, epoch });
+  const result = await setProjectSecretCourseSharing({
+    project_id,
+    name,
+    allow,
+    account_id,
+  });
+  await publishProjectDetailInvalidationBestEffort({
+    project_id,
+    fields: ["secrets"],
+  });
+  return result;
+}
+
+export async function handleProjectSecretsSetCoursePolicy({
+  account_id,
+  session_hash,
+  course_project_id,
+  course_id,
+  course_path,
+  enabled,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["setCoursePolicy"]>[0]) {
+  await assertFreshCourseMutation(account_id, session_hash);
+  await assertLocalProjectSecretAccess({
+    account_id,
+    project_id: course_project_id,
+    epoch,
+  });
+  return await setCourseSecretPolicyEnabled({
+    course_project_id,
+    course_id,
+    course_path,
+    enabled,
+    account_id,
+  });
+}
+
+export async function handleProjectSecretsSetCourseGrants({
+  account_id,
+  session_hash,
+  course_project_id,
+  course_id,
+  course_path,
+  names,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["setCourseGrants"]>[0]) {
+  await assertFreshCourseMutation(account_id, session_hash);
+  await assertLocalProjectSecretAccess({
+    account_id,
+    project_id: course_project_id,
+    epoch,
+  });
+  return await setCourseSecretGrants({
+    course_project_id,
+    course_id,
+    course_path,
+    names,
+    account_id,
+  });
+}
+
+export async function handleProjectSecretsApproveCourseRecipients({
+  account_id,
+  session_hash,
+  course_project_id,
+  course_id,
+  course_path,
+  recipients,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["approveCourseRecipients"]>[0]) {
+  await assertFreshCourseMutation(account_id, session_hash);
+  await assertLocalProjectSecretAccess({
+    account_id,
+    project_id: course_project_id,
+    epoch,
+  });
+  return await approveCourseSecretRecipientsLocal({
+    account_id,
+    course_project_id,
+    course_id,
+    course_path,
+    recipients,
+  });
+}
+
+export async function handleProjectSecretsRevokeCourseRecipients({
+  account_id,
+  session_hash,
+  course_project_id,
+  course_id,
+  course_path,
+  target_project_ids,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["revokeCourseRecipients"]>[0]) {
+  await assertFreshCourseMutation(account_id, session_hash);
+  await assertLocalProjectSecretAccess({
+    account_id,
+    project_id: course_project_id,
+    epoch,
+  });
+  return await revokeCourseSecretRecipients({
+    account_id,
+    course_project_id,
+    course_id,
+    course_path,
+    target_project_ids,
+  });
+}
+
+export async function handleProjectSecretsStartCourseSync(
+  opts: Parameters<InterBayProjectSecretsApi["startCourseSync"]>[0],
+) {
+  await assertFreshCourseMutation(opts.account_id, opts.session_hash);
+  await assertLocalProjectSecretAccess({
+    account_id: opts.account_id,
+    project_id: opts.course_project_id,
+    epoch: opts.epoch,
+  });
+  return await startCourseSecretRunLocal({ ...opts, mode: "sync" });
+}
+
+export async function handleProjectSecretsStartCourseCleanup(
+  opts: Parameters<InterBayProjectSecretsApi["startCourseCleanup"]>[0],
+) {
+  await assertFreshCourseMutation(opts.account_id, opts.session_hash);
+  await assertLocalProjectSecretAccess({
+    account_id: opts.account_id,
+    project_id: opts.course_project_id,
+    epoch: opts.epoch,
+  });
+  return await startCourseSecretRunLocal({ ...opts, mode: "cleanup" });
+}
+
+export async function handleProjectSecretsGetCourseSyncStatus({
+  account_id,
+  course_project_id,
+  course_id,
+  run_id,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["getCourseSyncStatus"]>[0]) {
+  await assertLocalProjectSecretAccess({
+    account_id,
+    project_id: course_project_id,
+    epoch,
+  });
+  return await getCourseSecretRunStatus({
+    course_project_id,
+    course_id,
+    run_id,
+  });
+}
+
+export async function handleProjectSecretsRevokeCoursePolicy({
+  account_id,
+  session_hash,
+  course_project_id,
+  course_id,
+  course_path,
+  epoch,
+}: Parameters<InterBayProjectSecretsApi["revokeCoursePolicy"]>[0]) {
+  await assertFreshCourseMutation(account_id, session_hash);
+  await assertLocalProjectSecretAccess({
+    account_id,
+    project_id: course_project_id,
+    epoch,
+  });
+  return await revokeCourseSecretPolicy({
+    account_id,
+    course_project_id,
+    course_id,
+    course_path,
+  });
+}
+
+export async function handleProjectSecretsInstallCourseManaged({
+  epoch,
+  ...opts
+}: Parameters<InterBayProjectSecretsApi["installCourseManaged"]>[0]) {
+  await assertCurrentProjectOwnership({ project_id: opts.project_id, epoch });
+  const result = await installCourseManagedProjectSecrets(opts);
+  await publishProjectDetailInvalidationBestEffort({
+    project_id: opts.project_id,
+    fields: ["secrets"],
+  });
+  const runtime_refresh = await syncProjectSecretsRuntimeOnAssignedHost({
+    project_id: opts.project_id,
+  });
+  return { ...result, runtime_refresh };
+}
+
+export async function handleProjectSecretsRemoveCourseManaged({
+  epoch,
+  ...opts
+}: Parameters<InterBayProjectSecretsApi["removeCourseManaged"]>[0]) {
+  await assertCurrentProjectOwnership({ project_id: opts.project_id, epoch });
+  const result = await removeCourseManagedProjectSecrets(opts);
+  await publishProjectDetailInvalidationBestEffort({
+    project_id: opts.project_id,
+    fields: ["secrets"],
+  });
+  const runtime_refresh = await syncProjectSecretsRuntimeOnAssignedHost({
+    project_id: opts.project_id,
+  });
+  return { ...result, runtime_refresh };
 }

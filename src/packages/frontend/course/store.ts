@@ -142,6 +142,7 @@ export type SortDescription = TypedMap<{
 }>;
 
 export type CourseSettingsRecord = TypedMap<{
+  course_id?: string;
   allow_collabs: boolean;
   student_project_functionality?: StudentProjectFunctionality;
   student_project_host_id?: string;
