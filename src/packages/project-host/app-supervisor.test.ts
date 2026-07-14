@@ -6,7 +6,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { superviseApp, supervisorExitCode } from "./app-supervisor";
+import {
+  resolveSupervisedCommand,
+  superviseApp,
+  supervisorExitCode,
+} from "./app-supervisor";
 import { getProjectHostActivitySnapshot } from "./health-progress";
 
 describe("project-host app supervisor", () => {
@@ -95,5 +99,31 @@ describe("project-host app supervisor", () => {
     process.env.COCALC_PROJECT_HOST_SUPERVISOR_PID = "4242";
 
     expect(getProjectHostActivitySnapshot().pid).toBe(4242);
+  });
+
+  it("leaves the app command unchanged when core capture is disabled", () => {
+    expect(resolveSupervisedCommand("/app", ["serve"])).toEqual({
+      command: "/app",
+      args: ["serve"],
+    });
+  });
+
+  it("applies a bounded app-only core limit when capture is enabled", () => {
+    process.env.COCALC_PROJECT_HOST_APP_CORE_DUMPS = "1";
+    process.env.COCALC_PROJECT_HOST_APP_CORE_LIMIT_BYTES = "1048576";
+
+    expect(resolveSupervisedCommand("/app", ["serve"])).toEqual({
+      command: "/usr/bin/prlimit",
+      args: ["--core=1048576:1048576", "--", "/app", "serve"],
+    });
+  });
+
+  it("rejects an app core limit above the hard cap", () => {
+    process.env.COCALC_PROJECT_HOST_APP_CORE_DUMPS = "1";
+    process.env.COCALC_PROJECT_HOST_APP_CORE_LIMIT_BYTES = "1073741825";
+
+    expect(() => resolveSupervisedCommand("/app", [])).toThrow(
+      "must be an integer between 1 and 1073741824",
+    );
   });
 });
