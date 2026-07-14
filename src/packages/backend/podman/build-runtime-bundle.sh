@@ -29,17 +29,18 @@ case "$ARCH" in
     GO_SHA256="68097bd680839cbc9d464a0edce4f7c333975e27a90246890e9f1078c7e702ad"
     RUST_TARGET="x86_64-unknown-linux-gnu"
     RUST_SHA256="bd9d53d09d4b60826288336de19fb9c5c7592081e4e4520d6de2f65ee8d79087"
+    CRUN_SHA256="2a80f801a0eeffadb1dca02928e329fbc88dd950fbb6e34e00abeaf9407f7ebf"
     ;;
   arm64)
     GO_SHA256="756274ea4b68fa5535eb9fe2559889287d725a8da63c6aae4d5f23778c229f4b"
     RUST_TARGET="aarch64-unknown-linux-gnu"
     RUST_SHA256="ec70c500e2744f0db55bd495ef90534a31fd9c0d5f5a2d752182a59e439ddee3"
+    CRUN_SHA256="6d36c4a15d5344fc125da386e8357ce2e3071a9d9cb4c806ab4a696b2d05b210"
     ;;
 esac
 
 PODMAN_SHA256="b20ea65afc5a58ea1cea019bd51a5d84eb9042d25d3eb82c55010c8815732d84"
 CONMON_SHA256="814fb5979a3a4b8576b1f901e606b482bebb41cb7e57926e6d5765ee786b96d3"
-CRUN_SHA256="16f91e5bbcf83b4ffd9b6efcefb2ae3bfbd24d6c90ab72e2a065d1bd63b2b200"
 NETAVARK_SHA256="e655fcd882fe891bcc8328ddcfff3745831c8b1013ae59f012d37ce87175b0b3"
 AARDVARK_SHA256="6c84a3371087d6af95407b0d3de26cdc1e720ae8cd983a9bdaec8883e2216959"
 
@@ -122,17 +123,16 @@ export PATH="/usr/local/go/bin:$PATH"
 
 PODMAN_ARCHIVE="$SRC/podman.tar.gz"
 CONMON_ARCHIVE="$SRC/conmon.tar.gz"
-CRUN_ARCHIVE="$SRC/crun.tar.gz"
+CRUN_BINARY="$SRC/crun"
 NETAVARK_ARCHIVE="$SRC/netavark.tar.gz"
 AARDVARK_ARCHIVE="$SRC/aardvark.tar.gz"
 fetch "https://github.com/containers/podman/archive/refs/tags/v${PODMAN_VERSION}.tar.gz" "$PODMAN_SHA256" "$PODMAN_ARCHIVE"
 fetch "https://github.com/containers/conmon/archive/refs/tags/v${CONMON_VERSION}.tar.gz" "$CONMON_SHA256" "$CONMON_ARCHIVE"
-fetch "https://github.com/containers/crun/archive/refs/tags/${CRUN_VERSION}.tar.gz" "$CRUN_SHA256" "$CRUN_ARCHIVE"
+fetch "https://github.com/containers/crun/releases/download/${CRUN_VERSION}/crun-${CRUN_VERSION}-linux-${ARCH}" "$CRUN_SHA256" "$CRUN_BINARY"
 fetch "https://github.com/containers/netavark/archive/refs/tags/v${NETAVARK_VERSION}.tar.gz" "$NETAVARK_SHA256" "$NETAVARK_ARCHIVE"
 fetch "https://github.com/containers/aardvark-dns/archive/refs/tags/v${AARDVARK_VERSION}.tar.gz" "$AARDVARK_SHA256" "$AARDVARK_ARCHIVE"
 tar -xzf "$PODMAN_ARCHIVE" -C "$SRC"
 tar -xzf "$CONMON_ARCHIVE" -C "$SRC"
-tar -xzf "$CRUN_ARCHIVE" -C "$SRC"
 tar -xzf "$NETAVARK_ARCHIVE" -C "$SRC"
 tar -xzf "$AARDVARK_ARCHIVE" -C "$SRC"
 
@@ -148,13 +148,7 @@ install -m 0755 "$SRC/podman-$PODMAN_VERSION/bin/podman" "$STAGE/bin/podman"
 make -C "$SRC/conmon-$CONMON_VERSION" -j"$(nproc)"
 install -m 0755 "$SRC/conmon-$CONMON_VERSION/bin/conmon" "$STAGE/bin/conmon"
 
-(
-  cd "$SRC/crun-$CRUN_VERSION"
-  ./autogen.sh
-  ./configure --prefix=/usr --enable-shared=no
-  make -j"$(nproc)"
-)
-install -m 0755 "$SRC/crun-$CRUN_VERSION/crun" "$STAGE/bin/crun"
+install -m 0755 "$CRUN_BINARY" "$STAGE/bin/crun"
 
 cargo build --locked --release --manifest-path "$SRC/netavark-$NETAVARK_VERSION/Cargo.toml"
 install -m 0755 "$SRC/netavark-$NETAVARK_VERSION/target/release/netavark" "$STAGE/bin/netavark"
@@ -186,7 +180,7 @@ jq -n \
   --arg podman_sha256 "$PODMAN_SHA256" \
   --arg conmon_sha256 "$CONMON_SHA256" \
   --arg crun_sha256 "$CRUN_SHA256" \
-  '{schema:"cocalc-container-runtime-v1",os:"linux",arch:$arch,build_userspace:"ubuntu:24.04",components:{podman:{version:$podman,source_sha256:$podman_sha256},conmon:{version:$conmon,source_sha256:$conmon_sha256},crun:{version:$crun,source_sha256:$crun_sha256},netavark:{version:$netavark},aardvark_dns:{version:$aardvark},go:{version:$go}},host_contract:{database_backend:"sqlite",cgroup_manager:"cgroupfs",network_backend:"netavark",required_commands:["catatonit","fuse-overlayfs","iptables","nft","pasta","slirp4netns"]}}' \
+  '{schema:"cocalc-container-runtime-v1",os:"linux",arch:$arch,build_userspace:"ubuntu:24.04",components:{podman:{version:$podman,source_sha256:$podman_sha256},conmon:{version:$conmon,source_sha256:$conmon_sha256},crun:{version:$crun,binary_sha256:$crun_sha256},netavark:{version:$netavark},aardvark_dns:{version:$aardvark},go:{version:$go}},host_contract:{database_backend:"sqlite",cgroup_manager:"cgroupfs",network_backend:"netavark",required_commands:["catatonit","fuse-overlayfs","iptables","nft","pasta","slirp4netns"]}}' \
   > "$STAGE/share/cocalc/runtime-manifest.json"
 
 for binary in podman conmon crun netavark aardvark-dns; do
