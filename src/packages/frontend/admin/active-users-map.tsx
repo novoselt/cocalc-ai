@@ -105,42 +105,18 @@ function ActiveUsersMapPlot({
         width: "100%",
       }}
     >
-      <svg
+      <img
+        alt=""
         aria-hidden="true"
-        preserveAspectRatio="xMidYMid meet"
+        src="/public/admin/active-users-world-map-f5ed5ec4.webp"
         style={{
           height: "100%",
           inset: 0,
+          objectFit: "fill",
           position: "absolute",
           width: "100%",
         }}
-        viewBox="0 0 1000 500"
-      >
-        <g fill="none" opacity="0.35" stroke={COLORS.BLUE_L} strokeWidth="1">
-          {[125, 250, 375, 500, 625, 750, 875].map((x) => (
-            <path d={`M${x} 0V500`} key={`longitude-${x}`} />
-          ))}
-          {[125, 250, 375].map((y) => (
-            <path d={`M0 ${y}H1000`} key={`latitude-${y}`} />
-          ))}
-        </g>
-        <g
-          fill={COLORS.GRAY_LLL}
-          stroke={COLORS.GRAY_M}
-          strokeLinejoin="round"
-          strokeWidth="2"
-        >
-          <path d="M45 92 78 61 137 50 177 69 211 65 248 91 281 122 267 150 229 164 207 194 173 204 150 229 121 215 102 184 70 163 47 132Z" />
-          <path d="M263 55 302 34 343 43 354 70 326 95 286 91Z" />
-          <path d="M261 218 302 223 333 255 348 298 333 346 309 399 285 455 264 416 249 361 230 320 236 270Z" />
-          <path d="M456 113 484 92 522 98 542 119 531 140 498 139 476 157 447 145Z" />
-          <path d="M478 157 533 148 574 175 590 223 570 276 538 334 507 319 489 278 460 234 451 190Z" />
-          <path d="M527 91 574 61 637 67 676 52 730 69 773 64 824 89 888 99 929 129 912 159 866 170 832 194 782 183 753 207 714 190 678 205 647 180 609 168 584 143 548 139Z" />
-          <path d="M808 294 844 276 891 288 925 320 908 356 870 370 829 350 796 321Z" />
-          <path d="M931 235 944 220 956 238 947 266Z" />
-          <path d="M35 468 129 456 230 465 330 454 433 467 536 456 642 467 752 455 858 466 960 453 981 487 25 487Z" />
-        </g>
-      </svg>
+      />
       {countries.map((country) => {
         const size = bubbleSize(country.count);
         const name = countryName(country.country_code);
