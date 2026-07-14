@@ -47,11 +47,6 @@ type ProjectResourcePressureSample = {
   error?: string;
 };
 
-type ProjectMemorySample = {
-  sampled_at_ms: number;
-  memory_current_bytes: number;
-};
-
 export type ResourcePressureLastScanSummary = {
   duration_ms: number;
   project_count: number;
@@ -92,7 +87,6 @@ const MAX_FD_ENTRIES_PER_TICK = positiveIntegerEnv(
 );
 
 const samples = new Map<string, ProjectResourcePressureSample>();
-const memorySamples = new Map<string, ProjectMemorySample>();
 let cursor = 0;
 let lastScan: ResourcePressureLastScanSummary | undefined;
 let refreshInFlight:
@@ -172,45 +166,6 @@ async function inspectProjectContainerPids(
     out.push({ ...container, root_pid });
   }
   return out;
-}
-
-async function readProjectMemoryCurrent(
-  container: ProjectContainerWithPid,
-  now: number,
-): Promise<void> {
-  try {
-    const cgroup = await readFile(`/proc/${container.root_pid}/cgroup`, "utf8");
-    const relative = cgroup
-      .split(/\r?\n/)
-      .map((line) => line.split(":"))
-      .find((parts) => parts[0] === "0")?.[2];
-    if (
-      !relative ||
-      relative.includes("..") ||
-      !relative.endsWith(`/project-${container.project_id}`)
-    ) {
-      memorySamples.delete(container.project_id);
-      return;
-    }
-    const raw = await readFile(
-      `/sys/fs/cgroup${relative}/memory.current`,
-      "utf8",
-    );
-    const memory_current_bytes = Number(raw.trim());
-    if (
-      !Number.isSafeInteger(memory_current_bytes) ||
-      memory_current_bytes < 0
-    ) {
-      memorySamples.delete(container.project_id);
-      return;
-    }
-    memorySamples.set(container.project_id, {
-      sampled_at_ms: now,
-      memory_current_bytes,
-    });
-  } catch {
-    memorySamples.delete(container.project_id);
-  }
 }
 
 async function readChildPids(pid: number): Promise<number[]> {
@@ -390,7 +345,6 @@ function toProjectSummary(
   sample: ProjectResourcePressureSample,
   now: number,
 ): HostResourcePressureProjectSummary {
-  const memory = memorySamples.get(sample.project_id);
   return {
     project_id: sample.project_id,
     sampled_at_ms: sample.sampled_at_ms,
@@ -401,9 +355,6 @@ function toProjectSummary(
     sockets: sample.sockets,
     inotify_instances: sample.inotify_instances,
     inotify_watches: sample.inotify_watches,
-    ...(memory && now - memory.sampled_at_ms <= FRESH_SAMPLE_MS
-      ? { memory_current_bytes: memory.memory_current_bytes }
-      : {}),
     ...(sample.truncated ? { truncated: true } : {}),
     ...(sample.error ? { error: sample.error } : {}),
   };
@@ -413,18 +364,14 @@ function maxBy(
   summaries: HostResourcePressureProjectSummary[],
   key: keyof Pick<
     HostResourcePressureProjectSummary,
-    | "file_descriptors"
-    | "sockets"
-    | "inotify_instances"
-    | "inotify_watches"
-    | "memory_current_bytes"
+    "file_descriptors" | "sockets" | "inotify_instances" | "inotify_watches"
   >,
 ): HostResourcePressureProjectSummary | undefined {
   let best: HostResourcePressureProjectSummary | undefined;
   for (const summary of summaries) {
-    if (!best || (summary[key] ?? 0) > (best[key] ?? 0)) best = summary;
+    if (!best || summary[key] > best[key]) best = summary;
   }
-  return best && (best[key] ?? 0) > 0 ? best : undefined;
+  return best && best[key] > 0 ? best : undefined;
 }
 
 export function summarizeResourcePressure({
@@ -440,11 +387,6 @@ export function summarizeResourcePressure({
   for (const project_id of [...samples.keys()]) {
     if (!running.has(project_id)) {
       samples.delete(project_id);
-    }
-  }
-  for (const project_id of [...memorySamples.keys()]) {
-    if (!running.has(project_id)) {
-      memorySamples.delete(project_id);
     }
   }
 
@@ -517,20 +459,7 @@ export function summarizeResourcePressure({
     ...(maxBy(summaries, "inotify_watches")
       ? { largest_inotify_watches: maxBy(summaries, "inotify_watches") }
       : {}),
-    ...(maxBy(summaries, "memory_current_bytes")
-      ? { largest_memory_current: maxBy(summaries, "memory_current_bytes") }
-      : {}),
   };
-}
-
-export function getFreshProjectMemoryUsage(
-  now: number = Date.now(),
-): Map<string, number> {
-  return new Map(
-    [...memorySamples.entries()]
-      .filter(([, sample]) => now - sample.sampled_at_ms <= FRESH_SAMPLE_MS)
-      .map(([project_id, sample]) => [project_id, sample.memory_current_bytes]),
-  );
 }
 
 export async function refreshResourcePressureMetrics(
@@ -543,20 +472,6 @@ export async function refreshResourcePressureMetrics(
     const podmanCommand = opts.podmanCommand ?? podman;
     try {
       const containers = await listRunningProjectContainers(podmanCommand);
-      let inspectedContainers: ProjectContainerWithPid[] = [];
-      try {
-        inspectedContainers = await inspectProjectContainerPids(
-          containers,
-          podmanCommand,
-        );
-        await Promise.all(
-          inspectedContainers.map(
-            async (container) => await readProjectMemoryCurrent(container, now),
-          ),
-        );
-      } catch (err) {
-        logger.debug("project memory cgroup scan failed", { err: `${err}` });
-      }
       const selected = selectContainersToScan(containers, now);
       const context: ScanContext = {
         deadline_ms: Date.now() + SCAN_BUDGET_MS,
@@ -567,11 +482,9 @@ export async function refreshResourcePressureMetrics(
       let error_count = 0;
       if (selected.length > 0) {
         try {
-          const selectedIds = new Set(
-            selected.map((container) => container.project_id),
-          );
-          const inspected = inspectedContainers.filter((container) =>
-            selectedIds.has(container.project_id),
+          const inspected = await inspectProjectContainerPids(
+            selected,
+            podmanCommand,
           );
           for (const container of inspected) {
             if (budgetExceeded(context)) break;
@@ -627,12 +540,7 @@ export const _test = {
   maxBy,
   normalizeContainerName,
   projectIdFromContainerName,
-  resetSamples: () => {
-    samples.clear();
-    memorySamples.clear();
-  },
-  setMemorySample: (project_id: string, sample: ProjectMemorySample) =>
-    memorySamples.set(project_id, sample),
+  resetSamples: () => samples.clear(),
   setSample: (sample: any) => samples.set(sample.project_id, sample),
   summarizeResourcePressure,
 };

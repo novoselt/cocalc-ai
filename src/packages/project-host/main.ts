@@ -1526,6 +1526,7 @@ export async function main(
       if (healthState.ready) return;
       await startupReady;
     },
+    isApplicationReady: () => healthState.ready,
     stopProjectForPressure: async ({
       project_id,
       force,
@@ -1579,6 +1580,7 @@ export async function main(
 
   healthState.ready = true;
   resolveStartupReady();
+  await masterRegistration?.heartbeat();
   logger.info("project-host ready");
   void rehydrateAcpAutomationsOnStartup().catch((err) => {
     logger.warn("startup ACP automation rehydrate failed", {

@@ -1354,7 +1354,9 @@ function ensurePodmanHealthy(env: Record<string, string>): void {
   }
   const probeOutput = combinedSpawnOutput(probe);
   if (!isPodmanStalePauseState(probeOutput)) {
-    return;
+    throw new Error(
+      `podman runtime preflight failed: ${probeOutput || `exit ${probe.status ?? "unknown"}${probe.signal ? ` signal ${probe.signal}` : ""}`}`,
+    );
   }
   console.warn(
     "podman reported stale pause-process state after restart; running `podman system migrate`.",

@@ -97,6 +97,7 @@ import {
   getRootfsBuildStatus as getRootfsBuildStatusOnHost,
   startRootfsBuild as startRootfsBuildOnHost,
 } from "./rootfs-build-runner";
+import { createProjectHostRuntimeHealthMonitor } from "./runtime-health";
 
 const logger = getLogger("project-host:master");
 
@@ -241,6 +242,7 @@ const SHUTDOWN_NOTICE_TIMEOUT_MS = Math.max(
 
 export interface MasterRegistrationHandle {
   stop: () => void;
+  heartbeat: () => Promise<void>;
   notifyShutdown: (opts?: {
     signal?: string;
     reason?: string;
@@ -1025,6 +1027,7 @@ export async function startMasterRegistration({
   masterConatToken,
   controlClient,
   waitUntilReady,
+  isApplicationReady,
   stopProjectForPressure,
 }: {
   hostId?: string;
@@ -1034,6 +1037,7 @@ export async function startMasterRegistration({
   masterConatToken?: string;
   controlClient?: ConatClient;
   waitUntilReady?: () => Promise<void>;
+  isApplicationReady?: () => boolean;
   stopProjectForPressure?: (opts: {
     project_id: string;
     force?: boolean;
@@ -1151,6 +1155,7 @@ export async function startMasterRegistration({
           masterConatToken: next,
           controlClient,
           waitUntilReady,
+          isApplicationReady,
           stopProjectForPressure,
         });
       } catch (err) {
@@ -1181,6 +1186,9 @@ export async function startMasterRegistration({
     };
     return {
       stop: stopPendingStartup,
+      async heartbeat() {
+        await delegatedHandle?.heartbeat();
+      },
       async notifyShutdown(opts) {
         await delegatedHandle?.notifyShutdown(opts);
       },
@@ -1204,12 +1212,20 @@ export async function startMasterRegistration({
   setSshpiperdPublicKey(id, sshpiperdKey.publicKey);
 
   const registry = createHostRegistryClient({ client });
+  const runtimeHealth = createProjectHostRuntimeHealthMonitor({
+    isApplicationReady: isApplicationReady ?? (() => true),
+  });
+
+  const awaitRuntimeReadyForControl = async (op: string) => {
+    await awaitReadyForControl(op, waitUntilReady);
+    await runtimeHealth.assertReady();
+  };
 
   // Control plane for this host (master can ask us to create/start/stop projects).
   const controlImpl: HostControlApi = {
     async createProject(opts) {
       if (opts.start || opts.ensure_volume !== false) {
-        await awaitReadyForControl("createProject", waitUntilReady);
+        await awaitRuntimeReadyForControl("createProject");
       }
       if (!hubApi.projects?.createProject) {
         throw Error("createProject not available");
@@ -1229,7 +1245,7 @@ export async function startMasterRegistration({
       restore_backup_id,
       lro_op_id,
     }) {
-      await awaitReadyForControl("startProject", waitUntilReady);
+      await awaitRuntimeReadyForControl("startProject");
       if (!hubApi.projects?.start) {
         throw Error("start not available");
       }
@@ -1250,7 +1266,7 @@ export async function startMasterRegistration({
       };
     },
     async stopProject({ project_id }) {
-      await awaitReadyForControl("stopProject", waitUntilReady);
+      await awaitRuntimeReadyForControl("stopProject");
       if (!hubApi.projects?.stop) {
         throw Error("stop not available");
       }
@@ -1258,7 +1274,7 @@ export async function startMasterRegistration({
       return { project_id, state: (status as any)?.state };
     },
     async getProjectStatus({ project_id }) {
-      await awaitReadyForControl("getProjectStatus", waitUntilReady);
+      await awaitRuntimeReadyForControl("getProjectStatus");
       if (!(hubApi.projects as any)?.status) {
         throw Error("status not available");
       }
@@ -1641,6 +1657,7 @@ export async function startMasterRegistration({
             }
           : {}),
         host_agent: hostAgentState,
+        runtime_health: runtimeHealth.getSnapshot(),
         observed_components: observedComponents,
         rootfs_scanner: rootfsScanner,
         software: versions,
@@ -1650,6 +1667,7 @@ export async function startMasterRegistration({
   };
 
   const send = async (fn: "register" | "heartbeat") => {
+    await runtimeHealth.refresh();
     const payload = buildPayload();
     const started = Date.now();
     try {
@@ -2300,5 +2318,9 @@ export async function startMasterRegistration({
     controlService?.close?.();
     localControlService?.close?.();
   };
-  return { stop, notifyShutdown };
+  return {
+    stop,
+    heartbeat: async () => await send("heartbeat"),
+    notifyShutdown,
+  };
 }

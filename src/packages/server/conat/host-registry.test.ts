@@ -741,6 +741,21 @@ describe("host-registry automatic convergence retry", () => {
     queryMock = jest.fn(async (sql: string, params: any[]) => {
       if (
         sql.includes(
+          "SELECT status, last_seen, metadata FROM project_hosts WHERE id=$1",
+        )
+      ) {
+        return {
+          rows: [
+            {
+              status: "running",
+              last_seen: new Date(),
+              metadata: currentMetadata,
+            },
+          ],
+        };
+      }
+      if (
+        sql.includes(
           "SELECT metadata FROM project_hosts WHERE id=$1 AND deleted IS NULL",
         )
       ) {

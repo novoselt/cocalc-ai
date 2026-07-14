@@ -46,10 +46,6 @@ inotify wd:2 ino:124 sdev:42 mask:fc6 ignored_mask:0 fhandle-bytes:8 fhandle-typ
       inotify_instances: 3,
       inotify_watches: 900,
     });
-    _test.setMemorySample("project-a", {
-      sampled_at_ms: now - 1_000,
-      memory_current_bytes: 512 * 1024 ** 2,
-    });
     _test.setSample({
       project_id: "project-b",
       container_id: "container-b",
@@ -94,9 +90,5 @@ inotify wd:2 ino:124 sdev:42 mask:fc6 ignored_mask:0 fhandle-bytes:8 fhandle-typ
     expect(summary.largest_sockets?.project_id).toBe("project-b");
     expect(summary.largest_inotify_instances?.project_id).toBe("project-b");
     expect(summary.largest_inotify_watches?.project_id).toBe("project-a");
-    expect(summary.largest_memory_current).toMatchObject({
-      project_id: "project-a",
-      memory_current_bytes: 512 * 1024 ** 2,
-    });
   });
 });

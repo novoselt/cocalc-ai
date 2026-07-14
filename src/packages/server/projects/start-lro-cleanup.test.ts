@@ -123,7 +123,7 @@ describe("supersedeOlderProjectStartLros", () => {
           ],
         };
       }
-      if (sql === "SELECT state FROM projects WHERE project_id=$1") {
+      if (sql.includes("FROM projects p")) {
         return {
           rows: [{ state: { state: "opened", time: "2026-05-06T12:00:00Z" } }],
         };
@@ -170,7 +170,7 @@ describe("supersedeOlderProjectStartLros", () => {
           ],
         };
       }
-      if (sql === "SELECT state FROM projects WHERE project_id=$1") {
+      if (sql.includes("FROM projects p")) {
         return {
           rows: [{ state: { state: "opened", time: "2026-05-06T12:00:00Z" } }],
         };
@@ -208,7 +208,7 @@ describe("supersedeOlderProjectStartLros", () => {
           ],
         };
       }
-      if (sql === "SELECT state FROM projects WHERE project_id=$1") {
+      if (sql.includes("FROM projects p")) {
         return {
           rows: [{ state: { state: "opened", time: "2026-05-06T12:00:00Z" } }],
         };
@@ -242,7 +242,7 @@ describe("supersedeOlderProjectStartLros", () => {
           ],
         };
       }
-      if (sql === "SELECT state FROM projects WHERE project_id=$1") {
+      if (sql.includes("FROM projects p")) {
         return {
           rows: [{ state: { state: "opened", time: "2026-05-06T12:00:00Z" } }],
         };
@@ -276,7 +276,7 @@ describe("supersedeOlderProjectStartLros", () => {
           ],
         };
       }
-      if (sql === "SELECT state FROM projects WHERE project_id=$1") {
+      if (sql.includes("FROM projects p")) {
         return {
           rows: [{ state: { state: "opened", time: "2026-05-06T12:00:00Z" } }],
         };
@@ -313,7 +313,7 @@ describe("supersedeOlderProjectStartLros", () => {
           ],
         };
       }
-      if (sql === "SELECT state FROM projects WHERE project_id=$1") {
+      if (sql.includes("FROM projects p")) {
         return {
           rows: [
             {
@@ -368,7 +368,7 @@ describe("supersedeOlderProjectStartLros", () => {
           ],
         };
       }
-      if (sql === "SELECT state FROM projects WHERE project_id=$1") {
+      if (sql.includes("FROM projects p")) {
         return {
           rows: [
             { state: { state: "starting", time: "2026-05-06T12:04:40Z" } },
@@ -415,7 +415,7 @@ describe("supersedeOlderProjectStartLros", () => {
           ],
         };
       }
-      if (sql === "SELECT state FROM projects WHERE project_id=$1") {
+      if (sql.includes("FROM projects p")) {
         return {
           rows: [{ state: { state: "opened", time: "2026-05-06T12:00:00Z" } }],
         };
@@ -436,5 +436,58 @@ describe("supersedeOlderProjectStartLros", () => {
       op_id: "canceled-op-1",
     });
     expect(updateLroMock).not.toHaveBeenCalled();
+  });
+
+  it("immediately cancels a restore start from a previous host process", async () => {
+    getProjectActiveOperationMock = jest.fn(async () => ({
+      project_id: "proj-1",
+      op_id: "restore-op-1",
+      kind: "project-start",
+      action: "start",
+      status: "running",
+    }));
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("FROM long_running_operations")) {
+        return {
+          rows: [
+            {
+              op_id: "restore-op-1",
+              scope_type: "project",
+              scope_id: "proj-1",
+              input: { restore_backup_id: "legacy-backup" },
+              created_at: "2026-07-13T20:00:00.000Z",
+            },
+          ],
+        };
+      }
+      if (sql.includes("FROM projects p")) {
+        return {
+          rows: [
+            {
+              state: { state: "starting", time: "2026-07-13T20:00:00Z" },
+              host_session_started_at: "2026-07-13T21:00:00.000Z",
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { cancelStaleProjectStartLros } = await import("./start-lro-cleanup");
+    const canceled = await cancelStaleProjectStartLros({
+      project_id: "proj-1",
+      nowMs: Date.UTC(2026, 6, 13, 21, 0, 10),
+    });
+
+    expect(canceled).toBe(1);
+    expect(updateLroMock).toHaveBeenCalledWith({
+      op_id: "restore-op-1",
+      status: "canceled",
+      error: "project start operation belongs to a previous host process",
+    });
+    expect(clearProjectActiveOperationMock).toHaveBeenCalledWith({
+      project_id: "proj-1",
+      op_id: "restore-op-1",
+    });
   });
 });

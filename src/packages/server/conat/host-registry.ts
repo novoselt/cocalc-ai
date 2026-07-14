@@ -47,6 +47,9 @@ const STOP_POLICY_PRIORITY_CACHE_TTL_MS = 5 * 60_000;
 const HOST_RESTART_RECOVERY_SCHEDULE_DELAY_MS = 1_000;
 const HOST_RESTART_RECOVERY_DEFAULT_PARALLEL_STARTS = 4;
 const HOST_RESTART_RECOVERY_MAX_PARALLEL_STARTS = 32;
+const HOST_RESTART_RECOVERY_INITIAL_PARALLEL_STARTS = 2;
+const HOST_RESTART_RECOVERY_START_SPACING_MS = 100;
+const HOST_RESTART_RECOVERY_HEARTBEAT_GRACE_MS = 2 * 60_000;
 const HOST_RESTART_RECOVERY_SLOT_TTL_MS = 30 * 60_000;
 const HOST_RESTART_RECOVERY_ACTIVE_STATES = [
   "running",
@@ -80,6 +83,47 @@ function getHostSessionId(metadata: any): string | undefined {
 function getHostBootId(metadata: any): string | undefined {
   const value = `${metadata?.host_boot_id ?? ""}`.trim();
   return value || undefined;
+}
+
+function getHostRuntimeHealth(metadata: any): {
+  status?: string;
+  ready: boolean;
+  error?: string;
+} {
+  const runtime = metadata?.runtime_health;
+  const status = `${runtime?.status ?? ""}`.trim() || undefined;
+  return {
+    status,
+    // Missing runtime_health is accepted while older project-host bundles are
+    // still in service. New bundles always report it before registration.
+    ready: status == null || (status === "ready" && runtime?.ready === true),
+    error: `${runtime?.error ?? ""}`.trim() || undefined,
+  };
+}
+
+function hostRuntimeAvailability(metadata: any) {
+  const runtime = getHostRuntimeHealth(metadata);
+  if (runtime.ready) {
+    return {
+      state: "online" as const,
+      category: "unknown" as const,
+      summary: "Host is online.",
+    };
+  }
+  if (runtime.status === "starting") {
+    return {
+      state: "recovering" as const,
+      category: "runtime_degraded" as const,
+      summary: "Host project runtime is starting.",
+    };
+  }
+  return {
+    state: "degraded" as const,
+    category: "runtime_degraded" as const,
+    summary: runtime.error
+      ? `Host project runtime is degraded: ${runtime.error}`
+      : "Host project runtime is degraded.",
+  };
 }
 
 function registryBayIdForHeartbeat(previousBayId: unknown): string {
@@ -347,6 +391,64 @@ export function hostRestartRecoveryParallelStarts({
   );
 }
 
+async function getHostRestartRecoveryReadiness({
+  host_id,
+  host_boot_id,
+  host_session_id,
+}: {
+  host_id: string;
+  host_boot_id?: string;
+  host_session_id?: string;
+}): Promise<{ ready: boolean; reason?: string }> {
+  const { rows } = await pool().query<{
+    status?: string | null;
+    last_seen?: Date | string | null;
+    metadata?: any;
+  }>(
+    "SELECT status, last_seen, metadata FROM project_hosts WHERE id=$1 AND deleted IS NULL",
+    [host_id],
+  );
+  const row = rows[0];
+  if (!row) return { ready: false, reason: "host record is missing" };
+  if (row.status && row.status !== "running") {
+    return { ready: false, reason: `host status is ${row.status}` };
+  }
+  const lastSeenMs = row.last_seen
+    ? new Date(row.last_seen).getTime()
+    : undefined;
+  if (lastSeenMs == null) {
+    return { ready: false, reason: "host has not reported a heartbeat" };
+  }
+  if (
+    !Number.isFinite(lastSeenMs) ||
+    Date.now() - lastSeenMs > HOST_RESTART_RECOVERY_HEARTBEAT_GRACE_MS
+  ) {
+    return { ready: false, reason: "host heartbeat is stale" };
+  }
+  const currentBootId = getHostBootId(row.metadata);
+  if (host_boot_id && currentBootId && currentBootId !== host_boot_id) {
+    return { ready: false, reason: "host boot changed during recovery" };
+  }
+  const currentSessionId = getHostSessionId(row.metadata);
+  if (
+    host_session_id &&
+    currentSessionId &&
+    currentSessionId !== host_session_id
+  ) {
+    return { ready: false, reason: "host session changed during recovery" };
+  }
+  const runtime = getHostRuntimeHealth(row.metadata);
+  if (!runtime.ready) {
+    return {
+      ready: false,
+      reason: runtime.error
+        ? `project runtime is ${runtime.status}: ${runtime.error}`
+        : `project runtime is ${runtime.status ?? "not ready"}`,
+    };
+  }
+  return { ready: true };
+}
+
 async function loadHostRestartRecoveryParallelStarts(
   host_id: string,
 ): Promise<number> {
@@ -518,11 +620,13 @@ async function recoverProjectAfterHostRestart({
   project,
   host_id,
   host_boot_id,
+  host_session_id,
 }: {
   project: HostRestartRecoveryProject;
   host_id: string;
   host_boot_id?: string;
-}): Promise<"started" | "skipped" | "failed"> {
+  host_session_id?: string;
+}): Promise<"started" | "skipped" | "failed" | "paused"> {
   if (
     !(await stillNeedsHostRestartRecovery({
       project_id: project.project_id,
@@ -588,6 +692,21 @@ async function recoverProjectAfterHostRestart({
         });
       });
     }
+    const readiness = await getHostRestartRecoveryReadiness({
+      host_id,
+      host_boot_id,
+      host_session_id,
+    }).catch(() => ({ ready: false, reason: "unable to verify host runtime" }));
+    if (!readiness.ready) {
+      logger.warn("pausing host restart recovery after runtime failure", {
+        host_id,
+        host_boot_id,
+        host_session_id,
+        project_id: project.project_id,
+        reason: readiness.reason,
+      });
+      return "paused";
+    }
     await markProjectRestartRecoveryFailedOpened({
       project_id: project.project_id,
       host_id,
@@ -616,6 +735,27 @@ export async function startHostRestartRecoveryForHost({
   max_parallel_starts?: number;
 }): Promise<void> {
   const startedAt = new Date().toISOString();
+  const initialReadiness = await getHostRestartRecoveryReadiness({
+    host_id,
+    host_boot_id,
+    host_session_id,
+  });
+  if (!initialReadiness.ready) {
+    await updateHostRestartRecoveryMetadata({
+      host_id,
+      patch: {
+        status: "queued" satisfies HostRestartRecoveryMetadataStatus,
+        host_boot_id,
+        previous_host_boot_id,
+        previous_host_session_id,
+        host_session_id,
+        source,
+        waiting_for: "runtime_ready",
+        wait_reason: initialReadiness.reason,
+      },
+    });
+    return;
+  }
   await updateHostRestartRecoveryMetadata({
     host_id,
     patch: {
@@ -626,6 +766,8 @@ export async function startHostRestartRecoveryForHost({
       host_session_id,
       source,
       started_at: startedAt,
+      waiting_for: null,
+      wait_reason: null,
     },
   });
   const projects = await loadHostRestartRecoveryProjects(host_id);
@@ -643,30 +785,137 @@ export async function startHostRestartRecoveryForHost({
   let started = 0;
   let skipped = 0;
   let failed = 0;
+  let pausedReason: string | undefined;
   let nextIndex = 0;
+  let activeStarts = 0;
+  let successfulCanaryStarts = 0;
+  // Prove the freshly initialized runtime with two starts before allowing the
+  // normal high-concurrency recovery fan-out.
+  let allowedParallelStarts = Math.min(
+    parallelStarts,
+    HOST_RESTART_RECOVERY_INITIAL_PARALLEL_STARTS,
+  );
+  const gateWaiters = new Set<() => void>();
+  const wakeGateWaiters = () => {
+    for (const resolve of gateWaiters) resolve();
+    gateWaiters.clear();
+  };
+  const pauseRecovery = (reason: string) => {
+    pausedReason ??= reason;
+    wakeGateWaiters();
+  };
+  const acquireStartGate = async (): Promise<boolean> => {
+    while (!pausedReason && activeStarts >= allowedParallelStarts) {
+      await new Promise<void>((resolve) => gateWaiters.add(resolve));
+    }
+    if (pausedReason) return false;
+    activeStarts += 1;
+    return true;
+  };
+  const releaseStartGate = (startedSuccessfully: boolean) => {
+    activeStarts = Math.max(0, activeStarts - 1);
+    if (startedSuccessfully) {
+      successfulCanaryStarts += 1;
+      allowedParallelStarts =
+        successfulCanaryStarts >= HOST_RESTART_RECOVERY_INITIAL_PARALLEL_STARTS
+          ? parallelStarts
+          : Math.min(parallelStarts, allowedParallelStarts + 1);
+    }
+    wakeGateWaiters();
+  };
+  let nextStartAt = Date.now();
+  const waitForStartWindow = async () => {
+    const scheduledAt = nextStartAt;
+    nextStartAt =
+      Math.max(Date.now(), nextStartAt) +
+      HOST_RESTART_RECOVERY_START_SPACING_MS;
+    const waitMs = scheduledAt - Date.now();
+    if (waitMs > 0) await sleep(waitMs);
+  };
   const runWorker = async () => {
     while (true) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const project = projects[index];
-      if (!project) return;
-      const result = await recoverProjectAfterHostRestart({
-        project,
-        host_id,
-        host_boot_id,
-      });
-      if (result === "started") {
-        started += 1;
-      } else if (result === "skipped") {
-        skipped += 1;
-      } else {
-        failed += 1;
+      if (pausedReason) return;
+      if (!(await acquireStartGate())) return;
+      let startedSuccessfully = false;
+      try {
+        const index = nextIndex;
+        nextIndex += 1;
+        const project = projects[index];
+        if (!project) return;
+        await waitForStartWindow();
+        const readiness = await getHostRestartRecoveryReadiness({
+          host_id,
+          host_boot_id,
+          host_session_id,
+        });
+        if (!readiness.ready) {
+          pauseRecovery(readiness.reason ?? "project runtime is not ready");
+          return;
+        }
+        const result = await recoverProjectAfterHostRestart({
+          project,
+          host_id,
+          host_boot_id,
+          host_session_id,
+        });
+        if (result === "started") {
+          started += 1;
+          startedSuccessfully = true;
+        } else if (result === "skipped") {
+          skipped += 1;
+        } else if (result === "paused") {
+          pauseRecovery("project runtime degraded while starting a project");
+          return;
+        } else {
+          failed += 1;
+          if (
+            successfulCanaryStarts <
+            HOST_RESTART_RECOVERY_INITIAL_PARALLEL_STARTS
+          ) {
+            pauseRecovery("a canary project failed during restart recovery");
+            return;
+          }
+        }
+      } finally {
+        releaseStartGate(startedSuccessfully);
       }
     }
   };
   await Promise.all(
     Array.from({ length: parallelStarts }, async () => await runWorker()),
   );
+  if (pausedReason) {
+    await updateHostRestartRecoveryMetadata({
+      host_id,
+      patch: {
+        status: "queued" satisfies HostRestartRecoveryMetadataStatus,
+        host_boot_id,
+        previous_host_boot_id,
+        previous_host_session_id,
+        host_session_id,
+        source,
+        started_at: startedAt,
+        paused_at: new Date().toISOString(),
+        waiting_for: "runtime_ready",
+        wait_reason: pausedReason,
+        total: projects.length,
+        parallel_starts: parallelStarts,
+        started,
+        skipped,
+        failed,
+      },
+    });
+    logger.warn("host restart recovery paused", {
+      host_id,
+      host_boot_id,
+      host_session_id,
+      reason: pausedReason,
+      started,
+      skipped,
+      failed,
+    });
+    return;
+  }
   await updateHostRestartRecoveryMetadata({
     host_id,
     patch: {
@@ -707,6 +956,7 @@ async function ensureHostRestartRecovery({
   next_session_id,
   previous_boot_id,
   next_boot_id,
+  next_metadata,
   source,
 }: {
   host_id: string;
@@ -715,6 +965,7 @@ async function ensureHostRestartRecovery({
   next_session_id?: string;
   previous_boot_id?: string;
   next_boot_id?: string;
+  next_metadata?: any;
   source: "register" | "heartbeat";
 }): Promise<void> {
   const bootChanged =
@@ -742,6 +993,22 @@ async function ensureHostRestartRecovery({
       queued_at: new Date().toISOString(),
     },
   });
+  const runtime = getHostRuntimeHealth(next_metadata);
+  if (!runtime.ready) {
+    await updateHostRestartRecoveryMetadata({
+      host_id,
+      patch: {
+        status: "queued" satisfies HostRestartRecoveryMetadataStatus,
+        host_boot_id: next_boot_id,
+        host_session_id: next_session_id,
+        waiting_for: "runtime_ready",
+        wait_reason: runtime.error
+          ? `project runtime is ${runtime.status}: ${runtime.error}`
+          : `project runtime is ${runtime.status ?? "not ready"}`,
+      },
+    });
+    return;
+  }
   if (process.env.NODE_ENV === "test") {
     return;
   }
@@ -1023,17 +1290,19 @@ export async function initHostRegistryService() {
           last_seen: new Date(),
           host_session_id: nextSessionId,
         });
+        const runtimeAvailability = hostRuntimeAvailability(sanitized.metadata);
         await recordHostAvailabilityObservation({
           host_id: info.id,
-          state: "online",
+          state: runtimeAvailability.state,
           planned: false,
-          category: "unknown",
+          category: runtimeAvailability.category,
           source: "host_register",
-          summary: "Host is online.",
+          summary: runtimeAvailability.summary,
           details: {
             status: "running",
             host_session_id: nextSessionId,
             host_boot_id: nextBootId,
+            runtime_health: sanitized.metadata?.runtime_health,
           },
         });
         await ensureHostRestartRecovery({
@@ -1043,6 +1312,7 @@ export async function initHostRegistryService() {
           next_session_id: nextSessionId,
           previous_boot_id: previousBootId,
           next_boot_id: nextBootId,
+          next_metadata: sanitized.metadata,
           source: "register",
         });
         if (previousRows[0] && previousSessionId !== nextSessionId) {
@@ -1098,17 +1368,19 @@ export async function initHostRegistryService() {
           last_seen: new Date(),
           host_session_id: nextSessionId,
         });
+        const runtimeAvailability = hostRuntimeAvailability(sanitized.metadata);
         await recordHostAvailabilityObservation({
           host_id: info.id,
-          state: "online",
+          state: runtimeAvailability.state,
           planned: false,
-          category: "unknown",
+          category: runtimeAvailability.category,
           source: "host_heartbeat",
-          summary: "Host is online.",
+          summary: runtimeAvailability.summary,
           details: {
             status: "running",
             host_session_id: nextSessionId,
             host_boot_id: nextBootId,
+            runtime_health: sanitized.metadata?.runtime_health,
           },
         });
         await ensureHostRestartRecovery({
@@ -1118,6 +1390,7 @@ export async function initHostRegistryService() {
           next_session_id: nextSessionId,
           previous_boot_id: previousBootId,
           next_boot_id: nextBootId,
+          next_metadata: sanitized.metadata,
           source: "heartbeat",
         });
         await attemptAutomaticConvergence({

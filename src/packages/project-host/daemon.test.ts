@@ -1366,9 +1366,12 @@ describe("project-host daemon stop", () => {
       throw new Error(`unexpected signal ${signal}`);
     }) as typeof process.kill);
     jest.spyOn(__test__.processRuntime, "spawnSync").mockImplementation(((
-      _command: string,
+      command: string,
       args: string[],
     ) => {
+      if (command === "podman") {
+        return { status: 0, stdout: "", stderr: "" } as any;
+      }
       const url = args[2];
       const ok = url === "http://127.0.0.1:9102/healthz";
       return {
@@ -1456,9 +1459,12 @@ describe("project-host daemon stop", () => {
       throw new Error(`unexpected signal ${signal}`);
     }) as typeof process.kill);
     jest.spyOn(__test__.processRuntime, "spawnSync").mockImplementation(((
-      _command: string,
+      command: string,
       args: string[],
     ) => {
+      if (command === "podman") {
+        return { status: 0, stdout: "", stderr: "" } as any;
+      }
       const url = args[2];
       const ok = url === "http://127.0.0.1:9102/healthz";
       return {
@@ -1967,5 +1973,22 @@ describe("project-host daemon stop", () => {
         "Error: cannot re-exec process to join the existing user namespace",
       ),
     ).toBe(true);
+  });
+
+  it("fails closed when the Podman runtime probe times out", () => {
+    const runtimeDir = mkTempDir("cocalc-project-host-podman-runtime-");
+    jest.spyOn(__test__.processRuntime, "spawnSync").mockReturnValue({
+      status: null,
+      signal: "SIGTERM",
+      stdout: "",
+      stderr: "",
+    } as any);
+
+    expect(() =>
+      __test__.ensurePodmanHealthy({
+        COCALC_DATA: mkTempDir("cocalc-project-host-podman-probe-"),
+        COCALC_PODMAN_RUNTIME_DIR: runtimeDir,
+      }),
+    ).toThrow("podman runtime preflight failed: exit unknown signal SIGTERM");
   });
 });
