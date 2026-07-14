@@ -42,8 +42,9 @@ import {
 } from "../page/flyouts/utils";
 import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
 import {
+  ProjectRuntimeExitTracker,
   projectRuntimeExitReason,
-  shouldRecoverFromProjectRuntimeExit,
+  projectRuntimeExitKey,
   type RuntimeRecoveryNotice,
 } from "../runtime-recovery";
 export { FILE_ACTIONS as file_actions, type FileAction, ProjectActions };
@@ -213,6 +214,9 @@ export interface ProjectStoreState {
 export class ProjectStore extends Store<ProjectStoreState> {
   public project_id: string;
   private previous_runstate: string | undefined;
+  private runtimeExitTracker = new ProjectRuntimeExitTracker();
+  private hasSeenProjectRecord = false;
+  private projectsStoreSubscribed = false;
 
   // Function to call to initialize one of the tables in this store.
   // This is purely an optimization, so project_log and project_log_all
@@ -238,22 +242,29 @@ export class ProjectStore extends Store<ProjectStoreState> {
     // This avoids leaving it open after we are removed, which is confusing,
     // given that all permissions have vanished.
     const projects: any = this.redux.getStore("projects"); // may not be available; for example when testing
-    // console.log("ProjectStore::_init project_map/project_id", this.project_id, projects.getIn(["project_map", this.project_id]));
-    if (
-      (projects != null
-        ? projects.getIn(["project_map", this.project_id])
-        : undefined) != null
-    ) {
-      // console.log('ProjectStore::_init projects.on("change", ... )');
-      // only do this if we are on project in the first place!
+    const project = projects?.getIn(["project_map", this.project_id]);
+    if (project != null) {
+      this.hasSeenProjectRecord = true;
       this.previous_runstate = projects.getIn([
         "project_map",
         this.project_id,
         "state",
         "state",
       ]);
-      projects.on("change", this._projects_store_change);
     }
+    // The project page can initialize before the account project projection.
+    // Subscribe regardless, then distinguish a not-yet-loaded row from a row
+    // that disappeared after it was observed.
+    if (projects != null && !this.projectsStoreSubscribed) {
+      projects.on("change", this._projects_store_change);
+      this.projectsStoreSubscribed = true;
+    }
+    console.info("[project-runtime-recovery] project store initialized", {
+      project_id: this.project_id,
+      project_record_present: project != null,
+      subscribed: this.projectsStoreSubscribed,
+      runstate: this.previous_runstate,
+    });
   };
 
   destroy = (): void => {
@@ -261,6 +272,7 @@ export class ProjectStore extends Store<ProjectStoreState> {
     if (projects_store !== undefined) {
       projects_store.removeListener("change", this._projects_store_change);
     }
+    this.projectsStoreSubscribed = false;
     // close any open file tabs, properly cleaning up editor state:
     const open = this.get("open_files")?.toJS();
     if (open != null) {
@@ -276,10 +288,32 @@ export class ProjectStore extends Store<ProjectStoreState> {
     //const log = (...args) =>
     //  console.log("project_store/_projects_store_change", ...args);
     if (change == null) {
+      if (!this.hasSeenProjectRecord) {
+        return;
+      }
       // User has been removed from the project!
       (this.redux.getActions("page") as any).close_project_tab(this.project_id);
     } else {
+      this.hasSeenProjectRecord = true;
       const new_state = change.getIn(["state", "state"]);
+      const runtimeExitReason = projectRuntimeExitReason(change);
+      const runtimeExitKey = projectRuntimeExitKey(change);
+      const recoverRuntimeExitReason = this.runtimeExitTracker.observe(change);
+      const hasNewRuntimeExit = recoverRuntimeExitReason != null;
+      if (
+        runtimeExitReason != null ||
+        (this.previous_runstate === "running" && new_state !== "running")
+      ) {
+        console.info("[project-runtime-recovery] project store transition", {
+          project_id: this.project_id,
+          previous_runstate: this.previous_runstate,
+          new_runstate: new_state,
+          runtime_exit_reason: runtimeExitReason,
+          runtime_exit_key: runtimeExitKey,
+          recovery_eligible: recoverRuntimeExitReason != null,
+          new_runtime_exit: hasNewRuntimeExit,
+        });
+      }
       //log(this.previous_runstate, "=>", new_state);
       // fire started or stopped when certain state transitions happen
       if (this.previous_runstate != null) {
@@ -288,14 +322,6 @@ export class ProjectStore extends Store<ProjectStoreState> {
         }
         if (this.previous_runstate == "running" && new_state != "running") {
           this.emit("stopped");
-          const runtimeExitReason = projectRuntimeExitReason(change);
-          if (shouldRecoverFromProjectRuntimeExit(change)) {
-            this.redux
-              .getProjectActions(this.project_id)
-              ?.noteProjectRuntimeLost?.({
-                runtime_exit_reason: runtimeExitReason,
-              });
-          }
         }
       } else {
         // null → "running"
@@ -307,6 +333,13 @@ export class ProjectStore extends Store<ProjectStoreState> {
         this.redux
           .getProjectActions(this.project_id)
           ?.resumeProjectStatusAfterRuntimeLoss?.();
+      }
+      if (hasNewRuntimeExit) {
+        this.redux
+          .getProjectActions(this.project_id)
+          ?.noteProjectRuntimeLost?.({
+            runtime_exit_reason: recoverRuntimeExitReason,
+          });
       }
       this.previous_runstate = new_state;
     }

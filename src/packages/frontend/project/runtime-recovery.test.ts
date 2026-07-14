@@ -6,7 +6,9 @@
 import { Map as ImmutableMap } from "immutable";
 
 import {
+  ProjectRuntimeExitTracker,
   ProjectRuntimeTracker,
+  projectRuntimeExitKey,
   projectRuntimeExitReason,
   projectRuntimeId,
   shouldRecoverFromProjectRuntimeExit,
@@ -64,5 +66,38 @@ describe("project runtime recovery", () => {
       }),
     ).toBe(false);
     expect(shouldRecoverFromProjectRuntimeExit({ state: {} })).toBe(false);
+  });
+
+  it("deduplicates explicit runtime exits without requiring a running transition", () => {
+    const tracker = new ProjectRuntimeExitTracker();
+    const firstExit = {
+      state: {
+        state: "opened",
+        time: "2026-07-14T16:52:32.779Z",
+        runtime_exit_reason: "host_pressure",
+      },
+    };
+    expect(projectRuntimeExitKey(firstExit)).toBe(
+      "host_pressure:2026-07-14T16:52:32.779Z",
+    );
+    expect(tracker.observe(firstExit)).toBe("host_pressure");
+    expect(tracker.observe(firstExit)).toBeUndefined();
+    expect(
+      tracker.observe({
+        state: {
+          ...firstExit.state,
+          time: "2026-07-14T17:00:00.000Z",
+        },
+      }),
+    ).toBe("host_pressure");
+    expect(
+      tracker.observe({
+        state: {
+          state: "opened",
+          time: "2026-07-14T17:01:00.000Z",
+          runtime_exit_reason: "user_stop",
+        },
+      }),
+    ).toBeUndefined();
   });
 });

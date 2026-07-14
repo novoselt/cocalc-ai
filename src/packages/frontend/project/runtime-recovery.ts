@@ -27,6 +27,32 @@ export function shouldRecoverFromProjectRuntimeExit(project: unknown): boolean {
   return reason === "container_missing" || reason === "host_pressure";
 }
 
+export function projectRuntimeExitKey(project: unknown): string | undefined {
+  const reason = projectRuntimeExitReason(project);
+  if (reason == null) {
+    return undefined;
+  }
+  const state = (project as any)?.get?.("state") ?? (project as any)?.state;
+  const time = state?.get?.("time") ?? state?.time ?? "";
+  return `${reason}:${time}`;
+}
+
+export class ProjectRuntimeExitTracker {
+  private exitKey?: string;
+
+  observe(project: unknown): string | undefined {
+    if (!shouldRecoverFromProjectRuntimeExit(project)) {
+      return undefined;
+    }
+    const nextExitKey = projectRuntimeExitKey(project);
+    if (nextExitKey == null || nextExitKey === this.exitKey) {
+      return undefined;
+    }
+    this.exitKey = nextExitKey;
+    return projectRuntimeExitReason(project);
+  }
+}
+
 export function projectRuntimeId(status: unknown): string | undefined {
   if (status == null || typeof status !== "object") {
     return undefined;
