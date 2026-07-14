@@ -1011,11 +1011,11 @@ export async function scheduleProjectHostRestart() {
     stdio: "ignore",
   });
   child.unref();
-  logger.info("upgrade: scheduled project-host reconcile");
+  logger.info("upgrade: scheduled project-host restart");
 }
 
 function scheduledProjectHostReconcileCommand(bin: string): string {
-  return `sleep 3; ${bin} daemon ensure || true`;
+  return `sleep 3; ${bin} daemon restart-project-host || true`;
 }
 
 export async function activateInstalledProjectHostVersion(
