@@ -102,7 +102,7 @@ const START_FAILURE_LOG_LINES = 80;
 const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
 const VERIFY_PROJECT_POOL_TIMEOUT_S = 10;
 const PROJECT_POOL_LAUNCHER_SCRIPT = `set -euo pipefail
-sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" max max 0 max max max 100000 100
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" max max 0 max max max 100000 100 100
 shift
 exec podman "$@"`;
 const DEFAULT_PROJECT_SCRIPT = join(
