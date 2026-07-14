@@ -26,6 +26,7 @@ import {
 } from "@cocalc/frontend/auth/fresh-auth";
 import {
   React,
+  useEffect,
   useIsMountedRef,
   useMemo,
   useState,
@@ -128,6 +129,13 @@ export const ProjectSecrets: React.FC<Props> = ({
   const isModal = mode === "modal";
   const isMountedRef = useIsMountedRef();
   const { secrets, refresh, setSecrets } = useProjectSecrets(project_id);
+
+  useEffect(() => {
+    if (isModal) {
+      refresh();
+    }
+  }, [isModal, refresh]);
+
   const sortedSecrets = useMemo(
     () => [...(secrets ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
     [secrets],
