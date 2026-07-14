@@ -109,6 +109,29 @@ describe("getInstalledRuntimeArtifacts", () => {
     });
   });
 
+  it("tracks the separately installed container runtime", () => {
+    const root = mkTempDir("cocalc-software-");
+    const runtimeRoot = path.join(root, "container-runtime");
+    fs.mkdirSync(runtimeRoot, { recursive: true });
+    makeVersionDir(runtimeRoot, "5.8.1");
+    const current = makeVersionDir(runtimeRoot, "5.8.2");
+    fs.symlinkSync(current, path.join(runtimeRoot, "current"));
+    process.env.COCALC_CONTAINER_RUNTIME_CURRENT = path.join(
+      runtimeRoot,
+      "current",
+    );
+    const artifact = getInstalledRuntimeArtifacts().find(
+      (entry) => entry.artifact === "container-runtime",
+    );
+    expect(artifact).toEqual({
+      artifact: "container-runtime",
+      current_version: "5.8.2",
+      current_build_id: undefined,
+      installed_versions: ["5.8.2", "5.8.1"],
+      retention_policy: { keep_count: 3 },
+    });
+  });
+
   it("includes referenced running project bundle and tools versions", () => {
     const root = mkTempDir("cocalc-software-");
     const bundlesRoot = path.join(root, "project-bundles");

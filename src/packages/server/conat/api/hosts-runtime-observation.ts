@@ -292,6 +292,17 @@ export function observedRuntimeArtifactsFromMetadata(
       retention_policy: defaultRetentionPolicyForArtifact("project-host"),
     },
     {
+      artifact: "container-runtime",
+      current_version:
+        `${software?.container_runtime ?? ""}`.trim() || undefined,
+      installed_versions: sortVersionsDescending(
+        `${software?.container_runtime ?? ""}`.trim()
+          ? [`${software.container_runtime}`.trim()]
+          : [],
+      ),
+      retention_policy: defaultRetentionPolicyForArtifact("container-runtime"),
+    },
+    {
       artifact: "project-bundle",
       current_version: `${software?.project_bundle ?? ""}`.trim() || undefined,
       current_build_id:

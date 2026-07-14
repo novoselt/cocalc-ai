@@ -349,9 +349,10 @@ function parsePushComponentSelector({
 
 function isHostCompatibilityComponent(
   component: SoftwareBuildComponent,
-): component is "project-host" | "project" | "tools" {
+): component is "project-host" | "container-runtime" | "project" | "tools" {
   return (
     component === "project-host" ||
+    component === "container-runtime" ||
     component === "project" ||
     component === "tools"
   );
@@ -476,6 +477,7 @@ function softwareInfoOverview() {
       project_hosts: [
         "host-bootstrap",
         "project-host",
+        "container-runtime",
         "project",
         "tools",
         "host-conat-router",
@@ -791,6 +793,18 @@ function rawSoftwareComponentInfo(
           "Host service subcomponents use project-host artifacts too.",
         ],
       });
+    case "container-runtime":
+      return projectHostArtifactInfo({
+        component,
+        title: "Project-host container runtime",
+        purpose:
+          "Install the pinned Podman, conmon, and crun runtime used by project hosts.",
+        upgradeArtifact: "container-runtime",
+        notes: [
+          "This artifact does not replace the operating system Podman.",
+          "Deploy through a single staging canary before any fleet rollout.",
+        ],
+      });
     case "project":
       return projectHostArtifactInfo({
         component,
@@ -923,6 +937,8 @@ function softwareComponentDescription(
       return "This explicit broad target rolls the full project-host managed runtime stack: project-host, host-local conat-router, host-local conat-persist, and acp-worker. Use it only when all host-managed services must move together.";
     case "project-host":
       return "Project-host is the host agent/runtime that supervises projects, host services, RootFS operations, and host-side deployment state. Deploy it when project-host control logic changes.";
+    case "container-runtime":
+      return "Container-runtime is the separately versioned Podman, conmon, and crun stack used by project hosts. It installs under /opt/cocalc and leaves the operating system Podman untouched.";
     case "project":
       return "Project is the runtime bundle that runs inside user projects and provides project daemons and project-level services. Deploy it when project behavior changes independently of the host agent.";
     case "tools":
@@ -947,10 +963,10 @@ function projectHostArtifactInfo({
   upgradeArtifact,
   notes,
 }: {
-  component: "project-host" | "project" | "tools";
+  component: "project-host" | "container-runtime" | "project" | "tools";
   title: string;
   purpose: string;
-  upgradeArtifact: "project-host" | "project" | "tools";
+  upgradeArtifact: "project-host" | "container-runtime" | "project" | "tools";
   notes: string[];
 }): Omit<SoftwareComponentInfo, "description"> {
   return {
@@ -1314,6 +1330,17 @@ function packageBuildInfo(
         ),
     };
   }
+  if (component === "container-runtime") {
+    const runtimeArch = process.arch === "arm64" ? "arm64" : "amd64";
+    const artifactName = `container-runtime-linux-${runtimeArch}.tar.xz`;
+    return {
+      packageFilter: "@cocalc/backend",
+      script: "build:container-runtime",
+      artifactName,
+      artifactPath: (srcRoot) =>
+        join(srcRoot, "packages", "backend", "podman", "build", artifactName),
+    };
+  }
   if (component === "project") {
     return {
       packageFilter: "@cocalc/project",
@@ -1668,14 +1695,15 @@ function hostArtifactForSmoke(
   component: SoftwareDeployComponent,
 ): string | undefined {
   if (component === "project-host") return "project-host";
+  if (component === "container-runtime") return "container-runtime";
   if (component === "project") return "project-bundle";
   if (component === "tools") return "tools";
   return undefined;
 }
 
 function runtimeArtifactForHostUpgradeArtifact(
-  artifact: "project-host" | "project" | "tools",
-): "project-host" | "project-bundle" | "tools" {
+  artifact: "project-host" | "container-runtime" | "project" | "tools",
+): "project-host" | "container-runtime" | "project-bundle" | "tools" {
   return artifact === "project" ? "project-bundle" : artifact;
 }
 
@@ -3178,8 +3206,13 @@ async function resolveDeployArtifact({
 function hostDeployTargetForComponent(component: SoftwareDeployComponent):
   | {
       artifactComponent: SoftwareBuildComponent;
-      upgradeArtifact: "project-host" | "project" | "tools";
+      upgradeArtifact:
+        | "project-host"
+        | "container-runtime"
+        | "project"
+        | "tools";
       managedComponents?: HostManagedSoftwareComponent[];
+      publishOnly?: boolean;
     }
   | undefined {
   if (component === "project-host") {
@@ -3187,6 +3220,15 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: component,
       upgradeArtifact: component,
       managedComponents: ["project-host"],
+    };
+  }
+  if (component === "container-runtime") {
+    return {
+      artifactComponent: component,
+      upgradeArtifact: component,
+      // Container runtime changes have a much larger host-level blast radius
+      // than ordinary bundles. Publishing must not mutate fleet desired state.
+      publishOnly: true,
     };
   }
   if (component === "project" || component === "tools") {
@@ -3947,6 +3989,11 @@ Supported deploy/smoke components:
                 ],
               ];
             } else if (hostTarget) {
+              if (hostTarget.publishOnly && opts.rollout) {
+                throw new Error(
+                  `software deploy ${component} does not support --rollout; publish it first, then explicitly upgrade selected canary hosts`,
+                );
+              }
               const compat = await publishHostCompatibilityArtifact({
                 client,
                 config,
@@ -3958,25 +4005,27 @@ Supported deploy/smoke components:
               hostManagedComponents = hostTarget.managedComponents;
               targetKind = "project-host-fleet";
               const reason = `software-deploy-${component}`;
-              commandArgsList = [
-                [
-                  ...cli.args,
-                  "--profile",
-                  deployTarget,
-                  "host",
-                  "deploy",
-                  "set",
-                  "--global",
-                  "--artifact",
-                  runtimeArtifactForHostUpgradeArtifact(
-                    hostTarget.upgradeArtifact,
-                  ),
-                  "--desired-version",
-                  artifact.artifact_id,
-                  "--reason",
-                  reason,
-                ],
-              ];
+              commandArgsList = hostTarget.publishOnly
+                ? []
+                : [
+                    [
+                      ...cli.args,
+                      "--profile",
+                      deployTarget,
+                      "host",
+                      "deploy",
+                      "set",
+                      "--global",
+                      "--artifact",
+                      runtimeArtifactForHostUpgradeArtifact(
+                        hostTarget.upgradeArtifact,
+                      ),
+                      "--desired-version",
+                      artifact.artifact_id,
+                      "--reason",
+                      reason,
+                    ],
+                  ];
               for (const hostManagedComponent of hostManagedComponents ?? []) {
                 commandArgsList.push([
                   ...cli.args,

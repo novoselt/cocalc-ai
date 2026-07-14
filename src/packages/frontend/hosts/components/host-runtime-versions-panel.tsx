@@ -70,6 +70,8 @@ function artifactLabel(artifact: HostSoftwareArtifact): string {
   switch (artifact) {
     case "project-host":
       return "Project host bundle";
+    case "container-runtime":
+      return "Container runtime";
     case "project":
       return "Project bundle";
     case "tools":
@@ -90,6 +92,8 @@ function toRuntimeArtifact(
       return "project-bundle";
     case "project-host":
       return "project-host";
+    case "container-runtime":
+      return "container-runtime";
     case "tools":
       return "tools";
     default:
@@ -104,6 +108,8 @@ function runningVersionForArtifact(
   switch (artifact) {
     case "project-host":
       return host.version;
+    case "container-runtime":
+      return host.container_runtime_version;
     case "project":
     case "project-bundle":
       return host.project_bundle_version;
@@ -118,7 +124,12 @@ function buildRunningCounts(hosts: Host[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const host of hosts) {
     if (host.deleted || host.status !== "running") continue;
-    for (const artifact of ["project-host", "project", "tools"] as const) {
+    for (const artifact of [
+      "project-host",
+      "container-runtime",
+      "project",
+      "tools",
+    ] as const) {
       const version = runningVersionForArtifact(host, artifact);
       if (!version) continue;
       const key = `${artifact}:${version}`;
@@ -176,6 +187,7 @@ function buildGlobalDefaultMap(
     const target = deployment.target as HostRuntimeArtifact;
     if (
       target !== "project-host" &&
+      target !== "container-runtime" &&
       target !== "project-bundle" &&
       target !== "tools"
     ) {

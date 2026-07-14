@@ -22,6 +22,10 @@ function cloneDefaultPolicy(): Record<
     "project-host": {
       keep_count: DEFAULT_RUNTIME_RETENTION_POLICY["project-host"].keep_count,
     },
+    "container-runtime": {
+      keep_count:
+        DEFAULT_RUNTIME_RETENTION_POLICY["container-runtime"].keep_count,
+    },
     "project-bundle": {
       keep_count: DEFAULT_RUNTIME_RETENTION_POLICY["project-bundle"].keep_count,
     },
@@ -70,35 +74,43 @@ function envOverrideForArtifact(
   const keep_count =
     artifact === "project-host"
       ? parseNonNegativeInt(process.env.COCALC_PROJECT_HOST_RETENTION_COUNT)
-      : artifact === "project-bundle"
-        ? (parseNonNegativeInt(
-            process.env.COCALC_PROJECT_BUNDLE_RETENTION_COUNT,
-          ) ??
-          parseNonNegativeInt(
-            process.env.COCALC_PROJECT_RUNTIME_ARTIFACT_RETENTION_COUNT,
-          ))
-        : (parseNonNegativeInt(
-            process.env.COCALC_PROJECT_TOOLS_RETENTION_COUNT,
-          ) ??
-          parseNonNegativeInt(
-            process.env.COCALC_PROJECT_RUNTIME_ARTIFACT_RETENTION_COUNT,
-          ));
+      : artifact === "container-runtime"
+        ? parseNonNegativeInt(
+            process.env.COCALC_CONTAINER_RUNTIME_RETENTION_COUNT,
+          )
+        : artifact === "project-bundle"
+          ? (parseNonNegativeInt(
+              process.env.COCALC_PROJECT_BUNDLE_RETENTION_COUNT,
+            ) ??
+            parseNonNegativeInt(
+              process.env.COCALC_PROJECT_RUNTIME_ARTIFACT_RETENTION_COUNT,
+            ))
+          : (parseNonNegativeInt(
+              process.env.COCALC_PROJECT_TOOLS_RETENTION_COUNT,
+            ) ??
+            parseNonNegativeInt(
+              process.env.COCALC_PROJECT_RUNTIME_ARTIFACT_RETENTION_COUNT,
+            ));
   const max_bytes =
     artifact === "project-host"
       ? parseNonNegativeInt(process.env.COCALC_PROJECT_HOST_RETENTION_MAX_BYTES)
-      : artifact === "project-bundle"
-        ? (parseNonNegativeInt(
-            process.env.COCALC_PROJECT_BUNDLE_RETENTION_MAX_BYTES,
-          ) ??
-          parseNonNegativeInt(
-            process.env.COCALC_PROJECT_RUNTIME_ARTIFACT_RETENTION_MAX_BYTES,
-          ))
-        : (parseNonNegativeInt(
-            process.env.COCALC_PROJECT_TOOLS_RETENTION_MAX_BYTES,
-          ) ??
-          parseNonNegativeInt(
-            process.env.COCALC_PROJECT_RUNTIME_ARTIFACT_RETENTION_MAX_BYTES,
-          ));
+      : artifact === "container-runtime"
+        ? parseNonNegativeInt(
+            process.env.COCALC_CONTAINER_RUNTIME_RETENTION_MAX_BYTES,
+          )
+        : artifact === "project-bundle"
+          ? (parseNonNegativeInt(
+              process.env.COCALC_PROJECT_BUNDLE_RETENTION_MAX_BYTES,
+            ) ??
+            parseNonNegativeInt(
+              process.env.COCALC_PROJECT_RUNTIME_ARTIFACT_RETENTION_MAX_BYTES,
+            ))
+          : (parseNonNegativeInt(
+              process.env.COCALC_PROJECT_TOOLS_RETENTION_MAX_BYTES,
+            ) ??
+            parseNonNegativeInt(
+              process.env.COCALC_PROJECT_RUNTIME_ARTIFACT_RETENTION_MAX_BYTES,
+            ));
   if (keep_count == null && max_bytes == null) return undefined;
   return {
     ...(keep_count != null ? { keep_count } : {}),
@@ -146,6 +158,10 @@ export function effectiveRuntimeRetentionPolicy({
     "project-host": normalizeRetentionPolicyEntry({
       fallback: defaults["project-host"],
       raw: configured?.["project-host"],
+    }),
+    "container-runtime": normalizeRetentionPolicyEntry({
+      fallback: defaults["container-runtime"],
+      raw: configured?.["container-runtime"],
     }),
     "project-bundle": normalizeRetentionPolicyEntry({
       fallback: defaults["project-bundle"],

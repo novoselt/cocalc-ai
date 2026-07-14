@@ -1,5 +1,28 @@
 import { accessSync, constants, statSync } from "node:fs";
 
+const DEFAULT_CONTAINER_RUNTIME_CURRENT =
+  "/opt/cocalc/container-runtime/current";
+
+function isExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function configuredContainerRuntimeCurrent(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const configured = `${
+    env.COCALC_CONTAINER_RUNTIME_CURRENT ?? DEFAULT_CONTAINER_RUNTIME_CURRENT
+  }`.trim();
+  return configured && isExecutable(`${configured}/bin/podman`)
+    ? configured
+    : undefined;
+}
+
 function isUsableDir(dir: string): boolean {
   try {
     const stat = statSync(dir);
@@ -15,6 +38,13 @@ export function podmanEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const env = { ...baseEnv };
+  const runtimeCurrent = configuredContainerRuntimeCurrent(env);
+  if (runtimeCurrent) {
+    const bin = `${runtimeCurrent}/bin`;
+    env.PATH = `${bin}:${env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}`;
+    env.CONTAINERS_CONF_OVERRIDE ??= `${runtimeCurrent}/etc/containers/containers.conf`;
+    env.COCALC_PODMAN_BIN ??= `${bin}/podman`;
+  }
   const uid =
     typeof process.getuid === "function" ? process.getuid() : undefined;
   const configured = env.COCALC_PODMAN_RUNTIME_DIR || env.XDG_RUNTIME_DIR;

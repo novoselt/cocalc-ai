@@ -23,6 +23,95 @@ function createArchive(base: string): string {
   return archivePath;
 }
 
+function createContainerRuntimeArchive(
+  base: string,
+  failStateProbe = false,
+): string {
+  const sourceRoot = path.join(base, "runtime-archive-root");
+  const payloadDir = path.join(sourceRoot, "container-runtime");
+  const binDir = path.join(payloadDir, "bin");
+  const metadataDir = path.join(payloadDir, "share", "cocalc");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(metadataDir, { recursive: true });
+  const podmanPath = path.join(binDir, "podman");
+  fs.writeFileSync(
+    podmanPath,
+    `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "podman version test"
+  exit 0
+fi
+case "$*" in
+  *DatabaseBackend*) echo sqlite; exit 0 ;;
+  *NetworkBackend*) echo netavark; exit 0 ;;
+  *CgroupManager*) echo cgroupfs; exit 0 ;;
+esac
+exit ${failStateProbe ? 1 : 0}
+`,
+  );
+  for (const binary of ["conmon", "crun", "netavark", "aardvark-dns"]) {
+    fs.copyFileSync("/usr/bin/true", path.join(binDir, binary));
+  }
+  for (const binary of [
+    "podman",
+    "conmon",
+    "crun",
+    "netavark",
+    "aardvark-dns",
+  ]) {
+    fs.chmodSync(path.join(binDir, binary), 0o755);
+  }
+  const versionOutput = execFileSync(podmanPath, ["--version"], {
+    encoding: "utf8",
+  }).trim();
+  fs.writeFileSync(
+    path.join(metadataDir, "runtime-manifest.json"),
+    JSON.stringify({
+      schema: "cocalc-container-runtime-v1",
+      components: { podman: { version: versionOutput } },
+      host_contract: {
+        database_backend: "sqlite",
+        network_backend: "netavark",
+        cgroup_manager: "cgroupfs",
+        required_commands: [],
+      },
+    }),
+  );
+  const archivePath = path.join(base, "container-runtime.tar.xz");
+  execFileSync("tar", [
+    "-cJf",
+    archivePath,
+    "-C",
+    sourceRoot,
+    "container-runtime",
+  ]);
+  return archivePath;
+}
+
+function installFakeExistingPodman(
+  current: string,
+  { running = false }: { running?: boolean } = {},
+): void {
+  const versionDir = path.join(path.dirname(current), "old");
+  const binDir = path.join(versionDir, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const podman = path.join(binDir, "podman");
+  fs.writeFileSync(
+    podman,
+    `#!/bin/sh
+case "$*" in
+  *DatabaseBackend*) echo sqlite ;;
+  *NetworkBackend*) echo cni ;;
+  *CgroupManager*) echo cgroupfs ;;
+  "ps -q") ${running ? "echo running-container" : ":"} ;;
+esac
+exit 0
+`,
+  );
+  fs.chmodSync(podman, 0o755);
+  fs.symlinkSync(versionDir, current);
+}
+
 async function serveFile(filePath: string): Promise<{
   close: () => Promise<void>;
   url: string;
@@ -57,6 +146,11 @@ afterEach(() => {
   delete process.env.COCALC_PROJECT_BUNDLE_RETENTION_MAX_BYTES;
   delete process.env.COCALC_PROJECT_TOOLS_RETENTION_COUNT;
   delete process.env.COCALC_PROJECT_TOOLS_RETENTION_MAX_BYTES;
+  delete process.env.COCALC_CONTAINER_RUNTIME_ROOT;
+  delete process.env.COCALC_CONTAINER_RUNTIME_CURRENT;
+  delete process.env.COCALC_CONTAINER_RUNTIME_RETENTION_COUNT;
+  delete process.env.COCALC_CONTAINER_RUNTIME_RETENTION_MAX_BYTES;
+  delete process.env.COCALC_PODMAN_RUNTIME_DIR;
   closeDatabase();
 });
 
@@ -126,6 +220,119 @@ describe("project host upgrade installer", () => {
       fs.rmSync(base, { recursive: true, force: true });
     }
   });
+
+  it("activates a validated container runtime against existing sqlite state", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "cocalc-runtime-test-"));
+    const archivePath = createContainerRuntimeArchive(base);
+    const served = await serveFile(archivePath);
+    try {
+      const runtimeRoot = path.join(base, "container-runtime");
+      const currentLink = path.join(runtimeRoot, "current");
+      const runtimeDir = path.join(base, "run");
+      fs.mkdirSync(runtimeRoot, { recursive: true });
+      fs.mkdirSync(runtimeDir);
+      installFakeExistingPodman(currentLink);
+      process.env.COCALC_DATA = path.join(base, "data");
+      process.env.COCALC_CONTAINER_RUNTIME_ROOT = runtimeRoot;
+      process.env.COCALC_CONTAINER_RUNTIME_CURRENT = currentLink;
+      process.env.COCALC_PODMAN_RUNTIME_DIR = runtimeDir;
+
+      const result = await __test__.downloadAndInstall({
+        artifact: "container-runtime",
+        canonicalArtifact: "container-runtime",
+        version: "5.8.2",
+        url: served.url,
+        stripComponents: 1,
+        root: runtimeRoot,
+        versionDir: path.join(runtimeRoot, "5.8.2"),
+        currentLink,
+      } as any);
+
+      expect(result).toEqual({
+        artifact: "container-runtime",
+        version: "5.8.2",
+        status: "updated",
+      });
+      expect(fs.realpathSync(currentLink)).toBe(
+        path.join(runtimeRoot, "5.8.2"),
+      );
+    } finally {
+      await served.close();
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("rolls back a container runtime that cannot read existing state", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "cocalc-runtime-test-"));
+    const archivePath = createContainerRuntimeArchive(base, true);
+    const served = await serveFile(archivePath);
+    try {
+      const runtimeRoot = path.join(base, "container-runtime");
+      const currentLink = path.join(runtimeRoot, "current");
+      const runtimeDir = path.join(base, "run");
+      fs.mkdirSync(runtimeRoot, { recursive: true });
+      fs.mkdirSync(runtimeDir);
+      installFakeExistingPodman(currentLink);
+      const previousTarget = fs.realpathSync(currentLink);
+      process.env.COCALC_DATA = path.join(base, "data");
+      process.env.COCALC_CONTAINER_RUNTIME_ROOT = runtimeRoot;
+      process.env.COCALC_CONTAINER_RUNTIME_CURRENT = currentLink;
+      process.env.COCALC_PODMAN_RUNTIME_DIR = runtimeDir;
+
+      await expect(
+        __test__.downloadAndInstall({
+          artifact: "container-runtime",
+          canonicalArtifact: "container-runtime",
+          version: "broken",
+          url: served.url,
+          stripComponents: 1,
+          root: runtimeRoot,
+          versionDir: path.join(runtimeRoot, "broken"),
+          currentLink,
+        } as any),
+      ).rejects.toThrow("was rolled back");
+      expect(fs.realpathSync(currentLink)).toBe(previousTarget);
+    } finally {
+      await served.close();
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("refuses a CNI to Netavark migration while a container is running", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "cocalc-runtime-test-"));
+    const archivePath = createContainerRuntimeArchive(base);
+    const served = await serveFile(archivePath);
+    try {
+      const runtimeRoot = path.join(base, "container-runtime");
+      const currentLink = path.join(runtimeRoot, "current");
+      const runtimeDir = path.join(base, "run");
+      fs.mkdirSync(runtimeRoot, { recursive: true });
+      fs.mkdirSync(runtimeDir);
+      installFakeExistingPodman(currentLink, { running: true });
+      const previousTarget = fs.realpathSync(currentLink);
+      process.env.COCALC_DATA = path.join(base, "data");
+      process.env.COCALC_CONTAINER_RUNTIME_ROOT = runtimeRoot;
+      process.env.COCALC_CONTAINER_RUNTIME_CURRENT = currentLink;
+      process.env.COCALC_PODMAN_RUNTIME_DIR = runtimeDir;
+
+      await expect(
+        __test__.downloadAndInstall({
+          artifact: "container-runtime",
+          canonicalArtifact: "container-runtime",
+          version: "5.8.2",
+          url: served.url,
+          stripComponents: 1,
+          root: runtimeRoot,
+          versionDir: path.join(runtimeRoot, "5.8.2"),
+          currentLink,
+        } as any),
+      ).rejects.toThrow("requires zero running containers");
+      expect(fs.realpathSync(currentLink)).toBe(previousTarget);
+    } finally {
+      await served.close();
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("prunes old version directories after switching current", async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "cocalc-upgrade-test-"));

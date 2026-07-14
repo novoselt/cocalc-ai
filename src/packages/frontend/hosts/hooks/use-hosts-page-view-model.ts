@@ -122,6 +122,8 @@ function runtimeArtifactForSoftwareArtifact(
       return "project-bundle";
     case "project-host":
       return "project-host";
+    case "container-runtime":
+      return "container-runtime";
     case "tools":
       return "tools";
     default:

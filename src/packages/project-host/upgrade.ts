@@ -21,18 +21,24 @@ import {
   writeConfiguredRuntimeRetentionPolicy,
 } from "./runtime-retention-policy";
 import { listRuntimeArtifactReferences } from "./sqlite/projects";
+import { podmanEnv } from "@cocalc/backend/podman/env";
 
 const logger = getLogger("project-host:upgrade");
 
 const DEFAULT_BASE_URL = "https://software.cocalc.ai/software";
 const DEFAULT_BUNDLE_ROOT = "/opt/cocalc/project-bundles";
 const DEFAULT_TOOLS_ROOT = "/opt/cocalc/tools";
+const DEFAULT_CONTAINER_RUNTIME_ROOT = "/opt/cocalc/container-runtime";
 const PROJECT_HOST_ROOT = "/opt/cocalc/project-host";
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 const DEFAULT_UPGRADE_FETCH_TIMEOUT_MS = 30_000;
 const DEFAULT_UPGRADE_DOWNLOAD_TIMEOUT_MS = 8 * 60 * 1000;
 
-type CanonicalArtifact = "project-host" | "project" | "tools";
+type CanonicalArtifact =
+  | "project-host"
+  | "container-runtime"
+  | "project"
+  | "tools";
 
 type ResolvedArtifact = {
   artifact: SoftwareArtifact;
@@ -45,6 +51,7 @@ type ResolvedArtifact = {
   versionDir: string;
   currentLink: string;
   retentionPolicy?: HostRuntimeRetentionPolicy;
+  containerRuntimeContract?: ContainerRuntimeContract;
 };
 
 type VersionDirEntry = {
@@ -175,11 +182,12 @@ async function runCommandCapture(
   args: string[],
   opts?: {
     timeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
   },
 ): Promise<{ stdout: string; stderr: string }> {
   return await new Promise<{ stdout: string; stderr: string }>(
     (resolve, reject) => {
-      const proc = spawn(cmd, args, { stdio: "pipe" });
+      const proc = spawn(cmd, args, { stdio: "pipe", env: opts?.env });
       let stdout = "";
       let stderr = "";
       const timeoutMs = opts?.timeoutMs;
@@ -438,6 +446,165 @@ async function assertInstalledVersionDir(versionDir: string): Promise<void> {
   }
 }
 
+type ContainerRuntimeContract = {
+  database_backend: string;
+  network_backend: string;
+  cgroup_manager: string;
+};
+
+async function podmanInfoField(
+  field: "DatabaseBackend" | "NetworkBackend" | "CgroupManager",
+  env = podmanEnv(),
+): Promise<string> {
+  const { stdout } = await runCommandCapture(
+    "podman",
+    ["info", "--format", `{{.Host.${field}}}`],
+    { timeoutMs: 30_000, env },
+  );
+  return stdout.trim().toLowerCase();
+}
+
+async function assertContainerRuntimeMigrationIsSafe(
+  contract: ContainerRuntimeContract,
+): Promise<void> {
+  const env = podmanEnv();
+  const backend = await podmanInfoField("DatabaseBackend", env);
+  if (backend !== contract.database_backend) {
+    throw new Error(
+      `container runtime activation requires existing Podman state to use ${contract.database_backend}; found ${backend || "unknown"}`,
+    );
+  }
+  const networkBackend = await podmanInfoField("NetworkBackend", env);
+  if (networkBackend !== contract.network_backend) {
+    const { stdout } = await runCommandCapture("podman", ["ps", "-q"], {
+      timeoutMs: 30_000,
+      env,
+    });
+    const running = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (running.length > 0) {
+      throw new Error(
+        `container runtime network migration ${networkBackend || "unknown"}->${contract.network_backend} requires zero running containers; found ${running.length}`,
+      );
+    }
+  }
+}
+
+async function validateContainerRuntimeVersion(
+  versionDir: string,
+): Promise<ContainerRuntimeContract> {
+  const manifestPath = path.join(
+    versionDir,
+    "share",
+    "cocalc",
+    "runtime-manifest.json",
+  );
+  const manifest = JSON.parse(await fs.promises.readFile(manifestPath, "utf8"));
+  if (manifest?.schema !== "cocalc-container-runtime-v1") {
+    throw new Error(`invalid container runtime manifest at ${manifestPath}`);
+  }
+  const contract: ContainerRuntimeContract = {
+    database_backend: `${manifest?.host_contract?.database_backend ?? ""}`
+      .trim()
+      .toLowerCase(),
+    network_backend: `${manifest?.host_contract?.network_backend ?? ""}`
+      .trim()
+      .toLowerCase(),
+    cgroup_manager: `${manifest?.host_contract?.cgroup_manager ?? ""}`
+      .trim()
+      .toLowerCase(),
+  };
+  if (
+    contract.database_backend !== "sqlite" ||
+    contract.network_backend !== "netavark" ||
+    contract.cgroup_manager !== "cgroupfs"
+  ) {
+    throw new Error(
+      `unsupported container runtime host contract: ${JSON.stringify(contract)}`,
+    );
+  }
+  const requiredCommands = manifest?.host_contract?.required_commands;
+  if (!Array.isArray(requiredCommands)) {
+    throw new Error(
+      "container runtime host contract commands must be an array",
+    );
+  }
+  for (const command of requiredCommands) {
+    if (typeof command !== "string" || !command.trim()) {
+      throw new Error("container runtime host contract has an invalid command");
+    }
+    await runCommandCapture(
+      "sh",
+      ["-c", 'command -v "$1" >/dev/null', "sh", command],
+      { timeoutMs: 15_000 },
+    );
+  }
+  for (const binary of [
+    "podman",
+    "conmon",
+    "crun",
+    "netavark",
+    "aardvark-dns",
+  ]) {
+    const binaryPath = path.join(versionDir, "bin", binary);
+    await fs.promises.access(binaryPath, fs.constants.X_OK);
+    let dependencies = "";
+    try {
+      const { stdout, stderr } = await runCommandCapture("ldd", [binaryPath], {
+        timeoutMs: 15_000,
+      });
+      dependencies = `${stdout}\n${stderr}`;
+    } catch (err) {
+      dependencies = describeError(err);
+      if (!/not a dynamic executable|statically linked/i.test(dependencies)) {
+        throw new Error(
+          `unable to inspect container runtime ${binary} dependencies: ${dependencies}`,
+        );
+      }
+    }
+    if (/\bnot found\b/i.test(dependencies)) {
+      throw new Error(
+        `container runtime ${binary} has unavailable shared libraries: ${dependencies.trim()}`,
+      );
+    }
+  }
+  const podmanBinary = path.join(versionDir, "bin", "podman");
+  const { stdout } = await runCommandCapture(podmanBinary, ["--version"], {
+    timeoutMs: 15_000,
+  });
+  const expectedVersion = `${manifest?.components?.podman?.version ?? ""}`;
+  if (!expectedVersion || !stdout.includes(expectedVersion)) {
+    throw new Error(
+      `container runtime Podman version mismatch: expected ${expectedVersion || "manifest version"}, got ${stdout.trim()}`,
+    );
+  }
+  return contract;
+}
+
+async function verifyActivatedContainerRuntime(
+  contract: ContainerRuntimeContract,
+): Promise<void> {
+  const env = podmanEnv();
+  for (const [field, expected] of [
+    ["DatabaseBackend", contract.database_backend],
+    ["NetworkBackend", contract.network_backend],
+    ["CgroupManager", contract.cgroup_manager],
+  ] as const) {
+    const observed = await podmanInfoField(field, env);
+    if (observed !== expected) {
+      throw new Error(
+        `activated container runtime ${field} mismatch: expected ${expected}, got ${observed || "unknown"}`,
+      );
+    }
+  }
+  await runCommandCapture("podman", ["ps", "-a"], {
+    timeoutMs: 30_000,
+    env,
+  });
+}
+
 function pathSizeBytes(target: string, seen = new Set<string>()): number {
   let real = target;
   try {
@@ -546,6 +713,7 @@ async function listRunningPodmanContainerIds(): Promise<string[]> {
   try {
     const { stdout } = await runCommandCapture("podman", ["ps", "-q"], {
       timeoutMs: 15_000,
+      env: podmanEnv(),
     });
     return stdout
       .split(/\r?\n/)
@@ -751,6 +919,11 @@ async function protectedArtifactVersions({
     if (pendingPrevious) {
       versions.add(pendingPrevious);
     }
+  } else if (artifact === "container-runtime") {
+    const installedVersions = await listInstalledArtifactVersions(root);
+    for (const version of installedVersions.slice(-2)) {
+      versions.add(version);
+    }
   } else {
     const references = listRuntimeArtifactReferences();
     const artifactReferences =
@@ -809,10 +982,12 @@ async function resolveArtifact(
     const channel: SoftwareChannel = target.channel ?? "latest";
     const os = normalizeOs();
     const arch = normalizeArch();
-    const manifestUrl =
-      canonicalArtifact === "tools"
-        ? `${baseUrl}/${canonicalArtifact}/${channel}-${os}-${arch}.json`
-        : `${baseUrl}/${canonicalArtifact}/${channel}-${os}.json`;
+    const archSpecific =
+      canonicalArtifact === "tools" ||
+      canonicalArtifact === "container-runtime";
+    const manifestUrl = archSpecific
+      ? `${baseUrl}/${canonicalArtifact}/${channel}-${os}-${arch}.json`
+      : `${baseUrl}/${canonicalArtifact}/${channel}-${os}.json`;
     const manifest = await fetchJson(manifestUrl);
     const manifestOs = normalizeOsValue(manifest?.os);
     const manifestArch = normalizeArchValue(manifest?.arch);
@@ -821,11 +996,7 @@ async function resolveArtifact(
         `manifest OS mismatch (${canonicalArtifact}): expected ${os}, got ${manifestOs}`,
       );
     }
-    if (
-      canonicalArtifact === "tools" &&
-      manifestArch &&
-      manifestArch !== arch
-    ) {
+    if (archSpecific && manifestArch && manifestArch !== arch) {
       throw new Error(
         `manifest arch mismatch (${canonicalArtifact}): expected ${arch}, got ${manifestArch}`,
       );
@@ -837,6 +1008,9 @@ async function resolveArtifact(
     const os = normalizeOs();
     if (canonicalArtifact === "project-host") {
       url = `${baseUrl}/project-host/${version}/bundle-${os}.tar.xz`;
+    } else if (canonicalArtifact === "container-runtime") {
+      const arch = normalizeArch();
+      url = `${baseUrl}/container-runtime/${version}/container-runtime-${os}-${arch}.tar.xz`;
     } else if (canonicalArtifact === "project") {
       url = `${baseUrl}/project/${version}/bundle-${os}.tar.xz`;
     } else {
@@ -862,9 +1036,12 @@ async function resolveArtifact(
       ? (projectHostPaths?.root ?? PROJECT_HOST_ROOT)
       : canonicalArtifact === "project"
         ? (process.env.COCALC_PROJECT_BUNDLES ?? DEFAULT_BUNDLE_ROOT)
-        : process.env.COCALC_PROJECT_TOOLS
-          ? path.dirname(process.env.COCALC_PROJECT_TOOLS)
-          : DEFAULT_TOOLS_ROOT;
+        : canonicalArtifact === "container-runtime"
+          ? (process.env.COCALC_CONTAINER_RUNTIME_ROOT ??
+            DEFAULT_CONTAINER_RUNTIME_ROOT)
+          : process.env.COCALC_PROJECT_TOOLS
+            ? path.dirname(process.env.COCALC_PROJECT_TOOLS)
+            : DEFAULT_TOOLS_ROOT;
   const stripComponents =
     canonicalArtifact === "project-host"
       ? (projectHostPaths?.stripComponents ?? 2)
@@ -964,7 +1141,29 @@ async function downloadAndInstall(
     version: resolved.version,
     dir: resolved.versionDir,
   });
+  const previousTarget = await fs.promises
+    .realpath(resolved.currentLink)
+    .catch(() => undefined);
+  if (resolved.canonicalArtifact === "container-runtime") {
+    const contract = await validateContainerRuntimeVersion(resolved.versionDir);
+    await assertContainerRuntimeMigrationIsSafe(contract);
+    resolved.containerRuntimeContract = contract;
+  }
   await replaceSymlink(resolved.currentLink, resolved.versionDir);
+  if (resolved.canonicalArtifact === "container-runtime") {
+    try {
+      await verifyActivatedContainerRuntime(resolved.containerRuntimeContract!);
+    } catch (err) {
+      if (previousTarget) {
+        await replaceSymlink(resolved.currentLink, previousTarget);
+      } else {
+        await fs.promises.rm(resolved.currentLink, { force: true });
+      }
+      throw new Error(
+        `activated container runtime failed Podman state verification and was rolled back: ${describeError(err)}`,
+      );
+    }
+  }
   const retentionPolicy = retentionPolicyForArtifact(
     resolved.artifact === "project" ? "project-bundle" : resolved.artifact,
     resolved.retentionPolicy,
@@ -1046,6 +1245,7 @@ function orderTargets(
   targets: SoftwareUpgradeTarget[],
 ): SoftwareUpgradeTarget[] {
   const order: SoftwareArtifact[] = [
+    "container-runtime",
     "tools",
     "project",
     "project-bundle",
@@ -1071,6 +1271,7 @@ export async function upgradeSoftware(
     const baseUrl = normalizeBaseUrl(opts.base_url);
     const results: UpgradeSoftwareResult[] = [];
     let restartHost = false;
+    let restartForContainerRuntime = false;
     for (const target of targets) {
       const resolved = await resolveArtifact(target, baseUrl);
       resolved.retentionPolicy = opts.retention_policy;
@@ -1088,8 +1289,14 @@ export async function upgradeSoftware(
       if (resolved.artifact === "project-host" && result.status === "updated") {
         restartHost = true;
       }
+      if (
+        resolved.artifact === "container-runtime" &&
+        result.status === "updated"
+      ) {
+        restartForContainerRuntime = true;
+      }
     }
-    if (restartHost && restartProjectHost) {
+    if ((restartHost && restartProjectHost) || restartForContainerRuntime) {
       await scheduleProjectHostRestart();
     }
     return { results };

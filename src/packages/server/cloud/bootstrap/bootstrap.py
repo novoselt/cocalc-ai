@@ -2294,7 +2294,7 @@ apply_bees_runtime_policy() {
 allow_path() {
   local path="${1//\\\\:/:}"
   case "$path" in
-    /mnt/cocalc|/mnt/cocalc/*|/mnt/cocalc-scratch|/mnt/cocalc-scratch/*|/dev/loop*|/var/lib/cocalc/cocalc.img|/var/lib/cocalc/btrfs.img|/var/lib/cocalc/star/project-host/0/cache|/var/lib/cocalc/star/project-host/0/cache/*|/var/lib/cocalc/star/project-host/0/secrets/rustic/rootfs-images|/var/lib/cocalc/star/project-host/0/secrets/rustic/rootfs-images/*|/var/lib/cocalc/star/project-host/0/secrets/rustic/project-*.toml|/opt/cocalc/project-host|/opt/cocalc/project-host/*|/opt/cocalc/project-bundles|/opt/cocalc/project-bundles/*|/opt/cocalc/tools|/opt/cocalc/tools/*)
+    /mnt/cocalc|/mnt/cocalc/*|/mnt/cocalc-scratch|/mnt/cocalc-scratch/*|/dev/loop*|/var/lib/cocalc/cocalc.img|/var/lib/cocalc/btrfs.img|/var/lib/cocalc/star/project-host/0/cache|/var/lib/cocalc/star/project-host/0/cache/*|/var/lib/cocalc/star/project-host/0/secrets/rustic/rootfs-images|/var/lib/cocalc/star/project-host/0/secrets/rustic/rootfs-images/*|/var/lib/cocalc/star/project-host/0/secrets/rustic/project-*.toml|/opt/cocalc/project-host|/opt/cocalc/project-host/*|/opt/cocalc/container-runtime|/opt/cocalc/container-runtime/*|/opt/cocalc/project-bundles|/opt/cocalc/project-bundles/*|/opt/cocalc/tools|/opt/cocalc/tools/*)
       return 0
       ;;
     *)

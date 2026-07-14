@@ -29,13 +29,18 @@ const PROJECT_HOST_RUNTIME_STACK_COMPONENTS: ManagedComponentKind[] = [
 
 function canonicalizeSoftwareArtifact(
   artifact: HostSoftwareArtifact,
-): "project-host" | "project" | "tools" | "bootstrap-environment" {
+):
+  | "project-host"
+  | "container-runtime"
+  | "project"
+  | "tools"
+  | "bootstrap-environment" {
   if (artifact === "project-bundle") return "project";
   return artifact;
 }
 
 function extractVersionFromSoftwareUrl(
-  artifact: "project-host" | "project" | "tools",
+  artifact: "project-host" | "container-runtime" | "project" | "tools",
   url?: string,
 ): string | undefined {
   if (!url) return undefined;
@@ -78,6 +83,7 @@ function normalizeSoftwareArtifacts(
   for (const artifact of artifacts) {
     if (
       artifact === "project-host" ||
+      artifact === "container-runtime" ||
       artifact === "project" ||
       artifact === "project-bundle" ||
       artifact === "tools" ||
@@ -195,7 +201,12 @@ function mapPublishedVersionRow({
   channel: HostSoftwareChannel;
   os: "linux" | "darwin";
   arch: "amd64" | "arm64";
-  canonical: "project-host" | "project" | "tools" | "bootstrap-environment";
+  canonical:
+    | "project-host"
+    | "container-runtime"
+    | "project"
+    | "tools"
+    | "bootstrap-environment";
   row: any;
 }): HostSoftwareAvailableVersion | undefined {
   const url = typeof row?.url === "string" ? row.url : undefined;
