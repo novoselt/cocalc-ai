@@ -15,10 +15,22 @@ describe("normalizeCoursePath", () => {
     );
   });
 
-  it.each(["", "/tmp/a.course", "../a.course", "a.txt", ".course/child"])(
-    "rejects %s",
-    (path) => {
-      expect(() => normalizeCoursePath(path)).toThrow("invalid course path");
-    },
-  );
+  it("normalizes course paths inside recognized project runtime homes", () => {
+    expect(normalizeCoursePath("/home/user/classes/math.course")).toBe(
+      "classes/math.course",
+    );
+    expect(normalizeCoursePath("/root/legacy.course")).toBe("legacy.course");
+  });
+
+  it.each([
+    "",
+    "/tmp/a.course",
+    "/etc/a.course",
+    "/home/user/../../tmp/a.course",
+    "../a.course",
+    "a.txt",
+    ".course/child",
+  ])("rejects %s", (path) => {
+    expect(() => normalizeCoursePath(path)).toThrow("invalid course path");
+  });
 });

@@ -140,4 +140,22 @@ describe("setCourseInfo local bay access", () => {
       },
     );
   });
+
+  it("accepts an absolute course path inside the project runtime home", async () => {
+    const { default: setCourseInfo } = await import("./set-course-info");
+    await expect(
+      setCourseInfo({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        course: makeCourseInfo({ path: "/home/user/classes/math.course" }),
+      }),
+    ).resolves.toMatchObject({
+      course: { path: "classes/math.course" },
+    });
+    expect(queryMock).toHaveBeenNthCalledWith(
+      2,
+      "UPDATE projects SET course=$1 WHERE project_id=$2",
+      [expect.objectContaining({ path: "classes/math.course" }), PROJECT_ID],
+    );
+  });
 });
