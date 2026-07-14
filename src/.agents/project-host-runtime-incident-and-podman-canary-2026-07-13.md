@@ -208,9 +208,60 @@ host-agent PID `451728`. A controlled `SIGSEGV` sent only to the app produced:
 A subsequent explicit component rollout changed the supervisor PID from
 `452707` to `454936`. The old supervisor recorded child exit code 0 with
 `forwarded_signal=SIGTERM`, and the replacement became healthy. This validates
-both crash recovery and the normal operator restart path. Core dumps remain
-disabled; the durable signal evidence narrows future failures, but bounded
-staging core capture is still needed for native stack diagnosis.
+both crash recovery and the normal operator restart path.
+
+### Bounded app-only core capture (2026-07-14)
+
+Commits `78edbe1330`, `d2f13eb915`, `d8e1b280f0`, `10bce8b608`, and
+`7ead589418` developed and staged opt-in project-host app core capture. The
+final design deliberately does not use `RLIMIT_CORE`: Linux ignores that limit
+when `core_pattern` pipes a core to a userspace handler. The staging test also
+showed that a piped 693 MiB logical core consumed 437 MiB when written densely.
+
+The bootstrap-installed handler now:
+
+- runs only when `COCALC_PROJECT_HOST_APP_CORE_DUMPS=1` is present in the
+  durable local project-host environment;
+- accepts a core only when the kernel PID equals `project-host-app.pid`, the
+  UID is the runtime host UID, and `/proc` confirms the recorded persistent
+  supervisor is the app's actual parent;
+- closes rejected pipes immediately, so unrelated host processes and project
+  containers cannot write forensic files or force the handler to drain their
+  core streams;
+- writes accepted cores and metadata as root-owned mode-0600 files under
+  `/mnt/cocalc/data/forensics/core-dumps`;
+- caps each input stream at 1 GiB, writes zero blocks sparsely, and retains only
+  the three newest captures; and
+- records and restores the prior kernel core pattern and `core_pipe_limit` when
+  the feature is disabled.
+
+The final staging artifacts are host-bootstrap
+`20260714T044833Z-7ead5894-sparse-app-cores-7ead5894` and project-host
+`20260714T044857Z-7ead5894-sparse-app-cores-7ead5894`. On staging `host2`:
+
+- an unrelated runtime-user Python process deliberately raised its own limit
+  and died with `SIGSEGV`; the accepted-core count remained unchanged;
+- the supervised app had soft and hard core limits of zero, yet its controlled
+  `SIGSEGV` produced a valid x86-64 ELF core because the pipe handler is the
+  authoritative bound;
+- the 719 MiB logical sparse test core used 143 MiB physically;
+- a fourth accepted crash left exactly three cores and removed the oldest core
+  plus metadata sidecar; and
+- after every crash the durable supervisor recorded `SIGSEGV`, the host-agent
+  replaced the app, `rootctl doctor` passed, and the final artifact was accepted
+  as the host's last-known-good project-host version.
+
+After removing the deliberately dense pre-fix test artifact, two retained
+sparse cores used 275 MiB physically. The automatic probe for the final app
+process session passed at `04:54:40` UTC using synthetic project
+`8758e745-edc0-45f0-bb0d-91ab868cc339`: host lifecycle work took 762 ms,
+controller work took 1.103 seconds, and the central failure count remained zero.
+
+One rollout attempt exposed a mixed-version hazard: new bootstrap policy was
+installed while the old app artifact still expected a temporary `prlimit`
+scheme. Disabling the feature restored the host, the final artifact then rolled
+out cleanly, and current bootstrap reconciliation removes that obsolete
+sudoers fragment. This feature remains staging-only and opt-in.
 
 ## Incident timeline
 
@@ -581,9 +632,10 @@ systemd, Podman, conmon/crun, and CoCalc.
   reboot attempt budget.
 - Verify the metadata-backed 15-minute alert limiter under a continuous staged
   failure.
-- Enable bounded, retained project-host app core dumps on staging and verify a
-  controlled native crash produces a usable core without allowing project
-  containers or unrelated host processes to fill the data disk.
+- **Complete on staging:** bounded, sparse, three-file project-host app core
+  capture produced valid ELF cores while an unrelated runtime-user crash was
+  rejected without creating a file. Production remains disabled pending the
+  broader promotion gate.
 - **Complete on staging:** durable app supervision records an actual child
   `SIGSEGV`, host-agent restarts the process in about five seconds, and the new
   process session passes a full synthetic lifecycle probe.
