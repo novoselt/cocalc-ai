@@ -746,6 +746,19 @@ function prioritySortValue(tier: Tier): number {
   return Number.isFinite(priority) ? priority : Number.NEGATIVE_INFINITY;
 }
 
+function suggestedDuplicateTierId(
+  sourceId: string,
+  tiers: Record<string, Tier>,
+) {
+  const base = `${sourceId || "tier"}-copy`;
+  if (tiers[base] == null) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base}-${i}`;
+    if (tiers[candidate] == null) return candidate;
+  }
+  return `${base}-${Date.now()}`;
+}
+
 function useMembershipTiers() {
   const [data, set_data] = React.useState<{ [key: string]: Tier }>({});
   const [total_active_account_count, set_total_active_account_count] =
@@ -898,6 +911,46 @@ function useMembershipTiers() {
     }
   }
 
+  async function duplicate_tier({
+    id,
+    source,
+  }: {
+    id: string;
+    source: Tier;
+  }): Promise<boolean> {
+    const trimmedId = id.trim();
+    if (data[trimmedId] != null) {
+      throw Error(`membership tier "${trimmedId}" already exists`);
+    }
+    const payload = buildMembershipTierPayload({
+      ...tierToFormValues(source),
+      id: trimmedId,
+      active: false,
+      store_visible: false,
+      team_visible: false,
+      course_store_visible: false,
+    });
+    try {
+      const completed = await runFreshTierMutation(async () => {
+        await webapp_client.conat_client.hub.purchases.createMembershipTier({
+          browser_id: webapp_client.browser_id,
+          tier: payload,
+        });
+      });
+      if (completed) {
+        set_editing(
+          applyMembershipTierTemplateFallbacks(
+            payload as Partial<Tier> & { id: string },
+          ) as Tier,
+        );
+      }
+      return completed;
+    } catch (err) {
+      set_error(err.message ?? String(err));
+      throw err;
+    }
+  }
+
   async function import_tiers(
     payloads: AdminMembershipTierPayload[],
   ): Promise<boolean> {
@@ -946,6 +999,7 @@ function useMembershipTiers() {
     set_editing,
     freshAuthModalProps,
     create_tier_from_template,
+    duplicate_tier,
     import_tiers,
     save,
     load,
@@ -977,12 +1031,15 @@ export function MembershipTiers() {
     set_editing,
     freshAuthModalProps,
     create_tier_from_template,
+    duplicate_tier,
     import_tiers,
     save,
     load,
   } = useMembershipTiers();
   const [createTierForm] = Form.useForm();
+  const [duplicateTierForm] = Form.useForm();
   const [createTierOpen, setCreateTierOpen] = React.useState(false);
+  const [duplicateTierOpen, setDuplicateTierOpen] = React.useState(false);
   const importFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [importModalOpen, setImportModalOpen] = React.useState(false);
   const [importCandidates, setImportCandidates] = React.useState<
@@ -3207,6 +3264,14 @@ export function MembershipTiers() {
               >
                 Reset
               </Button>
+              {editingExisting ? (
+                <Button
+                  htmlType="button"
+                  onClick={() => openDuplicateTierModal()}
+                >
+                  <Icon name="copy" /> Duplicate
+                </Button>
+              ) : null}
               <Button htmlType="button" onClick={() => set_editing(null)}>
                 Cancel
               </Button>
@@ -3222,6 +3287,35 @@ export function MembershipTiers() {
         </Form>
       </>
     );
+  }
+
+  async function duplicateTierFromModal(): Promise<void> {
+    if (editing == null) return;
+    try {
+      const values = await duplicateTierForm.validateFields();
+      const completed = await duplicate_tier({
+        id: values.id,
+        source: editing,
+      });
+      if (!completed) return;
+      setDuplicateTierOpen(false);
+      duplicateTierForm.resetFields();
+    } catch (err) {
+      if (err?.errorFields != null) return;
+      const message = err?.message ?? String(err);
+      set_error(message);
+      if (message.includes("already exists")) {
+        duplicateTierForm.setFields([{ name: "id", errors: [message] }]);
+      }
+    }
+  }
+
+  function openDuplicateTierModal() {
+    if (editing == null) return;
+    setDuplicateTierOpen(true);
+    duplicateTierForm.setFieldsValue({
+      id: suggestedDuplicateTierId(editing.id, data),
+    });
   }
 
   async function createTierFromModal(): Promise<void> {
@@ -3446,6 +3540,54 @@ export function MembershipTiers() {
             rules={[{ required: true, message: "Enter a display name." }]}
           >
             <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+    );
+  }
+
+  function render_duplicate_tier_modal() {
+    return (
+      <Modal
+        title={`Duplicate Membership Tier${editing?.id ? `: ${editing.id}` : ""}`}
+        open={duplicateTierOpen}
+        okText="Duplicate tier"
+        confirmLoading={saving}
+        onOk={() => duplicateTierFromModal()}
+        onCancel={() => {
+          setDuplicateTierOpen(false);
+          duplicateTierForm.resetFields();
+        }}
+        destroyOnHidden
+      >
+        <Paragraph type="secondary">
+          Create a draft copy of this tier with a new internal ID. The duplicate
+          is disabled and hidden from personal, team, and course purchase flows
+          until you explicitly enable it.
+        </Paragraph>
+        <Form layout="vertical" form={duplicateTierForm}>
+          <Form.Item
+            name="id"
+            label="New tier ID"
+            extra="Stable machine identifier, e.g. student-one-month."
+            rules={[
+              { required: true, message: "Enter a tier ID." },
+              {
+                pattern: /^[a-z0-9][a-z0-9_-]*$/,
+                message:
+                  "Use lowercase letters, numbers, underscores, or hyphens.",
+              },
+              {
+                validator: async (_, value) => {
+                  const id =
+                    typeof value === "string" ? value.trim() : String(value);
+                  if (!id || data[id] == null) return;
+                  throw Error(`membership tier "${id}" already exists`);
+                },
+              },
+            ]}
+          >
+            <Input autoFocus />
           </Form.Item>
         </Form>
       </Modal>
@@ -3883,6 +4025,7 @@ export function MembershipTiers() {
       </Space>
       <FreshAuthModal {...freshAuthModalProps} />
       {render_create_tier_modal()}
+      {render_duplicate_tier_modal()}
       {render_import_tiers_modal()}
     </>
   );
