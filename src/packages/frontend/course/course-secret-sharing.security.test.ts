@@ -30,4 +30,14 @@ describe("course secret sharing automatic-path audit", () => {
       }
     }
   });
+
+  it("links the sharing panel to the project-wide secrets configuration", () => {
+    const source = readFileSync(
+      join(__dirname, "configuration/shared-secrets.tsx"),
+      "utf8",
+    );
+    expect(source).toContain("revealDocsAction");
+    expect(source).toContain('actionId: "settings.environment.secrets"');
+    expect(source).toContain("Manage Project Secrets");
+  });
 });

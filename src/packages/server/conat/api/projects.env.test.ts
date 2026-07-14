@@ -13,6 +13,7 @@ let copyProjectSecretsMock: jest.Mock;
 let generateProjectSshKeySecretLocalMock: jest.Mock;
 let exportProjectSecretsForCopyMock: jest.Mock;
 let importProjectSecretsForCopyMock: jest.Mock;
+let syncProjectSecretsRuntimeOnAssignedHostMock: jest.Mock;
 let resolveProjectBayMock: jest.Mock;
 let requireDangerousProjectMutationAuthMock: jest.Mock;
 let interBayProjectSecretsMock: {
@@ -83,6 +84,12 @@ jest.mock("@cocalc/server/projects/project-secrets", () => ({
     importProjectSecretsForCopyMock(...args),
 }));
 
+jest.mock("@cocalc/server/projects/project-secrets-runtime", () => ({
+  __esModule: true,
+  syncProjectSecretsRuntimeOnAssignedHost: (...args: any[]) =>
+    syncProjectSecretsRuntimeOnAssignedHostMock(...args),
+}));
+
 jest.mock("@cocalc/server/projects/project-secret-ssh-key", () => ({
   __esModule: true,
   generateProjectSshKeySecretLocal: (...args: any[]) =>
@@ -100,6 +107,12 @@ describe("project env helpers", () => {
   const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";
   const PROJECT_ID = "22222222-2222-4222-8222-222222222222";
   const TARGET_PROJECT_ID = "33333333-3333-4333-8333-333333333333";
+  const RUNTIME_REFRESH = {
+    status: "updated_live",
+    cached_generation: 2,
+    materialized_generation: 2,
+    secret_names: ["API_KEY"],
+  } as const;
 
   beforeEach(() => {
     getLocalProjectCollaboratorAccessStatusMock = jest.fn(
@@ -206,6 +219,9 @@ describe("project env helpers", () => {
       conflicts: [],
       missing: [],
     }));
+    syncProjectSecretsRuntimeOnAssignedHostMock = jest.fn(
+      async () => RUNTIME_REFRESH,
+    );
     resolveProjectBayMock = jest.fn(async () => ({
       bay_id: "bay-0",
       epoch: 1,
@@ -495,6 +511,9 @@ describe("project env helpers", () => {
         fields: ["secrets"],
       },
     );
+    expect(syncProjectSecretsRuntimeOnAssignedHostMock).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+    });
   });
 
   it("deletes project secrets and publishes detail invalidation", async () => {
@@ -506,7 +525,10 @@ describe("project env helpers", () => {
         project_id: PROJECT_ID,
         name: "API_KEY",
       }),
-    ).resolves.toEqual({ deleted: true });
+    ).resolves.toEqual({
+      deleted: true,
+      runtime_refresh: RUNTIME_REFRESH,
+    });
 
     expect(deleteProjectSecretMock).toHaveBeenCalledWith({
       project_id: PROJECT_ID,
@@ -519,6 +541,9 @@ describe("project env helpers", () => {
         fields: ["secrets"],
       },
     );
+    expect(syncProjectSecretsRuntimeOnAssignedHostMock).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+    });
   });
 
   it("copies project secrets between collaborator projects", async () => {
@@ -535,6 +560,7 @@ describe("project env helpers", () => {
       copied: ["API_KEY"],
       conflicts: [],
       missing: [],
+      runtime_refresh: RUNTIME_REFRESH,
     });
 
     expect(assertCollabMock).toHaveBeenCalledWith({
@@ -558,6 +584,9 @@ describe("project env helpers", () => {
         fields: ["secrets"],
       },
     );
+    expect(syncProjectSecretsRuntimeOnAssignedHostMock).toHaveBeenCalledWith({
+      project_id: TARGET_PROJECT_ID,
+    });
   });
 
   it("routes same-bay remote project secret copies to that bay", async () => {
@@ -590,6 +619,7 @@ describe("project env helpers", () => {
       source_epoch: 3,
       target_epoch: 4,
     });
+    expect(syncProjectSecretsRuntimeOnAssignedHostMock).not.toHaveBeenCalled();
   });
 
   it("exports from source bay and imports into target bay for cross-bay secret copies", async () => {
@@ -626,6 +656,7 @@ describe("project env helpers", () => {
       overwrite: true,
       epoch: 4,
     });
+    expect(syncProjectSecretsRuntimeOnAssignedHostMock).not.toHaveBeenCalled();
   });
 
   it("generates an SSH key secret on the owning bay", async () => {

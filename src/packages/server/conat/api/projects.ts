@@ -2659,7 +2659,10 @@ export async function copyProjectSecrets({
         fields: ["secrets"],
       }),
     ]);
-    if (result.runtime_refresh == null) {
+    if (
+      result.runtime_refresh == null &&
+      targetOwnership.bay_id === getConfiguredBayId()
+    ) {
       result.runtime_refresh = await syncProjectSecretsRuntimeOnAssignedHost({
         project_id: target_project_id,
       });

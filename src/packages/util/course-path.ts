@@ -3,8 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import { projectRuntimeHomeRelativePath } from "./project-runtime";
+
 export function normalizeCoursePath(path: string): string {
-  const raw = `${path ?? ""}`.trim().replace(/\\/g, "/");
+  const input = `${path ?? ""}`.trim().replace(/\\/g, "/");
+  const raw = projectRuntimeHomeRelativePath(input) ?? input;
   if (!raw || raw.startsWith("/") || raw.includes("\0")) {
     throw new Error("invalid course path");
   }

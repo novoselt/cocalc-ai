@@ -28,6 +28,7 @@ import {
 } from "@cocalc/frontend/auth/fresh-auth";
 import { useMemo, useRedux, useState } from "@cocalc/frontend/app-framework";
 import { Icon } from "@cocalc/frontend/components";
+import { revealDocsAction } from "@cocalc/frontend/project/docs-actions";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { uuid } from "@cocalc/util/misc";
 import type { CourseActions } from "../actions";
@@ -185,6 +186,18 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
     });
   }
 
+  async function openProjectSecrets(): Promise<void> {
+    setError("");
+    try {
+      await revealDocsAction({
+        actionId: "settings.environment.secrets",
+        projectId: project_id,
+      });
+    } catch (err) {
+      setError(`${err}`);
+    }
+  }
+
   const identity = {
     browser_id: webapp_client.browser_id,
     course_project_id: project_id,
@@ -213,6 +226,13 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
           message="Students can read and extract every shared secret. Use dedicated, limited provider keys."
           description="Nothing is shared when this course opens or during ordinary course reconfiguration. Source secrets, recipients, and each synchronization require explicit actions."
         />
+        <Button
+          data-cocalc-docs-action="settings.environment.secrets"
+          icon={<Icon name="key" />}
+          onClick={() => void openProjectSecrets()}
+        >
+          Manage Project Secrets
+        </Button>
         {error ? <Alert showIcon type="error" message={error} /> : undefined}
         {revoked ? (
           <Alert
