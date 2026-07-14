@@ -37,9 +37,40 @@ import {
 } from "@cocalc/frontend/frame-editors/generic/client";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { UserResult } from "./users/user";
+import { projectActiveUserMapPosition } from "./active-users-map-geometry";
 
 const { Paragraph, Text } = Typography;
 const REFRESH_MS = 60_000;
+const DRAWER_WIDTH_STORAGE_KEY = "cocalc:admin:activeUsersMapDrawerWidth";
+const DEFAULT_DRAWER_WIDTH = "70%";
+const MIN_DRAWER_WIDTH = 560;
+
+function clampDrawerWidth(width: number): number {
+  if (typeof window === "undefined") return Math.max(MIN_DRAWER_WIDTH, width);
+  const maximum = Math.max(320, window.innerWidth - 48);
+  const minimum = Math.min(MIN_DRAWER_WIDTH, maximum);
+  return Math.min(maximum, Math.max(minimum, width));
+}
+
+function readDrawerWidth(): number | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const value = Number(window.localStorage.getItem(DRAWER_WIDTH_STORAGE_KEY));
+    return Number.isFinite(value) && value > 0
+      ? clampDrawerWidth(value)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistDrawerWidth(width: number): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    DRAWER_WIDTH_STORAGE_KEY,
+    `${clampDrawerWidth(width)}`,
+  );
+}
 
 const WINDOW_OPTIONS: Array<{
   label: string;
@@ -122,6 +153,7 @@ function ActiveUsersMapPlot({
         const name = countryName(country.country_code);
         const selected = selectedCountryCode === country.country_code;
         const label = `${name}: ${country.count} active user${country.count === 1 ? "" : "s"}`;
+        const position = projectActiveUserMapPosition(country);
         return (
           <Tooltip key={country.country_code} title={label}>
             <button
@@ -141,10 +173,10 @@ function ActiveUsersMapPlot({
                 fontWeight: 700,
                 height: size,
                 justifyContent: "center",
-                left: `${((country.longitude + 180) / 360) * 100}%`,
+                left: `${position.left}%`,
                 padding: 0,
                 position: "absolute",
-                top: `${((90 - country.latitude) / 180) * 100}%`,
+                top: `${position.top}%`,
                 transform: "translate(-50%, -50%)",
                 width: size,
               }}
@@ -207,6 +239,9 @@ export function ActiveUsersMapAdmin() {
   const [selectedGroup, setSelectedGroup] = useState<string>();
   const [selectedUser, setSelectedUser] = useState<User>();
   const [loadingUser, setLoadingUser] = useState(false);
+  const [drawerWidth, setDrawerWidth] = useState<number | undefined>(
+    readDrawerWidth,
+  );
   const requestInFlight = useRef(false);
 
   const load = useCallback(async () => {
@@ -354,7 +389,19 @@ export function ActiveUsersMapAdmin() {
       ) : null}
       <Drawer
         open={selectedGroup != null}
-        width={720}
+        placement="right"
+        size={drawerWidth ?? DEFAULT_DRAWER_WIDTH}
+        resizable={{
+          onResize: (width) => {
+            const next = clampDrawerWidth(width);
+            setDrawerWidth(next);
+            try {
+              persistDrawerWidth(next);
+            } catch {
+              // Resizing still works when localStorage is unavailable.
+            }
+          },
+        }}
         title={drawerTitle}
         onClose={() => {
           setSelectedGroup(undefined);
