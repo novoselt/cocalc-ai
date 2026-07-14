@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260714-v6"
+HELPER_SCHEMA_VERSION = "20260714-v7"
 RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -4865,7 +4865,7 @@ attach_pid_to_project_pool() {
 }
 
 attach_pid_tree_to_project_pool() {
-  local root_pid="$1" target="${2:-}" pending pid child
+  local root_pid="$1" target="${2:-}" pending pid child children_file children
   if [ -z "${root_pid}" ] || ! kill -0 "${root_pid}" 2>/dev/null; then
     return 0
   fi
@@ -4878,10 +4878,15 @@ attach_pid_tree_to_project_pool() {
       pending="${pending#* }"
     fi
     attach_pid_to_project_pool "${pid}" "${target}" || true
-    while IFS= read -r child; do
+    children_file="/proc/${pid}/task/${pid}/children"
+    children=""
+    if [ -r "${children_file}" ]; then
+      read -r children < "${children_file}" || true
+    fi
+    for child in ${children}; do
       [ -n "${child}" ] || continue
       pending="${pending:+${pending} }${child}"
-    done < <(ps -eo pid=,ppid= | awk -v parent="${pid}" '$2 == parent {print $1}')
+    done
   done
 }
 

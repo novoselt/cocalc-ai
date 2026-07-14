@@ -1548,6 +1548,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                'children_file="/proc/${pid}/task/${pid}/children"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertNotIn(
+                "ps -eo pid=,ppid=",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "default_podman_runtime_dir()",
                 rootctl.read_text(encoding="utf-8"),
             )
