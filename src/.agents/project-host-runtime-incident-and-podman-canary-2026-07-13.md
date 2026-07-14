@@ -64,8 +64,7 @@ The disposable staging canary also established a useful baseline:
 This establishes that the reverted runtime can recover projects quickly in
 parallel. It does not yet satisfy the long-duration promotion gate below.
 
-The next hardening layer is implemented in code on 2026-07-14 and is pending
-staging deployment and fault-injection validation:
+The next hardening layer was deployed to staging only on 2026-07-14:
 
 - the placement contract now fails closed when runtime-health metadata is
   missing instead of treating an old or incomplete heartbeat as healthy;
@@ -84,6 +83,49 @@ staging deployment and fault-injection validation:
   automatic reboot in ten minutes;
 - every synthetic failure, automatic reboot, and exhausted recovery budget
   produces a deduplicated operator alert.
+
+The first staging lifecycle probes exposed a real configuration bug rather than
+an artificial failure: project start used CoCalc's persistent Podman runtime
+directory, while container exec invoked Podman without the shared environment
+and therefore searched under `/run/user/2000`. Both canary hosts were correctly
+quarantined, completed forensic capture, and retried. One host received the
+bounded automatic hard reboot; the fleet-wide spacing gate prevented the second
+host from rebooting concurrently. `224ad4323c` fixed sandbox exec to use the
+same runtime environment and suppressed central provisioned-state reporting for
+synthetic volumes.
+
+After that fix, both staging hosts passed complete create/start/exec/write/read/
+stop/delete probes in about 1.2 seconds. The generated projects left no central
+PostgreSQL project row, host-local SQLite project row, Podman container, or
+Btrfs home/scratch subvolume. Both hosts returned to runtime `ready`, and a
+read-only audit found no active project-start LRO predating either current host
+session.
+
+The next scheduled 30-minute cycle passed again on both hosts on 2026-07-14 at
+01:32 UTC. The lifecycle durations were 0.83 and 0.67 seconds, controller
+durations were 1.25 and 1.00 seconds, and both newly generated project IDs again
+left no central project row. The rebooted host's automatic-recovery metadata
+changed from `scheduled` to `recovered` and retained the completed work ID,
+prior boot ID, attempt history, and cooldown.
+
+The failure run also verified delivery of synthetic-failure and automatic-
+reboot admin alerts. It revealed that random temporary project identifiers in
+the error text defeated exact-body message deduplication and produced repeated
+alerts. `bd2b7002a7` persists a per-host alert timestamp, limits continuous
+failure alerts to one per 15 minutes, and marks a scheduled reboot as recovered
+after a successful probe on the new boot without discarding its rolling attempt
+history or cooldown.
+
+Staging artifacts currently under test are:
+
+- project-host `20260714T010012Z-224ad432-runtime-hardening-sandbox-env`;
+- hub controller commits `bd2b7002a7` and `a3c5a0582b`, with the current staging
+  release built from `a3c5a0582b`.
+
+No synthetic-probe or automatic-reboot hardening code from this phase has been
+deployed to production. Staging project-host targets currently use explicit
+host overrides because the canary artifact has not been promoted to the fleet
+default. Remove those overrides only after an intentional global promotion.
 
 ## Incident timeline
 
@@ -294,10 +336,12 @@ then make comparative changes in staging.
    throttling, and stale-LRO fixes independently.
 4. **Complete:** deploy the atomic compatibility-library publication fix to the
    fleet and remove temporary host-specific software overrides.
-5. **Implemented; staging validation required:** synthetic runtime probes,
-   automated quarantine, durable forensic completion state, and alert delivery.
-6. **Implemented; staging validation required:** bounded automatic hard-reboot
-   recovery after forensic capture, with per-host and fleet-wide loop guards.
+5. **Staging-validated:** synthetic runtime probes, automated quarantine,
+   durable forensic completion state, cleanup, retry, and alert delivery.
+6. **Partially staging-validated:** bounded automatic hard-reboot recovery ran
+   once after forensic capture and the fleet gate blocked a concurrent second
+   reboot. Cooldown and rolling-budget exhaustion remain covered by tests but
+   require deliberate multi-reboot staging fault injection before production.
 
 Do not combine this production stabilization with a Podman upgrade, a switch to
 systemd cgroups, or a networking-backend change. Those remain separate staging
@@ -432,23 +476,26 @@ systemd, Podman, conmon/crun, and CoCalc.
 
 ## Remaining work
 
-- Deploy the hardening layer to staging only. Confirm a healthy synthetic probe
-  leaves no central project row, local SQLite row, container, volume, port
-  lease, or last-edited event behind.
-- Inject a synthetic lifecycle failure and a passive `podman ps` failure.
-  Verify each removes the host from placement and preserves one bounded
-  forensic capture before any reboot is queued.
-- Verify failed synthetic probes retry after 90 seconds, successful probes clear
-  quarantine, and healthy hosts are probed at most once every 30 minutes.
-- Verify a host process restart proactively cancels pre-session normal and
-  restore-backed start LROs without waiting for user traffic.
-- Verify automatic hard reboot requires two failures and completed diagnostics,
-  then enforces the 15-minute per-host cooldown, two-attempt six-hour budget,
-  and one-reboot-per-ten-minute fleet circuit breaker.
-- Confirm deduplicated alerts for synthetic failure, automatic reboot, and
-  exhausted recovery reach the production-equivalent staging alert channel.
-- Implement bounded automatic hard-reboot recovery after repeated failed probes
-  and a diagnostic window, with reboot-loop protection.
+- **Complete on staging:** healthy synthetic probes leave no central project
+  row, local SQLite row, container, or home/scratch subvolume.
+- **Complete on staging:** lifecycle failure quarantines placement, records
+  bounded forensic completion, retries after 90 seconds, and a later pass clears
+  quarantine.
+- **Complete in tests and staging audit:** host-session transitions proactively
+  cancel pre-session normal and restore-backed project-start LROs. No stale
+  active start LRO remained after the canary reboot and rollout.
+- **Complete on staging:** two failures plus completed diagnostics queued one
+  hard reboot, and the ten-minute fleet gate prevented a concurrent reboot.
+- Deliberately fault one staging host through the complete two-attempt/six-hour
+  exhaustion path and verify the 15-minute per-host cooldown and exhausted-
+  budget alert. Do not run this production experiment.
+- Inject a separate passive `podman ps` failure so the passive detector is
+  validated independently of the full lifecycle probe.
+- **Complete on staging:** a successful new-boot probe changes automatic
+  recovery state from `scheduled` to `recovered` while preserving the rolling
+  reboot attempt budget.
+- Verify the metadata-backed 15-minute alert limiter under a continuous staged
+  failure.
 - Build the disposable-host fault-injection harness and complete the 200
   interruption and 1,000 project-cycle baseline on the reverted runtime.
 - Package pinned Podman 5.8.x and Podman 6.0.1 runtime bundles, including their
