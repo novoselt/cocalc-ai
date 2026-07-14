@@ -9,11 +9,14 @@ import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import type {
   ActiveUserMapCountry,
   ActiveUserMapOverview,
+  ActiveUserMapQuery,
   ActiveUserMapUser,
   ActiveUserMapWindowMinutes,
   BrowserSessionLocation,
 } from "@cocalc/conat/hub/api/system";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import { listConfiguredBays } from "@cocalc/server/bay-directory";
+import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 
 const logger = getLogger("server:account-presence-locations");
 const LOCATION_TTL_HOURS = 26;
@@ -169,9 +172,10 @@ function normalizeWindow(value: number): ActiveUserMapWindowMinutes {
   return value as ActiveUserMapWindowMinutes;
 }
 
-function mapUser(row: ActiveLocationRow): ActiveUserMapUser {
+function mapUser(row: ActiveLocationRow, bay_id: string): ActiveUserMapUser {
   return {
     account_id: row.account_id,
+    bay_id,
     display_name: row.display_name,
     first_name: row.first_name,
     last_name: row.last_name,
@@ -197,12 +201,14 @@ export async function getActiveUserMapOverview({
       enabled: false,
       checked_at,
       bay_id,
+      current_bay_id: bay_id,
       active_minutes: windowMinutes,
       total_active: 0,
       mapped_active: 0,
       unknown_location: 0,
       countries: [],
       unknown_users: [],
+      bays: [{ bay_id, ok: true, enabled: false, total_active: 0 }],
     };
   }
   const { rows } = await getPool().query<ActiveLocationRow>(
@@ -224,7 +230,7 @@ export async function getActiveUserMapOverview({
   >();
   const unknown_users: ActiveUserMapUser[] = [];
   for (const row of rows) {
-    const user = mapUser(row);
+    const user = mapUser(row, bay_id);
     const latitude = Number(row.latitude);
     const longitude = Number(row.longitude);
     if (
@@ -268,13 +274,201 @@ export async function getActiveUserMapOverview({
     enabled: true,
     checked_at,
     bay_id,
+    current_bay_id: bay_id,
     active_minutes: windowMinutes,
     total_active: rows.length,
     mapped_active,
     unknown_location: unknown_users.length,
     countries: mappedCountries,
     unknown_users,
+    bays: [
+      {
+        bay_id,
+        ok: true,
+        enabled: true,
+        total_active: rows.length,
+      },
+    ],
   };
+}
+
+type AggregateUser = {
+  user: ActiveUserMapUser;
+  country_code?: string;
+  latitude?: number;
+  longitude?: number;
+};
+
+function shouldReplaceAggregateUser(
+  current: AggregateUser | undefined,
+  candidate: AggregateUser,
+): boolean {
+  if (!current) return true;
+  const currentTime = new Date(current.user.last_active).valueOf();
+  const candidateTime = new Date(candidate.user.last_active).valueOf();
+  return (
+    candidateTime > currentTime ||
+    (candidateTime === currentTime &&
+      candidate.country_code != null &&
+      current.country_code == null)
+  );
+}
+
+function aggregateActiveUserMapReports({
+  reports,
+  active_minutes,
+  current_bay_id,
+  bays,
+}: {
+  reports: ActiveUserMapOverview[];
+  active_minutes: ActiveUserMapWindowMinutes;
+  current_bay_id: string;
+  bays: ActiveUserMapOverview["bays"];
+}): ActiveUserMapOverview {
+  const usersByAccount = new Map<string, AggregateUser>();
+  for (const report of reports) {
+    for (const country of report.countries) {
+      for (const user of country.users) {
+        const candidate: AggregateUser = {
+          user,
+          country_code: country.country_code,
+          latitude: country.latitude,
+          longitude: country.longitude,
+        };
+        if (
+          shouldReplaceAggregateUser(
+            usersByAccount.get(user.account_id),
+            candidate,
+          )
+        ) {
+          usersByAccount.set(user.account_id, candidate);
+        }
+      }
+    }
+    for (const user of report.unknown_users) {
+      const candidate: AggregateUser = { user };
+      if (
+        shouldReplaceAggregateUser(
+          usersByAccount.get(user.account_id),
+          candidate,
+        )
+      ) {
+        usersByAccount.set(user.account_id, candidate);
+      }
+    }
+  }
+
+  const countries = new Map<
+    string,
+    ActiveUserMapCountry & { latitudeSum: number; longitudeSum: number }
+  >();
+  const unknown_users: ActiveUserMapUser[] = [];
+  for (const entry of usersByAccount.values()) {
+    if (
+      !entry.country_code ||
+      entry.latitude == null ||
+      entry.longitude == null
+    ) {
+      unknown_users.push(entry.user);
+      continue;
+    }
+    const country = countries.get(entry.country_code) ?? {
+      country_code: entry.country_code,
+      count: 0,
+      latitude: 0,
+      longitude: 0,
+      latitudeSum: 0,
+      longitudeSum: 0,
+      users: [],
+    };
+    country.count += 1;
+    country.latitudeSum += entry.latitude;
+    country.longitudeSum += entry.longitude;
+    country.users.push(entry.user);
+    countries.set(entry.country_code, country);
+  }
+  const byLastActive = (a: ActiveUserMapUser, b: ActiveUserMapUser) =>
+    new Date(b.last_active).valueOf() - new Date(a.last_active).valueOf();
+  unknown_users.sort(byLastActive);
+  const mappedCountries = [...countries.values()]
+    .map(({ latitudeSum, longitudeSum, ...country }) => ({
+      ...country,
+      latitude: latitudeSum / country.count,
+      longitude: longitudeSum / country.count,
+      users: country.users.sort(byLastActive),
+    }))
+    .sort(
+      (a, b) =>
+        b.count - a.count || a.country_code.localeCompare(b.country_code),
+    );
+  const mapped_active = mappedCountries.reduce(
+    (total, country) => total + country.count,
+    0,
+  );
+  return {
+    enabled: reports.some((report) => report.enabled),
+    checked_at: new Date().toISOString(),
+    bay_id: reports.length === 1 ? reports[0].bay_id : "all",
+    current_bay_id,
+    active_minutes,
+    total_active: usersByAccount.size,
+    mapped_active,
+    unknown_location: unknown_users.length,
+    countries: mappedCountries,
+    unknown_users,
+    bays,
+  };
+}
+
+export async function getActiveUserMapOverviewAcrossBays({
+  account_id,
+  active_minutes,
+}: ActiveUserMapQuery): Promise<ActiveUserMapOverview> {
+  const windowMinutes = normalizeWindow(active_minutes);
+  const currentBayId = getConfiguredBayId();
+  const bayIds = [
+    ...new Set(
+      (await listConfiguredBays())
+        .map(({ bay_id }) => `${bay_id ?? ""}`.trim())
+        .filter(Boolean)
+        .concat(currentBayId),
+    ),
+  ].sort();
+  const settled = await Promise.allSettled(
+    bayIds.map(async (bay_id) =>
+      bay_id === currentBayId
+        ? await getActiveUserMapOverview({ active_minutes: windowMinutes })
+        : await getInterBayBridge()
+            .bayOps(bay_id, { timeout_ms: 10_000 })
+            .getActiveUserMap({
+              account_id,
+              active_minutes: windowMinutes,
+            }),
+    ),
+  );
+  const reports: ActiveUserMapOverview[] = [];
+  const bays: ActiveUserMapOverview["bays"] = bayIds.map((bay_id, index) => {
+    const result = settled[index];
+    if (result.status === "fulfilled") {
+      reports.push(result.value);
+      return {
+        bay_id,
+        ok: true,
+        enabled: result.value.enabled,
+        total_active: result.value.total_active,
+      };
+    }
+    return { bay_id, ok: false, error: `${result.reason}` };
+  });
+  if (reports.length === 0) {
+    throw Error("active user map is unavailable on every configured bay");
+  }
+  return aggregateActiveUserMapReports({
+    reports,
+    active_minutes: windowMinutes,
+    current_bay_id: currentBayId,
+    bays,
+  });
 }
 
 export function clearAccountPresenceLocationThrottleForTesting(): void {

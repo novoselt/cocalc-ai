@@ -147,6 +147,7 @@ import {
   getMembershipAnalyticsEventsLocal,
   getMembershipAnalyticsOverviewLocal,
 } from "@cocalc/server/membership/analytics";
+import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
 import { createImpersonationGrantLocal } from "@cocalc/server/auth/impersonation";
 import { getAccountIdFromRememberMe as getLocalAccountIdFromRememberMe } from "@cocalc/server/auth/get-account";
 import { verifyFreshAuthCredentials } from "@cocalc/server/auth/two-factor";
@@ -575,6 +576,8 @@ async function startBayOpsService(): Promise<void> {
       seed_bay_id: getConfiguredClusterSeedBayId(),
       bays: [{ bay_id, ok: true }],
     }),
+    getActiveUserMap: async ({ active_minutes }) =>
+      await getActiveUserMapOverview({ active_minutes }),
     getMembershipAnalyticsEvents: async (opts) =>
       await getMembershipAnalyticsEventsLocal({ query: opts }),
     backfillMembershipAnalyticsPurchases: async (opts) =>

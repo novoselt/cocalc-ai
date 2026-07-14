@@ -25,6 +25,7 @@ import {
   recordMembershipAnalyticsEvent,
   recordMembershipPurchaseCompleted,
 } from "@cocalc/server/membership/analytics";
+import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
 
 // nothing should ever be this small, but just in case:
 const MIN_SUBSCRIPTION_AMOUNT = 1;
@@ -177,7 +178,8 @@ export default async function createSubscriptionPayment({
         client,
       });
       // it worked -- so commit it
-      client.query("COMMIT");
+      await client.query("COMMIT");
+      await refreshAccountBalanceAndPublishBestEffort({ account_id });
     } catch (err) {
       logger.debug("error renewing subscription", err);
       await client.query("ROLLBACK");
@@ -413,6 +415,7 @@ export async function processSubscriptionRenewal({
     }
     if (useTransaction) {
       await transaction.query("COMMIT");
+      await refreshAccountBalanceAndPublishBestEffort({ account_id });
     }
   } catch (err) {
     if (useTransaction) {

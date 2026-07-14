@@ -119,6 +119,8 @@ import type {
 } from "@cocalc/conat/hub/api/legacy-migration";
 import type {
   AcpAdmissionDenialReport,
+  ActiveUserMapOverview,
+  ActiveUserMapQuery,
   BayBackupsInfo,
   BayDrainPreflightResult,
   GlobalConfigPropagationStatus,
@@ -2288,6 +2290,7 @@ export type BayOpsMethod =
   | "get-membership-tiers"
   | "get-membership-tier-usage-report"
   | "get-membership-analytics-overview"
+  | "get-active-user-map"
   | "get-membership-analytics-events"
   | "backfill-membership-analytics-purchases"
   | "set-server-setting"
@@ -3592,6 +3595,9 @@ export interface InterBayBayOpsApi {
   getMembershipAnalyticsOverview: (
     opts: MembershipAnalyticsOverviewQuery,
   ) => Promise<MembershipAnalyticsOverview>;
+  getActiveUserMap: (
+    opts: ActiveUserMapQuery,
+  ) => Promise<ActiveUserMapOverview>;
   getMembershipAnalyticsEvents: (
     opts: MembershipAnalyticsEventsQuery,
   ) => Promise<MembershipAnalyticsEventRow[]>;
@@ -8480,6 +8486,15 @@ export function createInterBayBayOpsClient({
       method: "get-membership-analytics-overview",
     }),
   });
+  const activeUserMapClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMap">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map",
+    }),
+  });
   const membershipAnalyticsEventsClient = createServiceClient<
     Pick<InterBayBayOpsApi, "getMembershipAnalyticsEvents">
   >({
@@ -8523,6 +8538,8 @@ export function createInterBayBayOpsClient({
       await membershipAnalyticsOverviewClient.getMembershipAnalyticsOverview(
         opts,
       ),
+    getActiveUserMap: async (opts) =>
+      await activeUserMapClient.getActiveUserMap(opts),
     getMembershipAnalyticsEvents: async (opts) =>
       await membershipAnalyticsEventsClient.getMembershipAnalyticsEvents(opts),
     backfillMembershipAnalyticsPurchases: async (opts) =>
@@ -8701,6 +8718,17 @@ export function createInterBayBayOpsHandlers({
       impl: {
         getMembershipAnalyticsOverview: async (opts) =>
           await impl.getMembershipAnalyticsOverview(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "getActiveUserMap">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map",
+      }),
+      impl: {
+        getActiveUserMap: async (opts) => await impl.getActiveUserMap(opts),
       },
     }),
     createServiceHandler<
