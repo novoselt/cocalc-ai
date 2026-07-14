@@ -42,7 +42,7 @@ from typing import Any
 
 STATE_SCHEMA_VERSION = 1
 HELPER_SCHEMA_VERSION = "20260714-v6"
-RUNTIME_WRAPPER_VERSION = "20260714-v13"
+RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
 BUNDLE_RETENTION_COUNT = 3
@@ -2174,11 +2174,16 @@ is_project_uuid() {
   echo "$1" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 }
 
-require_runtime_owned_pid() {
-  local pid="$1" expected_uid="${SUDO_UID:-}" actual_uid
+require_live_pid() {
+  local pid="$1"
   if ! echo "$pid" | grep -Eq '^[0-9]+$' || [ "$pid" -le 1 ] || ! kill -0 "$pid" 2>/dev/null; then
     deny "project-pid-invalid" "$pid"
   fi
+}
+
+require_runtime_owned_pid() {
+  local pid="$1" expected_uid="${SUDO_UID:-}" actual_uid
+  require_live_pid "$pid"
   if ! echo "$expected_uid" | grep -Eq '^[0-9]+$' || [ "$expected_uid" -eq 0 ]; then
     deny "project-runtime-uid-invalid" "${expected_uid:-missing}"
   fi
@@ -2426,7 +2431,9 @@ case "$cmd" in
       echo "usage: cocalc-runtime-storage verify-project-pool <project-id> <pid>" >&2
       exit 2
     fi
-    require_runtime_owned_pid "$2"
+    # Container init uses a subordinate UID under rootless keep-id. This is a
+    # read-only containment check, so only require a live PID here.
+    require_live_pid "$2"
     verify_project_pid_in_pool "$2"
     ;;
   attach-project-cgroup)
