@@ -150,6 +150,8 @@ log before the replacement process started.
 The follow-up hardening therefore:
 
 - reduces the default synthetic RPC timeout from 15 minutes to 2 minutes;
+- schedules a new lifecycle probe after every project-host process-session
+  transition, not only after a VM boot or the normal 30-minute interval;
 - includes the deployment hostname in synthetic-failure alert subjects and
   bodies, avoiding confusion between Lite4b, staging, and production;
 - rotates up to five prior project-host logs under `log-history/` instead of

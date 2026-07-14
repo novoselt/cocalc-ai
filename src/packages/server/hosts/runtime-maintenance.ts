@@ -173,6 +173,11 @@ function syntheticProbeDue(row: RuntimeHostRow, nowMs = Date.now()): boolean {
   if (!probeBootId || (currentBootId && probeBootId !== currentBootId)) {
     return true;
   }
+  const currentSessionId = `${row.metadata?.host_session_id ?? ""}`.trim();
+  const probeSessionId = `${probe.host_session_id ?? ""}`.trim();
+  if (currentSessionId && probeSessionId !== currentSessionId) {
+    return true;
+  }
   const status = `${probe.status ?? ""}`.trim();
   const checkedAt = timestampMs(probe.checked_at ?? probe.claimed_at) ?? 0;
   if (status === "running") {

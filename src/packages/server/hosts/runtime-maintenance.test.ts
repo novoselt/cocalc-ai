@@ -124,18 +124,22 @@ describe("project-host runtime maintenance policy", () => {
     ).toMatchObject({ action: "wait", reason: "host heartbeat is stale" });
   });
 
-  it("runs a new synthetic probe after a boot or the success interval", () => {
+  it("runs a new synthetic probe after a boot, process session, or interval", () => {
     const row = degradedCloudHost({
       host_boot_id: "boot-4",
+      host_session_id: "session-4",
       runtime_synthetic_probe: {
         status: "passed",
         host_boot_id: "boot-3",
+        host_session_id: "session-3",
         checked_at: new Date(NOW - 60_000).toISOString(),
       },
     });
     expect(_test.syntheticProbeDue(row, NOW)).toBe(true);
 
     row.metadata.runtime_synthetic_probe.host_boot_id = "boot-4";
+    expect(_test.syntheticProbeDue(row, NOW)).toBe(true);
+    row.metadata.runtime_synthetic_probe.host_session_id = "session-4";
     row.metadata.runtime_synthetic_probe.checked_at = new Date(
       NOW - 31 * 60_000,
     ).toISOString();
