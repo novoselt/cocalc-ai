@@ -4,6 +4,18 @@ const mockGetConmonContainerProcesses = jest.fn();
 const mockGetConmonContainerProcessLists = jest.fn();
 const mockUnmountAll = jest.fn();
 const mockFileServerClient = jest.fn();
+const mockPodmanLimits = jest.fn(async () => [] as string[]);
+const mockProjectCgroupLimitsFromPodmanArgs = jest.fn(() => ({
+  memory_max: "max",
+  memory_high: "max",
+  memory_low: "0",
+  memory_swap_max: "max",
+  pids_max: "max",
+  cpu_max_quota: "max",
+  cpu_max_period: "100000",
+  cpu_weight: "100",
+  io_weight: "100",
+}));
 const mockConfiguredContainerRuntimeCurrent = jest.fn<string | undefined, []>(
   () => undefined,
 );
@@ -88,7 +100,10 @@ jest.mock("./rootfs", () => ({
 }));
 
 jest.mock("./limits", () => ({
-  podmanLimits: jest.fn(async () => []),
+  podmanLimits: (...args: any[]) => mockPodmanLimits(...args),
+  projectCgroupLimitsFromPodmanArgs: (...args: any[]) =>
+    mockProjectCgroupLimitsFromPodmanArgs(...args),
+  withoutPodmanCgroupLimits: (args: string[]) => args,
 }));
 
 jest.mock("./startup-scripts", () => ({
@@ -580,7 +595,7 @@ describe("project-runner podman orphan fallback", () => {
         project_id: project1,
         name: `project-${project1}`,
       }),
-    ).rejects.toThrow("escaped aggregate cgroup containment");
+    ).rejects.toThrow("escaped project cgroup containment");
   });
 
   it("does not set project quota twice when localPath already applied it", async () => {

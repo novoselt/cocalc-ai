@@ -51,6 +51,12 @@ import { mount as mountRootFs, unmountAll as unmountAllRootFs } from "./rootfs";
 import { type ProjectState } from "@cocalc/conat/project/runner/state";
 import { type Configuration } from "@cocalc/conat/project/runner/types";
 import { DEFAULT_PROJECT_IMAGE } from "@cocalc/util/db-schema/defaults";
+import {
+  podmanLimits,
+  projectCgroupLimitsFromPodmanArgs,
+  withoutPodmanCgroupLimits,
+  type ProjectCgroupLimits,
+} from "./limits";
 import { executeCode } from "@cocalc/backend/execute-code";
 import {
   getConmonContainerProcessLists,
@@ -103,9 +109,14 @@ const START_RUNNING_CHECK_INTERVAL_MS = 250;
 const START_FAILURE_LOG_LINES = 80;
 const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
 const VERIFY_PROJECT_POOL_TIMEOUT_S = 10;
+const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
 const PROJECT_POOL_LAUNCHER_SCRIPT = `set -euo pipefail
-sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" max max 0 max max max 100000 100 100
+sudo -n /usr/local/sbin/cocalc-runtime-storage enter-project-cgroup "$1" "$$"
 shift
+exec podman "$@"`;
+const PROJECT_CGROUP_LAUNCHER_SCRIPT = `set -euo pipefail
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}"
+shift 10
 exec podman "$@"`;
 const DEFAULT_PROJECT_SCRIPT = join(
   COCALC_SRC,
@@ -664,6 +675,30 @@ export function projectPoolPodmanLauncher(project_id: string) {
   };
 }
 
+function projectCgroupPodmanLauncher(
+  project_id: string,
+  limits: ProjectCgroupLimits,
+) {
+  return {
+    command: "bash",
+    argsPrefix: [
+      "-c",
+      PROJECT_CGROUP_LAUNCHER_SCRIPT,
+      "cocalc-project-podman",
+      project_id,
+      limits.memory_max,
+      limits.memory_high,
+      limits.memory_low,
+      limits.memory_swap_max,
+      limits.pids_max,
+      limits.cpu_max_quota,
+      limits.cpu_max_period,
+      limits.cpu_weight,
+      limits.io_weight,
+    ],
+  };
+}
+
 export async function verifyProjectContainerInPool({
   project_id,
   name,
@@ -695,7 +730,7 @@ export async function verifyProjectContainerInPool({
   });
   if (result.exit_code != null && result.exit_code !== 0) {
     throw Error(
-      `project container ${name} escaped aggregate cgroup containment: ${result.stderr || result.stdout || `verification exited ${result.exit_code}`}`,
+      `project container ${name} escaped project cgroup containment: ${result.stderr || result.stdout || `verification exited ${result.exit_code}`}`,
     );
   }
 }
@@ -899,6 +934,86 @@ async function inspectContainerPids(name: string): Promise<number[]> {
       ]),
     ),
   ];
+}
+
+async function inspectContainerSandboxPath(
+  name: string,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await executeCode({
+      command: "podman",
+      args: ["inspect", "--format", "{{.NetworkSettings.SandboxKey}}", name],
+      timeout: STOP_INSPECT_TIMEOUT_S,
+      err_on_exit: false,
+      env: podmanEnv(),
+    });
+    return `${stdout ?? ""}`.trim() || undefined;
+  } catch (err) {
+    logger.warn("start: failed to inspect project network namespace", {
+      name,
+      err: `${err}`,
+    });
+    return undefined;
+  }
+}
+
+async function attachProjectToCgroup({
+  project_id,
+  name,
+  limits,
+}: {
+  project_id: string;
+  name: string;
+  limits: ProjectCgroupLimits;
+}): Promise<void> {
+  const sandboxPath = await inspectContainerSandboxPath(name);
+  const result = await executeCode({
+    command: "sudo",
+    args: [
+      "-n",
+      "/usr/local/sbin/cocalc-runtime-storage",
+      "attach-project-cgroup",
+      project_id,
+      sandboxPath ?? "-",
+      limits.memory_max,
+      limits.memory_high,
+      limits.memory_low,
+      limits.memory_swap_max,
+      limits.pids_max,
+      limits.cpu_max_quota,
+      limits.cpu_max_period,
+      limits.cpu_weight,
+      limits.io_weight,
+    ],
+    timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
+    err_on_exit: false,
+  });
+  if (result.exit_code != null && result.exit_code !== 0) {
+    throw Error(
+      `failed to attach ${name} to its project cgroup: ${result.stderr || result.stdout || `helper exited ${result.exit_code}`}`,
+    );
+  }
+}
+
+async function cleanupProjectCgroup(project_id: string): Promise<void> {
+  const result = await executeCode({
+    command: "sudo",
+    args: [
+      "-n",
+      "/usr/local/sbin/cocalc-runtime-storage",
+      "cleanup-project-cgroup",
+      project_id,
+    ],
+    timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
+    err_on_exit: false,
+  });
+  if (result.exit_code != null && result.exit_code !== 0) {
+    logger.warn("stop: failed to clean project cgroup", {
+      project_id,
+      exit_code: result.exit_code,
+      stderr: `${result.stderr ?? ""}`.trim(),
+    });
+  }
 }
 
 function tryKillPid(pid: number, signal: NodeJS.Signals): void {
@@ -1879,6 +1994,12 @@ export async function start({
       args.push("-e", `${key}=${env[key]}`);
     }
 
+    const limitArgs = await podmanLimits(config);
+    const projectCgroupLimits = projectCgroupLimitsFromPodmanArgs(limitArgs);
+    // The root helper applies controller-backed limits to the project leaf.
+    // Podman remains cgroup-disabled so it cannot move the runtime elsewhere.
+    args.push(...withoutPodmanCgroupLimits(limitArgs));
+
     // --init = have podman inject a tiny built in init script so we don't get zombies.
     args.push("--init");
     args.push("--init-path", "/usr/bin/catatonit");
@@ -1892,7 +2013,10 @@ export async function start({
       "podman_run",
       async () =>
         await podman(args, {
-          launcher: projectPoolPodmanLauncher(project_id),
+          launcher: projectCgroupPodmanLauncher(
+            project_id,
+            projectCgroupLimits,
+          ),
         }),
     );
     const started = await timings.measure(
@@ -1917,8 +2041,13 @@ export async function start({
       );
     }
     try {
+      await attachProjectToCgroup({
+        project_id,
+        name,
+        limits: projectCgroupLimits,
+      });
       await timings.measure(
-        "verify_aggregate_cgroup",
+        "verify_project_cgroup",
         async () => await verifyProjectContainerInPool({ project_id, name }),
       );
     } catch (err) {
@@ -1960,6 +2089,12 @@ export async function start({
       logger.warn("start: failed to unmount rootfs after startup error", {
         project_id,
         err: `${unmountErr}`,
+      });
+    });
+    await cleanupProjectCgroup(project_id).catch((cleanupErr) => {
+      logger.warn("start: failed to clean project cgroup after error", {
+        project_id,
+        err: `${cleanupErr}`,
       });
     });
     throw err;
@@ -2057,6 +2192,7 @@ export async function stop({
       // mask the correct lowerdir on the next start.
       await unmountAllRootFs(project_id);
       await cleanupProjectSecretsHostPath(project_id);
+      await cleanupProjectCgroup(project_id);
     } catch (err) {
       logger.debug("stop", { err });
       throw err;

@@ -1348,13 +1348,17 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('attach_pid_to_project_pool_storage "$$" "$pool"', script)
             self.assertIn("attach-pasta-cgroups)", script)
             self.assertIn("prepare-project-cgroup)", script)
+            self.assertIn("enter-project-cgroup)", script)
             self.assertIn("verify-project-pool)", script)
             self.assertIn("attach-project-cgroup)", script)
             self.assertIn(
-                'attach_project_launcher_to_pool "$launcher_pid"', script
+                'pool="$(project_cgroup "$project_id")"', script
             )
+            self.assertIn("configure_project_pool_hierarchy", script)
+            self.assertIn('> "$cgroup/memory.max"', script)
+            self.assertIn('> "$cgroup/memory.oom.group"', script)
+            self.assertIn("cocalc-project-cgroups.lock", script)
             self.assertIn('PROJECT_PROCESS_OOM_SCORE_ADJ="500"', script)
-            self.assertIn("project pool has no finite memory.max", script)
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
             self.assertIn("find_bees_pid()", script)
             self.assertIn("apply_bees_runtime_policy()", script)
@@ -1691,7 +1695,11 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "flatten_project_pool_cgroup()",
+                "enable_project_pool_controllers()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'legacy="${pool}/legacy"',
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
