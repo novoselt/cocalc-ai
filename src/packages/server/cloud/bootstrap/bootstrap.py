@@ -4355,6 +4355,10 @@ HELPER_SCHEMA_VERSION="__HELPER_SCHEMA_VERSION__"
 
 run_daemon() {
   cd /
+  if env_value_is_true "$(read_env_value COCALC_PROJECT_HOST_APP_CORE_DUMPS)"; then
+    /usr/bin/prlimit --core=0:1073741824 -- \
+      sudo -n -u "${RUNTIME_USER}" -H "${RUNTIME_BIN}" daemon "$@"
+  fi
   sudo -n -u "${RUNTIME_USER}" -H "${RUNTIME_BIN}" daemon "$@"
 }
 
