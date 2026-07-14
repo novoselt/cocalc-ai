@@ -5850,11 +5850,23 @@ def configure_cloudflared_with_options(
         return None
 
     def write_text_if_changed(path: Path, content: str) -> bool:
+        existing: str | None = None
         try:
-            if path.read_text(encoding="utf-8") == content:
+            existing = path.read_text(encoding="utf-8")
+            if existing == content:
                 return False
         except OSError:
             pass
+        old_sha = (
+            hashlib.sha256(existing.encode("utf-8")).hexdigest()[:12]
+            if existing is not None
+            else "missing"
+        )
+        new_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+        log_line(
+            cfg,
+            f"bootstrap: updating cloudflared file path={path} old_sha={old_sha} new_sha={new_sha}",
+        )
         path.write_text(content, encoding="utf-8")
         return True
 
