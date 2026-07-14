@@ -3763,6 +3763,15 @@ Supported deploy/smoke components:
               entry,
             })
           : undefined;
+        const hostBootstrap =
+          component === "host-bootstrap"
+            ? await publishHostBootstrapArtifact({
+                client,
+                config,
+                entry,
+                selector: manifest.artifact_id,
+              })
+            : undefined;
         emitSuccess(
           { globals: command.optsWithGlobals() as any },
           "software push",
@@ -3786,6 +3795,13 @@ Supported deploy/smoke components:
                   host_base_url: hostCompat.base_url,
                   host_files: hostCompat.urls,
                   host_catalogs: hostCompat.catalog_urls,
+                }
+              : {}),
+            ...(hostBootstrap
+              ? {
+                  host_bootstrap_selector: hostBootstrap.selector,
+                  host_bootstrap_url: hostBootstrap.url,
+                  host_bootstrap_sha256_url: hostBootstrap.sha256_url,
                 }
               : {}),
           },

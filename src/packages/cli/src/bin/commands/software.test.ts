@@ -1166,6 +1166,62 @@ test("software push uploads files manifest and component index", async () => {
   assert.equal(payload.data.duration, "0ms");
 });
 
+test("software push publishes an immutable host bootstrap selector", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-push-host-bootstrap-"));
+  const localStore = join(dir, "store");
+  const bootstrapSource = join(
+    dir,
+    "src",
+    "packages",
+    "server",
+    "cloud",
+    "bootstrap",
+    "bootstrap.py",
+  );
+  const bootstrapBody = "#!/usr/bin/env python3\nprint('bootstrap')\n";
+  mkdirSync(dirname(bootstrapSource), { recursive: true });
+  writeFileSync(bootstrapSource, bootstrapBody);
+  const r2 = makeR2Client();
+  const program = createProgram(
+    makeDeps({
+      localStore,
+      cwd: dir,
+      repoRoot: dir,
+      env: r2Env,
+      r2Client: r2.client,
+    }),
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "--quiet",
+    "software",
+    "build",
+    "host-bootstrap:immutable",
+  ]);
+  await program.parseAsync([
+    "node",
+    "test",
+    "--quiet",
+    "software",
+    "push",
+    "host-bootstrap:immutable",
+    "--env-file",
+    join(dir, "missing.env"),
+  ]);
+
+  const artifactId = "20260614T235912Z-e882d124-immutable";
+  const key = `software/bootstrap/${artifactId}/bootstrap.py`;
+  assert.equal(r2.objects.get(key)!.toString("utf8"), bootstrapBody);
+  const sha256 = createHash("sha256").update(bootstrapBody).digest("hex");
+  assert.equal(
+    r2.objects.get(`${key}.sha256`)!.toString("utf8"),
+    `${sha256}  bootstrap.py\n`,
+  );
+  assert.equal(r2.objects.has("software/bootstrap/latest/bootstrap.py"), false);
+});
+
 test("software push publishes host compatibility catalog for project bundle", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-push-project-"));
   const localStore = join(dir, "store");
