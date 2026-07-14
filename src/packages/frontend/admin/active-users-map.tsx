@@ -218,6 +218,7 @@ function UserList({
                   <Text copyable>{user.email_address}</Text>
                 )}
                 {locationLabel(user) && <Tag>{locationLabel(user)}</Tag>}
+                <Tag>Bay: {user.bay_id}</Tag>
                 <Text type="secondary">
                   Active <TimeAgo date={user.last_active} />
                 </Text>
@@ -305,13 +306,27 @@ export function ActiveUsersMapAdmin() {
       : selectedCountry
         ? `${countryName(selectedCountry.country_code)} (${selectedCountry.count})`
         : "Active users";
+  const failedBays = overview?.bays.filter(({ ok }) => !ok) ?? [];
+  const disabledBays =
+    overview?.bays.filter(({ ok, enabled }) => ok && enabled === false) ?? [];
+  const responsiveBays = overview?.bays.filter(({ ok }) => ok).length ?? 0;
+  const incompleteMapReasons = [
+    failedBays.length
+      ? `Unavailable: ${failedBays.map(({ bay_id }) => bay_id).join(", ")}.`
+      : "",
+    disabledBays.length
+      ? `Collection disabled: ${disabledBays
+          .map(({ bay_id }) => bay_id)
+          .join(", ")}.`
+      : "",
+  ].filter(Boolean);
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-        Current-bay accounts whose <code>last_active</code> changed during the
-        selected window. Locations are approximate, short-lived Cloudflare
-        observations; no IP address or location history is stored.
+        Accounts across registered bays whose <code>last_active</code> changed
+        during the selected window. Locations are approximate, short-lived
+        Cloudflare observations; no IP address or location history is stored.
       </Paragraph>
       <Space wrap>
         <Segmented
@@ -332,12 +347,21 @@ export function ActiveUsersMapAdmin() {
         </Button>
         {overview && (
           <Text type="secondary">
-            Checked <TimeAgo date={overview.checked_at} /> · Bay{" "}
-            {overview.bay_id}
+            Checked <TimeAgo date={overview.checked_at} /> · Current bay{" "}
+            {overview.current_bay_id} · Bays {responsiveBays}/
+            {overview.bays.length}
           </Text>
         )}
       </Space>
       {error && <ShowError error={error} setError={setError} />}
+      {incompleteMapReasons.length > 0 && overview?.enabled ? (
+        <Alert
+          showIcon
+          type="warning"
+          message="The active-users map is incomplete"
+          description={incompleteMapReasons.join(" ")}
+        />
+      ) : null}
       {overview && !overview.enabled ? (
         <Alert
           showIcon

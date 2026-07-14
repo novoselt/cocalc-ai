@@ -242,7 +242,7 @@ import {
 } from "./browser-sessions";
 import { getLiveBrowserSessionInfo } from "./browser-sessions-live";
 import {
-  getActiveUserMapOverview,
+  getActiveUserMapOverviewAcrossBays,
   recordAccountPresenceLocation,
 } from "@cocalc/server/account-presence-locations";
 import { createRememberMeCookie } from "@cocalc/server/auth/remember-me";
@@ -6501,7 +6501,10 @@ export async function getActiveUserMap({
   active_minutes: ActiveUserMapWindowMinutes;
 }): Promise<ActiveUserMapOverview> {
   await assertAdmin(account_id);
-  return await getActiveUserMapOverview({ active_minutes });
+  return await getActiveUserMapOverviewAcrossBays({
+    account_id,
+    active_minutes,
+  });
 }
 
 export async function listBrowserSessions({

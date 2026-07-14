@@ -248,6 +248,11 @@ export interface VisitorLocationHeaderTestResult {
 
 export type ActiveUserMapWindowMinutes = 5 | 15 | 60 | 1440;
 
+export interface ActiveUserMapQuery {
+  account_id?: string;
+  active_minutes: ActiveUserMapWindowMinutes;
+}
+
 export interface BrowserSessionLocation {
   country_code?: string;
   region_code?: string;
@@ -261,6 +266,7 @@ export interface BrowserSessionLocation {
 
 export interface ActiveUserMapUser {
   account_id: string;
+  bay_id: string;
   display_name: string | null;
   first_name: string | null;
   last_name: string | null;
@@ -270,6 +276,14 @@ export interface ActiveUserMapUser {
   region: string | null;
   city: string | null;
   timezone: string | null;
+}
+
+export interface ActiveUserMapBayStatus {
+  bay_id: string;
+  ok: boolean;
+  enabled?: boolean;
+  total_active?: number;
+  error?: string;
 }
 
 export interface ActiveUserMapCountry {
@@ -284,12 +298,14 @@ export interface ActiveUserMapOverview {
   enabled: boolean;
   checked_at: string;
   bay_id: string;
+  current_bay_id: string;
   active_minutes: ActiveUserMapWindowMinutes;
   total_active: number;
   mapped_active: number;
   unknown_location: number;
   countries: ActiveUserMapCountry[];
   unknown_users: ActiveUserMapUser[];
+  bays: ActiveUserMapBayStatus[];
 }
 
 export type UxLatencyEventType = "project_start" | "file_open" | string;
@@ -1875,10 +1891,9 @@ export interface System {
     bay_id?: string;
   }) => Promise<BayLoadInfo>;
 
-  getActiveUserMap: (opts: {
-    account_id?: string;
-    active_minutes: ActiveUserMapWindowMinutes;
-  }) => Promise<ActiveUserMapOverview>;
+  getActiveUserMap: (
+    opts: ActiveUserMapQuery,
+  ) => Promise<ActiveUserMapOverview>;
 
   recordUxLatencyEvent: (opts: {
     account_id?: string;
