@@ -14,11 +14,6 @@ const CWD_ENV = "COCALC_PROJECT_HOST_SUPERVISED_CWD";
 const VERSION_ENV = "COCALC_PROJECT_HOST_SUPERVISED_VERSION";
 const APP_PID_PATH_ENV = "COCALC_PROJECT_HOST_APP_PID_PATH";
 const SUPERVISOR_PID_ENV = "COCALC_PROJECT_HOST_SUPERVISOR_PID";
-const CORE_DUMPS_ENV = "COCALC_PROJECT_HOST_APP_CORE_DUMPS";
-const CORE_LIMIT_ENV = "COCALC_PROJECT_HOST_APP_CORE_LIMIT_BYTES";
-const PRLIMIT_PATH = "/usr/bin/prlimit";
-const DEFAULT_CORE_LIMIT_BYTES = 512 * 1024 * 1024;
-const MAX_CORE_LIMIT_BYTES = 1024 * 1024 * 1024;
 
 const FORWARDED_SIGNALS: NodeJS.Signals[] = [
   "SIGTERM",
@@ -53,39 +48,6 @@ function childEnvironment(): NodeJS.ProcessEnv {
   delete env[APP_PID_PATH_ENV];
   env[SUPERVISOR_PID_ENV] = String(process.pid);
   return env;
-}
-
-function envIsTrue(value: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes(
-    `${value ?? ""}`.trim().toLowerCase(),
-  );
-}
-
-export function resolveSupervisedCommand(
-  command: string,
-  args: string[],
-): { command: string; args: string[] } {
-  if (!envIsTrue(process.env[CORE_DUMPS_ENV])) {
-    return { command, args };
-  }
-  const configured = `${process.env[CORE_LIMIT_ENV] ?? ""}`.trim();
-  const limit = configured ? Number(configured) : DEFAULT_CORE_LIMIT_BYTES;
-  if (
-    !Number.isSafeInteger(limit) ||
-    limit <= 0 ||
-    limit > MAX_CORE_LIMIT_BYTES
-  ) {
-    throw new Error(
-      `${CORE_LIMIT_ENV} must be an integer between 1 and ${MAX_CORE_LIMIT_BYTES}`,
-    );
-  }
-  if (!fs.existsSync(PRLIMIT_PATH)) {
-    throw new Error(`${PRLIMIT_PATH} is required when ${CORE_DUMPS_ENV}=1`);
-  }
-  return {
-    command: PRLIMIT_PATH,
-    args: [`--core=${limit}:${limit}`, "--", command, ...args],
-  };
 }
 
 function removeAppPidFile(appPidPath: string | undefined, pid?: number): void {
@@ -159,11 +121,10 @@ export async function superviseApp(): Promise<SupervisedAppResult> {
   const appPidPath =
     `${process.env[APP_PID_PATH_ENV] ?? ""}`.trim() || undefined;
 
-  const supervised = resolveSupervisedCommand(command, args);
   let forwardedSignal: NodeJS.Signals | undefined;
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(supervised.command, supervised.args, {
+    child = spawn(command, args, {
       cwd,
       env: childEnvironment(),
       argv0: "project-host:app",

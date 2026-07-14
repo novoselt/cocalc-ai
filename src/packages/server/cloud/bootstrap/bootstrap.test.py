@@ -1526,18 +1526,6 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "prlimit --core=0:1073741824",
-                rootctl.read_text(encoding="utf-8"),
-            )
-            self.assertIn(
-                'rlimit_core="0,1073741824"',
-                rootctl.read_text(encoding="utf-8"),
-            )
-            self.assertIn(
-                'visudo -c -f "${sudoers_tmp}"',
-                rootctl.read_text(encoding="utf-8"),
-            )
-            self.assertIn(
                 "kernel.core_pipe_limit = 4",
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -1576,7 +1564,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'parent_pid="$(sed -n',
                 core_handler_text,
             )
-            self.assertIn("count=1024", core_handler_text)
+            self.assertIn("count=1024 conv=sparse", core_handler_text)
             self.assertIn('"${kept}" -gt 3', core_handler_text)
             subprocess.run(["bash", "-n", str(core_handler)], check=True)
 
