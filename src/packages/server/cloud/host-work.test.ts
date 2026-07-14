@@ -640,6 +640,7 @@ describe("cloud host start failures", () => {
       last_seen: new Date() as any,
       metadata: {
         owner: "acct-owner",
+        runtime_health: { status: "ready", ready: true },
         machine: {
           cloud: "gcp",
           zone: "us-west3-b",

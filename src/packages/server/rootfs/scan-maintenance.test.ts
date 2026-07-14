@@ -86,6 +86,9 @@ describe("RootFS scan maintenance", () => {
               status: "running",
               last_seen: now,
               deleted: null,
+              metadata: {
+                runtime_health: { status: "ready", ready: true },
+              },
             },
             {
               id: "host-cached",
@@ -93,6 +96,9 @@ describe("RootFS scan maintenance", () => {
               status: "running",
               last_seen: now,
               deleted: null,
+              metadata: {
+                runtime_health: { status: "ready", ready: true },
+              },
             },
           ],
         };

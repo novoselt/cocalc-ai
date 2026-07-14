@@ -453,7 +453,13 @@ async function executeSyntheticProbe(
       startedAt,
       result,
     });
-    await markAutoRebootRecovered(row);
+    await markAutoRebootRecovered(row).catch((err) => {
+      logger.warn("unable to mark project-host automatic reboot as recovered", {
+        host_id: row.id,
+        host_name: hostName(row),
+        err: errorText(err),
+      });
+    });
     logger.info("project-host synthetic runtime probe passed", {
       host_id: row.id,
       host_name: hostName(row),
