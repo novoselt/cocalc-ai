@@ -232,14 +232,25 @@ class BootstrapRuntimeShellEnvTest(unittest.TestCase):
             home.mkdir(parents=True, exist_ok=True)
             bashrc = home / ".bashrc"
             bashrc.write_text("# existing line\n", encoding="utf-8")
+            runtime_current = Path(tmpdir) / "container-runtime" / "current"
+            managed_podman = runtime_current / "bin" / "podman"
+            managed_podman.parent.mkdir(parents=True)
+            managed_podman.write_text("#!/bin/sh\n", encoding="utf-8")
+            managed_podman.chmod(0o755)
 
             original = bootstrap.run_best_effort
+            original_current = os.environ.get("COCALC_CONTAINER_RUNTIME_CURRENT")
             bootstrap.run_best_effort = lambda *args, **kwargs: None
             try:
+                os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = str(runtime_current)
                 bootstrap.configure_runtime_shell_env(cfg)
                 bootstrap.configure_runtime_shell_env(cfg)
             finally:
                 bootstrap.run_best_effort = original
+                if original_current is None:
+                    os.environ.pop("COCALC_CONTAINER_RUNTIME_CURRENT", None)
+                else:
+                    os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = original_current
 
             text = bashrc.read_text(encoding="utf-8")
             self.assertIn("# existing line\n", text)
@@ -253,6 +264,13 @@ class BootstrapRuntimeShellEnvTest(unittest.TestCase):
                 text,
             )
             self.assertIn('export CONTAINERS_CGROUP_MANAGER="cgroupfs"', text)
+            self.assertIn(
+                f'export PATH="{runtime_current / "bin"}:$PATH"', text
+            )
+            self.assertIn(
+                f'export CONTAINERS_CONF="{runtime_current / "etc" / "containers" / "containers.conf"}"',
+                text,
+            )
 
 
 class BootstrapBundleManifestResolutionTest(unittest.TestCase):
@@ -757,8 +775,11 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
             self.assertEqual(len(calls), 2)
             self.assertIn(str(podman), calls[0][0][-1])
             self.assertIn(
-                f"CONTAINERS_CONF_OVERRIDE={conf}",
+                f"CONTAINERS_CONF={conf}",
                 calls[0][0],
+            )
+            self.assertTrue(
+                any(value.startswith("XDG_RUNTIME_DIR=") for value in calls[0][0])
             )
             self.assertIn("fingerprint", contract)
 
@@ -1653,7 +1674,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 "run_podman_as_runtime()", rootctl.read_text(encoding="utf-8")
             )
             self.assertIn(
-                'CONTAINERS_CONF_OVERRIDE="${container_runtime}/etc/containers/containers.conf"',
+                'CONTAINERS_CONF="${container_runtime}/etc/containers/containers.conf"',
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(

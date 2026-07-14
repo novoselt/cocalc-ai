@@ -35,7 +35,7 @@ describe("podmanEnv", () => {
       expect(podmanEnv(base)).toMatchObject({
         PATH: `${bin}:/usr/bin`,
         COCALC_PODMAN_BIN: path.join(bin, "podman"),
-        CONTAINERS_CONF_OVERRIDE: conf,
+        CONTAINERS_CONF: conf,
         CONTAINERS_STORAGE_CONF: "/existing/storage.conf",
         CONTAINERS_CGROUP_MANAGER: "cgroupfs",
         XDG_RUNTIME_DIR: runtimeDir,

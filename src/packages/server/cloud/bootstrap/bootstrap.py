@@ -747,9 +747,18 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     runtime_env: list[str] = []
     if managed_podman.is_file() and os.access(managed_podman, os.X_OK):
         podman = str(managed_podman)
+        env_assignments = read_env_assignments(cfg.env_file)
+        runtime_dir = (
+            env_assignments.get("COCALC_PODMAN_RUNTIME_DIR")
+            or env_assignments.get("XDG_RUNTIME_DIR")
+            or default_podman_runtime_dir(pw.pw_uid)
+        )
         runtime_env = [
             f"PATH={runtime_current / 'bin'}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            f"CONTAINERS_CONF_OVERRIDE={managed_conf}",
+            f"CONTAINERS_CONF={managed_conf}",
+            f"XDG_RUNTIME_DIR={runtime_dir}",
+            f"COCALC_PODMAN_RUNTIME_DIR={runtime_dir}",
+            'CONTAINERS_CGROUP_MANAGER=cgroupfs',
         ]
     else:
         podman = shutil.which("podman")
@@ -3967,11 +3976,27 @@ def runtime_podman_env_lines(cfg: BootstrapConfig) -> list[str]:
             runtime_dir = default_podman_runtime_dir(uid)
     if not runtime_dir:
         return []
-    return [
+    lines = [
         f'export XDG_RUNTIME_DIR="{runtime_dir}"',
         f'export COCALC_PODMAN_RUNTIME_DIR="{runtime_dir}"',
         'export CONTAINERS_CGROUP_MANAGER="cgroupfs"',
     ]
+    runtime_current = Path(
+        os.environ.get(
+            "COCALC_CONTAINER_RUNTIME_CURRENT",
+            "/opt/cocalc/container-runtime/current",
+        )
+    )
+    managed_podman = runtime_current / "bin" / "podman"
+    if managed_podman.is_file() and os.access(managed_podman, os.X_OK):
+        managed_conf = runtime_current / "etc" / "containers" / "containers.conf"
+        lines.extend(
+            [
+                f'export PATH="{runtime_current / "bin"}:$PATH"',
+                f'export CONTAINERS_CONF="{managed_conf}"',
+            ]
+        )
+    return lines
 
 
 def upsert_managed_bashrc_block(path: Path, lines: list[str]) -> None:
@@ -4798,7 +4823,7 @@ run_podman_as_runtime() {
       XDG_RUNTIME_DIR="${runtime_dir}" \
       COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
       CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-      CONTAINERS_CONF_OVERRIDE="${container_runtime}/etc/containers/containers.conf" \
+      CONTAINERS_CONF="${container_runtime}/etc/containers/containers.conf" \
       PATH="${container_runtime}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
       "${podman_bin}" "$@"
     return
