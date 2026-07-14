@@ -7,6 +7,7 @@ jest.setTimeout(15_000);
 
 let assertCollabMock: jest.Mock;
 let createLroMock: jest.Mock;
+let createLroDetailedMock: jest.Mock;
 let getLroMock: jest.Mock;
 let updateLroMock: jest.Mock;
 let publishLroSummaryMock: jest.Mock;
@@ -125,6 +126,7 @@ jest.mock("@cocalc/server/projects/copy-db", () => ({
 jest.mock("@cocalc/server/lro/lro-db", () => ({
   __esModule: true,
   createLro: (...args: any[]) => createLroMock(...args),
+  createLroDetailed: (...args: any[]) => createLroDetailedMock(...args),
   getLro: (...args: any[]) => getLroMock(...args),
   updateLro: (...args: any[]) => updateLroMock(...args),
 }));
@@ -174,6 +176,10 @@ describe("projects.start", () => {
       scope_type: "project",
       scope_id: "proj-1",
       status: "queued",
+    }));
+    createLroDetailedMock = jest.fn(async (...args: any[]) => ({
+      lro: await createLroMock(...args),
+      created: true,
     }));
     getLroMock = jest.fn(async () => undefined);
     updateLroMock = jest.fn(async ({ status }: { status: string }) => ({
@@ -276,6 +282,41 @@ describe("projects.start", () => {
       }),
     );
     expect(mirrorStartLroProgressMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses one active start operation across browser clients", async () => {
+    let created = true;
+    createLroDetailedMock = jest.fn(async (...args: any[]) => ({
+      lro: await createLroMock(...args),
+      created: created ? ((created = false), true) : false,
+    }));
+    const { start } = await import("./projects");
+
+    const [first, second] = await Promise.all([
+      start({
+        account_id: "acct-1",
+        project_id: "proj-1",
+        wait: false,
+      }),
+      start({
+        account_id: "acct-2",
+        project_id: "proj-1",
+        wait: false,
+      }),
+    ]);
+    await flushBackgroundStartTask();
+
+    expect(first.op_id).toBe("op-1");
+    expect(second.op_id).toBe("op-1");
+    expect(interBayStartMock).toHaveBeenCalledTimes(1);
+    expect(
+      updateLroMock.mock.calls.filter(([opts]) => opts.status === "running"),
+    ).toHaveLength(1);
+    expect(createLroDetailedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dedupe_key: "project-start:start:default",
+      }),
+    );
   });
 
   it("keeps the long control timeout for explicit backup restores", async () => {

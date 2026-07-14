@@ -166,9 +166,87 @@ export async function createLro({
   expires_at?: Date;
   status?: LroStatus;
 }): Promise<LroSummary> {
+  return (
+    await createLroDetailed({
+      kind,
+      scope_type,
+      scope_id,
+      created_by,
+      owner_type,
+      owner_id,
+      routing,
+      input,
+      dedupe_key,
+      parent_id,
+      expires_at,
+      status,
+    })
+  ).lro;
+}
+
+export async function createLroDetailed({
+  kind,
+  scope_type,
+  scope_id,
+  created_by,
+  owner_type,
+  owner_id,
+  routing,
+  input,
+  dedupe_key,
+  parent_id,
+  expires_at,
+  status = "queued",
+}: {
+  kind: string;
+  scope_type: LroScopeType;
+  scope_id: string;
+  created_by?: string;
+  owner_type?: "hub" | "host";
+  owner_id?: string;
+  routing?: string;
+  input?: any;
+  dedupe_key?: string;
+  parent_id?: string;
+  expires_at?: Date;
+  status?: LroStatus;
+}): Promise<{ lro: LroSummary; created: boolean }> {
   await ensureLroSchema();
-  if (dedupe_key) {
-    const existing = await pool().query(
+  const op_id = randomUUID();
+  const expires = expires_at ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const values = [
+    op_id,
+    kind,
+    scope_type,
+    scope_id,
+    status,
+    created_by ?? null,
+    owner_type ?? null,
+    owner_id ?? null,
+    routing ?? null,
+    input ?? null,
+    expires,
+    dedupe_key ?? null,
+    parent_id ?? null,
+  ];
+  const insert = `
+    INSERT INTO long_running_operations
+      (op_id, kind, scope_type, scope_id, status, created_by, owner_type, owner_id, routing, input, expires_at, dedupe_key, parent_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    RETURNING *
+  `;
+  if (!dedupe_key) {
+    const { rows } = await pool().query(insert, values);
+    return { lro: rows[0] as LroSummary, created: true };
+  }
+
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `cocalc:lro-dedupe:${scope_type}:${scope_id}:${dedupe_key}`,
+    ]);
+    const existing = await client.query(
       `
         SELECT *
         FROM long_running_operations
@@ -181,35 +259,18 @@ export async function createLro({
       [scope_type, scope_id, dedupe_key, TERMINAL_STATUSES],
     );
     if (existing.rows[0]) {
-      return existing.rows[0] as LroSummary;
+      await client.query("COMMIT");
+      return { lro: existing.rows[0] as LroSummary, created: false };
     }
+    const { rows } = await client.query(insert, values);
+    await client.query("COMMIT");
+    return { lro: rows[0] as LroSummary, created: true };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
   }
-  const op_id = randomUUID();
-  const expires = expires_at ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  const { rows } = await pool().query(
-    `
-      INSERT INTO long_running_operations
-        (op_id, kind, scope_type, scope_id, status, created_by, owner_type, owner_id, routing, input, expires_at, dedupe_key, parent_id)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-      RETURNING *
-    `,
-    [
-      op_id,
-      kind,
-      scope_type,
-      scope_id,
-      status,
-      created_by ?? null,
-      owner_type ?? null,
-      owner_id ?? null,
-      routing ?? null,
-      input ?? null,
-      expires,
-      dedupe_key ?? null,
-      parent_id ?? null,
-    ],
-  );
-  return rows[0] as LroSummary;
 }
 
 export async function updateLro({

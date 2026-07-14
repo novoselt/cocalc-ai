@@ -4,6 +4,7 @@ const ORDINARY_PROJECT_START_CONTROL_TIMEOUT_MS = 10 * 60 * 1000;
 
 let assertCollabMock: jest.Mock;
 let createLroMock: jest.Mock;
+let createLroDetailedMock: jest.Mock;
 let getLroMock: jest.Mock;
 let updateLroMock: jest.Mock;
 let publishLroSummaryMock: jest.Mock;
@@ -106,6 +107,7 @@ jest.mock("@cocalc/server/projects/copy-db", () => ({
 jest.mock("@cocalc/server/lro/lro-db", () => ({
   __esModule: true,
   createLro: (...args: any[]) => createLroMock(...args),
+  createLroDetailed: (...args: any[]) => createLroDetailedMock(...args),
   getLro: (...args: any[]) => getLroMock(...args),
   updateLro: (...args: any[]) => updateLroMock(...args),
 }));
@@ -155,6 +157,10 @@ describe("projects.restart", () => {
       scope_type: "project",
       scope_id: "proj-1",
       status: "queued",
+    }));
+    createLroDetailedMock = jest.fn(async (...args: any[]) => ({
+      lro: await createLroMock(...args),
+      created: true,
     }));
     getLroMock = jest.fn(async () => undefined);
     updateLroMock = jest.fn(async ({ status }: { status: string }) => ({

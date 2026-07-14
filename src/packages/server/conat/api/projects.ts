@@ -85,7 +85,12 @@ import {
   courseCollectLroResponse,
   triggerCourseCollectLroWorker,
 } from "@cocalc/server/projects/course-collect-worker";
-import { createLro, getLro, updateLro } from "@cocalc/server/lro/lro-db";
+import {
+  createLro,
+  createLroDetailed,
+  getLro,
+  updateLro,
+} from "@cocalc/server/lro/lro-db";
 import { publishLroEvent, publishLroSummary } from "@cocalc/server/lro/stream";
 import { lroStreamName } from "@cocalc/conat/lro/names";
 import { SERVICE as PERSIST_SERVICE } from "@cocalc/conat/persist/util";
@@ -4247,7 +4252,7 @@ async function runProjectStartLikeAction({
     }
     throw err;
   }
-  const op = await createLro({
+  const { lro: op, created } = await createLroDetailed({
     kind: "project-start",
     scope_type: "project",
     scope_id: project_id,
@@ -4261,8 +4266,28 @@ async function runProjectStartLikeAction({
         : {}),
       ...(autostart ? { autostart } : {}),
     },
+    dedupe_key: [
+      "project-start",
+      kind,
+      effectiveRestoreBackupId || "default",
+    ].join(":"),
     status: "queued",
   });
+  const response = {
+    op_id: op.op_id,
+    scope_type: "project" as const,
+    scope_id: project_id,
+    service: PERSIST_SERVICE,
+    stream_name: lroStreamName(op.op_id),
+  };
+  if (!created) {
+    log.debug(`${kind}: reusing active project-start operation`, {
+      project_id,
+      op_id: op.op_id,
+      status: op.status,
+    });
+    return response;
+  }
   publishStartLroSummaryBestEffort({
     scope_type: op.scope_type,
     scope_id: op.scope_id,
@@ -4289,13 +4314,6 @@ async function runProjectStartLikeAction({
   });
 
   log.debug(kind, { project_id, op_id: op.op_id });
-  const response = {
-    op_id: op.op_id,
-    scope_type: "project" as const,
-    scope_id: project_id,
-    service: PERSIST_SERVICE,
-    stream_name: lroStreamName(op.op_id),
-  };
   const runStart = async () => {
     const running = await updateLro({
       op_id: op.op_id,
