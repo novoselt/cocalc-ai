@@ -4347,6 +4347,7 @@ MIN_PROJECT_POOL_CPU_CORES="__MIN_PROJECT_POOL_CPU_CORES__"
 PROJECT_POOL_CPU_PERIOD_US="__PROJECT_POOL_CPU_PERIOD_US__"
 SYSCTL_CONFIG_PATH="/etc/sysctl.d/90-cocalc-project-host.conf"
 CORE_SYSCTL_CONFIG_PATH="/etc/sysctl.d/91-cocalc-project-host-core.conf"
+CORE_SUDOERS_CONFIG_PATH="/etc/sudoers.d/cocalc-project-host-core"
 CORE_HANDLER="/usr/local/sbin/cocalc-project-host-core-handler"
 CORE_ORIGINAL_PATTERN="/var/lib/cocalc/project-host-core-pattern.original"
 CORE_ORIGINAL_PIPE_LIMIT="/var/lib/cocalc/project-host-core-pipe-limit.original"
@@ -4404,7 +4405,7 @@ env_value_is_true() {
 }
 
 reconcile_app_core_dumps() {
-  local desired current original original_pipe_limit
+  local desired current original original_pipe_limit sudoers_tmp
   desired="$(read_env_value COCALC_PROJECT_HOST_APP_CORE_DUMPS)"
   current="$(cat /proc/sys/kernel/core_pattern 2>/dev/null || true)"
   if env_value_is_true "${desired}"; then
@@ -4412,6 +4413,12 @@ reconcile_app_core_dumps() {
       echo "missing project-host core handler: ${CORE_HANDLER}" >&2
       return 1
     fi
+    sudoers_tmp="$(mktemp)"
+    printf 'Defaults>%s rlimit_core="0,1073741824"\n' "${RUNTIME_USER}" > "${sudoers_tmp}"
+    chmod 0440 "${sudoers_tmp}"
+    visudo -c -f "${sudoers_tmp}" >/dev/null
+    install -o root -g root -m 0440 "${sudoers_tmp}" "${CORE_SUDOERS_CONFIG_PATH}"
+    rm -f "${sudoers_tmp}"
     install -d -o root -g root -m 0755 "$(dirname "${CORE_ORIGINAL_PATTERN}")"
     if [ ! -e "${CORE_ORIGINAL_PATTERN}" ]; then
       printf '%s\n' "${current}" > "${CORE_ORIGINAL_PATTERN}"
@@ -4443,6 +4450,7 @@ SYSCTL
     fi
     rm -f "${CORE_ORIGINAL_PATTERN}" "${CORE_ORIGINAL_PIPE_LIMIT}"
   fi
+  rm -f "${CORE_SUDOERS_CONFIG_PATH}"
 }
 
 runtime_uid() {

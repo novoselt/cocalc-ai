@@ -1530,6 +1530,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                'rlimit_core="0,1073741824"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'visudo -c -f "${sudoers_tmp}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "kernel.core_pipe_limit = 4",
                 rootctl.read_text(encoding="utf-8"),
             )
