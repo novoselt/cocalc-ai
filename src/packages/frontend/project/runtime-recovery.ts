@@ -7,8 +7,18 @@ export const PROJECT_RUNTIME_RECOVERY_EVENT = "runtime-recovery";
 
 export interface RuntimeRecoveryNotice {
   id: string;
-  reason: "host_session_changed" | "project_runtime_changed";
+  reason:
+    | "host_session_changed"
+    | "project_runtime_changed"
+    | "project_runtime_lost";
   occurred_at: number;
+}
+
+export function projectRuntimeExitReason(project: unknown): string | undefined {
+  const state = (project as any)?.get?.("state") ?? (project as any)?.state;
+  const reason =
+    state?.get?.("runtime_exit_reason") ?? state?.runtime_exit_reason;
+  return typeof reason === "string" && reason.length > 0 ? reason : undefined;
 }
 
 export function projectRuntimeId(status: unknown): string | undefined {
@@ -35,5 +45,9 @@ export class ProjectRuntimeTracker {
         : undefined;
     this.runtimeId = nextRuntimeId;
     return changed;
+  }
+
+  reset(): void {
+    this.runtimeId = undefined;
   }
 }

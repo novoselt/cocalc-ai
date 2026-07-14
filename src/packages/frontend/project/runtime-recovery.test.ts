@@ -3,7 +3,13 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { ProjectRuntimeTracker, projectRuntimeId } from "./runtime-recovery";
+import { Map as ImmutableMap } from "immutable";
+
+import {
+  ProjectRuntimeTracker,
+  projectRuntimeExitReason,
+  projectRuntimeId,
+} from "./runtime-recovery";
 
 describe("project runtime recovery", () => {
   it("reads valid runtime ids", () => {
@@ -20,5 +26,23 @@ describe("project runtime recovery", () => {
     expect(tracker.observe({})).toBeUndefined();
     expect(tracker.observe({ runtime_id: "runtime-b" })).toBe("runtime-b");
     expect(tracker.observe({ runtime_id: "runtime-b" })).toBeUndefined();
+    tracker.reset();
+    expect(tracker.observe({ runtime_id: "runtime-c" })).toBeUndefined();
+  });
+
+  it("reads runtime exit reasons from plain and immutable project state", () => {
+    expect(
+      projectRuntimeExitReason({
+        state: { runtime_exit_reason: "container_missing" },
+      }),
+    ).toBe("container_missing");
+    expect(
+      projectRuntimeExitReason(
+        ImmutableMap({
+          state: ImmutableMap({ runtime_exit_reason: "container_missing" }),
+        }),
+      ),
+    ).toBe("container_missing");
+    expect(projectRuntimeExitReason({ state: {} })).toBeUndefined();
   });
 });

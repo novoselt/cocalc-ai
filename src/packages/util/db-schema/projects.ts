@@ -781,6 +781,7 @@ export interface ProjectState {
   time?: Date;
   started_at?: Date;
   runtime_generation?: number;
+  runtime_exit_reason?: "container_missing";
   http_port?: number;
   ssh_port?: number;
   project_bundle_version?: string;

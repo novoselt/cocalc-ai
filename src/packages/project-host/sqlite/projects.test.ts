@@ -64,6 +64,29 @@ describe("project sqlite runtime ports", () => {
     expect(listUnreportedProjects()).toEqual([]);
   });
 
+  it("reports and clears an unexpected runtime exit reason", () => {
+    upsertProject({ project_id, state: "running", state_reported: true });
+    upsertProject({
+      project_id,
+      state: "opened",
+      runtime_exit_reason: "container_missing",
+    });
+    expect(listUnreportedProjects()).toEqual([
+      {
+        project_id,
+        state: "opened",
+        runtime_exit_reason: "container_missing",
+      },
+    ]);
+    expect(markProjectStateReported(project_id, "opened")).toBe(false);
+    expect(
+      markProjectStateReported(project_id, "opened", "container_missing"),
+    ).toBe(true);
+
+    upsertProject({ project_id, state: "starting" });
+    expect(getProject(project_id)?.runtime_exit_reason).toBeNull();
+  });
+
   it("stores and aggregates running project bundle/tools references", () => {
     upsertProject({
       project_id,

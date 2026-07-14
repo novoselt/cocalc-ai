@@ -41,7 +41,10 @@ import {
   FlyoutLogFilter,
 } from "../page/flyouts/utils";
 import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
-import type { RuntimeRecoveryNotice } from "../runtime-recovery";
+import {
+  projectRuntimeExitReason,
+  type RuntimeRecoveryNotice,
+} from "../runtime-recovery";
 export { FILE_ACTIONS as file_actions, type FileAction, ProjectActions };
 import type {
   FindBackupsState,
@@ -242,6 +245,12 @@ export class ProjectStore extends Store<ProjectStoreState> {
     ) {
       // console.log('ProjectStore::_init projects.on("change", ... )');
       // only do this if we are on project in the first place!
+      this.previous_runstate = projects.getIn([
+        "project_map",
+        this.project_id,
+        "state",
+        "state",
+      ]);
       projects.on("change", this._projects_store_change);
     }
   };
@@ -278,12 +287,22 @@ export class ProjectStore extends Store<ProjectStoreState> {
         }
         if (this.previous_runstate == "running" && new_state != "running") {
           this.emit("stopped");
+          if (projectRuntimeExitReason(change) === "container_missing") {
+            this.redux
+              .getProjectActions(this.project_id)
+              ?.noteProjectRuntimeLost?.();
+          }
         }
       } else {
         // null → "running"
         if (new_state == "running") {
           this.emit("started");
         }
+      }
+      if (new_state === "running") {
+        this.redux
+          .getProjectActions(this.project_id)
+          ?.resumeProjectStatusAfterRuntimeLoss?.();
       }
       this.previous_runstate = new_state;
     }

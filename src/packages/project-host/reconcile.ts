@@ -12,6 +12,7 @@ import {
   shouldCheckProjectLastChangedRunning,
 } from "./last-edited";
 import { getMountPoint } from "./file-server";
+import { reportProjectStateImmediately } from "./project-state-reporter";
 
 const DEFAULT_INTERVAL = 15_000;
 const DEFAULT_MISSING_CYCLES_BEFORE_OPENED = 2;
@@ -228,11 +229,22 @@ export async function reconcileOnce() {
       upsertProject({
         project_id: row.project_id,
         state: "opened",
+        runtime_exit_reason: "container_missing",
         http_port: null,
         ssh_port: null,
         updated_at: now,
         last_seen: now,
       });
+      void reportProjectStateImmediately(row.project_id, {
+        state: "opened",
+        time: new Date(now),
+        runtime_exit_reason: "container_missing",
+      }).catch((err) =>
+        logger.debug("immediate runtime-loss report failed", {
+          project_id: row.project_id,
+          err: `${err}`,
+        }),
+      );
       resetProjectLastChangedRunning(row.project_id);
     }
   }

@@ -1595,13 +1595,14 @@ export class JupyterActions extends JupyterActions0 {
   private handleProjectRuntimeChange(notice: RuntimeRecoveryNotice): void {
     if (
       this.isClosed() ||
-      notice.reason !== "project_runtime_changed" ||
+      (notice.reason !== "project_runtime_changed" &&
+        notice.reason !== "project_runtime_lost") ||
       notice.id === this.lastRuntimeRecoveryId
     ) {
       return;
     }
     this.lastRuntimeRecoveryId = notice.id;
-    this.closeJupyterClient("project_runtime_changed");
+    this.closeJupyterClient(notice.reason);
     this.clearRunQueue();
     this.runningNow = false;
     this.clear_all_cell_run_state();

@@ -2793,6 +2793,46 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     });
   };
 
+  private projectStatusNeedsRuntimeReconnect = false;
+  private runtimeLossRecoveryInFlight?: Promise<void>;
+
+  noteProjectRuntimeLost = () => {
+    this.projectStatusNeedsRuntimeReconnect = true;
+    this.projectRuntimeTracker.reset();
+    this.projectStatusSub?.close();
+    delete this.projectStatusSub;
+    this.publishRuntimeRecoveryNotice({
+      id: `${this.project_id}:runtime-lost:${Date.now()}`,
+      reason: "project_runtime_lost",
+      occurred_at: Date.now(),
+    });
+    if (this.runtimeLossRecoveryInFlight != null) {
+      return;
+    }
+    this.runtimeLossRecoveryInFlight = Promise.resolve(
+      (this.redux.getActions("projects") as any)?.start_project?.(
+        this.project_id,
+        { autostart: true },
+      ),
+    )
+      .catch((err) => {
+        this.setState({
+          control_error: `The project runtime stopped unexpectedly and could not be restarted: ${err}`,
+        });
+      })
+      .finally(() => {
+        this.runtimeLossRecoveryInFlight = undefined;
+      });
+  };
+
+  resumeProjectStatusAfterRuntimeLoss = () => {
+    if (!this.projectStatusNeedsRuntimeReconnect || !this.initialized) {
+      return;
+    }
+    this.projectStatusNeedsRuntimeReconnect = false;
+    void this.initProjectStatus();
+  };
+
   private publishRuntimeRecoveryNotice = (notice: RuntimeRecoveryNotice) => {
     this.setState({ runtime_recovery_notice: notice });
     this.get_store()?.emit(PROJECT_RUNTIME_RECOVERY_EVENT, notice);

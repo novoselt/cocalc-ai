@@ -30,6 +30,7 @@ import {
 import { deleteProjectLocal } from "./sqlite/projects";
 import { deleteVolume } from "./file-server";
 import { recordProjectHostRpcTraffic } from "./rpc-traffic-audit";
+import { setProjectStateReporter } from "./project-state-reporter";
 
 let statusClient: HostStatusApi | undefined;
 let hostInfo: Pick<HostProjectStatus, "host_id" | "host"> | undefined;
@@ -133,7 +134,11 @@ export async function reportProjectStateToMaster(
     // remains queued for the background reporter.
     const reportedState = typeof state === "string" ? state : state.state;
     if (reportedState) {
-      markProjectStateReported(project_id, reportedState);
+      markProjectStateReported(
+        project_id,
+        reportedState,
+        typeof state === "string" ? undefined : state.runtime_exit_reason,
+      );
     }
   } catch (err) {
     recordProjectHostRpcTraffic({
@@ -146,6 +151,8 @@ export async function reportProjectStateToMaster(
     logger.debug("reportProjectStateToMaster failed", { project_id, err });
   }
 }
+
+setProjectStateReporter(reportProjectStateToMaster);
 
 export function queueProvisionedInventory(project_ids: string[]) {
   const checked_at = Date.now();
@@ -314,7 +321,16 @@ async function reportPendingStates() {
   const pending = listUnreportedProjects();
   for (const row of pending) {
     if (!row.state) continue;
-    await reportProjectStateToMaster(row.project_id, row.state);
+    await reportProjectStateToMaster(
+      row.project_id,
+      row.runtime_exit_reason
+        ? {
+            state: row.state as any,
+            time: new Date(),
+            runtime_exit_reason: row.runtime_exit_reason as any,
+          }
+        : row.state,
+    );
   }
   await reportPendingProvisioning();
   await reportPendingProjectTouches();

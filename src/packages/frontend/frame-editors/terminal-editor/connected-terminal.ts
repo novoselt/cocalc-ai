@@ -237,6 +237,14 @@ function projectRuntimeRestartedTerminalMessage(
   });
 }
 
+function projectRuntimeLostTerminalMessage(cols: number | undefined): string {
+  return terminalStatusBox(cols, {
+    title: "Project runtime stopped",
+    primary: "The previous terminal session ended.",
+    secondary: ["Restarting the project and reconnecting automatically..."],
+  });
+}
+
 function projectHostReconnectedTerminalMessage(
   cols: number | undefined,
 ): string {
@@ -381,7 +389,8 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       typeof recoveryNoticeId === "string" &&
       typeof recoveryOccurredAt === "number" &&
       (recoveryReason === "host_session_changed" ||
-        recoveryReason === "project_runtime_changed") &&
+        recoveryReason === "project_runtime_changed" ||
+        recoveryReason === "project_runtime_lost") &&
       Date.now() - recoveryOccurredAt <= RUNTIME_RECOVERY_NOTICE_MAX_AGE_MS
     ) {
       this.pendingRuntimeRecoveryNotice = {
@@ -928,7 +937,8 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
   private handleRuntimeRecovery = (notice: RuntimeRecoveryNotice): void => {
     if (
       this.isClosed() ||
-      notice.reason !== "project_runtime_changed" ||
+      (notice.reason !== "project_runtime_changed" &&
+        notice.reason !== "project_runtime_lost") ||
       notice.id === this.lastRuntimeRecoveryId
     ) {
       return;
@@ -939,12 +949,17 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     this.set_connection_status("disconnected");
     this.ptyExited = false;
     this.clearProjectStartingRetry();
+    if (notice.reason === "project_runtime_lost") {
+      this.autoStartProjectOnNextConnect = true;
+    }
     void this.showRuntimeRecoveryMessage(
-      projectRuntimeRestartedTerminalMessage(this.terminal.cols),
+      notice.reason === "project_runtime_lost"
+        ? projectRuntimeLostTerminalMessage(this.terminal.cols)
+        : projectRuntimeRestartedTerminalMessage(this.terminal.cols),
     ).then(() => {
       void this.connect();
       this.reconnectResource?.requestReconnect({
-        reason: "project_runtime_changed",
+        reason: notice.reason,
         resetBackoff: true,
       });
     });
@@ -1057,7 +1072,9 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     await this.showRuntimeRecoveryMessage(
       reason === "project_runtime_changed"
         ? projectRuntimeRestartedTerminalMessage(this.terminal.cols)
-        : projectHostReconnectedTerminalMessage(this.terminal.cols),
+        : reason === "project_runtime_lost"
+          ? projectRuntimeLostTerminalMessage(this.terminal.cols)
+          : projectHostReconnectedTerminalMessage(this.terminal.cols),
     );
   };
 

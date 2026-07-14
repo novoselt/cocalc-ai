@@ -932,6 +932,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     if (runtimeRecoveryNotice == null || hardDeleteBlocked) return;
     const reason = runtimeRecoveryNotice?.get?.("reason");
     const projectRestarted = reason === "project_runtime_changed";
+    const projectRuntimeLost = reason === "project_runtime_lost";
     return (
       <Alert
         showIcon
@@ -939,14 +940,18 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         type="warning"
         banner
         message={
-          projectRestarted
-            ? "Project restarted"
-            : "Project host connection recovered"
+          projectRuntimeLost
+            ? "Project runtime stopped unexpectedly"
+            : projectRestarted
+              ? "Project restarted"
+              : "Project host connection recovered"
         }
         description={
-          projectRestarted
-            ? "The project runtime restarted, so previous terminals and notebook kernels ended. CoCalc is reconnecting them automatically; files and collaborative documents remain available."
-            : "The project host restarted or reconnected. CoCalc rebuilt this tab's files, terminals, notebooks, and other live connections automatically. Existing terminal processes and kernels may have ended."
+          projectRuntimeLost
+            ? "The project container exited, so previous terminals and notebook kernels ended. CoCalc is restarting the project and reconnecting active terminals automatically; files and collaborative documents remain available."
+            : projectRestarted
+              ? "The project runtime restarted, so previous terminals and notebook kernels ended. CoCalc is reconnecting them automatically; files and collaborative documents remain available."
+              : "The project host restarted or reconnected. CoCalc rebuilt this tab's files, terminals, notebooks, and other live connections automatically. Existing terminal processes and kernels may have ended."
         }
         onClose={() => actions?.dismissRuntimeRecoveryNotice?.()}
       />
