@@ -1,0 +1,10 @@
+[Unit]
+Description=CoCalc Bay Hub Worker Watchdog
+After=cocalc-bay-frontdoor.service cocalc-bay-conat-router.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cocalc/bay/current/bin/bay-hub-watchdog
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal

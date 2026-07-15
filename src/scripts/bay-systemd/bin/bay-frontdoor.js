@@ -46,6 +46,10 @@ const healthIntervalMs = intEnv(
   "COCALC_BAY_FRONTDOOR_HEALTH_INTERVAL_MS",
   1000,
 );
+const unhealthyThreshold = intEnv(
+  "COCALC_BAY_FRONTDOOR_UNHEALTHY_THRESHOLD",
+  3,
+);
 const upstreamTimeoutMs = intEnv(
   "COCALC_BAY_FRONTDOOR_UPSTREAM_TIMEOUT_MS",
   15000,
@@ -57,8 +61,10 @@ const workers = Array.from({ length: workerCount }, (_, index) => ({
   host: workerHost,
   port: workerBasePort + index,
   healthy: false,
+  consecutiveFailures: 0,
   lastOk: 0,
   lastError: "not checked yet",
+  upgrades: new Set(),
 }));
 
 const signingKey = readSigningKey();
@@ -92,6 +98,46 @@ function readSigningKey() {
   return undefined;
 }
 
+function evictWorkerUpgrades(worker) {
+  if (worker.upgrades.size === 0) {
+    return;
+  }
+  log("evicting upgraded connections from unhealthy worker", {
+    worker_id: worker.id,
+    connections: worker.upgrades.size,
+  });
+  for (const connection of [...worker.upgrades]) {
+    connection.socket.destroy();
+    connection.upstream.destroy();
+  }
+}
+
+function recordWorkerHealth(worker, ok, error = "") {
+  const wasHealthy = worker.healthy;
+  if (ok) {
+    worker.healthy = true;
+    worker.consecutiveFailures = 0;
+    worker.lastOk = Date.now();
+    worker.lastError = "";
+  } else {
+    worker.consecutiveFailures += 1;
+    worker.lastError = error;
+    if (worker.consecutiveFailures >= unhealthyThreshold) {
+      worker.healthy = false;
+    }
+  }
+  if (wasHealthy && !worker.healthy) {
+    log("worker became unhealthy", {
+      worker_id: worker.id,
+      consecutive_failures: worker.consecutiveFailures,
+      error: worker.lastError,
+    });
+    evictWorkerUpgrades(worker);
+  } else if (!wasHealthy && worker.healthy) {
+    log("worker recovered", { worker_id: worker.id });
+  }
+}
+
 function checkWorker(worker) {
   return new Promise((resolve) => {
     const req = http.request(
@@ -108,13 +154,11 @@ function checkWorker(worker) {
           res.statusCode != null &&
           res.statusCode >= 200 &&
           res.statusCode < 400;
-        worker.healthy = ok;
-        if (ok) {
-          worker.lastOk = Date.now();
-          worker.lastError = "";
-        } else {
-          worker.lastError = `health status ${res.statusCode}`;
-        }
+        recordWorkerHealth(
+          worker,
+          ok,
+          ok ? "" : `health status ${res.statusCode}`,
+        );
         resolve();
       },
     );
@@ -122,8 +166,7 @@ function checkWorker(worker) {
       req.destroy(new Error("health timeout"));
     });
     req.on("error", (err) => {
-      worker.healthy = false;
-      worker.lastError = err.message;
+      recordWorkerHealth(worker, false, err.message);
       resolve();
     });
     req.end();
@@ -132,6 +175,19 @@ function checkWorker(worker) {
 
 async function refreshHealth() {
   await Promise.all(workers.map(checkWorker));
+}
+
+let healthRefreshInFlight;
+function scheduleHealthRefresh() {
+  if (healthRefreshInFlight != null) {
+    return healthRefreshInFlight;
+  }
+  healthRefreshInFlight = refreshHealth()
+    .catch((err) => log("health refresh failed", { error: err.message }))
+    .finally(() => {
+      healthRefreshInFlight = undefined;
+    });
+  return healthRefreshInFlight;
 }
 
 function healthyWorkers() {
@@ -282,6 +338,8 @@ function writeHealth(res) {
         port: worker.port,
         healthy: worker.healthy,
         drained: drained.has(worker.id),
+        consecutive_failures: worker.consecutiveFailures,
+        active_upgrades: worker.upgrades.size,
         last_ok: worker.lastOk ? new Date(worker.lastOk).toISOString() : null,
         last_error: worker.lastError || null,
       })),
@@ -372,6 +430,11 @@ function proxyUpgrade(req, socket, head) {
   const { worker } = selected;
 
   const upstream = net.connect(worker.port, worker.host);
+  const connection = { socket, upstream };
+  worker.upgrades.add(connection);
+  const forgetConnection = () => worker.upgrades.delete(connection);
+  socket.once("close", forgetConnection);
+  upstream.once("close", forgetConnection);
   upstream.setTimeout(upstreamTimeoutMs);
   upstream.once("connect", () => {
     // The timeout above is only a connect timeout. After the upgrade succeeds,
@@ -409,17 +472,26 @@ function proxyUpgrade(req, socket, head) {
 
 const server = http.createServer(proxyHttp);
 server.on("upgrade", proxyUpgrade);
-server.listen(bindPort, bindHost, async () => {
-  log("listening", {
-    bind: `${bindHost}:${bindPort}`,
-    workers: workers.map((worker) => `${worker.host}:${worker.port}`),
-    healthPath,
+function start() {
+  server.listen(bindPort, bindHost, async () => {
+    log("listening", {
+      bind: `${bindHost}:${bindPort}`,
+      workers: workers.map((worker) => `${worker.host}:${worker.port}`),
+      healthPath,
+      workerHealthPath,
+      unhealthyThreshold,
+    });
+    await scheduleHealthRefresh();
   });
-  await refreshHealth();
-});
 
-setInterval(() => {
-  refreshHealth().catch((err) =>
-    log("health refresh failed", { error: err.message }),
-  );
-}, healthIntervalMs).unref();
+  setInterval(scheduleHealthRefresh, healthIntervalMs).unref();
+}
+
+if (require.main === module) {
+  start();
+}
+
+module.exports = {
+  evictWorkerUpgrades,
+  recordWorkerHealth,
+};

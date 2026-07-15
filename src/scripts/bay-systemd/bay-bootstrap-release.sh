@@ -834,12 +834,17 @@ COCALC_BAY_ROUTER_HEALTH_PATH=/healthz
 
 COCALC_BAY_HUB_BIND_HOST=127.0.0.1
 COCALC_BAY_HUB_BASE_PORT=${HUB_BASE_PORT}
-COCALC_BAY_HUB_HEALTH_PATH=/alive
+COCALC_BAY_HUB_HEALTH_PATH=/ready
 
 COCALC_BAY_FRONTDOOR_HOST=127.0.0.1
 COCALC_BAY_FRONTDOOR_PORT=9400
 COCALC_BAY_FRONTDOOR_HEALTH_PATH=/_cocalc/frontdoor/healthz
 COCALC_BAY_FRONTDOOR_DRAIN_FILE=${BAY_ROOT}/state/frontdoor-drain-workers
+COCALC_BAY_FRONTDOOR_UNHEALTHY_THRESHOLD=3
+
+COCALC_BAY_HUB_WATCHDOG_FAILURE_THRESHOLD=2
+COCALC_BAY_HUB_WATCHDOG_RESTART_TIMEOUT_S=90
+COCALC_BAY_HUB_WATCHDOG_RESTART_COOLDOWN_S=300
 
 COCALC_BAY_MIN_HEALTHY_WORKERS=1
 COCALC_BAY_HEALTH_TIMEOUT_S=15
@@ -876,6 +881,11 @@ EOF
   set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_FRONTDOOR_PORT" "9400"
   set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_FRONTDOOR_HEALTH_PATH" "/_cocalc/frontdoor/healthz"
   set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_FRONTDOOR_DRAIN_FILE" "${BAY_ROOT}/state/frontdoor-drain-workers"
+  set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_HUB_HEALTH_PATH" "/ready"
+  set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_FRONTDOOR_UNHEALTHY_THRESHOLD" "3"
+  set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_HUB_WATCHDOG_FAILURE_THRESHOLD" "2"
+  set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_HUB_WATCHDOG_RESTART_TIMEOUT_S" "90"
+  set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_HUB_WATCHDOG_RESTART_COOLDOWN_S" "300"
   set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_POSTGRES_MAX_WAL_SIZE" "8GB"
   set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_POSTGRES_SHARED_BUFFERS" "1GB"
   set_env_var "${ENV_DIR}/bay.env" "COCALC_BAY_POSTGRES_EFFECTIVE_CACHE_SIZE" "8GB"
@@ -936,6 +946,7 @@ EOF
   run systemctl enable cocalc-bay.target
   run systemctl enable cocalc-bay-frontdoor.service
   run systemctl enable cocalc-bay-cloudflared.service
+  run systemctl enable cocalc-bay-hub-watchdog.timer
   if [[ "$ENABLE_WORKERS" -eq 1 ]]; then
     for worker_id in $(seq 1 "$WORKER_COUNT"); do
       run systemctl enable "cocalc-bay-hub@${worker_id}.service"
@@ -947,6 +958,7 @@ EOF
     run systemctl start cocalc-bay.target
     run systemctl start cocalc-bay-frontdoor.service
     run systemctl start cocalc-bay-cloudflared.service
+    run systemctl start cocalc-bay-hub-watchdog.timer
   fi
   prune_old_releases
 

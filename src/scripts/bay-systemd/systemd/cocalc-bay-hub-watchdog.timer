@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically recover wedged CoCalc Bay Hub Workers
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=10s
+AccuracySec=1s
+Unit=cocalc-bay-hub-watchdog.service
+
+[Install]
+WantedBy=timers.target

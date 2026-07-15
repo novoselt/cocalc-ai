@@ -122,6 +122,12 @@ install -m 0644 "${SCRIPT_DIR}/env/bay-topology.env.example" \
 if [[ ! -e "${TARGET_ENV_DIR}/bay.env" ]]; then
   install -m 0644 "${SCRIPT_DIR}/env/bay.env.example" "${TARGET_ENV_DIR}/bay.env"
 fi
+# /ready verifies each hub worker's Conat round trip. Migrate only the old
+# scaffold default so an explicit operator-selected path remains untouched.
+if grep -qx 'COCALC_BAY_HUB_HEALTH_PATH=/alive' "${TARGET_ENV_DIR}/bay.env"; then
+  sed -i 's|^COCALC_BAY_HUB_HEALTH_PATH=/alive$|COCALC_BAY_HUB_HEALTH_PATH=/ready|' \
+    "${TARGET_ENV_DIR}/bay.env"
+fi
 if [[ ! -e "${TARGET_ENV_DIR}/bay-workers.env" ]]; then
   install -m 0644 "${SCRIPT_DIR}/env/bay-workers.env.example" \
     "${TARGET_ENV_DIR}/bay-workers.env"
@@ -161,6 +167,10 @@ if [[ "$DAEMON_RELOAD" -eq 1 ]]; then
     exit 2
   fi
   systemctl daemon-reload
+  systemctl enable cocalc-bay-hub-watchdog.timer
+  if systemctl is-active --quiet cocalc-bay.target; then
+    systemctl start cocalc-bay-hub-watchdog.timer
+  fi
 fi
 
 cat <<EOF

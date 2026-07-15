@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+FAKE_BIN="${TMP}/bin"
+mkdir -p "$FAKE_BIN"
+
+cat > "${FAKE_BIN}/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+url="${*: -1}"
+if [[ "$url" == *":9102/healthz"* ]]; then
+  [[ "${FAKE_ROUTER_HEALTHY:-1}" == "1" ]]
+  exit
+fi
+printf '%s\n' "$WATCHDOG_HEALTH_JSON"
+EOF
+
+cat > "${FAKE_BIN}/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$WATCHDOG_SYSTEMCTL_LOG"
+case "$1" in
+  is-enabled|is-active)
+    exit 0
+    ;;
+  is-failed)
+    exit 1
+    ;;
+  show)
+    if [[ "$*" == *"ActiveState"* ]]; then
+      printf 'active\n'
+    else
+      printf 'running\n'
+    fi
+    ;;
+esac
+EOF
+
+cat > "${FAKE_BIN}/timeout" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+shift
+exec "$@"
+EOF
+chmod 0755 "${FAKE_BIN}/"*
+
+export PATH="${FAKE_BIN}:${PATH}"
+export COCALC_BAY_ENV_FILE="${TMP}/missing-bay.env"
+export COCALC_BAY_WORKERS_ENV_FILE="${TMP}/missing-workers.env"
+export COCALC_BAY_OVERLAY_ENV_FILE="${TMP}/missing-overlay.env"
+export COCALC_BAY_TOPOLOGY_ENV_FILE="${TMP}/missing-topology.env"
+export COCALC_BAY_SECRETS_ENV_FILE="${TMP}/missing-secrets.env"
+export COCALC_BAY_RUN_DIR="${TMP}/run"
+export COCALC_BAY_HUB_WATCHDOG_FAILURE_THRESHOLD=2
+export COCALC_BAY_HUB_WATCHDOG_RESTART_COOLDOWN_S=300
+export WATCHDOG_SYSTEMCTL_LOG="${TMP}/systemctl.log"
+export WATCHDOG_HEALTH_JSON='{
+  "workers": [
+    {"id": 1, "healthy": false, "drained": false},
+    {"id": 2, "healthy": false, "drained": false},
+    {"id": 3, "healthy": true, "drained": false},
+    {"id": 4, "healthy": false, "drained": true}
+  ]
+}'
+
+bash "${SCRIPT_DIR}/bay-hub-watchdog"
+if grep -q '^restart ' "$WATCHDOG_SYSTEMCTL_LOG"; then
+  echo "watchdog restarted a worker before reaching its threshold" >&2
+  exit 1
+fi
+
+bash "${SCRIPT_DIR}/bay-hub-watchdog"
+grep -qx 'restart cocalc-bay-hub@1.service' "$WATCHDOG_SYSTEMCTL_LOG"
+if grep -qx 'restart cocalc-bay-hub@2.service' "$WATCHDOG_SYSTEMCTL_LOG"; then
+  echo "watchdog restarted more than one worker in one pass" >&2
+  exit 1
+fi
+
+: > "$WATCHDOG_SYSTEMCTL_LOG"
+rm -rf "$COCALC_BAY_RUN_DIR"
+export COCALC_BAY_HUB_WATCHDOG_FAILURE_THRESHOLD=1
+export FAKE_ROUTER_HEALTHY=0
+bash "${SCRIPT_DIR}/bay-hub-watchdog"
+if grep -q '^restart ' "$WATCHDOG_SYSTEMCTL_LOG"; then
+  echo "watchdog restarted a worker while the router was unhealthy" >&2
+  exit 1
+fi
+
+echo "bay hub watchdog tests passed"

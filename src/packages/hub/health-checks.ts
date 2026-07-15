@@ -14,6 +14,8 @@ import express, { Response } from "express";
 import { createServer, Server } from "net";
 import { isFloat } from "validator";
 import { database_is_working } from "@cocalc/server/metrics/hub_register";
+import { conat } from "@cocalc/backend/conat";
+import { randomId } from "@cocalc/conat/names";
 const logger = getLogger("hub:healthcheck");
 const { debug: L } = logger;
 
@@ -26,6 +28,81 @@ const HEALTHCHECKS = new_counter(
 interface HealthcheckData {
   code: 200 | 404;
   txt: string;
+}
+
+const DEFAULT_CONAT_HEALTH_TIMEOUT_MS = 2_000;
+
+function conatHealthTimeoutMs(): number {
+  const value = Number.parseInt(
+    process.env.COCALC_HUB_CONAT_HEALTH_TIMEOUT_MS ?? "",
+    10,
+  );
+  return Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_CONAT_HEALTH_TIMEOUT_MS;
+}
+
+type ConatHealthProbe = () => Promise<unknown>;
+
+let localConatHealthProbe: Promise<ConatHealthProbe> | undefined;
+
+async function createLocalConatHealthProbe(): Promise<ConatHealthProbe> {
+  const client = conat();
+  const workerId = (process.env.COCALC_BAY_WORKER_ID ?? "standalone").replace(
+    /[^a-zA-Z0-9_-]/g,
+    "-",
+  );
+  const subject = `hub-health.worker-${workerId}.${process.pid}`;
+  const subscription = await client.subscribe(subject);
+
+  void (async () => {
+    for await (const message of subscription) {
+      await message.respond(message.data ?? null);
+    }
+  })().catch((err) => {
+    logger.error("local Conat health responder stopped", { subject, err });
+  });
+
+  return async () => {
+    const nonce = randomId();
+    const response = await client.request(
+      subject,
+      { nonce },
+      { timeout: conatHealthTimeoutMs() },
+    );
+    if (response.data?.nonce !== nonce) {
+      throw new Error("local Conat health response did not match request");
+    }
+  };
+}
+
+async function defaultConatHealthProbe(): Promise<unknown> {
+  localConatHealthProbe ??= createLocalConatHealthProbe();
+  try {
+    return await (
+      await localConatHealthProbe
+    )();
+  } catch (err) {
+    // A startup race can fail before Conat is connected. Permit the next
+    // readiness check to recreate the local responder instead of requiring a
+    // process restart to recover.
+    localConatHealthProbe = undefined;
+    throw err;
+  }
+}
+
+export async function checkConatRouting(
+  probe: ConatHealthProbe = defaultConatHealthProbe,
+): Promise<Check> {
+  try {
+    await probe();
+    return { status: "conat routing round trip succeeded" };
+  } catch (err) {
+    return {
+      status: `conat routing round trip failed: ${err instanceof Error ? err.message : err}`,
+      abort: true,
+    };
+  }
 }
 
 // self termination is only activated, if there is a COCALC_HUB_SELF_TERMINATE environment variable
@@ -247,6 +324,23 @@ export async function setup_health_checks(opts: Opts): Promise<void> {
     res.type("txt");
     res.status(code);
     res.send(txt);
+  });
+
+  // Frontdoors use this endpoint to decide whether a worker can accept browser
+  // traffic. Unlike /alive, this verifies the worker's local Conat path and API
+  // routing, which can fail while the HTTP process remains responsive.
+  router.get("/ready", async (_, res: Response) => {
+    const alive = process_alive();
+    if (alive.code !== 200) {
+      res.type("txt");
+      res.status(alive.code);
+      res.send(alive.txt);
+      return;
+    }
+    const routing = await checkConatRouting();
+    res.type("txt");
+    res.status(routing.abort ? 503 : 200);
+    res.send(routing.status);
   });
 
   // this is a more general check than concurrent-warn
