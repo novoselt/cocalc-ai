@@ -1299,6 +1299,7 @@ test("host get includes runtime summary in json output", async () => {
       bay_id: "bay-0",
       region: "us-west3",
       pricing_model: "spot",
+      funding_mode: "site-funded",
       last_seen: "2026-05-01T18:38:02.717Z",
       machine: {
         cloud: "gcp",
@@ -1325,6 +1326,7 @@ test("host get includes runtime summary in json output", async () => {
 
   assert.deepEqual(capture.runtimeDeploymentStatusRequests, ["host-1"]);
   assert.equal(capture.data.host_id, "host-1");
+  assert.equal(capture.data.funding_mode, "site-funded");
   assert.equal(capture.data.runtime_status.targets.length, 2);
   assert.equal(
     capture.data.runtime_status.targets[0].target,

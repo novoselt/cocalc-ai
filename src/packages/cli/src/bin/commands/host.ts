@@ -1127,6 +1127,7 @@ function emitHostGetHuman({
       pricing_model: host.pricing_model ?? "",
       desired_pricing_model: host.desired_pricing_model ?? "",
       effective_pricing_model: host.effective_pricing_model ?? "",
+      funding_mode: host.funding_mode ?? "",
       recovery_phase: host.recovery_phase ?? "",
       interruption_restore_policy: host.interruption_restore_policy ?? "",
       size: host.size ?? "",
@@ -1521,6 +1522,7 @@ export function registerHostCommand(
             pricing_model: row.pricing_model ?? "on_demand",
             desired_pricing_model: row.desired_pricing_model ?? null,
             effective_pricing_model: row.effective_pricing_model ?? null,
+            funding_mode: row.funding_mode ?? null,
             recovery_phase: row.recovery_phase ?? null,
             interruption_restore_policy:
               row.interruption_restore_policy ?? null,
@@ -1648,6 +1650,7 @@ export function registerHostCommand(
           pricing_model: h.pricing_model ?? "on_demand",
           desired_pricing_model: h.desired_pricing_model ?? null,
           effective_pricing_model: h.effective_pricing_model ?? null,
+          funding_mode: h.funding_mode ?? null,
           recovery_phase: h.recovery_phase ?? null,
           spot_recovery_state: h.spot_recovery_state ?? null,
           interruption_restore_policy: h.interruption_restore_policy ?? null,
