@@ -30,7 +30,8 @@ export default function mathToHtml(
     html = hideKatexMathMl(
       katex.renderToString(math, {
         displayMode: !isInline,
-        macros: { ...macros, ...documentMacros },
+        macros:
+          documentMacros == null ? macros : { ...macros, ...documentMacros },
         globalGroup: true, // See https://github.com/sagemathinc/cocalc/issues/5750
       }),
     );

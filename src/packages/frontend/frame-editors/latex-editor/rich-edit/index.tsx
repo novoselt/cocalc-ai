@@ -100,7 +100,12 @@ export function LatexCodemirrorEditor(props: EditorComponentProps) {
       // dispose widgets on the wrong one).
       const cm = editorActionsRef.current?._cm?.[props.id];
       if (cm) {
-        dispose = attachWidgetManager(cm, frameContextRef.current);
+        // FrameContext identifies the owning LaTeX editor, whose path can be
+        // the master document even when this leaf displays an included file.
+        dispose = attachWidgetManager(cm, {
+          ...frameContextRef.current,
+          path: props.path,
+        });
       } else {
         retryTimer = setTimeout(tryAttach, 100);
       }

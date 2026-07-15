@@ -141,6 +141,15 @@ describe("extractMacros", () => {
 });
 
 describe("mathToHtml with per-document macros", () => {
+  it("preserves globally defined KaTeX macros without document overrides", () => {
+    const definition = mathToHtml("\\gdef\\cocalcSharedMacroReview{q}", true);
+    expect(definition.err).toBeUndefined();
+
+    const use = mathToHtml("\\cocalcSharedMacroReview", true);
+    expect(use.err).toBeUndefined();
+    expect(use.__html).toContain("katex");
+  });
+
   it("a user macro renders (would otherwise be undefined)", () => {
     const macros = extractMacros("\\newcommand{\\myset}{\\{1,2,3\\}}");
     const { __html, err } = mathToHtml("\\myset", true, macros);
