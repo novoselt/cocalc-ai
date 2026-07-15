@@ -150,6 +150,26 @@ describe("project-host runtime maintenance policy", () => {
     expect(_test.syntheticProbeDue(row, NOW)).toBe(false);
   });
 
+  it("retries a failed synthetic probe after bootstrap reconciliation", () => {
+    const row = degradedCloudHost({
+      bootstrap_lifecycle: {
+        last_reconcile_finished_at: new Date(NOW - 10_000).toISOString(),
+      },
+      runtime_synthetic_probe: {
+        status: "failed",
+        host_boot_id: "boot-3",
+        host_session_id: "session-3",
+        checked_at: new Date(NOW - 30_000).toISOString(),
+      },
+    });
+    expect(_test.syntheticProbeDue(row, NOW)).toBe(true);
+
+    row.metadata.bootstrap_lifecycle.last_reconcile_finished_at = new Date(
+      NOW - 60_000,
+    ).toISOString();
+    expect(_test.syntheticProbeDue(row, NOW)).toBe(false);
+  });
+
   it("rate limits repeated synthetic failure alerts by host metadata", () => {
     const row = degradedCloudHost({
       runtime_synthetic_probe: {

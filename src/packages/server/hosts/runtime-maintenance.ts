@@ -184,6 +184,12 @@ function syntheticProbeDue(row: RuntimeHostRow, nowMs = Date.now()): boolean {
     return nowMs - checkedAt >= SYNTHETIC_PROBE_CLAIM_TIMEOUT_MS;
   }
   if (status === "failed") {
+    const bootstrapFinishedAt = timestampMs(
+      row.metadata?.bootstrap_lifecycle?.last_reconcile_finished_at,
+    );
+    if (bootstrapFinishedAt != null && bootstrapFinishedAt > checkedAt) {
+      return true;
+    }
     return nowMs - checkedAt >= SYNTHETIC_PROBE_FAILURE_RETRY_MS;
   }
   return nowMs - checkedAt >= SYNTHETIC_PROBE_SUCCESS_INTERVAL_MS;

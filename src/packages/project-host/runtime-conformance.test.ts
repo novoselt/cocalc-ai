@@ -7,10 +7,33 @@ describe("runtime conformance", () => {
     expect(__test__.startupCheckIds()).toEqual([
       "root-owned-path",
       "sudo-policy-visible",
+      "project-cgroup-helper-contract",
       "sudo-direct-deny",
       "sudo-generic-mount-deny",
     ]);
+    expect(__test__.periodicCheckIds()).toContain(
+      "project-cgroup-helper-contract",
+    );
     expect(__test__.periodicCheckIds()).toContain("sudo-wrapper-allow");
+  });
+
+  it("distinguishes supported helper usage from an old helper", () => {
+    expect(
+      __test__.helperCommandSupported({
+        exitCode: 2,
+        stdout: "",
+        stderr:
+          "usage: cocalc-runtime-storage enter-project-cgroup <project-id> <launcher-pid>",
+      }),
+    ).toBe(true);
+    expect(
+      __test__.helperCommandSupported({
+        exitCode: 2,
+        stdout: "",
+        stderr:
+          "SECURITY_DENY code=unsupported-command detail=enter-project-cgroup",
+      }),
+    ).toBe(false);
   });
 
   it("times out stuck commands", async () => {

@@ -27,6 +27,7 @@ import getLogger from "@cocalc/backend/logger";
 const logger = getLogger("project-host:runtime-conformance");
 
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
+const REQUIRED_PROJECT_CGROUP_COMMAND = "enter-project-cgroup";
 
 const DEFAULT_SWEEP_MS = 5 * 60 * 1000;
 const MIN_SWEEP_MS = 30 * 1000;
@@ -173,6 +174,46 @@ async function checkSudoWhitelistAllowsWrapper(): Promise<CheckResult> {
   };
 }
 
+function helperCommandSupported(
+  result: { exitCode: number; stdout: string; stderr: string },
+  command = REQUIRED_PROJECT_CGROUP_COMMAND,
+): boolean {
+  const output = `${result.stdout}\n${result.stderr}`;
+  return (
+    result.exitCode === 2 &&
+    output.includes(`usage: cocalc-runtime-storage ${command}`)
+  );
+}
+
+async function checkProjectCgroupHelperContract(): Promise<CheckResult> {
+  // Missing arguments make a supported command return its usage without
+  // changing cgroup state. Older helpers report unsupported-command instead.
+  const probe = await run("sudo", [
+    "-n",
+    STORAGE_WRAPPER,
+    REQUIRED_PROJECT_CGROUP_COMMAND,
+  ]);
+  if (helperCommandSupported(probe)) {
+    return {
+      name: "project-cgroup-helper-contract",
+      ok: true,
+      level: "error",
+      message: `runtime helper supports ${REQUIRED_PROJECT_CGROUP_COMMAND}`,
+    };
+  }
+  return {
+    name: "project-cgroup-helper-contract",
+    ok: false,
+    level: "error",
+    message: `runtime helper does not support ${REQUIRED_PROJECT_CGROUP_COMMAND}`,
+    details: {
+      exitCode: probe.exitCode,
+      stderr: probe.stderr.trim(),
+      stdout: probe.stdout.trim(),
+    },
+  };
+}
+
 async function checkSudoPolicyListsWrapper(): Promise<CheckResult> {
   const probe = await run("sudo", ["-n", "-l"]);
   if (probe.exitCode !== 0) {
@@ -257,6 +298,10 @@ const STARTUP_CHECK_FACTORIES: CheckFactory[] = [
     run: async () => await checkRootOwnedNotWritable(STORAGE_WRAPPER),
   },
   { id: "sudo-policy-visible", run: checkSudoPolicyListsWrapper },
+  {
+    id: "project-cgroup-helper-contract",
+    run: checkProjectCgroupHelperContract,
+  },
   { id: "sudo-direct-deny", run: checkSudoWhitelistDeniesDirectRoot },
   {
     id: "sudo-generic-mount-deny",
@@ -270,6 +315,10 @@ const PERIODIC_CHECK_FACTORIES: CheckFactory[] = [
     run: async () => await checkRootOwnedNotWritable(STORAGE_WRAPPER),
   },
   { id: "sudo-policy-visible", run: checkSudoPolicyListsWrapper },
+  {
+    id: "project-cgroup-helper-contract",
+    run: checkProjectCgroupHelperContract,
+  },
   { id: "sudo-wrapper-allow", run: checkSudoWhitelistAllowsWrapper },
 ];
 
@@ -335,6 +384,7 @@ export function startRuntimeConformanceMonitor(): () => void {
 
 export const __test__ = {
   commandTimeoutMs,
+  helperCommandSupported,
   periodicCheckIds: () => PERIODIC_CHECK_FACTORIES.map(({ id }) => id),
   run,
   startupCheckIds: () => STARTUP_CHECK_FACTORIES.map(({ id }) => id),
