@@ -2043,6 +2043,7 @@ export async function getLaunchHealth({
   const execP95 = uxLatencyP95({
     summary: latency,
     metric: "project_exec_ready",
+    segment: "warm",
   });
   const lifecycleP95 = uxLatencyP95({
     summary: latency,

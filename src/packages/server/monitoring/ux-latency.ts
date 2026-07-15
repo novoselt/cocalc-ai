@@ -587,7 +587,7 @@ function shouldAlertOnLatencySla({
   };
 }
 
-function alertCandidates(
+export function alertCandidates(
   summary: UxLatencySummary,
   sla: UxLatencySlaThresholds,
 ): UxLatencyAlertCandidate[] {
@@ -755,7 +755,14 @@ function alertCandidates(
     });
   }
 
-  const execReady = rowByMetric(summary.metrics, "project_exec_ready");
+  // Autostart readiness includes waiting for a stopped project to start and can
+  // remain pending across a suspended browser tab. It is useful diagnostic
+  // telemetry, but it does not measure the warm exec SLA.
+  const execReady = rowByMetricAndSegment(
+    summary.segments,
+    "project_exec_ready",
+    "warm",
+  );
   const execReadyAlert = shouldAlertOnLatencySla({
     summary,
     row: execReady,
@@ -767,7 +774,8 @@ function alertCandidates(
       body: actionableLatencyBody({
         summary,
         row: execReady,
-        expectation: "Project exec readiness violated the configured P95 SLA.",
+        expectation:
+          "Warm project exec readiness violated the configured P95 SLA.",
         thresholdMs: sla.project_exec_ready_p95_ms,
         slowSamples: execReadyAlert.slowSamples,
       }),
