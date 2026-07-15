@@ -38,7 +38,9 @@ import { conat } from "@cocalc/backend/conat";
 import {
   startProjectOnHost,
   stopProjectOnHost,
+  updateProjectRunQuotaOnHost,
 } from "@cocalc/server/project-host/control";
+import { applyHostRuntimePolicyToRunQuota } from "@cocalc/server/project-host/run-quota";
 import {
   ensureProjectFileServerClientReady,
   getProjectFileServerClient,
@@ -493,10 +495,7 @@ export class BaseProject extends EventEmitter {
     };
   };
 
-  /*
-    set_all_quotas ensures that if the project is running and the quotas
-    (except idle_timeout) have changed, then the project is restarted.
-    */
+  /* Reconfigure active projects in place when enforceable quotas change. */
   setAllQuotas = async (): Promise<void> => {
     await this.ensureLocalOwnership();
     const dbg = this.dbg("set_all_quotas");
@@ -525,18 +524,27 @@ export class BaseProject extends EventEmitter {
       dbg("running, but no quotas changed");
       return;
     } else {
-      dbg("running and a non-idle quota changed; restart");
-      // CRITICAL: do NOT await on this restart!  The set_all_quotas call must
+      dbg("running and a non-idle quota changed; reconfigure live cgroup");
+      // CRITICAL: do not await on this host operation. The set_all_quotas call must
       // complete quickly (in an HTTP request), whereas restart can easily take 20s,
-      // and there is no reason to wait on this.  Wrapping this as below calls the
-      // function, properly awaits and logs what happens, and avoids uncaught exceptions,
-      // but doesn't block the caller of this function.
+      // and there is no reason to wait on it. During a rolling upgrade, fall
+      // back to the previous restart behavior if the assigned host is too old
+      // to support live reconfiguration.
       (async () => {
         try {
-          await this.restart();
-          dbg("restart worked");
+          await updateProjectRunQuotaOnHost({
+            project_id: this.project_id,
+            run_quota: nextRunQuota,
+          });
+          dbg("live quota reconfiguration worked");
         } catch (err) {
-          dbg(`restart failed -- ${err}`);
+          dbg(`live quota reconfiguration failed; restarting -- ${err}`);
+          try {
+            await this.restart();
+            dbg("fallback restart worked");
+          } catch (restartErr) {
+            dbg(`fallback restart failed -- ${restartErr}`);
+          }
         }
       })();
     }
@@ -565,6 +573,7 @@ export class BaseProject extends EventEmitter {
         last_started_by,
         runtime_sponsor_account_id,
         usage_account_id,
+        host_id,
       } = await query({
         db: db(),
         select: [
@@ -573,6 +582,7 @@ export class BaseProject extends EventEmitter {
           "last_started_by",
           "runtime_sponsor_account_id",
           "usage_account_id",
+          "host_id",
         ],
         table: "projects",
         where: { project_id: this.project_id },
@@ -614,6 +624,10 @@ export class BaseProject extends EventEmitter {
         project_id: this.project_id,
         run_quota: nextRunQuota,
       });
+      nextRunQuota = await applyHostRuntimePolicyToRunQuota(
+        nextRunQuota,
+        host_id,
+      );
       nextRunQuota = withCocalcAiRuntimeSemantics(nextRunQuota);
     }
 

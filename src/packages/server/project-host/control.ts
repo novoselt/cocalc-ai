@@ -11,7 +11,6 @@ import {
   getUserHostTier,
   normalizeHostTier,
 } from "./placement";
-import { machineHasGpu } from "../cloud/host-gpu";
 import { maybeAutoGrowHostDiskForReservationFailure } from "./auto-grow";
 import { appendProjectOutboxEventForProject } from "@cocalc/database/postgres/project-events-outbox";
 import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
@@ -44,6 +43,7 @@ import type {
   HostAccessRole,
   HostEffectiveAccessRole,
 } from "@cocalc/conat/hub/api/hosts";
+import { applyHostRuntimePolicyToRunQuota } from "./run-quota";
 
 const log = getLogger("server:project-host:control");
 // Project starts can include large restores, so allow a long RPC timeout.
@@ -501,34 +501,6 @@ export async function loadProject(project_id: string): Promise<ProjectMeta> {
   return { ...rows[0], image, authorized_keys };
 }
 
-async function hostHasGpu(host_id: string): Promise<boolean> {
-  const { rows } = await pool().query(
-    "SELECT metadata FROM project_hosts WHERE id=$1 AND deleted IS NULL",
-    [host_id],
-  );
-  const metadata = rows[0]?.metadata ?? {};
-  const machine = metadata?.machine ?? {};
-  return machineHasGpu(machine);
-}
-
-async function applyHostGpuToRunQuota(
-  run_quota: any | undefined,
-  host_id: string,
-): Promise<any> {
-  const quota = run_quota ? { ...run_quota } : {};
-  if (await hostHasGpu(host_id)) {
-    quota.gpu = true;
-  } else {
-    if (Object.prototype.hasOwnProperty.call(quota, "gpu")) {
-      quota.gpu = false;
-    }
-    if (Object.prototype.hasOwnProperty.call(quota, "gpu_count")) {
-      delete quota.gpu_count;
-    }
-  }
-  return quota;
-}
-
 export async function loadHostFromRegistry(host_id: string) {
   const { rows } = await pool().query(
     "SELECT id, bay_id, name, region, public_url, internal_url, ssh_server, tier, metadata FROM project_hosts WHERE id=$1 AND deleted IS NULL",
@@ -804,7 +776,10 @@ async function registerProjectOnHost({
     already_assigned: meta.host_id === host_id,
   });
 
-  const run_quota = await applyHostGpuToRunQuota(meta.run_quota, host_id);
+  const run_quota = await applyHostRuntimePolicyToRunQuota(
+    meta.run_quota,
+    host_id,
+  );
 
   await client.createProject({
     project_id,
@@ -979,7 +954,7 @@ export async function startProjectOnHost(
       throw new Error(cpuPolicyBlockMessage);
     }
     const meta = await loadProject(project_id);
-    const run_quota = await applyHostGpuToRunQuota(
+    const run_quota = await applyHostRuntimePolicyToRunQuota(
       meta.run_quota,
       placement.host_id,
     );
@@ -1068,6 +1043,24 @@ export async function startProjectOnHost(
       startProjectInFlight.delete(project_id);
     }
   }
+}
+
+export async function updateProjectRunQuotaOnHost({
+  project_id,
+  run_quota,
+}: {
+  project_id: string;
+  run_quota?: any;
+}): Promise<void> {
+  const { host_id } = await getAssignedProjectHostInfo(project_id);
+  const client = await getRoutedHostControlClient({
+    host_id,
+    timeout: 30_000,
+  });
+  await client.updateProjectRunQuota({
+    project_id,
+    run_quota: await applyHostRuntimePolicyToRunQuota(run_quota, host_id),
+  });
 }
 
 export function takeStartProjectPhaseTimings(

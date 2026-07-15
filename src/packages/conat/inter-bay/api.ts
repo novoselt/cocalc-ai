@@ -2094,6 +2094,7 @@ export type HostControlMethod =
   | "get-project-status"
   | "update-authorized-keys"
   | "update-project-users"
+  | "update-project-run-quota"
   | "sync-project-secrets-cache"
   | "setup-project-secret-ssh-key"
   | "apply-pending-copies"
@@ -3152,6 +3153,10 @@ export interface InterBayHostControlApi {
     host_id: string;
     update: HostControlArg<"updateProjectUsers">;
   }) => Promise<void>;
+  updateProjectRunQuota: (opts: {
+    host_id: string;
+    update: HostControlArg<"updateProjectRunQuota">;
+  }) => ReturnType<HostControlApi["updateProjectRunQuota"]>;
   syncProjectSecretsCache: (opts: {
     host_id: string;
     sync: HostControlArg<"syncProjectSecretsCache">;
@@ -3972,6 +3977,7 @@ const HOST_CONTROL_METHOD_SPECS = [
   { name: "getProjectStatus", method: "get-project-status" },
   { name: "updateAuthorizedKeys", method: "update-authorized-keys" },
   { name: "updateProjectUsers", method: "update-project-users" },
+  { name: "updateProjectRunQuota", method: "update-project-run-quota" },
   { name: "syncProjectSecretsCache", method: "sync-project-secrets-cache" },
   { name: "setupProjectSecretSshKey", method: "setup-project-secret-ssh-key" },
   { name: "applyPendingCopies", method: "apply-pending-copies" },

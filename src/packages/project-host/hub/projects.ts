@@ -142,21 +142,12 @@ import {
   assertProjectDiskQuotaStartAllowed,
   isProjectDiskQuotaStartBlocked,
 } from "../project-start-quota";
+import { normalizeRunQuota, runnerConfigFromQuota } from "../run-quota";
 
 const logger = getLogger("project-host:hub:projects");
 const CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS = 45_000;
 export const PROJECT_RUNNER_RPC_TIMEOUT_MS = 60 * 60 * 1000;
 const MB = 1_000_000;
-const DEFAULT_PID_LIMIT = positiveIntegerEnv("COCALC_PROJECT_PIDS_LIMIT", 4096);
-const DEFAULT_NOFILE_LIMIT = positiveIntegerEnv(
-  "COCALC_PROJECT_NOFILE_LIMIT",
-  8192,
-);
-const DEFAULT_CORE_LIMIT = nonNegativeIntegerEnv(
-  "COCALC_PROJECT_CORE_LIMIT",
-  0,
-);
-const DEFAULT_SHM_SIZE = process.env.COCALC_PROJECT_SHM_SIZE?.trim() || "64m";
 const DEFAULT_MAX_BACKUPS_PER_PROJECT = 30;
 const PROJECT_OWNER_LIMITS_CACHE_TTL_MS = 5 * 60_000;
 const LRO_PUBLISH_RETRY_ATTEMPTS = 20;
@@ -182,21 +173,6 @@ const accountLimitsInflight = new Map<
   Promise<MembershipEffectiveLimits>
 >();
 
-function positiveIntegerEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw.trim() === "") return fallback;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
-
-function nonNegativeIntegerEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw.trim() === "") return fallback;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 0) return fallback;
-  return parsed;
-}
 let listeningProjectPortOffsetsCache:
   | {
       value: Set<number>;
@@ -449,59 +425,6 @@ async function publishLroSummaryWithRetry({
     attempts: LRO_PUBLISH_RETRY_ATTEMPTS,
   });
   return false;
-}
-
-function normalizeRunQuota(run_quota?: any): any | undefined {
-  if (run_quota == null) return undefined;
-  if (typeof run_quota === "string") {
-    try {
-      return JSON.parse(run_quota);
-    } catch {
-      return undefined;
-    }
-  }
-  if (typeof run_quota === "object") {
-    return run_quota;
-  }
-  return undefined;
-}
-
-function runnerConfigFromQuota(run_quota?: any): Partial<Configuration> {
-  const limits: Partial<Configuration> = {
-    pids: DEFAULT_PID_LIMIT,
-    nofile: DEFAULT_NOFILE_LIMIT,
-    core: DEFAULT_CORE_LIMIT,
-    shmSize: DEFAULT_SHM_SIZE,
-  };
-  if (!run_quota) return limits;
-
-  if (run_quota.cpu_limit != null) {
-    limits.cpu = run_quota.cpu_limit;
-  }
-
-  if (run_quota.memory_limit != null) {
-    const memory = Math.floor(run_quota.memory_limit * MB);
-    limits.memory = memory;
-    limits.tmp = Math.floor(memory / 2);
-    limits.swap = true;
-  }
-
-  if (run_quota.pids_limit != null) {
-    limits.pids = run_quota.pids_limit;
-  }
-
-  if (run_quota.disk_quota != null) {
-    const disk = Math.floor(run_quota.disk_quota * MB);
-    limits.disk = disk;
-    limits.scratch = disk;
-  }
-
-  const hasGpu = run_quota.gpu === true || (run_quota.gpu_count ?? 0) > 0;
-  if (hasGpu) {
-    limits.gpu = true;
-  }
-
-  return limits;
 }
 
 export async function getProjectOwnerEffectiveLimits(

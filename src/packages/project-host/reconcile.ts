@@ -20,14 +20,23 @@ const DEFAULT_INTERVAL = 15_000;
 const DEFAULT_MISSING_CYCLES_BEFORE_OPENED = 2;
 const DEFAULT_STALE_HEARTBEAT_MS = pidUpdateIntervalMs * 2.5;
 const DEFAULT_STALE_HEARTBEAT_CYCLES = 3;
+const DEFAULT_CGROUP_RECONCILE_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_CGROUP_RECONCILE_CONCURRENCY = 8;
 const DEFAULT_PROJECT_PROXY_PORT_NUMBER = Number(DEFAULT_PROJECT_PROXY_PORT);
 
 const logger = getLogger("project-host:reconcile");
 const missingSince = new Map<string, number>();
 const staleHeartbeatCycles = new Map<string, number>();
+const cgroupReconciledAt = new Map<string, number>();
 
 export interface ReconcileOptions {
   recoverStaleRuntime?: (project_id: string) => Promise<string | undefined>;
+  reconcileProjectCgroup?: (opts: {
+    project_id: string;
+    run_quota?: any;
+    force: boolean;
+  }) => Promise<{ status: string }>;
+  forceProjectCgroupRepair?: boolean;
 }
 
 interface ContainerState {
@@ -192,6 +201,7 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
   const now = Date.now();
   const knownProjects = listProjects();
   const knownIds = new Set(knownProjects.map((p) => p.project_id));
+  const knownById = new Map(knownProjects.map((p) => [p.project_id, p]));
   const { ok, states: containers } = await getContainerStates();
   if (!ok) {
     logger.debug(
@@ -205,6 +215,7 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
   let mountPoint: string | undefined;
   let mountPointError: string | undefined;
   let loggedMountPointError = false;
+  const cgroupRepairs: Array<() => Promise<void>> = [];
   const resolveMountPoint = (): string | undefined => {
     if (mountPoint || mountPointError) return mountPoint;
     try {
@@ -232,6 +243,37 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
     }
     upsertProject(row);
     if (info.state === "running") {
+      if (options.reconcileProjectCgroup != null) {
+        const lastReconciled = cgroupReconciledAt.get(info.project_id) ?? 0;
+        const due =
+          options.forceProjectCgroupRepair === true ||
+          now - lastReconciled >= cgroupReconcileIntervalMs();
+        if (due) {
+          const run_quota = knownById.get(info.project_id)?.run_quota;
+          cgroupRepairs.push(async () => {
+            try {
+              const result = await options.reconcileProjectCgroup!({
+                project_id: info.project_id,
+                run_quota,
+                force: options.forceProjectCgroupRepair === true,
+              });
+              if (result.status !== "not_running") {
+                cgroupReconciledAt.set(info.project_id, Date.now());
+              }
+              if (result.status === "repaired") {
+                logger.info("repaired project cgroup policy", {
+                  project_id: info.project_id,
+                });
+              }
+            } catch (err) {
+              logger.warn("project cgroup reconciliation failed", {
+                project_id: info.project_id,
+                err: `${err}`,
+              });
+            }
+          });
+        }
+      }
       const base = resolveMountPoint();
       const heartbeatAgeMs = base
         ? projectHeartbeatAgeMs(base, info.project_id, now)
@@ -300,10 +342,13 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
         }
       }
     } else {
+      cgroupReconciledAt.delete(info.project_id);
       staleHeartbeatCycles.delete(info.project_id);
       resetProjectLastChangedRunning(info.project_id);
     }
   }
+
+  await runWithConcurrency(cgroupRepairs, cgroupReconcileConcurrency());
 
   // Any project we think is active but has no container should be marked stopped.
   for (const row of knownProjects) {
@@ -311,6 +356,7 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
       !containers.has(row.project_id) &&
       (row.state === "running" || row.state === "starting")
     ) {
+      cgroupReconciledAt.delete(row.project_id);
       const misses = (missingSince.get(row.project_id) ?? 0) + 1;
       missingSince.set(row.project_id, misses);
       if (misses < missingCyclesBeforeOpened()) {
@@ -359,9 +405,41 @@ function staleProjectHeartbeatCycles(): number {
   return Math.max(1, Math.floor(raw));
 }
 
+function cgroupReconcileIntervalMs(): number {
+  const raw = Number(process.env.COCALC_PROJECT_CGROUP_RECONCILE_INTERVAL_MS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_CGROUP_RECONCILE_INTERVAL_MS;
+  }
+  return Math.max(DEFAULT_INTERVAL, Math.floor(raw));
+}
+
+function cgroupReconcileConcurrency(): number {
+  const raw = Number(process.env.COCALC_PROJECT_CGROUP_RECONCILE_CONCURRENCY);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_CGROUP_RECONCILE_CONCURRENCY;
+  }
+  return Math.max(1, Math.min(32, Math.floor(raw)));
+}
+
+async function runWithConcurrency(
+  jobs: Array<() => Promise<void>>,
+  concurrency: number,
+): Promise<void> {
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
+      while (next < jobs.length) {
+        const index = next++;
+        await jobs[index]();
+      }
+    }),
+  );
+}
+
 export function resetReconcileStateForTests(): void {
   missingSince.clear();
   staleHeartbeatCycles.clear();
+  cgroupReconciledAt.clear();
 }
 
 export function startReconciler(
@@ -370,16 +448,22 @@ export function startReconciler(
 ): () => void {
   let timer: NodeJS.Timeout | undefined;
   let running = false;
+  let first = true;
   const tick = async () => {
     if (running) {
       return;
     }
     running = true;
     try {
-      await reconcileOnce(options);
+      await reconcileOnce({
+        ...options,
+        forceProjectCgroupRepair:
+          first || options.forceProjectCgroupRepair === true,
+      });
     } catch (err) {
       logger.debug("reconcileOnce failed", { err: `${err}` });
     } finally {
+      first = false;
       running = false;
     }
   };

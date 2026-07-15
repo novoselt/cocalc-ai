@@ -111,6 +111,9 @@ const START_FAILURE_LOG_LINES = 80;
 const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
 const VERIFY_PROJECT_POOL_TIMEOUT_S = 10;
 const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
+const DEFAULT_PROJECT_POOL_CGROUP = "/sys/fs/cgroup/cocalc-project-pool";
+const PROJECT_LEAF_POOL_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024;
+const MIN_PROJECT_LEAF_MEMORY_MAX_BYTES = 512 * 1024 * 1024;
 const PROJECT_POOL_LAUNCHER_SCRIPT = `set -euo pipefail
 sudo -n /usr/local/sbin/cocalc-runtime-storage enter-project-cgroup "$1" "$$"
 shift
@@ -1091,6 +1094,168 @@ async function attachProjectToCgroup({
       `failed to attach ${name} to its project cgroup: ${result.stderr || result.stdout || `helper exited ${result.exit_code}`}`,
     );
   }
+}
+
+function projectPoolCgroupPath(): string {
+  return (
+    process.env.COCALC_PROJECT_POOL_CGROUP?.trim() ||
+    DEFAULT_PROJECT_POOL_CGROUP
+  );
+}
+
+async function effectiveProjectCgroupLimits(
+  requested: ProjectCgroupLimits,
+): Promise<ProjectCgroupLimits | undefined> {
+  try {
+    const poolMax = Number(
+      (
+        await readFile(join(projectPoolCgroupPath(), "memory.max"), "utf8")
+      ).trim(),
+    );
+    if (!Number.isSafeInteger(poolMax) || poolMax <= 0) return undefined;
+    const ceiling = poolMax - PROJECT_LEAF_POOL_HEADROOM_BYTES;
+    if (ceiling < MIN_PROJECT_LEAF_MEMORY_MAX_BYTES) return undefined;
+    const requestedMax = Number(requested.memory_max);
+    const memoryMax =
+      requested.memory_max === "max" ||
+      !Number.isSafeInteger(requestedMax) ||
+      requestedMax > ceiling
+        ? ceiling
+        : requestedMax;
+    const clampToMemoryMax = (value: string): string => {
+      if (value === "max") return value;
+      const parsed = Number(value);
+      return Number.isSafeInteger(parsed) && parsed > memoryMax
+        ? `${memoryMax}`
+        : value;
+    };
+    return {
+      ...requested,
+      memory_max: `${memoryMax}`,
+      memory_high: clampToMemoryMax(requested.memory_high),
+      memory_low: clampToMemoryMax(requested.memory_low),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function projectCgroupConforms({
+  project_id,
+  requested,
+}: {
+  project_id: string;
+  requested: ProjectCgroupLimits;
+}): Promise<{ conforms: boolean; effective?: ProjectCgroupLimits }> {
+  const effective = await effectiveProjectCgroupLimits(requested);
+  if (!effective) return { conforms: false };
+  const cgroup = join(projectPoolCgroupPath(), `project-${project_id}`);
+  try {
+    const values = await Promise.all(
+      [
+        "memory.max",
+        "memory.high",
+        "memory.low",
+        "memory.swap.max",
+        "pids.max",
+        "cpu.max",
+        "cpu.weight",
+        "memory.oom.group",
+        "cgroup.procs",
+      ].map(async (name) =>
+        (await readFile(join(cgroup, name), "utf8")).trim(),
+      ),
+    );
+    const [
+      memoryMax,
+      memoryHigh,
+      memoryLow,
+      memorySwapMax,
+      pidsMax,
+      cpuMax,
+      cpuWeight,
+      memoryOomGroup,
+      cgroupProcs,
+    ] = values;
+    let ioWeightConforms = true;
+    try {
+      const ioWeight = (
+        await readFile(join(cgroup, "io.weight"), "utf8")
+      ).trim();
+      const defaultIoWeight = ioWeight
+        .split(/\r?\n/)
+        .find((line) => line.startsWith("default "))
+        ?.slice("default ".length);
+      ioWeightConforms = defaultIoWeight === effective.io_weight;
+    } catch {
+      // The io controller is optional; the privileged helper also skips it
+      // when the kernel does not expose io.weight for this hierarchy.
+    }
+    return {
+      conforms:
+        memoryMax === effective.memory_max &&
+        memoryHigh === effective.memory_high &&
+        memoryLow === effective.memory_low &&
+        memorySwapMax === effective.memory_swap_max &&
+        pidsMax === effective.pids_max &&
+        cpuMax === `${effective.cpu_max_quota} ${effective.cpu_max_period}` &&
+        cpuWeight === effective.cpu_weight &&
+        ioWeightConforms &&
+        memoryOomGroup === "0" &&
+        cgroupProcs.length > 0,
+      effective,
+    };
+  } catch {
+    return { conforms: false, effective };
+  }
+}
+
+export type ProjectCgroupReconcileResult = {
+  status: "already_current" | "repaired" | "not_running";
+  requested_memory_max?: string;
+  effective_memory_max?: string;
+};
+
+export async function reconcileProjectCgroup({
+  project_id,
+  config,
+  force = false,
+}: {
+  project_id: string;
+  config?: Configuration;
+  force?: boolean;
+}): Promise<ProjectCgroupReconcileResult> {
+  if (!isValidUUID(project_id)) {
+    throw Error("reconcileProjectCgroup: project_id must be valid");
+  }
+  return await withProjectLifecycleLock(project_id, async () => {
+    const name = projectContainerName(project_id);
+    if (!(await hasLiveConmonContainer(name))) {
+      return { status: "not_running" };
+    }
+    const requested = projectCgroupLimitsFromPodmanArgs(
+      await podmanLimits(config),
+    );
+    const conformance = await projectCgroupConforms({
+      project_id,
+      requested,
+    });
+    if (!force && conformance.conforms) {
+      return {
+        status: "already_current",
+        requested_memory_max: requested.memory_max,
+        effective_memory_max: conformance.effective?.memory_max,
+      };
+    }
+    await attachProjectToCgroup({ project_id, name, limits: requested });
+    const effective =
+      conformance.effective ?? (await effectiveProjectCgroupLimits(requested));
+    return {
+      status: "repaired",
+      requested_memory_max: requested.memory_max,
+      effective_memory_max: effective?.memory_max,
+    };
+  });
 }
 
 async function cleanupProjectCgroup(project_id: string): Promise<void> {

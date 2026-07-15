@@ -479,6 +479,14 @@ export interface HostControlApi {
     project_id: string;
     users?: any;
   }) => Promise<void>;
+  updateProjectRunQuota: (opts: {
+    project_id: string;
+    run_quota?: any;
+  }) => Promise<{
+    status: "already_current" | "repaired" | "not_running";
+    requested_memory_max?: string;
+    effective_memory_max?: string;
+  }>;
   syncProjectSecretsCache: (opts: {
     project_id: string;
     cache: ProjectSecretsRuntimeCache;

@@ -3,6 +3,7 @@ export {};
 let queryMock: jest.Mock;
 let startProjectOnHostMock: jest.Mock;
 let stopProjectOnHostMock: jest.Mock;
+let updateProjectRunQuotaOnHostMock: jest.Mock;
 let getProjectFileServerClientMock: jest.Mock;
 let ensureProjectFileServerClientReadyMock: jest.Mock;
 let issueRootfsReleaseArtifactUploadMock: jest.Mock;
@@ -40,6 +41,15 @@ jest.mock("@cocalc/server/project-host/control", () => ({
   __esModule: true,
   startProjectOnHost: (...args: any[]) => startProjectOnHostMock(...args),
   stopProjectOnHost: (...args: any[]) => stopProjectOnHostMock(...args),
+  updateProjectRunQuotaOnHost: (...args: any[]) =>
+    updateProjectRunQuotaOnHostMock(...args),
+}));
+
+jest.mock("@cocalc/server/project-host/run-quota", () => ({
+  __esModule: true,
+  applyHostRuntimePolicyToRunQuota: jest.fn(
+    async (run_quota: unknown) => run_quota ?? {},
+  ),
 }));
 
 jest.mock("@cocalc/server/conat/file-server-client", () => ({
@@ -143,6 +153,7 @@ describe("BaseProject.start RootFS sealing", () => {
     queryTableMock = jest.fn(async () => ({}));
     startProjectOnHostMock = jest.fn(async () => undefined);
     stopProjectOnHostMock = jest.fn(async () => undefined);
+    updateProjectRunQuotaOnHostMock = jest.fn(async () => undefined);
     ensureProjectFileServerClientReadyMock = jest.fn(async () => undefined);
     issueRootfsReleaseArtifactUploadMock = jest.fn(async () => ({
       backend: "rustic",
@@ -310,6 +321,7 @@ describe("BaseProject.start RootFS sealing", () => {
           last_started_by: OWNER_ID,
           runtime_sponsor_account_id: RUNTIME_SPONSOR_ID,
           usage_account_id: null,
+          host_id: HOST_ID,
         };
       }
       if (opts?.query === "UPDATE projects") {
@@ -339,6 +351,7 @@ describe("BaseProject.start RootFS sealing", () => {
     }));
 
     const { BaseProject } = await import("./base");
+    const hostRunQuota = await import("@cocalc/server/project-host/run-quota");
     const project = new BaseProject(PROJECT_ID);
 
     await project.computeQuota(ACTOR_ID);
@@ -353,6 +366,10 @@ describe("BaseProject.start RootFS sealing", () => {
         member_host: true,
       },
     });
+    expect(hostRunQuota.applyHostRuntimePolicyToRunQuota).toHaveBeenCalledWith(
+      expect.objectContaining({ memory_limit: 2000, disk_quota: 10000 }),
+      HOST_ID,
+    );
   });
 
   it("recomputes stored run_quota for stopped projects without restarting", async () => {
@@ -416,7 +433,7 @@ describe("BaseProject.start RootFS sealing", () => {
     expect(stopProjectOnHostMock).not.toHaveBeenCalled();
   });
 
-  it("restarts active projects when non-idle runtime quotas change", async () => {
+  it("reconfigures active projects live and falls back for old hosts", async () => {
     const OWNER_ID = "33333333-3333-4333-8333-333333333333";
 
     queryTableMock = jest.fn(async (opts: any) => {
@@ -468,6 +485,22 @@ describe("BaseProject.start RootFS sealing", () => {
     project.restart = restartMock;
 
     await project.setAllQuotas();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(updateProjectRunQuotaOnHostMock).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+      run_quota: expect.objectContaining({
+        memory_limit: 4000,
+        disk_quota: 5000,
+      }),
+    });
+    expect(restartMock).not.toHaveBeenCalled();
+
+    updateProjectRunQuotaOnHostMock.mockRejectedValueOnce(
+      new Error("unknown remote function updateProjectRunQuota"),
+    );
+    await project.setAllQuotas();
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(restartMock).toHaveBeenCalledTimes(1);
   });

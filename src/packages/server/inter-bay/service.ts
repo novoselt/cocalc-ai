@@ -2543,6 +2543,10 @@ async function startHostControlService(): Promise<void> {
       await (await getHostClient(host_id, 30_000)).updateAuthorizedKeys(update),
     updateProjectUsers: async ({ host_id, update }) =>
       await (await getHostClient(host_id, 30_000)).updateProjectUsers(update),
+    updateProjectRunQuota: async ({ host_id, update }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).updateProjectRunQuota(update),
     syncProjectSecretsCache: async ({ host_id, sync }) =>
       await (
         await getHostClient(host_id, 30_000)

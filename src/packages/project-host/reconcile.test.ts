@@ -200,6 +200,32 @@ describe("reconcileOnce", () => {
     });
   });
 
+  it("reconciles running project cgroups in place and rate limits checks", async () => {
+    upsertProject({
+      project_id,
+      state: "running",
+      run_quota: { memory_limit: 2000 },
+    });
+    mockPodmanPs(`project-${project_id}|running|\n`);
+    const reconcileProjectCgroup = jest.fn(async () => ({
+      status: "repaired",
+    }));
+
+    await reconcileOnce({
+      reconcileProjectCgroup,
+      forceProjectCgroupRepair: true,
+    });
+    await reconcileOnce({ reconcileProjectCgroup });
+
+    expect(reconcileProjectCgroup).toHaveBeenCalledTimes(1);
+    expect(reconcileProjectCgroup).toHaveBeenCalledWith({
+      project_id,
+      run_quota: { memory_limit: 2000 },
+      force: true,
+    });
+    expect(getProject(project_id)?.state).toBe("running");
+  });
+
   it("clears stale running projects when the container is gone", async () => {
     upsertProject({
       project_id,

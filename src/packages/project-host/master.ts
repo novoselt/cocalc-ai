@@ -45,13 +45,21 @@ import {
   getRootfsMountpoint,
   isMounted as isRootfsMounted,
 } from "@cocalc/project-runner/run/rootfs";
-import { deleteProjectLocal, upsertProject } from "./sqlite/projects";
+import {
+  deleteProjectLocal,
+  getProject,
+  upsertProject,
+} from "./sqlite/projects";
 import {
   getCachedProjectSecretsForRuntime,
   markProjectSecretsCacheMaterialized,
   syncProjectSecretsCache as syncProjectSecretsCacheLocal,
 } from "./project-secrets-cache";
-import { refreshProjectSecretsHostPath } from "@cocalc/project-runner/run/podman";
+import {
+  reconcileProjectCgroup,
+  refreshProjectSecretsHostPath,
+} from "@cocalc/project-runner/run/podman";
+import { runnerConfigFromQuota } from "./run-quota";
 import { setupProjectSecretSshKey } from "./project-secret-ssh-key";
 import { setProjectHostAuthPublicKey } from "./auth-public-key";
 import { matchAppRequest } from "./app-public-access";
@@ -1342,6 +1350,18 @@ export async function startMasterRegistration({
       await updateProjectUsers({
         project_id,
         users,
+      });
+    },
+    async updateProjectRunQuota({ project_id, run_quota }) {
+      await awaitReadyForControl("updateProjectRunQuota", waitUntilReady);
+      upsertProject({ project_id, run_quota });
+      if (getProject(project_id)?.state !== "running") {
+        return { status: "not_running" };
+      }
+      return await reconcileProjectCgroup({
+        project_id,
+        config: runnerConfigFromQuota(run_quota),
+        force: true,
       });
     },
     async syncProjectSecretsCache({ project_id, cache }) {

@@ -132,6 +132,7 @@ import {
   getAll,
   projectSecretsHostPath,
   PROJECT_SECRETS_HOST_ROOT,
+  reconcileProjectCgroup,
   refreshProjectSecretsHostPath,
   podmanRuntimeArgs,
   redactConfigurationForLog,
@@ -202,6 +203,60 @@ describe("project-runner podman orphan fallback", () => {
 
   afterEach(() => {
     processKillSpy.mockRestore();
+  });
+
+  it("reapplies project cgroup limits without restarting the container", async () => {
+    mockPodmanLimits.mockResolvedValue(["--memory=2000000000"]);
+    mockProjectCgroupLimitsFromPodmanArgs.mockReturnValue({
+      memory_max: "2000000000",
+      memory_high: "max",
+      memory_low: "1600000000",
+      memory_swap_max: "0",
+      pids_max: "4096",
+      cpu_max_quota: "max",
+      cpu_max_period: "100000",
+      cpu_weight: "100",
+      io_weight: "100",
+    });
+    mockGetConmonContainerProcessLists.mockResolvedValue(
+      new Map([
+        [
+          `project-${project1}`,
+          [
+            {
+              name: `project-${project1}`,
+              project_id: project1,
+              conmon_pid: 400,
+              child_pids: [401],
+            },
+          ],
+        ],
+      ]),
+    );
+
+    await expect(
+      reconcileProjectCgroup({
+        project_id: project1,
+        config: { memory: 2_000_000_000 },
+        force: true,
+      }),
+    ).resolves.toMatchObject({ status: "repaired" });
+
+    expect(mockExecuteCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "sudo",
+        args: expect.arrayContaining([
+          "attach-project-cgroup",
+          project1,
+          "2000000000",
+          "0",
+        ]),
+      }),
+    );
+    expect(mockPodman).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["rm", `project-${project1}`]),
+      expect.anything(),
+    );
   });
 
   it("treats a project as running when podman misses it but conmon sees it", async () => {

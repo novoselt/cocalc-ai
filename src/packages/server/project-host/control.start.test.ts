@@ -130,6 +130,13 @@ jest.mock("@cocalc/server/projects/rootfs-state", () => ({
     getCurrentProjectRootfsBindingMock(...args),
 }));
 
+jest.mock("./run-quota", () => ({
+  __esModule: true,
+  applyHostRuntimePolicyToRunQuota: jest.fn(
+    async (run_quota: unknown) => run_quota ?? {},
+  ),
+}));
+
 jest.mock("@cocalc/server/membership/project-limits", () => ({
   __esModule: true,
   assertCanRestoreProvisionedProjectStorage: (...args: any[]) =>

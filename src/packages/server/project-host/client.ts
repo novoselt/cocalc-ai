@@ -52,6 +52,8 @@ export async function getRoutedHostControlClient({
         await bridge.updateAuthorizedKeys({ host_id, update }),
       updateProjectUsers: async (update) =>
         await bridge.updateProjectUsers({ host_id, update }),
+      updateProjectRunQuota: async (update) =>
+        await bridge.updateProjectRunQuota({ host_id, update }),
       syncProjectSecretsCache: async (sync) =>
         await bridge.syncProjectSecretsCache({ host_id, sync }),
       setupProjectSecretSshKey: async (setup) =>

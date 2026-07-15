@@ -2630,8 +2630,9 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
       <Card size="small" title="Project resource policy">
         <Space orientation="vertical" style={{ width: "100%" }} size="small">
           <Typography.Text type="secondary">
-            Optional RAM cap for projects running on this host. CPU and storage
-            still come from normal project policy.
+            RAM available to each project on this host. On a private host this
+            replaces the membership RAM limit; on a shared-pool host it is only
+            a downward safety cap. The aggregate host reserve remains enforced.
           </Typography.Text>
           <Space wrap>
             <InputNumber

@@ -84,6 +84,7 @@ import { initCodexSiteKeyGovernor } from "./codex/codex-site-metering";
 import { startCodexSubscriptionCacheGc } from "./codex/codex-subscription-cache-gc";
 import { setPreferContainerExecutor } from "@cocalc/lite/hub/acp/workspace-root";
 import { sandboxExec } from "@cocalc/project-runner/run/sandbox-exec";
+import { reconcileProjectCgroup } from "@cocalc/project-runner/run/podman";
 import { getOrCreateSelfSigned } from "@cocalc/lite/tls";
 import { handleDaemonCli } from "./daemon";
 import { startCopyWorker } from "./pending-copies";
@@ -133,6 +134,7 @@ import { initProjectStorageInfoService } from "./storage-info-service";
 import { initProjectDocumentActivityService } from "./document-activity-service";
 import { initProjectArchiveInfoService } from "./archive-info-service";
 import { startProjectHostEventLoopStallMonitor } from "./event-loop-stalls";
+import { runnerConfigFromQuota } from "./run-quota";
 import { getProjectHostActivitySnapshot } from "./health-progress";
 import {
   attachProjectHostConatRouterProxy,
@@ -1550,6 +1552,12 @@ export async function main(
     },
   });
   const stopReconciler = startReconciler(undefined, {
+    reconcileProjectCgroup: async ({ project_id, run_quota, force }) =>
+      await reconcileProjectCgroup({
+        project_id,
+        config: runnerConfigFromQuota(run_quota),
+        force,
+      }),
     recoverStaleRuntime: async (project_id) => {
       const stopped = await runnerApi.stop({ project_id, force: true });
       if (stopped?.state === "opened") {
