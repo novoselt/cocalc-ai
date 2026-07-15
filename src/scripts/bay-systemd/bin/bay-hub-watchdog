@@ -103,13 +103,19 @@ while IFS=$'\t' read -r worker_id healthy drained; do
   fi
 
   bay_log "hub watchdog restarting persistently unhealthy ${unit} (${active_state}/${sub_state})"
+  "${COCALC_BAY_CURRENT_LINK}/bin/bay-frontdoor-drain" "$worker_id"
+  # Record the attempt before entering systemctl. A failed or timed-out restart
+  # must also respect the cooldown instead of retrying every timer tick.
+  printf '%s\n' "$now" > "$restart_file"
   systemctl reset-failed "$unit" >/dev/null 2>&1 || true
   if timeout "${COCALC_BAY_HUB_WATCHDOG_RESTART_TIMEOUT_S}" \
-      systemctl restart "$unit"; then
-    printf '%s\n' "$now" > "$restart_file"
+      systemctl restart "$unit" && \
+      "${COCALC_BAY_CURRENT_LINK}/bin/bay-worker-health" "$worker_id"; then
     rm -f "$failure_file"
+    "${COCALC_BAY_CURRENT_LINK}/bin/bay-frontdoor-undrain" "$worker_id"
     bay_log "hub watchdog restarted ${unit}"
   else
+    "${COCALC_BAY_CURRENT_LINK}/bin/bay-frontdoor-undrain" "$worker_id" || true
     bay_log "hub watchdog failed to restart ${unit}"
   fi
 

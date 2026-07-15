@@ -7,6 +7,8 @@ trap 'rm -rf "$TMP"' EXIT
 
 FAKE_BIN="${TMP}/bin"
 mkdir -p "$FAKE_BIN"
+export COCALC_BAY_CURRENT_LINK="${TMP}/current"
+mkdir -p "${COCALC_BAY_CURRENT_LINK}/bin"
 
 cat > "${FAKE_BIN}/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -48,6 +50,15 @@ exec "$@"
 EOF
 chmod 0755 "${FAKE_BIN}/"*
 
+for helper in bay-frontdoor-drain bay-frontdoor-undrain bay-worker-health; do
+  cat > "${COCALC_BAY_CURRENT_LINK}/bin/${helper}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s %s\n' "$(basename "$0")" "$*" >> "$WATCHDOG_HELPER_LOG"
+EOF
+  chmod 0755 "${COCALC_BAY_CURRENT_LINK}/bin/${helper}"
+done
+
 export PATH="${FAKE_BIN}:${PATH}"
 export COCALC_BAY_ENV_FILE="${TMP}/missing-bay.env"
 export COCALC_BAY_WORKERS_ENV_FILE="${TMP}/missing-workers.env"
@@ -58,6 +69,7 @@ export COCALC_BAY_RUN_DIR="${TMP}/run"
 export COCALC_BAY_HUB_WATCHDOG_FAILURE_THRESHOLD=2
 export COCALC_BAY_HUB_WATCHDOG_RESTART_COOLDOWN_S=300
 export WATCHDOG_SYSTEMCTL_LOG="${TMP}/systemctl.log"
+export WATCHDOG_HELPER_LOG="${TMP}/helper.log"
 export WATCHDOG_HEALTH_JSON='{
   "workers": [
     {"id": 1, "healthy": false, "drained": false},
@@ -75,6 +87,9 @@ fi
 
 bash "${SCRIPT_DIR}/bay-hub-watchdog"
 grep -qx 'restart cocalc-bay-hub@1.service' "$WATCHDOG_SYSTEMCTL_LOG"
+grep -qx 'bay-frontdoor-drain 1' "$WATCHDOG_HELPER_LOG"
+grep -qx 'bay-worker-health 1' "$WATCHDOG_HELPER_LOG"
+grep -qx 'bay-frontdoor-undrain 1' "$WATCHDOG_HELPER_LOG"
 if grep -qx 'restart cocalc-bay-hub@2.service' "$WATCHDOG_SYSTEMCTL_LOG"; then
   echo "watchdog restarted more than one worker in one pass" >&2
   exit 1
