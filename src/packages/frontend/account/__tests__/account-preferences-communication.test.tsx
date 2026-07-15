@@ -3,10 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { AccountPreferencesCommunication } from "../account-preferences-communication";
 import {
+  MARKETING_CONSENT_OTHER_SETTINGS_KEY,
   OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
   type NotificationEmailMode,
 } from "@cocalc/util/notification-preferences";
@@ -35,75 +36,99 @@ jest.mock("react-intl", () => ({
 }));
 
 jest.mock("antd", () => ({
-  Alert: ({
-    description,
-    message,
-  }: {
-    description?: ReactNode;
-    message: ReactNode;
-  }) => (
-    <div>
-      {message}
-      {description}
-    </div>
+  Alert: ({ message }: { message: ReactNode }) => <div>{message}</div>,
+  Button: ({ children, icon, onClick }: any) => (
+    <button onClick={onClick} type="button">
+      {icon}
+      {children}
+    </button>
   ),
-  Radio: {
-    Group: ({
-      options,
-      onChange,
-    }: {
-      options: { value: NotificationEmailMode; label: string }[];
-      onChange: (event: { target: { value: NotificationEmailMode } }) => void;
-    }) => (
-      <div>
-        {options.map((option) => (
-          <button
-            data-testid={`mode-${option.value}`}
-            key={option.value}
-            onClick={() => onChange({ target: { value: option.value } })}
-            type="button"
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    ),
-  },
-  Space: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  Tag: ({ children }: { children: ReactNode }) => <span>{children}</span>,
-  Typography: {
-    Text: ({ children }: { children: ReactNode }) => <span>{children}</span>,
-    Paragraph: ({ children }: { children: ReactNode }) => <p>{children}</p>,
-  },
-}));
-
-jest.mock("@cocalc/frontend/antd-bootstrap", () => ({
-  Panel: ({ children, header }: any) => (
+  Card: ({ children, title }: { children: ReactNode; title: ReactNode }) => (
     <section>
-      <h1>{header}</h1>
+      <h2>{title}</h2>
       {children}
     </section>
   ),
+  Select: ({
+    options,
+    onChange,
+    value,
+  }: {
+    options: {
+      disabled?: boolean;
+      value: NotificationEmailMode;
+      label: string;
+    }[];
+    onChange: (value: NotificationEmailMode) => void;
+    value: NotificationEmailMode;
+  }) => (
+    <select
+      data-testid="delivery-mode"
+      onChange={(event) =>
+        onChange(event.currentTarget.value as NotificationEmailMode)
+      }
+      value={value}
+    >
+      {options.map((option) => (
+        <option
+          disabled={option.disabled}
+          key={option.value}
+          value={option.value}
+        >
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
+  Space: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   Switch: ({
     checked,
-    children,
     onChange,
+    ...props
   }: {
-    checked?: boolean;
-    children: ReactNode;
-    onChange?: (event: { target: { checked: boolean } }) => void;
+    checked: boolean;
+    onChange: (checked: boolean) => void;
+    "aria-label"?: string;
   }) => (
-    <label>
-      <input
-        checked={!!checked}
-        type="checkbox"
-        onChange={(event) =>
-          onChange?.({ target: { checked: event.currentTarget.checked } })
-        }
-      />
-      {children}
-    </label>
+    <input
+      aria-label={props["aria-label"]}
+      checked={checked}
+      onChange={(event) => onChange(event.currentTarget.checked)}
+      type="checkbox"
+    />
   ),
+  Table: ({ columns, dataSource, rowKey }: any) => (
+    <table>
+      <thead>
+        <tr>
+          {columns.map((column: any) => (
+            <th key={column.key}>{column.title}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {dataSource.map((record: any) => (
+          <tr
+            data-testid={`notification-row-${record[rowKey]}`}
+            key={record[rowKey]}
+          >
+            {columns.map((column: any) => (
+              <td key={column.key}>
+                {column.render
+                  ? column.render(record[column.dataIndex], record)
+                  : record[column.dataIndex]}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  ),
+  Tag: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  Typography: {
+    Text: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+    Title: ({ children }: { children: ReactNode }) => <h1>{children}</h1>,
+  },
 }));
 
 jest.mock("@cocalc/frontend/components", () => ({
@@ -113,12 +138,6 @@ jest.mock("@cocalc/frontend/components", () => ({
 jest.mock("@cocalc/frontend/i18n", () => ({
   labels: {
     communication: { defaultMessage: "Communication" },
-  },
-}));
-
-jest.mock("@cocalc/frontend/webapp-client", () => ({
-  webapp_client: {
-    server_time: () => 123,
   },
 }));
 
@@ -151,19 +170,116 @@ describe("AccountPreferencesCommunication", () => {
   it("renders category-based notification email preferences", () => {
     render(<AccountPreferencesCommunication />);
 
-    expect(screen.getByText("Notification email")).toBeTruthy();
-    expect(screen.getByText("Billing and spend")).toBeTruthy();
-    expect(screen.getByText("Security and access")).toBeTruthy();
-    expect(screen.getByText("AI and Codex")).toBeTruthy();
-    expect(screen.getAllByText("Required immediate email")).toHaveLength(2);
+    expect(screen.getByText("Notifications")).toBeTruthy();
+    expect(screen.getByText("Billing")).toBeTruthy();
+    expect(screen.getByText("Security")).toBeTruthy();
+    expect(screen.getByText("Membership requests")).toBeTruthy();
+    expect(screen.getByText("Access requests")).toBeTruthy();
+    expect(screen.getByText("Mentions")).toBeTruthy();
+    expect(screen.getByText("Chat replies")).toBeTruthy();
+    expect(screen.getByText("AI activity")).toBeTruthy();
+    expect(screen.getByText("Onboarding and marketing emails")).toBeTruthy();
+    expect(screen.queryByText("project invitations")).toBeNull();
+    expect(screen.queryByText("Required immediate email")).toBeNull();
+    expect(screen.queryByText("Show Announcement Banner")).toBeNull();
+    expect(screen.queryByText("Hide free warnings")).toBeNull();
     expect(screen.queryByText(/Do NOT send email/i)).toBeNull();
+
+    expect(
+      screen
+        .getAllByTestId(/^notification-row-/)
+        .map((row) =>
+          row.getAttribute("data-testid")?.replace("notification-row-", ""),
+        ),
+    ).toEqual([
+      "security",
+      "billing",
+      "membership_requests",
+      "access_requests",
+      "mentions",
+      "chat_replies",
+      "ai",
+      "course",
+      "support",
+      "maintenance",
+      "product",
+    ]);
+
+    const billingRow = screen.getByTestId("notification-row-billing");
+    const billingSelect = within(billingRow).getByTestId(
+      "delivery-mode",
+    ) as HTMLSelectElement;
+    expect(
+      Array.from(billingSelect.options).map(({ disabled, text, value }) => ({
+        disabled,
+        text,
+        value,
+      })),
+    ).toEqual([
+      {
+        disabled: false,
+        text: "Immediate email and in-app",
+        value: "immediate",
+      },
+      { disabled: true, text: "Digest email and in-app", value: "digest" },
+      { disabled: true, text: "In-app only", value: "off" },
+      { disabled: true, text: "None", value: "none" },
+    ]);
+
+    const membershipRow = screen.getByTestId(
+      "notification-row-membership_requests",
+    );
+    const membershipSelect = within(membershipRow).getByTestId(
+      "delivery-mode",
+    ) as HTMLSelectElement;
+    expect(
+      Array.from(membershipSelect.options).map(({ disabled, text, value }) => ({
+        disabled,
+        text,
+        value,
+      })),
+    ).toEqual([
+      {
+        disabled: false,
+        text: "Immediate email and in-app",
+        value: "immediate",
+      },
+      { disabled: false, text: "Digest email and in-app", value: "digest" },
+      { disabled: true, text: "In-app only", value: "off" },
+      { disabled: true, text: "None", value: "none" },
+    ]);
+
+    const accessRow = screen.getByTestId("notification-row-access_requests");
+    const accessSelect = within(accessRow).getByTestId(
+      "delivery-mode",
+    ) as HTMLSelectElement;
+    expect(
+      Array.from(accessSelect.options).map(({ disabled, text, value }) => ({
+        disabled,
+        text,
+        value,
+      })),
+    ).toEqual([
+      {
+        disabled: false,
+        text: "Immediate email and in-app",
+        value: "immediate",
+      },
+      { disabled: false, text: "Digest email and in-app", value: "digest" },
+      { disabled: false, text: "In-app only", value: "off" },
+      { disabled: false, text: "None", value: "none" },
+    ]);
   });
 
   it("persists notification_preferences when a category mode changes", () => {
     render(<AccountPreferencesCommunication />);
 
-    // Editable rows are support, collaboration, ai, product, maintenance, course.
-    fireEvent.click(screen.getAllByTestId("mode-immediate")[2]);
+    fireEvent.change(
+      within(screen.getByTestId("notification-row-ai")).getByTestId(
+        "delivery-mode",
+      ),
+      { target: { value: "immediate" } },
+    );
 
     expect(setOtherSettings).toHaveBeenCalledWith(
       OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
@@ -178,21 +294,58 @@ describe("AccountPreferencesCommunication", () => {
     );
   });
 
-  it("persists marketing consent and product email preference together", () => {
+  it("persists product email preference independently of marketing consent", () => {
     render(<AccountPreferencesCommunication />);
 
-    fireEvent.click(
-      screen.getByRole("checkbox", {
-        name: /Occasional platform tips and product updates/,
-      }),
+    fireEvent.change(
+      within(screen.getByTestId("notification-row-product")).getByTestId(
+        "delivery-mode",
+      ),
+      { target: { value: "digest" } },
     );
 
-    expect(setOtherSettings).toHaveBeenCalledWith("newsletter", true);
     expect(setOtherSettings).toHaveBeenCalledWith(
       OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
       expect.objectContaining({
         email: expect.objectContaining({
           product: "digest",
+        }),
+      }),
+    );
+    expect(setOtherSettings).not.toHaveBeenCalledWith(
+      MARKETING_CONSENT_OTHER_SETTINGS_KEY,
+      expect.anything(),
+    );
+  });
+
+  it("persists onboarding and marketing email consent separately", () => {
+    render(<AccountPreferencesCommunication />);
+
+    fireEvent.click(
+      screen.getByLabelText("Allow optional onboarding and marketing emails"),
+    );
+
+    expect(setOtherSettings).toHaveBeenCalledWith(
+      MARKETING_CONSENT_OTHER_SETTINGS_KEY,
+      true,
+    );
+  });
+
+  it("persists none delivery mode for optional notification categories", () => {
+    render(<AccountPreferencesCommunication />);
+
+    fireEvent.change(
+      within(screen.getByTestId("notification-row-mentions")).getByTestId(
+        "delivery-mode",
+      ),
+      { target: { value: "none" } },
+    );
+
+    expect(setOtherSettings).toHaveBeenCalledWith(
+      OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
+      expect.objectContaining({
+        email: expect.objectContaining({
+          mentions: "none",
         }),
       }),
     );

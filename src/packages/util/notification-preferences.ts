@@ -6,13 +6,18 @@
 export const OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY =
   "notification_preferences";
 
-export type NotificationEmailMode = "immediate" | "digest" | "off";
+export type NotificationEmailMode = "immediate" | "digest" | "off" | "none";
+export type NotificationEmailSendingMode = "immediate" | "digest";
+export type NotificationInAppMode = Exclude<NotificationEmailMode, "none">;
 
 export type NotificationCategory =
   | "billing"
   | "security"
   | "support"
-  | "collaboration"
+  | "membership_requests"
+  | "access_requests"
+  | "mentions"
+  | "chat_replies"
   | "ai"
   | "product"
   | "maintenance"
@@ -24,6 +29,7 @@ export interface NotificationCategoryDefinition {
   description: string;
   defaultEmailMode: NotificationEmailMode;
   requiredEmailMode?: NotificationEmailMode;
+  allowedEmailModes?: NotificationEmailMode[];
 }
 
 export interface NotificationPreferences {
@@ -42,62 +48,91 @@ export const NOTIFICATION_EMAIL_MODES: {
 }[] = [
   {
     key: "immediate",
-    label: "Immediate",
-    description: "Email me soon after this notification happens.",
+    label: "Immediate email and in-app",
+    description:
+      "Send an email soon after this happens and show an in-app notification.",
   },
   {
     key: "digest",
-    label: "Daily digest",
-    description: "Include this in one daily summary email.",
+    label: "Digest email and in-app",
+    description:
+      "Include this in a daily email digest and show an in-app notification.",
   },
   {
     key: "off",
-    label: "CoCalc only",
-    description: "Show this in CoCalc, but do not email me.",
+    label: "In-app only",
+    description: "Show an in-app notification, but do not send email.",
+  },
+  {
+    key: "none",
+    label: "None",
+    description: "Do not send email or show an in-app notification.",
   },
 ];
 
 export const NOTIFICATION_CATEGORIES: NotificationCategoryDefinition[] = [
   {
-    key: "billing",
-    label: "Billing and spend",
-    description:
-      "Payments, receipts requiring action, spend limits, and dedicated-host enforcement.",
-    defaultEmailMode: "immediate",
-    requiredEmailMode: "immediate",
-  },
-  {
     key: "security",
-    label: "Security and access",
+    label: "Security",
     description:
-      "Password resets, email verification, 2FA, and account access changes.",
+      "Password resets, email verification, two-factor authentication, and account access changes.",
     defaultEmailMode: "immediate",
     requiredEmailMode: "immediate",
   },
   {
-    key: "support",
-    label: "Support and admin",
-    description: "Support replies and account notices from CoCalc staff.",
+    key: "billing",
+    label: "Billing",
+    description:
+      "Payments, receipts requiring action, spend limits, and paid resource enforcement.",
+    defaultEmailMode: "immediate",
+    requiredEmailMode: "immediate",
+  },
+  {
+    key: "membership_requests",
+    label: "Membership requests",
+    description:
+      "Requests, approvals, reverification, and status changes for memberships managed by another account or organization.",
+    defaultEmailMode: "immediate",
+    allowedEmailModes: ["immediate", "digest"],
+  },
+  {
+    key: "access_requests",
+    label: "Access requests",
+    description:
+      "Requests to access projects and decisions on your access requests.",
     defaultEmailMode: "immediate",
   },
   {
-    key: "collaboration",
-    label: "Mentions and collaboration",
-    description:
-      "Mentions, project invitations, and direct collaboration notifications.",
+    key: "mentions",
+    label: "Mentions",
+    description: "Direct mentions in project files and chats.",
+    defaultEmailMode: "immediate",
+  },
+  {
+    key: "chat_replies",
+    label: "Chat replies",
+    description: "Replies in chat threads you follow or have participated in.",
     defaultEmailMode: "immediate",
   },
   {
     key: "ai",
-    label: "AI and Codex",
-    description: "Long-running AI or Codex work completed.",
+    label: "AI activity",
+    description: "Long-running AI tasks completed or requiring attention.",
     defaultEmailMode: "off",
   },
   {
-    key: "product",
-    label: "Product news",
-    description: "Product updates and announcements.",
-    defaultEmailMode: "off",
+    key: "course",
+    label: "Course",
+    description:
+      "Course announcements, assignment updates, grading notices, and other course activity.",
+    defaultEmailMode: "immediate",
+  },
+  {
+    key: "support",
+    label: "Support",
+    description:
+      "Replies and notices from support staff or site administrators.",
+    defaultEmailMode: "immediate",
   },
   {
     key: "maintenance",
@@ -106,11 +141,10 @@ export const NOTIFICATION_CATEGORIES: NotificationCategoryDefinition[] = [
     defaultEmailMode: "digest",
   },
   {
-    key: "course",
-    label: "Course announcements",
-    description:
-      "Instructor announcements and future course broadcast messages.",
-    defaultEmailMode: "immediate",
+    key: "product",
+    label: "Product news",
+    description: "Product updates and feature announcements.",
+    defaultEmailMode: "off",
   },
 ];
 
@@ -140,6 +174,18 @@ function isNotificationEmailMode(
   return typeof value === "string" && VALID_EMAIL_MODES.has(value as any);
 }
 
+export function notificationModeSendsEmail(
+  mode: NotificationEmailMode,
+): mode is NotificationEmailSendingMode {
+  return mode === "immediate" || mode === "digest";
+}
+
+export function notificationModeCreatesInApp(
+  mode: NotificationEmailMode,
+): mode is NotificationInAppMode {
+  return mode !== "none";
+}
+
 export function normalizeNotificationPreferences(
   raw: unknown,
 ): NotificationPreferences {
@@ -151,15 +197,32 @@ export function normalizeNotificationPreferences(
     typeof (raw as { email?: unknown }).email === "object"
       ? ((raw as { email: Record<string, unknown> }).email ?? {})
       : {};
+  const legacyCollaborationMode = isNotificationEmailMode(
+    rawEmail.collaboration,
+  )
+    ? rawEmail.collaboration
+    : undefined;
 
   const email = { ...defaults.email };
   for (const category of NOTIFICATION_CATEGORIES) {
-    const value = rawEmail[category.key];
-    email[category.key] = category.requiredEmailMode
-      ? category.requiredEmailMode
-      : isNotificationEmailMode(value)
-        ? value
-        : defaults.email[category.key];
+    const value =
+      rawEmail[category.key] ??
+      (category.key === "mentions" || category.key === "chat_replies"
+        ? legacyCollaborationMode
+        : undefined);
+    if (category.requiredEmailMode) {
+      email[category.key] = category.requiredEmailMode;
+      continue;
+    }
+    if (
+      isNotificationEmailMode(value) &&
+      (category.allowedEmailModes == null ||
+        category.allowedEmailModes.includes(value))
+    ) {
+      email[category.key] = value;
+      continue;
+    }
+    email[category.key] = defaults.email[category.key];
   }
   return { ...defaults, email };
 }

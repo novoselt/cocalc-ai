@@ -3,28 +3,27 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Alert, Radio, Space, Tag, Typography } from "antd";
-import { FormattedMessage, defineMessage, useIntl } from "react-intl";
+import { Alert, Select, Space, Switch, Table } from "antd";
+import type { TableColumnsType } from "antd";
+import { defineMessage } from "react-intl";
 
-import { Panel, Switch } from "@cocalc/frontend/antd-bootstrap";
 import { redux, useTypedRedux } from "@cocalc/frontend/app-framework";
-import { Icon } from "@cocalc/frontend/components";
 import { labels } from "@cocalc/frontend/i18n";
-import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
   MARKETING_CONSENT_OTHER_SETTINGS_KEY,
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_EMAIL_MODES,
   OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
+  notificationModeSendsEmail,
   normalizeNotificationPreferences,
-  setProductMarketingEmailMode,
   type NotificationCategory,
   type NotificationEmailMode,
 } from "@cocalc/util/notification-preferences";
 import { CookieConsentSettings } from "./cookie-consent-settings";
+import { SettingsCard } from "./settings-card";
 import type { SettingsPageDefinition } from "./settings-page";
 
-const { Text, Paragraph } = Typography;
+type NotificationCategoryRow = (typeof NOTIFICATION_CATEGORIES)[number];
 
 export const ACCOUNT_PREFERENCES_COMMUNICATION_PAGE = {
   component: AccountPreferencesCommunication,
@@ -38,19 +37,13 @@ export const ACCOUNT_PREFERENCES_COMMUNICATION_PAGE = {
 } satisfies SettingsPageDefinition;
 
 export function AccountPreferencesCommunication(): React.JSX.Element {
-  const intl = useIntl();
   const other_settings = useTypedRedux("account", "other_settings");
-  const stripe_customer = useTypedRedux("account", "stripe_customer");
   const email_address_verified = useTypedRedux(
     "account",
     "email_address_verified",
   );
   const email_address = useTypedRedux("account", "email_address");
   const isVerified = !!email_address_verified?.get(email_address ?? "");
-  const is_stripe_customer = !!stripe_customer?.getIn([
-    "subscriptions",
-    "total_count",
-  ]);
 
   function on_change(name: string, value: any): void {
     redux.getActions("account").set_other_settings(name, value);
@@ -76,103 +69,54 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
     const next = normalizeNotificationPreferences(notificationPreferences);
     next.email[category] = mode;
     on_change(OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY, next);
-    if (category === "product") {
-      on_change(MARKETING_CONSENT_OTHER_SETTINGS_KEY, mode !== "off");
-    }
   }
 
-  function setMarketingConsent(enabled: boolean) {
+  function setMarketingConsent(enabled: boolean): void {
     on_change(MARKETING_CONSENT_OTHER_SETTINGS_KEY, enabled);
-    on_change(
-      OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
-      setProductMarketingEmailMode(notificationPreferences, enabled),
-    );
   }
 
-  function render_marketing_consent() {
-    return (
-      <Alert
-        type="info"
-        showIcon
-        message={
-          <Switch
-            checked={marketingConsent}
-            onChange={(e) => setMarketingConsent(e.target.checked)}
-          >
-            <strong>Occasional platform tips and product updates</strong>
-          </Switch>
-        }
-        description={
-          <Text type="secondary">
-            When enabled, CoCalc may send onboarding tips and product-news email
-            and sync your account contact data to Salesloft for onboarding
-            cadences. When disabled, product-news email is off and Salesloft
-            sync is skipped or removed.
-          </Text>
-        }
-      />
-    );
+  function deliveryOptions(category: NotificationCategoryRow) {
+    return NOTIFICATION_EMAIL_MODES.map(({ key, label }) => ({
+      disabled: category.requiredEmailMode
+        ? key !== category.requiredEmailMode
+        : category.allowedEmailModes != null &&
+          !category.allowedEmailModes.includes(key),
+      label,
+      value: key,
+    }));
   }
 
-  function toggle_global_banner(val: boolean): void {
-    if (val) {
-      // this must be "null", not "undefined" – otherwise the data isn't stored in the DB.
-      on_change("show_global_info2", null);
-    } else {
-      on_change("show_global_info2", webapp_client.server_time());
-    }
-  }
-
-  function render_global_banner() {
-    return (
-      <Switch
-        checked={!other_settings.get("show_global_info2")}
-        onChange={(e) => toggle_global_banner(e.target.checked)}
-      >
-        <FormattedMessage
-          id="account.other-settings.global_banner"
-          defaultMessage={`<strong>Show Announcement Banner</strong>: only shows up if there is a
-        message`}
+  const notificationColumns: TableColumnsType<NotificationCategoryRow> = [
+    {
+      dataIndex: "label",
+      key: "category",
+      title: "Category",
+    },
+    {
+      dataIndex: "description",
+      key: "description",
+      title: "Scope",
+    },
+    {
+      key: "delivery",
+      render: (_, category) => (
+        <Select
+          value={notificationPreferences.email[category.key]}
+          onChange={(mode) => setNotificationEmailMode(category.key, mode)}
+          options={deliveryOptions(category)}
+          popupMatchSelectWidth={false}
         />
-      </Switch>
-    );
-  }
-
-  function render_no_free_warnings() {
-    const extra = is_stripe_customer ? (
-      <span>(thanks for being a customer)</span>
-    ) : (
-      <span>(only available to customers)</span>
-    );
-
-    return (
-      <Switch
-        disabled={!is_stripe_customer}
-        checked={!!other_settings.get("no_free_warnings")}
-        onChange={(e) => on_change("no_free_warnings", e.target.checked)}
-      >
-        <strong>Hide free warnings</strong>: do{" "}
-        <strong>
-          <i>not</i>
-        </strong>{" "}
-        show a warning banner when using a free trial project {extra}
-      </Switch>
-    );
-  }
+      ),
+      title: "Delivery",
+    },
+  ];
 
   function render_notification_email_preferences() {
-    const hasEmailDelivery = NOTIFICATION_CATEGORIES.some(
-      (category) => notificationPreferences.email[category.key] !== "off",
+    const hasEmailDelivery = NOTIFICATION_CATEGORIES.some((category) =>
+      notificationModeSendsEmail(notificationPreferences.email[category.key]),
     );
     return (
       <Space vertical style={{ width: "100%" }}>
-        <div>
-          <Text strong>Notification email</Text>
-          <Paragraph type="secondary" style={{ marginBottom: 8 }}>
-            Choose which notifications are emailed immediately, included in a
-            daily digest, or kept in CoCalc only.
-          </Paragraph>
-        </div>
         {!isVerified && hasEmailDelivery && (
           <Alert
             type="warning"
@@ -180,83 +124,42 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
             message="Verify your email address to receive notification email."
           />
         )}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns:
-              "minmax(180px, 0.7fr) minmax(260px, 1fr) minmax(300px, 1fr)",
-            gap: 12,
-            alignItems: "center",
-          }}
-        >
-          <Text strong>Category</Text>
-          <Text strong>What it includes</Text>
-          <Text strong>Email delivery</Text>
-          {NOTIFICATION_CATEGORIES.map((category) => (
-            <NotificationPreferenceRow
-              key={category.key}
-              category={category}
-              mode={notificationPreferences.email[category.key]}
-              onChange={(mode) => setNotificationEmailMode(category.key, mode)}
-            />
-          ))}
+        <div style={{ maxWidth: "100%", width: "fit-content" }}>
+          <Table
+            columns={notificationColumns}
+            dataSource={NOTIFICATION_CATEGORIES}
+            pagination={false}
+            rowKey="key"
+          />
         </div>
       </Space>
     );
   }
 
-  return (
-    <Panel
-      size="small"
-      header={
-        <>
-          <Icon name="mail" /> {intl.formatMessage(labels.communication)}
-        </>
-      }
-    >
-      {render_marketing_consent()}
-      <div style={{ marginTop: 16 }} />
-      {render_notification_email_preferences()}
-      <div style={{ marginTop: 16 }} />
-      {render_global_banner()}
-      {render_no_free_warnings()}
-      <CookieConsentSettings />
-    </Panel>
-  );
-}
+  function render_marketing_email_preferences() {
+    return (
+      <SettingsCard title="Onboarding and marketing emails">
+        <Space>
+          <Switch
+            aria-label="Allow optional onboarding and marketing emails"
+            checked={marketingConsent}
+            onChange={setMarketingConsent}
+          />
+          <span>
+            Allow optional onboarding help, product tips, and marketing emails.
+          </span>
+        </Space>
+      </SettingsCard>
+    );
+  }
 
-function NotificationPreferenceRow({
-  category,
-  mode,
-  onChange,
-}: {
-  category: (typeof NOTIFICATION_CATEGORIES)[number];
-  mode: NotificationEmailMode;
-  onChange: (mode: NotificationEmailMode) => void;
-}) {
   return (
-    <>
-      <Space vertical size={0}>
-        <Text>{category.label}</Text>
-        {category.requiredEmailMode && (
-          <Tag color="blue">Required immediate email</Tag>
-        )}
-      </Space>
-      <Text type="secondary">{category.description}</Text>
-      {category.requiredEmailMode ? (
-        <Text>Immediate</Text>
-      ) : (
-        <Radio.Group
-          optionType="button"
-          buttonStyle="solid"
-          value={mode}
-          onChange={(e) => onChange(e.target.value)}
-          options={NOTIFICATION_EMAIL_MODES.map(({ key, label }) => ({
-            value: key,
-            label,
-          }))}
-        />
-      )}
-    </>
+    <Space vertical size="middle" style={{ width: "100%" }}>
+      <SettingsCard title="Notifications">
+        {render_notification_email_preferences()}
+      </SettingsCard>
+      {render_marketing_email_preferences()}
+      <CookieConsentSettings />
+    </Space>
   );
 }
