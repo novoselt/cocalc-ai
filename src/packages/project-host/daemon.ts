@@ -52,7 +52,7 @@ const PODMAN_RUNTIME_NAMESPACE_ERROR_PATTERNS = [
   /cannot join .*user namespace/i,
   /invalid internal status/i,
 ];
-const FORENSICS_DIR = "forensics";
+const DEFAULT_FORENSICS_ROOT = "/var/lib/cocalc-project-host-forensics";
 const PROJECT_HOST_LOG_HISTORY_DIR = "log-history";
 const PROJECT_HOST_LOG_HISTORY_PREFIX = "project-host-";
 const CONAT_PERSIST_LOG_HISTORY_PREFIX = "conat-persist-";
@@ -345,8 +345,36 @@ function noteHealthFailure(
   };
 }
 
-function safeTimestampForPath(iso = new Date().toISOString()): string {
-  return iso.replace(/[:.]/g, "-");
+function forensicsRoot(): string {
+  if (process.env.NODE_ENV === "test") {
+    return (
+      process.env.COCALC_PROJECT_HOST_DAEMON_FORENSICS_ROOT ??
+      DEFAULT_FORENSICS_ROOT
+    );
+  }
+  return DEFAULT_FORENSICS_ROOT;
+}
+
+function captureDirFromRootctlOutput(stdout: string): string | undefined {
+  const match = stdout.match(/^CAPTURE_DIR=(.+)$/m);
+  if (!match) return;
+  const captureDir = path.resolve(match[1]);
+  const root = path.resolve(forensicsRoot());
+  if (path.dirname(captureDir) !== root) return;
+  if (
+    !/^(project-host|conat-router|conat-persist)-pid\d+-[A-Za-z0-9]+$/.test(
+      path.basename(captureDir),
+    )
+  ) {
+    return;
+  }
+  try {
+    const info = fs.lstatSync(captureDir);
+    if (!info.isDirectory() || info.isSymbolicLink()) return;
+  } catch {
+    return;
+  }
+  return captureDir;
 }
 
 function writeForensicsFile(file: string, content: string): void {
@@ -377,32 +405,6 @@ function captureProcessForensics({
     return;
   }
   const startedAt = new Date().toISOString();
-  const captureDir = path.join(
-    dataDir,
-    FORENSICS_DIR,
-    `${component}-${safeTimestampForPath(startedAt)}-pid${pid}`,
-  );
-  fs.mkdirSync(captureDir, { recursive: true });
-  try {
-    fs.chmodSync(captureDir, 0o700);
-  } catch {
-    // best effort
-  }
-  writeForensicsFile(
-    path.join(captureDir, "context.json"),
-    `${JSON.stringify(
-      {
-        started_at: startedAt,
-        component,
-        pid,
-        selected_version: selectedVersion,
-        running_version: runningVersion,
-        health,
-      },
-      null,
-      2,
-    )}\n`,
-  );
   const durationSeconds = forensicsDurationSeconds();
   const captureResult = spawnSyncText(
     "sudo",
@@ -412,21 +414,41 @@ function captureProcessForensics({
       "capture-forensics",
       component,
       String(pid),
-      captureDir,
       String(durationSeconds),
     ],
     { timeout: (durationSeconds + 10) * 1000 },
   );
+  const captureDir = captureDirFromRootctlOutput(captureResult.stdout ?? "");
+  if (captureDir) {
+    writeForensicsFile(
+      path.join(captureDir, "context.json"),
+      `${JSON.stringify(
+        {
+          started_at: startedAt,
+          component,
+          pid,
+          selected_version: selectedVersion,
+          running_version: runningVersion,
+          health,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  }
   if (
+    !captureDir ||
     captureResult.error ||
     (captureResult.status != null &&
       captureResult.status !== 0 &&
       captureResult.status !== 124)
   ) {
-    writeForensicsFile(
-      path.join(captureDir, "capture-run.txt"),
-      `${combinedSpawnOutput(captureResult)}\n`,
-    );
+    if (captureDir) {
+      writeForensicsFile(
+        path.join(captureDir, "capture-run.txt"),
+        `${combinedSpawnOutput(captureResult)}\n`,
+      );
+    }
     recordDaemonEvent(dataDir, {
       component,
       action: "forensics_failed",
@@ -3067,6 +3089,7 @@ export function handleDaemonCli(argv: string[]): boolean {
 
 export const __test__ = {
   archivePreviousComponentLog,
+  captureDirFromRootctlOutput,
   captureProcessForensics,
   checkHealthSync,
   cleanupStrayProcesses,

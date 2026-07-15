@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260714-v11"
+HELPER_SCHEMA_VERSION = "20260715-v12"
 RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -2168,6 +2168,298 @@ def ensure_cocalc_mount(cfg: BootstrapConfig) -> None:
         run_best_effort(cfg, ["mount", "/mnt/cocalc"], "mount /mnt/cocalc")
 
 
+RUNTIME_STORAGE_PATH_HELPER = r'''#!/usr/bin/python3
+"""Root-owned, openat2-anchored path mutations for cocalc-runtime-storage.
+
+The sudo caller owns /opt/cocalc/project-host, so this helper must never load
+code, Node, or native addons from that tree.  Keep this file self-contained and
+installed below /usr/local with root ownership.
+"""
+
+import ctypes
+import errno
+import os
+import stat
+import subprocess
+import sys
+
+
+ALLOWED_ROOTS = {
+    "/mnt/cocalc",
+    "/mnt/cocalc-scratch",
+    "/opt/cocalc/container-runtime",
+    "/opt/cocalc/project-bundles",
+    "/opt/cocalc/project-host",
+    "/opt/cocalc/tools",
+    "/var/lib/cocalc",
+    "/var/lib/cocalc/star/project-host/0/cache",
+    "/var/lib/cocalc/star/project-host/0/secrets/rustic",
+}
+COMMANDS = {"chmod", "chattr-cow", "chown", "mkdir", "rename", "rm", "rmdir", "truncate"}
+SYS_OPENAT2 = 437
+RESOLVE_NO_MAGICLINKS = 0x02
+RESOLVE_NO_SYMLINKS = 0x04
+RESOLVE_BENEATH = 0x08
+RESOLVE_FLAGS = RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH
+O_PATH = getattr(os, "O_PATH", 0o10000000)
+LIBC = ctypes.CDLL(None, use_errno=True)
+
+
+class OpenHow(ctypes.Structure):
+    _fields_ = [("flags", ctypes.c_uint64), ("mode", ctypes.c_uint64), ("resolve", ctypes.c_uint64)]
+
+
+def fail(message):
+    raise ValueError(message)
+
+
+def validate_relative(path, *, allow_root=False):
+    if allow_root and path == ".":
+        return
+    if not path or path.startswith("/"):
+        fail(f"path must be relative: {path!r}")
+    if any(part in ("", ".", "..") for part in path.split("/")):
+        fail(f"path must stay beneath root: {path!r}")
+
+
+def openat2(dirfd, path, flags, mode=0):
+    encoded = os.fsencode(path)
+    if b"\0" in encoded:
+        fail("path contains NUL")
+    how = OpenHow(flags=flags, mode=mode, resolve=RESOLVE_FLAGS)
+    result = LIBC.syscall(
+        SYS_OPENAT2,
+        ctypes.c_int(dirfd),
+        ctypes.c_char_p(encoded),
+        ctypes.byref(how),
+        ctypes.sizeof(how),
+    )
+    if result < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), path)
+    return result
+
+
+def open_root(root, allowed_roots):
+    if root not in allowed_roots or os.path.realpath(root) != root:
+        fail(f"root is not allowed: {root!r}")
+    return os.open(root, O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+
+
+def open_parent(rootfd, path):
+    parts = path.split("/")
+    parent = "/".join(parts[:-1]) or "."
+    fd = openat2(rootfd, parent, O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+    return fd, parts[-1]
+
+
+def open_existing(rootfd, path):
+    return openat2(rootfd, path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+
+
+def mkdir_beneath(rootfd, path, recursive, mode):
+    if not recursive:
+        parentfd, name = open_parent(rootfd, path)
+        try:
+            os.mkdir(name, mode, dir_fd=parentfd)
+        finally:
+            os.close(parentfd)
+        return
+    current = os.dup(rootfd)
+    try:
+        for part in path.split("/"):
+            try:
+                os.mkdir(part, mode, dir_fd=current)
+            except FileExistsError:
+                pass
+            nextfd = openat2(current, part, O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+            os.close(current)
+            current = nextfd
+    finally:
+        os.close(current)
+
+
+def remove_entry(parentfd, name, recursive, force):
+    for _attempt in range(4):
+        try:
+            info = os.stat(name, dir_fd=parentfd, follow_symlinks=False)
+        except FileNotFoundError:
+            if force:
+                return
+            raise
+        if stat.S_ISDIR(info.st_mode):
+            if not recursive:
+                raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), name)
+            try:
+                childfd = openat2(
+                    parentfd,
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NONBLOCK | os.O_CLOEXEC,
+                )
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            try:
+                for child in os.listdir(childfd):
+                    remove_entry(childfd, child, True, force)
+            finally:
+                os.close(childfd)
+            try:
+                os.rmdir(name, dir_fd=parentfd)
+                return
+            except (FileNotFoundError, NotADirectoryError):
+                if force:
+                    return
+                continue
+        else:
+            try:
+                os.unlink(name, dir_fd=parentfd)
+                return
+            except FileNotFoundError:
+                if force:
+                    return
+                continue
+            except IsADirectoryError:
+                continue
+    raise OSError(errno.EBUSY, "path changed repeatedly during removal", name)
+
+
+def parse(argv):
+    if not argv or argv[0] not in COMMANDS:
+        fail("unsupported command")
+    command = argv[0]
+    values = {"recursive": False, "force": False}
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("--recursive", "--force"):
+            values[arg[2:]] = True
+            i += 1
+            continue
+        if arg not in ("--root", "--path", "--dest", "--mode", "--length", "--uid", "--gid"):
+            fail(f"unknown option: {arg}")
+        if i + 1 >= len(argv) or arg[2:] in values:
+            fail(f"invalid option: {arg}")
+        values[arg[2:]] = argv[i + 1]
+        i += 2
+    root = values.get("root", "")
+    path = values.get("path", "")
+    validate_relative(path, allow_root=command in ("chmod", "chown"))
+    if command == "rename":
+        validate_relative(values.get("dest", ""))
+    elif "dest" in values:
+        fail("--dest is only valid for rename")
+    allowed = {
+        "chmod": {"root", "path", "mode", "recursive", "force"},
+        "chattr-cow": {"root", "path", "recursive", "force"},
+        "chown": {"root", "path", "uid", "gid", "recursive", "force"},
+        "mkdir": {"root", "path", "mode", "recursive", "force"},
+        "rename": {"root", "path", "dest", "recursive", "force"},
+        "rm": {"root", "path", "recursive", "force"},
+        "rmdir": {"root", "path", "recursive", "force"},
+        "truncate": {"root", "path", "length", "recursive", "force"},
+    }[command]
+    if any(key not in allowed for key in values):
+        fail("option is not valid for command")
+    for required in {
+        "chmod": ("mode",),
+        "chown": ("uid", "gid"),
+        "mkdir": ("mode",),
+        "rename": ("dest",),
+        "truncate": ("length",),
+    }.get(command, ()):
+        if required not in values:
+            fail(f"missing --{required}")
+    return command, root, path, values
+
+
+def parse_uint(value, name, maximum=(2**53 - 1)):
+    if not value.isdigit():
+        fail(f"{name} must be a non-negative integer")
+    result = int(value)
+    if result > maximum:
+        fail(f"{name} is too large")
+    return result
+
+
+def run(argv, allowed_roots=ALLOWED_ROOTS):
+    command, root, path, values = parse(argv)
+    rootfd = open_root(root, allowed_roots)
+    try:
+        if command == "mkdir":
+            mode = int(values["mode"], 8)
+            mkdir_beneath(rootfd, path, values["recursive"], mode)
+        elif command == "rename":
+            sourcefd, source = open_parent(rootfd, path)
+            destfd, dest = open_parent(rootfd, values["dest"])
+            try:
+                os.rename(source, dest, src_dir_fd=sourcefd, dst_dir_fd=destfd)
+            finally:
+                os.close(sourcefd)
+                os.close(destfd)
+        elif command in ("rm", "rmdir"):
+            parentfd, name = open_parent(rootfd, path)
+            try:
+                if command == "rmdir" and not values["recursive"]:
+                    os.rmdir(name, dir_fd=parentfd)
+                else:
+                    remove_entry(parentfd, name, values["recursive"], values["force"])
+            finally:
+                os.close(parentfd)
+        elif command == "chmod":
+            fd = open_existing(rootfd, path)
+            try:
+                os.fchmod(fd, int(values["mode"], 8))
+            finally:
+                os.close(fd)
+        elif command == "chown":
+            fd = open_existing(rootfd, path)
+            try:
+                os.fchown(fd, parse_uint(values["uid"], "uid", 2**32 - 1), parse_uint(values["gid"], "gid", 2**32 - 1))
+            finally:
+                os.close(fd)
+        elif command == "truncate":
+            fd = openat2(
+                rootfd,
+                path,
+                os.O_WRONLY | os.O_CREAT | os.O_NONBLOCK | os.O_CLOEXEC,
+                0o600,
+            )
+            try:
+                os.ftruncate(fd, parse_uint(values["length"], "length"))
+            finally:
+                os.close(fd)
+        elif command == "chattr-cow":
+            fd = open_existing(rootfd, path)
+            try:
+                subprocess.run(
+                    ["/usr/bin/chattr", "+C", f"/proc/self/fd/{fd}"],
+                    pass_fds=(fd,),
+                    check=True,
+                    stdin=subprocess.DEVNULL,
+                )
+            finally:
+                os.close(fd)
+    finally:
+        os.close(rootfd)
+
+
+def main(argv=None, allowed_roots=ALLOWED_ROOTS):
+    if os.geteuid() != 0:
+        print("cocalc runtime storage path helper must run as root", file=sys.stderr)
+        return 1
+    try:
+        run(sys.argv[1:] if argv is None else argv, allowed_roots)
+        return 0
+    except (OSError, ValueError, subprocess.CalledProcessError) as err:
+        print(f"SECURITY_DENY code=path-helper-failed detail={err}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
 def install_privileged_wrappers(cfg: BootstrapConfig) -> None:
     storage_wrapper = """#!/usr/bin/env bash
 set -euo pipefail
@@ -2181,12 +2473,14 @@ if [ "$#" -lt 1 ]; then
 fi
 cmd="$1"
 shift
+cd /
 STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"
 STORAGE_CGROUP_CPU_MAX="100000 100000"
 STORAGE_CGROUP_CPU_WEIGHT="1"
 STORAGE_CGROUP_IO_WEIGHT="1"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_PROCESS_OOM_SCORE_ADJ="500"
+RUNTIME_USER="__RUNTIME_USER__"
 PROJECT_LEAF_POOL_HEADROOM_BYTES="$((2 * 1024 * 1024 * 1024))"
 MIN_PROJECT_LEAF_MEMORY_MAX_BYTES="$((512 * 1024 * 1024))"
 
@@ -2488,16 +2782,90 @@ apply_bees_runtime_policy() {
   done
 }
 
-allow_path() {
-  local path="${1//\\\\:/:}"
+lexical_absolute_path_is_safe() {
+  local path="$1" part
   case "$path" in
-    /mnt/cocalc|/mnt/cocalc/*|/mnt/cocalc-scratch|/mnt/cocalc-scratch/*|/dev/loop*|/var/lib/cocalc/cocalc.img|/var/lib/cocalc/btrfs.img|/var/lib/cocalc/star/project-host/0/cache|/var/lib/cocalc/star/project-host/0/cache/*|/var/lib/cocalc/star/project-host/0/secrets/rustic/rootfs-images|/var/lib/cocalc/star/project-host/0/secrets/rustic/rootfs-images/*|/var/lib/cocalc/star/project-host/0/secrets/rustic/project-*.toml|/opt/cocalc/project-host|/opt/cocalc/project-host/*|/opt/cocalc/container-runtime|/opt/cocalc/container-runtime/*|/opt/cocalc/project-bundles|/opt/cocalc/project-bundles/*|/opt/cocalc/tools|/opt/cocalc/tools/*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
+    /*) ;;
+    *) return 1 ;;
   esac
+  case "$path" in
+    *$'\n'*|*$'\r'*) return 1 ;;
+  esac
+  IFS='/' read -r -a _path_parts <<< "${path#/}"
+  for part in "${_path_parts[@]}"; do
+    case "$part" in
+      ""|"."|"..") return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# Resolve an absolute caller path to a fixed root plus a relative path.  The
+# fixed roots are selected here, never supplied by the sudo caller.  Mutating
+# operations pass these values to the native openat2 helper below, so a caller
+# cannot escape by replacing a checked directory with a symlink after validation.
+set_allowed_path_parts() {
+  local path="$1"
+  lexical_absolute_path_is_safe "$path" || return 1
+  ALLOWED_PATH_ROOT=""
+  ALLOWED_PATH_REL=""
+  case "$path" in
+    /mnt/cocalc-scratch)
+      ALLOWED_PATH_ROOT="/mnt/cocalc-scratch"; ALLOWED_PATH_REL="." ;;
+    /mnt/cocalc-scratch/*)
+      ALLOWED_PATH_ROOT="/mnt/cocalc-scratch"; ALLOWED_PATH_REL="${path#/mnt/cocalc-scratch/}" ;;
+    /mnt/cocalc)
+      ALLOWED_PATH_ROOT="/mnt/cocalc"; ALLOWED_PATH_REL="." ;;
+    /mnt/cocalc/*)
+      ALLOWED_PATH_ROOT="/mnt/cocalc"; ALLOWED_PATH_REL="${path#/mnt/cocalc/}" ;;
+    /var/lib/cocalc/cocalc.img|/var/lib/cocalc/btrfs.img)
+      ALLOWED_PATH_ROOT="/var/lib/cocalc"; ALLOWED_PATH_REL="${path#/var/lib/cocalc/}" ;;
+    /var/lib/cocalc/star/project-host/0/cache)
+      ALLOWED_PATH_ROOT="/var/lib/cocalc/star/project-host/0/cache"; ALLOWED_PATH_REL="." ;;
+    /var/lib/cocalc/star/project-host/0/cache/*)
+      ALLOWED_PATH_ROOT="/var/lib/cocalc/star/project-host/0/cache"; ALLOWED_PATH_REL="${path#/var/lib/cocalc/star/project-host/0/cache/}" ;;
+    /var/lib/cocalc/star/project-host/0/secrets/rustic/rootfs-images)
+      ALLOWED_PATH_ROOT="/var/lib/cocalc/star/project-host/0/secrets/rustic"; ALLOWED_PATH_REL="rootfs-images" ;;
+    /var/lib/cocalc/star/project-host/0/secrets/rustic/rootfs-images/*)
+      ALLOWED_PATH_ROOT="/var/lib/cocalc/star/project-host/0/secrets/rustic"; ALLOWED_PATH_REL="${path#/var/lib/cocalc/star/project-host/0/secrets/rustic/}" ;;
+    /var/lib/cocalc/star/project-host/0/secrets/rustic/project-*.toml)
+      ALLOWED_PATH_ROOT="/var/lib/cocalc/star/project-host/0/secrets/rustic"; ALLOWED_PATH_REL="${path#/var/lib/cocalc/star/project-host/0/secrets/rustic/}" ;;
+    /opt/cocalc/project-host)
+      ALLOWED_PATH_ROOT="/opt/cocalc/project-host"; ALLOWED_PATH_REL="." ;;
+    /opt/cocalc/project-host/*)
+      ALLOWED_PATH_ROOT="/opt/cocalc/project-host"; ALLOWED_PATH_REL="${path#/opt/cocalc/project-host/}" ;;
+    /opt/cocalc/container-runtime)
+      ALLOWED_PATH_ROOT="/opt/cocalc/container-runtime"; ALLOWED_PATH_REL="." ;;
+    /opt/cocalc/container-runtime/*)
+      ALLOWED_PATH_ROOT="/opt/cocalc/container-runtime"; ALLOWED_PATH_REL="${path#/opt/cocalc/container-runtime/}" ;;
+    /opt/cocalc/project-bundles)
+      ALLOWED_PATH_ROOT="/opt/cocalc/project-bundles"; ALLOWED_PATH_REL="." ;;
+    /opt/cocalc/project-bundles/*)
+      ALLOWED_PATH_ROOT="/opt/cocalc/project-bundles"; ALLOWED_PATH_REL="${path#/opt/cocalc/project-bundles/}" ;;
+    /opt/cocalc/tools)
+      ALLOWED_PATH_ROOT="/opt/cocalc/tools"; ALLOWED_PATH_REL="." ;;
+    /opt/cocalc/tools/*)
+      ALLOWED_PATH_ROOT="/opt/cocalc/tools"; ALLOWED_PATH_REL="${path#/opt/cocalc/tools/}" ;;
+    /dev/loop[0-9]*)
+      ALLOWED_PATH_ROOT="/dev"; ALLOWED_PATH_REL="${path#/dev/}" ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+allow_path() {
+  set_allowed_path_parts "${1//\\\\:/:}"
+}
+
+require_allowed_path_parts() {
+  local path="$1"
+  if ! set_allowed_path_parts "$path"; then
+    deny "path-not-allowed" "$path"
+  fi
+}
+
+path_helper() {
+  /usr/local/libexec/cocalc-runtime-storage-path-helper "$@"
 }
 
 allow_overlay_mountpoint() {
@@ -2520,19 +2888,8 @@ allow_overlay_mountpoint() {
 
 allow_privileged_delete_root() {
   local path="${1//\\\\:/:}"
-  case "$path" in
-    /mnt/cocalc|/mnt/cocalc/*)
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-  local base
-  base="$(basename "$path")"
-  if ! echo "$base" | grep -Eq '^project-[0-9a-fA-F-]{32,64}(-scratch)?$'; then
-    return 1
-  fi
-  return 0
+  lexical_absolute_path_is_safe "$path" || return 1
+  echo "$path" | grep -Eq '^/mnt/cocalc/project-[0-9a-fA-F-]{32,64}(-scratch)?$'
 }
 
 check_relative_delete_path() {
@@ -2574,6 +2931,10 @@ check_args() {
           deny "path-not-allowed" "$_part"
         fi
       done
+      continue
+    fi
+    if [[ "$arg" == */* ]] && [[ "$arg" != -* ]]; then
+      deny "relative-path-not-allowed" "$arg"
     fi
   done
 }
@@ -2791,36 +3152,152 @@ case "$cmd" in
     exec /sbin/losetup "$@"
     ;;
   mknod)
-    check_args "$@"
+    if [ "$#" -ne 5 ] || [ "$1" != "-m660" ] || [ "$3" != "b" ] || [ "$4" != "7" ]; then
+      deny "mknod-args-invalid" "$*"
+    fi
+    if ! echo "$2" | grep -Eq '^/dev/loop[0-9]+$' || ! echo "$5" | grep -Eq '^[0-9]+$'; then
+      deny "mknod-loop-invalid" "$*"
+    fi
     exec /usr/bin/mknod "$@"
     ;;
   chown)
-    check_args "$@"
-    exec /bin/chown "$@"
+    if [ "$#" -lt 2 ]; then
+      deny "chown-args-invalid" "$*"
+    fi
+    owner="$1"
+    shift
+    case "$owner" in
+      *:*) owner_user="${owner%%:*}"; owner_group="${owner#*:}" ;;
+      *) deny "chown-owner-invalid" "$owner" ;;
+    esac
+    if echo "$owner_user" | grep -Eq '^[0-9]+$'; then
+      owner_uid="$owner_user"
+    else
+      owner_uid="$(id -u "$owner_user" 2>/dev/null || true)"
+    fi
+    if echo "$owner_group" | grep -Eq '^[0-9]+$'; then
+      owner_gid="$owner_group"
+    else
+      owner_gid="$(getent group "$owner_group" | cut -d: -f3 || true)"
+    fi
+    if ! echo "$owner_uid" | grep -Eq '^[0-9]+$' || ! echo "$owner_gid" | grep -Eq '^[0-9]+$'; then
+      deny "chown-owner-invalid" "$owner"
+    fi
+    runtime_uid="$(id -u "$RUNTIME_USER")"
+    runtime_gid="$(id -g "$RUNTIME_USER")"
+    if [ "$owner_uid" != "$runtime_uid" ] || [ "$owner_gid" != "$runtime_gid" ]; then
+      deny "chown-owner-not-runtime-user" "$owner"
+    fi
+    for path in "$@"; do
+      if echo "$path" | grep -Eq '^/dev/loop[0-9]+$'; then
+        /bin/chown "$owner_uid:$owner_gid" -- "$path"
+        continue
+      fi
+      require_allowed_path_parts "$path"
+      path_helper chown --root "$ALLOWED_PATH_ROOT" --path "$ALLOWED_PATH_REL" --uid "$owner_uid" --gid "$owner_gid"
+    done
     ;;
   chmod)
-    check_args "$@"
-    exec /bin/chmod "$@"
+    if [ "$#" -lt 2 ] || ! echo "$1" | grep -Eq '^([0-7]{3}|0[0-7]{3})$'; then
+      deny "chmod-args-invalid" "$*"
+    fi
+    mode="$1"
+    shift
+    for path in "$@"; do
+      require_allowed_path_parts "$path"
+      path_helper chmod --root "$ALLOWED_PATH_ROOT" --path "$ALLOWED_PATH_REL" --mode "$mode"
+    done
     ;;
   chattr)
-    check_args "$@"
-    exec /usr/bin/chattr "$@"
+    if [ "$#" -ne 2 ] || [ "$1" != "+C" ]; then
+      deny "chattr-args-invalid" "$*"
+    fi
+    require_allowed_path_parts "$2"
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper chattr-cow --root "$ALLOWED_PATH_ROOT" --path "$ALLOWED_PATH_REL"
     ;;
   truncate)
-    check_args "$@"
-    exec /usr/bin/truncate "$@"
+    if [ "$#" -ne 3 ] || [ "$1" != "-s" ]; then
+      deny "truncate-args-invalid" "$*"
+    fi
+    length="$(numfmt --from=iec "$2" 2>/dev/null || true)"
+    if ! echo "$length" | grep -Eq '^[0-9]+$'; then
+      deny "truncate-length-invalid" "$2"
+    fi
+    require_allowed_path_parts "$3"
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper truncate --root "$ALLOWED_PATH_ROOT" --path "$ALLOWED_PATH_REL" --length "$length"
     ;;
   mkdir)
-    check_args "$@"
-    exec /bin/mkdir "$@"
+    recursive=false
+    if [ "${1:-}" = "-p" ]; then
+      recursive=true
+      shift
+    fi
+    if [ "$#" -lt 1 ]; then
+      deny "mkdir-args-invalid" "$*"
+    fi
+    for path in "$@"; do
+      require_allowed_path_parts "$path"
+      if [ "$ALLOWED_PATH_REL" = "." ]; then
+        if [ "$recursive" = true ] && [ -d "$ALLOWED_PATH_ROOT" ]; then
+          continue
+        fi
+        deny "mkdir-root-not-allowed" "$path"
+      fi
+      helper_args=(mkdir --root "$ALLOWED_PATH_ROOT" --path "$ALLOWED_PATH_REL" --mode 0755)
+      if [ "$recursive" = true ]; then
+        helper_args+=(--recursive)
+      fi
+      path_helper "${helper_args[@]}"
+    done
     ;;
   mv)
-    check_args "$@"
-    exec /bin/mv "$@"
+    if [ "$#" -ne 2 ]; then
+      deny "mv-args-invalid" "$*"
+    fi
+    require_allowed_path_parts "$1"
+    source_root="$ALLOWED_PATH_ROOT"
+    source_rel="$ALLOWED_PATH_REL"
+    require_allowed_path_parts "$2"
+    if [ "$source_root" != "$ALLOWED_PATH_ROOT" ]; then
+      deny "mv-cross-root-not-allowed" "$1 -> $2"
+    fi
+    if [ "$source_rel" = "." ] || [ "$ALLOWED_PATH_REL" = "." ]; then
+      deny "mv-root-not-allowed" "$1 -> $2"
+    fi
+    exec /usr/local/libexec/cocalc-runtime-storage-path-helper rename --root "$source_root" --path "$source_rel" --dest "$ALLOWED_PATH_REL"
     ;;
   rm)
-    check_args "$@"
-    exec /bin/rm "$@"
+    recursive=false
+    force=false
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -rf|-fr)
+          recursive=true; force=true; shift ;;
+        -r|-R|--recursive)
+          recursive=true; shift ;;
+        -f|--force)
+          force=true; shift ;;
+        --)
+          shift; break ;;
+        -*)
+          deny "rm-option-invalid" "$1" ;;
+        *)
+          break ;;
+      esac
+    done
+    if [ "$#" -lt 1 ]; then
+      deny "rm-args-invalid" "$*"
+    fi
+    for path in "$@"; do
+      require_allowed_path_parts "$path"
+      if [ "$ALLOWED_PATH_REL" = "." ]; then
+        deny "rm-root-not-allowed" "$path"
+      fi
+      helper_args=(rm --root "$ALLOWED_PATH_ROOT" --path "$ALLOWED_PATH_REL")
+      if [ "$recursive" = true ]; then helper_args+=(--recursive); fi
+      if [ "$force" = true ]; then helper_args+=(--force); fi
+      path_helper "${helper_args[@]}"
+    done
     ;;
   sandbox-rm)
     if [ "$#" -lt 2 ]; then
@@ -2837,7 +3314,8 @@ case "$cmd" in
     if ! check_relative_delete_path "$rel"; then
       deny "sandbox-delete-path-invalid" "$rel"
     fi
-    helper=(/opt/cocalc/project-host/bin/project-host privileged-rm-helper rm --root "$root" --path "$rel")
+    project_rel="${root#/mnt/cocalc/}"
+    helper=(/usr/local/libexec/cocalc-runtime-storage-path-helper rm --root /mnt/cocalc --path "${project_rel}/${rel}")
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --recursive|--force)
@@ -2866,7 +3344,8 @@ case "$cmd" in
     if ! check_relative_delete_path "$rel"; then
       deny "sandbox-delete-path-invalid" "$rel"
     fi
-    helper=(/opt/cocalc/project-host/bin/project-host privileged-rm-helper rmdir --root "$root" --path "$rel")
+    project_rel="${root#/mnt/cocalc/}"
+    helper=(/usr/local/libexec/cocalc-runtime-storage-path-helper rmdir --root /mnt/cocalc --path "${project_rel}/${rel}")
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --recursive)
@@ -3767,7 +4246,9 @@ exec /bin/journalctl -u "$service" -o cat -f -n "$lines"
     storage_wrapper = storage_wrapper.replace(
         "__PROJECT_POOL_CGROUP__", DEFAULT_PROJECT_POOL_CGROUP
     )
+    storage_wrapper = storage_wrapper.replace("__RUNTIME_USER__", cfg.ssh_user)
     wrappers = {
+        "/usr/local/libexec/cocalc-runtime-storage-path-helper": RUNTIME_STORAGE_PATH_HELPER,
         "/usr/local/sbin/cocalc-runtime-storage": storage_wrapper,
         "/usr/local/sbin/cocalc-mount-data": mount_wrapper,
         "/usr/local/sbin/cocalc-cloudflared-ctl": cloud_ctl_wrapper,
@@ -3775,7 +4256,9 @@ exec /bin/journalctl -u "$service" -o cat -f -n "$lines"
     }
     for path, content in wrappers.items():
         p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
+        os.chown(p, 0, 0)
         p.chmod(0o755)
 
 
@@ -4686,6 +5169,11 @@ RUNTIME_USER="__RUNTIME_USER__"
 RUNTIME_BIN="$RUNTIME_ROOT/bin/project-host"
 PID_FILE="/mnt/cocalc/data/daemon.pid"
 HOST_AGENT_PID_FILE="/mnt/cocalc/data/host-agent.pid"
+CONAT_ROUTER_PID_FILE="/mnt/cocalc/data/conat-router.pid"
+CONAT_PERSIST_PID_FILE="/mnt/cocalc/data/conat-persist.pid"
+FORENSICS_ROOT="/var/lib/cocalc-project-host-forensics"
+MAX_FORENSICS_DURATION_SECONDS="30"
+MAX_FORENSICS_FILE_BLOCKS="65536"
 OOM_ADJ="${COCALC_PROJECT_HOST_OOM_SCORE_ADJ:__OOM_ADJ_LITERAL__}"
 PROJECT_OOM_ADJ="500"
 ENV_FILE="/etc/cocalc/project-host.env"
@@ -5262,24 +5750,54 @@ attach_running_project_processes() {
   )
 }
 
-allow_forensics_capture_dir() {
-  local path="${1//\\\\:/:}"
-  case "$path" in
-    /mnt/cocalc/data/forensics/*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
+forensics_pid_file() {
+  case "$1" in
+    project-host) printf '%s\\n' "${PID_FILE}" ;;
+    conat-router) printf '%s\\n' "${CONAT_ROUTER_PID_FILE}" ;;
+    conat-persist) printf '%s\\n' "${CONAT_PERSIST_PID_FILE}" ;;
+    *) return 1 ;;
   esac
+}
+
+require_forensics_pid() {
+  local component="$1" pid="$2" pid_file expected_pid actual_uid title
+  pid_file="$(forensics_pid_file "${component}")" || deny "forensics-component-invalid" "${component}"
+  expected_pid="$(read_pid_file "${pid_file}" || true)"
+  if [ -z "${expected_pid}" ] || [ "${expected_pid}" != "${pid}" ]; then
+    deny "forensics-pid-mismatch" "component=${component} requested=${pid} expected=${expected_pid:-missing}"
+  fi
+  if ! kill -0 "${pid}" 2>/dev/null; then
+    deny "forensics-pid-not-running" "${pid}"
+  fi
+  actual_uid="$(awk '/^Uid:/ {print $2}' "/proc/${pid}/status" 2>/dev/null || true)"
+  if [ "${actual_uid}" != "$(runtime_uid)" ]; then
+    deny "forensics-pid-owner-mismatch" "pid=${pid} uid=${actual_uid:-missing}"
+  fi
+  title="$(tr '\\0' '\\n' < "/proc/${pid}/cmdline" 2>/dev/null | head -n1 || true)"
+  case "${component}:${title}" in
+    project-host:project-host:app|conat-router:project-host:conat-router|conat-persist:project-host:conat-persist) ;;
+    *) deny "forensics-process-title-mismatch" "component=${component} title=${title:-missing}" ;;
+  esac
+}
+
+prepare_forensics_root() {
+  if [ "$(stat -c %u /var/lib)" != "0" ] || [ "$((8#$(stat -c %a /var/lib) & 8#022))" -ne 0 ]; then
+    deny "forensics-parent-insecure" "/var/lib"
+  fi
+  if [ -L "${FORENSICS_ROOT}" ]; then
+    deny "forensics-root-symlink" "${FORENSICS_ROOT}"
+  fi
+  /usr/bin/install -d -o root -g "${RUNTIME_USER}" -m 0750 "${FORENSICS_ROOT}"
+  if [ "$(readlink -f "${FORENSICS_ROOT}")" != "${FORENSICS_ROOT}" ] || [ "$(stat -c %u "${FORENSICS_ROOT}")" != "0" ]; then
+    deny "forensics-root-invalid" "${FORENSICS_ROOT}"
+  fi
 }
 
 capture_forensics() {
   local component="$1"
   local pid="$2"
-  local capture_dir="$3"
-  local duration_seconds="$4"
-  local status=0 task_dir task_file tid
+  local duration_seconds="$3"
+  local capture_dir status=0 task_dir task_file tid task_count=0
   case "${component}" in
     project-host|conat-router|conat-persist)
       ;;
@@ -5292,15 +5810,15 @@ capture_forensics() {
     echo "invalid pid '${pid}'" >&2
     exit 2
   fi
-  if ! echo "${duration_seconds}" | grep -Eq '^[0-9]+$' || [ "${duration_seconds}" -le 0 ]; then
+  if ! echo "${duration_seconds}" | grep -Eq '^[0-9]+$' || [ "${duration_seconds}" -le 0 ] || [ "${duration_seconds}" -gt "${MAX_FORENSICS_DURATION_SECONDS}" ]; then
     echo "invalid duration '${duration_seconds}'" >&2
     exit 2
   fi
-  if ! allow_forensics_capture_dir "${capture_dir}"; then
-    deny "forensics-dir-not-allowed" "${capture_dir}"
-  fi
-  mkdir -p "${capture_dir}"
-  chmod 700 "${capture_dir}" || true
+  require_forensics_pid "${component}" "${pid}"
+  prepare_forensics_root
+  capture_dir="$(mktemp -d -p "${FORENSICS_ROOT}" "${component}-pid${pid}-XXXXXXXX")"
+  chmod 0700 "${capture_dir}"
+  printf 'CAPTURE_DIR=%s\\n' "${capture_dir}"
 
   if [ -r "/proc/${pid}/cmdline" ]; then
     {
@@ -5322,6 +5840,11 @@ capture_forensics() {
     if [ -d "${task_dir}" ]; then
       for task_file in "${task_dir}"/*; do
         [ -e "${task_file}" ] || continue
+        task_count="$((task_count + 1))"
+        if [ "${task_count}" -gt 256 ]; then
+          printf 'ERROR: task stack capture truncated at 256 threads\\n'
+          break
+        fi
         tid="$(basename "${task_file}")"
         printf '===== %s =====\\n' "${tid}"
         if ! cat "${task_file}/stack" 2>&1; then
@@ -5339,14 +5862,17 @@ capture_forensics() {
   chmod 600 "${capture_dir}/ps-threads.txt" || true
 
   if command -v lsof >/dev/null 2>&1; then
-    lsof -p "${pid}" > "${capture_dir}/lsof.txt" 2>&1 || true
+    (ulimit -f "${MAX_FORENSICS_FILE_BLOCKS}"; lsof -p "${pid}") > "${capture_dir}/lsof.txt" 2>&1 || true
   else
     printf 'ERROR: lsof not installed\\n' > "${capture_dir}/lsof.txt"
   fi
   chmod 600 "${capture_dir}/lsof.txt" || true
 
+  # Recheck immediately before ptrace to reject stale/reused pids.  Use one
+  # bounded trace file instead of one unbounded file per thread.
+  require_forensics_pid "${component}" "${pid}"
   set +e
-  /usr/bin/timeout "${duration_seconds}s" strace -ff -ttt -T -s 256 -yy -o "${capture_dir}/strace" -p "${pid}" > "${capture_dir}/strace-run.txt" 2>&1
+  (ulimit -f "${MAX_FORENSICS_FILE_BLOCKS}"; /usr/bin/timeout "${duration_seconds}s" strace -f -ttt -T -s 256 -yy -o "${capture_dir}/strace.txt" -p "${pid}") > "${capture_dir}/strace-run.txt" 2>&1
   status="$?"
   set -e
   chmod 600 "${capture_dir}/strace-run.txt" || true
@@ -5446,11 +5972,11 @@ case "${cmd}" in
     attach_running_project_processes || true
     ;;
   capture-forensics)
-    if [ "$#" -ne 4 ]; then
-      echo "usage: ${0} capture-forensics <component> <pid> <capture-dir> <duration-seconds>" >&2
+    if [ "$#" -ne 3 ]; then
+      echo "usage: ${0} capture-forensics <component> <pid> <duration-seconds>" >&2
       exit 2
     fi
-    capture_forensics "$1" "$2" "$3" "$4"
+    capture_forensics "$1" "$2" "$3"
     ;;
   apply-sysctls)
     apply_project_host_sysctls

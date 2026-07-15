@@ -1309,6 +1309,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
 
             original_write_text = bootstrap.Path.write_text
             original_chmod = bootstrap.os.chmod
+            original_chown = bootstrap.os.chown
 
             def capture_write(self, data, encoding="utf-8"):
                 captured[str(self)] = data
@@ -1317,10 +1318,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             try:
                 bootstrap.Path.write_text = capture_write
                 bootstrap.os.chmod = lambda *_args, **_kwargs: None
+                bootstrap.os.chown = lambda *_args, **_kwargs: None
                 bootstrap.install_privileged_wrappers(cfg)
             finally:
                 bootstrap.Path.write_text = original_write_text
                 bootstrap.os.chmod = original_chmod
+                bootstrap.os.chown = original_chown
 
             script = captured["/usr/local/sbin/cocalc-runtime-storage"]
             self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
@@ -1415,7 +1418,19 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("sandbox-rm)", script)
             self.assertIn("sandbox-rmdir)", script)
             self.assertIn("allow_privileged_delete_root", script)
-            self.assertIn("privileged-rm-helper", script)
+            self.assertIn("cocalc-runtime-storage-path-helper", script)
+            self.assertNotIn(
+                "/opt/cocalc/project-host/bin/project-host privileged-rm-helper",
+                script,
+            )
+            self.assertIn("lexical_absolute_path_is_safe", script)
+            self.assertIn('deny "relative-path-not-allowed"', script)
+            self.assertIn('path_helper chmod --root "$ALLOWED_PATH_ROOT"', script)
+            self.assertIn("mv-cross-root-not-allowed", script)
+            self.assertIn("rm-root-not-allowed", script)
+            self.assertNotIn('exec /bin/chmod "$@"', script)
+            self.assertNotIn('exec /bin/chown "$@"', script)
+            self.assertNotIn('exec /bin/rm "$@"', script)
             self.assertIn("grow-shared-scratch)", script)
             self.assertIn("/mnt/cocalc-scratch", script)
             self.assertIn("/var/lib/cocalc/star/project-host/0/cache", script)
@@ -1452,6 +1467,67 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("--userns=keep-id:uid=2001,gid=2001", script)
             self.assertIn(': >"$rootfs/run/podman-init"', script)
             self.assertIn(': >"$rootfs/run/.containerenv"', script)
+            helper = captured[
+                "/usr/local/libexec/cocalc-runtime-storage-path-helper"
+            ]
+            helper_namespace = {"__name__": "bootstrap_path_helper_test"}
+            exec(helper, helper_namespace)
+            safe_root = Path(tmpdir) / "safe-root"
+            outside = Path(tmpdir) / "outside"
+            safe_root.mkdir()
+            outside.mkdir()
+            (outside / "secret").write_text("unchanged", encoding="utf-8")
+            (safe_root / "escape").symlink_to(outside, target_is_directory=True)
+            run_helper = helper_namespace["run"]
+            allowed_roots = {str(safe_root)}
+            run_helper(
+                [
+                    "mkdir",
+                    "--root",
+                    str(safe_root),
+                    "--path",
+                    "a/b",
+                    "--recursive",
+                    "--mode",
+                    "0750",
+                ],
+                allowed_roots,
+            )
+            (safe_root / "a" / "b" / "data").write_text(
+                "abcdef", encoding="utf-8"
+            )
+            run_helper(
+                [
+                    "truncate",
+                    "--root",
+                    str(safe_root),
+                    "--path",
+                    "a/b/data",
+                    "--length",
+                    "2",
+                ],
+                allowed_roots,
+            )
+            self.assertEqual(
+                (safe_root / "a" / "b" / "data").read_text(encoding="utf-8"),
+                "ab",
+            )
+            with self.assertRaises(OSError):
+                run_helper(
+                    [
+                        "chmod",
+                        "--root",
+                        str(safe_root),
+                        "--path",
+                        "escape/secret",
+                        "--mode",
+                        "0600",
+                    ],
+                    allowed_roots,
+                )
+            self.assertEqual(
+                (outside / "secret").read_text(encoding="utf-8"), "unchanged"
+            )
             wrapper_path = Path(tmpdir) / "cocalc-runtime-storage"
             wrapper_path.write_text(script, encoding="utf-8")
             subprocess.run(["bash", "-n", str(wrapper_path)], check=True)
@@ -1724,8 +1800,28 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 "/etc/sysctl.d/60-cocalc-project-host-inotify.conf",
                 rootctl.read_text(encoding="utf-8"),
             )
-            self.assertIn(
+            self.assertNotIn(
                 "allow_forensics_capture_dir",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'FORENSICS_ROOT="/var/lib/cocalc-project-host-forensics"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "require_forensics_pid",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'MAX_FORENSICS_DURATION_SECONDS="30"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'printf \'CAPTURE_DIR=%s\\n\'',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertNotIn(
+                "<capture-dir>",
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
