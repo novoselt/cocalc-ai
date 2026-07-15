@@ -2739,17 +2739,7 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     this.filesystemPromise = undefined;
   };
 
-  resetProjectHostRuntime = (opts?: {
-    reason?: "host_session_changed";
-    recovery_id?: string;
-  }) => {
-    if (opts?.reason != null) {
-      this.publishRuntimeRecoveryNotice({
-        id: opts.recovery_id ?? misc.uuid(),
-        reason: opts.reason,
-        occurred_at: Date.now(),
-      });
-    }
+  resetProjectHostRuntime = () => {
     this.clearFilesystemClient();
     disconnect_from_project(this.project_id);
     this.projectStatusSub?.close();
