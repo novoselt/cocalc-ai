@@ -10,7 +10,7 @@ case " ${NODE_OPTIONS:-} " in
   *) export NODE_OPTIONS="${NODE_OPTIONS:+${NODE_OPTIONS} }--max-old-space-size=8192" ;;
 esac
 
-if [[ $# -gt 0 && -x "$1" ]]; then
+if [[ $# -gt 0 && -f "$1" && -x "$1" ]]; then
   ncc_bin="$1"
   shift
 else
