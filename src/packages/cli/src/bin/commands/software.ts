@@ -4095,6 +4095,25 @@ Supported deploy/smoke components:
                     "--wait",
                   ]);
                 }
+                if (
+                  component === "project-host" ||
+                  component === "project" ||
+                  component === "tools"
+                ) {
+                  commandArgsList.push([
+                    ...cli.args,
+                    "--profile",
+                    deployTarget,
+                    "host",
+                    "deploy",
+                    "resume-default",
+                    "--all-hosts",
+                    "--artifact",
+                    runtimeArtifactForHostUpgradeArtifact(
+                      hostTarget.upgradeArtifact,
+                    ),
+                  ]);
+                }
               }
             } else if (hostBootstrapTarget) {
               targetKind = "project-host-fleet";

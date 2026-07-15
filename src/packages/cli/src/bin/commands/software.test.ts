@@ -3403,7 +3403,7 @@ test("software deploy project-host --rollout sets fleet default and upgrades onl
   ]);
 
   const artifactId = "20260614T235912Z-e882d124-host-rollout";
-  assert.equal(runs.length, 4);
+  assert.equal(runs.length, 5);
   assert.deepEqual(runs[0].args.slice(-12), [
     "--profile",
     "staging",
@@ -3460,6 +3460,16 @@ test("software deploy project-host --rollout sets fleet default and upgrades onl
     "--reason",
     "software-deploy-project-host",
     "--wait",
+  ]);
+  assert.deepEqual(runs[4].args.slice(-8), [
+    "--profile",
+    "staging",
+    "host",
+    "deploy",
+    "resume-default",
+    "--all-hosts",
+    "--artifact",
+    "project-host",
   ]);
   const history = JSON.parse(
     r2.objects
