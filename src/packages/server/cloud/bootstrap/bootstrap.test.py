@@ -1813,6 +1813,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "deny() {",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 'MAX_FORENSICS_DURATION_SECONDS="30"',
                 rootctl.read_text(encoding="utf-8"),
             )

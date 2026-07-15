@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260715-v12"
+HELPER_SCHEMA_VERSION = "20260715-v13"
 RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
@@ -5196,6 +5196,13 @@ CORE_ORIGINAL_PATTERN="/var/lib/cocalc/project-host-core-pattern.original"
 CORE_ORIGINAL_PIPE_LIMIT="/var/lib/cocalc/project-host-core-pipe-limit.original"
 CORE_PATTERN="|/usr/local/sbin/cocalc-project-host-core-handler %P %u %g %s %t %e"
 HELPER_SCHEMA_VERSION="__HELPER_SCHEMA_VERSION__"
+
+deny() {
+  local code="$1"
+  local detail="$2"
+  echo "SECURITY_DENY code=${code} detail=${detail}" >&2
+  exit 2
+}
 
 run_daemon() {
   cd /
