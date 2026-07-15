@@ -1472,6 +1472,7 @@ export async function initHostRegistryService() {
           [host_id, nextMetadata],
         );
         if (
+          notice.reason !== "host-shutdown" ||
           !shouldAutoRestoreInterruptedSpotHost({
             status: row.status,
             metadata: nextMetadata,
@@ -1485,9 +1486,39 @@ export async function initHostRegistryService() {
           });
           return;
         }
+        const now = new Date();
+        const retryAt = new Date(now.getTime() + 5_000);
+        const previousRecovery = nextMetadata.spot_recovery_state ?? {};
+        nextMetadata.spot_recovery_state = {
+          ...previousRecovery,
+          phase: "retrying_spot",
+          outage_started_at:
+            previousRecovery.outage_started_at ?? now.toISOString(),
+          next_retry_at: retryAt.toISOString(),
+          active_machine_type:
+            previousRecovery.active_machine_type ??
+            nextMetadata.machine?.machine_type,
+        };
+        nextMetadata.desired_state = "running";
+        await pool().query(
+          "UPDATE project_hosts SET status='starting', last_seen=NULL, metadata=$2, updated=NOW() WHERE id=$1 AND deleted IS NULL",
+          [host_id, nextMetadata],
+        );
+        await recordHostAvailabilityObservation({
+          host_id,
+          state: "recovering",
+          planned: false,
+          category: "spot_interruption",
+          source: "host_shutdown_notice",
+          summary:
+            "Cloud provider is stopping this Spot VM; automatic recovery has started.",
+          details: notice,
+        });
+        await notifyProjectHostUpdate({ host_id });
         const enqueued = await enqueueCloudVmWorkOnce({
           vm_id: host_id,
           action: "start",
+          not_before: retryAt,
           payload: {
             source: "shutdown_notice",
             signal: notice.signal,

@@ -19,6 +19,7 @@ export const DEFAULT_SPOT_RECOVERY_POLICY: Required<HostSpotRecoveryPolicy> =
     spot_return_requires_probe: true,
     max_restore_attempts_before_fallback: 0,
     max_standard_runtime_minutes: 24 * 60,
+    alternate_spot_machine_types: [],
   });
 
 export function defaultRestorePolicy(
@@ -78,6 +79,19 @@ export function normalizeSpotRecoveryPolicy(
       parsePositiveInt(
         (value as HostSpotRecoveryPolicy).max_standard_runtime_minutes,
       ) ?? DEFAULT_SPOT_RECOVERY_POLICY.max_standard_runtime_minutes,
+    alternate_spot_machine_types: Array.isArray(
+      (value as HostSpotRecoveryPolicy).alternate_spot_machine_types,
+    )
+      ? Array.from(
+          new Set(
+            (value as HostSpotRecoveryPolicy)
+              .alternate_spot_machine_types!.map((item) =>
+                `${item ?? ""}`.trim(),
+              )
+              .filter(Boolean),
+          ),
+        )
+      : DEFAULT_SPOT_RECOVERY_POLICY.alternate_spot_machine_types,
   };
 }
 

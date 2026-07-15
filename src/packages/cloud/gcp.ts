@@ -986,6 +986,77 @@ export class GcpProvider implements CloudProvider {
     });
   }
 
+  async setMachineType(
+    runtime: HostRuntime,
+    machineType: string,
+    creds: any,
+  ): Promise<void> {
+    logger.info("gcp.setMachineType", {
+      instance_id: runtime.instance_id,
+      zone: runtime.zone,
+      machine_type: machineType,
+    });
+    const credentials = parseCredentials(creds ?? {});
+    if (!runtime.zone) {
+      throw new Error("gcp.setMachineType requires zone");
+    }
+    const normalized = `${machineType ?? ""}`.trim();
+    if (!normalized) {
+      throw new Error("gcp.setMachineType requires machineType");
+    }
+    const client = new InstancesClient(credentials);
+    const [instance] = await client.get({
+      project: credentials.projectId,
+      zone: runtime.zone,
+      instance: runtime.instance_id,
+    });
+    const current = `${instance?.machineType ?? ""}`.split("/").pop();
+    if (current === normalized) return;
+    const status = `${instance?.status ?? ""}`.trim().toUpperCase();
+    if (
+      status === "RUNNING" ||
+      status === "PROVISIONING" ||
+      status === "STAGING"
+    ) {
+      const [stopResponse] = await client.stop({
+        project: credentials.projectId,
+        zone: runtime.zone,
+        instance: runtime.instance_id,
+      });
+      await waitUntilOperationComplete({
+        response: stopResponse,
+        zone: runtime.zone,
+        credentials,
+      });
+      await waitForInstanceLifecycleStatus({
+        client,
+        credentials,
+        runtime,
+        desired: ["TERMINATED"],
+      });
+    } else if (status === "STOPPING") {
+      await waitForInstanceLifecycleStatus({
+        client,
+        credentials,
+        runtime,
+        desired: ["TERMINATED"],
+      });
+    }
+    const [response] = await client.setMachineType({
+      project: credentials.projectId,
+      zone: runtime.zone,
+      instance: runtime.instance_id,
+      instancesSetMachineTypeRequestResource: {
+        machineType: `zones/${runtime.zone}/machineTypes/${normalized}`,
+      },
+    });
+    await waitUntilOperationComplete({
+      response,
+      zone: runtime.zone,
+      credentials,
+    });
+  }
+
   async probeSpotAvailability(
     spec: HostSpec,
     creds: any,

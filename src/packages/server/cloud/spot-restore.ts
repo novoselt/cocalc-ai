@@ -49,6 +49,7 @@ export const DEFAULT_SPOT_RECOVERY_POLICY: Required<HostSpotRecoveryPolicy> =
     spot_return_requires_probe: true,
     max_restore_attempts_before_fallback: 0,
     max_standard_runtime_minutes: 24 * 60,
+    alternate_spot_machine_types: [],
   });
 
 export function normalizeHostPricingModelValue(
@@ -135,6 +136,17 @@ function normalizeIsoTimestamp(value: unknown): string | undefined {
   return parsed.toISOString();
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set<string>(
+      value
+        .map((item: unknown) => `${item ?? ""}`.trim())
+        .filter((item: string) => !!item),
+    ),
+  );
+}
+
 export function normalizeSpotRecoveryPolicy(
   value: unknown,
 ): Required<HostSpotRecoveryPolicy> | undefined {
@@ -165,6 +177,11 @@ export function normalizeSpotRecoveryPolicy(
   const maxStandardRuntimeMinutes =
     parsePositiveInt((value as any).max_standard_runtime_minutes) ??
     DEFAULT_SPOT_RECOVERY_POLICY.max_standard_runtime_minutes;
+  const alternateSpotMachineTypes = Array.isArray(
+    (value as any).alternate_spot_machine_types,
+  )
+    ? normalizeStringArray((value as any).alternate_spot_machine_types)
+    : DEFAULT_SPOT_RECOVERY_POLICY.alternate_spot_machine_types;
   return {
     spot_restore_retry_window_minutes: retryWindow,
     spot_restore_backoff_seconds: backoffSeconds,
@@ -174,6 +191,7 @@ export function normalizeSpotRecoveryPolicy(
     spot_return_requires_probe: spotReturnRequiresProbe,
     max_restore_attempts_before_fallback: maxAttempts,
     max_standard_runtime_minutes: maxStandardRuntimeMinutes,
+    alternate_spot_machine_types: alternateSpotMachineTypes,
   };
 }
 
@@ -204,6 +222,11 @@ export function normalizeSpotRecoveryState(
         ? "failure"
         : undefined;
   const lastProbeError = `${(value as any).last_probe_error ?? ""}`.trim();
+  const activeMachineType =
+    `${(value as any).active_machine_type ?? ""}`.trim();
+  const triedMachineTypes = normalizeStringArray(
+    (value as any).spot_machine_types_tried,
+  );
   return {
     phase,
     ...(normalizeIsoTimestamp((value as any).outage_started_at)
@@ -249,6 +272,17 @@ export function normalizeSpotRecoveryState(
             (value as any).verification_deadline_at,
           ),
         }
+      : {}),
+    ...(activeMachineType ? { active_machine_type: activeMachineType } : {}),
+    ...(normalizeIsoTimestamp((value as any).machine_type_attempt_started_at)
+      ? {
+          machine_type_attempt_started_at: normalizeIsoTimestamp(
+            (value as any).machine_type_attempt_started_at,
+          ),
+        }
+      : {}),
+    ...(triedMachineTypes.length
+      ? { spot_machine_types_tried: triedMachineTypes }
       : {}),
   };
 }

@@ -9,6 +9,8 @@ import { createServer as createHttpServer } from "http";
 import type { IncomingMessage, ServerResponse } from "http";
 import { createServer as createHttpsServer } from "https";
 import { once } from "node:events";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { URL } from "node:url";
 import express from "express";
 import TTL from "@isaacs/ttlcache";
@@ -1610,6 +1612,11 @@ export async function main(
 
   let closed = false;
   let shutdownInProgress = false;
+  const hostShutdownIntentPath = join(dataDir, "host-shutdown-intent");
+  // A stale marker means the previous shutdown completed before the daemon
+  // could consume it. It must never turn a later software restart into a VM
+  // interruption notice.
+  rmSync(hostShutdownIntentPath, { force: true });
   const close = () => {
     if (closed) return;
     closed = true;
@@ -1641,10 +1648,16 @@ export async function main(
   const closeWithSignal = async (signal: string) => {
     if (closed || shutdownInProgress) return;
     shutdownInProgress = true;
+    let reason = "process-signal";
+    try {
+      const intent = readFileSync(hostShutdownIntentPath, "utf8").trim();
+      if (intent === "host-shutdown") reason = intent;
+    } catch {}
+    rmSync(hostShutdownIntentPath, { force: true });
     try {
       await masterRegistration?.notifyShutdown({
         signal,
-        reason: "process-signal",
+        reason,
       });
     } finally {
       close();

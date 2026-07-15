@@ -1,4 +1,41 @@
-import { shouldAutoRestoreInterruptedSpotHost } from "./spot-restore";
+import {
+  normalizeSpotRecoveryPolicy,
+  normalizeSpotRecoveryState,
+  shouldAutoRestoreInterruptedSpotHost,
+} from "./spot-restore";
+
+describe("spot recovery metadata", () => {
+  it("normalizes configured alternate machine types", () => {
+    expect(
+      normalizeSpotRecoveryPolicy({
+        alternate_spot_machine_types: [
+          " n2d-standard-16 ",
+          "n2d-standard-16",
+          "",
+        ],
+      })?.alternate_spot_machine_types,
+    ).toEqual(["n2d-standard-16"]);
+  });
+
+  it("preserves the active machine type and attempted candidates", () => {
+    expect(
+      normalizeSpotRecoveryState({
+        phase: "retrying_spot",
+        active_machine_type: "n2d-standard-16",
+        machine_type_attempt_started_at: "2026-07-15T19:00:00.000Z",
+        spot_machine_types_tried: [
+          "t2d-standard-16",
+          "n2d-standard-16",
+          "n2d-standard-16",
+        ],
+      }),
+    ).toMatchObject({
+      active_machine_type: "n2d-standard-16",
+      machine_type_attempt_started_at: "2026-07-15T19:00:00.000Z",
+      spot_machine_types_tried: ["t2d-standard-16", "n2d-standard-16"],
+    });
+  });
+});
 
 describe("shouldAutoRestoreInterruptedSpotHost", () => {
   it("returns true for spot hosts with immediate restore", () => {

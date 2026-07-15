@@ -14,6 +14,13 @@ export type HostOperationalState = {
   reason?: string;
 };
 
+export type HostRecoveryDisplay = {
+  active: boolean;
+  title?: string;
+  description?: string;
+  etaMinutes?: number;
+};
+
 function read(hostInfo: HostInfoLike | undefined, key: string): any {
   if (!hostInfo) return undefined;
   if (typeof hostInfo.get === "function") return hostInfo.get(key);
@@ -34,6 +41,76 @@ function normalizeStatus(value: unknown): string | undefined {
   const status = `${value ?? ""}`.trim().toLowerCase();
   if (!status) return undefined;
   return status === "active" ? "running" : status;
+}
+
+function futureTimestamp(value: unknown): number | undefined {
+  const timestamp = Date.parse(`${value ?? ""}`);
+  return Number.isFinite(timestamp) && timestamp > Date.now()
+    ? timestamp
+    : undefined;
+}
+
+export function getHostRecoveryDisplay(
+  hostInfo: HostInfoLike | undefined,
+): HostRecoveryDisplay {
+  const recovery = read(hostInfo, "spot_recovery_state");
+  const phase = `${
+    read(hostInfo, "recovery_phase") ?? read(recovery, "phase") ?? ""
+  }`.trim();
+  const desiredState = `${read(hostInfo, "desired_state") ?? "running"}`;
+  if (!phase || phase === "idle" || desiredState !== "running") {
+    return { active: false };
+  }
+  const desiredPricing = `${
+    read(hostInfo, "desired_pricing_model") ??
+    read(hostInfo, "pricing_model") ??
+    ""
+  }`;
+  if (desiredPricing !== "spot") return { active: false };
+  const effectivePricing = `${
+    read(hostInfo, "effective_pricing_model") ?? desiredPricing
+  }`;
+  const machine = read(hostInfo, "machine");
+  const desiredMachineType = `${read(machine, "machine_type") ?? ""}`.trim();
+  const activeMachineType = `${
+    read(recovery, "active_machine_type") ?? desiredMachineType
+  }`.trim();
+  const nextRetry = futureTimestamp(read(recovery, "next_retry_at"));
+  const etaMinutes = nextRetry
+    ? Math.max(2, Math.ceil((nextRetry - Date.now()) / 60_000) + 2)
+    : 2;
+
+  if (
+    effectivePricing === "on_demand" ||
+    phase === "running_standard_fallback"
+  ) {
+    return {
+      active: true,
+      title: "Project host is restarting on guaranteed capacity",
+      description:
+        "Spot capacity was not available, so CoCalc switched this host to a regular on-demand VM and is reconnecting projects automatically.",
+      etaMinutes,
+    };
+  }
+  if (
+    activeMachineType &&
+    desiredMachineType &&
+    activeMachineType !== desiredMachineType
+  ) {
+    return {
+      active: true,
+      title: "Project host is restarting on alternate Spot capacity",
+      description: `The cloud provider interrupted this Spot VM. CoCalc is now trying ${activeMachineType} after ${desiredMachineType} was unavailable.`,
+      etaMinutes,
+    };
+  }
+  return {
+    active: true,
+    title: "Project host is restarting automatically",
+    description:
+      "The cloud provider interrupted this Spot VM. CoCalc detected the shutdown and is restarting the host and its projects automatically.",
+    etaMinutes,
+  };
 }
 
 type ComputeStateName = keyof typeof COMPUTE_STATES;

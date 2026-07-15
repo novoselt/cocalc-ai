@@ -69,6 +69,11 @@ export interface CloudProvider {
     pricingModel: NonNullable<HostSpec["pricing_model"]>,
     creds: any,
   ): Promise<void>;
+  setMachineType?(
+    runtime: HostRuntime,
+    machineType: string,
+    creds: any,
+  ): Promise<void>;
   probeSpotAvailability?(
     spec: HostSpec,
     creds: any,

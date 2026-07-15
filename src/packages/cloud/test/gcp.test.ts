@@ -14,6 +14,7 @@ const startMock = jest.fn();
 const stopMock = jest.fn();
 const deleteMock = jest.fn();
 const setSchedulingMock = jest.fn();
+const setMachineTypeMock = jest.fn();
 const authRequestMock = jest.fn();
 const waitMock = jest.fn();
 
@@ -40,6 +41,7 @@ jest.mock("@google-cloud/compute", () => {
     stop = stopMock;
     delete = deleteMock;
     setScheduling = setSchedulingMock;
+    setMachineType = setMachineTypeMock;
     auth = {
       getClient: async () => ({
         request: authRequestMock,
@@ -81,6 +83,7 @@ describe("GcpProvider", () => {
     stopMock.mockReset();
     deleteMock.mockReset();
     setSchedulingMock.mockReset();
+    setMachineTypeMock.mockReset();
     authRequestMock.mockReset();
     waitMock.mockReset();
   });
@@ -649,6 +652,44 @@ describe("GcpProvider", () => {
         ),
       }),
     );
+  });
+
+  it("changes the machine type of a stopped instance", async () => {
+    getMock.mockResolvedValueOnce([
+      {
+        status: "TERMINATED",
+        machineType: "zones/us-west1-a/machineTypes/t2d-standard-16",
+      },
+    ]);
+    setMachineTypeMock.mockResolvedValueOnce([
+      { latestResponse: { name: "op-machine-type", status: "DONE" } },
+    ]);
+    waitMock.mockResolvedValueOnce([{ status: "DONE" }]);
+
+    const provider = new GcpProvider();
+    await provider.setMachineType?.(
+      {
+        provider: "gcp",
+        instance_id: "ph-test",
+        zone: "us-west1-a",
+        ssh_user: "ubuntu",
+      },
+      "n2d-standard-16",
+      {
+        project_id: "proj-1",
+        client_email: "svc@example.com",
+        private_key: "key",
+      },
+    );
+
+    expect(setMachineTypeMock).toHaveBeenCalledWith({
+      project: "proj-1",
+      zone: "us-west1-a",
+      instance: "ph-test",
+      instancesSetMachineTypeRequestResource: {
+        machineType: "zones/us-west1-a/machineTypes/n2d-standard-16",
+      },
+    });
   });
 
   it("probes same-shape spot availability with a temporary instance", async () => {

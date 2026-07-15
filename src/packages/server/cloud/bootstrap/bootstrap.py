@@ -6239,7 +6239,9 @@ User={cfg.ssh_user}
 Group={cfg.ssh_user}
 WorkingDirectory=/
 ExecStart={runtime_root}/bin/start-project-host
+ExecStop=/bin/bash -lc "printf host-shutdown > /mnt/cocalc/data/host-shutdown-intent; {runtime_root}/bin/ctl stop"
 TimeoutStartSec=360
+TimeoutStopSec=25
 RemainAfterExit=yes
 
 [Install]

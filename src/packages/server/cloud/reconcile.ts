@@ -26,7 +26,10 @@ const logger = getLogger("server:cloud:reconcile");
 const pool = () => getPool();
 
 export const DEFAULT_INTERVALS = {
-  running_ms: 5 * 60 * 1000,
+  // Guest shutdown notices are the fast path for Spot interruptions. This
+  // provider poll is the independent fallback when the guest cannot report
+  // before power is removed.
+  running_ms: 60 * 1000,
   idle_ms: 30 * 60 * 1000,
   empty_ms: 3 * 60 * 60 * 1000,
 };

@@ -4,11 +4,42 @@
  */
 
 import {
+  getHostRecoveryDisplay,
   getProjectLifecycleView,
   normalizeProjectStateForDisplay,
 } from "./host-operational";
 
 describe("projects host operational display state", () => {
+  it("describes automatic spot recovery with an alternate machine type", () => {
+    expect(
+      getHostRecoveryDisplay({
+        desired_state: "running",
+        desired_pricing_model: "spot",
+        effective_pricing_model: "spot",
+        recovery_phase: "retrying_spot",
+        machine: { machine_type: "t2d-standard-16" },
+        spot_recovery_state: {
+          phase: "retrying_spot",
+          active_machine_type: "n2d-standard-16",
+        },
+      }),
+    ).toMatchObject({
+      active: true,
+      title: "Project host is restarting on alternate Spot capacity",
+      etaMinutes: 2,
+    });
+  });
+
+  it("does not describe idle spot hosts as recovering", () => {
+    expect(
+      getHostRecoveryDisplay({
+        desired_state: "running",
+        desired_pricing_model: "spot",
+        recovery_phase: "idle",
+      }),
+    ).toEqual({ active: false });
+  });
+
   it("keeps running projects running when host heartbeat is stale", () => {
     const hostInfo = {
       status: "running",

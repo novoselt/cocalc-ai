@@ -79,6 +79,7 @@ import { StartButton } from "@cocalc/frontend/project/start-button";
 import { useHostInfo } from "@cocalc/frontend/projects/host-info";
 import {
   evaluateHostOperational,
+  getHostRecoveryDisplay,
   getProjectLifecycleView,
   hostLabel,
 } from "@cocalc/frontend/projects/host-operational";
@@ -245,6 +246,10 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const hostUnavailableReason =
     hostOperational.reason ?? "Assigned host is unavailable.";
   const assignedHostLabel = hostLabel(hostInfo, host_id);
+  const hostRecovery = useMemo(
+    () => getHostRecoveryDisplay(hostInfo),
+    [hostInfo],
+  );
   const fullscreen = useTypedRedux("page", "fullscreen");
   const active_top_tab = useTypedRedux("page", "active_top_tab");
   const modal = useTypedRedux({ project_id }, "modal");
@@ -888,34 +893,52 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         showIcon
         type="warning"
         banner
-        message="Project host is not available"
+        message={
+          hostRecovery.active
+            ? hostRecovery.title
+            : "Project host is not available"
+        }
         description={
           <Space wrap>
             <span>
-              This project is assigned to {assignedHostLabel}, which is
-              unavailable ({hostUnavailableReason}). File access may fail until
-              the host comes back online, but project settings and cached
-              metadata are still available.
+              {hostRecovery.active ? (
+                <>
+                  {hostRecovery.description} Expected recovery is within about{" "}
+                  {hostRecovery.etaMinutes ?? 2} minute
+                  {(hostRecovery.etaMinutes ?? 2) === 1 ? "" : "s"}. Saved
+                  project data remains safe; file, terminal, and notebook access
+                  resumes when the host reconnects.
+                </>
+              ) : (
+                <>
+                  This project is assigned to {assignedHostLabel}, which is
+                  unavailable ({hostUnavailableReason}). File access may fail
+                  until the host comes back online, but project settings and
+                  cached metadata are still available.
+                </>
+              )}
             </span>
-            <Button
-              size="small"
-              loading={checkingHost}
-              onClick={async () => {
-                if (!host_id) return;
-                try {
-                  setCheckingHost(true);
-                  await redux
-                    .getActions("projects")
-                    ?.ensure_host_info(host_id, true);
-                } catch (err) {
-                  console.warn("failed to refresh host status", err);
-                } finally {
-                  setCheckingHost(false);
-                }
-              }}
-            >
-              <Icon name="refresh" /> Check Host Status
-            </Button>
+            {!hostRecovery.active ? (
+              <Button
+                size="small"
+                loading={checkingHost}
+                onClick={async () => {
+                  if (!host_id) return;
+                  try {
+                    setCheckingHost(true);
+                    await redux
+                      .getActions("projects")
+                      ?.ensure_host_info(host_id, true);
+                  } catch (err) {
+                    console.warn("failed to refresh host status", err);
+                  } finally {
+                    setCheckingHost(false);
+                  }
+                }}
+              >
+                <Icon name="refresh" /> Check Host Status
+              </Button>
+            ) : null}
             <MoveProject
               project_id={project_id}
               size="small"

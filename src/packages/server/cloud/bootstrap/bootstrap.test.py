@@ -2176,6 +2176,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 written["/etc/systemd/system/cocalc-project-host-start.service"],
             )
             self.assertIn(
+                f'ExecStop=/bin/bash -lc "printf host-shutdown > /mnt/cocalc/data/host-shutdown-intent; {runtime_root}/bin/ctl stop"',
+                written["/etc/systemd/system/cocalc-project-host-start.service"],
+            )
+            self.assertIn(
+                "TimeoutStopSec=25",
+                written["/etc/systemd/system/cocalc-project-host-start.service"],
+            )
+            self.assertIn(
                 (
                     ["systemctl", "daemon-reload"],
                     "reload systemd",

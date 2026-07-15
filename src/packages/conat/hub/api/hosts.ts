@@ -133,6 +133,7 @@ export interface HostSpotRecoveryPolicy {
   spot_return_requires_probe?: boolean;
   max_restore_attempts_before_fallback?: number;
   max_standard_runtime_minutes?: number;
+  alternate_spot_machine_types?: string[];
 }
 
 export interface HostSpotRecoveryState {
@@ -147,6 +148,9 @@ export interface HostSpotRecoveryState {
   last_probe_error?: string;
   verification_started_at?: string;
   verification_deadline_at?: string;
+  active_machine_type?: string;
+  machine_type_attempt_started_at?: string;
+  spot_machine_types_tried?: string[];
 }
 
 export interface HostBillingEnforcement {
