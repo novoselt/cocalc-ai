@@ -257,6 +257,7 @@ export {
 const COMMIT_INTERVAL = 2_000;
 const LEASE_HEARTBEAT_INTERVAL = 2_000;
 const TERMINAL_CHAT_VERIFY_DELAYS_MS = [0, 100, 250, 500, 1_000] as const;
+const ACP_LOG_PERSIST_RETRY_DELAYS_MS = [0, 100, 500, 1_000] as const;
 const MESSAGE_ID_LOOKUP_WARN_ROWS = 2_000;
 const MESSAGE_ID_LOOKUP_WARN_EVERY = 100;
 const ENABLE_MESSAGE_ID_LINEAR_SCAN_FALLBACK = false;
@@ -2072,6 +2073,10 @@ export class ChatStreamWriter {
           throwOnProjectStorageFailure: true,
         });
         this.throwProjectStorageFailureIfPresent(`terminal-${source}:complete`);
+        // Keep the queue until both the activity log and terminal chat row are
+        // durable. Recovery can reconstruct either side after a worker or
+        // connectivity failure as long as these payloads remain available.
+        clearAcpPayloads(this.metadata);
       })(),
     });
   }
@@ -2402,6 +2407,7 @@ export class ChatStreamWriter {
     if (this.finished) {
       await this.waitForLiveLogFlush();
       await this.persistLog();
+      clearAcpPayloads(this.metadata);
     }
     this.setThreadState("running");
     try {
@@ -2694,7 +2700,6 @@ export class ChatStreamWriter {
           });
         }
       }
-      clearAcpPayloads(this.metadata);
       this.finished = true;
       this.trackTimeTravelOperation("finalize", this.metadata.path, () =>
         this.timeTravel?.finalizeTurn(this.metadata.message_date),
@@ -2702,9 +2707,13 @@ export class ChatStreamWriter {
       return;
     }
     if (payload.type === "error") {
-      this.content = formatUserFacingAcpError(payload.error);
+      const errorContent = formatUserFacingAcpError(payload.error);
+      const streamedContent = getLiveResponseMarkdown(this.events);
+      this.content = appendTerminalErrorToStreamedContent(
+        streamedContent,
+        errorContent,
+      );
       this.lastErrorText = stripKnownAcpErrorNoise(payload.error);
-      clearAcpPayloads(this.metadata);
       this.finished = true;
       this.finishedBy = "error";
       this.trackTimeTravelOperation("finalize", this.metadata.path, () =>
@@ -3751,7 +3760,11 @@ export class ChatStreamWriter {
     const text = event.event.text;
     if (typeof text !== "string" || text.length === 0) return undefined;
     if (event.event.delta === true) {
-      this.livePreviewText += text;
+      this.livePreviewText =
+        mergeProgressiveMessageText(this.livePreviewText, text, {
+          previousHasDelta: true,
+          nextIsDelta: true,
+        }) ?? this.livePreviewText + text;
     } else {
       const progressive = mergeProgressiveMessageText(
         this.livePreviewText,
@@ -3785,25 +3798,45 @@ export class ChatStreamWriter {
 
   private async persistLog(): Promise<void> {
     if (this.events.length === 0) return;
-    try {
-      const started = performance.now();
-      const store = this.getLogStore();
-      await store.set(this.logKey, this.events);
-      const durationMs = performance.now() - started;
-      if (durationMs >= ACP_LOG_PERSIST_SLOW_MS) {
-        logger.warn("acp final log persist slow", {
+    const store = this.getLogStore();
+    let lastError: unknown;
+    for (
+      let attempt = 0;
+      attempt < ACP_LOG_PERSIST_RETRY_DELAYS_MS.length;
+      attempt++
+    ) {
+      const delayMs = ACP_LOG_PERSIST_RETRY_DELAYS_MS[attempt];
+      if (delayMs > 0) {
+        await sleep(delayMs);
+      }
+      try {
+        const started = performance.now();
+        await store.set(this.logKey, this.events);
+        const durationMs = performance.now() - started;
+        if (durationMs >= ACP_LOG_PERSIST_SLOW_MS) {
+          logger.warn("acp final log persist slow", {
+            chatKey: this.chatKey,
+            path: this.metadata.path,
+            events: this.events.length,
+            durationMs: roundMs(durationMs),
+          });
+        }
+        return;
+      } catch (err) {
+        lastError = err;
+        logger.warn("failed to persist acp log", {
           chatKey: this.chatKey,
           path: this.metadata.path,
+          logKey: this.logKey,
           events: this.events.length,
-          durationMs: roundMs(durationMs),
+          attempt: attempt + 1,
+          attempts: ACP_LOG_PERSIST_RETRY_DELAYS_MS.length,
+          err,
         });
-      }
-    } catch (err) {
-      logger.warn("failed to persist acp log", err);
-      if (this.noteProjectStorageFailure(err, "activity-log-persist")) {
-        throw err;
+        this.noteProjectStorageFailure(err, "activity-log-persist");
       }
     }
+    throw lastError ?? new Error("failed to persist ACP activity log");
   }
 
   // Persist fields in the dedicated thread-config record so finalize/recovery
@@ -3945,6 +3978,17 @@ function formatUserFacingAcpError(error: string): string {
     "- [Upgrade your membership](/settings/membership)",
     "- [Open AI settings](/settings/ai) to connect a ChatGPT Plan or your own OpenAI API key",
   ].join("\n");
+}
+
+function appendTerminalErrorToStreamedContent(
+  streamedContent: string | undefined,
+  errorContent: string,
+): string {
+  const streamed = `${streamedContent ?? ""}`.trim();
+  if (!streamed) return errorContent;
+  const error = errorContent.trim();
+  if (!error || looksLikeErrorEcho(streamed, error)) return streamed;
+  return `${streamed}\n\n${error}\n\n`;
 }
 
 function syncdbField<T = unknown>(record: any, key: string): T | undefined {

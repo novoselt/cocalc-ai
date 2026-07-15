@@ -4,7 +4,7 @@
  */
 
 import { Button, Checkbox, Drawer } from "antd";
-import { LoadingOutlined } from "@ant-design/icons";
+import { ClockCircleOutlined, LoadingOutlined } from "@ant-design/icons";
 import type { CSSProperties } from "react";
 import {
   useEffect,
@@ -376,7 +376,7 @@ export function AgentActivityChip({
         }}
       />
       {generating ? (
-        <LoadingOutlined spin style={{ fontSize: 11, color: palette.accent }} />
+        <ClockCircleOutlined style={{ fontSize: 11, color: palette.accent }} />
       ) : null}
       <span
         style={{

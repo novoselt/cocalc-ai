@@ -78,7 +78,7 @@ describe("AgentMessageStatus", () => {
 
   it("renders the shared activity chip and opens it on click", () => {
     const onOpen = jest.fn();
-    render(
+    const { container } = render(
       React.createElement(AgentActivityChip, {
         generating: true,
         durationLabel: "0:10",
@@ -95,6 +95,7 @@ describe("AgentMessageStatus", () => {
     expect(screen.getByText(/ago$/)).toBeTruthy();
     expect(screen.queryByText(/Last activity/)).toBeNull();
     expect(screen.queryByText("Activity")).toBeNull();
+    expect(container.querySelector(".anticon-spin")).toBeNull();
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
