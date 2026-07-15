@@ -15,6 +15,7 @@ import {
 import { buildHostSpec, provisionIfNeeded } from "./host-util";
 import type { CloudVmWorkHandlers } from "./worker";
 import type {
+  HostFundingMode,
   HostMachine,
   HostPricingModel,
   HostSpotRecoveryPolicy,
@@ -781,6 +782,20 @@ function gcpAlternateSpotMachineTypes(opts: {
   return Array.from(
     new Set([desired, ...configured, ...derived].filter(Boolean)),
   );
+}
+
+function hostFundingMode(row: any): HostFundingMode | undefined {
+  const value = `${row?.metadata?.billing?.funding_mode ?? ""}`
+    .trim()
+    .toLowerCase();
+  if (
+    value === "account-prepaid" ||
+    value === "account-postpaid" ||
+    value === "site-funded"
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 function runtimeMachineType(runtime: any): string | undefined {
@@ -1599,6 +1614,7 @@ async function handleStart(row: any) {
     };
     const promoteToAlternateSpotMachineType = async (): Promise<boolean> => {
       if (
+        hostFundingMode(row) !== "site-funded" ||
         providerId !== "gcp" ||
         !entry.provider.setMachineType ||
         !recoveryPolicy ||

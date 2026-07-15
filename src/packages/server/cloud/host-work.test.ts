@@ -1733,6 +1733,7 @@ describe("cloud host start failures", () => {
       status: "starting",
       metadata: {
         owner: "acct-owner",
+        billing: { funding_mode: "site-funded" },
         pricing_model: "spot",
         desired_pricing_model: "spot",
         effective_pricing_model: "spot",
@@ -1786,6 +1787,90 @@ describe("cloud host start failures", () => {
       phase: "retrying_spot",
       active_machine_type: "n2d-standard-16",
       spot_machine_types_tried: ["t2d-standard-16", "n2d-standard-16"],
+    });
+  });
+
+  it("keeps the configured machine type for account-funded Spot hosts", async () => {
+    const hostId = "5bb65808-78a8-4ac2-bf43-99a37a504a8a";
+    const setMachineType = jest.fn(async () => undefined);
+    const setPricingModel = jest.fn(async () => undefined);
+    const startHost = jest.fn(async () => undefined);
+    const getStatus = jest.fn(async () => "running");
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        provider: {
+          setMachineType,
+          setPricingModel,
+          startHost,
+          getStatus,
+        },
+      },
+      creds: {},
+    });
+
+    await upsertProjectHost({
+      id: hostId,
+      name: "Account-funded GCP Spot interruption host",
+      region: "us-south1",
+      status: "starting",
+      metadata: {
+        owner: "acct-owner",
+        billing: { funding_mode: "account-prepaid" },
+        pricing_model: "spot",
+        desired_pricing_model: "spot",
+        effective_pricing_model: "spot",
+        interruption_restore_policy: "immediate",
+        machine: {
+          cloud: "gcp",
+          zone: "us-south1-c",
+          machine_type: "t2d-standard-16",
+          disk_gb: 200,
+          disk_type: "balanced",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "gcp",
+          instance_id: `cocalc-host-${hostId}`,
+          metadata: { machine_type: "t2d-standard-16" },
+        },
+        spot_recovery_state: {
+          phase: "retrying_spot",
+          outage_started_at: new Date().toISOString(),
+          attempt: 1,
+          active_machine_type: "t2d-standard-16",
+          spot_machine_types_tried: ["t2d-standard-16"],
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.start({
+      id: "start-account-funded-spot-1",
+      vm_id: hostId,
+      action: "start",
+      payload: {
+        provider: "gcp",
+        source: "verify_host_ready",
+        reason: "provider-status:TERMINATED",
+      },
+    } as any);
+
+    expect(setMachineType).not.toHaveBeenCalled();
+    expect(setPricingModel).toHaveBeenCalledWith(
+      expect.objectContaining({ instance_id: `cocalc-host-${hostId}` }),
+      "on_demand",
+      {},
+    );
+    expect(startHost).toHaveBeenCalled();
+    const hostRows = await getPool().query(
+      "SELECT metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(hostRows.rows[0].metadata.effective_pricing_model).toBe("on_demand");
+    expect(hostRows.rows[0].metadata.spot_recovery_state).toMatchObject({
+      phase: "running_standard_fallback",
+      active_machine_type: "t2d-standard-16",
+      spot_machine_types_tried: ["t2d-standard-16"],
     });
   });
 
