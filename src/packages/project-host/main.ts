@@ -179,6 +179,7 @@ import {
 } from "./raw-network-egress";
 import { startManagedCpuUsageLoop } from "./cpu-usage";
 import { managedProjectEgressResidualTracker } from "./managed-egress-residual";
+import { startGcpPreemptionWatcher } from "./gcp-preemption";
 export { runPrivilegedRmHelper } from "./privileged-rm-helper";
 
 const logger = getLogger("project-host:main");
@@ -1610,6 +1611,21 @@ export async function main(
     });
   });
 
+  let gcpPreemptionNoticeSent = false;
+  const stopGcpPreemptionWatcher = startGcpPreemptionWatcher({
+    onPreempted: async () => {
+      if (gcpPreemptionNoticeSent) return;
+      gcpPreemptionNoticeSent = true;
+      await masterRegistration?.notifyShutdown({
+        signal: "GCP_PREEMPTED",
+        reason: "host-shutdown",
+      });
+      // Do not let a final heartbeat overwrite the hub's recovery state while
+      // GCP is transitioning the VM out of RUNNING.
+      masterRegistration?.stop();
+    },
+  });
+
   let closed = false;
   let shutdownInProgress = false;
   const hostShutdownIntentPath = join(dataDir, "host-shutdown-intent");
@@ -1636,6 +1652,7 @@ export async function main(
     stopRawNetworkEgressLoop?.();
     stopCpuUsageLoop?.();
     stopEventLoopStallMonitor?.();
+    stopGcpPreemptionWatcher();
     stopConatRevocationKickLoop?.();
     stopCodexSubscriptionCacheGc?.();
     stopCopyWorker?.();
@@ -1655,10 +1672,12 @@ export async function main(
     } catch {}
     rmSync(hostShutdownIntentPath, { force: true });
     try {
-      await masterRegistration?.notifyShutdown({
-        signal,
-        reason,
-      });
+      if (!(reason === "host-shutdown" && gcpPreemptionNoticeSent)) {
+        await masterRegistration?.notifyShutdown({
+          signal,
+          reason,
+        });
+      }
     } finally {
       close();
     }
