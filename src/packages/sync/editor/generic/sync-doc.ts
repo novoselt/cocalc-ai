@@ -80,6 +80,7 @@ const fallbackCursorPresence = new PatchflowMemoryPresenceAdapter();
 
 const DEBUG = false;
 const BACKEND_FS_WATCH_DISABLED_EXTENSIONS = new Set(["chat", "sage-chat"]);
+const DEFAULT_BACKEND_FS_WATCH_TIMEOUT_MS = 20_000;
 
 export type State = "init" | "ready" | "closed";
 export type DataServer = "project" | "database";
@@ -173,6 +174,9 @@ export interface SyncOpts0 {
   deletedCheckInterval?: number;
 
   watchDebounce?: number;
+  // Filesystem reconciliation is auxiliary to live document sync and must not
+  // keep the editor in its initial read-only state indefinitely.
+  backendFsWatchTimeoutMs?: number;
   firstReadLockTimeout?: number;
 
   // if not set (the default), right when the document is 'ready',
@@ -3692,15 +3696,34 @@ export class SyncDoc extends EventEmitter {
     if (!this.shouldUseBackendFsWatch()) return;
     const syncFsWatch = (this.fs as any)?.syncFsWatch;
     if (typeof syncFsWatch !== "function") return;
+    const timeoutMs = Math.max(
+      1,
+      this.opts.backendFsWatchTimeoutMs ?? DEFAULT_BACKEND_FS_WATCH_TIMEOUT_MS,
+    );
+    let timer: NodeJS.Timeout | undefined;
     try {
-      await syncFsWatch(this.path, active, {
-        project_id: this.project_id,
-        history_epoch: this.history_epoch,
-        doctype: this.doctype,
-        watchDebounce: this.opts.watchDebounce,
-      });
+      await Promise.race([
+        syncFsWatch(this.path, active, {
+          project_id: this.project_id,
+          history_epoch: this.history_epoch,
+          doctype: this.doctype,
+          watchDebounce: this.opts.watchDebounce,
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(
+                `backend filesystem watch timed out after ${timeoutMs}ms`,
+              ),
+            );
+          }, timeoutMs);
+          timer.unref?.();
+        }),
+      ]);
     } catch (err) {
       this.dbg("syncFsWatch")(`failed: ${err?.message ?? err}`);
+    } finally {
+      if (timer != null) clearTimeout(timer);
     }
   }
 

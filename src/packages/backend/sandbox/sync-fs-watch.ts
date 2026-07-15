@@ -75,6 +75,7 @@ export interface FsHead {
   version: number;
   heads?: string[];
   lastSeq?: number;
+  formatVersion?: number;
 }
 
 /**
@@ -137,7 +138,8 @@ export class SyncFsWatchStore {
           time INTEGER NOT NULL,
           version INTEGER NOT NULL,
           heads TEXT,
-          lastSeq INTEGER
+          lastSeq INTEGER,
+          formatVersion INTEGER
         );
       `);
       // Backward-compatible migrations; ignore if columns already exist.
@@ -146,6 +148,9 @@ export class SyncFsWatchStore {
       } catch {}
       try {
         this.db.exec("ALTER TABLE fs_heads ADD COLUMN lastSeq INTEGER");
+      } catch {}
+      try {
+        this.db.exec("ALTER TABLE fs_heads ADD COLUMN formatVersion INTEGER");
       } catch {}
     };
 
@@ -306,7 +311,7 @@ export class SyncFsWatchStore {
   getFsHead(string_id: string): FsHead | undefined {
     const row = this.db
       .prepare(
-        "SELECT string_id, time, version, heads, lastSeq FROM fs_heads WHERE string_id = ?",
+        "SELECT string_id, time, version, heads, lastSeq, formatVersion FROM fs_heads WHERE string_id = ?",
       )
       .get(string_id) as FsHead | undefined;
     if (!row) return;
@@ -324,6 +329,7 @@ export class SyncFsWatchStore {
       version: row.version,
       heads,
       lastSeq: (row as any).lastSeq,
+      formatVersion: (row as any).formatVersion,
     };
   }
 
@@ -331,13 +337,14 @@ export class SyncFsWatchStore {
     this.db
       .prepare(
         `
-        INSERT INTO fs_heads(string_id, time, version, heads, lastSeq)
-        VALUES(?, ?, ?, ?, ?)
+        INSERT INTO fs_heads(string_id, time, version, heads, lastSeq, formatVersion)
+        VALUES(?, ?, ?, ?, ?, ?)
         ON CONFLICT(string_id) DO UPDATE SET
           time=excluded.time,
           version=excluded.version,
           heads=excluded.heads,
-          lastSeq=excluded.lastSeq;
+          lastSeq=excluded.lastSeq,
+          formatVersion=excluded.formatVersion;
       `,
       )
       .run(
@@ -346,6 +353,7 @@ export class SyncFsWatchStore {
         head.version,
         head.heads ? JSON.stringify(head.heads) : null,
         head.lastSeq ?? null,
+        head.formatVersion ?? null,
       );
   }
 }

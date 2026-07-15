@@ -192,10 +192,12 @@ describe("backend sync-fs watch policy", () => {
     path: string,
     opts: {
       watchDebounce?: number;
+      backendFsWatchTimeoutMs?: number;
+      syncFsWatch?: jest.Mock;
     } = {},
   ) {
     const client = new Client({}, client_id);
-    const syncFsWatch = jest.fn(async () => undefined);
+    const syncFsWatch = opts.syncFsWatch ?? jest.fn(async () => undefined);
     const syncFsReconcile = jest.fn(async () => undefined);
     const fs1 = {
       ...fs,
@@ -210,6 +212,7 @@ describe("backend sync-fs watch policy", () => {
       client,
       fs: fs1,
       watchDebounce: opts.watchDebounce,
+      backendFsWatchTimeoutMs: opts.backendFsWatchTimeoutMs,
     });
     await once(doc, "ready");
     return { doc, syncFsWatch, syncFsReconcile };
@@ -239,6 +242,17 @@ describe("backend sync-fs watch policy", () => {
         watchDebounce: 75,
       }),
     );
+    await doc.close();
+  });
+
+  it("does not block document readiness on a stuck backend sync-fs watch", async () => {
+    const syncFsWatch = jest.fn(() => new Promise<void>(() => undefined));
+    const { doc } = await openDoc("stuck-watch.txt", {
+      syncFsWatch,
+      backendFsWatchTimeoutMs: 10,
+    });
+    expect(doc.get_state()).toBe("ready");
+    expect(syncFsWatch).toHaveBeenCalled();
     await doc.close();
   });
 

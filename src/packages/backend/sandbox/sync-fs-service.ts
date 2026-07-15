@@ -76,12 +76,15 @@ export type SyncFsServiceOptions = {
   heartbeatTtlMs?: number;
   pruneIntervalMs?: number;
   maxActivePaths?: number;
+  docReadyTimeoutMs?: number;
 };
 
 const logger = getLogger("sandbox:sync-fs-service");
 
 const DEFAULT_HEARTBEAT_TTL_MS = 60_000;
 const DEFAULT_MAX_ACTIVE_PATHS = 256;
+const DEFAULT_DOC_READY_TIMEOUT_MS = 15_000;
+const STREAM_HEAD_FORMAT_VERSION = 2;
 const MAX_RECENT_RELEASES = 32;
 const DEBOUNCE_MS = 250; // coalesce rapid events
 const SUPPRESS_TTL_MS = 5_000; // suppress self-inflicted fs events briefly
@@ -310,6 +313,7 @@ export class SyncFsService extends EventEmitter {
   private readonly heartbeatTtlMs: number;
   private readonly pruneIntervalMs: number;
   private readonly maxActivePaths: number;
+  private readonly docReadyTimeoutMs: number;
   private pruneTimer?: NodeJS.Timeout;
   private readonly counters = {
     heartbeatActive: 0,
@@ -342,6 +346,14 @@ export class SyncFsService extends EventEmitter {
       1,
       opts?.maxActivePaths ??
         envNumber("COCALC_SYNC_FS_MAX_ACTIVE_PATHS", DEFAULT_MAX_ACTIVE_PATHS),
+    );
+    this.docReadyTimeoutMs = Math.max(
+      1,
+      opts?.docReadyTimeoutMs ??
+        envNumber(
+          "COCALC_SYNC_FS_DOC_READY_TIMEOUT_MS",
+          DEFAULT_DOC_READY_TIMEOUT_MS,
+        ),
     );
     this.pruneTimer = setInterval(this.pruneStale, this.pruneIntervalMs);
     this.pruneTimer.unref?.();
@@ -975,8 +987,30 @@ export class SyncFsService extends EventEmitter {
         doc = client.sync.string(commonOpts);
       }
       await new Promise<void>((resolve, reject) => {
-        doc!.once("ready", () => resolve());
-        doc!.once("error", (err) => reject(err));
+        const onReady = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = (err: unknown) => {
+          cleanup();
+          reject(err);
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(
+            new Error(
+              `sync-fs document baseline timed out after ${this.docReadyTimeoutMs}ms: ${syncPath}`,
+            ),
+          );
+        }, this.docReadyTimeoutMs);
+        timer.unref?.();
+        const cleanup = () => {
+          clearTimeout(timer);
+          doc?.removeListener("ready", onReady);
+          doc?.removeListener("error", onError);
+        };
+        doc!.once("ready", onReady);
+        doc!.once("error", onError);
       });
       const value = doc?.to_str();
       doc?.close?.();
@@ -1255,7 +1289,12 @@ export class SyncFsService extends EventEmitter {
       if (this.closed) {
         return;
       }
-      this.store.setFsHead({ string_id, time, version });
+      this.store.setFsHead({
+        string_id,
+        time,
+        version,
+        formatVersion: STREAM_HEAD_FORMAT_VERSION,
+      });
       this.updateStreamInfo(string_id, obj, seq);
       if (process.env.SYNC_FS_DEBUG) {
         console.log("sync-fs appendPatch", {
@@ -1297,7 +1336,9 @@ export class SyncFsService extends EventEmitter {
   }
 
   private updateStreamInfo(string_id: string, patch: any, seq: number): void {
-    const persisted = this.store.getFsHead(string_id);
+    const cached = this.store.getFsHead(string_id);
+    const persisted =
+      cached?.formatVersion === STREAM_HEAD_FORMAT_VERSION ? cached : undefined;
     let info: StreamInfo = this.streamInfo.get(string_id) ?? {
       heads: new Set<PatchId>(
         (persisted?.heads ?? [])
@@ -1324,6 +1365,13 @@ export class SyncFsService extends EventEmitter {
       lastSeq: info.lastSeq,
     };
     info.lastSeq = seq;
+    // A snapshot is another representation of an existing patch. It is not a
+    // new causal patch and must not resurrect that old patch as a stream head.
+    if (patch.is_snapshot) {
+      this.streamInfo.set(string_id, info);
+      this.persistStreamInfo(string_id, info);
+      return;
+    }
     const parentIds = Array.isArray(patch.parents)
       ? patch.parents
           .map((t: any) => this.normalizePatchId(t))
@@ -1338,16 +1386,21 @@ export class SyncFsService extends EventEmitter {
     if (typeof patch.version === "number") {
       info.maxVersion = Math.max(info.maxVersion, patch.version);
     }
+    this.streamInfo.set(string_id, info);
+    this.persistStreamInfo(string_id, info);
+  }
+
+  private persistStreamInfo(string_id: string, info: StreamInfo): void {
     const latest =
       [...info.heads].sort(comparePatchId).pop() ??
       encodePatchId(info.maxTimeMs || Date.now(), this.clientId);
-    this.streamInfo.set(string_id, info);
     this.store.setFsHead({
       string_id,
       time: latest,
       version: info.maxVersion,
       heads: [...info.heads],
       lastSeq: info.lastSeq,
+      formatVersion: STREAM_HEAD_FORMAT_VERSION,
     });
   }
 
@@ -1389,7 +1442,9 @@ export class SyncFsService extends EventEmitter {
     maxTimeMs: number;
   }> {
     const writer = await this.getPatchWriter({ project_id, string_id, path });
-    const persisted = this.store.getFsHead(string_id);
+    const cached = this.store.getFsHead(string_id);
+    const persisted =
+      cached?.formatVersion === STREAM_HEAD_FORMAT_VERSION ? cached : undefined;
     let info: StreamInfo = this.streamInfo.get(string_id) ?? {
       heads: new Set<PatchId>(
         (persisted?.heads ?? [])
@@ -1423,6 +1478,9 @@ export class SyncFsService extends EventEmitter {
         ? undefined
         : info.lastSeq + 1;
     let sawUpdatesSinceLastSeq = false;
+    const snapshotCandidates = new Set<PatchId>();
+    const nonSnapshotPatchIds = new Set<PatchId>();
+    const nonSnapshotParentIds = new Set<PatchId>();
     if (process.env.SYNC_FS_DEBUG) {
       console.log("sync-fs getStreamHeads start", { string_id, start_seq });
     }
@@ -1434,14 +1492,22 @@ export class SyncFsService extends EventEmitter {
         sawUpdatesSinceLastSeq = true;
         const p: any = mesg;
         if (typeof seq === "number") info.lastSeq = seq;
+        const tId = this.normalizePatchId(p.time);
+        if (p.is_snapshot) {
+          if (tId) snapshotCandidates.add(tId);
+          continue;
+        }
         const parentIds = Array.isArray(p.parents)
           ? p.parents
               .map((t: any) => this.normalizePatchId(t))
               .filter((t): t is PatchId => !!t)
           : [];
-        for (const t of parentIds) info.heads.delete(t);
-        const tId = this.normalizePatchId(p.time);
+        for (const t of parentIds) {
+          nonSnapshotParentIds.add(t);
+          info.heads.delete(t);
+        }
         if (tId) {
+          nonSnapshotPatchIds.add(tId);
           info.heads.add(tId);
           info.maxTimeMs = Math.max(info.maxTimeMs, this.timeMs(tId));
         }
@@ -1454,6 +1520,22 @@ export class SyncFsService extends EventEmitter {
         console.log("sync-fs getStreamHeads error", err);
       }
       // fall through with whatever we gathered
+    }
+    // A full read can begin at a Patchflow snapshot checkpoint. In that case
+    // the snapshot stands in for omitted history and is a head only when no
+    // loaded patch replaces it or descends directly from it. During an
+    // incremental read the existing state already accounts for the original
+    // patch, so snapshots never alter causal heads.
+    if (start_seq === undefined) {
+      for (const snapshotId of snapshotCandidates) {
+        if (
+          !nonSnapshotPatchIds.has(snapshotId) &&
+          !nonSnapshotParentIds.has(snapshotId)
+        ) {
+          info.heads.add(snapshotId);
+          info.maxTimeMs = Math.max(info.maxTimeMs, this.timeMs(snapshotId));
+        }
+      }
     }
     // If we resumed from a persisted lastSeq, saw no newer updates, and can no
     // longer load that persisted seq, then the underlying persist stream was
@@ -1499,16 +1581,7 @@ export class SyncFsService extends EventEmitter {
       });
     }
     this.streamInfo.set(string_id, info);
-    const latest =
-      [...info.heads].sort(comparePatchId).pop() ??
-      encodePatchId(info.maxTimeMs || Date.now(), this.clientId);
-    this.store.setFsHead({
-      string_id,
-      time: latest,
-      version: info.maxVersion,
-      heads: [...info.heads],
-      lastSeq: info.lastSeq,
-    });
+    this.persistStreamInfo(string_id, info);
     return {
       heads: [...info.heads],
       maxVersion: info.maxVersion,

@@ -89,6 +89,7 @@ describe("SyncFsWatchStore", () => {
       version: 3,
       heads: [legacyPatchId(8), legacyPatchId(10)],
       lastSeq: 42,
+      formatVersion: 2,
     });
     store1.close();
 
@@ -97,6 +98,7 @@ describe("SyncFsWatchStore", () => {
     expect(decodePatchId(head!.time).timeMs).toBe(10);
     expect(head?.version).toBe(3);
     expect(head?.lastSeq).toBe(42);
+    expect(head?.formatVersion).toBe(2);
     expect(head?.heads?.map((h) => decodePatchId(h).timeMs)).toEqual([8, 10]);
     store2.close();
   });

@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { once } from "events";
+import { EventEmitter, once } from "events";
 import { SyncFsService } from "./sync-fs-service";
 import { tmpNameSync } from "tmp-promise";
 import { SyncFsWatchStore } from "./sync-fs-watch";
@@ -387,6 +387,7 @@ describe("SyncFsService", () => {
       version: 1,
       heads: [],
       lastSeq: 5,
+      formatVersion: 2,
     });
 
     const fake = new FakeAStream([
@@ -411,6 +412,106 @@ describe("SyncFsService", () => {
     svc.close();
   }, 10_000);
 
+  it("does not resurrect an old patch as a head when its snapshot is appended later", async () => {
+    const first = legacyPatchId(100);
+    const latest = legacyPatchId(200);
+    const fake = new FakeAStream([
+      { mesg: { time: first, parents: [], version: 1 }, seq: 1 },
+      {
+        mesg: { time: latest, parents: [first], version: 2 },
+        seq: 2,
+      },
+      {
+        mesg: {
+          time: first,
+          is_snapshot: true,
+          snapshot: "first",
+          seq_info: { seq: 1 },
+        },
+        seq: 3,
+      },
+    ]);
+    const store = new SyncFsWatchStore();
+    // This is the poisoned shape persisted by the previous head algorithm.
+    // Missing formatVersion forces one full, non-destructive stream rebuild.
+    store.setFsHead({
+      string_id: syncStringId("p-snapshot", "snapshot.txt"),
+      time: latest,
+      version: 2,
+      heads: [latest, first],
+      lastSeq: 3,
+    });
+    const svc = new SyncFsService(store);
+    (svc as any).getPatchWriter = async () => fake;
+
+    const result = await (svc as any).getStreamHeads({
+      project_id: "p-snapshot",
+      string_id: syncStringId("p-snapshot", "snapshot.txt"),
+      path: "snapshot.txt",
+    });
+
+    expect(result.heads).toEqual([latest]);
+    expect(fake.lastStartSeq).toBeUndefined();
+    expect(
+      store.getFsHead(syncStringId("p-snapshot", "snapshot.txt")),
+    ).toMatchObject({
+      heads: [latest],
+      lastSeq: 3,
+      version: 2,
+    });
+    svc.close();
+  });
+
+  it("accepts a checkpoint snapshot as the only available stream head", async () => {
+    const checkpoint = legacyPatchId(100);
+    const fake = new FakeAStream([
+      {
+        mesg: {
+          time: checkpoint,
+          is_snapshot: true,
+          snapshot: "checkpoint",
+          seq_info: { seq: 1 },
+        },
+        seq: 2,
+      },
+    ]);
+    const svc = new SyncFsService();
+    (svc as any).getPatchWriter = async () => fake;
+
+    const result = await (svc as any).getStreamHeads({
+      project_id: "p-checkpoint",
+      string_id: syncStringId("p-checkpoint", "checkpoint.txt"),
+      path: "checkpoint.txt",
+    });
+
+    expect(result.heads).toEqual([checkpoint]);
+    svc.close();
+  });
+
+  it("closes and abandons a stream baseline SyncDoc that never becomes ready", async () => {
+    const doc = Object.assign(new EventEmitter(), {
+      close: jest.fn(),
+      to_str: jest.fn(() => "never"),
+    });
+    const svc = new SyncFsService(undefined, { docReadyTimeoutMs: 10 });
+    svc.on("error", () => undefined);
+    (svc as any).getConatClient = () => ({
+      sync: { string: jest.fn(() => doc) },
+    });
+
+    await expect(
+      (svc as any).loadDocViaSyncDoc({
+        project_id: "p-timeout",
+        string_id: syncStringId("p-timeout", "timeout.txt"),
+        syncPath: "timeout.txt",
+      }),
+    ).resolves.toBeUndefined();
+    expect(doc.close).toHaveBeenCalledTimes(1);
+    expect(doc.listenerCount("ready")).toBe(0);
+    expect(doc.listenerCount("error")).toBe(0);
+    svc.close();
+  });
+
   it("resets stale persisted heads if stream was deleted", async () => {
     const dbPath = tmpNameSync({ prefix: "sync-fs-heads-", postfix: ".db" });
     const store = new SyncFsWatchStore(dbPath);
@@ -420,6 +521,7 @@ describe("SyncFsService", () => {
       version: 7,
       heads: [legacyPatchId(123)],
       lastSeq: 42,
+      formatVersion: 2,
     });
 
     // Simulate persist reset: stream has no historical messages.
