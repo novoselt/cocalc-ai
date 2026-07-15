@@ -1675,31 +1675,38 @@ describe("project-host daemon stop", () => {
 
   it("captures unhealthy process forensics when enabled", () => {
     const dataDir = mkTempDir("cocalc-project-host-daemon-");
+    const forensicsRoot = path.join(dataDir, "forensics");
     process.env.COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS = "1";
     process.env.COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC = "1";
+    process.env.COCALC_PROJECT_HOST_DAEMON_FORENSICS_ROOT = forensicsRoot;
     const spawnSyncSpy = jest
       .spyOn(__test__.processRuntime, "spawnSync")
       .mockImplementation(((command: string, args: string[]) => {
         if (command === "sudo") {
-          const captureDir = args[5];
-          expect(args).toEqual(
-            expect.arrayContaining([
-              "-n",
-              __test__.rootctlPath(),
-              "capture-forensics",
-              "project-host",
-              "4242",
-              captureDir,
-              "1",
-            ]),
+          const captureDir = path.join(
+            forensicsRoot,
+            "project-host-pid4242-AbCd1234",
           );
+          expect(args).toEqual([
+            "-n",
+            __test__.rootctlPath(),
+            "capture-forensics",
+            "project-host",
+            "4242",
+            "1",
+          ]);
+          fs.mkdirSync(captureDir, { recursive: true });
           fs.writeFileSync(path.join(captureDir, "ps-threads.txt"), "ps ok\n");
           fs.writeFileSync(path.join(captureDir, "lsof.txt"), "lsof ok\n");
           fs.writeFileSync(
             path.join(captureDir, "strace-run.txt"),
             "strace timed out\n",
           );
-          return { status: 124, stdout: "", stderr: "" } as any;
+          return {
+            status: 124,
+            stdout: `CAPTURE_DIR=${captureDir}\n`,
+            stderr: "",
+          } as any;
         }
         throw new Error(`unexpected command ${command}`);
       }) as typeof __test__.processRuntime.spawnSync);
@@ -1717,7 +1724,6 @@ describe("project-host daemon stop", () => {
       runningVersion: "1776387302658",
     });
 
-    const forensicsRoot = path.join(dataDir, "forensics");
     const captures = fs.readdirSync(forensicsRoot);
     expect(captures).toHaveLength(1);
     const captureDir = path.join(forensicsRoot, captures[0]);
@@ -1750,6 +1756,21 @@ describe("project-host daemon stop", () => {
       ]),
     );
     expect(spawnSyncSpy).toHaveBeenCalled();
+  });
+
+  it("rejects forged rootctl forensics paths", () => {
+    const root = mkTempDir("cocalc-project-host-forensics-");
+    process.env.COCALC_PROJECT_HOST_DAEMON_FORENSICS_ROOT = root;
+    const outside = mkTempDir("cocalc-project-host-forensics-outside-");
+    const forged = path.join(outside, "project-host-pid42-AbCd1234");
+    expect(
+      __test__.captureDirFromRootctlOutput(`CAPTURE_DIR=${forged}\n`),
+    ).toBeUndefined();
+    const symlink = path.join(root, "project-host-pid42-AbCd1234");
+    fs.symlinkSync(outside, symlink);
+    expect(
+      __test__.captureDirFromRootctlOutput(`CAPTURE_DIR=${symlink}\n`),
+    ).toBeUndefined();
   });
 
   it("does not default project storage to /mnt/cocalc unless it is btrfs", () => {
