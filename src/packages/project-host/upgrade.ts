@@ -39,6 +39,8 @@ const DEFAULT_UPGRADE_FETCH_TIMEOUT_MS = 30_000;
 const DEFAULT_UPGRADE_DOWNLOAD_TIMEOUT_MS = 8 * 60 * 1000;
 const CONTAINER_QUIESCE_TIMEOUT_MS = 2 * 60_000;
 
+const installTails = new Map<string, Promise<void>>();
+
 type CanonicalArtifact =
   | "project-host"
   | "container-runtime"
@@ -1145,7 +1147,7 @@ function currentVersion(linkPath: string): string | undefined {
   return undefined;
 }
 
-async function downloadAndInstall(
+async function downloadAndInstallUnlocked(
   resolved: ResolvedArtifact,
 ): Promise<UpgradeSoftwareResult> {
   const existing = currentVersion(resolved.currentLink);
@@ -1186,21 +1188,36 @@ async function downloadAndInstall(
       version: resolved.version,
     });
   }
-  await safeRemove(resolved.versionDir);
-  await ensureWritableDir(resolved.versionDir);
-  logger.info("upgrade: extracting artifact", {
-    artifact: resolved.artifact,
-    version: resolved.version,
-    stripComponents: resolved.stripComponents,
-    dir: resolved.versionDir,
-  });
-  await runTar([
-    "-xJf",
-    archivePath,
-    `--strip-components=${resolved.stripComponents}`,
-    "-C",
-    resolved.versionDir,
-  ]);
+  const versionParent = path.dirname(resolved.versionDir);
+  await ensureWritableDir(versionParent);
+  const stagingDir = path.join(
+    versionParent,
+    `.${path.basename(resolved.versionDir)}.extract-${process.pid}-${crypto.randomUUID()}`,
+  );
+  let promoted = false;
+  await ensureWritableDir(stagingDir);
+  try {
+    logger.info("upgrade: extracting artifact", {
+      artifact: resolved.artifact,
+      version: resolved.version,
+      stripComponents: resolved.stripComponents,
+      dir: stagingDir,
+    });
+    await runTar([
+      "-xJf",
+      archivePath,
+      `--strip-components=${resolved.stripComponents}`,
+      "-C",
+      stagingDir,
+    ]);
+    await safeRemove(resolved.versionDir);
+    await fs.promises.rename(stagingDir, resolved.versionDir);
+    promoted = true;
+  } finally {
+    if (!promoted) {
+      await safeRemove(stagingDir).catch(() => undefined);
+    }
+  }
   logger.info("upgrade: extracted artifact", {
     artifact: resolved.artifact,
     version: resolved.version,
@@ -1263,6 +1280,27 @@ async function downloadAndInstall(
     };
   } finally {
     releaseRuntimeMaintenance?.();
+  }
+}
+
+async function downloadAndInstall(
+  resolved: ResolvedArtifact,
+): Promise<UpgradeSoftwareResult> {
+  const key = resolved.currentLink;
+  const previous = installTails.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const tail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  installTails.set(key, tail);
+  await previous;
+  try {
+    return await downloadAndInstallUnlocked(resolved);
+  } finally {
+    release();
+    if (installTails.get(key) === tail) {
+      installTails.delete(key);
+    }
   }
 }
 
