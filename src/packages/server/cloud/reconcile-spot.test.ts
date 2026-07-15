@@ -5,6 +5,12 @@ import {
 } from "./spot-restore";
 
 describe("spot recovery metadata", () => {
+  it("advances from a repeatedly interrupted Spot machine type by default", () => {
+    expect(
+      normalizeSpotRecoveryPolicy({})?.max_restore_attempts_before_fallback,
+    ).toBe(2);
+  });
+
   it("normalizes configured alternate machine types", () => {
     expect(
       normalizeSpotRecoveryPolicy({

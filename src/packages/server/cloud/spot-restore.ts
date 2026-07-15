@@ -47,7 +47,10 @@ export const DEFAULT_SPOT_RECOVERY_POLICY: Required<HostSpotRecoveryPolicy> =
     standard_fallback_min_minutes: 20,
     spot_probe_interval_minutes: 10,
     spot_return_requires_probe: true,
-    max_restore_attempts_before_fallback: 0,
+    // Give each Spot machine type one restore attempt before advancing.
+    // This avoids spending the full retry window on capacity that is being
+    // preempted immediately after boot.
+    max_restore_attempts_before_fallback: 2,
     max_standard_runtime_minutes: 24 * 60,
     alternate_spot_machine_types: [],
   });

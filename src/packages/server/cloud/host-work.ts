@@ -55,6 +55,8 @@ const pool = () => getPool();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const HOST_READY_VERIFY_DELAY_MS = 10_000;
 const HOST_READY_VERIFY_DEADLINE_MS = 10 * 60 * 1000;
+const HOST_READY_SPOT_STABLE_MS = 2 * 60 * 1000;
+const HOST_READY_HEARTBEAT_FRESH_MS = 45_000;
 const SPOT_PROBE_STABLE_MS = 5 * 60 * 1000;
 const HOST_SHUTDOWN_PROVIDER_WAIT_MS = 90_000;
 const HOST_SHUTDOWN_PROVIDER_POLL_MS = 5_000;
@@ -670,6 +672,14 @@ function hostIsOperationalSince(row: any, sinceIso?: string): boolean {
   const sinceMs = sinceIso ? new Date(sinceIso).getTime() : 0;
   const lastSeenMs = hostLastSeenMs(row);
   return lastSeenMs > 0 && lastSeenMs >= sinceMs;
+}
+
+function hostHeartbeatIsFresh(row: any, now = new Date()): boolean {
+  const lastSeenMs = hostLastSeenMs(row);
+  return (
+    lastSeenMs > 0 &&
+    now.getTime() - lastSeenMs <= HOST_READY_HEARTBEAT_FRESH_MS
+  );
 }
 
 function withPricingAndRecoveryMetadata(
@@ -2557,10 +2567,60 @@ async function handleVerifyHostReady(row: any) {
   const providerId = normalizeProviderId(host.metadata?.machine?.cloud);
   const startedAtIso = `${row.payload?.started_at ?? ""}`.trim();
   const deadlineAtIso = `${row.payload?.deadline_at ?? ""}`.trim();
-  if (hostIsOperationalSince(host, startedAtIso)) {
+  const managedSpotRecovery = isSpotRecoveryManagedHost(host);
+  const now = new Date();
+  const state = managedSpotRecovery ? spotRecoveryState(host) : undefined;
+  const verificationStartedAtIso =
+    startedAtIso || `${state?.verification_started_at ?? ""}`.trim();
+  const verificationStartedAt = verificationStartedAtIso
+    ? new Date(verificationStartedAtIso)
+    : undefined;
+  const stableAt =
+    verificationStartedAt && Number.isFinite(verificationStartedAt.getTime())
+      ? new Date(verificationStartedAt.getTime() + HOST_READY_SPOT_STABLE_MS)
+      : undefined;
+  const operationalSinceStart = hostIsOperationalSince(host, startedAtIso);
+  let providerObservation: ProviderReadyObservation | undefined;
+
+  if (
+    operationalSinceStart &&
+    managedSpotRecovery &&
+    providerId &&
+    hostHeartbeatIsFresh(host, now)
+  ) {
+    providerObservation = await observeProviderReadyStatus({
+      row: host,
+      providerId,
+    });
+    const providerStopped = stoppedProviderStatus(providerObservation);
+    const providerRunning =
+      providerObservation?.mapped_status === "running" && !providerStopped;
+    if (
+      !providerStopped &&
+      (!providerRunning || (stableAt && now < stableAt))
+    ) {
+      await enqueueCloudVmWork({
+        vm_id: host.id,
+        action: "verify_host_ready",
+        not_before: new Date(Date.now() + HOST_READY_VERIFY_DELAY_MS),
+        payload: {
+          ...row.payload,
+          provider: providerId,
+        },
+      });
+      return;
+    }
+  }
+
+  if (
+    operationalSinceStart &&
+    (!managedSpotRecovery ||
+      (hostHeartbeatIsFresh(host, now) &&
+        providerObservation?.mapped_status === "running" &&
+        (!stableAt || now >= stableAt)))
+  ) {
     if (isSpotRecoveryManagedHost(host)) {
       const policy = spotRecoveryPolicy(host);
-      const state = spotRecoveryState(host);
       const effective = effectivePricingModel(host);
       const desired = desiredPricingModel(host);
       if (effective === "on_demand") {
@@ -2630,10 +2690,12 @@ async function handleVerifyHostReady(row: any) {
   }
 
   if (providerId) {
-    const observation = await observeProviderReadyStatus({
-      row: host,
-      providerId,
-    });
+    const observation =
+      providerObservation ??
+      (await observeProviderReadyStatus({
+        row: host,
+        providerId,
+      }));
     const stoppedStatus = stoppedProviderStatus(observation);
     if (stoppedStatus) {
       const providerStatusText =
