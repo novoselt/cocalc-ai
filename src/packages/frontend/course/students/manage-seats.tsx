@@ -18,7 +18,10 @@ import {
 } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
-import type { MembershipPackageDetails } from "@cocalc/conat/hub/api/purchases";
+import type {
+  MembershipPackageAssignment,
+  MembershipPackageDetails,
+} from "@cocalc/conat/hub/api/purchases";
 import {
   FreshAuthModal,
   useFreshAuthAction,
@@ -65,6 +68,39 @@ export const MANAGE_SEATS_MODAL_BODY_STYLE = {
   overflowY: "auto",
 } as const;
 
+export interface ManageSeatsAssignmentMatch {
+  assignment: MembershipPackageAssignment;
+  membershipPackage: MembershipPackageDetails;
+}
+
+export function getManageSeatsAssignmentMatches(
+  packages: MembershipPackageDetails[],
+  student: ManageSeatsStudent,
+): ManageSeatsAssignmentMatch[] {
+  return packages.flatMap((membershipPackage) => {
+    const assignment = getActiveMembershipPackageAssignmentForStudent(
+      membershipPackage,
+      student,
+    );
+    return assignment == null ? [] : [{ assignment, membershipPackage }];
+  });
+}
+
+export function getNextManageSeatsPagination({
+  page,
+  pageSize,
+  previousPageSize,
+}: {
+  page: number;
+  pageSize: number;
+  previousPageSize: number;
+}): { current: number; pageSize: number } {
+  return {
+    current: pageSize === previousPageSize ? page : 1,
+    pageSize,
+  };
+}
+
 async function runWithConcurrency<T>(
   items: T[],
   concurrency: number,
@@ -109,6 +145,8 @@ export function ManageSeats({
   const [completed, setCompleted] = useState<number>(0);
   const [total, setTotal] = useState<number>(0);
   const [error, setError] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(20);
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   const manageablePackages = useMemo(
@@ -130,9 +168,16 @@ export function ManageSeats({
     if (!packageStillExists) {
       setPackageId((manageablePackages[0] ?? packages[0])?.id);
     }
+  }, [open, packages, manageablePackages, packageId]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
     setSelectedStudentIds([]);
     setError("");
-  }, [open, packages, manageablePackages, packageId]);
+    setCurrentPage(1);
+  }, [open, packageId]);
 
   const membershipPackage = packages.find(({ id }) => id === packageId);
   const canManage =
@@ -140,20 +185,47 @@ export function ManageSeats({
     (isAdmin || membershipPackage.owner_account_id === currentAccountId);
   const packageActive = isMembershipPackageCurrentlyActive(membershipPackage);
   const rows = students;
+  const assignmentMatchesByStudentId = useMemo(
+    () =>
+      new Map(
+        rows.map((student) => [
+          student.student_id,
+          getManageSeatsAssignmentMatches(packages, student),
+        ]),
+      ),
+    [packages, rows],
+  );
   const selectedRows = rows.filter((student) =>
     selectedStudentIds.includes(student.student_id),
   );
+  const getAssignmentMatches = (student: ManageSeatsStudent) =>
+    assignmentMatchesByStudentId.get(student.student_id) ?? [];
+  const getSeatAssignmentMatch = (student: ManageSeatsStudent) =>
+    getAssignmentMatches(student).find(
+      ({ membershipPackage }) => membershipPackage.id === packageId,
+    );
   const getSeatAssignment = (student: ManageSeatsStudent) =>
-    getActiveMembershipPackageAssignmentForStudent(membershipPackage, student);
+    getSeatAssignmentMatch(student)?.assignment;
+  const getOtherSeatAssignmentMatches = (student: ManageSeatsStudent) =>
+    getAssignmentMatches(student).filter(
+      ({ membershipPackage }) => membershipPackage.id !== packageId,
+    );
   const assignableRows = selectedRows.filter(
     (student) =>
       student.project_id &&
       (student.account_id || student.email_address) &&
-      !getSeatAssignment(student),
+      getAssignmentMatches(student).length === 0,
   );
   const revokableRows = selectedRows.filter(
     (student) => !!getSeatAssignment(student),
   );
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(rows.length / pageSize));
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage);
+    }
+  }, [currentPage, pageSize, rows.length]);
 
   async function mutateSeats(
     action: "assign" | "revoke",
@@ -259,7 +331,7 @@ export function ManageSeats({
                 showIcon
                 style={{ marginBottom: 16 }}
                 title={`${packages.length} separate seat packages are linked to this course`}
-                description="Assignments and available seats belong to the selected package; packages are not silently combined."
+                description="Each student's status includes every linked package. Select a package to assign its available seats or revoke seats belonging to it."
               />
             )}
             <Paragraph strong style={{ marginBottom: 6 }}>
@@ -382,18 +454,43 @@ export function ManageSeats({
             </Space>
             <Table<ManageSeatsStudent>
               size="small"
-              pagination={{ pageSize: 20, showSizeChanger: true }}
+              pagination={{
+                current: currentPage,
+                pageSize,
+                pageSizeOptions: ["20", "50", "100", "200"],
+                showSizeChanger: true,
+                showTotal: (count, range) =>
+                  `${range[0]}-${range[1]} of ${count} students`,
+                onChange: (page, nextPageSize) => {
+                  const next = getNextManageSeatsPagination({
+                    page,
+                    pageSize: nextPageSize,
+                    previousPageSize: pageSize,
+                  });
+                  setCurrentPage(next.current);
+                  setPageSize(next.pageSize);
+                },
+              }}
               rowKey="student_id"
               dataSource={rows}
               rowSelection={{
                 selectedRowKeys: selectedStudentIds,
                 onChange: (keys) =>
                   setSelectedStudentIds(keys.map((key) => `${key}`)),
-                getCheckboxProps: (student) => ({
-                  disabled:
-                    !student.project_id ||
-                    (!student.account_id && !student.email_address),
-                }),
+                getCheckboxProps: (student) => {
+                  const assignedThroughAnotherPackage =
+                    !getSeatAssignment(student) &&
+                    getOtherSeatAssignmentMatches(student).length > 0;
+                  return {
+                    disabled:
+                      !student.project_id ||
+                      (!student.account_id && !student.email_address) ||
+                      assignedThroughAnotherPackage,
+                    title: assignedThroughAnotherPackage
+                      ? "This student already has a seat from another linked package"
+                      : undefined,
+                  };
+                },
               }}
               columns={[
                 {
@@ -411,32 +508,57 @@ export function ManageSeats({
                   title: "Paid seat",
                   key: "seat",
                   render: (_, student) => {
-                    const assignment = getSeatAssignment(student);
-                    if (assignment) {
+                    const assignmentMatch = getSeatAssignmentMatch(student);
+                    const otherAssignmentMatches =
+                      getOtherSeatAssignmentMatches(student);
+                    const visibleMatch =
+                      assignmentMatch ?? otherAssignmentMatches[0];
+                    if (visibleMatch) {
+                      const { assignment, membershipPackage: assignedPackage } =
+                        visibleMatch;
                       const reserved = !assignment.account_id;
                       const accountMismatch =
                         !!assignment.account_id &&
                         assignment.account_id !== student.account_id;
+                      const assignedPackageActive =
+                        isMembershipPackageCurrentlyActive(assignedPackage);
+                      const assignedElsewhere =
+                        assignedPackage.id !== membershipPackage?.id;
+                      const additionalAssignments =
+                        getAssignmentMatches(student).length - 1;
                       return (
-                        <Tag
-                          color={
-                            accountMismatch
-                              ? "red"
-                              : packageActive
-                                ? "green"
-                                : "orange"
-                          }
-                        >
-                          {accountMismatch
-                            ? "Claimed by another account"
-                            : reserved
-                              ? packageActive
-                                ? "Reserved"
-                                : "Reserved, inactive"
-                              : packageActive
-                                ? "Assigned"
-                                : "Assigned, inactive"}
-                        </Tag>
+                        <Space direction="vertical" size={0}>
+                          <Tag
+                            color={
+                              accountMismatch
+                                ? "red"
+                                : assignedPackageActive
+                                  ? "green"
+                                  : "orange"
+                            }
+                          >
+                            {accountMismatch
+                              ? "Claimed by another account"
+                              : reserved
+                                ? assignedPackageActive
+                                  ? "Reserved"
+                                  : "Reserved, inactive"
+                                : assignedPackageActive
+                                  ? "Assigned"
+                                  : "Assigned, inactive"}
+                          </Tag>
+                          {assignedElsewhere && (
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              Via {ownerName(assignedPackage.owner_account_id)}
+                              {assignedPackage.purchase_id
+                                ? `, purchase #${assignedPackage.purchase_id}`
+                                : ""}
+                              {additionalAssignments > 0
+                                ? ` (+${additionalAssignments} more)`
+                                : ""}
+                            </Text>
+                          )}
+                        </Space>
                       );
                     }
                     return (
