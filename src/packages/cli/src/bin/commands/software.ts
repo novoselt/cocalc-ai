@@ -4104,6 +4104,21 @@ Supported deploy/smoke components:
                   "--profile",
                   deployTarget,
                   "host",
+                  "deploy",
+                  "set",
+                  "--global",
+                  "--artifact",
+                  "bootstrap-environment",
+                  "--desired-version",
+                  artifact.artifact_id,
+                  "--reason",
+                  "software-deploy-host-bootstrap",
+                ],
+                [
+                  ...cli.args,
+                  "--profile",
+                  deployTarget,
+                  "host",
                   "reconcile",
                   "--all-online",
                   "--force-bootstrap",
@@ -4326,6 +4341,12 @@ Supported deploy/smoke components:
                 }
                 if (hostBootstrapTarget) {
                   const published = await publishHostBootstrapArtifact({
+                    client,
+                    config,
+                    entry: artifact.remote_entry,
+                    selector: artifact.artifact_id,
+                  });
+                  await publishHostBootstrapArtifact({
                     client,
                     config,
                     entry: artifact.remote_entry,

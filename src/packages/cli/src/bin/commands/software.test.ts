@@ -3293,6 +3293,12 @@ test("software deploy host-bootstrap publishes latest bootstrap and reconciles h
     r2.objects.get("software/bootstrap/latest/bootstrap.py")!.toString("utf8"),
     bootstrapBody,
   );
+  assert.equal(
+    r2.objects
+      .get(`software/bootstrap/${artifactId}/bootstrap.py`)!
+      .toString("utf8"),
+    bootstrapBody,
+  );
   const sha256 = createHash("sha256").update(bootstrapBody).digest("hex");
   assert.equal(
     r2.objects
@@ -3300,8 +3306,22 @@ test("software deploy host-bootstrap publishes latest bootstrap and reconciles h
       .toString("utf8"),
     `${sha256}  bootstrap.py\n`,
   );
-  assert.equal(runs.length, 1);
+  assert.equal(runs.length, 2);
   assert.deepEqual(runs[0].args, [
+    "--profile",
+    "staging",
+    "host",
+    "deploy",
+    "set",
+    "--global",
+    "--artifact",
+    "bootstrap-environment",
+    "--desired-version",
+    artifactId,
+    "--reason",
+    "software-deploy-host-bootstrap",
+  ]);
+  assert.deepEqual(runs[1].args, [
     "--profile",
     "staging",
     "host",
@@ -3327,7 +3347,7 @@ test("software deploy host-bootstrap publishes latest bootstrap and reconciles h
   );
   assert.equal(
     record.details.host_bootstrap_url,
-    "https://software.example.test/software/bootstrap/latest/bootstrap.py",
+    `https://software.example.test/software/bootstrap/${artifactId}/bootstrap.py`,
   );
   assert.equal(record.details.host_bootstrap_reconcile, true);
 });
