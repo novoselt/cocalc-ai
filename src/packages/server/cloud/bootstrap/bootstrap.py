@@ -6247,6 +6247,25 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 """
+    shutdown_service = f"""[Unit]
+Description=Notify CoCalc before project host shutdown
+After=network-online.target cocalc-project-host-start.service
+Wants=network-online.target
+ConditionPathIsMountPoint=/mnt/cocalc
+
+[Service]
+Type=oneshot
+User={cfg.ssh_user}
+Group={cfg.ssh_user}
+WorkingDirectory=/
+ExecStart=/bin/true
+ExecStop=/bin/bash -lc "printf host-shutdown > /mnt/cocalc/data/host-shutdown-intent; {runtime_root}/bin/ctl stop"
+TimeoutStopSec=25
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
     Path("/etc/systemd/system/cocalc-project-host-watchdog.service").write_text(
         watchdog_service, encoding="utf-8"
     )
@@ -6256,14 +6275,28 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/cocalc-project-host-start.service").write_text(
         boot_service, encoding="utf-8"
     )
+    Path("/etc/systemd/system/cocalc-project-host-shutdown.service").write_text(
+        shutdown_service, encoding="utf-8"
+    )
     os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.service", 0o644)
     os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.timer", 0o644)
     os.chmod("/etc/systemd/system/cocalc-project-host-start.service", 0o644)
+    os.chmod("/etc/systemd/system/cocalc-project-host-shutdown.service", 0o644)
     run_best_effort(cfg, ["systemctl", "daemon-reload"], "reload systemd")
     run_best_effort(
         cfg,
         ["systemctl", "enable", "cocalc-project-host-start.service"],
         "enable project-host boot service",
+    )
+    run_best_effort(
+        cfg,
+        [
+            "systemctl",
+            "enable",
+            "--now",
+            "cocalc-project-host-shutdown.service",
+        ],
+        "enable project-host shutdown notifier",
     )
     run_best_effort(
         cfg,

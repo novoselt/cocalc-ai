@@ -2184,6 +2184,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 written["/etc/systemd/system/cocalc-project-host-start.service"],
             )
             self.assertIn(
+                "/etc/systemd/system/cocalc-project-host-shutdown.service",
+                written,
+            )
+            self.assertIn(
+                "ExecStart=/bin/true",
+                written[
+                    "/etc/systemd/system/cocalc-project-host-shutdown.service"
+                ],
+            )
+            self.assertIn(
+                f'ExecStop=/bin/bash -lc "printf host-shutdown > /mnt/cocalc/data/host-shutdown-intent; {runtime_root}/bin/ctl stop"',
+                written[
+                    "/etc/systemd/system/cocalc-project-host-shutdown.service"
+                ],
+            )
+            self.assertIn(
                 (
                     ["systemctl", "daemon-reload"],
                     "reload systemd",
@@ -2194,6 +2210,18 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 (
                     ["systemctl", "enable", "cocalc-project-host-start.service"],
                     "enable project-host boot service",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "systemctl",
+                        "enable",
+                        "--now",
+                        "cocalc-project-host-shutdown.service",
+                    ],
+                    "enable project-host shutdown notifier",
                 ),
                 recorded,
             )
