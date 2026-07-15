@@ -201,6 +201,7 @@ export function observedRuntimeArtifactsFromMetadata(
       const artifact = `${entry?.artifact ?? ""}`.trim() as HostRuntimeArtifact;
       if (
         artifact !== "project-host" &&
+        artifact !== "container-runtime" &&
         artifact !== "project-bundle" &&
         artifact !== "tools"
       ) {

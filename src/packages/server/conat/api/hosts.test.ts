@@ -3227,6 +3227,16 @@ describe("hosts.getHostRuntimeDeploymentStatus", () => {
           installed_bytes_total: 3000,
         },
         {
+          artifact: "container-runtime",
+          current_version: "runtime-v2",
+          installed_versions: ["runtime-v2", "runtime-v1"],
+          version_bytes: [
+            { version: "runtime-v2", bytes: 6000 },
+            { version: "runtime-v1", bytes: 5000 },
+          ],
+          installed_bytes_total: 11000,
+        },
+        {
           artifact: "project-bundle",
           current_version: "bundle-v4",
           current_build_id: "build-bundle-v4",
@@ -3310,6 +3320,17 @@ describe("hosts.getHostRuntimeDeploymentStatus", () => {
       id: HOST_ID,
     });
     expect(status.observed_artifacts).toEqual([
+      {
+        artifact: "container-runtime",
+        current_version: "runtime-v2",
+        installed_versions: ["runtime-v2", "runtime-v1"],
+        version_bytes: [
+          { version: "runtime-v2", bytes: 6000 },
+          { version: "runtime-v1", bytes: 5000 },
+        ],
+        installed_bytes_total: 11000,
+        retention_policy: { keep_count: 3 },
+      },
       {
         artifact: "project-bundle",
         current_version: "bundle-v4",
