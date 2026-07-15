@@ -7,7 +7,15 @@ const test = require("node:test");
 
 process.env.COCALC_BAY_FRONTDOOR_UNHEALTHY_THRESHOLD = "3";
 
-const { recordWorkerHealth } = require("./bay-frontdoor.js");
+const { formatHealthError, recordWorkerHealth } = require("./bay-frontdoor.js");
+
+test("includes a normalized readiness body in health errors", () => {
+  assert.equal(
+    formatHealthError(503, " conat routing\n round trip failed: timeout "),
+    "health status 503: conat routing round trip failed: timeout",
+  );
+  assert.equal(formatHealthError(503, ""), "health status 503");
+});
 
 class MockSocket extends EventEmitter {
   destroyed = false;

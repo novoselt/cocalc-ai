@@ -50,6 +50,10 @@ const unhealthyThreshold = intEnv(
   "COCALC_BAY_FRONTDOOR_UNHEALTHY_THRESHOLD",
   3,
 );
+const healthErrorMaxBytes = intEnv(
+  "COCALC_BAY_FRONTDOOR_HEALTH_ERROR_MAX_BYTES",
+  2048,
+);
 const upstreamTimeoutMs = intEnv(
   "COCALC_BAY_FRONTDOOR_UPSTREAM_TIMEOUT_MS",
   15000,
@@ -138,8 +142,24 @@ function recordWorkerHealth(worker, ok, error = "") {
   }
 }
 
+function formatHealthError(statusCode, body) {
+  const detail = `${body ?? ""}`.replace(/\s+/g, " ").trim();
+  return detail
+    ? `health status ${statusCode}: ${detail}`
+    : `health status ${statusCode}`;
+}
+
 function checkWorker(worker) {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok, error = "") => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      recordWorkerHealth(worker, ok, error);
+      resolve();
+    };
     const req = http.request(
       {
         hostname: worker.host,
@@ -149,25 +169,43 @@ function checkWorker(worker) {
         timeout: Math.min(5000, upstreamTimeoutMs),
       },
       (res) => {
-        res.resume();
         const ok =
           res.statusCode != null &&
           res.statusCode >= 200 &&
           res.statusCode < 400;
-        recordWorkerHealth(
-          worker,
-          ok,
-          ok ? "" : `health status ${res.statusCode}`,
-        );
-        resolve();
+        if (ok) {
+          res.resume();
+          finish(true);
+          return;
+        }
+        const chunks = [];
+        let bytes = 0;
+        res.on("data", (chunk) => {
+          if (bytes >= healthErrorMaxBytes) {
+            return;
+          }
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          const selected = buffer.subarray(0, healthErrorMaxBytes - bytes);
+          chunks.push(selected);
+          bytes += selected.length;
+        });
+        res.once("end", () => {
+          finish(
+            false,
+            formatHealthError(
+              res.statusCode,
+              Buffer.concat(chunks).toString("utf8"),
+            ),
+          );
+        });
+        res.once("error", (err) => finish(false, err.message));
       },
     );
     req.on("timeout", () => {
       req.destroy(new Error("health timeout"));
     });
     req.on("error", (err) => {
-      recordWorkerHealth(worker, false, err.message);
-      resolve();
+      finish(false, err.message);
     });
     req.end();
   });
@@ -493,5 +531,6 @@ if (require.main === module) {
 
 module.exports = {
   evictWorkerUpgrades,
+  formatHealthError,
   recordWorkerHealth,
 };

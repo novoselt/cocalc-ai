@@ -58,6 +58,14 @@ printf '%s %s\n' "$(basename "$0")" "$*" >> "$WATCHDOG_HELPER_LOG"
 EOF
   chmod 0755 "${COCALC_BAY_CURRENT_LINK}/bin/${helper}"
 done
+cat > "${COCALC_BAY_CURRENT_LINK}/bin/bay-hub-diagnose" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf '%s %s\n' "$(basename "$0")" "$*" >> "$WATCHDOG_HELPER_LOG"
+printf '/tmp/test-hub-incident.txt\n'
+EOF
+chmod 0755 "${COCALC_BAY_CURRENT_LINK}/bin/bay-hub-diagnose"
 
 export PATH="${FAKE_BIN}:${PATH}"
 export COCALC_BAY_ENV_FILE="${TMP}/missing-bay.env"
@@ -87,6 +95,7 @@ fi
 
 bash "${SCRIPT_DIR}/bay-hub-watchdog"
 grep -qx 'restart cocalc-bay-hub@1.service' "$WATCHDOG_SYSTEMCTL_LOG"
+grep -qx 'bay-hub-diagnose 1' "$WATCHDOG_HELPER_LOG"
 grep -qx 'bay-frontdoor-drain 1' "$WATCHDOG_HELPER_LOG"
 grep -qx 'bay-worker-health 1' "$WATCHDOG_HELPER_LOG"
 grep -qx 'bay-frontdoor-undrain 1' "$WATCHDOG_HELPER_LOG"

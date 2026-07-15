@@ -4,6 +4,7 @@ After=cocalc-bay-frontdoor.service cocalc-bay-conat-router.service
 
 [Service]
 Type=oneshot
+UMask=0077
 ExecStart=/opt/cocalc/bay/current/bin/bay-hub-watchdog
 TimeoutStartSec=120
 StandardOutput=journal

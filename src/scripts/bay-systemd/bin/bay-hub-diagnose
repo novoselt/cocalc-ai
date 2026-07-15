@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+
+worker_id="${1:-}"
+if [[ ! "$worker_id" =~ ^[1-9][0-9]*$ ]]; then
+  bay_log "usage: bay-hub-diagnose <worker-id>"
+  exit 2
+fi
+
+: "${COCALC_BAY_HUB_DIAGNOSTIC_DIR:=/var/log/cocalc-bay/hub-watchdog-incidents}"
+: "${COCALC_BAY_HUB_DIAGNOSTIC_RETENTION_DAYS:=14}"
+: "${COCALC_BAY_HUB_DIAGNOSTIC_MAX_FILES:=100}"
+
+incident_dir="$COCALC_BAY_HUB_DIAGNOSTIC_DIR"
+if [[ -L "$incident_dir" ]]; then
+  bay_log "refusing symlink diagnostic directory: ${incident_dir}"
+  exit 1
+fi
+install -d -o root -g root -m 0700 "$incident_dir"
+
+unit="cocalc-bay-hub@${worker_id}.service"
+pid="$(systemctl show "$unit" --property=MainPID --value 2>/dev/null || printf '0')"
+if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+  pid=0
+fi
+cgroup="$(systemctl show "$unit" --property=ControlGroup --value 2>/dev/null || true)"
+
+timestamp="$(date -u +%Y%m%dT%H%M%S.%NZ)"
+incident="${incident_dir}/${timestamp}-worker-${worker_id}-pid-${pid}.txt"
+tmp="$(mktemp "${incident_dir}/.incident.XXXXXX")"
+chmod 0600 "$tmp"
+trap 'rm -f "$tmp"' EXIT
+
+frontdoor_health="$(cat || true)"
+{
+  printf 'captured_at=%s\n' "$(date -u --iso-8601=ns)"
+  printf 'bay_id=%s\n' "$COCALC_BAY_ID"
+  printf 'worker_id=%s\n' "$worker_id"
+  printf 'unit=%s\n' "$unit"
+  printf 'pid=%s\n' "$pid"
+  printf '\n### frontdoor-health\n%s\n' "$frontdoor_health"
+
+  printf '\n### systemd\n'
+  systemctl show "$unit" \
+    --property=ActiveEnterTimestamp \
+    --property=ActiveState \
+    --property=CPUUsageNSec \
+    --property=ControlGroup \
+    --property=ExecMainCode \
+    --property=ExecMainStatus \
+    --property=MainPID \
+    --property=MemoryCurrent \
+    --property=MemoryPeak \
+    --property=NRestarts \
+    --property=SubState \
+    --property=TasksCurrent \
+    2>&1 || true
+
+  printf '\n### process\n'
+  if ((pid > 0)) && [[ -d "/proc/${pid}" ]]; then
+    ps -o pid,ppid,lstart,etime,state,pcpu,pmem,rss,vsz,nlwp,wchan:32,comm,args \
+      -p "$pid" 2>&1 || true
+    printf '\n### threads (first 200)\n'
+    ps -L -p "$pid" -o pid,tid,psr,state,pcpu,time,wchan:32,comm \
+      2>&1 | head -n 201 || true
+    printf '\n### proc-status\n'
+    cat "/proc/${pid}/status" 2>&1 || true
+    printf '\n### proc-limits\n'
+    cat "/proc/${pid}/limits" 2>&1 || true
+    printf '\nfd_count='
+    find "/proc/${pid}/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l
+    printf 'socket_fd_count='
+    find "/proc/${pid}/fd" -mindepth 1 -maxdepth 1 -printf '%l\n' 2>/dev/null \
+      | grep -c '^socket:' || true
+    printf '\n### sockets (first 200)\n'
+    ss -Htanp 2>/dev/null | grep -F "pid=${pid}," | head -n 200 || true
+  else
+    printf 'process is not present\n'
+  fi
+
+  printf '\n### cgroup\n'
+  if [[ "$cgroup" == /* && -d "/sys/fs/cgroup${cgroup}" ]]; then
+    printf 'path=%s\n' "$cgroup"
+    for name in \
+      cpu.stat \
+      io.stat \
+      memory.current \
+      memory.events \
+      memory.events.local \
+      memory.peak \
+      pids.current; do
+      path="/sys/fs/cgroup${cgroup}/${name}"
+      if [[ -r "$path" ]]; then
+        printf -- '--- %s ---\n' "$name"
+        head -n 200 "$path" 2>&1 || true
+      fi
+    done
+  else
+    printf 'service cgroup is not available: %s\n' "$cgroup"
+  fi
+
+  printf '\n### recent-worker-journal (last 200)\n'
+  journalctl -u "$unit" -n 200 --no-pager -o short-iso 2>&1 || true
+} > "$tmp"
+
+mv -f "$tmp" "$incident"
+trap - EXIT
+
+find "$incident_dir" -maxdepth 1 -type f -name '*-worker-*-pid-*.txt' \
+  -mtime "+${COCALC_BAY_HUB_DIAGNOSTIC_RETENTION_DAYS}" -delete
+mapfile -t stale < <(
+  find "$incident_dir" -maxdepth 1 -type f -name '*-worker-*-pid-*.txt' \
+    -printf '%T@ %p\n' | sort -nr | tail -n "+$((COCALC_BAY_HUB_DIAGNOSTIC_MAX_FILES + 1))" \
+    | cut -d' ' -f2-
+)
+if ((${#stale[@]} > 0)); then
+  rm -f -- "${stale[@]}"
+fi
+
+printf '%s\n' "$incident"

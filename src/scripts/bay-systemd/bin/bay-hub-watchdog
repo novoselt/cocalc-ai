@@ -8,6 +8,7 @@ source "${SCRIPT_DIR}/lib.sh"
 : "${COCALC_BAY_HUB_WATCHDOG_FAILURE_THRESHOLD:=2}"
 : "${COCALC_BAY_HUB_WATCHDOG_RESTART_TIMEOUT_S:=90}"
 : "${COCALC_BAY_HUB_WATCHDOG_RESTART_COOLDOWN_S:=300}"
+: "${COCALC_BAY_HUB_DIAGNOSTIC_TIMEOUT_S:=8}"
 
 STATE_DIR="${COCALC_BAY_RUN_DIR}/hub-watchdog"
 mkdir -p "$STATE_DIR"
@@ -103,6 +104,15 @@ while IFS=$'\t' read -r worker_id healthy drained; do
   fi
 
   bay_log "hub watchdog restarting persistently unhealthy ${unit} (${active_state}/${sub_state})"
+  if diagnostic_path="$(
+    printf '%s\n' "$health_json" | \
+      timeout "${COCALC_BAY_HUB_DIAGNOSTIC_TIMEOUT_S}" \
+        "${COCALC_BAY_CURRENT_LINK}/bin/bay-hub-diagnose" "$worker_id"
+  )"; then
+    bay_log "hub watchdog captured diagnostics for ${unit}: ${diagnostic_path}"
+  else
+    bay_log "hub watchdog could not capture diagnostics for ${unit}"
+  fi
   "${COCALC_BAY_CURRENT_LINK}/bin/bay-frontdoor-drain" "$worker_id"
   # Record the attempt before entering systemctl. A failed or timed-out restart
   # must also respect the cooldown instead of retrying every timer tick.
