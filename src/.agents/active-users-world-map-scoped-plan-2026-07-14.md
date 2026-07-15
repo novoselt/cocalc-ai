@@ -217,7 +217,7 @@ Server rules:
 3. Apply a server-side per-account write throttle of at least five minutes so a
    one-minute heartbeat does not cause unnecessary database writes.
 4. Use server time for `observed_at` and `expire`.
-5. Accept country codes only after normalization and a strict length check.
+5. Accept country codes only after normalization and a strict length check. 
 6. Cap all text field lengths before writing.
 7. Parse coordinates as finite numbers and require latitude in `[-90, 90]` and
    longitude in `[-180, 180]`.
@@ -407,7 +407,7 @@ No websocket subscription is needed.
 
 1. Deploy the schema and backend with the feature disabled.
 2. Verify Cloudflare visitor-location headers using the existing admin test.
-3. Verify the generic delete-expired interval is at most two hours.
+3. Verify the generic delete-expired interval is at most 26 hours.
 4. Enable `active_user_map_enabled` on `cocalc.ai`.
 5. Confirm rows contain no IP address and all have non-null expiration.
 6. Confirm an expired fixture disappears from API results immediately and from
@@ -513,3 +513,4 @@ it cannot reconstruct an intraday timeline. Adding that capability would
 require a new aggregate-snapshot design, a separate short retention policy, and
 an explicit privacy review; it should not be implemented by turning the current
 location table into an unbounded event history.
+
