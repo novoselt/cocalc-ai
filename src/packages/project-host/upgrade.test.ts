@@ -224,6 +224,48 @@ describe("project host upgrade installer", () => {
     }
   });
 
+  it("serializes concurrent installs targeting the same current link", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "cocalc-upgrade-test-"));
+    const archivePath = createArchive(base);
+    const served = await serveFile(archivePath);
+    try {
+      process.env.COCALC_DATA = path.join(base, "data");
+      const root = path.join(base, "project-host-bundles");
+      const versionDir = path.join(root, "v1");
+      const currentLink = path.join(root, "current");
+      const resolved = {
+        artifact: "project-host",
+        canonicalArtifact: "project-host",
+        version: "v1",
+        url: served.url,
+        stripComponents: 1,
+        root,
+        versionDir,
+        currentLink,
+      } as any;
+
+      const results = await Promise.all([
+        __test__.downloadAndInstall(resolved),
+        __test__.downloadAndInstall(resolved),
+      ]);
+
+      expect(results.map(({ status }) => status).sort()).toEqual([
+        "noop",
+        "updated",
+      ]);
+      expect(fs.realpathSync(currentLink)).toBe(versionDir);
+      expect(fs.readFileSync(path.join(versionDir, "README.txt"), "utf8")).toBe(
+        "project-host bundle\n",
+      );
+      expect(
+        fs.readdirSync(root).filter((name) => name.includes(".extract-")),
+      ).toEqual([]);
+    } finally {
+      await served.close();
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it("activates a validated container runtime against existing sqlite state", async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "cocalc-runtime-test-"));
     const archivePath = createContainerRuntimeArchive(base);
