@@ -341,6 +341,7 @@ export type SiteSettingsExtrasKeys =
   | "software_license_token"
   | "software_license_server_url"
   | "software_license_instance_id"
+  | "active_user_map_enabled"
   //   | "coreweave_kubeconfig"
   //   | "amazon_web_services_access_key"
   //   | "amazon_web_services_secret_access_key"
@@ -694,6 +695,16 @@ export const EXTRAS: SettingsExtras = {
     tags: ["RootFS", "Security", "Project Hosts"],
     group: "Compute / Project Hosts",
     subgroup: "RootFS Scanning",
+  },
+  active_user_map_enabled: {
+    name: "Active Users Map: Enabled",
+    desc: "Collect one short-lived approximate Cloudflare location per active account and enable the admin active-users world map. No IP address or location history is stored. Disabled by default.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Cloudflare", "Security"],
+    group: "System / Advanced",
+    subgroup: "Admin Operations",
   },
   rootfs_scan_container_image: {
     name: "RootFS Scan: Trivy Container Image",

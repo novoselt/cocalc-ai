@@ -43,8 +43,6 @@ import {
 import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
 import {
   ProjectRuntimeExitTracker,
-  projectRuntimeExitReason,
-  projectRuntimeExitKey,
   type RuntimeRecoveryNotice,
 } from "../runtime-recovery";
 export { FILE_ACTIONS as file_actions, type FileAction, ProjectActions };
@@ -259,14 +257,6 @@ export class ProjectStore extends Store<ProjectStoreState> {
       projects.on("change", this._projects_store_change);
       this.projectsStoreSubscribed = true;
     }
-    console.info(
-      `[project-runtime-recovery] project store initialized ${JSON.stringify({
-        project_id: this.project_id,
-        project_record_present: project != null,
-        subscribed: this.projectsStoreSubscribed,
-        runstate: this.previous_runstate,
-      })}`,
-    );
   };
 
   destroy = (): void => {
@@ -298,28 +288,8 @@ export class ProjectStore extends Store<ProjectStoreState> {
     } else {
       this.hasSeenProjectRecord = true;
       const new_state = change.getIn(["state", "state"]);
-      const runtimeExitReason = projectRuntimeExitReason(change);
-      const runtimeExitKey = projectRuntimeExitKey(change);
       const recoverRuntimeExitReason = this.runtimeExitTracker.observe(change);
       const hasNewRuntimeExit = recoverRuntimeExitReason != null;
-      if (
-        runtimeExitReason != null ||
-        (this.previous_runstate === "running" && new_state !== "running")
-      ) {
-        console.info(
-          `[project-runtime-recovery] project store transition ${JSON.stringify(
-            {
-              project_id: this.project_id,
-              previous_runstate: this.previous_runstate,
-              new_runstate: new_state,
-              runtime_exit_reason: runtimeExitReason,
-              runtime_exit_key: runtimeExitKey,
-              recovery_eligible: recoverRuntimeExitReason != null,
-              new_runtime_exit: hasNewRuntimeExit,
-            },
-          )}`,
-        );
-      }
       //log(this.previous_runstate, "=>", new_state);
       // fire started or stopped when certain state transitions happen
       if (this.previous_runstate != null) {

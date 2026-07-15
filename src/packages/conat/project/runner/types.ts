@@ -45,6 +45,8 @@ export interface Configuration {
   env?: { [key: string]: string };
   // Project secrets mounted read-only at COCALC_SECRETS in the runtime.
   secrets?: { [key: string]: string };
+  // Authoritative generation represented by the complete secrets map.
+  secrets_generation?: number;
   // cpu priority: 1, 2 or 3, with 3 being highest
   cpu?: number;
   // memory limit in BYTES

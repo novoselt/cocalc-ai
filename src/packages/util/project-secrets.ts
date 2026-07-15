@@ -55,7 +55,23 @@ export interface ProjectSecretRuntimeCacheEntry {
 
 export interface ProjectSecretsRuntimeCache {
   key_base64: string;
+  generation: number;
   entries: ProjectSecretRuntimeCacheEntry[];
+}
+
+export type ProjectSecretsRuntimeRefreshStatus =
+  | "updated_live"
+  | "cached_for_next_start"
+  | "already_current"
+  | "stale_ignored"
+  | "retry_pending";
+
+export interface ProjectSecretsRuntimeRefreshResult {
+  status: ProjectSecretsRuntimeRefreshStatus;
+  cached_generation: number;
+  materialized_generation: number;
+  secret_names: string[];
+  error_code?: "host_unassigned" | "host_unavailable" | "refresh_failed";
 }
 
 export interface ProjectSecretSshKeySetupResult {

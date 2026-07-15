@@ -18,7 +18,10 @@ import {
 } from "@cocalc/server/lro/worker-config";
 import { getProjectHostDefaultParallelLimits } from "@cocalc/server/lro/project-host-defaults";
 import { publishLroEvent, publishLroSummary } from "@cocalc/server/lro/stream";
-import { publishProjectRootfsCatalogEntry } from "@cocalc/server/rootfs/catalog";
+import {
+  assertRootfsSlugAvailable,
+  publishProjectRootfsCatalogEntry,
+} from "@cocalc/server/rootfs/catalog";
 import { assertCanCreateOrUpdateRootfs } from "@cocalc/server/membership/rootfs-limits";
 import { setProjectRootfsImageWithRollback } from "@cocalc/server/projects/rootfs-state";
 import { withTimeout } from "@cocalc/util/async-utils";
@@ -28,6 +31,7 @@ import {
 } from "./rootfs-publish-admission";
 import {
   issueRootfsReleaseArtifactUpload,
+  requestUnreferencedRootfsReleaseDeletion,
   upsertPublishedRootfsRelease,
 } from "@cocalc/server/rootfs/releases";
 import {
@@ -528,6 +532,10 @@ async function handleRootfsPublishOp(op: LroSummary): Promise<void> {
 
   let lastProgressKey: string | null = null;
   const timings = createPhaseTimingRecorder();
+  let registeredRelease:
+    | Awaited<ReturnType<typeof upsertPublishedRootfsRelease>>
+    | undefined;
+  let catalogEntrySaved = false;
   const progress = (update: {
     step: string;
     message?: string;
@@ -573,6 +581,10 @@ async function handleRootfsPublishOp(op: LroSummary): Promise<void> {
       step: "validate",
       message: "starting RootFS publish",
       detail: { project_id },
+    });
+
+    await timings.measure("validate_slug", async () => {
+      await assertRootfsSlugAvailable({ slug: input.slug });
     });
 
     const started = Date.now();
@@ -690,6 +702,7 @@ async function handleRootfsPublishOp(op: LroSummary): Promise<void> {
         },
       });
     });
+    registeredRelease = release;
 
     const catalogOp = await updateLro({
       op_id,
@@ -735,6 +748,7 @@ async function handleRootfsPublishOp(op: LroSummary): Promise<void> {
         release_id: release.release_id,
       });
     });
+    catalogEntrySaved = true;
     const switched_project = input.switch_project === true;
     if (switched_project) {
       const switchOp = await updateLro({
@@ -818,6 +832,26 @@ async function handleRootfsPublishOp(op: LroSummary): Promise<void> {
     });
   } catch (err) {
     logger.warn("rootfs publish op failed", { op_id, err: `${err}` });
+    if (registeredRelease?.created && !catalogEntrySaved) {
+      try {
+        const cleanup = await requestUnreferencedRootfsReleaseDeletion({
+          release_id: registeredRelease.release_id,
+          requested_by: created_by,
+          reason: `RootFS publish ${op_id} failed before creating a catalog entry`,
+        });
+        logger.info("rootfs publish release cleanup requested", {
+          op_id,
+          release_id: registeredRelease.release_id,
+          ...cleanup,
+        });
+      } catch (cleanupErr) {
+        logger.warn("rootfs publish release cleanup failed", {
+          op_id,
+          release_id: registeredRelease.release_id,
+          err: `${cleanupErr}`,
+        });
+      }
+    }
     const updated = await updateLro({
       op_id,
       status: "failed",

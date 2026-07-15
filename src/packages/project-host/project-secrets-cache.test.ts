@@ -43,6 +43,7 @@ describe("project secrets runtime cache", () => {
         project_id,
         cache: {
           key_base64: key.toString("base64"),
+          generation: 1,
           entries: [
             {
               name: "API_KEY",
@@ -53,7 +54,12 @@ describe("project secrets runtime cache", () => {
           ],
         },
       }),
-    ).toEqual(["API_KEY"]);
+    ).toEqual({
+      accepted: true,
+      secret_names: ["API_KEY"],
+      cached_generation: 1,
+      materialized_generation: 0,
+    });
 
     const rows = getCachedProjectSecrets(project_id);
     expect(rows).toEqual([
@@ -85,6 +91,7 @@ describe("project secrets runtime cache", () => {
       project_id,
       cache: {
         key_base64: key.toString("base64"),
+        generation: 1,
         entries: [{ name: "TOKEN", encrypted_value, value_bytes: 10 }],
       },
     });
@@ -92,5 +99,52 @@ describe("project secrets runtime cache", () => {
 
     expect(getCachedProjectSecrets(project_id)).toHaveLength(1);
     expect(getCachedProjectSecretsForRuntime({ project_id })).toBeUndefined();
+  });
+
+  it("does not let an out-of-order generation roll cached secrets backward", () => {
+    const key = Buffer.alloc(32, 11);
+    const encryptedNew = encryptProjectSecretValue({
+      project_id,
+      name: "TOKEN",
+      value: "new",
+      key,
+    });
+    const encryptedOld = encryptProjectSecretValue({
+      project_id,
+      name: "TOKEN",
+      value: "old",
+      key,
+    });
+    syncProjectSecretsCache({
+      project_id,
+      cache: {
+        key_base64: key.toString("base64"),
+        generation: 2,
+        entries: [
+          { name: "TOKEN", encrypted_value: encryptedNew, value_bytes: 3 },
+        ],
+      },
+    });
+
+    expect(
+      syncProjectSecretsCache({
+        project_id,
+        cache: {
+          key_base64: key.toString("base64"),
+          generation: 1,
+          entries: [
+            { name: "TOKEN", encrypted_value: encryptedOld, value_bytes: 3 },
+          ],
+        },
+      }),
+    ).toEqual({
+      accepted: false,
+      secret_names: ["TOKEN"],
+      cached_generation: 2,
+      materialized_generation: 0,
+    });
+    expect(getCachedProjectSecretsForRuntime({ project_id })).toEqual({
+      TOKEN: "new",
+    });
   });
 });

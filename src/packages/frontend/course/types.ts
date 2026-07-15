@@ -18,6 +18,7 @@ export interface SyncDBRecordBase {
 
 export interface SyncDBRecordSettings {
   table: string;
+  course_id?: string;
   allow_collabs?: boolean;
   institute_pay?: boolean;
   site_license_pay?: boolean;

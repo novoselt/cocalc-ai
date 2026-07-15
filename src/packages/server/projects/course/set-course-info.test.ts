@@ -3,6 +3,7 @@ export {};
 import type { CourseInfo } from "@cocalc/util/db-schema/projects";
 
 let assertLocalProjectCollaboratorMock: jest.Mock;
+let assertProjectCollaboratorAccessAllowRemoteMock: jest.Mock;
 let publishProjectDetailInvalidationBestEffortMock: jest.Mock;
 let queryMock: jest.Mock;
 
@@ -10,6 +11,12 @@ jest.mock("@cocalc/server/conat/project-local-access", () => ({
   __esModule: true,
   assertLocalProjectCollaborator: (...args: any[]) =>
     assertLocalProjectCollaboratorMock(...args),
+}));
+
+jest.mock("@cocalc/server/conat/project-remote-access", () => ({
+  __esModule: true,
+  assertProjectCollaboratorAccessAllowRemote: (...args: any[]) =>
+    assertProjectCollaboratorAccessAllowRemoteMock(...args),
 }));
 
 jest.mock("@cocalc/database/pool", () => ({
@@ -41,6 +48,9 @@ describe("setCourseInfo local bay access", () => {
   beforeEach(() => {
     jest.resetModules();
     assertLocalProjectCollaboratorMock = jest.fn(async () => undefined);
+    assertProjectCollaboratorAccessAllowRemoteMock = jest.fn(
+      async () => undefined,
+    );
     publishProjectDetailInvalidationBestEffortMock = jest.fn(
       async () => undefined,
     );
@@ -65,11 +75,10 @@ describe("setCourseInfo local bay access", () => {
     expect(queryMock).not.toHaveBeenCalled();
   });
 
-  it("rejects setting course info when the course project is on another bay", async () => {
-    assertLocalProjectCollaboratorMock = jest
-      .fn()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("project belongs to another bay"));
+  it("rejects setting course info when the course project is inaccessible", async () => {
+    assertProjectCollaboratorAccessAllowRemoteMock = jest.fn(async () => {
+      throw new Error("project collaborator access required");
+    });
     queryMock = jest.fn(async () => ({
       rows: [{ course: { project_id: COURSE_PROJECT_ID } }],
     }));
@@ -80,15 +89,17 @@ describe("setCourseInfo local bay access", () => {
         project_id: PROJECT_ID,
         course: makeCourseInfo(),
       }),
-    ).rejects.toThrow("project belongs to another bay");
+    ).rejects.toThrow("project collaborator access required");
     expect(assertLocalProjectCollaboratorMock).toHaveBeenNthCalledWith(1, {
       account_id: ACCOUNT_ID,
       project_id: PROJECT_ID,
     });
-    expect(assertLocalProjectCollaboratorMock).toHaveBeenNthCalledWith(2, {
-      account_id: ACCOUNT_ID,
-      project_id: COURSE_PROJECT_ID,
-    });
+    expect(assertProjectCollaboratorAccessAllowRemoteMock).toHaveBeenCalledWith(
+      {
+        account_id: ACCOUNT_ID,
+        project_id: COURSE_PROJECT_ID,
+      },
+    );
   });
 
   it("updates course info when both projects are local", async () => {
@@ -111,10 +122,12 @@ describe("setCourseInfo local bay access", () => {
       account_id: ACCOUNT_ID,
       project_id: PROJECT_ID,
     });
-    expect(assertLocalProjectCollaboratorMock).toHaveBeenNthCalledWith(2, {
-      account_id: ACCOUNT_ID,
-      project_id: COURSE_PROJECT_ID,
-    });
+    expect(assertProjectCollaboratorAccessAllowRemoteMock).toHaveBeenCalledWith(
+      {
+        account_id: ACCOUNT_ID,
+        project_id: COURSE_PROJECT_ID,
+      },
+    );
     expect(queryMock).toHaveBeenNthCalledWith(
       2,
       "UPDATE projects SET course=$1 WHERE project_id=$2",
@@ -125,6 +138,24 @@ describe("setCourseInfo local bay access", () => {
         project_id: PROJECT_ID,
         fields: ["course"],
       },
+    );
+  });
+
+  it("accepts an absolute course path inside the project runtime home", async () => {
+    const { default: setCourseInfo } = await import("./set-course-info");
+    await expect(
+      setCourseInfo({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        course: makeCourseInfo({ path: "/home/user/classes/math.course" }),
+      }),
+    ).resolves.toMatchObject({
+      course: { path: "classes/math.course" },
+    });
+    expect(queryMock).toHaveBeenNthCalledWith(
+      2,
+      "UPDATE projects SET course=$1 WHERE project_id=$2",
+      [expect.objectContaining({ path: "classes/math.course" }), PROJECT_ID],
     );
   });
 });

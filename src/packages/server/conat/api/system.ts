@@ -138,6 +138,9 @@ import type {
   UxLatencyEventInput,
   UxLatencySummary,
   VisitorLocationHeaderTestResult,
+  ActiveUserMapOverview,
+  ActiveUserMapWindowMinutes,
+  BrowserSessionLocation,
 } from "@cocalc/conat/hub/api/system";
 import {
   bootstrapCloudflareConfiguration as bootstrapCloudflareConfiguration0,
@@ -238,6 +241,10 @@ import {
   upsertBrowserSessionRecord,
 } from "./browser-sessions";
 import { getLiveBrowserSessionInfo } from "./browser-sessions-live";
+import {
+  getActiveUserMapOverviewAcrossBays,
+  recordAccountPresenceLocation,
+} from "@cocalc/server/account-presence-locations";
 import { createRememberMeCookie } from "@cocalc/server/auth/remember-me";
 import {
   recordNewAuthSession,
@@ -6458,6 +6465,7 @@ export async function upsertBrowserSession({
   spawn_marker,
   active_project_id,
   open_projects,
+  location,
 }: {
   account_id?: string;
   browser_id: string;
@@ -6466,12 +6474,13 @@ export async function upsertBrowserSession({
   spawn_marker?: string;
   active_project_id?: string;
   open_projects?: unknown;
+  location?: BrowserSessionLocation;
 }): Promise<{ browser_id: string; created_at: string; updated_at: string }> {
   if (!account_id) {
     throw Error("must be signed in");
   }
   await touchAccountActivity(account_id);
-  return upsertBrowserSessionRecord({
+  const session = await upsertBrowserSessionRecord({
     account_id,
     browser_id,
     session_name,
@@ -6479,6 +6488,22 @@ export async function upsertBrowserSession({
     spawn_marker,
     active_project_id,
     open_projects,
+  });
+  void recordAccountPresenceLocation({ account_id, location });
+  return session;
+}
+
+export async function getActiveUserMap({
+  account_id,
+  active_minutes,
+}: {
+  account_id?: string;
+  active_minutes: ActiveUserMapWindowMinutes;
+}): Promise<ActiveUserMapOverview> {
+  await assertAdmin(account_id);
+  return await getActiveUserMapOverviewAcrossBays({
+    account_id,
+    active_minutes,
   });
 }
 

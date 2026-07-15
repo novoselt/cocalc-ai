@@ -669,7 +669,7 @@ export default function RootFilesystemImage({
     setPublishDraft({
       image: currentImage,
       label: nextLabel,
-      slug: currentEntry?.slug ?? "",
+      slug: defaultMode === "manage" ? (currentEntry?.slug ?? "") : "",
       description: nextDescription,
       family: currentEntry?.family ?? "",
       version: currentEntry?.version ?? "",
@@ -2155,6 +2155,12 @@ export default function RootFilesystemImage({
                               </>
                             }
                             onClick={() => {
+                              if (publishMode === "manage") {
+                                setPublishDraft((cur) => ({
+                                  ...cur,
+                                  slug: "",
+                                }));
+                              }
                               setPublishMode("copy");
                               setPublishCopyMode("project");
                             }}
@@ -2167,6 +2173,12 @@ export default function RootFilesystemImage({
                             }
                             description="Save metadata for the current base image string without publishing live project state."
                             onClick={() => {
+                              if (publishMode === "manage") {
+                                setPublishDraft((cur) => ({
+                                  ...cur,
+                                  slug: "",
+                                }));
+                              }
                               setPublishMode("copy");
                               setPublishCopyMode("base");
                             }}
@@ -2180,7 +2192,13 @@ export default function RootFilesystemImage({
                                   ? "Update the selected catalog entry instead of creating another copy."
                                   : "Edit the selected shared or official entry instead of saving my own copy."
                               }
-                              onClick={() => setPublishMode("manage")}
+                              onClick={() => {
+                                setPublishDraft((cur) => ({
+                                  ...cur,
+                                  slug: publishSourceEntry.slug ?? "",
+                                }));
+                                setPublishMode("manage");
+                              }}
                               title="Update catalog entry"
                             />
                           ) : null}

@@ -8,7 +8,9 @@ import {
   type ProjectSecretsRuntimeCache,
 } from "@cocalc/util/project-secrets";
 import {
+  getCachedProjectSecretsState,
   getCachedProjectSecrets,
+  markCachedProjectSecretsMaterialized,
   replaceCachedProjectSecrets,
 } from "./sqlite/project-secrets";
 
@@ -36,13 +38,40 @@ export function syncProjectSecretsCache({
 }: {
   project_id: string;
   cache: ProjectSecretsRuntimeCache;
-}): string[] {
+}): {
+  accepted: boolean;
+  secret_names: string[];
+  cached_generation: number;
+  materialized_generation: number;
+} {
   setProjectSecretsCacheKey(cache.key_base64);
-  replaceCachedProjectSecrets({
+  const { accepted, state } = replaceCachedProjectSecrets({
     project_id,
+    generation: cache.generation,
     entries: cache.entries,
   });
-  return cache.entries.map(({ name }) => name).sort();
+  return {
+    accepted,
+    secret_names: getCachedProjectSecrets(project_id)
+      .map(({ name }) => name)
+      .sort(),
+    cached_generation: state.cached_generation,
+    materialized_generation: state.materialized_generation,
+  };
+}
+
+export function getProjectSecretsCacheState(project_id: string) {
+  return getCachedProjectSecretsState(project_id);
+}
+
+export function markProjectSecretsCacheMaterialized({
+  project_id,
+  generation,
+}: {
+  project_id: string;
+  generation: number;
+}) {
+  return markCachedProjectSecretsMaterialized({ project_id, generation });
 }
 
 export function getCachedProjectSecretsForRuntime({

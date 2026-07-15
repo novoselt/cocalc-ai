@@ -178,6 +178,34 @@ async function generateUniqueRootfsSlug(): Promise<string> {
   throw Error("failed to generate a unique rootfs slug");
 }
 
+export async function assertRootfsSlugAvailable({
+  slug,
+  image_id,
+}: {
+  slug?: unknown;
+  image_id?: string;
+}): Promise<string | undefined> {
+  const normalized = validateRootfsSlug(slug);
+  if (!normalized) return undefined;
+  const params: string[] = [normalized];
+  let excludeCurrentImage = "";
+  if (image_id) {
+    params.push(image_id);
+    excludeCurrentImage = "AND image_id<>$2";
+  }
+  const { rows } = await getPool("medium").query<{ image_id: string }>(
+    `SELECT image_id
+     FROM rootfs_images
+     WHERE slug=$1 ${excludeCurrentImage}
+     LIMIT 1`,
+    params,
+  );
+  if (rows.length > 0) {
+    throw Error(`rootfs slug '${normalized}' is already in use`);
+  }
+  return normalized;
+}
+
 function normalizeTags(tags?: unknown): string[] {
   if (!Array.isArray(tags)) return [];
   return Array.from(
@@ -1399,16 +1427,7 @@ async function upsertRootfsRow({
     validateRootfsSlug(body.slug) ??
     previous?.slug ??
     (await generateUniqueRootfsSlug());
-  const existingSlugRows = await pool.query<{ image_id: string }>(
-    `SELECT image_id
-     FROM rootfs_images
-     WHERE slug=$1 AND image_id<>$2
-     LIMIT 1`,
-    [slug, image_id],
-  );
-  if (existingSlugRows.rows.length > 0) {
-    throw Error(`rootfs slug '${slug}' is already in use`);
-  }
+  await assertRootfsSlugAvailable({ slug, image_id });
   const contentSpecified =
     hasOwn(body, "content") && body.content !== undefined;
   const extraContentWarnings =

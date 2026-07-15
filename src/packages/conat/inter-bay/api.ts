@@ -119,6 +119,8 @@ import type {
 } from "@cocalc/conat/hub/api/legacy-migration";
 import type {
   AcpAdmissionDenialReport,
+  ActiveUserMapOverview,
+  ActiveUserMapQuery,
   BayBackupsInfo,
   BayDrainPreflightResult,
   GlobalConfigPropagationStatus,
@@ -156,11 +158,17 @@ import type {
   ProjectRootfsConfig,
   ProjectRootfsPublishConfig,
   ProjectRunQuota,
+  CourseSecretPolicyState,
+  CourseSecretRecipientPreview,
+  CourseSecretSyncPreview,
+  CourseSecretSyncRun,
+  CourseSecretSyncStatusResult,
   ProjectSecretMetadata,
   ProjectSnapshotSchedule,
   CopyProjectSecretsResult,
   GenerateProjectSshKeySecretResult,
 } from "@cocalc/conat/hub/api/projects";
+import type { ProjectSecretsRuntimeRefreshResult } from "@cocalc/util/project-secrets";
 import type {
   HostAgentStatus,
   HostControlApi,
@@ -2288,6 +2296,7 @@ export type BayOpsMethod =
   | "get-membership-tiers"
   | "get-membership-tier-usage-report"
   | "get-membership-analytics-overview"
+  | "get-active-user-map"
   | "get-membership-analytics-events"
   | "backfill-membership-analytics-purchases"
   | "set-server-setting"
@@ -2324,12 +2333,28 @@ export type ProjectCollabInviteMethod =
   | "respond";
 export type ProjectSecretsMethod =
   | "list"
+  | "refresh-runtime"
+  | "validate-course-target"
   | "set"
   | "delete"
   | "copy"
   | "export-for-copy"
   | "import-for-copy"
-  | "generate-ssh-key-secret";
+  | "generate-ssh-key-secret"
+  | "list-course-shareable"
+  | "get-course-policy"
+  | "preview-course-sync"
+  | "set-course-sharing"
+  | "set-course-policy"
+  | "set-course-grants"
+  | "approve-course-recipients"
+  | "revoke-course-recipients"
+  | "start-course-sync"
+  | "start-course-cleanup"
+  | "get-course-sync-status"
+  | "revoke-course-policy"
+  | "install-course-managed"
+  | "remove-course-managed";
 export type ExternalCredentialMethod =
   | "upsert"
   | "get"
@@ -2447,6 +2472,20 @@ export interface InterBayProjectSecretsApi {
     project_id: string;
     epoch?: number;
   }) => Promise<ProjectSecretMetadata[]>;
+  refreshRuntime: (opts: {
+    account_id: string;
+    project_id: string;
+    epoch?: number;
+  }) => Promise<ProjectSecretsRuntimeRefreshResult>;
+  validateCourseTarget: (opts: {
+    project_id: string;
+    course_project_id: string;
+    course_path: string;
+    epoch?: number;
+  }) => Promise<{
+    eligible: boolean;
+    reason: CourseSecretRecipientPreview["reason"];
+  }>;
   set: (opts: {
     account_id: string;
     project_id: string;
@@ -2459,7 +2498,10 @@ export interface InterBayProjectSecretsApi {
     project_id: string;
     name: string;
     epoch?: number;
-  }) => Promise<{ deleted: boolean }>;
+  }) => Promise<{
+    deleted: boolean;
+    runtime_refresh?: ProjectSecretsRuntimeRefreshResult;
+  }>;
   copy: (opts: {
     account_id: string;
     source_project_id: string;
@@ -2489,6 +2531,134 @@ export interface InterBayProjectSecretsApi {
     secret_name?: string;
     epoch?: number;
   }) => Promise<GenerateProjectSshKeySecretResult>;
+  listCourseShareable: (opts: {
+    account_id: string;
+    course_project_id: string;
+    epoch?: number;
+  }) => Promise<ProjectSecretMetadata[]>;
+  getCoursePolicy: (opts: {
+    account_id: string;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    epoch?: number;
+  }) => Promise<CourseSecretPolicyState | null>;
+  previewCourseSync: (opts: {
+    account_id: string;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    target_project_ids: string[];
+    epoch?: number;
+  }) => Promise<CourseSecretSyncPreview>;
+  setCourseSharing: (opts: {
+    account_id: string;
+    session_hash?: string | null;
+    project_id: string;
+    name: string;
+    allow: boolean;
+    epoch?: number;
+  }) => Promise<ProjectSecretMetadata>;
+  setCoursePolicy: (opts: {
+    account_id: string;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    enabled: boolean;
+    epoch?: number;
+  }) => Promise<CourseSecretPolicyState>;
+  setCourseGrants: (opts: {
+    account_id: string;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    names: string[];
+    epoch?: number;
+  }) => Promise<CourseSecretPolicyState>;
+  approveCourseRecipients: (opts: {
+    account_id: string;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    recipients: Array<{
+      target_project_id: string;
+      student_account_id?: string | null;
+    }>;
+    epoch?: number;
+  }) => Promise<CourseSecretPolicyState>;
+  revokeCourseRecipients: (opts: {
+    account_id: string;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    target_project_ids: string[];
+    epoch?: number;
+  }) => Promise<CourseSecretPolicyState>;
+  startCourseSync: (opts: {
+    account_id: string;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    epoch?: number;
+  }) => Promise<CourseSecretSyncRun>;
+  startCourseCleanup: (opts: {
+    account_id: string;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    epoch?: number;
+  }) => Promise<CourseSecretSyncRun>;
+  getCourseSyncStatus: (opts: {
+    account_id: string;
+    course_project_id: string;
+    course_id: string;
+    run_id?: string;
+    epoch?: number;
+  }) => Promise<CourseSecretSyncStatusResult | null>;
+  revokeCoursePolicy: (opts: {
+    account_id: string;
+    session_hash?: string | null;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    epoch?: number;
+  }) => Promise<CourseSecretPolicyState>;
+  installCourseManaged: (opts: {
+    project_id: string;
+    course_project_id: string;
+    course_id: string;
+    course_path: string;
+    policy_id: string;
+    account_id: string;
+    secrets: Array<{
+      name: string;
+      value: string;
+      source_revision: number;
+      grant_id: string;
+    }>;
+    epoch?: number;
+  }) => Promise<{
+    copied: string[];
+    unchanged: string[];
+    conflicts: string[];
+    runtime_refresh: ProjectSecretsRuntimeRefreshResult;
+  }>;
+  removeCourseManaged: (opts: {
+    project_id: string;
+    policy_id: string;
+    names?: string[];
+    account_id: string;
+    epoch?: number;
+  }) => Promise<{
+    removed: string[];
+    runtime_refresh: ProjectSecretsRuntimeRefreshResult;
+  }>;
 }
 
 export interface InterBayExternalCredentialInfo {
@@ -3592,6 +3762,9 @@ export interface InterBayBayOpsApi {
   getMembershipAnalyticsOverview: (
     opts: MembershipAnalyticsOverviewQuery,
   ) => Promise<MembershipAnalyticsOverview>;
+  getActiveUserMap: (
+    opts: ActiveUserMapQuery,
+  ) => Promise<ActiveUserMapOverview>;
   getMembershipAnalyticsEvents: (
     opts: MembershipAnalyticsEventsQuery,
   ) => Promise<MembershipAnalyticsEventRow[]>;
@@ -3874,12 +4047,28 @@ type ProjectSecretsName = keyof InterBayProjectSecretsApi;
 
 const PROJECT_SECRETS_METHOD_SPECS = [
   { name: "list", method: "list" },
+  { name: "refreshRuntime", method: "refresh-runtime" },
+  { name: "validateCourseTarget", method: "validate-course-target" },
   { name: "set", method: "set" },
   { name: "delete", method: "delete" },
   { name: "copy", method: "copy" },
   { name: "exportForCopy", method: "export-for-copy" },
   { name: "importForCopy", method: "import-for-copy" },
   { name: "generateSshKeySecret", method: "generate-ssh-key-secret" },
+  { name: "listCourseShareable", method: "list-course-shareable" },
+  { name: "getCoursePolicy", method: "get-course-policy" },
+  { name: "previewCourseSync", method: "preview-course-sync" },
+  { name: "setCourseSharing", method: "set-course-sharing" },
+  { name: "setCoursePolicy", method: "set-course-policy" },
+  { name: "setCourseGrants", method: "set-course-grants" },
+  { name: "approveCourseRecipients", method: "approve-course-recipients" },
+  { name: "revokeCourseRecipients", method: "revoke-course-recipients" },
+  { name: "startCourseSync", method: "start-course-sync" },
+  { name: "startCourseCleanup", method: "start-course-cleanup" },
+  { name: "getCourseSyncStatus", method: "get-course-sync-status" },
+  { name: "revokeCoursePolicy", method: "revoke-course-policy" },
+  { name: "installCourseManaged", method: "install-course-managed" },
+  { name: "removeCourseManaged", method: "remove-course-managed" },
 ] as const satisfies ReadonlyArray<{
   name: ProjectSecretsName;
   method: ProjectSecretsMethod;
@@ -8480,6 +8669,15 @@ export function createInterBayBayOpsClient({
       method: "get-membership-analytics-overview",
     }),
   });
+  const activeUserMapClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMap">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map",
+    }),
+  });
   const membershipAnalyticsEventsClient = createServiceClient<
     Pick<InterBayBayOpsApi, "getMembershipAnalyticsEvents">
   >({
@@ -8523,6 +8721,8 @@ export function createInterBayBayOpsClient({
       await membershipAnalyticsOverviewClient.getMembershipAnalyticsOverview(
         opts,
       ),
+    getActiveUserMap: async (opts) =>
+      await activeUserMapClient.getActiveUserMap(opts),
     getMembershipAnalyticsEvents: async (opts) =>
       await membershipAnalyticsEventsClient.getMembershipAnalyticsEvents(opts),
     backfillMembershipAnalyticsPurchases: async (opts) =>
@@ -8701,6 +8901,17 @@ export function createInterBayBayOpsHandlers({
       impl: {
         getMembershipAnalyticsOverview: async (opts) =>
           await impl.getMembershipAnalyticsOverview(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "getActiveUserMap">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map",
+      }),
+      impl: {
+        getActiveUserMap: async (opts) => await impl.getActiveUserMap(opts),
       },
     }),
     createServiceHandler<

@@ -72,6 +72,15 @@ type RootfsReleaseRow = {
   inspect_json: Record<string, any> | null;
 };
 
+export type PublishedRootfsRelease = RootfsReleaseRow & {
+  created: boolean;
+};
+
+export type RootfsReleaseCleanupResult = {
+  queued: boolean;
+  blockers: RootfsDeleteBlockers;
+};
+
 type BucketRow = {
   id: string;
   name: string;
@@ -1269,7 +1278,7 @@ export async function upsertPublishedRootfsRelease({
 }: {
   artifact: PublishProjectRootfsArtifact;
   upload?: RootfsUploadedArtifactResult;
-}): Promise<RootfsReleaseRow> {
+}): Promise<PublishedRootfsRelease> {
   await ensureRootfsRusticRepoSchema();
   const content_key = normalizeContentKey(artifact.content_key);
   if (!upload) {
@@ -1388,7 +1397,74 @@ export async function upsertPublishedRootfsRelease({
   if (!row) {
     throw new Error(`failed to upsert RootFS release for ${content_key}`);
   }
-  return row;
+  return {
+    ...row,
+    created: existing == null && row.release_id === release_id,
+  };
+}
+
+export async function requestUnreferencedRootfsReleaseDeletion({
+  release_id,
+  requested_by,
+  reason,
+}: {
+  release_id: string;
+  requested_by: string;
+  reason: string;
+}): Promise<RootfsReleaseCleanupResult> {
+  const release = await loadRootfsReleaseById(release_id);
+  if (!release) {
+    return {
+      queued: false,
+      blockers: {
+        projects_using_release: 0,
+        catalog_entries_using_release: 0,
+        prepull_entries_using_release: 0,
+        child_releases: 0,
+        total: 0,
+      },
+    };
+  }
+  const { rows } = await getPool("medium").query<{ release_id: string }>(
+    `UPDATE rootfs_releases AS rel
+     SET gc_status='pending_delete',
+         delete_requested_at=NOW(),
+         delete_requested_by=$2,
+         delete_reason=$3,
+         updated=NOW()
+     WHERE rel.release_id=$1
+       AND COALESCE(rel.gc_status, 'active') <> 'deleted'
+       AND NOT EXISTS (
+         SELECT 1
+         FROM project_rootfs_states
+         WHERE release_id=rel.release_id
+            OR runtime_image=rel.runtime_image
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM projects
+         WHERE rootfs_image=rel.runtime_image
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM rootfs_images
+         WHERE release_id=rel.release_id
+           AND COALESCE(deleted, false)=false
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM rootfs_releases AS child
+         WHERE child.parent_release_id=rel.release_id
+           AND COALESCE(child.gc_status, 'active') <> 'deleted'
+       )
+     RETURNING rel.release_id`,
+    [release_id, requested_by, reason],
+  );
+  const blockers = await getReleaseDeleteBlockers(release);
+  return {
+    queued: rows.length > 0,
+    blockers,
+  };
 }
 
 async function resolveRootfsRusticAccess({
