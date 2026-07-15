@@ -1,10 +1,15 @@
 import {
+  maxStandardRuntimeMs,
   normalizeSpotRecoveryPolicy,
   normalizeSpotRecoveryState,
   shouldAutoRestoreInterruptedSpotHost,
 } from "./spot-restore";
 
 describe("spot recovery metadata", () => {
+  it("bounds fallback runtime to 24 hours by default", () => {
+    expect(maxStandardRuntimeMs({})).toBe(24 * 60 * 60 * 1000);
+  });
+
   it("advances from a repeatedly interrupted Spot machine type by default", () => {
     expect(
       normalizeSpotRecoveryPolicy({})?.max_restore_attempts_before_fallback,

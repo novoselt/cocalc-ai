@@ -378,6 +378,13 @@ export function standardFallbackMinMs(policy?: HostSpotRecoveryPolicy): number {
   return normalized.standard_fallback_min_minutes * 60 * 1000;
 }
 
+export function maxStandardRuntimeMs(policy?: HostSpotRecoveryPolicy): number {
+  const normalized = normalizeSpotRecoveryPolicy(policy) ?? {
+    ...DEFAULT_SPOT_RECOVERY_POLICY,
+  };
+  return normalized.max_standard_runtime_minutes * 60 * 1000;
+}
+
 export function spotProbeIntervalMs(policy?: HostSpotRecoveryPolicy): number {
   const normalized = normalizeSpotRecoveryPolicy(policy) ?? {
     ...DEFAULT_SPOT_RECOVERY_POLICY,

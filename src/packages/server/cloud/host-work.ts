@@ -31,6 +31,7 @@ import {
   desiredPricingModel,
   effectivePricingModel,
   isSpotRecoveryManagedHost,
+  maxStandardRuntimeMs,
   shouldAutoRestoreInterruptedSpotHost,
   spotProbeIntervalMs,
   spotRecoveryPolicy,
@@ -801,6 +802,24 @@ function hostFundingMode(row: any): HostFundingMode | undefined {
 function runtimeMachineType(runtime: any): string | undefined {
   const value = `${runtime?.metadata?.machine_type ?? ""}`.trim();
   return value ? value.split("/").pop() : undefined;
+}
+
+function activeAlternateSpotMachineType(
+  row: any,
+  state: HostSpotRecoveryState | undefined,
+): { active: string; desired: string } | undefined {
+  if (
+    hostFundingMode(row) !== "site-funded" ||
+    effectivePricingModel(row) !== "spot"
+  ) {
+    return undefined;
+  }
+  const desired = `${row?.metadata?.machine?.machine_type ?? ""}`.trim();
+  const active =
+    `${state?.active_machine_type ?? ""}`.trim() ||
+    runtimeMachineType(row?.metadata?.runtime);
+  if (!active || !desired || active === desired) return undefined;
+  return { active, desired };
 }
 
 function isSpotCapacityError(err: unknown): boolean {
@@ -2681,6 +2700,30 @@ async function handleVerifyHostReady(row: any) {
           },
         );
         await updateHostRow(host.id, { metadata: nextMetadata });
+        const alternateMachineType = activeAlternateSpotMachineType(
+          { ...host, metadata: nextMetadata },
+          idleState,
+        );
+        if (policy && alternateMachineType) {
+          const alternateStartedAt = state?.machine_type_attempt_started_at
+            ? new Date(state.machine_type_attempt_started_at)
+            : new Date();
+          const alternateStartedAtMs = Number.isFinite(
+            alternateStartedAt.getTime(),
+          )
+            ? alternateStartedAt.getTime()
+            : Date.now();
+          await scheduleSpotProbe({
+            row: { ...host, metadata: nextMetadata },
+            provider: providerId ?? host.metadata?.machine?.cloud,
+            not_before: new Date(
+              Math.max(
+                Date.now(),
+                alternateStartedAtMs + maxStandardRuntimeMs(policy),
+              ),
+            ),
+          });
+        }
         if (state?.phase === "returning_to_spot") {
           await logCloudVmEvent({
             vm_id: host.id,
@@ -2935,9 +2978,11 @@ async function handleProbeSpot(row: any) {
   const host = await loadHostRow(row.vm_id);
   if (!host) return;
   if (!isSpotRecoveryManagedHost(host)) return;
-  if (effectivePricingModel(host) !== "on_demand") return;
   const policy = spotRecoveryPolicy(host);
   const state = spotRecoveryState(host);
+  const currentEffectivePricing = effectivePricingModel(host);
+  const alternateMachineType = activeAlternateSpotMachineType(host, state);
+  if (currentEffectivePricing !== "on_demand" && !alternateMachineType) return;
   const providerId = normalizeProviderId(host.metadata?.machine?.cloud);
   if (!providerId || !policy) return;
   const { entry, creds } = await getProviderContext(providerId, {
@@ -2951,7 +2996,7 @@ async function handleProbeSpot(row: any) {
   };
   const probingMetadata = withPricingAndRecoveryMetadata(host.metadata, {
     desired_pricing_model: desiredPricingModel(host),
-    effective_pricing_model: "on_demand",
+    effective_pricing_model: currentEffectivePricing,
     spot_recovery_state: probingState,
   });
   await updateHostRow(host.id, { metadata: probingMetadata });
@@ -2970,15 +3015,15 @@ async function handleProbeSpot(row: any) {
   });
   if (!available) {
     const failedState: HostSpotRecoveryState = {
-      ...(probingState ?? { phase: "running_standard_fallback" }),
-      phase: "running_standard_fallback",
+      ...probingState,
+      phase: alternateMachineType ? "idle" : "running_standard_fallback",
       last_probe_at: new Date().toISOString(),
       last_probe_result: "failure",
       last_probe_error: "spot probe failed",
     };
     const failedMetadata = withPricingAndRecoveryMetadata(host.metadata, {
       desired_pricing_model: desiredPricingModel(host),
-      effective_pricing_model: "on_demand",
+      effective_pricing_model: currentEffectivePricing,
       spot_recovery_state: failedState,
     });
     await updateHostRow(host.id, { metadata: failedMetadata });
@@ -3005,7 +3050,7 @@ async function handleProbeSpot(row: any) {
   delete successState.last_probe_error;
   const successMetadata = withPricingAndRecoveryMetadata(host.metadata, {
     desired_pricing_model: desiredPricingModel(host),
-    effective_pricing_model: "on_demand",
+    effective_pricing_model: currentEffectivePricing,
     spot_recovery_state: successState,
   });
   await updateHostRow(host.id, {

@@ -7,6 +7,7 @@ import {
 import { after, before, getPool } from "@cocalc/server/test";
 
 const provisionIfNeededMock = jest.fn();
+const buildHostSpecMock = jest.fn();
 const getProviderContextMock = jest.fn();
 const buildCloudInitStartupScriptMock = jest.fn();
 const resolveLaunchpadBootstrapUrlMock = jest.fn();
@@ -18,6 +19,7 @@ const maybeAutoGrowHostDiskForReservationFailureMock = jest.fn();
 const removeHostSshKnownHostAliasMock = jest.fn();
 
 jest.mock("./host-util", () => ({
+  buildHostSpec: (...args: any[]) => buildHostSpecMock(...args),
   provisionIfNeeded: (...args: any[]) => provisionIfNeededMock(...args),
 }));
 
@@ -100,6 +102,14 @@ beforeEach(async () => {
     reason: "not a reservation failure",
   });
   removeHostSshKnownHostAliasMock.mockResolvedValue(undefined);
+  buildHostSpecMock.mockImplementation(async (row) => ({
+    name: row.id,
+    region: row.region,
+    pricing_model: row.metadata?.effective_pricing_model,
+    metadata: {
+      machine_type: row.metadata?.machine?.machine_type,
+    },
+  }));
   getProviderContextMock.mockResolvedValue({
     entry: {
       provider: {
@@ -1624,6 +1634,181 @@ describe("cloud host start failures", () => {
       action: "spot_return_succeeded",
       status: "success",
     });
+  });
+
+  it("schedules a return probe after 24 hours on alternate Spot capacity", async () => {
+    const hostId = "27a79a8e-38c7-4d8d-98d9-29894774500f";
+    const now = Date.now();
+    const startedAt = new Date(now - 3 * 60_000).toISOString();
+    const alternateStartedAt = new Date(now - 10 * 60_000);
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        provider: {
+          getInstance: jest.fn(async () => ({ status: "RUNNING" })),
+          mapStatus: () => "running",
+        },
+      },
+      creds: {},
+    });
+    await upsertProjectHost({
+      id: hostId,
+      name: "Alternate Spot return host",
+      region: "us-south1",
+      status: "running",
+      last_seen: new Date(now) as any,
+      metadata: {
+        owner: "acct-owner",
+        billing: { funding_mode: "site-funded" },
+        pricing_model: "spot",
+        desired_pricing_model: "spot",
+        effective_pricing_model: "spot",
+        interruption_restore_policy: "immediate",
+        machine: {
+          cloud: "gcp",
+          zone: "us-south1-c",
+          machine_type: "t2d-standard-16",
+          disk_gb: 200,
+          disk_type: "balanced",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "gcp",
+          instance_id: `cocalc-host-${hostId}`,
+          metadata: { machine_type: "n2d-standard-16" },
+        },
+        spot_recovery_state: {
+          phase: "retrying_spot",
+          outage_started_at: new Date(now - 15 * 60_000).toISOString(),
+          attempt: 1,
+          active_machine_type: "n2d-standard-16",
+          machine_type_attempt_started_at: alternateStartedAt.toISOString(),
+          spot_machine_types_tried: ["t2d-standard-16", "n2d-standard-16"],
+          verification_started_at: startedAt,
+          verification_deadline_at: new Date(now + 7 * 60_000).toISOString(),
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.verify_host_ready({
+      id: "verify-alternate-spot-1",
+      vm_id: hostId,
+      action: "verify_host_ready",
+      payload: {
+        provider: "gcp",
+        started_at: startedAt,
+        deadline_at: new Date(now + 7 * 60_000).toISOString(),
+      },
+    } as any);
+
+    const workRows = await getPool().query(
+      "SELECT action, not_before FROM cloud_vm_work WHERE vm_id=$1 AND action='probe_spot'",
+      [hostId],
+    );
+    expect(workRows.rows).toHaveLength(1);
+    expect(workRows.rows[0].action).toBe("probe_spot");
+    expect(new Date(workRows.rows[0].not_before).getTime()).toBe(
+      alternateStartedAt.getTime() + 24 * 60 * 60_000,
+    );
+  });
+
+  it("returns an alternate Spot host only after its desired type probes successfully", async () => {
+    const hostId = "63e292e8-26e6-418e-bc2d-a691643f52dd";
+    const probeSpotAvailability = jest
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    getProviderContextMock.mockResolvedValue({
+      entry: { provider: { probeSpotAvailability } },
+      creds: {},
+    });
+    await upsertProjectHost({
+      id: hostId,
+      name: "Alternate Spot probe host",
+      region: "us-south1",
+      status: "running",
+      last_seen: new Date() as any,
+      metadata: {
+        owner: "acct-owner",
+        billing: { funding_mode: "site-funded" },
+        pricing_model: "spot",
+        desired_pricing_model: "spot",
+        effective_pricing_model: "spot",
+        interruption_restore_policy: "immediate",
+        machine: {
+          cloud: "gcp",
+          zone: "us-south1-c",
+          machine_type: "t2d-standard-16",
+          disk_gb: 200,
+          disk_type: "balanced",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "gcp",
+          instance_id: `cocalc-host-${hostId}`,
+          metadata: { machine_type: "n2d-standard-16" },
+        },
+        spot_recovery_state: {
+          phase: "idle",
+          active_machine_type: "n2d-standard-16",
+          last_recovered_at: new Date().toISOString(),
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.probe_spot({
+      id: "probe-alternate-spot-1",
+      vm_id: hostId,
+      action: "probe_spot",
+      payload: { provider: "gcp" },
+    } as any);
+
+    let hostRows = await getPool().query(
+      "SELECT status, metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(hostRows.rows[0].status).toBe("running");
+    expect(hostRows.rows[0].metadata.effective_pricing_model).toBe("spot");
+    expect(hostRows.rows[0].metadata.spot_recovery_state).toMatchObject({
+      phase: "idle",
+      active_machine_type: "n2d-standard-16",
+      last_probe_result: "failure",
+    });
+    await getPool().query("DELETE FROM cloud_vm_work WHERE vm_id=$1", [hostId]);
+
+    await cloudHostHandlers.probe_spot({
+      id: "probe-alternate-spot-2",
+      vm_id: hostId,
+      action: "probe_spot",
+      payload: { provider: "gcp" },
+    } as any);
+
+    expect(probeSpotAvailability).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          machine_type: "t2d-standard-16",
+        }),
+      }),
+      {},
+      { stableForMs: 5 * 60_000 },
+    );
+    hostRows = await getPool().query(
+      "SELECT status, metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(hostRows.rows[0].status).toBe("starting");
+    expect(hostRows.rows[0].metadata.effective_pricing_model).toBe("spot");
+    expect(hostRows.rows[0].metadata.spot_recovery_state).toMatchObject({
+      phase: "returning_to_spot",
+      active_machine_type: "n2d-standard-16",
+      last_probe_result: "success",
+    });
+    const workRows = await getPool().query(
+      "SELECT action, state FROM cloud_vm_work WHERE vm_id=$1",
+      [hostId],
+    );
+    expect(workRows.rows).toEqual([{ action: "start", state: "queued" }]);
   });
 
   it("keeps Spot recovery pending until provider and heartbeats are stable", async () => {
