@@ -112,6 +112,27 @@ describe("classifyHostAvailabilitySnapshot", () => {
     expect(observation.category).toBe("runtime_degraded");
   });
 
+  it("classifies a quarantined public browser route separately", () => {
+    const observation = classifyHostAvailabilitySnapshot({
+      id: "7b1fa6e1-032d-4e90-bd20-00568c67d5d0",
+      status: "running",
+      last_seen: new Date().toISOString(),
+      metadata: {
+        runtime_health: { status: "ready", ready: true },
+        public_route_probe: {
+          status: "failed",
+          quarantined: true,
+          error: "CORS preflight returned HTTP 502",
+        },
+      },
+    });
+
+    expect(observation.state).toBe("degraded");
+    expect(observation.planned).toBe(false);
+    expect(observation.category).toBe("public_route_degraded");
+    expect(observation.summary).toContain("CORS preflight returned HTTP 502");
+  });
+
   it("formats running-but-stale host alert bodies", () => {
     expect(_test.formatStaleDuration(125 * 60_000)).toBe("2h5m");
     const body = _test.formatRunningStaleHostAlertBody([

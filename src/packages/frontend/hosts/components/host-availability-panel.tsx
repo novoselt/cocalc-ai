@@ -40,6 +40,7 @@ const CATEGORY_OPTIONS: { value: HostAvailabilityCategory; label: string }[] = [
   { value: "user_stopped", label: "User stopped" },
   { value: "host_stale", label: "Heartbeat stale" },
   { value: "runtime_degraded", label: "Project runtime degraded" },
+  { value: "public_route_degraded", label: "Public browser route degraded" },
   { value: "unknown", label: "Unknown" },
 ];
 

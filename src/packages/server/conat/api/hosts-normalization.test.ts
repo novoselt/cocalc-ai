@@ -427,4 +427,93 @@ describe("computeHostOperationalAvailability", () => {
         "Host synthetic project probe failed: project exec timed out",
     });
   });
+
+  it("does not quarantine a host after only one public-route failure", () => {
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: new Date(),
+        metadata: {
+          runtime_health: { status: "ready", ready: true },
+          public_route_probe: {
+            status: "failed",
+            consecutive_failures: 1,
+            quarantined: false,
+            error: "Cloudflare returned 502",
+          },
+        },
+      }),
+    ).toMatchObject({ operational: true, online: true });
+  });
+
+  it("excludes a host with a quarantined public browser route", () => {
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: new Date(),
+        metadata: {
+          runtime_health: { status: "ready", ready: true },
+          public_route_probe: {
+            status: "failed",
+            consecutive_failures: 2,
+            quarantined: true,
+            error: "Cloudflare returned 502",
+          },
+        },
+      }),
+    ).toMatchObject({
+      operational: false,
+      online: true,
+      reason_unavailable:
+        "Host public browser route is degraded: Cloudflare returned 502",
+    });
+  });
+
+  it("exposes sanitized public-route probe state", () => {
+    const host = parseRow({
+      id: "host-public-route",
+      name: "host-public-route",
+      status: "running",
+      last_seen: new Date(),
+      metadata: {
+        runtime_health: { status: "ready", ready: true },
+        public_route_probe: {
+          status: "failed",
+          claim_id: "private-claim",
+          checked_at: "2026-07-15T20:00:00.000Z",
+          duration_ms: 321,
+          consecutive_failures: 2,
+          consecutive_successes: 0,
+          quarantined: true,
+          error: "missing CORS",
+          alerted_at: "2026-07-15T20:00:01.000Z",
+          result: {
+            public_url: "https://host.example.test",
+            origin: "https://cocalc.example.test",
+            health_status: 200,
+            preflight_status: 204,
+            session_status: 401,
+            edge_server: "cloudflare",
+            cf_ray: "ray-1",
+          },
+        },
+      },
+    });
+    expect(host.public_route_probe).toEqual({
+      status: "failed",
+      checked_at: "2026-07-15T20:00:00.000Z",
+      duration_ms: 321,
+      consecutive_failures: 2,
+      consecutive_successes: 0,
+      quarantined: true,
+      error: "missing CORS",
+      health_status: 200,
+      preflight_status: 204,
+      session_status: 401,
+      edge_server: "cloudflare",
+      cf_ray: "ray-1",
+    });
+    expect(host.public_route_probe).not.toHaveProperty("claim_id");
+    expect(host.public_route_probe).not.toHaveProperty("alerted_at");
+  });
 });

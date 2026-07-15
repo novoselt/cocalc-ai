@@ -184,6 +184,136 @@ describe("project-host runtime maintenance policy", () => {
     expect(_test.syntheticProbeFailureAlertDue(row, NOW)).toBe(true);
   });
 
+  it("runs public-route probes after a boot, process session, or interval", () => {
+    const row = degradedCloudHost({
+      host_boot_id: "boot-4",
+      host_session_id: "session-4",
+      public_route_probe: {
+        status: "passed",
+        host_boot_id: "boot-3",
+        host_session_id: "session-3",
+        checked_at: new Date(NOW - 30_000).toISOString(),
+      },
+    });
+    expect(_test.publicRouteProbeDue(row, NOW)).toBe(true);
+
+    row.metadata.public_route_probe.host_boot_id = "boot-4";
+    expect(_test.publicRouteProbeDue(row, NOW)).toBe(true);
+    row.metadata.public_route_probe.host_session_id = "session-4";
+    expect(_test.publicRouteProbeDue(row, NOW)).toBe(false);
+    row.metadata.public_route_probe.checked_at = new Date(
+      NOW - 3 * 60_000,
+    ).toISOString();
+    expect(_test.publicRouteProbeDue(row, NOW)).toBe(true);
+  });
+
+  it("requires two public failures to quarantine and two successes to recover", () => {
+    const row = degradedCloudHost();
+    const baseClaim = {
+      claim_id: "claim-1",
+      previous_failures: 0,
+      previous_successes: 0,
+      was_quarantined: false,
+    };
+    const firstFailure = _test.publicRouteProbeOutcome({
+      row,
+      claim: baseClaim,
+      checkedAt: new Date(NOW).toISOString(),
+      duration_ms: 100,
+      error: new Error("CORS missing"),
+    });
+    expect(firstFailure).toMatchObject({
+      status: "failed",
+      consecutive_failures: 1,
+      quarantined: false,
+    });
+
+    const secondFailure = _test.publicRouteProbeOutcome({
+      row,
+      claim: {
+        ...baseClaim,
+        claim_id: "claim-2",
+        previous_failures: 1,
+      },
+      checkedAt: new Date(NOW).toISOString(),
+      duration_ms: 100,
+      error: new Error("CORS missing"),
+      alerted_at: new Date(NOW).toISOString(),
+    });
+    expect(secondFailure).toMatchObject({
+      status: "failed",
+      consecutive_failures: 2,
+      quarantined: true,
+    });
+
+    const firstSuccess = _test.publicRouteProbeOutcome({
+      row,
+      claim: {
+        ...baseClaim,
+        claim_id: "claim-3",
+        previous_failures: 2,
+        was_quarantined: true,
+        alerted_at: new Date(NOW).toISOString(),
+      },
+      checkedAt: new Date(NOW).toISOString(),
+      duration_ms: 100,
+      result: {
+        public_url: "https://host.example.test",
+        origin: "https://cocalc.example.test",
+        health_status: 200,
+        preflight_status: 204,
+        session_status: 401,
+      },
+    });
+    expect(firstSuccess).toMatchObject({
+      status: "recovering",
+      consecutive_successes: 1,
+      quarantined: true,
+      alerted_at: new Date(NOW).toISOString(),
+    });
+
+    const secondSuccess = _test.publicRouteProbeOutcome({
+      row,
+      claim: {
+        ...baseClaim,
+        claim_id: "claim-4",
+        previous_failures: 0,
+        previous_successes: 1,
+        was_quarantined: true,
+      },
+      checkedAt: new Date(NOW).toISOString(),
+      duration_ms: 100,
+      result: {
+        public_url: "https://host.example.test",
+        origin: "https://cocalc.example.test",
+        health_status: 200,
+        preflight_status: 204,
+        session_status: 401,
+      },
+    });
+    expect(secondSuccess).toMatchObject({
+      status: "passed",
+      consecutive_successes: 2,
+      quarantined: false,
+    });
+    expect(secondSuccess.alerted_at).toBeUndefined();
+  });
+
+  it("rate limits repeated public-route failure alerts", () => {
+    const row = degradedCloudHost({
+      public_route_probe: {
+        status: "failed",
+        quarantined: true,
+        alerted_at: new Date(NOW - 5 * 60_000).toISOString(),
+      },
+    });
+    expect(_test.publicRouteProbeFailureAlertDue(row, NOW)).toBe(false);
+    row.metadata.public_route_probe.alerted_at = new Date(
+      NOW - 16 * 60_000,
+    ).toISOString();
+    expect(_test.publicRouteProbeFailureAlertDue(row, NOW)).toBe(true);
+  });
+
   it("identifies the deployment from the project-host public URL", () => {
     const id = "c2c1bb5b-d5fb-4a06-8904-4549f4089ac2";
     expect(

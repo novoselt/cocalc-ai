@@ -8,10 +8,15 @@ import { randomUUID } from "node:crypto";
 import getLogger from "@cocalc/backend/logger";
 import { createHostControlClient } from "@cocalc/conat/project-host/api";
 import getPool from "@cocalc/database/pool";
+import { getSitePublicOrigin } from "@cocalc/server/bay-public-origin";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { enqueueCloudVmWorkOnce } from "@cocalc/server/cloud/db";
 import { getExplicitHostControlClient } from "@cocalc/server/conat/route-client";
 import adminAlert from "@cocalc/server/messages/admin-alert";
+import {
+  probeProjectHostPublicRoute,
+  type ProjectHostPublicRouteProbeResult,
+} from "./public-route-probe";
 
 const logger = getLogger("server:hosts:runtime-maintenance");
 
@@ -48,6 +53,57 @@ const SYNTHETIC_PROBE_CONCURRENCY = Math.max(
       Number(process.env.COCALC_HOST_SYNTHETIC_PROBE_CONCURRENCY ?? 2),
     ) || 2,
   ),
+);
+const PUBLIC_ROUTE_PROBE_SUCCESS_INTERVAL_MS = Math.max(
+  60_000,
+  Number(process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_INTERVAL_MS ?? 2 * 60_000),
+);
+const PUBLIC_ROUTE_PROBE_FAILURE_RETRY_MS = Math.max(
+  30_000,
+  Number(process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_RETRY_MS ?? 60_000),
+);
+const PUBLIC_ROUTE_PROBE_CLAIM_TIMEOUT_MS = Math.max(
+  60_000,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_CLAIM_TIMEOUT_MS ?? 2 * 60_000,
+  ),
+);
+const PUBLIC_ROUTE_PROBE_REQUEST_TIMEOUT_MS = Math.max(
+  5000,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_REQUEST_TIMEOUT_MS ?? 15_000,
+  ),
+);
+const PUBLIC_ROUTE_PROBE_ALERT_INTERVAL_MS = Math.max(
+  60_000,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_ALERT_INTERVAL_MS ?? 15 * 60_000,
+  ),
+);
+const PUBLIC_ROUTE_PROBE_CONCURRENCY = Math.max(
+  1,
+  Math.min(
+    32,
+    Math.floor(
+      Number(process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_CONCURRENCY ?? 32),
+    ) || 32,
+  ),
+);
+const PUBLIC_ROUTE_PROBE_FAILURES_TO_QUARANTINE = Math.max(
+  2,
+  Math.floor(
+    Number(
+      process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_FAILURES_TO_QUARANTINE ?? 2,
+    ),
+  ) || 2,
+);
+const PUBLIC_ROUTE_PROBE_SUCCESSES_TO_RECOVER = Math.max(
+  2,
+  Math.floor(
+    Number(
+      process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_SUCCESSES_TO_RECOVER ?? 2,
+    ),
+  ) || 2,
 );
 const AUTO_REBOOT_WINDOW_MS = Math.max(
   60 * 60_000,
@@ -110,6 +166,15 @@ type AutoRebootDecision =
   | { action: "wait"; reason: string }
   | { action: "exhausted"; attempts: RebootAttempt[] }
   | { action: "reboot"; attempts: RebootAttempt[] };
+
+type PublicRouteProbeClaim = {
+  claim_id: string;
+  previous_status?: string;
+  previous_failures: number;
+  previous_successes: number;
+  was_quarantined: boolean;
+  alerted_at?: string;
+};
 
 const RECOVERABLE_AUTO_REBOOT_STATUSES = new Set([
   "scheduled",
@@ -205,6 +270,85 @@ function syntheticProbeFailureAlertDue(
   return (
     alertedAt == null || nowMs - alertedAt >= SYNTHETIC_PROBE_ALERT_INTERVAL_MS
   );
+}
+
+function publicRouteProbeDue(row: RuntimeHostRow, nowMs = Date.now()): boolean {
+  const probe = row.metadata?.public_route_probe ?? {};
+  const currentBootId = `${row.metadata?.host_boot_id ?? ""}`.trim();
+  const probeBootId = `${probe.host_boot_id ?? ""}`.trim();
+  if (!probeBootId || (currentBootId && probeBootId !== currentBootId)) {
+    return true;
+  }
+  const currentSessionId = `${row.metadata?.host_session_id ?? ""}`.trim();
+  const probeSessionId = `${probe.host_session_id ?? ""}`.trim();
+  if (currentSessionId && probeSessionId !== currentSessionId) {
+    return true;
+  }
+  const status = `${probe.status ?? ""}`.trim();
+  const checkedAt = timestampMs(probe.checked_at ?? probe.claimed_at) ?? 0;
+  if (status === "running") {
+    return nowMs - checkedAt >= PUBLIC_ROUTE_PROBE_CLAIM_TIMEOUT_MS;
+  }
+  if (status === "failed" || status === "recovering") {
+    return nowMs - checkedAt >= PUBLIC_ROUTE_PROBE_FAILURE_RETRY_MS;
+  }
+  return nowMs - checkedAt >= PUBLIC_ROUTE_PROBE_SUCCESS_INTERVAL_MS;
+}
+
+function publicRouteProbeFailureAlertDue(
+  row: RuntimeHostRow,
+  nowMs = Date.now(),
+): boolean {
+  const alertedAt = timestampMs(row.metadata?.public_route_probe?.alerted_at);
+  return (
+    alertedAt == null ||
+    nowMs - alertedAt >= PUBLIC_ROUTE_PROBE_ALERT_INTERVAL_MS
+  );
+}
+
+function publicRouteProbeOutcome({
+  row,
+  claim,
+  checkedAt,
+  duration_ms,
+  result,
+  error,
+  alerted_at,
+}: {
+  row: RuntimeHostRow;
+  claim: PublicRouteProbeClaim;
+  checkedAt: string;
+  duration_ms: number;
+  result?: ProjectHostPublicRouteProbeResult;
+  error?: unknown;
+  alerted_at?: string;
+}): Record<string, any> {
+  const failed = error != null;
+  const consecutiveFailures = failed ? claim.previous_failures + 1 : 0;
+  const consecutiveSuccesses = failed ? 0 : claim.previous_successes + 1;
+  const quarantined = failed
+    ? claim.was_quarantined ||
+      consecutiveFailures >= PUBLIC_ROUTE_PROBE_FAILURES_TO_QUARANTINE
+    : claim.was_quarantined &&
+      consecutiveSuccesses < PUBLIC_ROUTE_PROBE_SUCCESSES_TO_RECOVER;
+  return {
+    status: failed ? "failed" : quarantined ? "recovering" : "passed",
+    claim_id: claim.claim_id,
+    checked_at: checkedAt,
+    host_boot_id: row.metadata?.host_boot_id,
+    host_session_id: row.metadata?.host_session_id,
+    duration_ms,
+    consecutive_failures: consecutiveFailures,
+    consecutive_successes: consecutiveSuccesses,
+    quarantined,
+    error: failed ? errorText(error) : undefined,
+    result: failed ? undefined : result,
+    alerted_at: failed
+      ? (alerted_at ?? claim.alerted_at)
+      : quarantined
+        ? claim.alerted_at
+        : undefined,
+  };
 }
 
 function recentRebootAttempts(metadata: any, nowMs: number): RebootAttempt[] {
@@ -577,6 +721,303 @@ export async function runSyntheticProjectHostProbes(): Promise<{
   };
 }
 
+async function claimPublicRouteProbe(
+  row: RuntimeHostRow,
+): Promise<PublicRouteProbeClaim | undefined> {
+  const claimId = randomUUID();
+  const previous = row.metadata?.public_route_probe ?? {};
+  const claim: PublicRouteProbeClaim = {
+    claim_id: claimId,
+    previous_status: `${previous.status ?? ""}`.trim() || undefined,
+    previous_failures: Number(previous.consecutive_failures) || 0,
+    previous_successes: Number(previous.consecutive_successes) || 0,
+    was_quarantined: previous.quarantined === true,
+    alerted_at: `${previous.alerted_at ?? ""}`.trim() || undefined,
+  };
+  const probe = {
+    status: "running",
+    claim_id: claimId,
+    claimed_at: new Date().toISOString(),
+    host_boot_id: row.metadata?.host_boot_id,
+    host_session_id: row.metadata?.host_session_id,
+    consecutive_failures: claim.previous_failures,
+    consecutive_successes: claim.previous_successes,
+    quarantined: claim.was_quarantined,
+    alerted_at: claim.alerted_at,
+  };
+  const { rowCount } = await pool().query(
+    `
+      UPDATE project_hosts
+      SET metadata=jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{public_route_probe}',
+        $3::jsonb,
+        true
+      ), updated=NOW()
+      WHERE id=$1
+        AND deleted IS NULL
+        AND status='running'
+        AND COALESCE(last_seen, to_timestamp(0)) >=
+          NOW() - ($2::double precision * INTERVAL '1 millisecond')
+        AND (
+          metadata -> 'public_route_probe' ->> 'status' IS DISTINCT FROM 'running'
+          OR COALESCE(
+            (metadata -> 'public_route_probe' ->> 'claimed_at')::timestamptz,
+            to_timestamp(0)
+          ) < NOW() - ($4::double precision * INTERVAL '1 millisecond')
+        )
+    `,
+    [
+      row.id,
+      HEARTBEAT_FRESH_MS,
+      JSON.stringify(probe),
+      PUBLIC_ROUTE_PROBE_CLAIM_TIMEOUT_MS,
+    ],
+  );
+  return rowCount ? claim : undefined;
+}
+
+async function finishPublicRouteProbe({
+  row,
+  claim,
+  startedAt,
+  result,
+  error,
+  alerted_at,
+}: {
+  row: RuntimeHostRow;
+  claim: PublicRouteProbeClaim;
+  startedAt: number;
+  result?: ProjectHostPublicRouteProbeResult;
+  error?: unknown;
+  alerted_at?: string;
+}): Promise<Record<string, any>> {
+  const probe = publicRouteProbeOutcome({
+    row,
+    claim,
+    checkedAt: new Date().toISOString(),
+    duration_ms: Date.now() - startedAt,
+    result,
+    error,
+    alerted_at,
+  });
+  await pool().query(
+    `
+      UPDATE project_hosts
+      SET metadata=jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{public_route_probe}',
+        $3::jsonb,
+        true
+      ), updated=NOW()
+      WHERE id=$1
+        AND metadata -> 'public_route_probe' ->> 'claim_id'=$2
+    `,
+    [row.id, claim.claim_id, JSON.stringify(probe)],
+  );
+  return probe;
+}
+
+async function executePublicRouteProbe({
+  row,
+  claim,
+  origin,
+}: {
+  row: RuntimeHostRow;
+  claim: PublicRouteProbeClaim;
+  origin: string;
+}): Promise<{
+  passed: boolean;
+  quarantined: boolean;
+  recovered: boolean;
+  alert?: { row: RuntimeHostRow; error: string; consecutive_failures: number };
+}> {
+  const startedAt = Date.now();
+  try {
+    const result = await probeProjectHostPublicRoute({
+      public_url: `${row.public_url}`,
+      origin,
+      timeout_ms: PUBLIC_ROUTE_PROBE_REQUEST_TIMEOUT_MS,
+    });
+    const probe = await finishPublicRouteProbe({
+      row,
+      claim,
+      startedAt,
+      result,
+    });
+    logger.info("project-host public route probe passed", {
+      host_id: row.id,
+      host_name: hostName(row),
+      duration_ms: Date.now() - startedAt,
+      recovery_status: probe.status,
+      consecutive_successes: probe.consecutive_successes,
+    });
+    return {
+      passed: true,
+      quarantined: probe.quarantined === true,
+      recovered: claim.was_quarantined && probe.quarantined !== true,
+    };
+  } catch (err) {
+    const nextFailures = claim.previous_failures + 1;
+    const willQuarantine =
+      claim.was_quarantined ||
+      nextFailures >= PUBLIC_ROUTE_PROBE_FAILURES_TO_QUARANTINE;
+    const alertDue = willQuarantine && publicRouteProbeFailureAlertDue(row);
+    const probe = await finishPublicRouteProbe({
+      row,
+      claim,
+      startedAt,
+      error: err,
+      alerted_at: alertDue ? new Date().toISOString() : undefined,
+    });
+    logger.warn("project-host public route probe failed", {
+      host_id: row.id,
+      host_name: hostName(row),
+      duration_ms: Date.now() - startedAt,
+      consecutive_failures: probe.consecutive_failures,
+      quarantined: probe.quarantined,
+      err: errorText(err),
+    });
+    return {
+      passed: false,
+      quarantined: probe.quarantined === true,
+      recovered: false,
+      alert: alertDue
+        ? {
+            row,
+            error: errorText(err),
+            consecutive_failures: probe.consecutive_failures,
+          }
+        : undefined,
+    };
+  }
+}
+
+async function alertPublicRouteFailures({
+  origin,
+  failures,
+}: {
+  origin: string;
+  failures: Array<{
+    row: RuntimeHostRow;
+    error: string;
+    consecutive_failures: number;
+  }>;
+}): Promise<void> {
+  if (!failures.length) return;
+  const sites = Array.from(
+    new Set(failures.map(({ row }) => deploymentLabel(row))),
+  ).join(",");
+  await adminAlert({
+    subject: `[${sites}] ${failures.length} project-host public route${failures.length === 1 ? "" : "s"} failed`,
+    body: [
+      `${failures.length} public project-host browser route${failures.length === 1 ? " has" : "s have"} failed repeated probes.`,
+      `site=${sites}`,
+      `origin=${origin}`,
+      "The hosts still have fresh backend heartbeats, but are quarantined from placement because browser CORS/session traffic may not reach them.",
+      "This signal does not automatically reboot a VM or project runtime.",
+      "",
+      ...failures.map(({ row, error, consecutive_failures }) =>
+        [
+          `${hostName(row)} host_id=${row.id}`,
+          `failures=${consecutive_failures}`,
+          `error=${error}`,
+          row.public_url ? `url=${row.public_url}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      ),
+    ].join("\n"),
+    dedupMinutes: 15,
+  });
+}
+
+async function alertPublicRouteRecoveries(
+  rows: RuntimeHostRow[],
+): Promise<void> {
+  if (!rows.length) return;
+  const sites = Array.from(new Set(rows.map(deploymentLabel))).join(",");
+  await adminAlert({
+    subject: `[${sites}] ${rows.length} project-host public route${rows.length === 1 ? "" : "s"} recovered`,
+    body: [
+      `${rows.length} public project-host browser route${rows.length === 1 ? " has" : "s have"} passed two consecutive recovery probes and returned to placement.`,
+      ...rows.map(
+        (row) => `${hostName(row)} host_id=${row.id} url=${row.public_url}`,
+      ),
+    ].join("\n"),
+    dedupMinutes: 15,
+  });
+}
+
+export async function runProjectHostPublicRouteProbes(): Promise<{
+  attempted: number;
+  passed: number;
+  failed: number;
+  quarantined: number;
+}> {
+  if (!enabled(process.env.COCALC_HOST_PUBLIC_ROUTE_PROBES_ENABLED)) {
+    return { attempted: 0, passed: 0, failed: 0, quarantined: 0 };
+  }
+  const origin =
+    `${process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_ORIGIN ?? ""}`.trim() ||
+    (await getSitePublicOrigin());
+  if (!origin) {
+    logger.warn("project-host public route probes have no configured origin");
+    return { attempted: 0, passed: 0, failed: 0, quarantined: 0 };
+  }
+  const rows = (await listRuntimeHosts())
+    .filter((row) => {
+      const runtime = row.metadata?.runtime_health ?? {};
+      return (
+        !!`${row.public_url ?? ""}`.trim() &&
+        `${row.metadata?.desired_state ?? "running"}` === "running" &&
+        runtime.status === "ready" &&
+        runtime.ready === true &&
+        !["queued", "running"].includes(
+          `${row.metadata?.host_restart_recovery?.status ?? ""}`,
+        ) &&
+        publicRouteProbeDue(row)
+      );
+    })
+    .slice(0, PUBLIC_ROUTE_PROBE_CONCURRENCY);
+  const claimed = (
+    await Promise.all(
+      rows.map(async (row) => ({
+        row,
+        claim: await claimPublicRouteProbe(row),
+      })),
+    )
+  ).filter(
+    (
+      entry,
+    ): entry is {
+      row: RuntimeHostRow;
+      claim: PublicRouteProbeClaim;
+    } => entry.claim != null,
+  );
+  const results = await Promise.all(
+    claimed.map(({ row, claim }) =>
+      executePublicRouteProbe({ row, claim, origin }),
+    ),
+  );
+  const failures = results
+    .map(({ alert }) => alert)
+    .filter((alert): alert is NonNullable<typeof alert> => alert != null);
+  await alertPublicRouteFailures({ origin, failures });
+  await alertPublicRouteRecoveries(
+    results.flatMap((result, index) =>
+      result.recovered ? [claimed[index].row] : [],
+    ),
+  );
+  const passed = results.filter(({ passed }) => passed).length;
+  return {
+    attempted: results.length,
+    passed,
+    failed: results.length - passed,
+    quarantined: results.filter(({ quarantined }) => quarantined).length,
+  };
+}
+
 async function updateAutoRecoveryState({
   host_id,
   state,
@@ -801,10 +1242,14 @@ export async function runProjectHostRuntimeMaintenance(): Promise<void> {
   if (maintenanceInflight) return await maintenanceInflight;
   maintenanceInflight = (async () => {
     const recovery = await runBoundedRuntimeAutoRecovery();
-    const probes = await runSyntheticProjectHostProbes();
+    const [probes, publicRoutes] = await Promise.all([
+      runSyntheticProjectHostProbes(),
+      runProjectHostPublicRouteProbes(),
+    ]);
     logger.debug("project-host runtime maintenance complete", {
       recovery,
       probes,
+      public_routes: publicRoutes,
     });
   })();
   try {
@@ -819,6 +1264,9 @@ export const _test = {
   deploymentLabel,
   recentRebootAttempts,
   recoveredAutoRebootState,
+  publicRouteProbeDue,
+  publicRouteProbeFailureAlertDue,
+  publicRouteProbeOutcome,
   syntheticProbeFailureAlertDue,
   syntheticProbeDue,
 };

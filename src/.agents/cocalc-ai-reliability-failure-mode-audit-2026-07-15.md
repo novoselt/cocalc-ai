@@ -216,6 +216,14 @@ should quarantine placement and open an incident; a direct-origin success plus
 public-route failure should classify the tunnel/edge rather than the project
 runtime. Recovery requires two successes to avoid flapping.
 
+**Implementation status (2026-07-15).** R2 now continuously checks public
+health, CORS preflight, and the bounded unauthenticated session response for
+fresh desired-running hosts. Probe state is persisted per host, placement is
+quarantined after two failures, recovery requires two successes, and operator
+alerts are aggregated across hosts. Public-route failures are classified
+separately and never trigger automatic VM or runtime reboot. The dedicated
+authenticated session and WebSocket/data-path canary remains part of R3.
+
 ### R3: Scheduled Full User-Path Canary
 
 **Failure mode.** `admin smoke` and the cloud smoke runner can exercise a rich

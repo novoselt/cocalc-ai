@@ -206,6 +206,7 @@ function normalizeCategory(value?: string | null): HostAvailabilityCategory {
     case "user_stopped":
     case "host_stale":
     case "runtime_degraded":
+    case "public_route_degraded":
       return value;
     default:
       return "unknown";
@@ -375,6 +376,7 @@ export function classifyHostAvailabilitySnapshot(
   const recoveryPhase = metadata.spot_recovery_state?.phase;
   const runtimeHealth = metadata.runtime_health ?? {};
   const syntheticProbe = metadata.runtime_synthetic_probe ?? {};
+  const publicRouteProbe = metadata.public_route_probe ?? {};
   const runtimeStatus = `${runtimeHealth.status ?? ""}`.trim();
   const status = `${row.status ?? ""}`.trim();
   const lastSeen = normalizeDate(row.last_seen);
@@ -390,6 +392,7 @@ export function classifyHostAvailabilitySnapshot(
       last_seen: lastSeen?.toISOString(),
       recovery_phase: recoveryPhase,
       runtime_health: runtimeHealth,
+      public_route_probe: publicRouteProbe,
     },
   };
   if (row.deleted) {
@@ -439,6 +442,23 @@ export function classifyHostAvailabilitySnapshot(
       summary: runtimeHealth.error
         ? `Host project runtime is degraded: ${runtimeHealth.error}`
         : `Host project runtime is ${runtimeStatus}.`,
+    };
+  }
+  if (
+    status === "running" &&
+    heartbeatFresh &&
+    publicRouteProbe.quarantined === true
+  ) {
+    return {
+      ...base,
+      state: "degraded",
+      planned: false,
+      category: "public_route_degraded",
+      summary: publicRouteProbe.error
+        ? `Host public browser route is degraded: ${publicRouteProbe.error}`
+        : publicRouteProbe.status === "recovering"
+          ? "Host public browser route is recovering."
+          : "Host public browser route is degraded.",
     };
   }
   if (isServingSpotFallbackPhase(recoveryPhase)) {

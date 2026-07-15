@@ -40,6 +40,7 @@ import type {
   HostMetricsHistory,
   HostPricingModel,
   HostPressureZone,
+  HostPublicRouteProbe,
   HostRuntimeExceptionSummary,
   HostSpotRecoveryPolicy,
   HostSpotRecoveryState,
@@ -320,6 +321,40 @@ function hostLastSeenMs(row: any): number | undefined {
   return Number.isFinite(ts) ? ts : undefined;
 }
 
+function normalizePublicRouteProbe(
+  value: unknown,
+): HostPublicRouteProbe | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const probe = value as Record<string, any>;
+  const status = `${probe.status ?? ""}`.trim();
+  if (!new Set(["running", "passed", "failed", "recovering"]).has(status)) {
+    return undefined;
+  }
+  const result =
+    probe.result && typeof probe.result === "object" ? probe.result : {};
+  const finiteNumber = (entry: unknown): number | undefined => {
+    const numeric = Number(entry);
+    return Number.isFinite(numeric) ? numeric : undefined;
+  };
+  const nonNegativeInteger = (entry: unknown): number =>
+    Math.max(0, Math.floor(finiteNumber(entry) ?? 0));
+  return {
+    status: status as HostPublicRouteProbe["status"],
+    claimed_at: normalizeIsoDateString(probe.claimed_at),
+    checked_at: normalizeIsoDateString(probe.checked_at),
+    duration_ms: finiteNumber(probe.duration_ms),
+    consecutive_failures: nonNegativeInteger(probe.consecutive_failures),
+    consecutive_successes: nonNegativeInteger(probe.consecutive_successes),
+    quarantined: probe.quarantined === true,
+    error: normalizeString(probe.error),
+    health_status: finiteNumber(result.health_status),
+    preflight_status: finiteNumber(result.preflight_status),
+    session_status: finiteNumber(result.session_status),
+    edge_server: normalizeString(result.edge_server),
+    cf_ray: normalizeString(result.cf_ray),
+  };
+}
+
 export function computeHostOperationalAvailability(row: any): {
   operational: boolean;
   online: boolean;
@@ -400,6 +435,19 @@ export function computeHostOperationalAvailability(row: any): {
       reason_unavailable: syntheticError
         ? `Host synthetic project probe failed: ${syntheticError}`
         : "Host synthetic project probe failed.",
+    };
+  }
+
+  const publicRouteProbe = row?.metadata?.public_route_probe;
+  if (publicRouteProbe?.quarantined === true) {
+    const publicRouteError = `${publicRouteProbe?.error ?? ""}`.trim();
+    return {
+      operational: false,
+      online: true,
+      status,
+      reason_unavailable: publicRouteError
+        ? `Host public browser route is degraded: ${publicRouteError}`
+        : "Host public browser route is degraded.",
     };
   }
 
@@ -1245,6 +1293,7 @@ export function parseRow(
     container_runtime_version: software.container_runtime,
     host_session_id: metadata.host_session_id,
     host_session_started_at: metadata.host_session_started_at,
+    public_route_probe: normalizePublicRouteProbe(metadata.public_route_probe),
     metrics:
       currentMetrics || opts.metrics_history
         ? {

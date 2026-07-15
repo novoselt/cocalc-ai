@@ -777,6 +777,22 @@ export interface HostRuntimeExceptionSummary {
   host_override_targets: HostRuntimeDeploymentTarget[];
 }
 
+export interface HostPublicRouteProbe {
+  status: "running" | "passed" | "failed" | "recovering";
+  claimed_at?: string;
+  checked_at?: string;
+  duration_ms?: number;
+  consecutive_failures: number;
+  consecutive_successes: number;
+  quarantined: boolean;
+  error?: string;
+  health_status?: number;
+  preflight_status?: number;
+  session_status?: number;
+  edge_server?: string;
+  cf_ray?: string;
+}
+
 export interface HostCatalog {
   provider: string;
   entries: HostCatalogEntry[];
@@ -804,6 +820,7 @@ export interface Host {
   container_runtime_version?: string;
   host_session_id?: string;
   host_session_started_at?: string;
+  public_route_probe?: HostPublicRouteProbe;
   metrics?: HostMetrics;
   pressure?: HostPressureState;
   machine?: HostMachine;
@@ -913,6 +930,7 @@ export type HostAvailabilityCategory =
   | "user_stopped"
   | "host_stale"
   | "runtime_degraded"
+  | "public_route_degraded"
   | "unknown";
 
 export interface HostAvailabilityEvent {
