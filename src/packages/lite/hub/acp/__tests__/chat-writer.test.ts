@@ -1382,6 +1382,59 @@ describe("ChatStreamWriter", () => {
     (writer as any).dispose?.(true);
   });
 
+  it("keeps complete agent delta updates as separate preview paragraphs", async () => {
+    const previewPayloads: Array<AcpStreamMessage | AcpStreamMessage[]> = [];
+    const { syncdb } = makeFakeSyncDB();
+    const writer: any = new ChatStreamWriter({
+      metadata: baseMetadata,
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+      livePreviewStreamFactory: () =>
+        ({
+          publish: async (payload: AcpStreamMessage | AcpStreamMessage[]) => {
+            previewPayloads.push(payload);
+            return { seq: previewPayloads.length, time: Date.now() };
+          },
+          close: () => {},
+        }) as any,
+    });
+
+    const first =
+      "The production edge is healthy. I am checking the project hosts next.";
+    const second =
+      "The project-host audit is complete. All remaining containers are healthy.";
+    await writer.handle({
+      type: "event",
+      event: { type: "message", text: first, delta: true } as any,
+      seq: 0,
+      time: 1000,
+    } as AcpStreamMessage);
+    await writer.handle({
+      type: "event",
+      event: { type: "message", text: second, delta: true } as any,
+      seq: 20,
+      time: 2000,
+    } as AcpStreamMessage);
+    await writer.waitForLivePreviewFlush();
+
+    const previewEvents = flattenLivePayloads(previewPayloads);
+    const latestPreview = previewEvents
+      .filter(
+        (event) => event.type === "event" && event.event.type === "message",
+      )
+      .at(-1) as any;
+    expect(latestPreview.event.text).toBe(`${first}\n\n${second}`);
+    expect(getLiveResponseMarkdown(previewEvents)).toBe(
+      `${first}\n\n${second}`,
+    );
+    writer.dispose?.(true);
+  });
+
   it("persists durable timestamps on live and terminal log events", async () => {
     const logSet = jest.fn().mockResolvedValue(undefined);
     const livePayloads: Array<AcpStreamMessage | AcpStreamMessage[]> = [];
@@ -1456,8 +1509,45 @@ describe("ChatStreamWriter", () => {
 
     const final = findLastChatSet(sets)!;
     expect(final.generating).toBe(false);
+    expect(final.history?.[0]?.content).toContain("oops");
+    expect(final.history?.[0]?.content).toContain("failed");
     expect((queue.clearAcpPayloads as any).mock.calls.length).toBe(1);
     (writer as any).dispose?.(true);
+  });
+
+  it("retries activity persistence before clearing the recovery queue", async () => {
+    const { syncdb, sets } = makeFakeSyncDB();
+    const logSet = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary activity store failure"))
+      .mockResolvedValue(undefined);
+    const writer: any = new ChatStreamWriter({
+      metadata: baseMetadata,
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: logSet,
+        }) as any,
+    });
+
+    await writer.handle({
+      type: "event",
+      event: { type: "message", text: "work completed" } as any,
+      seq: 0,
+    } as AcpStreamMessage);
+    await writer.handle({
+      type: "summary",
+      finalResponse: "done",
+      seq: 1,
+    } as AcpStreamMessage);
+    await flush(writer);
+
+    expect(logSet).toHaveBeenCalledTimes(2);
+    expect(queue.clearAcpPayloads).toHaveBeenCalledTimes(1);
+    expect(findLastChatSet(sets)?.generating).toBe(false);
+    writer.dispose?.(true);
   });
 
   it("does not overwrite error content when summary arrives afterward", async () => {
