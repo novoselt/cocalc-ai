@@ -94,6 +94,13 @@ describe("rendered public marketing overpromise canary", () => {
 });
 
 describe("public metadata overpromise coverage", () => {
+  it.each(["SOC 2-certified", "HIPAA-compliant", "FERPA-compliant"])(
+    "recognizes hyphenated compliance claim %s",
+    (claim) => {
+      expect(claim).toMatch(OVERPROMISE_TERMS);
+    },
+  );
+
   it("checks every sitemap route title and description", () => {
     for (const path of PUBLIC_SITEMAP_PATHS) {
       const metadata = routeMetadata(path);
