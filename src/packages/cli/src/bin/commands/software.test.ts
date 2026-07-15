@@ -3239,7 +3239,7 @@ test("software deploy project-host publishes compatibility object and sets fleet
   assert.equal(history.deployments[0].artifact_id, artifactId);
 });
 
-test("software deploy host-bootstrap publishes latest bootstrap and reconciles hosts", async () => {
+test("software deploy host-bootstrap clears overrides before reconciling hosts", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-host-bootstrap-"));
   const localStore = join(dir, "store");
   const bootstrapSource = join(
@@ -3306,7 +3306,7 @@ test("software deploy host-bootstrap publishes latest bootstrap and reconciles h
       .toString("utf8"),
     `${sha256}  bootstrap.py\n`,
   );
-  assert.equal(runs.length, 2);
+  assert.equal(runs.length, 3);
   assert.deepEqual(runs[0].args, [
     "--profile",
     "staging",
@@ -3322,6 +3322,16 @@ test("software deploy host-bootstrap publishes latest bootstrap and reconciles h
     "software-deploy-host-bootstrap",
   ]);
   assert.deepEqual(runs[1].args, [
+    "--profile",
+    "staging",
+    "host",
+    "deploy",
+    "resume-default",
+    "--all-hosts",
+    "--artifact",
+    "bootstrap-environment",
+  ]);
+  assert.deepEqual(runs[2].args, [
     "--profile",
     "staging",
     "host",
