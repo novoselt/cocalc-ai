@@ -55,7 +55,7 @@ echo "- Build @cocalc/plus"
 pnpm --filter @cocalc/plus build
 
 echo "- Bundle entry point with @vercel/ncc"
-ncc build packages/plus/dist/bin/start.js \
+"$ROOT/scripts/ncc.sh" build packages/plus/dist/bin/start.js \
   -o "$OUT"/bundle \
   --external prettier \
   --external node-pty \

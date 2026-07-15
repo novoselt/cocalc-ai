@@ -105,7 +105,7 @@ echo "- Build compact control-plane bundle"
   --no-static
 
 echo "- Bundle schema migration helper with @vercel/ncc"
-pnpm --filter @cocalc/project-host exec ncc build "$ROOT/packages/rocket/bin/bay-migrate-schema.js" \
+pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/packages/rocket/bin/bay-migrate-schema.js" \
   -o "$OUT/runtime/migrate-schema" \
   --external bufferutil \
   --external utf-8-validate \

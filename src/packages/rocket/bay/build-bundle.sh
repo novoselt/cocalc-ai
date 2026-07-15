@@ -153,7 +153,7 @@ cp -a "$ROOT/packages/project-host/build/bundle/main"/. \
   "$OUT/runtime/project-host"/
 
 echo "- Bundle schema migration helper with @vercel/ncc"
-pnpm --filter @cocalc/project-host exec ncc build "$ROOT/packages/rocket/bin/bay-migrate-schema.js" \
+pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/packages/rocket/bin/bay-migrate-schema.js" \
   -o "$OUT/runtime/migrate-schema" \
   --external bufferutil \
   --external utf-8-validate \
@@ -163,7 +163,7 @@ copy_native_pkg "bufferutil" "$OUT/runtime/migrate-schema"
 copy_native_pkg "utf-8-validate" "$OUT/runtime/migrate-schema"
 
 echo "- Bundle cloudflared systemd helper with @vercel/ncc"
-pnpm --filter @cocalc/project-host exec ncc build "$ROOT/packages/rocket/bin/bay-cloudflared.js" \
+pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/packages/rocket/bin/bay-cloudflared.js" \
   -o "$OUT/runtime/cloudflared" \
   --external bufferutil \
   --external utf-8-validate \

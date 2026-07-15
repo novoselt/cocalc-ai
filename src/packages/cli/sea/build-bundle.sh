@@ -17,7 +17,7 @@ echo "- Build @cocalc/cli"
 pnpm --dir "$ROOT/packages/cli" build
 
 echo "- Bundle CLI entry point with @vercel/ncc"
-ncc build "$ROOT/packages/cli/dist/bin/cocalc.js" \
+"$ROOT/scripts/ncc.sh" build "$ROOT/packages/cli/dist/bin/cocalc.js" \
   -o "$OUT" \
   --minify \
   --license "licenses.txt"

@@ -126,19 +126,19 @@ build_star_helper_bundles() {
       "$STAR_HELPER_BUILD_DIR/seed-star-poc" \
       "$STAR_HELPER_BUILD_DIR/ensure-rootfs-cache" \
       "$STAR_HELPER_BUILD_DIR/publish-default-rootfs"
-    pnpm --filter @cocalc/launchpad exec ncc build \
+    pnpm --filter @cocalc/launchpad exec "$SRC_ROOT/scripts/ncc.sh" build \
       "$SRC_ROOT/packages/server/build/star-helper-entrypoints/seed-star-poc.cjs" \
       -o "$STAR_HELPER_BUILD_DIR/seed-star-poc" \
       --external bufferutil \
       --external utf-8-validate \
       --license licenses.txt
-    pnpm --filter @cocalc/launchpad exec ncc build \
+    pnpm --filter @cocalc/launchpad exec "$SRC_ROOT/scripts/ncc.sh" build \
       "$SRC_ROOT/packages/server/build/star-helper-entrypoints/publish-default-rootfs.cjs" \
       -o "$STAR_HELPER_BUILD_DIR/publish-default-rootfs" \
       --external bufferutil \
       --external utf-8-validate \
       --license licenses.txt
-    pnpm --filter @cocalc/project-host exec ncc build \
+    pnpm --filter @cocalc/project-host exec "$SRC_ROOT/scripts/ncc.sh" build \
       "$SRC_ROOT/packages/project-host/build/star-helper-entrypoints/ensure-rootfs-cache.cjs" \
       -o "$STAR_HELPER_BUILD_DIR/ensure-rootfs-cache" \
       --external bufferutil \
@@ -225,7 +225,7 @@ fs.writeFileSync(entry, lines.join("\n"));
 console.error(`[star-runtime-build] generated ${entry} with ${files.length} routes`);
 NODE
     rm -rf "$out_dir"
-    pnpm --filter @cocalc/launchpad exec ncc build \
+    pnpm --filter @cocalc/launchpad exec "$SRC_ROOT/scripts/ncc.sh" build \
       "$entry" \
       -o "$out_dir" \
       --external bufferutil \

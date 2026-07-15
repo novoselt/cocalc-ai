@@ -86,7 +86,7 @@ mkdir -p "$OUT"
 cd "$ROOT"
 
 echo "- Bundle entry point with @vercel/ncc"
-ncc build packages/project/bin/cocalc-project.js \
+"$ROOT/scripts/ncc.sh" build packages/project/bin/cocalc-project.js \
   -o "$OUT"/bundle \
   --source-map \
   --external prettier \

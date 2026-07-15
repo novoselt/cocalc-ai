@@ -121,7 +121,7 @@ echo "- Build project-host"
 pnpm --filter @cocalc/project-host run build
 
 echo "- Bundle entry point with @vercel/ncc"
-ncc build packages/project-host/bin/start.js \
+"$ROOT/scripts/ncc.sh" build packages/project-host/bin/start.js \
   -o "$OUT"/bundle \
   --source-map \
   --external node-pty \
@@ -129,7 +129,7 @@ ncc build packages/project-host/bin/start.js \
   --external utf-8-validate
 
 echo "- Bundle main entrypoint (daemon target)"
-ncc build packages/project-host/dist/main.js \
+"$ROOT/scripts/ncc.sh" build packages/project-host/dist/main.js \
   -o "$OUT"/main \
   --source-map \
   --external node-pty \
@@ -137,7 +137,7 @@ ncc build packages/project-host/dist/main.js \
   --external utf-8-validate
 
 echo "- Bundle persistent app supervisor"
-ncc build packages/project-host/dist/app-supervisor.js \
+"$ROOT/scripts/ncc.sh" build packages/project-host/dist/app-supervisor.js \
   -o "$OUT"/supervisor \
   --source-map
 

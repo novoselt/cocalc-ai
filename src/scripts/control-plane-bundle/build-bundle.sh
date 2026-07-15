@@ -180,7 +180,7 @@ ncc_build() {
     # Running from src causes ncc/ts-loader to pick up the monorepo tsconfig and
     # type-check source dependencies.  The release bundle should consume built JS.
     cd "$(dirname "$ROOT")"
-    "$ncc_bin" build --no-cache "$@"
+    "$ROOT/scripts/ncc.sh" "$ncc_bin" build --no-cache "$@"
   )
 }
 
