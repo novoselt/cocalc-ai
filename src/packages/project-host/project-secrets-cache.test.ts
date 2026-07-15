@@ -147,4 +147,35 @@ describe("project secrets runtime cache", () => {
       TOKEN: "new",
     });
   });
+
+  it("assigns local generations to snapshots from legacy hubs", () => {
+    const key = Buffer.alloc(32, 12);
+    const encrypted_value = encryptProjectSecretValue({
+      project_id,
+      name: "TOKEN",
+      value: "legacy",
+      key,
+    });
+    const legacyCache = {
+      key_base64: key.toString("base64"),
+      entries: [{ name: "TOKEN", encrypted_value, value_bytes: 6 }],
+    };
+
+    expect(
+      syncProjectSecretsCache({
+        project_id,
+        cache: legacyCache as any,
+      }),
+    ).toEqual(
+      expect.objectContaining({ accepted: true, cached_generation: 1 }),
+    );
+    expect(
+      syncProjectSecretsCache({
+        project_id,
+        cache: legacyCache as any,
+      }),
+    ).toEqual(
+      expect.objectContaining({ accepted: true, cached_generation: 2 }),
+    );
+  });
 });

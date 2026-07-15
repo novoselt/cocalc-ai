@@ -45,9 +45,17 @@ export function syncProjectSecretsCache({
   materialized_generation: number;
 } {
   setProjectSecretsCacheKey(cache.key_base64);
+  const current = getCachedProjectSecretsState(project_id);
+  // Older hubs did not include a generation. Treat each legacy snapshot as a
+  // new local generation so a project-host can be upgraded before the hub, or
+  // continue serving safely if the hub is rolled back.
+  const generation =
+    Number.isSafeInteger(cache.generation) && cache.generation >= 0
+      ? cache.generation
+      : current.cached_generation + 1;
   const { accepted, state } = replaceCachedProjectSecrets({
     project_id,
-    generation: cache.generation,
+    generation,
     entries: cache.entries,
   });
   return {
