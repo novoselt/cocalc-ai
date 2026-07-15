@@ -936,6 +936,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     );
     const projectRestarted = reason === "project_runtime_changed";
     const projectRuntimeLost = reason === "project_runtime_lost";
+    if (!projectRestarted && !projectRuntimeLost) return;
     const hostPressure = runtimeExitReason === "host_pressure";
     return (
       <Alert
@@ -948,18 +949,14 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
             ? hostPressure
               ? "Project stopped to protect host stability"
               : "Project runtime stopped unexpectedly"
-            : projectRestarted
-              ? "Project restarted"
-              : "Project host connection recovered"
+            : "Project restarted"
         }
         description={
           projectRuntimeLost
             ? hostPressure
               ? "The host ran critically low on resources, so this project runtime was stopped. Previous terminals and notebook kernels ended. CoCalc is restarting the project and reconnecting active terminals automatically; files and collaborative documents remain available."
               : "The project container exited, so previous terminals and notebook kernels ended. CoCalc is restarting the project and reconnecting active terminals automatically; files and collaborative documents remain available."
-            : projectRestarted
-              ? "The project runtime restarted, so previous terminals and notebook kernels ended. CoCalc is reconnecting them automatically; files and collaborative documents remain available."
-              : "The project host restarted or reconnected. CoCalc rebuilt this tab's files, terminals, notebooks, and other live connections automatically. Existing terminal processes and kernels may have ended."
+            : "The project runtime restarted, so previous terminals and notebook kernels ended. CoCalc is reconnecting them automatically; files and collaborative documents remain available."
         }
         onClose={() => actions?.dismissRuntimeRecoveryNotice?.()}
       />

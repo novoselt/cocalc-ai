@@ -245,19 +245,6 @@ function projectRuntimeLostTerminalMessage(cols: number | undefined): string {
   });
 }
 
-function projectHostReconnectedTerminalMessage(
-  cols: number | undefined,
-): string {
-  return terminalStatusBox(cols, {
-    title: "Project host reconnected",
-    primary: "This tab's live connection was reset.",
-    secondary: [
-      "Reconnecting the terminal automatically...",
-      "Earlier terminal processes may have ended.",
-    ],
-  });
-}
-
 function terminalStatusBox(
   cols: number | undefined,
   {
@@ -388,8 +375,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     if (
       typeof recoveryNoticeId === "string" &&
       typeof recoveryOccurredAt === "number" &&
-      (recoveryReason === "host_session_changed" ||
-        recoveryReason === "project_runtime_changed" ||
+      (recoveryReason === "project_runtime_changed" ||
         recoveryReason === "project_runtime_lost") &&
       Date.now() - recoveryOccurredAt <= RUNTIME_RECOVERY_NOTICE_MAX_AGE_MS
     ) {
@@ -1072,9 +1058,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     await this.showRuntimeRecoveryMessage(
       reason === "project_runtime_changed"
         ? projectRuntimeRestartedTerminalMessage(this.terminal.cols)
-        : reason === "project_runtime_lost"
-          ? projectRuntimeLostTerminalMessage(this.terminal.cols)
-          : projectHostReconnectedTerminalMessage(this.terminal.cols),
+        : projectRuntimeLostTerminalMessage(this.terminal.cols),
     );
   };
 

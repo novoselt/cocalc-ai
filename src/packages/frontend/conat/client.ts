@@ -1718,12 +1718,8 @@ export class ConatClient extends EventEmitter {
         affectedProjectIds.add(project_id);
       }
     }
-    const recovery_id = `${state.host_id}:${host_session_id}`;
     for (const project_id of affectedProjectIds) {
-      redux.getProjectActions?.(project_id)?.resetProjectHostRuntime?.({
-        reason: "host_session_changed",
-        recovery_id,
-      });
+      redux.getProjectActions?.(project_id)?.resetProjectHostRuntime?.();
     }
   };
 

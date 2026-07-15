@@ -13,7 +13,10 @@ function loadTerminalModule({
   runtimeGeneration?: number;
   runtimeRecoveryNotice?: {
     id: string;
-    reason: "host_session_changed" | "project_runtime_changed";
+    reason:
+      | "host_session_changed"
+      | "project_runtime_changed"
+      | "project_runtime_lost";
     occurred_at: number;
   };
   project?: any;
@@ -890,7 +893,7 @@ describe("connected terminal resizing", () => {
     }
   });
 
-  it("explains a recent project-host session replacement before reconnecting", async () => {
+  it("ignores a project-host session replacement notice", async () => {
     const { Terminal } = loadTerminalModule({
       runtimeRecoveryNotice: {
         id: "host-1:session-2",
@@ -916,12 +919,8 @@ describe("connected terminal resizing", () => {
     const terminal = new Terminal(actions, 0, "term-1", parent);
     await terminal.connect();
 
-    expect(terminal["terminal"].write).toHaveBeenCalledWith(
+    expect(terminal["terminal"].write).not.toHaveBeenCalledWith(
       expect.stringContaining("Project host reconnected"),
-      expect.any(Function),
-    );
-    expect(terminal["terminal"].write).toHaveBeenCalledWith(
-      expect.stringContaining("live connection was reset"),
       expect.any(Function),
     );
     terminal.close();

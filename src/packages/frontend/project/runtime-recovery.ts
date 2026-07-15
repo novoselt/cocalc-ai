@@ -7,10 +7,7 @@ export const PROJECT_RUNTIME_RECOVERY_EVENT = "runtime-recovery";
 
 export interface RuntimeRecoveryNotice {
   id: string;
-  reason:
-    | "host_session_changed"
-    | "project_runtime_changed"
-    | "project_runtime_lost";
+  reason: "project_runtime_changed" | "project_runtime_lost";
   occurred_at: number;
   runtime_exit_reason?: string;
 }
