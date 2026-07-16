@@ -1454,6 +1454,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("apply_pasta_resource_limits", script)
             self.assertIn("ensure_project_network_rule", script)
             self.assertIn("emit_project_network_rules", script)
+            ensure_network_body = script.split(
+                "ensure_project_network_rule() {", 1
+            )[1].split("\n}\n\nemit_project_network_rules()", 1)[0]
+            self.assertNotIn("project_network_rule_handles", ensure_network_body)
+            self.assertIn(
+                'if emit_project_network_rules "$project_id" | run_project_network_nft -f -; then',
+                ensure_network_body,
+            )
+            self.assertIn("configure_project_network_table", ensure_network_body)
             self.assertIn(
                 "printf 'flush chain inet %s %s\\n'", script
             )

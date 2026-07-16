@@ -2887,18 +2887,18 @@ project_network_rule_handles() {
 }
 
 ensure_project_network_rule() {
-  local project_id="$1" handle handles
+  local project_id="$1"
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
+  # Listing a cgroup/socket rule chain can take many seconds on a busy host.
+  # Project creation must not depend on that read path: append containment
+  # rules atomically, then let the periodic full reconciliation remove any
+  # duplicate or stale rules. Bootstrap normally creates the table first; the
+  # fallback keeps a cold or manually repaired host self-healing.
+  if emit_project_network_rules "$project_id" | run_project_network_nft -f -; then
+    return 0
+  fi
   configure_project_network_table
-  handles="$(project_network_rule_handles "$project_id")"
-  {
-    while IFS= read -r handle; do
-      [ -n "$handle" ] || continue
-      printf 'delete rule inet %s %s handle %s\\n' \
-        "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$handle"
-    done <<< "$handles"
-    emit_project_network_rules "$project_id"
-  } | run_project_network_nft -f -
+  emit_project_network_rules "$project_id" | run_project_network_nft -f -
 }
 
 emit_project_network_rules() {
