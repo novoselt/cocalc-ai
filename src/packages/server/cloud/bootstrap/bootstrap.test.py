@@ -572,6 +572,76 @@ class BootstrapJournaldLimitsTest(unittest.TestCase):
             )
 
 
+class BootstrapRsyslogLimitsTest(unittest.TestCase):
+    def test_unchanged_limits_do_not_queue_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            logrotate_path = Path(tmpdir) / "logrotate.d" / "rsyslog"
+            logrotate_path.parent.mkdir()
+            logrotate_path.write_text(
+                bootstrap.RSYSLOG_LOGROTATE_CONTENT,
+                encoding="utf-8",
+            )
+            calls = []
+            original_run_best_effort = bootstrap.run_best_effort
+            try:
+                bootstrap.run_best_effort = lambda *args, **kwargs: calls.append(
+                    (args, kwargs)
+                )
+                bootstrap.configure_rsyslog_limits(
+                    cfg,
+                    logrotate_path=logrotate_path,
+                )
+            finally:
+                bootstrap.run_best_effort = original_run_best_effort
+
+            self.assertEqual(calls, [])
+
+    def test_changed_limits_queue_nonblocking_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            logrotate_path = Path(tmpdir) / "logrotate.d" / "rsyslog"
+            logrotate_path.parent.mkdir()
+            calls = []
+            original_run_best_effort = bootstrap.run_best_effort
+            original_which = bootstrap.shutil.which
+            try:
+                bootstrap.run_best_effort = lambda *args, **kwargs: calls.append(
+                    (args, kwargs)
+                )
+                bootstrap.shutil.which = lambda _name: "/usr/bin/systemctl"
+                bootstrap.configure_rsyslog_limits(
+                    cfg,
+                    logrotate_path=logrotate_path,
+                )
+            finally:
+                bootstrap.run_best_effort = original_run_best_effort
+                bootstrap.shutil.which = original_which
+
+            self.assertEqual(
+                logrotate_path.read_text(encoding="utf-8"),
+                bootstrap.RSYSLOG_LOGROTATE_CONTENT,
+            )
+            self.assertEqual(
+                calls,
+                [
+                    (
+                        (
+                            cfg,
+                            [
+                                "systemctl",
+                                "start",
+                                "--no-block",
+                                "logrotate.service",
+                            ],
+                            "queue classic system log rotation",
+                        ),
+                        {"timeout": 15},
+                    )
+                ],
+            )
+
+
 class BootstrapSubidAllocationTest(unittest.TestCase):
     def test_rewrites_user_subid_ranges_to_the_exact_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2828,6 +2898,7 @@ class BootstrapModesTest(unittest.TestCase):
             patch("configure_kernel_key_limits", lambda _cfg: None)
             patch("configure_inotify_limits", lambda _cfg: None)
             patch("configure_journald_limits", lambda _cfg: None)
+            patch("configure_rsyslog_limits", lambda _cfg: None)
             patch("install_btrfs_helper", lambda _cfg: None)
             patch("install_privileged_wrappers", lambda _cfg: None)
             patch("reconcile_project_network_limits", lambda _cfg: None)

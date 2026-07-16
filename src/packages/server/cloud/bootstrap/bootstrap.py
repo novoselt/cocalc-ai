@@ -1264,6 +1264,55 @@ def configure_journald_limits(
         )
 
 
+RSYSLOG_LOGROTATE_CONTENT = """/var/log/syslog
+/var/log/mail.log
+/var/log/kern.log
+/var/log/auth.log
+/var/log/user.log
+/var/log/cron.log
+{
+    daily
+    rotate 3
+    maxsize 256M
+    missingok
+    notifempty
+    compress
+    sharedscripts
+    postrotate
+        /usr/lib/rsyslog/rsyslog-rotate
+    endscript
+}
+"""
+
+
+def configure_rsyslog_limits(
+    cfg: BootstrapConfig,
+    *,
+    logrotate_path: Path = Path("/etc/logrotate.d/rsyslog"),
+) -> None:
+    if not logrotate_path.parent.exists():
+        return
+    log_line(cfg, "bootstrap: configuring classic system log limits")
+    try:
+        changed = (
+            logrotate_path.read_text(encoding="utf-8")
+            != RSYSLOG_LOGROTATE_CONTENT
+        )
+    except OSError:
+        changed = True
+    if not changed:
+        log_line(cfg, "bootstrap: classic system log limits already current")
+        return
+    logrotate_path.write_text(RSYSLOG_LOGROTATE_CONTENT, encoding="utf-8")
+    if shutil.which("systemctl") is not None:
+        run_best_effort(
+            cfg,
+            ["systemctl", "start", "--no-block", "logrotate.service"],
+            "queue classic system log rotation",
+            timeout=15,
+        )
+
+
 ALGIF_AEAD_DISABLE_CONF = (
     'install algif_aead /bin/false\n'
 )
@@ -6985,6 +7034,7 @@ def run_provision(cfg: BootstrapConfig) -> int:
         install_gpu_support(cfg)
         configure_chrony(cfg)
         configure_journald_limits(cfg)
+        configure_rsyslog_limits(cfg)
         enable_userns(cfg)
         ensure_subuids(cfg)
         enable_linger(cfg)
@@ -7011,6 +7061,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         configure_kernel_key_limits(cfg)
         configure_inotify_limits(cfg)
         configure_journald_limits(cfg)
+        configure_rsyslog_limits(cfg)
         image_size_gb = compute_image_size(cfg)
         install_btrfs_helper(cfg)
         install_privileged_wrappers(cfg)
