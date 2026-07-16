@@ -1472,7 +1472,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
             self.assertIn('PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"', script)
-            self.assertIn('PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="5"', script)
+            self.assertIn('PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="30"', script)
             self.assertIn("project-cgroup-lock-timeout", script)
             self.assertIn("project-network-lock-timeout", script)
             self.assertIn("--kill-after=2s", script)

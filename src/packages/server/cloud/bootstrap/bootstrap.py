@@ -2542,7 +2542,11 @@ PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
 PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
 PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"
-PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="5"
+# Full-chain reads are only used by background reconciliation and can take
+# over ten seconds on a busy host with hundreds of cgroup/socket rules.
+# Foreground project creation uses an append-only write and does not pay this
+# timeout unless it must repair a missing table.
+PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="30"
 
 deny() {
   local code="$1"
