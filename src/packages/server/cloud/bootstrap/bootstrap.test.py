@@ -1383,6 +1383,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("socket cgroupv2 level", script)
             self.assertIn("apply_pasta_resource_limits", script)
             self.assertIn("ensure_project_network_rule", script)
+            self.assertIn("project_cgroup_has_processes", script)
+            self.assertNotIn('[ -s "$cgroup/cgroup.procs" ]', script)
             self.assertIn(
                 'pool="$(project_cgroup "$project_id")"', script
             )

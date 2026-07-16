@@ -2849,6 +2849,13 @@ apply_pasta_resource_limits() {
     --nofile="${PROJECT_PASTA_NOFILE_LIMIT}:${PROJECT_PASTA_NOFILE_LIMIT}"
 }
 
+project_cgroup_has_processes() {
+  local cgroup="$1" pid=""
+  [ -r "$cgroup/cgroup.procs" ] || return 1
+  read -r pid < "$cgroup/cgroup.procs" || true
+  [ -n "$pid" ]
+}
+
 verify_project_network_limits() {
   local project_id="$1" marker tcp_count udp_count pid found=0 limits
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
@@ -2885,7 +2892,7 @@ reconcile_project_network_limits() {
   "$PROJECT_NETWORK_NFT" flush chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN"
   for cgroup in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
     [ -d "$cgroup" ] || continue
-    [ -s "$cgroup/cgroup.procs" ] || continue
+    project_cgroup_has_processes "$cgroup" || continue
     project_id="${cgroup##*/project-}"
     is_project_uuid "$project_id" || continue
     ensure_project_network_rule "$project_id"
