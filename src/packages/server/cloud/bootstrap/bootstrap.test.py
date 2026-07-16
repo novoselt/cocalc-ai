@@ -1375,6 +1375,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("enter-project-cgroup)", script)
             self.assertIn("verify-project-pool)", script)
             self.assertIn("attach-project-cgroup)", script)
+            self.assertIn("verify-project-network-limits)", script)
+            self.assertIn("reconcile-project-network-limits)", script)
+            self.assertIn('PROJECT_PASTA_NOFILE_LIMIT="4096"', script)
+            self.assertIn('PROJECT_TCP_NEW_RATE="50"', script)
+            self.assertIn('PROJECT_UDP_NEW_RATE="100"', script)
+            self.assertIn("socket cgroupv2 level", script)
+            self.assertIn("apply_pasta_resource_limits", script)
+            self.assertIn("ensure_project_network_rule", script)
             self.assertIn(
                 'pool="$(project_cgroup "$project_id")"', script
             )
@@ -2806,6 +2814,7 @@ class BootstrapModesTest(unittest.TestCase):
             patch("configure_journald_limits", lambda _cfg: None)
             patch("install_btrfs_helper", lambda _cfg: None)
             patch("install_privileged_wrappers", lambda _cfg: None)
+            patch("reconcile_project_network_limits", lambda _cfg: None)
             patch("ensure_cocalc_mount", lambda _cfg: None)
             patch("ensure_btrfs_data", lambda _cfg: None)
             patch("ensure_subuids", lambda _cfg: None)

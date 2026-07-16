@@ -259,6 +259,38 @@ describe("project-runner podman orphan fallback", () => {
     );
   });
 
+  it("verifies network containment during periodic cgroup reconciliation", async () => {
+    mockGetConmonContainerProcessLists.mockResolvedValue(
+      new Map([
+        [
+          `project-${project1}`,
+          [
+            {
+              name: `project-${project1}`,
+              project_id: project1,
+              conmon_pid: 400,
+              child_pids: [401],
+            },
+          ],
+        ],
+      ]),
+    );
+
+    await reconcileProjectCgroup({ project_id: project1 });
+
+    expect(mockExecuteCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "sudo",
+        args: [
+          "-n",
+          "/usr/local/sbin/cocalc-runtime-storage",
+          "verify-project-network-limits",
+          project1,
+        ],
+      }),
+    );
+  });
+
   it("treats a project as running when podman misses it but conmon sees it", async () => {
     mockPodman.mockResolvedValue({ stdout: "" });
     mockGetConmonContainerProcesses.mockResolvedValue(

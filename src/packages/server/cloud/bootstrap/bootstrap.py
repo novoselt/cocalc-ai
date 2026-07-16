@@ -2483,6 +2483,14 @@ PROJECT_PROCESS_OOM_SCORE_ADJ="500"
 RUNTIME_USER="__RUNTIME_USER__"
 PROJECT_LEAF_POOL_HEADROOM_BYTES="$((2 * 1024 * 1024 * 1024))"
 MIN_PROJECT_LEAF_MEMORY_MAX_BYTES="$((512 * 1024 * 1024))"
+PROJECT_PASTA_NOFILE_LIMIT="4096"
+PROJECT_TCP_NEW_RATE="50"
+PROJECT_TCP_NEW_BURST="200"
+PROJECT_UDP_NEW_RATE="100"
+PROJECT_UDP_NEW_BURST="400"
+PROJECT_NETWORK_NFT="/usr/sbin/nft"
+PROJECT_NETWORK_TABLE="cocalc_project_network"
+PROJECT_NETWORK_CHAIN="output"
 
 deny() {
   local code="$1"
@@ -2745,6 +2753,153 @@ find_pasta_pids_for_netns() {
   done < <(find_pasta_pids)
 }
 
+find_pasta_pids_for_project() {
+  local project_id="$1" expected pid actual
+  expected="$(project_cgroup_relative_path "$project_id")"
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
+    [ "$actual" = "$expected" ] && printf '%s\\n' "$pid"
+  done < <(find_pasta_pids)
+}
+
+project_network_cgroup_path() {
+  local project_id="$1" relative
+  relative="${PROJECT_POOL_CGROUP_DEFAULT#/sys/fs/cgroup/}"
+  relative="${relative#/}"
+  printf '%s/project-%s\\n' "$relative" "$project_id"
+}
+
+project_network_cgroup_level() {
+  local path
+  path="$(project_network_cgroup_path "$1")"
+  awk -F/ '{print NF}' <<< "$path"
+}
+
+project_network_rule_marker() {
+  printf 'cocalc-project-network-%s\\n' "$1"
+}
+
+require_project_network_tools() {
+  [ -x "$PROJECT_NETWORK_NFT" ] || deny "project-network-tool-missing" "$PROJECT_NETWORK_NFT"
+  [ -x /usr/bin/prlimit ] || deny "project-network-tool-missing" "/usr/bin/prlimit"
+}
+
+configure_project_network_table() {
+  require_project_network_tools
+  if ! "$PROJECT_NETWORK_NFT" list table inet "$PROJECT_NETWORK_TABLE" >/dev/null 2>&1; then
+    "$PROJECT_NETWORK_NFT" add table inet "$PROJECT_NETWORK_TABLE"
+  fi
+  if ! "$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
+    printf 'add chain inet %s %s { type filter hook output priority filter; policy accept; }\\n' \
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" | "$PROJECT_NETWORK_NFT" -f -
+  fi
+}
+
+project_network_rule_handles() {
+  local project_id="$1" marker
+  marker="$(project_network_rule_marker "$project_id")"
+  "$PROJECT_NETWORK_NFT" -a list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" 2>/dev/null | \
+    awk -v marker="comment \\\"${marker}-" '
+      index($0, marker) {
+        for (i = 1; i < NF; i++) {
+          if ($i == "handle") print $(i + 1)
+        }
+      }
+    '
+}
+
+ensure_project_network_rule() {
+  local project_id="$1" path level marker handle
+  is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
+  configure_project_network_table
+  path="$(project_network_cgroup_path "$project_id")"
+  level="$(project_network_cgroup_level "$project_id")"
+  marker="$(project_network_rule_marker "$project_id")"
+  {
+    while IFS= read -r handle; do
+      [ -n "$handle" ] || continue
+      printf 'delete rule inet %s %s handle %s\\n' \
+        "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$handle"
+    done < <(project_network_rule_handles "$project_id")
+    printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto tcp tcp flags & (fin | syn | rst | ack) == syn limit rate over %s/second burst %s packets counter drop comment "%s-tcp"\\n' \
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
+      "$PROJECT_TCP_NEW_RATE" "$PROJECT_TCP_NEW_BURST" "$marker"
+    printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto udp ct state new limit rate over %s/second burst %s packets counter drop comment "%s-udp"\\n' \
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
+      "$PROJECT_UDP_NEW_RATE" "$PROJECT_UDP_NEW_BURST" "$marker"
+  } | "$PROJECT_NETWORK_NFT" -f -
+}
+
+remove_project_network_rule() {
+  local project_id="$1" handle
+  if ! "$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
+    return 0
+  fi
+  while IFS= read -r handle; do
+    [ -n "$handle" ] || continue
+    "$PROJECT_NETWORK_NFT" delete rule inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" handle "$handle"
+  done < <(project_network_rule_handles "$project_id")
+}
+
+apply_pasta_resource_limits() {
+  local pid="$1"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 0
+  /usr/bin/prlimit --pid "$pid" \
+    --nofile="${PROJECT_PASTA_NOFILE_LIMIT}:${PROJECT_PASTA_NOFILE_LIMIT}"
+}
+
+verify_project_network_limits() {
+  local project_id="$1" marker tcp_count udp_count pid found=0 limits
+  is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
+  require_project_network_tools
+  marker="$(project_network_rule_marker "$project_id")"
+  if ! "$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
+    echo "project network nftables chain is missing" >&2
+    return 1
+  fi
+  tcp_count="$("$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" | grep -Fc "comment \\\"${marker}-tcp\\\"" || true)"
+  udp_count="$("$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" | grep -Fc "comment \\\"${marker}-udp\\\"" || true)"
+  if [ "$tcp_count" -ne 1 ] || [ "$udp_count" -ne 1 ]; then
+    echo "project network nftables rules are missing or duplicated: tcp=${tcp_count} udp=${udp_count}" >&2
+    return 1
+  fi
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    found=1
+    limits="$(awk '$1 == "Max" && $2 == "open" && $3 == "files" {print $4 " " $5}' "/proc/${pid}/limits" 2>/dev/null || true)"
+    if [ "$limits" != "${PROJECT_PASTA_NOFILE_LIMIT} ${PROJECT_PASTA_NOFILE_LIMIT}" ]; then
+      echo "pasta nofile limit mismatch: pid=${pid} limits=${limits:-missing}" >&2
+      return 1
+    fi
+  done < <(find_pasta_pids_for_project "$project_id")
+  if [ "$found" -ne 1 ]; then
+    echo "project pasta process is missing" >&2
+    return 1
+  fi
+}
+
+reconcile_project_network_limits() {
+  local cgroup project_id pid actual pool_relative
+  configure_project_network_table
+  "$PROJECT_NETWORK_NFT" flush chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN"
+  for cgroup in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
+    [ -d "$cgroup" ] || continue
+    [ -s "$cgroup/cgroup.procs" ] || continue
+    project_id="${cgroup##*/project-}"
+    is_project_uuid "$project_id" || continue
+    ensure_project_network_rule "$project_id"
+  done
+  pool_relative="${PROJECT_POOL_CGROUP_DEFAULT#/sys/fs/cgroup}"
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
+    case "$actual" in
+      "${pool_relative}/project-"*) apply_pasta_resource_limits "$pid" ;;
+    esac
+  done < <(find_pasta_pids)
+}
+
 find_bees_pid() {
   local mountpoint="$1" proc pid
   for proc in /proc/[0-9]*; do
@@ -2989,6 +3144,7 @@ case "$cmd" in
       "$pool" "$memory_max" "$memory_high" "$memory_low" \
       "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
       "$cpu_weight" "$io_weight"
+    ensure_project_network_rule "$project_id"
     printf '%s\n' "$launcher_pid" > "$pool/cgroup.procs"
     printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
     verify_project_pid_in_pool "$project_id" "$launcher_pid"
@@ -3054,8 +3210,26 @@ case "$cmd" in
     if [ "$netns_path" != "-" ]; then
       while IFS= read -r pasta_pid; do
         attach_pid_to_project_pool_storage "$pasta_pid" "$pool" || true
+        apply_pasta_resource_limits "$pasta_pid"
       done < <(find_pasta_pids_for_netns "$netns_path")
     fi
+    ensure_project_network_rule "$project_id"
+    ;;
+  verify-project-network-limits)
+    if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then
+      echo "usage: cocalc-runtime-storage verify-project-network-limits <project-id>" >&2
+      exit 2
+    fi
+    verify_project_network_limits "$1"
+    ;;
+  reconcile-project-network-limits)
+    if [ "$#" -ne 0 ]; then
+      echo "usage: cocalc-runtime-storage reconcile-project-network-limits" >&2
+      exit 2
+    fi
+    exec 9>/run/lock/cocalc-project-cgroups.lock
+    flock -x 9
+    reconcile_project_network_limits
     ;;
   cleanup-project-cgroup)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then
@@ -3064,6 +3238,7 @@ case "$cmd" in
     exec 9>/run/lock/cocalc-project-cgroups.lock
     flock -x 9
     pool="$(project_cgroup "$1")"
+    remove_project_network_rule "$1"
     if [ -d "$pool" ]; then
       if [ -w "$pool/cgroup.kill" ]; then
         printf '1\n' > "$pool/cgroup.kill" 2>/dev/null || true
@@ -3086,8 +3261,13 @@ case "$cmd" in
     flock -x 9
     configure_project_pool_hierarchy
     pool="$(project_legacy_cgroup)"
+    reconcile_project_network_limits
     while IFS= read -r pasta_pid; do
-      attach_pid_to_project_pool_storage "$pasta_pid" "$pool" || true
+      actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pasta_pid}/cgroup" 2>/dev/null || true)"
+      case "$actual" in
+        "$(project_pool_relative_path)/project-"*) ;;
+        *) attach_pid_to_project_pool_storage "$pasta_pid" "$pool" || true ;;
+      esac
     done < <(find_pasta_pids)
     ;;
   btrfs)
@@ -4271,6 +4451,18 @@ def reconcile_bees_runtime_policy(cfg: BootstrapConfig) -> None:
             "/mnt/cocalc",
         ],
         "reconcile BEES runtime policy",
+    )
+
+
+def reconcile_project_network_limits(cfg: BootstrapConfig) -> None:
+    run_cmd(
+        cfg,
+        [
+            "/usr/local/sbin/cocalc-runtime-storage",
+            "reconcile-project-network-limits",
+        ],
+        "reconcile per-project network containment",
+        timeout=60,
     )
 
 
@@ -6807,6 +6999,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         image_size_gb = compute_image_size(cfg)
         install_btrfs_helper(cfg)
         install_privileged_wrappers(cfg)
+        reconcile_project_network_limits(cfg)
         ensure_cocalc_mount(cfg)
         reconcile_bees_runtime_policy(cfg)
         setup_shared_scratch(cfg)

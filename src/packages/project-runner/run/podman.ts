@@ -1210,6 +1210,31 @@ async function projectCgroupConforms({
   }
 }
 
+async function projectNetworkLimitsConform(
+  project_id: string,
+): Promise<boolean> {
+  const result = await executeCode({
+    command: "sudo",
+    args: [
+      "-n",
+      "/usr/local/sbin/cocalc-runtime-storage",
+      "verify-project-network-limits",
+      project_id,
+    ],
+    timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
+    err_on_exit: false,
+  });
+  const conforms = result.exit_code == null || result.exit_code === 0;
+  if (!conforms) {
+    logger.debug("project network containment requires repair", {
+      project_id,
+      exit_code: result.exit_code,
+      stderr: `${result.stderr ?? ""}`.trim(),
+    });
+  }
+  return conforms;
+}
+
 export type ProjectCgroupReconcileResult = {
   status: "already_current" | "repaired" | "not_running";
   requested_memory_max?: string;
@@ -1240,7 +1265,10 @@ export async function reconcileProjectCgroup({
       project_id,
       requested,
     });
-    if (!force && conformance.conforms) {
+    const networkConforms = force
+      ? false
+      : await projectNetworkLimitsConform(project_id);
+    if (!force && conformance.conforms && networkConforms) {
       return {
         status: "already_current",
         requested_memory_max: requested.memory_max,
