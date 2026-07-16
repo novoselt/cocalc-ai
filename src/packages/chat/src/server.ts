@@ -20,6 +20,8 @@ import { posix as path } from "node:path";
 const logger = getLogger("chat:server");
 const PROJECT_HOME = "/home/user";
 
+export type { ImmerDB };
+
 export function canonicalChatPath(chatPath: string): string {
   const value = `${chatPath ?? ""}`.trim();
   if (!value) {
