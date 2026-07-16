@@ -1781,6 +1781,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "net.ipv4.ip_local_port_range = 10000 65535",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "net.ipv4.ip_local_reserved_ports = 30000-59999",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "reconcile_app_core_dumps",
                 rootctl.read_text(encoding="utf-8"),
             )

@@ -471,10 +471,20 @@ function autoRebootDecision(
   if (`${runtime.status ?? ""}` !== "degraded" || runtime.ready === true) {
     return { action: "wait", reason: "runtime is not degraded" };
   }
-  const failures = Math.max(
-    Number(runtime.consecutive_failures) || 0,
-    Number(runtime.synthetic_probe?.consecutive_failures) || 0,
-  );
+  const runtimeFailures = Number(runtime.consecutive_failures) || 0;
+  const syntheticFailures =
+    Number(runtime.synthetic_probe?.consecutive_failures) || 0;
+  if (
+    runtimeFailures < AUTO_REBOOT_MIN_FAILURES &&
+    syntheticFailures >= AUTO_REBOOT_MIN_FAILURES &&
+    `${runtime.synthetic_probe?.failure_kind ?? ""}` === "port_bind_collision"
+  ) {
+    return {
+      action: "wait",
+      reason: "synthetic failures are retryable project port collisions",
+    };
+  }
+  const failures = Math.max(runtimeFailures, syntheticFailures);
   if (failures < AUTO_REBOOT_MIN_FAILURES) {
     return { action: "wait", reason: "failure threshold is not met" };
   }
@@ -1216,6 +1226,7 @@ async function scheduleAutoReboot(
         `provider=${cloudProvider(row)}`,
         `attempt=${nextAttempts.length}/${AUTO_REBOOT_MAX_ATTEMPTS} within ${Math.round(AUTO_REBOOT_WINDOW_MS / 3_600_000)}h`,
         `work_id=${workId ?? "already queued"}`,
+        `synthetic_failure_kind=${row.metadata?.runtime_health?.synthetic_probe?.failure_kind ?? "unknown"}`,
         `runtime_error=${row.metadata?.runtime_health?.error ?? "unknown"}`,
       ].join("\n"),
       dedupMinutes: 10,

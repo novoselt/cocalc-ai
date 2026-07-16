@@ -616,13 +616,22 @@ export interface HostKernelSysctlMismatch {
   actual: number | null;
 }
 
+export interface HostKernelSysctlTextMismatch {
+  key: string;
+  target: string;
+  actual: string | null;
+}
+
 export interface HostKernelSysctlSnapshot {
   collected_at?: string;
   config_path?: string;
   targets: Record<string, number>;
   values: Record<string, number | null>;
+  text_targets?: Record<string, string>;
+  text_values?: Record<string, string | null>;
   ok: boolean;
   mismatches: HostKernelSysctlMismatch[];
+  text_mismatches?: HostKernelSysctlTextMismatch[];
   apply_attempted?: boolean;
   apply_succeeded?: boolean;
   error?: string;

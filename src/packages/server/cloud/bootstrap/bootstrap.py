@@ -5222,6 +5222,10 @@ fs.inotify.max_user_watches = 2097152
 fs.inotify.max_queued_events = 65536
 kernel.keys.maxkeys = 20000
 kernel.keys.maxbytes = 25000000
+# Project listeners use 30,000-59,999. Exclude those ports from ephemeral
+# client allocation while preserving a large ephemeral pool around them.
+net.ipv4.ip_local_port_range = 10000 65535
+net.ipv4.ip_local_reserved_ports = 30000-59999
 SYSCTL
   chmod 0644 "${SYSCTL_CONFIG_PATH}"
   sysctl -p "${SYSCTL_CONFIG_PATH}"

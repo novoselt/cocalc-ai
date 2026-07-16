@@ -289,6 +289,20 @@ describe("project host start ACP rehydrate ordering", () => {
       });
   });
 
+  it("avoids project ports occupied by non-listening TCP sockets", async () => {
+    const { parseOccupiedPortOffsetsFromProcNet } = await import("./projects");
+    const procNet = [
+      "  sl  local_address rem_address st",
+      "   0: 0100007F:AFC9 0100007F:2382 01",
+      "   1: 0100007F:7532 00000000:0000 0A",
+      "   2: 0100007F:C350 00000000:0000 06",
+    ].join("\n");
+
+    expect([...parseOccupiedPortOffsetsFromProcNet(procNet)]).toEqual([
+      1, 2, 5000,
+    ]);
+  });
+
   it("does not rehydrate ACP automations before runner start on start()", async () => {
     const order: string[] = [];
     const runnerApi = {

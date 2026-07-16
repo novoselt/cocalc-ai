@@ -59,6 +59,28 @@ describe("project-host runtime maintenance policy", () => {
     });
   });
 
+  it("does not reboot for repeated project port collisions", () => {
+    const row = degradedCloudHost({
+      runtime_health: {
+        status: "degraded",
+        ready: false,
+        consecutive_failures: 0,
+        diagnostics_completed_at: new Date(NOW - 60_000).toISOString(),
+        error: "synthetic project probe failed",
+        synthetic_probe: {
+          status: "failed",
+          consecutive_failures: 2,
+          failure_kind: "port_bind_collision",
+        },
+      },
+    });
+
+    expect(_test.autoRebootDecision(row, NOW)).toEqual({
+      action: "wait",
+      reason: "synthetic failures are retryable project port collisions",
+    });
+  });
+
   it("exhausts the rolling reboot budget", () => {
     const attempts = [
       {
