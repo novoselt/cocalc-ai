@@ -8,6 +8,13 @@
 
 set -euo pipefail
 
+# Package-local TypeScript builds can exceed Node's 2 GB default heap while
+# assembling release bundles. Preserve an explicit operator-provided limit.
+case " ${NODE_OPTIONS:-} " in
+  *" --max-old-space-size="* | *" --max_old_space_size="* | *" --max-old-space-size "* | *" --max_old_space_size "*) ;;
+  *) export NODE_OPTIONS="${NODE_OPTIONS:+${NODE_OPTIONS} }--max-old-space-size=8192" ;;
+esac
+
 ROOT="$(realpath "$(dirname "${BASH_SOURCE[0]}")/../..")"
 ENTRYPOINT=""
 OUT=""
