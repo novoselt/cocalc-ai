@@ -1458,7 +1458,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 "printf 'flush chain inet %s %s\\n'", script
             )
             self.assertIn(
-                "} | run_project_network_nft -f -", script
+                "printf '%s\\n' \"$rules\" | run_project_network_nft -f -",
+                script,
             )
             self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
             self.assertIn('PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"', script)
@@ -1483,6 +1484,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertNotIn(
                 'ensure_project_network_rule "$project_id"',
                 reconcile_body,
+            )
+            self.assertLess(
+                reconcile_body.index('rules="$(render_project_network_rules)"'),
+                reconcile_body.index("acquire_project_network_lock"),
+            )
+            self.assertLess(
+                reconcile_body.index("release_project_lock"),
+                reconcile_body.index("apply_project_network_process_limits"),
             )
             self.assertIn("project_cgroup_has_processes", script)
             self.assertNotIn('[ -s "$cgroup/cgroup.procs" ]', script)

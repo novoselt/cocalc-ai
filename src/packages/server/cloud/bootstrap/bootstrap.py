@@ -2970,9 +2970,8 @@ verify_project_network_limits() {
   fi
 }
 
-reconcile_project_network_limits() {
-  local cgroup project_id pid actual pool_relative
-  configure_project_network_table
+render_project_network_rules() {
+  local cgroup project_id
   {
     printf 'flush chain inet %s %s\\n' \
       "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN"
@@ -2983,7 +2982,11 @@ reconcile_project_network_limits() {
       is_project_uuid "$project_id" || continue
       emit_project_network_rules "$project_id"
     done
-  } | run_project_network_nft -f -
+  }
+}
+
+apply_project_network_process_limits() {
+  local pid actual pool_relative
   pool_relative="${PROJECT_POOL_CGROUP_DEFAULT#/sys/fs/cgroup}"
   while IFS= read -r pid; do
     [ -n "$pid" ] || continue
@@ -2992,6 +2995,20 @@ reconcile_project_network_limits() {
       "${pool_relative}/project-"*) apply_pasta_resource_limits "$pid" ;;
     esac
   done < <(find_pasta_pids)
+}
+
+reconcile_project_network_limits() {
+  local rules
+  # Discovering hundreds of project cgroups and pasta processes can take
+  # minutes on a large host. Build the atomic nftables update before taking
+  # the foreground project-start lock, and keep per-process prlimit work
+  # outside it entirely.
+  rules="$(render_project_network_rules)"
+  acquire_project_network_lock
+  configure_project_network_table
+  printf '%s\\n' "$rules" | run_project_network_nft -f -
+  release_project_lock
+  apply_project_network_process_limits
 }
 
 find_bees_pid() {
@@ -3326,9 +3343,7 @@ case "$cmd" in
       echo "usage: cocalc-runtime-storage reconcile-project-network-limits" >&2
       exit 2
     fi
-    acquire_project_network_lock
     reconcile_project_network_limits
-    release_project_lock
     ;;
   cleanup-project-cgroup)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then
@@ -3369,9 +3384,7 @@ case "$cmd" in
       esac
     done < <(find_pasta_pids)
     release_project_lock
-    acquire_project_network_lock
     reconcile_project_network_limits
-    release_project_lock
     ;;
   btrfs)
     check_args "$@"
