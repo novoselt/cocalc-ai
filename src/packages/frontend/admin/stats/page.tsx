@@ -15,12 +15,10 @@ import {
   Space,
   Spin,
   Statistic,
-  Switch,
   Table,
   Tag,
   Typography,
 } from "antd";
-import { redux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import { Icon } from "@cocalc/frontend/components";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type {
@@ -35,7 +33,6 @@ import type {
   UxLatencyRecentEvent,
   UxLatencySummary,
 } from "@cocalc/conat/hub/api/system";
-import { ADMIN_UX_LATENCY_ALERTS_ENABLED_KEY } from "@cocalc/util/admin-alerts";
 
 const { Text } = Typography;
 
@@ -262,9 +259,6 @@ export const UsageStatistics: React.FC = () => {
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
-  const otherSettings = useTypedRedux("account", "other_settings");
-  const alertsEnabled =
-    otherSettings?.get?.(ADMIN_UX_LATENCY_ALERTS_ENABLED_KEY) !== false;
 
   useEffect(() => {
     let canceled = false;
@@ -733,41 +727,7 @@ export const UsageStatistics: React.FC = () => {
         </Spin>
       </Card>
 
-      <Card
-        title="User Latency"
-        extra={
-          <Space wrap>
-            <Space>
-              <Text type="secondary">My alerts</Text>
-              <Popover
-                title="Admin alert preference"
-                content={
-                  <div style={{ maxWidth: 320 }}>
-                    The My alerts switch only controls whether this admin
-                    account receives UX latency admin alerts. It does not
-                    disable monitoring or alerts for other admins.
-                  </div>
-                }
-              >
-                <Text type="secondary" style={{ cursor: "help" }}>
-                  <Icon name="info-circle" />
-                </Text>
-              </Popover>
-              <Switch
-                checked={alertsEnabled}
-                onChange={(checked) =>
-                  redux
-                    .getActions("account")
-                    .set_other_settings(
-                      ADMIN_UX_LATENCY_ALERTS_ENABLED_KEY,
-                      checked,
-                    )
-                }
-              />
-            </Space>
-          </Space>
-        }
-      >
+      <Card title="User Latency">
         <Spin spinning={loading && !summary}>
           <Row gutter={[16, 16]}>
             <Col xs={24} md={8}>
