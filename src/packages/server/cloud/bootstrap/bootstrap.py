@@ -2810,25 +2810,30 @@ project_network_rule_handles() {
 }
 
 ensure_project_network_rule() {
-  local project_id="$1" path level marker handle
+  local project_id="$1" handle
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
   configure_project_network_table
-  path="$(project_network_cgroup_path "$project_id")"
-  level="$(project_network_cgroup_level "$project_id")"
-  marker="$(project_network_rule_marker "$project_id")"
   {
     while IFS= read -r handle; do
       [ -n "$handle" ] || continue
       printf 'delete rule inet %s %s handle %s\\n' \
         "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$handle"
     done < <(project_network_rule_handles "$project_id")
-    printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto tcp tcp flags & (fin | syn | rst | ack) == syn limit rate over %s/second burst %s packets counter drop comment "%s-tcp"\\n' \
-      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
-      "$PROJECT_TCP_NEW_RATE" "$PROJECT_TCP_NEW_BURST" "$marker"
-    printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto udp ct state new limit rate over %s/second burst %s packets counter drop comment "%s-udp"\\n' \
-      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
-      "$PROJECT_UDP_NEW_RATE" "$PROJECT_UDP_NEW_BURST" "$marker"
+    emit_project_network_rules "$project_id"
   } | "$PROJECT_NETWORK_NFT" -f -
+}
+
+emit_project_network_rules() {
+  local project_id="$1" path level marker
+  path="$(project_network_cgroup_path "$project_id")"
+  level="$(project_network_cgroup_level "$project_id")"
+  marker="$(project_network_rule_marker "$project_id")"
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto tcp tcp flags & (fin | syn | rst | ack) == syn limit rate over %s/second burst %s packets counter drop comment "%s-tcp"\\n' \
+    "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
+    "$PROJECT_TCP_NEW_RATE" "$PROJECT_TCP_NEW_BURST" "$marker"
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto udp ct state new limit rate over %s/second burst %s packets counter drop comment "%s-udp"\\n' \
+    "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
+    "$PROJECT_UDP_NEW_RATE" "$PROJECT_UDP_NEW_BURST" "$marker"
 }
 
 remove_project_network_rule() {
@@ -2889,14 +2894,17 @@ verify_project_network_limits() {
 reconcile_project_network_limits() {
   local cgroup project_id pid actual pool_relative
   configure_project_network_table
-  "$PROJECT_NETWORK_NFT" flush chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN"
-  for cgroup in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
-    [ -d "$cgroup" ] || continue
-    project_cgroup_has_processes "$cgroup" || continue
-    project_id="${cgroup##*/project-}"
-    is_project_uuid "$project_id" || continue
-    ensure_project_network_rule "$project_id"
-  done
+  {
+    printf 'flush chain inet %s %s\\n' \
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN"
+    for cgroup in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
+      [ -d "$cgroup" ] || continue
+      project_cgroup_has_processes "$cgroup" || continue
+      project_id="${cgroup##*/project-}"
+      is_project_uuid "$project_id" || continue
+      emit_project_network_rules "$project_id"
+    done
+  } | "$PROJECT_NETWORK_NFT" -f -
   pool_relative="${PROJECT_POOL_CGROUP_DEFAULT#/sys/fs/cgroup}"
   while IFS= read -r pid; do
     [ -n "$pid" ] || continue

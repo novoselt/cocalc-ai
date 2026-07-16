@@ -1383,6 +1383,20 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("socket cgroupv2 level", script)
             self.assertIn("apply_pasta_resource_limits", script)
             self.assertIn("ensure_project_network_rule", script)
+            self.assertIn("emit_project_network_rules", script)
+            self.assertIn(
+                "printf 'flush chain inet %s %s\\n'", script
+            )
+            self.assertIn(
+                '} | "$PROJECT_NETWORK_NFT" -f -', script
+            )
+            reconcile_body = script.split(
+                "reconcile_project_network_limits() {", 1
+            )[1].split("\n}\n", 1)[0]
+            self.assertNotIn(
+                'ensure_project_network_rule "$project_id"',
+                reconcile_body,
+            )
             self.assertIn("project_cgroup_has_processes", script)
             self.assertNotIn('[ -s "$cgroup/cgroup.procs" ]', script)
             self.assertIn(
