@@ -59,7 +59,7 @@ describe("project-host runtime maintenance policy", () => {
     });
   });
 
-  it("does not reboot for repeated project port collisions", () => {
+  it("does not reboot for synthetic-only failures", () => {
     const row = degradedCloudHost({
       runtime_health: {
         status: "degraded",
@@ -77,7 +77,29 @@ describe("project-host runtime maintenance policy", () => {
 
     expect(_test.autoRebootDecision(row, NOW)).toEqual({
       action: "wait",
-      reason: "synthetic failures are retryable project port collisions",
+      reason: "passive runtime failure threshold is not met",
+    });
+  });
+
+  it("does not reboot for an unclassified synthetic-only failure", () => {
+    const row = degradedCloudHost({
+      runtime_health: {
+        status: "degraded",
+        ready: false,
+        consecutive_failures: 0,
+        diagnostics_completed_at: new Date(NOW - 60_000).toISOString(),
+        error: "synthetic project probe failed",
+        synthetic_probe: {
+          status: "failed",
+          consecutive_failures: 8,
+          failure_kind: "project_start_failed",
+        },
+      },
+    });
+
+    expect(_test.autoRebootDecision(row, NOW)).toEqual({
+      action: "wait",
+      reason: "passive runtime failure threshold is not met",
     });
   });
 
