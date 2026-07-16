@@ -226,18 +226,20 @@ describe("project-host runtime maintenance policy", () => {
     expect(_test.syntheticProbeDue(row, NOW)).toBe(false);
   });
 
-  it("rate limits repeated synthetic failure alerts by host metadata", () => {
+  it("alerts once per synthetic quarantine incident", () => {
     const row = degradedCloudHost({
       runtime_synthetic_probe: {
         status: "failed",
         alerted_at: new Date(NOW - 5 * 60_000).toISOString(),
       },
     });
-    expect(_test.syntheticProbeFailureAlertDue(row, NOW)).toBe(false);
+    expect(_test.syntheticProbeFailureAlertDue(row)).toBe(false);
     row.metadata.runtime_synthetic_probe.alerted_at = new Date(
-      NOW - 16 * 60_000,
+      NOW - 24 * 60 * 60_000,
     ).toISOString();
-    expect(_test.syntheticProbeFailureAlertDue(row, NOW)).toBe(true);
+    expect(_test.syntheticProbeFailureAlertDue(row)).toBe(false);
+    delete row.metadata.runtime_synthetic_probe.alerted_at;
+    expect(_test.syntheticProbeFailureAlertDue(row)).toBe(true);
   });
 
   it("requires two synthetic failures to quarantine and one pass to recover", () => {
@@ -415,7 +417,7 @@ describe("project-host runtime maintenance policy", () => {
     expect(secondSuccess.alerted_at).toBeUndefined();
   });
 
-  it("rate limits repeated public-route failure alerts", () => {
+  it("alerts once per public-route quarantine incident", () => {
     const row = degradedCloudHost({
       public_route_probe: {
         status: "failed",
@@ -423,11 +425,13 @@ describe("project-host runtime maintenance policy", () => {
         alerted_at: new Date(NOW - 5 * 60_000).toISOString(),
       },
     });
-    expect(_test.publicRouteProbeFailureAlertDue(row, NOW)).toBe(false);
+    expect(_test.publicRouteProbeFailureAlertDue(row)).toBe(false);
     row.metadata.public_route_probe.alerted_at = new Date(
-      NOW - 16 * 60_000,
+      NOW - 24 * 60 * 60_000,
     ).toISOString();
-    expect(_test.publicRouteProbeFailureAlertDue(row, NOW)).toBe(true);
+    expect(_test.publicRouteProbeFailureAlertDue(row)).toBe(false);
+    delete row.metadata.public_route_probe.alerted_at;
+    expect(_test.publicRouteProbeFailureAlertDue(row)).toBe(true);
   });
 
   it("identifies the deployment from the project-host public URL", () => {

@@ -39,12 +39,6 @@ const SYNTHETIC_PROBE_RPC_TIMEOUT_MS = Math.max(
   2 * 60_000,
   Number(process.env.COCALC_HOST_SYNTHETIC_PROBE_RPC_TIMEOUT_MS ?? 2 * 60_000),
 );
-const SYNTHETIC_PROBE_ALERT_INTERVAL_MS = Math.max(
-  60_000,
-  Number(
-    process.env.COCALC_HOST_SYNTHETIC_PROBE_ALERT_INTERVAL_MS ?? 15 * 60_000,
-  ),
-);
 const SYNTHETIC_PROBE_FAILURES_TO_QUARANTINE = Math.max(
   2,
   Math.floor(
@@ -78,12 +72,6 @@ const PUBLIC_ROUTE_PROBE_REQUEST_TIMEOUT_MS = Math.max(
   5000,
   Number(
     process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_REQUEST_TIMEOUT_MS ?? 15_000,
-  ),
-);
-const PUBLIC_ROUTE_PROBE_ALERT_INTERVAL_MS = Math.max(
-  60_000,
-  Number(
-    process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_ALERT_INTERVAL_MS ?? 15 * 60_000,
   ),
 );
 const PUBLIC_ROUTE_PROBE_CONCURRENCY = Math.max(
@@ -276,16 +264,8 @@ function syntheticProbeDue(row: RuntimeHostRow, nowMs = Date.now()): boolean {
   return nowMs - checkedAt >= SYNTHETIC_PROBE_SUCCESS_INTERVAL_MS;
 }
 
-function syntheticProbeFailureAlertDue(
-  row: RuntimeHostRow,
-  nowMs = Date.now(),
-): boolean {
-  const alertedAt = timestampMs(
-    row.metadata?.runtime_synthetic_probe?.alerted_at,
-  );
-  return (
-    alertedAt == null || nowMs - alertedAt >= SYNTHETIC_PROBE_ALERT_INTERVAL_MS
-  );
+function syntheticProbeFailureAlertDue(row: RuntimeHostRow): boolean {
+  return timestampMs(row.metadata?.runtime_synthetic_probe?.alerted_at) == null;
 }
 
 function syntheticProbeOutcome({
@@ -352,15 +332,8 @@ function publicRouteProbeDue(row: RuntimeHostRow, nowMs = Date.now()): boolean {
   return nowMs - checkedAt >= PUBLIC_ROUTE_PROBE_SUCCESS_INTERVAL_MS;
 }
 
-function publicRouteProbeFailureAlertDue(
-  row: RuntimeHostRow,
-  nowMs = Date.now(),
-): boolean {
-  const alertedAt = timestampMs(row.metadata?.public_route_probe?.alerted_at);
-  return (
-    alertedAt == null ||
-    nowMs - alertedAt >= PUBLIC_ROUTE_PROBE_ALERT_INTERVAL_MS
-  );
+function publicRouteProbeFailureAlertDue(row: RuntimeHostRow): boolean {
+  return timestampMs(row.metadata?.public_route_probe?.alerted_at) == null;
 }
 
 function publicRouteProbeOutcome({
@@ -744,6 +717,7 @@ async function executeSyntheticProbe(
           .filter(Boolean)
           .join("\n"),
         dedupMinutes: 15,
+        dedupBySubject: true,
       });
     }
     return false;
@@ -1007,6 +981,7 @@ async function alertPublicRouteFailures({
       ),
     ].join("\n"),
     dedupMinutes: 15,
+    dedupBySubject: true,
   });
 }
 
