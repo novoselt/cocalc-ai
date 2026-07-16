@@ -2529,6 +2529,31 @@ describe("ChatStreamWriter", () => {
     writer.dispose?.(true);
   });
 
+  it("maps runtime-home chat paths outside a deep workspace through the project root", async () => {
+    const writer: any = new ChatStreamWriter({
+      metadata: {
+        ...baseMetadata,
+        path: "/home/user/.local/share/cocalc/navigator.chat",
+        message_id: "msg-project-root-chat-path",
+      } as any,
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      workspaceRoot: "/home/user/Notebooks/Exams",
+      hostWorkspaceRoot: "/mnt/cocalc/project-test/Notebooks/Exams",
+      hostProjectRoot: "/mnt/cocalc/project-test",
+      syncdbOverride: makeFakeSyncDB().syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+    });
+
+    expect((writer as any).resolveChatFilePath()).toBe(
+      "/mnt/cocalc/project-test/.local/share/cocalc/navigator.chat",
+    );
+    writer.dispose?.(true);
+  });
+
   it("resolves chat row by message_id when sender/date changed", async () => {
     const rowDate = new Date("2026-02-21T10:11:12.000Z").toISOString();
     const rows: any[] = [

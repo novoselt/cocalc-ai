@@ -46,6 +46,7 @@ import {
   normalizeCodexSessionId,
   resolveCodexSessionMode,
 } from "@cocalc/util/ai/codex";
+import { projectRuntimeHomeRelativePath } from "@cocalc/util/project-runtime";
 import { type Client as ConatClient } from "@cocalc/conat/core/client";
 import type {
   FileAdapter,
@@ -1643,6 +1644,7 @@ export class ChatStreamWriter {
   private readonly chatKey: string;
   private readonly workspaceRoot?: string;
   private readonly hostWorkspaceRoot?: string;
+  private readonly hostProjectRoot?: string;
   private inlineCodeLinksCache?: {
     content: string;
     links: InlineCodeLink[];
@@ -2198,6 +2200,7 @@ export class ChatStreamWriter {
     sessionKey,
     workspaceRoot,
     hostWorkspaceRoot,
+    hostProjectRoot,
     syncdbOverride,
     logStoreFactory,
     liveLogStreamFactory,
@@ -2209,6 +2212,7 @@ export class ChatStreamWriter {
     sessionKey?: string;
     workspaceRoot?: string;
     hostWorkspaceRoot?: string;
+    hostProjectRoot?: string;
     syncdbOverride?: any;
     logStoreFactory?: () => AKV<AcpStreamMessage[]>;
     liveLogStreamFactory?: () => AStream<AcpStreamMessage | AcpStreamMessage[]>;
@@ -2228,6 +2232,7 @@ export class ChatStreamWriter {
     this.chatKey = chatKey(metadata);
     this.workspaceRoot = workspaceRoot;
     this.hostWorkspaceRoot = hostWorkspaceRoot ?? workspaceRoot;
+    this.hostProjectRoot = hostProjectRoot;
     this.usePool = syncdbOverride == null;
     this.syncdbPromise =
       syncdbOverride != null
@@ -3008,6 +3013,18 @@ export class ChatStreamWriter {
     if (!chatPath) return;
     if (path.isAbsolute(chatPath)) {
       const absolute = path.resolve(chatPath);
+      const runtimeRelative = projectRuntimeHomeRelativePath(absolute);
+      if (runtimeRelative != null && this.hostProjectRoot) {
+        const projectRoot = path.resolve(this.hostProjectRoot);
+        const resolved = path.resolve(projectRoot, runtimeRelative);
+        if (
+          resolved !== projectRoot &&
+          !resolved.startsWith(`${projectRoot}${path.sep}`)
+        ) {
+          throw new Error(`chat path escapes project root: ${chatPath}`);
+        }
+        return resolved;
+      }
       const workspaceRoot = this.workspaceRoot;
       const hostRoot = this.hostWorkspaceRoot;
       if (
@@ -6326,6 +6343,10 @@ async function executeAcpRequest({
     useContainer && executor instanceof ContainerExecutor
       ? executor.getMountPoint()
       : workspaceRoot;
+  const hostProjectRoot =
+    useContainer && executor instanceof ContainerExecutor
+      ? executor.getProjectMountPoint()
+      : undefined;
   // Container mode must always proxy terminals (useNativeTerminal=false) so ACP
   // routes commands through our adapter into the project container. In local
   // mode, respect "auto" behavior.
@@ -6364,6 +6385,7 @@ async function executeAcpRequest({
         sessionKey: request.session_id,
         workspaceRoot,
         hostWorkspaceRoot: hostRoot,
+        hostProjectRoot,
       })
     : null;
 
@@ -7853,16 +7875,18 @@ async function writeQueuedJobFailureToChat({
   if (!request.chat || !conatClient) return;
   try {
     const workspaceRoot = resolveWorkspaceRoot(request.config);
+    const hostRoots = resolveHostRoots({
+      projectId: request.chat.project_id,
+      workspaceRoot,
+    });
     const writer = new ChatStreamWriter({
       metadata: request.chat,
       client: conatClient,
       approverAccountId: request.account_id,
       sessionKey: request.session_id,
       workspaceRoot,
-      hostWorkspaceRoot: resolveHostWorkspaceRoot({
-        projectId: request.chat.project_id,
-        workspaceRoot,
-      }),
+      hostWorkspaceRoot: hostRoots.workspace,
+      hostProjectRoot: hostRoots.project,
     });
     await writer.waitUntilReady();
     if (writer.isClosed()) {
@@ -7881,24 +7905,28 @@ async function writeQueuedJobFailureToChat({
   }
 }
 
-function resolveHostWorkspaceRoot({
+function resolveHostRoots({
   projectId,
   workspaceRoot,
 }: {
   projectId: string;
   workspaceRoot: string;
-}): string {
+}): { workspace: string; project?: string } {
   if (!preferContainerExecutor()) {
-    return workspaceRoot;
+    return { workspace: workspaceRoot };
   }
   if (!conatClient) {
     throw Error("conat client must be initialized");
   }
-  return new ContainerExecutor({
+  const executor = new ContainerExecutor({
     projectId,
     workspaceRoot,
     conatClient,
-  }).getMountPoint();
+  });
+  return {
+    workspace: executor.getMountPoint(),
+    project: executor.getProjectMountPoint(),
+  };
 }
 
 async function writeQueuedCommandResultToChat({
