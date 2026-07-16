@@ -2,7 +2,13 @@ import getLogger from "@cocalc/backend/logger";
 import { randomUUID } from "crypto";
 import { readFileSync } from "node:fs";
 import { promises as fsPromises } from "node:fs";
-import { availableParallelism, homedir, totalmem, userInfo } from "node:os";
+import {
+  availableParallelism,
+  homedir,
+  totalmem,
+  uptime,
+  userInfo,
+} from "node:os";
 import { dirname, join } from "node:path";
 import { getRow, upsertRow } from "@cocalc/lite/hub/sqlite/database";
 import {
@@ -1682,6 +1688,9 @@ export async function startMasterRegistration({
       host_session_id: randomUUID(),
       host_boot_id: readHostBootId(),
       host_session_started_at: new Date().toISOString(),
+      host_boot_started_at: new Date(
+        Date.now() - uptime() * 1000,
+      ).toISOString(),
       host_cpu_count: availableParallelism(),
       host_ram_gb: Math.max(1, Math.round(totalmem() / 1024 ** 3)),
     },
@@ -1741,6 +1750,7 @@ export async function startMasterRegistration({
       version: versions.project_host ?? basePayload.version,
       metadata: {
         ...(basePayload.metadata ?? {}),
+        host_uptime_s: Math.max(0, Math.floor(uptime())),
         ...(currentMetrics
           ? {
               metrics: {

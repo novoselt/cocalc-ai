@@ -1271,6 +1271,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     const project_id = uuid();
     const marker = uuid();
     const startedAt = Date.now();
+    let stage = "create";
     syntheticRuntimeProbeProjects.add(project_id);
     try {
       await createProject({
@@ -1286,12 +1287,14 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           disk_quota: 256,
         },
       } as CreateProjectOptions);
+      stage = "status";
       const status = await runnerApi.status({ project_id });
       if (status?.state !== "running") {
         throw new Error(
           `synthetic project did not reach running state (state=${status?.state ?? "unknown"})`,
         );
       }
+      stage = "exec_file";
       const result = await sandboxExec({
         project_id,
         script: `mkdir -p .cocalc && printf '%s' '${marker}' > .cocalc/host-runtime-probe && cat .cocalc/host-runtime-probe`,
@@ -1309,6 +1312,10 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         finished_at: new Date().toISOString(),
         duration_ms: Date.now() - startedAt,
       };
+    } catch (err) {
+      throw new Error(
+        `synthetic project probe failed project_id=${project_id} stage=${stage}: ${err}`,
+      );
     } finally {
       await runnerApi.stop({ project_id, force: true }).catch((err) => {
         logger.warn("synthetic runtime probe failed to stop its project", {

@@ -30,6 +30,18 @@ function degradedCloudHost(overrides: Record<string, any> = {}) {
   };
 }
 
+function syntheticClaim(overrides: Record<string, any> = {}) {
+  return {
+    claim_id: "claim-1",
+    previous_failures: 0,
+    previous_total_checks: 0,
+    previous_passed_checks: 0,
+    previous_failed_checks: 0,
+    was_quarantined: false,
+    ...overrides,
+  };
+}
+
 describe("project-host runtime maintenance policy", () => {
   it("requires completed forensic capture before rebooting", () => {
     const row = degradedCloudHost();
@@ -182,6 +194,66 @@ describe("project-host runtime maintenance policy", () => {
       NOW - 16 * 60_000,
     ).toISOString();
     expect(_test.syntheticProbeFailureAlertDue(row, NOW)).toBe(true);
+  });
+
+  it("requires two synthetic failures to quarantine and one pass to recover", () => {
+    const row = degradedCloudHost();
+    const firstFailure = _test.syntheticProbeOutcome({
+      row,
+      claim: syntheticClaim(),
+      checkedAt: new Date(NOW).toISOString(),
+      duration_ms: 100,
+      error: new Error("transient crun getcwd failure"),
+    });
+    expect(firstFailure).toMatchObject({
+      status: "failed",
+      consecutive_failures: 1,
+      quarantined: false,
+      total_checks: 1,
+      failed_checks: 1,
+    });
+
+    const secondFailure = _test.syntheticProbeOutcome({
+      row,
+      claim: syntheticClaim({
+        claim_id: "claim-2",
+        previous_failures: 1,
+        previous_total_checks: 1,
+        previous_failed_checks: 1,
+      }),
+      checkedAt: new Date(NOW).toISOString(),
+      duration_ms: 100,
+      error: new Error("repeated failure"),
+    });
+    expect(secondFailure).toMatchObject({
+      status: "failed",
+      consecutive_failures: 2,
+      quarantined: true,
+      total_checks: 2,
+      failed_checks: 2,
+    });
+
+    const recovered = _test.syntheticProbeOutcome({
+      row,
+      claim: syntheticClaim({
+        claim_id: "claim-3",
+        previous_failures: 2,
+        previous_total_checks: 2,
+        previous_failed_checks: 2,
+        was_quarantined: true,
+      }),
+      checkedAt: new Date(NOW).toISOString(),
+      duration_ms: 100,
+      result: { project_id: "probe-project" },
+    });
+    expect(recovered).toMatchObject({
+      status: "passed",
+      consecutive_failures: 0,
+      quarantined: false,
+      total_checks: 3,
+      passed_checks: 1,
+      failed_checks: 2,
+    });
   });
 
   it("runs public-route probes after a boot, process session, or interval", () => {

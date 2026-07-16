@@ -416,6 +416,7 @@ describe("computeHostOperationalAvailability", () => {
           runtime_health: { status: "ready", ready: true },
           runtime_synthetic_probe: {
             status: "failed",
+            quarantined: true,
             error: "project exec timed out",
           },
         },
@@ -426,6 +427,24 @@ describe("computeHostOperationalAvailability", () => {
       reason_unavailable:
         "Host synthetic project probe failed: project exec timed out",
     });
+  });
+
+  it("does not quarantine a host after only one synthetic failure", () => {
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: new Date(),
+        metadata: {
+          runtime_health: { status: "ready", ready: true },
+          runtime_synthetic_probe: {
+            status: "failed",
+            consecutive_failures: 1,
+            quarantined: false,
+            error: "transient project exec failure",
+          },
+        },
+      }),
+    ).toMatchObject({ operational: true, online: true });
   });
 
   it("does not quarantine a host after only one public-route failure", () => {

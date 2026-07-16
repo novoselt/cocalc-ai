@@ -45,6 +45,12 @@ const SYNTHETIC_PROBE_ALERT_INTERVAL_MS = Math.max(
     process.env.COCALC_HOST_SYNTHETIC_PROBE_ALERT_INTERVAL_MS ?? 15 * 60_000,
   ),
 );
+const SYNTHETIC_PROBE_FAILURES_TO_QUARANTINE = Math.max(
+  2,
+  Math.floor(
+    Number(process.env.COCALC_HOST_SYNTHETIC_PROBE_FAILURES_TO_QUARANTINE ?? 2),
+  ) || 2,
+);
 const SYNTHETIC_PROBE_CONCURRENCY = Math.max(
   1,
   Math.min(
@@ -176,6 +182,16 @@ type PublicRouteProbeClaim = {
   alerted_at?: string;
 };
 
+type SyntheticProbeClaim = {
+  claim_id: string;
+  previous_failures: number;
+  previous_total_checks: number;
+  previous_passed_checks: number;
+  previous_failed_checks: number;
+  was_quarantined: boolean;
+  alerted_at?: string;
+};
+
 const RECOVERABLE_AUTO_REBOOT_STATUSES = new Set([
   "scheduled",
   "exhausted",
@@ -270,6 +286,47 @@ function syntheticProbeFailureAlertDue(
   return (
     alertedAt == null || nowMs - alertedAt >= SYNTHETIC_PROBE_ALERT_INTERVAL_MS
   );
+}
+
+function syntheticProbeOutcome({
+  row,
+  claim,
+  checkedAt,
+  duration_ms,
+  result,
+  error,
+  alerted_at,
+}: {
+  row: RuntimeHostRow;
+  claim: SyntheticProbeClaim;
+  checkedAt: string;
+  duration_ms: number;
+  result?: Record<string, any>;
+  error?: unknown;
+  alerted_at?: string;
+}): Record<string, any> {
+  const failed = error != null;
+  const consecutiveFailures = failed ? claim.previous_failures + 1 : 0;
+  const quarantined =
+    failed &&
+    (claim.was_quarantined ||
+      consecutiveFailures >= SYNTHETIC_PROBE_FAILURES_TO_QUARANTINE);
+  return {
+    status: failed ? "failed" : "passed",
+    claim_id: claim.claim_id,
+    checked_at: checkedAt,
+    host_boot_id: row.metadata?.host_boot_id,
+    host_session_id: row.metadata?.host_session_id,
+    duration_ms,
+    consecutive_failures: consecutiveFailures,
+    total_checks: claim.previous_total_checks + 1,
+    passed_checks: claim.previous_passed_checks + (failed ? 0 : 1),
+    failed_checks: claim.previous_failed_checks + (failed ? 1 : 0),
+    quarantined,
+    error: failed ? errorText(error) : undefined,
+    result: failed ? undefined : result,
+    alerted_at: quarantined ? (alerted_at ?? claim.alerted_at) : undefined,
+  };
 }
 
 function publicRouteProbeDue(row: RuntimeHostRow, nowMs = Date.now()): boolean {
@@ -468,10 +525,31 @@ async function listRuntimeHosts(): Promise<RuntimeHostRow[]> {
 
 async function claimSyntheticProbe(
   row: RuntimeHostRow,
-): Promise<{ claim_id: string; previous_failures: number } | undefined> {
+): Promise<SyntheticProbeClaim | undefined> {
   const claimId = randomUUID();
-  const previousFailures =
-    Number(row.metadata?.runtime_synthetic_probe?.consecutive_failures) || 0;
+  const previous = row.metadata?.runtime_synthetic_probe ?? {};
+  const sameSession =
+    `${previous.host_session_id ?? ""}`.trim() ===
+    `${row.metadata?.host_session_id ?? ""}`.trim();
+  const previousFailures = sameSession
+    ? Number(previous.consecutive_failures) || 0
+    : 0;
+  const claim: SyntheticProbeClaim = {
+    claim_id: claimId,
+    previous_failures: previousFailures,
+    previous_total_checks: sameSession ? Number(previous.total_checks) || 0 : 0,
+    previous_passed_checks: sameSession
+      ? Number(previous.passed_checks) || 0
+      : 0,
+    previous_failed_checks: sameSession
+      ? Number(previous.failed_checks) || 0
+      : 0,
+    was_quarantined: sameSession && previous.quarantined === true,
+    alerted_at:
+      sameSession && `${previous.alerted_at ?? ""}`.trim()
+        ? `${previous.alerted_at}`.trim()
+        : undefined,
+  };
   const probe = {
     status: "running",
     claim_id: claimId,
@@ -479,6 +557,11 @@ async function claimSyntheticProbe(
     host_boot_id: row.metadata?.host_boot_id,
     host_session_id: row.metadata?.host_session_id,
     consecutive_failures: previousFailures,
+    total_checks: claim.previous_total_checks,
+    passed_checks: claim.previous_passed_checks,
+    failed_checks: claim.previous_failed_checks,
+    quarantined: claim.was_quarantined,
+    alerted_at: claim.alerted_at,
   };
   const { rowCount } = await pool().query(
     `
@@ -509,43 +592,33 @@ async function claimSyntheticProbe(
       SYNTHETIC_PROBE_CLAIM_TIMEOUT_MS,
     ],
   );
-  return rowCount
-    ? { claim_id: claimId, previous_failures: previousFailures }
-    : undefined;
+  return rowCount ? claim : undefined;
 }
 
 async function finishSyntheticProbe({
   row,
-  claim_id,
-  previous_failures,
+  claim,
   startedAt,
   error,
   result,
   alerted_at,
 }: {
   row: RuntimeHostRow;
-  claim_id: string;
-  previous_failures: number;
+  claim: SyntheticProbeClaim;
   startedAt: number;
   error?: unknown;
   result?: Record<string, any>;
   alerted_at?: string;
-}): Promise<void> {
-  const failed = error != null;
-  const probe = {
-    status: failed ? "failed" : "passed",
-    claim_id,
-    checked_at: new Date().toISOString(),
-    host_boot_id: row.metadata?.host_boot_id,
-    host_session_id: row.metadata?.host_session_id,
+}): Promise<Record<string, any>> {
+  const probe = syntheticProbeOutcome({
+    row,
+    claim,
+    checkedAt: new Date().toISOString(),
     duration_ms: Date.now() - startedAt,
-    consecutive_failures: failed ? previous_failures + 1 : 0,
-    error: failed ? errorText(error) : undefined,
-    result: failed ? undefined : result,
-    alerted_at: failed
-      ? (alerted_at ?? row.metadata?.runtime_synthetic_probe?.alerted_at)
-      : undefined,
-  };
+    error,
+    result,
+    alerted_at,
+  });
   await pool().query(
     `
       UPDATE project_hosts
@@ -558,8 +631,9 @@ async function finishSyntheticProbe({
       WHERE id=$1
         AND metadata -> 'runtime_synthetic_probe' ->> 'claim_id'=$2
     `,
-    [row.id, claim_id, JSON.stringify(probe)],
+    [row.id, claim.claim_id, JSON.stringify(probe)],
   );
+  return probe;
 }
 
 async function markAutoRebootRecovered(row: RuntimeHostRow): Promise<void> {
@@ -601,7 +675,7 @@ async function markAutoRebootRecovered(row: RuntimeHostRow): Promise<void> {
 
 async function executeSyntheticProbe(
   row: RuntimeHostRow,
-  claim: { claim_id: string; previous_failures: number },
+  claim: SyntheticProbeClaim,
 ): Promise<boolean> {
   const startedAt = Date.now();
   try {
@@ -619,7 +693,7 @@ async function executeSyntheticProbe(
     const result = await client.runSyntheticRuntimeProbe();
     await finishSyntheticProbe({
       row,
-      ...claim,
+      claim,
       startedAt,
       result,
     });
@@ -637,10 +711,13 @@ async function executeSyntheticProbe(
     });
     return true;
   } catch (err) {
-    const alertDue = syntheticProbeFailureAlertDue(row);
-    await finishSyntheticProbe({
+    const willQuarantine =
+      claim.was_quarantined ||
+      claim.previous_failures + 1 >= SYNTHETIC_PROBE_FAILURES_TO_QUARANTINE;
+    const alertDue = willQuarantine && syntheticProbeFailureAlertDue(row);
+    const probe = await finishSyntheticProbe({
       row,
-      ...claim,
+      claim,
       startedAt,
       error: err,
       alerted_at: alertDue ? new Date().toISOString() : undefined,
@@ -659,6 +736,7 @@ async function executeSyntheticProbe(
           `A full synthetic project lifecycle probe failed on ${hostName(row)}.`,
           `site=${site}`,
           `host_id=${row.id}`,
+          `consecutive_failures=${probe.consecutive_failures}`,
           `error=${errorText(err)}`,
           row.public_url ? `url=${row.public_url}` : undefined,
           "The host is quarantined from placement until a later probe succeeds.",
@@ -707,7 +785,7 @@ export async function runSyntheticProjectHostProbes(): Promise<{
       entry,
     ): entry is {
       row: RuntimeHostRow;
-      claim: { claim_id: string; previous_failures: number };
+      claim: SyntheticProbeClaim;
     } => entry.claim != null,
   );
   const results = await Promise.all(
@@ -1267,6 +1345,7 @@ export const _test = {
   publicRouteProbeDue,
   publicRouteProbeFailureAlertDue,
   publicRouteProbeOutcome,
+  syntheticProbeOutcome,
   syntheticProbeFailureAlertDue,
   syntheticProbeDue,
 };

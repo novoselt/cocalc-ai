@@ -426,7 +426,7 @@ export function computeHostOperationalAvailability(row: any): {
   }
 
   const syntheticProbe = row?.metadata?.runtime_synthetic_probe;
-  if (`${syntheticProbe?.status ?? ""}`.trim() === "failed") {
+  if (syntheticProbe?.quarantined === true) {
     const syntheticError = `${syntheticProbe?.error ?? ""}`.trim();
     return {
       operational: false,
