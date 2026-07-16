@@ -429,6 +429,26 @@ describe("computeHostOperationalAvailability", () => {
     });
   });
 
+  it("allows existing-project connections through synthetic quarantine", () => {
+    expect(
+      computeHostOperationalAvailability(
+        {
+          status: "running",
+          last_seen: new Date(),
+          metadata: {
+            runtime_health: { status: "ready", ready: true },
+            runtime_synthetic_probe: {
+              status: "failed",
+              quarantined: true,
+              error: "project exec timed out",
+            },
+          },
+        },
+        { includeSyntheticProbe: false },
+      ),
+    ).toMatchObject({ operational: true, online: true });
+  });
+
   it("does not quarantine a host after only one synthetic failure", () => {
     expect(
       computeHostOperationalAvailability({

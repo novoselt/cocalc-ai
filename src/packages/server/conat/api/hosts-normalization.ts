@@ -355,7 +355,14 @@ function normalizePublicRouteProbe(
   };
 }
 
-export function computeHostOperationalAvailability(row: any): {
+export function computeHostOperationalAvailability(
+  row: any,
+  {
+    includeSyntheticProbe = true,
+  }: {
+    includeSyntheticProbe?: boolean;
+  } = {},
+): {
   operational: boolean;
   online: boolean;
   status: string;
@@ -426,7 +433,7 @@ export function computeHostOperationalAvailability(row: any): {
   }
 
   const syntheticProbe = row?.metadata?.runtime_synthetic_probe;
-  if (syntheticProbe?.quarantined === true) {
+  if (includeSyntheticProbe && syntheticProbe?.quarantined === true) {
     const syntheticError = `${syntheticProbe?.error ?? ""}`.trim();
     return {
       operational: false,
