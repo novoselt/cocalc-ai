@@ -1458,7 +1458,20 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 "printf 'flush chain inet %s %s\\n'", script
             )
             self.assertIn(
-                '} | "$PROJECT_NETWORK_NFT" -f -', script
+                "} | run_project_network_nft -f -", script
+            )
+            self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
+            self.assertIn('PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"', script)
+            self.assertIn('PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="5"', script)
+            self.assertIn("project-cgroup-lock-timeout", script)
+            self.assertIn("project-network-lock-timeout", script)
+            self.assertIn("--kill-after=2s", script)
+            attach_body = script.split(
+                "  attach-project-cgroup)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertNotIn(
+                'ensure_project_network_rule "$project_id"',
+                attach_body,
             )
             reconcile_body = script.split(
                 "reconcile_project_network_limits() {", 1

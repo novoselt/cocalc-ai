@@ -2540,12 +2540,34 @@ PROJECT_UDP_NEW_BURST="400"
 PROJECT_NETWORK_NFT="/usr/sbin/nft"
 PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
+PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
+PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"
+PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="5"
 
 deny() {
   local code="$1"
   local detail="$2"
   echo "SECURITY_DENY code=${code} detail=${detail}" >&2
   exit 2
+}
+
+acquire_project_cgroup_lock() {
+  exec 9>/run/lock/cocalc-project-cgroups.lock
+  if ! flock -x -w "$PROJECT_CGROUP_LOCK_WAIT_SECONDS" 9; then
+    deny "project-cgroup-lock-timeout" "$PROJECT_CGROUP_LOCK_WAIT_SECONDS"
+  fi
+}
+
+acquire_project_network_lock() {
+  exec 9>/run/lock/cocalc-project-network.lock
+  if ! flock -x -w "$PROJECT_NETWORK_LOCK_WAIT_SECONDS" 9; then
+    deny "project-network-lock-timeout" "$PROJECT_NETWORK_LOCK_WAIT_SECONDS"
+  fi
+}
+
+release_project_lock() {
+  flock -u 9 || true
+  exec 9>&-
 }
 
 is_project_uuid() {
@@ -2832,23 +2854,29 @@ project_network_rule_marker() {
 require_project_network_tools() {
   [ -x "$PROJECT_NETWORK_NFT" ] || deny "project-network-tool-missing" "$PROJECT_NETWORK_NFT"
   [ -x /usr/bin/prlimit ] || deny "project-network-tool-missing" "/usr/bin/prlimit"
+  [ -x /usr/bin/timeout ] || deny "project-network-tool-missing" "/usr/bin/timeout"
+}
+
+run_project_network_nft() {
+  /usr/bin/timeout --signal=TERM --kill-after=2s \
+    "${PROJECT_NETWORK_NFT_TIMEOUT_SECONDS}s" "$PROJECT_NETWORK_NFT" "$@"
 }
 
 configure_project_network_table() {
   require_project_network_tools
-  if ! "$PROJECT_NETWORK_NFT" list table inet "$PROJECT_NETWORK_TABLE" >/dev/null 2>&1; then
-    "$PROJECT_NETWORK_NFT" add table inet "$PROJECT_NETWORK_TABLE"
+  if ! run_project_network_nft list table inet "$PROJECT_NETWORK_TABLE" >/dev/null 2>&1; then
+    run_project_network_nft add table inet "$PROJECT_NETWORK_TABLE"
   fi
-  if ! "$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
+  if ! run_project_network_nft list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
     printf 'add chain inet %s %s { type filter hook output priority filter; policy accept; }\\n' \
-      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" | "$PROJECT_NETWORK_NFT" -f -
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" | run_project_network_nft -f -
   fi
 }
 
 project_network_rule_handles() {
   local project_id="$1" marker
   marker="$(project_network_rule_marker "$project_id")"
-  "$PROJECT_NETWORK_NFT" -a list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" 2>/dev/null | \
+  run_project_network_nft -a list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" 2>/dev/null | \
     awk -v marker="comment \\\"${marker}-" '
       index($0, marker) {
         for (i = 1; i < NF; i++) {
@@ -2859,17 +2887,18 @@ project_network_rule_handles() {
 }
 
 ensure_project_network_rule() {
-  local project_id="$1" handle
+  local project_id="$1" handle handles
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
   configure_project_network_table
+  handles="$(project_network_rule_handles "$project_id")"
   {
     while IFS= read -r handle; do
       [ -n "$handle" ] || continue
       printf 'delete rule inet %s %s handle %s\\n' \
         "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$handle"
-    done < <(project_network_rule_handles "$project_id")
+    done <<< "$handles"
     emit_project_network_rules "$project_id"
-  } | "$PROJECT_NETWORK_NFT" -f -
+  } | run_project_network_nft -f -
 }
 
 emit_project_network_rules() {
@@ -2886,14 +2915,15 @@ emit_project_network_rules() {
 }
 
 remove_project_network_rule() {
-  local project_id="$1" handle
-  if ! "$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
+  local project_id="$1" handle handles
+  if ! run_project_network_nft list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
     return 0
   fi
+  handles="$(project_network_rule_handles "$project_id")"
   while IFS= read -r handle; do
     [ -n "$handle" ] || continue
-    "$PROJECT_NETWORK_NFT" delete rule inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" handle "$handle"
-  done < <(project_network_rule_handles "$project_id")
+    run_project_network_nft delete rule inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" handle "$handle"
+  done <<< "$handles"
 }
 
 apply_pasta_resource_limits() {
@@ -2911,16 +2941,16 @@ project_cgroup_has_processes() {
 }
 
 verify_project_network_limits() {
-  local project_id="$1" marker tcp_count udp_count pid found=0 limits
+  local project_id="$1" marker rules tcp_count udp_count pid found=0 limits
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
   require_project_network_tools
   marker="$(project_network_rule_marker "$project_id")"
-  if ! "$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
+  if ! rules="$(run_project_network_nft list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" 2>/dev/null)"; then
     echo "project network nftables chain is missing" >&2
     return 1
   fi
-  tcp_count="$("$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" | grep -Fc "comment \\\"${marker}-tcp\\\"" || true)"
-  udp_count="$("$PROJECT_NETWORK_NFT" list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" | grep -Fc "comment \\\"${marker}-udp\\\"" || true)"
+  tcp_count="$(grep -Fc "comment \\\"${marker}-tcp\\\"" <<< "$rules" || true)"
+  udp_count="$(grep -Fc "comment \\\"${marker}-udp\\\"" <<< "$rules" || true)"
   if [ "$tcp_count" -ne 1 ] || [ "$udp_count" -ne 1 ]; then
     echo "project network nftables rules are missing or duplicated: tcp=${tcp_count} udp=${udp_count}" >&2
     return 1
@@ -2953,7 +2983,7 @@ reconcile_project_network_limits() {
       is_project_uuid "$project_id" || continue
       emit_project_network_rules "$project_id"
     done
-  } | "$PROJECT_NETWORK_NFT" -f -
+  } | run_project_network_nft -f -
   pool_relative="${PROJECT_POOL_CGROUP_DEFAULT#/sys/fs/cgroup}"
   while IFS= read -r pid; do
     [ -n "$pid" ] || continue
@@ -3198,8 +3228,7 @@ case "$cmd" in
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
-    exec 9>/run/lock/cocalc-project-cgroups.lock
-    flock -x 9
+    acquire_project_cgroup_lock
     require_runtime_owned_pid "$launcher_pid"
     configure_project_pool_hierarchy
     require_finite_project_pool_memory_max
@@ -3208,21 +3237,24 @@ case "$cmd" in
       "$pool" "$memory_max" "$memory_high" "$memory_low" \
       "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
       "$cpu_weight" "$io_weight"
-    ensure_project_network_rule "$project_id"
     printf '%s\n' "$launcher_pid" > "$pool/cgroup.procs"
     printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
     verify_project_pid_in_pool "$project_id" "$launcher_pid"
+    release_project_lock
+    acquire_project_network_lock
+    ensure_project_network_rule "$project_id"
+    release_project_lock
     ;;
   enter-project-cgroup)
     if [ "$#" -ne 2 ] || ! is_project_uuid "$1"; then
       echo "usage: cocalc-runtime-storage enter-project-cgroup <project-id> <launcher-pid>" >&2
       exit 2
     fi
-    exec 9>/run/lock/cocalc-project-cgroups.lock
-    flock -x 9
+    acquire_project_cgroup_lock
     configure_project_pool_hierarchy
     require_finite_project_pool_memory_max
     attach_project_launcher "$1" "$2"
+    release_project_lock
     ;;
   verify-project-pool)
     if [ "$#" -ne 2 ] || ! is_project_uuid "$1"; then
@@ -3259,8 +3291,7 @@ case "$cmd" in
         *) deny "podman-netns-path-invalid" "$netns_path" ;;
       esac
     fi
-    exec 9>/run/lock/cocalc-project-cgroups.lock
-    flock -x 9
+    acquire_project_cgroup_lock
     configure_project_pool_hierarchy
     require_finite_project_pool_memory_max
     pool="$(project_cgroup "$project_id")"
@@ -3277,7 +3308,7 @@ case "$cmd" in
         apply_pasta_resource_limits "$pasta_pid"
       done < <(find_pasta_pids_for_netns "$netns_path")
     fi
-    ensure_project_network_rule "$project_id"
+    release_project_lock
     ;;
   verify-project-network-limits)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then
@@ -3291,18 +3322,16 @@ case "$cmd" in
       echo "usage: cocalc-runtime-storage reconcile-project-network-limits" >&2
       exit 2
     fi
-    exec 9>/run/lock/cocalc-project-cgroups.lock
-    flock -x 9
+    acquire_project_network_lock
     reconcile_project_network_limits
+    release_project_lock
     ;;
   cleanup-project-cgroup)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then
       deny "project-id-invalid" "${1:-missing}"
     fi
-    exec 9>/run/lock/cocalc-project-cgroups.lock
-    flock -x 9
+    acquire_project_cgroup_lock
     pool="$(project_cgroup "$1")"
-    remove_project_network_rule "$1"
     if [ -d "$pool" ]; then
       if [ -w "$pool/cgroup.kill" ]; then
         printf '1\n' > "$pool/cgroup.kill" 2>/dev/null || true
@@ -3315,17 +3344,19 @@ case "$cmd" in
         deny "project-cgroup-cleanup-failed" "$1"
       fi
     fi
+    release_project_lock
+    acquire_project_network_lock
+    remove_project_network_rule "$1"
+    release_project_lock
     ;;
   attach-pasta-cgroups)
     if [ "$#" -ne 0 ]; then
       echo "usage: cocalc-runtime-storage attach-pasta-cgroups" >&2
       exit 2
     fi
-    exec 9>/run/lock/cocalc-project-cgroups.lock
-    flock -x 9
+    acquire_project_cgroup_lock
     configure_project_pool_hierarchy
     pool="$(project_legacy_cgroup)"
-    reconcile_project_network_limits
     while IFS= read -r pasta_pid; do
       actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pasta_pid}/cgroup" 2>/dev/null || true)"
       case "$actual" in
@@ -3333,6 +3364,10 @@ case "$cmd" in
         *) attach_pid_to_project_pool_storage "$pasta_pid" "$pool" || true ;;
       esac
     done < <(find_pasta_pids)
+    release_project_lock
+    acquire_project_network_lock
+    reconcile_project_network_limits
+    release_project_lock
     ;;
   btrfs)
     check_args "$@"

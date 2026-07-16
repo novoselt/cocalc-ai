@@ -154,6 +154,8 @@ describe("reconcileOnce", () => {
     delete process.env.COCALC_PROJECT_HOST_RECONCILE_MISSING_CYCLES;
     delete process.env.COCALC_PROJECT_HOST_RECONCILE_STALE_HEARTBEAT_MS;
     delete process.env.COCALC_PROJECT_HOST_RECONCILE_STALE_HEARTBEAT_CYCLES;
+    delete process.env.COCALC_PROJECT_CGROUP_RECONCILE_INTERVAL_MS;
+    delete process.env.COCALC_PROJECT_NETWORK_RECONCILE_INTERVAL_MS;
     mountPoint = mkdtempSync(join(tmpdir(), "cocalc-reconcile-"));
     (getMountPoint as jest.Mock).mockReturnValue(mountPoint);
     closeDatabase();
@@ -224,6 +226,31 @@ describe("reconcileOnce", () => {
       force: true,
     });
     expect(getProject(project_id)?.state).toBe("running");
+  });
+
+  it("rate limits failed cgroup repairs instead of queuing every tick", async () => {
+    upsertProject({ project_id, state: "running" });
+    mockPodmanPs(`project-${project_id}|running|\n`);
+    const reconcileProjectCgroup = jest.fn(async () => {
+      throw new Error("helper timed out");
+    });
+
+    await reconcileOnce({ reconcileProjectCgroup });
+    await reconcileOnce({ reconcileProjectCgroup });
+
+    expect(reconcileProjectCgroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles host network containment once and rate limits failures", async () => {
+    mockPodmanPs();
+    const reconcileProjectNetworkLimits = jest.fn(async () => {
+      throw new Error("nft timed out");
+    });
+
+    await reconcileOnce({ reconcileProjectNetworkLimits });
+    await reconcileOnce({ reconcileProjectNetworkLimits });
+
+    expect(reconcileProjectNetworkLimits).toHaveBeenCalledTimes(1);
   });
 
   it("clears stale running projects when the container is gone", async () => {

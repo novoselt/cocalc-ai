@@ -22,12 +22,14 @@ const DEFAULT_STALE_HEARTBEAT_MS = pidUpdateIntervalMs * 2.5;
 const DEFAULT_STALE_HEARTBEAT_CYCLES = 3;
 const DEFAULT_CGROUP_RECONCILE_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_CGROUP_RECONCILE_CONCURRENCY = 8;
+const DEFAULT_NETWORK_RECONCILE_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_PROJECT_PROXY_PORT_NUMBER = Number(DEFAULT_PROJECT_PROXY_PORT);
 
 const logger = getLogger("project-host:reconcile");
 const missingSince = new Map<string, number>();
 const staleHeartbeatCycles = new Map<string, number>();
 const cgroupReconciledAt = new Map<string, number>();
+let networkReconciledAt = 0;
 
 export interface ReconcileOptions {
   recoverStaleRuntime?: (project_id: string) => Promise<string | undefined>;
@@ -36,6 +38,7 @@ export interface ReconcileOptions {
     run_quota?: any;
     force: boolean;
   }) => Promise<{ status: string }>;
+  reconcileProjectNetworkLimits?: () => Promise<void>;
   forceProjectCgroupRepair?: boolean;
 }
 
@@ -249,6 +252,9 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
           options.forceProjectCgroupRepair === true ||
           now - lastReconciled >= cgroupReconcileIntervalMs();
         if (due) {
+          // Record the attempt before starting it. A timed-out privileged helper
+          // must not be queued again by every 15-second reconcile tick.
+          cgroupReconciledAt.set(info.project_id, now);
           const run_quota = knownById.get(info.project_id)?.run_quota;
           cgroupRepairs.push(async () => {
             try {
@@ -257,9 +263,6 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
                 run_quota,
                 force: options.forceProjectCgroupRepair === true,
               });
-              if (result.status !== "not_running") {
-                cgroupReconciledAt.set(info.project_id, Date.now());
-              }
               if (result.status === "repaired") {
                 logger.info("repaired project cgroup policy", {
                   project_id: info.project_id,
@@ -350,6 +353,24 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
 
   await runWithConcurrency(cgroupRepairs, cgroupReconcileConcurrency());
 
+  if (options.reconcileProjectNetworkLimits != null) {
+    const due =
+      options.forceProjectCgroupRepair === true ||
+      now - networkReconciledAt >= networkReconcileIntervalMs();
+    if (due) {
+      // As with per-project cgroups, failed attempts are rate limited. The next
+      // pass repairs the complete host policy in one transaction.
+      networkReconciledAt = now;
+      try {
+        await options.reconcileProjectNetworkLimits();
+      } catch (err) {
+        logger.warn("project network containment reconciliation failed", {
+          err: `${err}`,
+        });
+      }
+    }
+  }
+
   // Any project we think is active but has no container should be marked stopped.
   for (const row of knownProjects) {
     if (
@@ -421,6 +442,14 @@ function cgroupReconcileConcurrency(): number {
   return Math.max(1, Math.min(32, Math.floor(raw)));
 }
 
+function networkReconcileIntervalMs(): number {
+  const raw = Number(process.env.COCALC_PROJECT_NETWORK_RECONCILE_INTERVAL_MS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_NETWORK_RECONCILE_INTERVAL_MS;
+  }
+  return Math.max(DEFAULT_INTERVAL, Math.floor(raw));
+}
+
 async function runWithConcurrency(
   jobs: Array<() => Promise<void>>,
   concurrency: number,
@@ -440,6 +469,7 @@ export function resetReconcileStateForTests(): void {
   missingSince.clear();
   staleHeartbeatCycles.clear();
   cgroupReconciledAt.clear();
+  networkReconciledAt = 0;
 }
 
 export function startReconciler(

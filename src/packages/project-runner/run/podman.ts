@@ -111,6 +111,7 @@ const START_FAILURE_LOG_LINES = 80;
 const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
 const VERIFY_PROJECT_POOL_TIMEOUT_S = 10;
 const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
+const RECONCILE_PROJECT_NETWORK_TIMEOUT_S = 30;
 const DEFAULT_PROJECT_POOL_CGROUP = "/sys/fs/cgroup/cocalc-project-pool";
 const PROJECT_LEAF_POOL_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024;
 const MIN_PROJECT_LEAF_MEMORY_MAX_BYTES = 512 * 1024 * 1024;
@@ -1210,31 +1211,6 @@ async function projectCgroupConforms({
   }
 }
 
-async function projectNetworkLimitsConform(
-  project_id: string,
-): Promise<boolean> {
-  const result = await executeCode({
-    command: "sudo",
-    args: [
-      "-n",
-      "/usr/local/sbin/cocalc-runtime-storage",
-      "verify-project-network-limits",
-      project_id,
-    ],
-    timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
-    err_on_exit: false,
-  });
-  const conforms = result.exit_code == null || result.exit_code === 0;
-  if (!conforms) {
-    logger.debug("project network containment requires repair", {
-      project_id,
-      exit_code: result.exit_code,
-      stderr: `${result.stderr ?? ""}`.trim(),
-    });
-  }
-  return conforms;
-}
-
 export type ProjectCgroupReconcileResult = {
   status: "already_current" | "repaired" | "not_running";
   requested_memory_max?: string;
@@ -1265,10 +1241,7 @@ export async function reconcileProjectCgroup({
       project_id,
       requested,
     });
-    const networkConforms = force
-      ? false
-      : await projectNetworkLimitsConform(project_id);
-    if (!force && conformance.conforms && networkConforms) {
+    if (!force && conformance.conforms) {
       return {
         status: "already_current",
         requested_memory_max: requested.memory_max,
@@ -1284,6 +1257,24 @@ export async function reconcileProjectCgroup({
       effective_memory_max: effective?.memory_max,
     };
   });
+}
+
+export async function reconcileProjectNetworkLimits(): Promise<void> {
+  const result = await executeCode({
+    command: "sudo",
+    args: [
+      "-n",
+      "/usr/local/sbin/cocalc-runtime-storage",
+      "reconcile-project-network-limits",
+    ],
+    timeout: RECONCILE_PROJECT_NETWORK_TIMEOUT_S,
+    err_on_exit: false,
+  });
+  if (result.exit_code !== 0) {
+    throw Error(
+      `failed to reconcile project network containment: ${result.stderr || result.stdout || `helper exited ${result.exit_code ?? "without a code"}`}`,
+    );
+  }
 }
 
 async function cleanupProjectCgroup(project_id: string): Promise<void> {
