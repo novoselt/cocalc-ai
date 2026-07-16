@@ -3299,6 +3299,11 @@ case "$cmd" in
       "$pool" "$memory_max" "$memory_high" "$memory_low" \
       "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
       "$cpu_weight" "$io_weight"
+    release_project_lock
+    # Process discovery and migration can be slow for a project with a very
+    # large process tree. The cgroup now exists with its final limits, so keep
+    # that work outside the global hierarchy lock; cleanup races are harmless
+    # because these attachments are already best effort.
     while IFS= read -r conmon_pid; do
       attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
     done < <(find_project_conmon_pids "$project_id")
@@ -3308,7 +3313,6 @@ case "$cmd" in
         apply_pasta_resource_limits "$pasta_pid"
       done < <(find_pasta_pids_for_netns "$netns_path")
     fi
-    release_project_lock
     ;;
   verify-project-network-limits)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then

@@ -21,7 +21,10 @@ const DEFAULT_MISSING_CYCLES_BEFORE_OPENED = 2;
 const DEFAULT_STALE_HEARTBEAT_MS = pidUpdateIntervalMs * 2.5;
 const DEFAULT_STALE_HEARTBEAT_CYCLES = 3;
 const DEFAULT_CGROUP_RECONCILE_INTERVAL_MS = 5 * 60_000;
-const DEFAULT_CGROUP_RECONCILE_CONCURRENCY = 8;
+// The privileged helper serializes cgroup hierarchy mutations globally. More
+// concurrency only creates lock waiters and can starve foreground project
+// starts while a large host is repairing every running project at startup.
+const DEFAULT_CGROUP_RECONCILE_CONCURRENCY = 1;
 const DEFAULT_NETWORK_RECONCILE_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_PROJECT_PROXY_PORT_NUMBER = Number(DEFAULT_PROJECT_PROXY_PORT);
 

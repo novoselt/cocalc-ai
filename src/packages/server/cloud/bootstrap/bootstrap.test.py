@@ -1473,6 +1473,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'ensure_project_network_rule "$project_id"',
                 attach_body,
             )
+            self.assertLess(
+                attach_body.index("release_project_lock"),
+                attach_body.index("find_project_conmon_pids"),
+            )
             reconcile_body = script.split(
                 "reconcile_project_network_limits() {", 1
             )[1].split("\n}\n", 1)[0]
