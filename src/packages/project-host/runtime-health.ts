@@ -246,18 +246,14 @@ export function createProjectHostRuntimeHealthMonitor({
       const started = Date.now();
       try {
         await probe();
-        const syntheticFailed = snapshot.synthetic_probe?.status === "failed";
         snapshot = {
           ...snapshot,
-          status: syntheticFailed ? "degraded" : "ready",
-          ready: !syntheticFailed,
+          status: "ready",
+          ready: true,
           checked_at: new Date().toISOString(),
           podman_latency_ms: Date.now() - started,
           consecutive_failures: 0,
-          error: syntheticFailed
-            ? (snapshot.synthetic_probe?.error ??
-              "synthetic runtime probe failed")
-            : undefined,
+          error: undefined,
         };
       } catch (err) {
         const consecutiveFailures = snapshot.consecutive_failures + 1;
@@ -314,17 +310,9 @@ export function createProjectHostRuntimeHealthMonitor({
       : undefined;
     snapshot = {
       ...snapshot,
-      status: failed
-        ? "degraded"
-        : snapshot.consecutive_failures
-          ? "degraded"
-          : "ready",
-      ready: !failed && snapshot.consecutive_failures === 0,
-      error: failed
-        ? syntheticError
-        : snapshot.consecutive_failures
-          ? snapshot.error
-          : undefined,
+      status: snapshot.consecutive_failures ? "degraded" : "ready",
+      ready: snapshot.consecutive_failures === 0,
+      error: snapshot.consecutive_failures ? snapshot.error : undefined,
       synthetic_probe: {
         status: failed ? "failed" : "passed",
         checked_at: new Date().toISOString(),

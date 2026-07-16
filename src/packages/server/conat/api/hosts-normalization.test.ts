@@ -449,6 +449,35 @@ describe("computeHostOperationalAvailability", () => {
     ).toMatchObject({ operational: true, online: true });
   });
 
+  it("allows legacy synthetic-only runtime degradation for existing projects", () => {
+    expect(
+      computeHostOperationalAvailability(
+        {
+          status: "running",
+          last_seen: new Date(),
+          metadata: {
+            runtime_health: {
+              status: "degraded",
+              ready: false,
+              consecutive_failures: 0,
+              podman_latency_ms: 77,
+              error: "synthetic project probe failed",
+              synthetic_probe: {
+                status: "failed",
+                error: "synthetic project probe failed",
+              },
+            },
+            runtime_synthetic_probe: {
+              status: "failed",
+              quarantined: true,
+            },
+          },
+        },
+        { includeSyntheticProbe: false },
+      ),
+    ).toMatchObject({ operational: true, online: true });
+  });
+
   it("does not quarantine a host after only one synthetic failure", () => {
     expect(
       computeHostOperationalAvailability({

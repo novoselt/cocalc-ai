@@ -121,8 +121,8 @@ describe("project-host runtime health", () => {
     });
     await monitor.refresh();
     expect(monitor.getSnapshot()).toMatchObject({
-      status: "degraded",
-      ready: false,
+      status: "ready",
+      ready: true,
       consecutive_failures: 0,
       synthetic_probe: {
         status: "failed",

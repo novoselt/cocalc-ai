@@ -409,6 +409,13 @@ export function computeHostOperationalAvailability(
 
   const runtimeHealth = row?.metadata?.runtime_health;
   const runtimeStatus = `${runtimeHealth?.status ?? ""}`.trim();
+  const syntheticOnlyRuntimeDegradation =
+    !includeSyntheticProbe &&
+    runtimeStatus === "degraded" &&
+    runtimeHealth?.ready === false &&
+    runtimeHealth?.synthetic_probe?.status === "failed" &&
+    Number(runtimeHealth?.consecutive_failures ?? 0) === 0 &&
+    Number.isFinite(Number(runtimeHealth?.podman_latency_ms));
   if (!runtimeStatus || typeof runtimeHealth?.ready !== "boolean") {
     return {
       operational: false,
@@ -417,7 +424,10 @@ export function computeHostOperationalAvailability(
       reason_unavailable: "Host has not reported project runtime health.",
     };
   }
-  if (runtimeStatus !== "ready" || runtimeHealth?.ready !== true) {
+  if (
+    !syntheticOnlyRuntimeDegradation &&
+    (runtimeStatus !== "ready" || runtimeHealth?.ready !== true)
+  ) {
     const runtimeError = `${runtimeHealth?.error ?? ""}`.trim();
     return {
       operational: false,
