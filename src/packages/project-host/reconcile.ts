@@ -25,6 +25,10 @@ const DEFAULT_CGROUP_RECONCILE_INTERVAL_MS = 5 * 60_000;
 // concurrency only creates lock waiters and can starve foreground project
 // starts while a large host is repairing every running project at startup.
 const DEFAULT_CGROUP_RECONCILE_CONCURRENCY = 1;
+// A large host can have hundreds of running containers. Even serialized
+// repairs issue a Podman inspection per project, so bound each tick to avoid
+// starving foreground container creation with a startup inspection burst.
+const DEFAULT_CGROUP_RECONCILE_MAX_PER_TICK = 4;
 const DEFAULT_NETWORK_RECONCILE_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_PROJECT_PROXY_PORT_NUMBER = Number(DEFAULT_PROJECT_PROXY_PORT);
 
@@ -254,7 +258,7 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
         const due =
           options.forceProjectCgroupRepair === true ||
           now - lastReconciled >= cgroupReconcileIntervalMs();
-        if (due) {
+        if (due && cgroupRepairs.length < cgroupReconcileMaxPerTick()) {
           // Record the attempt before starting it. A timed-out privileged helper
           // must not be queued again by every 15-second reconcile tick.
           cgroupReconciledAt.set(info.project_id, now);
@@ -443,6 +447,14 @@ function cgroupReconcileConcurrency(): number {
     return DEFAULT_CGROUP_RECONCILE_CONCURRENCY;
   }
   return Math.max(1, Math.min(32, Math.floor(raw)));
+}
+
+function cgroupReconcileMaxPerTick(): number {
+  const raw = Number(process.env.COCALC_PROJECT_CGROUP_RECONCILE_MAX_PER_TICK);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_CGROUP_RECONCILE_MAX_PER_TICK;
+  }
+  return Math.max(1, Math.min(128, Math.floor(raw)));
 }
 
 function networkReconcileIntervalMs(): number {

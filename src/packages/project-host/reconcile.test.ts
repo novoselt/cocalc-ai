@@ -156,6 +156,7 @@ describe("reconcileOnce", () => {
     delete process.env.COCALC_PROJECT_HOST_RECONCILE_STALE_HEARTBEAT_CYCLES;
     delete process.env.COCALC_PROJECT_CGROUP_RECONCILE_INTERVAL_MS;
     delete process.env.COCALC_PROJECT_CGROUP_RECONCILE_CONCURRENCY;
+    delete process.env.COCALC_PROJECT_CGROUP_RECONCILE_MAX_PER_TICK;
     delete process.env.COCALC_PROJECT_NETWORK_RECONCILE_INTERVAL_MS;
     mountPoint = mkdtempSync(join(tmpdir(), "cocalc-reconcile-"));
     (getMountPoint as jest.Mock).mockReturnValue(mountPoint);
@@ -259,13 +260,38 @@ describe("reconcileOnce", () => {
       return { status: "repaired" };
     });
 
+    await reconcileOnce({ reconcileProjectCgroup });
+
+    expect(reconcileProjectCgroup).toHaveBeenCalledTimes(2);
+    expect(maxActive).toBe(1);
+  });
+
+  it("spreads cgroup repairs across reconcile ticks", async () => {
+    const secondProjectId = "815a6760-358e-46bc-a4fe-c43d1ed5c729";
+    upsertProject({ project_id, state: "running" });
+    upsertProject({ project_id: secondProjectId, state: "running" });
+    mockPodmanPs(
+      `project-${project_id}|running|\nproject-${secondProjectId}|running|\n`,
+    );
+    process.env.COCALC_PROJECT_CGROUP_RECONCILE_MAX_PER_TICK = "1";
+    const reconcileProjectCgroup = jest.fn(async () => ({
+      status: "repaired",
+    }));
+
     await reconcileOnce({
       reconcileProjectCgroup,
       forceProjectCgroupRepair: true,
     });
+    await reconcileOnce({ reconcileProjectCgroup });
 
     expect(reconcileProjectCgroup).toHaveBeenCalledTimes(2);
-    expect(maxActive).toBe(1);
+    expect(
+      new Set(
+        reconcileProjectCgroup.mock.calls.map(
+          ([options]) => options.project_id,
+        ),
+      ),
+    ).toEqual(new Set([project_id, secondProjectId]));
   });
 
   it("reconciles host network containment once and rate limits failures", async () => {
