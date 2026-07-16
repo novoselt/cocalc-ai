@@ -147,6 +147,10 @@ import { normalizeRunQuota, runnerConfigFromQuota } from "../run-quota";
 const logger = getLogger("project-host:hub:projects");
 const CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS = 45_000;
 export const PROJECT_RUNNER_RPC_TIMEOUT_MS = 60 * 60 * 1000;
+const SYNTHETIC_RUNTIME_PROBE_TIMEOUT_MS = Math.max(
+  10_000,
+  Number(process.env.COCALC_SYNTHETIC_RUNTIME_PROBE_TIMEOUT_MS) || 90_000,
+);
 const MB = 1_000_000;
 const DEFAULT_MAX_BACKUPS_PER_PROJECT = 30;
 const PROJECT_OWNER_LIMITS_CACHE_TTL_MS = 5 * 60_000;
@@ -1260,12 +1264,20 @@ async function startRunnerWithPortRetry({
 }
 
 export function wireProjectsApi(runnerApi: RunnerApi) {
-  async function runSyntheticRuntimeProbe(): Promise<{
+  type SyntheticRuntimeProbeResult = {
     project_id: string;
     started_at: string;
     finished_at: string;
     duration_ms: number;
-  }> {
+  };
+  let syntheticRuntimeProbeInFlight:
+    | {
+        started_at: number;
+        promise: Promise<SyntheticRuntimeProbeResult>;
+      }
+    | undefined;
+
+  async function performSyntheticRuntimeProbe(): Promise<SyntheticRuntimeProbeResult> {
     const project_id = uuid();
     const marker = uuid();
     const startedAt = Date.now();
@@ -1332,6 +1344,29 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
       deleteProjectLocal(project_id);
       syntheticRuntimeProbeProjects.delete(project_id);
     }
+  }
+
+  async function runSyntheticRuntimeProbe(): Promise<SyntheticRuntimeProbeResult> {
+    if (syntheticRuntimeProbeInFlight != null) {
+      throw new Error(
+        `synthetic runtime probe already in progress for ${Date.now() - syntheticRuntimeProbeInFlight.started_at}ms`,
+      );
+    }
+    const startedAt = Date.now();
+    const promise = performSyntheticRuntimeProbe().finally(() => {
+      if (syntheticRuntimeProbeInFlight?.promise === promise) {
+        syntheticRuntimeProbeInFlight = undefined;
+      }
+    });
+    syntheticRuntimeProbeInFlight = {
+      started_at: startedAt,
+      promise,
+    };
+    return await withTimeout(
+      promise,
+      SYNTHETIC_RUNTIME_PROBE_TIMEOUT_MS,
+      "synthetic runtime probe",
+    );
   }
 
   async function rehydrateAcpAutomations(
