@@ -330,7 +330,11 @@ export async function withSessionAdvisoryLock<T>({
 }): Promise<T | undefined> {
   const client = await getPoolClient();
   let locked = false;
-  let destroyClient = false;
+  let result!: T;
+  let workFailed = false;
+  let workError: unknown;
+  let unlockFailed = false;
+  let unlockError: unknown;
   try {
     const { rows } = await client.query<{ locked: boolean }>(
       "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
@@ -340,26 +344,42 @@ export async function withSessionAdvisoryLock<T>({
     if (!locked) {
       return undefined;
     }
-    return await fn();
-  } finally {
+
     try {
-      if (locked) {
-        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [
-          lockKey,
-        ]);
-      }
+      result = await fn();
     } catch (err) {
-      // Never return a connection that may still hold the session lock.
-      destroyClient = true;
-      throw err;
-    } finally {
-      if (destroyClient) {
-        client.release(true);
-      } else {
-        client.release();
-      }
+      workFailed = true;
+      workError = err;
     }
+
+    try {
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]);
+    } catch (err) {
+      unlockFailed = true;
+      unlockError = err;
+    }
+  } finally {
+    // Never return a connection that may still hold the session lock.
+    client.release(unlockFailed);
   }
+
+  if (workFailed) {
+    if (unlockFailed) {
+      L.error(
+        "failed to unlock PostgreSQL session after protected work failed",
+        {
+          lockKey,
+          workError,
+          unlockError,
+        },
+      );
+    }
+    throw workError;
+  }
+  if (unlockFailed) {
+    throw unlockError;
+  }
+  return result;
 }
 
 export function getClient(): Client {

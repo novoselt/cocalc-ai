@@ -454,4 +454,66 @@ describe("session-bound clients", () => {
 
     expect(sessionClient.release).toHaveBeenCalledWith(true);
   });
+
+  it("releases the client and preserves a protected-work failure", async () => {
+    const { pgMock, poolModule } = await loadPool();
+    const workError = new Error("protected work failed");
+    const sessionClient = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          return { rows: [{ locked: true }] };
+        }
+        if (sql.includes("pg_advisory_unlock")) {
+          return { rows: [{ pg_advisory_unlock: true }] };
+        }
+        throw new Error(`unexpected query: ${sql}`);
+      }),
+      release: jest.fn(),
+    };
+    pgMock.__setPoolImpls({
+      connect: jest.fn().mockResolvedValue(sessionClient),
+    });
+    poolModule.default({ ensureExists: false });
+
+    await expect(
+      poolModule.withSessionAdvisoryLock({
+        lockKey: "work-failure",
+        fn: async () => {
+          throw workError;
+        },
+      }),
+    ).rejects.toBe(workError);
+
+    expect(sessionClient.release).toHaveBeenCalledWith(false);
+  });
+
+  it("destroys the client without masking a protected-work failure", async () => {
+    const { pgMock, poolModule } = await loadPool();
+    const workError = new Error("protected work failed");
+    const unlockError = new Error("connection lost while unlocking");
+    const sessionClient = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          return { rows: [{ locked: true }] };
+        }
+        throw unlockError;
+      }),
+      release: jest.fn(),
+    };
+    pgMock.__setPoolImpls({
+      connect: jest.fn().mockResolvedValue(sessionClient),
+    });
+    poolModule.default({ ensureExists: false });
+
+    await expect(
+      poolModule.withSessionAdvisoryLock({
+        lockKey: "work-and-unlock-failure",
+        fn: async () => {
+          throw workError;
+        },
+      }),
+    ).rejects.toBe(workError);
+
+    expect(sessionClient.release).toHaveBeenCalledWith(true);
+  });
 });
