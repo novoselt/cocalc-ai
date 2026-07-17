@@ -8,13 +8,15 @@ import getLogger from "@cocalc/backend/logger";
 import { sudo, STORAGE_WRAPPER } from "./util";
 import { exists } from "@cocalc/backend/misc/async-utils-node";
 import { join } from "node:path";
+import { availableParallelism } from "node:os";
 
 const logger = getLogger("file-server:btrfs:bees");
 const BEES_ALREADY_RUNNING_EXIT_CODE = 75;
 
 interface Options {
-  // average load target: default=1
-  loadavgTarget?: number;
+  // Explicit worker ceiling. Resource contention is handled by the dedicated
+  // low-weight cgroup rather than BEES's host-wide load-average heuristic.
+  workerCount?: number;
   // 0-8: default 1
   verbose?: number;
   // hash table size: default 1G
@@ -36,7 +38,11 @@ function beesDisabledByEnv(): boolean {
 
 export default async function bees(
   mountpoint: string,
-  { loadavgTarget = 1, verbose = 1, size = "1G" }: Options = {},
+  {
+    workerCount = Math.min(4, availableParallelism()),
+    verbose = 1,
+    size = "1G",
+  }: Options = {},
 ): Promise<BeesStartResult> {
   if (beesDisabledByEnv()) {
     logger.debug(
@@ -58,8 +64,8 @@ export default async function bees(
   }
 
   const args: string[] = ["bees", "-v", `${verbose}`];
-  if (loadavgTarget) {
-    args.push("-g", `${loadavgTarget}`);
+  if (workerCount > 0) {
+    args.push("-c", `${Math.max(1, Math.floor(workerCount))}`);
   }
   args.push(mountpoint);
   logger.debug(`Running 'sudo -n ${STORAGE_WRAPPER} ${args.join(" ")}'`);
