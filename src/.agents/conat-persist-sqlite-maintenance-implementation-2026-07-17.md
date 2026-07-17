@@ -2,7 +2,7 @@
 
 Date: 2026-07-17
 
-Status: implemented; staging validation pending
+Status: implemented and validated on staging; production review pending
 
 This document records the implementation of
 `conat-persist-sqlite-maintenance-plan-2026-07-17.md` and the procedure for
@@ -172,6 +172,67 @@ invalidation, rollback, secondary refresh retry, corrupt-catalog rebuild,
 interrupted-run recovery, stale-process owners, dry-run behavior, and
 multi-worker coverage. Backend, Conat, project-host, and server package
 typechecks pass.
+
+## Staging Validation Results
+
+Commit `0e635ccd2ad233e2f3361b7b5d3ae8caa421d5f2` was deployed to staging on
+2026-07-17 using these immutable artifacts:
+
+```text
+bay:          20260717T190419Z-0e635ccd-persist-maintenance-20260717
+project-host: 20260717T190736Z-0e635ccd-persist-maintenance-20260717
+```
+
+Only `bay-conat-persist` and the managed project-host `conat-persist`
+components were restarted. No production component was deployed or enabled.
+
+Dry-run inventory completed with healthy catalogs, complete worker coverage,
+and no failures:
+
+```text
+staging bay:   102 existing databases
+staging host:  422 existing databases
+staging host2: 140 existing databases
+```
+
+Every existing database was below the accelerated 1 MB staging threshold. A
+disposable 34,086,912-byte SQLite database was therefore created in the bay
+storage domain and another on `host`. Each contained 1,024 initial 32 KiB rows,
+then retained only 8 rows, leaving 8,254 of 8,322 pages free. Dry-run inspection
+identified each as the only eligible candidate and estimated 33,808,384 bytes
+reclaimable without changing its source inode or size.
+
+Real maintenance was then enabled on one domain at a time. Both promotions
+completed successfully:
+
+```text
+before size:       34,086,912 bytes
+after size:           270,336 bytes
+reclaimed:         33,816,576 bytes
+bay duration:             179 ms
+host duration:             56 ms
+```
+
+For both results, the inode changed, ownership and mode were preserved, the 8
+expected rows and 262,144 live payload bytes remained, `PRAGMA quick_check`
+returned `ok`, the freelist became zero, and no compact or rollback artifact
+remained. The catalog recorded one success and no failure, timeout,
+invalidation, or secondary-refresh backlog.
+
+Both disposable directories were then deleted. The next bounded scan marked
+their catalog rows `missing` and did not recreate either path.
+
+The staging bay and both staging project-host persist services were finally
+restarted with maintenance enabled, mutation enabled, and all accelerated
+threshold/interval overrides removed. They now use the conservative defaults
+documented above. All three loopback health and maintenance endpoints are
+ready, catalogs remain healthy, tracking coverage is complete, and recent logs
+contain no maintenance error. The full bay smoke test passed homepage, static,
+favicon, and all four worker-to-host route checks. The project-host smoke test
+confirmed the representative host artifact, deployment status, and host RPC.
+The CLI does not yet implement component-specific smoke commands for
+`bay-conat-persist` or `host-conat-persist`, so direct health/status checks and
+the parent artifact smoke tests were used instead.
 
 ## Remaining Production Gate
 
