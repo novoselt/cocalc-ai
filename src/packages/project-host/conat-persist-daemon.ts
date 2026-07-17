@@ -24,7 +24,7 @@ export async function main(): Promise<ProjectHostConatPersistDaemonContext> {
   });
   const systemAccountPassword = getOrCreateProjectHostConatPassword();
   setConatPassword(systemAccountPassword);
-  const { host, port, id, client, httpServer, persistServer } =
+  const { host, port, id, client, httpServer, persistServer, maintenance } =
     await startStandaloneProjectHostConatPersist({
       systemAccountPassword,
     });
@@ -41,6 +41,7 @@ export async function main(): Promise<ProjectHostConatPersistDaemonContext> {
     try {
       await persistServer.end();
     } finally {
+      maintenance?.close();
       stopEventLoopStallMonitor();
       try {
         client.close();

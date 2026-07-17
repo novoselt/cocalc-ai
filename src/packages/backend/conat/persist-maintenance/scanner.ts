@@ -1,0 +1,206 @@
+/*
+ *  This file is part of CoCalc: Copyright (c) 2026 Sagemath, Inc.
+ *  License: MS-RSL - see LICENSE.md for details
+ */
+
+import { lstat, readdir } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+
+import type { PersistMaintenanceConfig } from "./config";
+import { PersistMaintenanceCatalog } from "./catalog";
+import { fileIdentity, PersistMaintenancePathSafety } from "./path-safety";
+
+interface ScanCursor {
+  startedAt: number;
+  roots: string[];
+  rootIndex: number;
+  stack: string[];
+  current?: { path: string; index: number };
+  files: number;
+  entries: number;
+  bytes: number;
+}
+
+export interface PersistMaintenanceScanResult {
+  complete: boolean;
+  startedAt: number;
+  completedAt?: number;
+  files: number;
+  entries: number;
+  bytes: number;
+  errors: string[];
+}
+
+const PLACEHOLDER = /\[[a-zA-Z0-9_]+\]/;
+
+async function expandTemplate(template: string): Promise<string[]> {
+  const absolute = resolve(template);
+  const match = absolute.match(PLACEHOLDER);
+  if (!match || match.index == null) return [absolute];
+  const before = absolute.slice(0, match.index);
+  const after = absolute.slice(match.index + match[0].length);
+  const parent = dirname(before);
+  const namePrefix = basename(before);
+  const slash = after.indexOf("/");
+  const nameSuffix = slash < 0 ? after : after.slice(0, slash);
+  const pathSuffix = slash < 0 ? "" : after.slice(slash + 1);
+  try {
+    const entries = await readdir(parent, { withFileTypes: true });
+    return entries
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          !entry.isSymbolicLink() &&
+          entry.name.startsWith(namePrefix) &&
+          entry.name.endsWith(nameSuffix) &&
+          entry.name.length > namePrefix.length + nameSuffix.length,
+      )
+      .map((entry) => join(parent, entry.name, pathSuffix));
+  } catch {
+    return [];
+  }
+}
+
+async function expandRoots(templates: string[]): Promise<string[]> {
+  const roots = (
+    await Promise.all(templates.map((template) => expandTemplate(template)))
+  ).flat();
+  return [...new Set(roots)].sort();
+}
+
+export class PersistMaintenanceScanner {
+  constructor(
+    private readonly catalog: PersistMaintenanceCatalog,
+    private readonly safety: PersistMaintenancePathSafety,
+    private readonly config: PersistMaintenanceConfig,
+  ) {}
+
+  private loadCursor(): ScanCursor | undefined {
+    const raw = this.catalog.getState("scan_cursor");
+    if (!raw) return;
+    try {
+      return JSON.parse(raw) as ScanCursor;
+    } catch {
+      return;
+    }
+  }
+
+  private saveCursor(cursor?: ScanCursor): void {
+    this.catalog.setState("scan_cursor", cursor ? JSON.stringify(cursor) : "");
+  }
+
+  async scanBatch(): Promise<PersistMaintenanceScanResult> {
+    let cursor = this.loadCursor();
+    if (!cursor) {
+      cursor = {
+        startedAt: Date.now(),
+        roots: await expandRoots(this.config.rootTemplates),
+        rootIndex: 0,
+        stack: [],
+        files: 0,
+        entries: 0,
+        bytes: 0,
+      };
+      this.catalog.setState("scan_started_at", `${cursor.startedAt}`);
+    }
+    const startEntries = cursor.entries;
+    const startBytes = cursor.bytes;
+    const errors: string[] = [];
+
+    while (
+      cursor.entries - startEntries < this.config.scanEntryLimit &&
+      cursor.bytes - startBytes < this.config.scanByteLimit
+    ) {
+      if (!cursor.current) {
+        const next = cursor.stack.pop() ?? cursor.roots[cursor.rootIndex++];
+        if (!next) break;
+        cursor.current = { path: next, index: 0 };
+      }
+      let entries;
+      try {
+        entries = await readdir(cursor.current.path, { withFileTypes: true });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          errors.push(`${cursor.current.path}: ${err}`);
+        }
+        cursor.current = undefined;
+        continue;
+      }
+      if (cursor.current.index >= entries.length) {
+        cursor.current = undefined;
+        continue;
+      }
+      const entry = entries[cursor.current.index++];
+      cursor.entries += 1;
+      const path = join(cursor.current.path, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        cursor.stack.push(path);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".db")) continue;
+      if (
+        entry.name.includes(".compact-") ||
+        entry.name.includes(".rollback-") ||
+        entry.name.endsWith("-wal") ||
+        entry.name.endsWith("-shm")
+      ) {
+        continue;
+      }
+      try {
+        const checked = this.safety.assertExistingRegularFile(path);
+        let walSize = 0;
+        try {
+          walSize = (await lstat(`${checked.path}-wal`)).size;
+        } catch {}
+        const identity = fileIdentity(checked.stat, walSize);
+        this.catalog.observeFile(checked.path, identity);
+        cursor.files += 1;
+        cursor.bytes += identity.sizeBytes;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          errors.push(`${path}: ${err}`);
+        }
+      }
+    }
+
+    const complete =
+      !cursor.current &&
+      cursor.stack.length === 0 &&
+      cursor.rootIndex >= cursor.roots.length;
+    if (!complete) {
+      this.saveCursor(cursor);
+      return {
+        complete: false,
+        startedAt: cursor.startedAt,
+        files: cursor.files,
+        entries: cursor.entries,
+        bytes: cursor.bytes,
+        errors,
+      };
+    }
+
+    for (const path of this.catalog.listStalePresent(cursor.startedAt)) {
+      try {
+        this.safety.assertExistingRegularFile(path);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          this.catalog.markMissing(path);
+        }
+      }
+    }
+    const completedAt = Date.now();
+    this.catalog.setState("scan_completed_at", `${completedAt}`);
+    this.catalog.setState("scan_files", `${cursor.files}`);
+    this.saveCursor(undefined);
+    return {
+      complete: true,
+      startedAt: cursor.startedAt,
+      completedAt,
+      files: cursor.files,
+      entries: cursor.entries,
+      bytes: cursor.bytes,
+      errors,
+    };
+  }
+}

@@ -82,6 +82,7 @@ import TTL from "@isaacs/ttlcache";
 import { getLogger } from "@cocalc/conat/logger";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import { throttle } from "lodash";
+import type { PersistMaintenanceHandle } from "./maintenance/types";
 
 const logger = getLogger("persist:storage");
 
@@ -304,24 +305,55 @@ export class PersistentStream extends EventEmitter {
   private conf: Configuration;
   private throttledBackup?;
   private closing = false;
+  private maintenanceDirty = false;
+  private readonly maintenanceHandles = new Map<
+    string,
+    PersistMaintenanceHandle
+  >();
 
   constructor(options: StorageOptions) {
     super();
     openPaths.add(options.path);
-    logger.debug("constructor ", options.path);
-    this.setMaxListeners(1000);
-    options = { compression: DEFAULT_COMPRESSION, ...options };
-    this.options = options;
-    const location = this.options.ephemeral
-      ? ":memory:"
-      : this.options.path + ".db";
-    if (location !== ":memory:") {
-      this.dbPath = location;
+    try {
+      logger.debug("constructor ", options.path);
+      this.setMaxListeners(1000);
+      options = { compression: DEFAULT_COMPRESSION, ...options };
+      this.options = options;
+      const location = this.options.ephemeral
+        ? ":memory:"
+        : this.options.path + ".db";
+      if (location !== ":memory:") {
+        this.dbPath = location;
+      }
+      this.initArchive();
+      this.db = createDatabase(location);
+      this.initSchema();
+      this.maintenanceDirty = false;
+    } catch (err) {
+      openPaths.delete(options.path);
+      throw err;
     }
-    this.initArchive();
-    this.db = createDatabase(location);
-    this.initSchema();
   }
+
+  addMaintenanceHandle = (handle: PersistMaintenanceHandle): void => {
+    if (this.options.ephemeral || this.closing) return;
+    this.maintenanceHandles.set(handle.ownerId, handle);
+  };
+
+  private markMaintenanceMutation = (): void => {
+    if (this.options.ephemeral || this.closing) return;
+    this.maintenanceDirty = true;
+    for (const handle of this.maintenanceHandles.values()) {
+      try {
+        handle.onMutation();
+      } catch (err) {
+        logger.debug("persist maintenance mutation hook failed", {
+          path: this.options.path,
+          err,
+        });
+      }
+    }
+  };
 
   private initArchive = () => {
     if (!this.options.archive) {
@@ -444,6 +476,16 @@ export class PersistentStream extends EventEmitter {
         }
         if (closed) {
           this.backupClosedDatabase();
+          for (const handle of this.maintenanceHandles.values()) {
+            try {
+              handle.onFinalClose(this.maintenanceDirty);
+            } catch (err) {
+              logger.debug("persist maintenance close hook failed", {
+                path,
+                err,
+              });
+            }
+          }
         }
       }
     } finally {
@@ -452,6 +494,7 @@ export class PersistentStream extends EventEmitter {
       this.msgIDs?.clear();
       // @ts-ignore
       delete this.msgIDs;
+      this.maintenanceHandles.clear();
       openPaths.delete(path);
     }
   };
@@ -507,6 +550,7 @@ export class PersistentStream extends EventEmitter {
     try {
       const result = fn();
       this.db.exec("COMMIT");
+      this.markMaintenanceMutation();
       return result;
     } catch (err) {
       try {
@@ -994,6 +1038,9 @@ export class PersistentStream extends EventEmitter {
     this.conf = full as Configuration;
     // ensure any new limits are enforced
     this.enforceLimits(0);
+    if (config != null) {
+      this.markMaintenanceMutation();
+    }
     this.throttledBackup();
     return full as Configuration;
   };
@@ -1114,6 +1161,7 @@ export class PersistentStream extends EventEmitter {
 
   deleteCheckpoint = (name: string): void => {
     this.db.prepare("DELETE FROM stream_checkpoints WHERE name = ?").run(name);
+    this.markMaintenanceMutation();
     this.emit("change", {
       op: "checkpoints",
       checkpoints: this.getCheckpoints(),

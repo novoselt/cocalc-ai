@@ -15,6 +15,7 @@ const { zstdCompressSync, zstdDecompressSync } = require("node:zlib");
 import { syncFiles } from "@cocalc/backend/data";
 import ensureContainingDirectoryExists from "@cocalc/backend/misc/ensure-containing-directory-exists";
 import { statSync, copyFileSync } from "node:fs";
+import type { PersistMaintenanceHooks } from "@cocalc/conat/persist/maintenance/types";
 
 initContext({
   sqlite,
@@ -38,18 +39,22 @@ export function initPersistServer({
   id,
   clusterMode,
   service,
+  maintenance,
 }: {
   id?: string;
   clusterMode?: boolean;
   service?: string;
+  maintenance?: PersistMaintenanceHooks;
 }) {
   const persistServer = server({
     client: conat({ noCache: persistServers.length > 0 }),
     id,
     clusterMode,
     service,
+    maintenance,
   });
   persistServers.push(persistServer);
+  return persistServer;
 }
 
 export function close() {
