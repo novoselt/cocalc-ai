@@ -225,6 +225,24 @@ process exit still uses the existing bounded lifecycle restart behavior. The
 initial deployment target is staging only; production requires review of the
 code and staging observations.
 
+### Rolling-upgrade ownership handoff
+
+The first staging rollout exposed a lifecycle race that was not visible in the
+snapshot experiments. The old project-host daemon's detached BEES process was
+still running when the new daemon initialized. The privileged wrapper correctly
+refused to start a duplicate, so the new daemon classified BEES as externally
+owned. The inherited process then exited as old-daemon shutdown completed, but
+the new daemon had no reason to retry and both staging hosts were left without
+BEES.
+
+The supervisor now treats `BEES_ALREADY_RUNNING` as a potentially transient
+rolling-upgrade handoff. It retries acquisition with exponential backoff capped
+at one minute. The wrapper's process check and file lock remain authoritative,
+so retries cannot create two BEES instances. A genuinely external process is
+not signaled or replaced; the new daemon takes ownership only after that process
+exits. A focused fake-timer test covers the observed sequence and verifies that
+the replacement is started and supervised.
+
 ## Risk controls
 
 - Never run experimental BEES settings first on the only copy of user data.
