@@ -3,7 +3,18 @@
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { discoverApiV2Routes } from "./api-v2-routes";
+import {
+  discoverApiV2Routes,
+  EMBEDDED_API_V2_ROUTES_LOADER,
+  loadEmbeddedApiV2Routes,
+} from "./api-v2-routes";
+
+type EmbeddedApiV2RoutesGlobal = {
+  [key: symbol]: unknown;
+};
+
+const embeddedRoutesGlobal = globalThis as unknown as EmbeddedApiV2RoutesGlobal;
+const embeddedRoutesSymbol = Symbol.for(EMBEDDED_API_V2_ROUTES_LOADER);
 
 describe("discoverApiV2Routes", () => {
   const logger = {
@@ -13,6 +24,7 @@ describe("discoverApiV2Routes", () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    delete embeddedRoutesGlobal[embeddedRoutesSymbol];
   });
 
   it("discovers handlers directly from the api/v2 filesystem layout", () => {
@@ -53,5 +65,24 @@ describe("discoverApiV2Routes", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("loads and validates routes registered by a release bundle", () => {
+    const handler = jest.fn();
+    const loader = jest.fn(() => [{ path: "/health", handler }]);
+    embeddedRoutesGlobal[embeddedRoutesSymbol] = loader;
+
+    expect(loadEmbeddedApiV2Routes()).toEqual([{ path: "/health", handler }]);
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects invalid embedded route loaders", () => {
+    embeddedRoutesGlobal[embeddedRoutesSymbol] = () => [
+      { path: "/health", handler: "not-a-function" },
+    ];
+
+    expect(() => loadEmbeddedApiV2Routes()).toThrow(
+      "embedded api v2 route loader contains an invalid route entry",
+    );
   });
 });
