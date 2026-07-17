@@ -414,10 +414,11 @@ async function resolveLatestSoftwareRow({
       };
     }
   }
-  const manifestUrl =
-    canonical === "tools"
-      ? `${softwareBaseUrl}/${canonical}/${channel}-${targetOs}-${targetArch}.json`
-      : `${softwareBaseUrl}/${canonical}/${channel}-${targetOs}.json`;
+  const archSpecific =
+    canonical === "tools" || canonical === "container-runtime";
+  const manifestUrl = archSpecific
+    ? `${softwareBaseUrl}/${canonical}/${channel}-${targetOs}-${targetArch}.json`
+    : `${softwareBaseUrl}/${canonical}/${channel}-${targetOs}.json`;
   try {
     const manifest = await fetchSoftwareManifest(manifestUrl);
     const resolvedUrl =
