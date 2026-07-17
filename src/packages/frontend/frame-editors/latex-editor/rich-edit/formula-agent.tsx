@@ -39,19 +39,19 @@ interface FormulaAgentOpts {
   instruction?: string;
 }
 
-export function createFormulaAgentPrompt({
-  project_id,
-  path,
-  source,
-  from,
-  to,
-  instruction,
-}: FormulaAgentOpts): string {
+function formulaMarkdown(opts: FormulaAgentOpts): string {
+  if (opts.formulaType === "math-env") {
+    return opts.source;
+  }
+  const content = opts.formulaContent ?? opts.source;
+  return ["$$", content, "$$"].join("\n");
+}
+
+export function createFormulaAgentPrompt(opts: FormulaAgentOpts): string {
+  const { project_id, path, source, from, to, instruction } = opts;
   return [
     "**Edit this LaTeX formula:**",
-    "$$",
-    source,
-    "$$",
+    formulaMarkdown(opts),
     "",
     "**Requested change:**",
     instruction ?? "",

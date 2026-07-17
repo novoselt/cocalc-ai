@@ -14,11 +14,13 @@ describe("Formula Agent prompt", () => {
       from: { line: 7, ch: 3 },
       to: { line: 7, ch: 8 },
       formulaType: "math-inline",
+      formulaContent: "x^2",
       instruction: "Add a subscript n to x.",
     });
     expect(prompt).toContain("home/user/latex/widget.tex");
     expect(prompt).toContain('"line": 8');
-    expect(prompt).toContain("$$\n$x^2$\n$$");
+    expect(prompt).toContain("$$\nx^2\n$$");
+    expect(prompt).not.toContain("$$\n$x^2$\n$$");
     expect(prompt).toContain("Add a subscript n to x.");
     expect(prompt).toContain("Do not ask them to repeat it.");
     expect(prompt).toContain("Do not merely reply with proposed LaTeX");
@@ -35,6 +37,7 @@ describe("Formula Agent prompt", () => {
       from: { line: 7, ch: 3 },
       to: { line: 9, ch: 8 },
       formulaType: "math-inline",
+      formulaContent: "x^2",
       instruction: "Add a subscript n to x.",
     });
     expect(prompt).toContain('"line": 8');
@@ -50,9 +53,25 @@ describe("Formula Agent prompt", () => {
       from: { line: 7, ch: 3 },
       to: { line: 7, ch: 8 },
       formulaType: "math-inline",
+      formulaContent: "x^2",
       instruction: "Add a subscript n to x.",
     });
     expect(prompt).toContain("Do not merely reply with proposed LaTeX");
     expect(prompt).toContain("Intent metadata");
+  });
+
+  it("keeps math environments free of nested display delimiters", () => {
+    const source = "\\begin{align}x &= y\\end{align}";
+    const prompt = createFormulaAgentPrompt({
+      project_id: "project-id",
+      path: "home/user/latex/widget.tex",
+      source,
+      from: { line: 0, ch: 0 },
+      to: { line: 0, ch: source.length },
+      formulaType: "math-env",
+      instruction: "Swap the two sides.",
+    });
+    expect(prompt).toContain(`**Edit this LaTeX formula:**\n${source}`);
+    expect(prompt).not.toContain(`$$\n${source}\n$$`);
   });
 });
