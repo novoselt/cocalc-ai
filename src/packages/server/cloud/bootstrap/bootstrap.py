@@ -6880,8 +6880,16 @@ Type=simple
     unit_changed = write_text_if_changed(
         Path("/etc/systemd/system/cocalc-cloudflared.service"), unit
     )
+    recovery_dropin_dir = Path(
+        "/etc/systemd/system/cocalc-cloudflared.service.d"
+    )
+    recovery_dropin_dir.mkdir(parents=True, exist_ok=True)
+    recovery_dropin_changed = write_text_if_changed(
+        recovery_dropin_dir / "cocalc-recovery.conf",
+        "[Service]\nTimeoutStopSec=30\n",
+    )
     service_changed = unit_changed or service_changed
-    if unit_changed:
+    if unit_changed or recovery_dropin_changed:
         run_cmd(cfg, ["systemctl", "daemon-reload"], "daemon-reload", timeout=30)
     run_cmd(cfg, ["systemctl", "enable", "cocalc-cloudflared"], "enable cloudflared")
     active = run_cmd(

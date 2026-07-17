@@ -2634,9 +2634,16 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
 
             config = next(data for path, data, _ in writes if path == "/etc/cloudflared/config.yml")
             unit = next(data for path, data, _ in writes if path == "/etc/systemd/system/cocalc-cloudflared.service")
+            recovery_dropin = next(
+                data
+                for path, data, _ in writes
+                if path
+                == "/etc/systemd/system/cocalc-cloudflared.service.d/cocalc-recovery.conf"
+            )
             self.assertIn("credentials-file: /etc/cloudflared/tunnel-id.json", config)
             self.assertNotIn("--token", unit)
             self.assertNotIn("EnvironmentFile=/etc/cloudflared/token.env", unit)
+            self.assertEqual(recovery_dropin, "[Service]\nTimeoutStopSec=30\n")
 
     def test_configure_cloudflared_uses_token_file_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2732,6 +2739,9 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 bootstrap.os.chmod = lambda *_args, **_kwargs: None
 
                 bootstrap.configure_cloudflared_with_options(cfg, install_package=False)
+                stored.pop(
+                    "/etc/systemd/system/cocalc-cloudflared.service.d/cocalc-recovery.conf"
+                )
                 commands.clear()
                 events.clear()
                 bootstrap.configure_cloudflared_with_options(cfg, install_package=False)
@@ -2748,7 +2758,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertFalse(
                 any(args[:2] == ["systemctl", "restart"] for args, _desc, _kwargs in commands)
             )
-            self.assertFalse(
+            self.assertTrue(
                 any(args[:2] == ["systemctl", "daemon-reload"] for args, _desc, _kwargs in commands)
             )
             self.assertTrue(
