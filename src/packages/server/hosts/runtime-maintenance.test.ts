@@ -379,6 +379,8 @@ describe("project-host runtime maintenance policy", () => {
         health_status: 200,
         preflight_status: 204,
         session_status: 401,
+        websocket_status: 101,
+        websocket_attempts: 8,
       },
     });
     expect(firstSuccess).toMatchObject({
@@ -405,6 +407,8 @@ describe("project-host runtime maintenance policy", () => {
         health_status: 200,
         preflight_status: 204,
         session_status: 401,
+        websocket_status: 101,
+        websocket_attempts: 8,
       },
     });
     expect(secondSuccess).toMatchObject({
@@ -428,6 +432,38 @@ describe("project-host runtime maintenance policy", () => {
       NOW - 16 * 60_000,
     ).toISOString();
     expect(_test.publicRouteProbeFailureAlertDue(row, NOW)).toBe(true);
+  });
+
+  it("only repairs quarantined capable hosts outside the cooldown", () => {
+    const probe = {
+      status: "failed",
+      claim_id: "probe-claim",
+      quarantined: true,
+      consecutive_failures: 2,
+    };
+    const row = degradedCloudHost({
+      cloudflared_restart_supported: true,
+      public_route_probe: probe,
+    });
+    expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
+      action: "restart",
+    });
+
+    row.metadata.cloudflared_restart_supported = false;
+    expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
+      action: "wait",
+      reason: "host does not advertise tunnel restart support",
+    });
+
+    row.metadata.cloudflared_restart_supported = true;
+    row.metadata.public_route_auto_recovery = {
+      status: "restart_completed",
+      attempted_at: new Date(NOW - 5 * 60_000).toISOString(),
+    };
+    expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
+      action: "wait",
+      reason: "host tunnel repair is in cooldown",
+    });
   });
 
   it("identifies the deployment from the project-host public URL", () => {
