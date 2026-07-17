@@ -4,7 +4,7 @@
  */
 
 import getLogger from "@cocalc/backend/logger";
-import getPool from "@cocalc/database/pool";
+import { withSessionAdvisoryLock } from "@cocalc/database/pool";
 
 import { runPendingRootfsReleaseGc } from "./releases";
 
@@ -27,19 +27,7 @@ let started = false;
 async function withMaintenanceLock<T>(
   fn: () => Promise<T>,
 ): Promise<T | undefined> {
-  const pool = getPool("medium");
-  const { rows } = await pool.query<{ locked: boolean }>(
-    "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-    [LOCK_KEY],
-  );
-  if (!rows[0]?.locked) {
-    return undefined;
-  }
-  try {
-    return await fn();
-  } finally {
-    await pool.query("SELECT pg_advisory_unlock(hashtext($1))", [LOCK_KEY]);
-  }
+  return await withSessionAdvisoryLock({ lockKey: LOCK_KEY, fn });
 }
 
 export function startRootfsReleaseGcMaintenance(): void {

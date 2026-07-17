@@ -343,3 +343,115 @@ describe("getTransactionClient", () => {
     expect(transactionClient.release).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("session-bound clients", () => {
+  it("ignores cache options when checking out a client", async () => {
+    const { pgMock, poolModule } = await loadPool();
+    const sessionClient = {
+      query: jest.fn().mockResolvedValue({ rows: [] }),
+      release: jest.fn(),
+    };
+    const connect = jest.fn().mockResolvedValue(sessionClient);
+    pgMock.__setPoolImpls({ connect });
+    poolModule.default({ ensureExists: false });
+
+    const fromString = await poolModule.getPoolClient("medium");
+    const fromObject = await poolModule.getPoolClient({
+      cacheTime: "long",
+      ensureExists: false,
+    });
+
+    expect(fromString).toBe(sessionClient);
+    expect(fromObject).toBe(sessionClient);
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it("acquires and releases a session advisory lock on one client", async () => {
+    const { pgMock, poolModule } = await loadPool();
+    const fn = jest.fn().mockResolvedValue("result");
+    const sessionClient = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          return { rows: [{ locked: true }] };
+        }
+        if (sql.includes("pg_advisory_unlock")) {
+          return { rows: [{ pg_advisory_unlock: true }] };
+        }
+        throw new Error(`unexpected query: ${sql}`);
+      }),
+      release: jest.fn(),
+    };
+    const connect = jest.fn().mockResolvedValue(sessionClient);
+    pgMock.__setPoolImpls({ connect });
+    poolModule.default({ ensureExists: false });
+
+    const result = await poolModule.withSessionAdvisoryLock({
+      lockKey: "test-lock",
+      fn,
+    });
+
+    expect(result).toBe("result");
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(sessionClient.query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      ["test-lock"],
+    );
+    expect(sessionClient.query).toHaveBeenNthCalledWith(
+      2,
+      "SELECT pg_advisory_unlock(hashtext($1))",
+      ["test-lock"],
+    );
+    expect(sessionClient.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the client without running work when the lock is unavailable", async () => {
+    const { pgMock, poolModule } = await loadPool();
+    const fn = jest.fn();
+    const sessionClient = {
+      query: jest.fn().mockResolvedValue({ rows: [{ locked: false }] }),
+      release: jest.fn(),
+    };
+    pgMock.__setPoolImpls({
+      connect: jest.fn().mockResolvedValue(sessionClient),
+    });
+    poolModule.default({ ensureExists: false });
+
+    const result = await poolModule.withSessionAdvisoryLock({
+      lockKey: "busy-lock",
+      fn,
+    });
+
+    expect(result).toBeUndefined();
+    expect(fn).not.toHaveBeenCalled();
+    expect(sessionClient.query).toHaveBeenCalledTimes(1);
+    expect(sessionClient.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("destroys a client when unlocking fails", async () => {
+    const { pgMock, poolModule } = await loadPool();
+    const unlockError = new Error("connection lost while unlocking");
+    const sessionClient = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          return { rows: [{ locked: true }] };
+        }
+        throw unlockError;
+      }),
+      release: jest.fn(),
+    };
+    pgMock.__setPoolImpls({
+      connect: jest.fn().mockResolvedValue(sessionClient),
+    });
+    poolModule.default({ ensureExists: false });
+
+    await expect(
+      poolModule.withSessionAdvisoryLock({
+        lockKey: "unlock-failure",
+        fn: async () => "result",
+      }),
+    ).rejects.toBe(unlockError);
+
+    expect(sessionClient.release).toHaveBeenCalledWith(true);
+  });
+});

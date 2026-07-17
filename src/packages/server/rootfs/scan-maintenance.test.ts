@@ -13,6 +13,8 @@ jest.mock("@cocalc/database/pool", () => ({
   default: () => ({
     query: queryMock,
   }),
+  withSessionAdvisoryLock: async ({ fn }: { fn: () => Promise<unknown> }) =>
+    await fn(),
 }));
 
 jest.mock("@cocalc/database/settings/server-settings", () => ({

@@ -4,7 +4,7 @@
  */
 
 import getLogger from "@cocalc/backend/logger";
-import getPool from "@cocalc/database/pool";
+import getPool, { withSessionAdvisoryLock } from "@cocalc/database/pool";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
@@ -216,25 +216,7 @@ export async function selectHostForScheduledRootfsScan(
 async function withMaintenanceLock<T>(
   fn: () => Promise<T>,
 ): Promise<T | undefined> {
-  // Advisory locks require a real PoolClient; cached pools only expose query().
-  const pool = getPool();
-  const client = await pool.connect();
-  try {
-    const { rows } = await client.query<{ locked: boolean }>(
-      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-      [LOCK_KEY],
-    );
-    if (!rows[0]?.locked) {
-      return undefined;
-    }
-    try {
-      return await fn();
-    } finally {
-      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [LOCK_KEY]);
-    }
-  } finally {
-    client.release();
-  }
+  return await withSessionAdvisoryLock({ lockKey: LOCK_KEY, fn });
 }
 
 export async function runScheduledOfficialRootfsScans(): Promise<{

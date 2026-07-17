@@ -4,7 +4,7 @@
  */
 
 import getLogger from "@cocalc/backend/logger";
-import getPool from "@cocalc/database/pool";
+import getPool, { withSessionAdvisoryLock } from "@cocalc/database/pool";
 import { normalizeProviderId } from "@cocalc/cloud";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { enqueueCloudVmWork } from "@cocalc/server/cloud";
@@ -67,28 +67,7 @@ type CandidateHostRow = {
 async function withMaintenanceLock<T>(
   fn: () => Promise<T>,
 ): Promise<T | undefined> {
-  const pool = getPool("medium");
-  const client = await pool.connect();
-  let locked = false;
-  try {
-    const { rows } = await client.query<{ locked: boolean }>(
-      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-      [LOCK_KEY],
-    );
-    locked = rows[0]?.locked === true;
-    if (!locked) return undefined;
-    return await fn();
-  } finally {
-    try {
-      if (locked) {
-        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [
-          LOCK_KEY,
-        ]);
-      }
-    } finally {
-      client.release();
-    }
-  }
+  return await withSessionAdvisoryLock({ lockKey: LOCK_KEY, fn });
 }
 
 async function listCandidateHosts(): Promise<CandidateHostRow[]> {

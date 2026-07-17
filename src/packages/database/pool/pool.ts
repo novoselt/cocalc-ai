@@ -306,8 +306,60 @@ export async function getTransactionClient(
 export async function getPoolClient(
   options?: PoolOptionInput,
 ): Promise<PoolClient> {
-  const pool = await getPool(options);
+  // Cached pools only expose query(); session-bound work must always use the
+  // underlying write pool so callers can safely hold transactions and locks.
+  const poolOptions =
+    typeof options === "string"
+      ? {}
+      : (() => {
+          const { cacheTime: _unusedCacheTime, ...rest } = options ?? {};
+          return rest;
+        })();
+  const pool = getPool(poolOptions);
   return await pool.connect();
+}
+
+// Session advisory locks belong to one PostgreSQL connection, not to a pool.
+// Keep that client checked out until the protected work and unlock complete.
+export async function withSessionAdvisoryLock<T>({
+  lockKey,
+  fn,
+}: {
+  lockKey: string;
+  fn: () => Promise<T>;
+}): Promise<T | undefined> {
+  const client = await getPoolClient();
+  let locked = false;
+  let destroyClient = false;
+  try {
+    const { rows } = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      [lockKey],
+    );
+    locked = rows[0]?.locked === true;
+    if (!locked) {
+      return undefined;
+    }
+    return await fn();
+  } finally {
+    try {
+      if (locked) {
+        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [
+          lockKey,
+        ]);
+      }
+    } catch (err) {
+      // Never return a connection that may still hold the session lock.
+      destroyClient = true;
+      throw err;
+    } finally {
+      if (destroyClient) {
+        client.release(true);
+      } else {
+        client.release();
+      }
+    }
+  }
 }
 
 export function getClient(): Client {
