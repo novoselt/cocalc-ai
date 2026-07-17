@@ -47,9 +47,10 @@ during that reported hour despite consuming one CPU and scanning about 18.8
 MB/s. Its long-run average fell from 168,354 B/s to 157,840 B/s as uptime
 increased without additional deduplication.
 
-This is a zero-yield crawl condition, not evidence that there are no remaining
-duplicates. Restarting the same production binary against an identical clone
-immediately reclaimed data.
+This is a zero-yield observation interval, not evidence that there are no
+remaining duplicates and not proof that the crawler was stalled. BEES scans
+deterministically and persists its position in `beescrawl.dat`; a restart does
+not jump to a random location.
 
 ## Clone results
 
@@ -64,9 +65,11 @@ logical counters. Device error counters stayed at zero in every trial.
 | Production binary, 4 workers | Independent fresh snapshot |   10m17s |  3.96 cores | 17.4 MiB/s | 1,587,372,032 B |    2.57 MB/s |   +2,211,840 B |
 
 The independent production-binary trial is the fair comparison with the live
-host. It reclaimed data about 16 times faster than the live daemon's reported
-long-run rate. The short tests vary because different crawl regions have very
-different duplicate density.
+host for the four-worker resource policy. It reclaimed data about 16 times
+faster than the live daemon's reported long-run rate. The experiment did not
+isolate restart behavior from worker count, and restart alone should not be
+credited for the gain. The short tests vary because different crawl regions
+have very different duplicate density.
 
 The unrestricted 16-worker run populated about 59 GiB of clean file cache.
 The process RSS remained near 1.1 GiB and `MemAvailable` remained high, so this
@@ -153,18 +156,23 @@ Run BEES with an explicit four-worker maximum. Do not rely on `-g 1`: the live
 load-target behavior plus the hard one-core cgroup produced continuous
 throttling and poor progress.
 
-### 3. Recycle zero-yield crawls
+### 3. Observe crawl progress without restart remediation
 
-Do not leave one BEES process running forever without progress supervision.
-Monitor the hourly `beesstats.txt` updates and cgroup CPU usage. Gracefully
-restart BEES when two successive fresh statistics snapshots show no increase
-in `dedup_bytes` while BEES consumed significant CPU. Apply a per-host cooldown
-and stable jitter so the fleet does not restart simultaneously.
+Publish the hourly `beesstats.txt` counters, 15-minute `beescrawl.dat`
+checkpoint identity, and cgroup CPU, memory, and I/O counters. Distinguish
+between:
 
-A simpler first canary is a bounded restart every six hours. Startup took
-about 15 seconds and graceful stop took one to two seconds in these trials.
-Progress-aware recycling is preferable because it avoids restarting a daemon
-that is still productive.
+- advancing scans that currently find no duplicates, which are healthy;
+- completed scans with negligible CPU use, which are idle;
+- sustained CPU use without scan-counter or checkpoint movement, which may be
+  a genuine stall.
+
+Do not restart BEES merely because `dedup_bytes` is unchanged. BEES persists a
+deterministic scan position and hash table, so a clean restart resumes the same
+work rather than jumping to a different search location. An unclean restart
+only repeats work since the most recent checkpoint, normally at most 15
+minutes. If telemetry demonstrates a real internal stall, fix the task/crawl
+recovery behavior in BEES itself instead of adding an external restart loop.
 
 ### 4. Update BEES separately
 
@@ -184,8 +192,38 @@ upgrade so regressions can be attributed and rolled back independently.
 4. Canary one low-risk production host for at least 24 hours.
 5. Compare reclaimed bytes per CPU-hour, project latency, cache pressure,
    metadata growth, and device errors with an unchanged host.
-6. Add progress-aware recycling and canary it separately.
-7. Build and canary the upstream BEES upgrade as a final independent change.
+6. Observe at least one complete scan interval and investigate any sustained
+   CPU use without checkpoint or scan-counter movement.
+7. If a genuine stall is demonstrated, implement and test recovery inside
+   BEES rather than restarting it externally.
+8. Build and canary the upstream BEES upgrade as a final independent change.
+
+## Immediate implementation
+
+The first implementation keeps the production BEES binary and 1 GiB table
+unchanged. It replaces `-g 1` with an explicit worker count of
+`min(host CPUs, 4)` and places BEES alone in `/sys/fs/cgroup/cocalc-bees` with:
+
+- a CPU ceiling matching that worker count, CPU weight 1, and existing nice 19;
+- I/O weight 1 plus 64 MiB/s read and 16 MiB/s write limits on every Btrfs
+  backing device;
+- `memory.high` equal to one sixteenth of host RAM, clamped to 1-4 GiB;
+- `memory.max` equal to one eighth of host RAM, clamped to 2-8 GiB;
+- no swap, `memory.oom.group=0`, and `pids.max=64`.
+
+The project-host samples read-only status every five minutes. It publishes the
+BEES PID, process cgroup, cgroup limits and cumulative CPU/memory/I/O counters,
+hourly BEES totals and progress table, and the timestamp and SHA-256 identity
+of `beescrawl.dat` through host heartbeat metadata. A process is only labeled
+`possible_stall` after at least 90 minutes of significant CPU use (0.05 average
+core or more) with neither checkpoint identity nor scan counters advancing.
+Idle periods and process replacement reset that observation window.
+
+This status is diagnostic only. It logs the transition to `possible_stall` but
+does not signal or restart BEES and does not page an administrator. Unexpected
+process exit still uses the existing bounded lifecycle restart behavior. The
+initial deployment target is staging only; production requires review of the
+code and staging observations.
 
 ## Risk controls
 

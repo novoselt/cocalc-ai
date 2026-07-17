@@ -802,6 +802,40 @@ export interface HostPublicRouteProbe {
   cf_ray?: string;
 }
 
+export interface HostBeesStatus {
+  enabled: boolean;
+  running: boolean;
+  pid?: number;
+  external?: boolean;
+  restartAttempts?: number;
+  restartPending?: boolean;
+  lastExit?: {
+    code: number | null;
+    signal: string | null;
+    at: string;
+  };
+  telemetry?: {
+    assessment:
+      | "observing"
+      | "active"
+      | "idle"
+      | "possible_stall"
+      | "unavailable";
+    sample?: Record<string, any>;
+    previous_sampled_at?: string;
+    interval_ms?: number;
+    average_cpu_cores?: number;
+    crawl_changed?: boolean;
+    stats_changed?: boolean;
+    counter_delta?: Record<string, number>;
+    last_progress_at?: string;
+    progress_age_ms?: number;
+    stall_observation_ms: number;
+    error?: string;
+    error_at?: string;
+  };
+}
+
 export interface HostCatalog {
   provider: string;
   entries: HostCatalogEntry[];
@@ -830,6 +864,7 @@ export interface Host {
   host_session_id?: string;
   host_session_started_at?: string;
   public_route_probe?: HostPublicRouteProbe;
+  bees?: HostBeesStatus;
   metrics?: HostMetrics;
   pressure?: HostPressureState;
   machine?: HostMachine;

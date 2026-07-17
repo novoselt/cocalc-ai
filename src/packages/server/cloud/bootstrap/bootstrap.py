@@ -2523,10 +2523,18 @@ fi
 cmd="$1"
 shift
 cd /
-STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"
-STORAGE_CGROUP_CPU_MAX="100000 100000"
-STORAGE_CGROUP_CPU_WEIGHT="1"
-STORAGE_CGROUP_IO_WEIGHT="1"
+BEES_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-bees"
+BEES_CGROUP_MAX_WORKERS="4"
+BEES_CGROUP_CPU_PERIOD="100000"
+BEES_CGROUP_CPU_WEIGHT="1"
+BEES_CGROUP_IO_WEIGHT="1"
+BEES_CGROUP_IO_READ_BPS="$((64 * 1024 * 1024))"
+BEES_CGROUP_IO_WRITE_BPS="$((16 * 1024 * 1024))"
+BEES_CGROUP_MEMORY_HIGH_MAX="$((4 * 1024 * 1024 * 1024))"
+BEES_CGROUP_MEMORY_MAX_MAX="$((8 * 1024 * 1024 * 1024))"
+BEES_CGROUP_MEMORY_HIGH_MIN="$((1 * 1024 * 1024 * 1024))"
+BEES_CGROUP_MEMORY_MAX_MIN="$((2 * 1024 * 1024 * 1024))"
+BEES_CGROUP_PIDS_MAX="64"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_PROCESS_OOM_SCORE_ADJ="500"
 RUNTIME_USER="__RUNTIME_USER__"
@@ -2737,25 +2745,76 @@ attach_project_launcher() {
   printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${pid}/oom_score_adj"
 }
 
-project_storage_cgroup() {
-  printf '%s\n' "${STORAGE_CGROUP_DEFAULT}"
+bees_cgroup() {
+  printf '%s\n' "${BEES_CGROUP_DEFAULT}"
 }
 
-configure_project_storage_cgroup() {
-  local pool="$1"
-  if [ -w /sys/fs/cgroup/cgroup.subtree_control ]; then
-    printf '+cpu\n' > /sys/fs/cgroup/cgroup.subtree_control || true
-    printf '+io\n' > /sys/fs/cgroup/cgroup.subtree_control || true
+bees_worker_count() {
+  local cpu_count
+  cpu_count="$(/usr/bin/nproc 2>/dev/null || printf '1\n')"
+  if ! echo "$cpu_count" | grep -Eq '^[0-9]+$' || [ "$cpu_count" -lt 1 ]; then
+    cpu_count=1
   fi
+  if [ "$cpu_count" -gt "$BEES_CGROUP_MAX_WORKERS" ]; then
+    cpu_count="$BEES_CGROUP_MAX_WORKERS"
+  fi
+  printf '%s\n' "$cpu_count"
+}
+
+bees_memory_limits() {
+  local total_kib total_bytes memory_high memory_max
+  total_kib="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)"
+  if ! echo "$total_kib" | grep -Eq '^[0-9]+$' || [ "$total_kib" -le 0 ]; then
+    printf '%s %s\n' "$BEES_CGROUP_MEMORY_HIGH_MAX" "$BEES_CGROUP_MEMORY_MAX_MAX"
+    return 0
+  fi
+  total_bytes="$((total_kib * 1024))"
+  memory_high="$((total_bytes / 16))"
+  memory_max="$((total_bytes / 8))"
+  if [ "$memory_high" -lt "$BEES_CGROUP_MEMORY_HIGH_MIN" ]; then
+    memory_high="$BEES_CGROUP_MEMORY_HIGH_MIN"
+  elif [ "$memory_high" -gt "$BEES_CGROUP_MEMORY_HIGH_MAX" ]; then
+    memory_high="$BEES_CGROUP_MEMORY_HIGH_MAX"
+  fi
+  if [ "$memory_max" -lt "$BEES_CGROUP_MEMORY_MAX_MIN" ]; then
+    memory_max="$BEES_CGROUP_MEMORY_MAX_MIN"
+  elif [ "$memory_max" -gt "$BEES_CGROUP_MEMORY_MAX_MAX" ]; then
+    memory_max="$BEES_CGROUP_MEMORY_MAX_MAX"
+  fi
+  printf '%s %s\n' "$memory_high" "$memory_max"
+}
+
+configure_bees_cgroup() {
+  local pool="$1" mountpoint="$2" workers memory_high memory_max
+  local device major_hex minor_hex major minor
+  local -a io_limits=()
+  enable_cgroup_controllers /sys/fs/cgroup
   mkdir -p "$pool"
-  if [ -w "${pool}/cpu.max" ]; then
-    printf '%s\n' "${STORAGE_CGROUP_CPU_MAX}" > "${pool}/cpu.max" || true
+  workers="$(bees_worker_count)"
+  read -r memory_high memory_max < <(bees_memory_limits)
+  printf '%s %s\n' "$((workers * BEES_CGROUP_CPU_PERIOD))" "$BEES_CGROUP_CPU_PERIOD" > "${pool}/cpu.max"
+  printf '%s\n' "$BEES_CGROUP_CPU_WEIGHT" > "${pool}/cpu.weight"
+  printf '%s\n' "$memory_high" > "${pool}/memory.high"
+  printf '%s\n' "$memory_max" > "${pool}/memory.max"
+  if [ -w "${pool}/memory.swap.max" ]; then
+    printf '0\n' > "${pool}/memory.swap.max"
   fi
-  if [ -w "${pool}/cpu.weight" ]; then
-    printf '%s\n' "${STORAGE_CGROUP_CPU_WEIGHT}" > "${pool}/cpu.weight" || true
-  fi
+  printf '0\n' > "${pool}/memory.oom.group"
+  printf '%s\n' "$BEES_CGROUP_PIDS_MAX" > "${pool}/pids.max"
   if [ -w "${pool}/io.weight" ]; then
-    printf 'default %s\n' "${STORAGE_CGROUP_IO_WEIGHT}" > "${pool}/io.weight" || true
+    printf 'default %s\n' "$BEES_CGROUP_IO_WEIGHT" > "${pool}/io.weight"
+  fi
+  if [ -w "${pool}/io.max" ]; then
+    while IFS= read -r device; do
+      [ -b "$device" ] || continue
+      read -r major_hex minor_hex < <(stat -Lc '%t %T' "$device")
+      major="$((16#$major_hex))"
+      minor="$((16#$minor_hex))"
+      io_limits+=("${major}:${minor} rbps=${BEES_CGROUP_IO_READ_BPS} wbps=${BEES_CGROUP_IO_WRITE_BPS}")
+    done < <(/usr/bin/btrfs filesystem show --raw "$mountpoint" 2>/dev/null | awk '$1 == "devid" {print $NF}')
+    if [ "${#io_limits[@]}" -gt 0 ]; then
+      printf '%s\n' "${io_limits[@]}" > "${pool}/io.max"
+    fi
   fi
 }
 
@@ -3037,12 +3096,12 @@ find_bees_pid() {
 }
 
 apply_bees_runtime_policy() {
-  local pid="$1" pool task tid
+  local pid="$1" mountpoint="$2" pool task tid
   if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
     return 0
   fi
-  pool="$(project_storage_cgroup)"
-  configure_project_storage_cgroup "$pool"
+  pool="$(bees_cgroup)"
+  configure_bees_cgroup "$pool" "$mountpoint"
   attach_pid_to_project_pool_storage "$pid" "$pool" || true
   for task in "/proc/${pid}/task/"[0-9]*; do
     [ -d "$task" ] || continue
@@ -3050,6 +3109,146 @@ apply_bees_runtime_policy() {
     /usr/bin/renice -n 19 -p "$tid" >/dev/null 2>&1 || true
     /usr/bin/ionice -c3 -p "$tid" >/dev/null 2>&1 || true
   done
+}
+
+emit_bees_status() {
+  local mountpoint="$1" pid pool
+  pid="$(find_bees_pid "$mountpoint")"
+  pool="$(bees_cgroup)"
+  /usr/bin/python3 - "$mountpoint" "$pid" "$pool" <<'PY'
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+mountpoint, raw_pid, cgroup = sys.argv[1:4]
+beeshome = os.path.join(mountpoint, ".beeshome")
+
+
+def read_text(path, limit=1024 * 1024):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(limit).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def file_status(path, include_hash=False):
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return {"exists": False}
+    result = {
+        "exists": True,
+        "mtime_ms": int(stat.st_mtime * 1000),
+        "size_bytes": stat.st_size,
+    }
+    if include_hash:
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as handle:
+                while chunk := handle.read(128 * 1024):
+                    digest.update(chunk)
+            result["sha256"] = digest.hexdigest()
+        except OSError:
+            pass
+    return result
+
+
+def parse_number(value):
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return value
+
+
+def parse_key_value_lines(text):
+    result = {}
+    for line in (text or "").splitlines():
+        words = line.split()
+        if len(words) == 2:
+            result[words[0]] = parse_number(words[1])
+    return result
+
+
+def parse_stats(text):
+    total = {}
+    progress = []
+    in_total = False
+    in_progress = False
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped == "TOTAL:":
+            in_total = True
+            continue
+        if stripped == "RATES:":
+            in_total = False
+            continue
+        if stripped.startswith("extsz"):
+            in_progress = True
+        if in_progress:
+            progress.append(line.rstrip())
+        if not in_total:
+            continue
+        for word in stripped.split():
+            if "=" not in word:
+                continue
+            key, value = word.split("=", 1)
+            total[key] = parse_number(value)
+    return {"total": total, "progress": "\\n".join(progress)[:32768]}
+
+
+stats_path = os.path.join(beeshome, "beesstats.txt")
+crawl_path = os.path.join(beeshome, "beescrawl.dat")
+stats_text = read_text(stats_path)
+crawl_text = read_text(crawl_path)
+stats = file_status(stats_path)
+stats.update(parse_stats(stats_text))
+crawl = file_status(crawl_path, include_hash=True)
+crawl["root_count"] = sum(
+    1 for line in (crawl_text or "").splitlines() if line.startswith("root ")
+)
+
+pid = int(raw_pid) if raw_pid.isdigit() and int(raw_pid) > 1 else None
+process_cgroup = None
+if pid is not None:
+    process_cgroup = read_text(f"/proc/{pid}/cgroup", 64 * 1024)
+    if process_cgroup is not None:
+        process_cgroup = process_cgroup.strip()
+
+result = {
+    "sampled_at": datetime.now(timezone.utc).isoformat(),
+    "pid": pid,
+    "process_cgroup": process_cgroup,
+    "stats": stats,
+    "crawl": crawl,
+    "cgroup": {
+        "path": cgroup,
+        "cpu_max": (read_text(os.path.join(cgroup, "cpu.max")) or "").strip() or None,
+        "cpu_weight": parse_number((read_text(os.path.join(cgroup, "cpu.weight")) or "").strip()),
+        "cpu_stat": parse_key_value_lines(read_text(os.path.join(cgroup, "cpu.stat"))),
+        "cpu_pressure": (read_text(os.path.join(cgroup, "cpu.pressure")) or "").strip() or None,
+        "io_weight": (read_text(os.path.join(cgroup, "io.weight")) or "").strip() or None,
+        "io_max": (read_text(os.path.join(cgroup, "io.max")) or "").strip() or None,
+        "io_stat": (read_text(os.path.join(cgroup, "io.stat")) or "").strip() or None,
+        "io_pressure": (read_text(os.path.join(cgroup, "io.pressure")) or "").strip() or None,
+        "memory_current": parse_number((read_text(os.path.join(cgroup, "memory.current")) or "").strip()),
+        "memory_high": parse_number((read_text(os.path.join(cgroup, "memory.high")) or "").strip()),
+        "memory_max": parse_number((read_text(os.path.join(cgroup, "memory.max")) or "").strip()),
+        "memory_peak": parse_number((read_text(os.path.join(cgroup, "memory.peak")) or "").strip()),
+        "memory_events": parse_key_value_lines(read_text(os.path.join(cgroup, "memory.events"))),
+        "memory_pressure": (read_text(os.path.join(cgroup, "memory.pressure")) or "").strip() or None,
+        "pids_current": parse_number((read_text(os.path.join(cgroup, "pids.current")) or "").strip()),
+        "pids_max": parse_number((read_text(os.path.join(cgroup, "pids.max")) or "").strip()),
+    },
+}
+json.dump(result, sys.stdout, separators=(",", ":"))
+sys.stdout.write("\\n")
+PY
 }
 
 lexical_absolute_path_is_safe() {
@@ -4363,11 +4562,27 @@ PY' bash "$tree"
     esac
     existing_pid="$(find_bees_pid "$mountpoint")"
     if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
-      apply_bees_runtime_policy "$existing_pid"
+      apply_bees_runtime_policy "$existing_pid" "$mountpoint"
       echo "BEES_POLICY_RECONCILED mountpoint=${mountpoint} pid=${existing_pid}" >&2
     else
       echo "BEES_NOT_RUNNING mountpoint=${mountpoint}" >&2
     fi
+    ;;
+  bees-status)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage bees-status <mountpoint>" >&2
+      exit 2
+    fi
+    mountpoint="$1"
+    check_args "$mountpoint"
+    case "$mountpoint" in
+      /mnt/cocalc|/mnt/cocalc/*)
+        ;;
+      *)
+        deny "bees-mountpoint-not-allowed" "$mountpoint"
+        ;;
+    esac
+    emit_bees_status "$mountpoint"
     ;;
   bees)
     check_args "$@"
@@ -4391,7 +4606,7 @@ PY' bash "$tree"
     fi
     existing_pid="$(find_bees_pid "$mountpoint")"
     if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
-      apply_bees_runtime_policy "$existing_pid"
+      apply_bees_runtime_policy "$existing_pid" "$mountpoint"
       echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} pid=${existing_pid}" >&2
       exit 75
     fi
@@ -4401,8 +4616,8 @@ PY' bash "$tree"
       echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} lock=${lock_path}" >&2
       exit 75
     fi
-    pool="$(project_storage_cgroup)"
-    configure_project_storage_cgroup "$pool"
+    pool="$(bees_cgroup)"
+    configure_bees_cgroup "$pool" "$mountpoint"
     attach_pid_to_project_pool_storage "$$" "$pool" || true
     if [ -x /opt/cocalc/tools/current/bees ]; then
       exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /opt/cocalc/tools/current/bees "$@"

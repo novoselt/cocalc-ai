@@ -38,6 +38,7 @@ import { updateAuthorizedKeys, updateProjectUsers } from "./hub/projects";
 import {
   deleteVolume,
   getBackupExecutionStatus,
+  getFileServerRuntimeStatus,
   invalidateBackupConfig,
 } from "./file-server";
 import { getInstalledRuntimeArtifacts, getSoftwareVersions } from "./software";
@@ -1777,6 +1778,7 @@ export async function startMasterRegistration({
     const rootfsScanner = getRootfsTrivyScannerProvisioningStatus();
     const hostAgentState = readHostAgentState();
     const currentMetrics = hostMetrics.getCurrentSnapshot();
+    const fileServerStatus = getFileServerRuntimeStatus();
     const pressureState: HostPressureState | undefined =
       pressureController?.getCurrentState();
     const bootstrapLifecycle = getBootstrapLifecycle();
@@ -1802,6 +1804,7 @@ export async function startMasterRegistration({
           : {}),
         host_agent: hostAgentState,
         runtime_health: runtimeHealth.getSnapshot(),
+        bees: fileServerStatus?.bees,
         observed_components: observedComponents,
         rootfs_scanner: rootfsScanner,
         software: versions,

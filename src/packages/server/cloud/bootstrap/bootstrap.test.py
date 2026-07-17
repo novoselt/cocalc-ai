@@ -1424,16 +1424,25 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("flock -n 9", script)
             self.assertIn("flock-missing", script)
             self.assertIn(
-                'STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"',
+                'BEES_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-bees"', script
+            )
+            self.assertIn('BEES_CGROUP_MAX_WORKERS="4"', script)
+            self.assertIn(
+                'BEES_CGROUP_IO_READ_BPS="$((64 * 1024 * 1024))"', script
+            )
+            self.assertIn(
+                'BEES_CGROUP_IO_WRITE_BPS="$((16 * 1024 * 1024))"', script
+            )
+            self.assertIn(
+                'BEES_CGROUP_MEMORY_HIGH_MAX="$((4 * 1024 * 1024 * 1024))"',
                 script,
             )
-            self.assertIn('STORAGE_CGROUP_CPU_MAX="100000 100000"', script)
-            self.assertIn("project_storage_cgroup()", script)
-            self.assertIn("printf '%s\n' \"${STORAGE_CGROUP_DEFAULT}\"", script)
-            self.assertIn('pool="$(project_storage_cgroup)"', script)
-            self.assertIn('configure_project_storage_cgroup "$pool"', script)
             self.assertIn(
-                "> /sys/fs/cgroup/cgroup.subtree_control",
+                'BEES_CGROUP_MEMORY_MAX_MAX="$((8 * 1024 * 1024 * 1024))"',
+                script,
+            )
+            self.assertIn(
+                '> "${parent}/cgroup.subtree_control"',
                 script,
             )
             self.assertIn('> "${pool}/cpu.max"', script)
@@ -1532,6 +1541,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("/usr/bin/ionice -c3 /usr/bin/nice -n 19", script)
             self.assertIn("find_bees_pid()", script)
             self.assertIn("apply_bees_runtime_policy()", script)
+            self.assertIn("configure_bees_cgroup()", script)
+            self.assertIn('pool="$(bees_cgroup)"', script)
+            self.assertIn('configure_bees_cgroup "$pool" "$mountpoint"', script)
+            self.assertIn('> "${pool}/memory.high"', script)
+            self.assertIn('> "${pool}/memory.max"', script)
+            self.assertIn('> "${pool}/pids.max"', script)
+            self.assertIn('> "${pool}/io.max"', script)
+            self.assertIn("emit_bees_status()", script)
+            self.assertIn("bees-status)", script)
             self.assertIn("reconcile-bees)", script)
             self.assertNotIn("\x00", script)
             self.assertIn("tr '\\0' '\\n'", script)
@@ -1660,6 +1678,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             wrapper_path = Path(tmpdir) / "cocalc-runtime-storage"
             wrapper_path.write_text(script, encoding="utf-8")
             subprocess.run(["bash", "-n", str(wrapper_path)], check=True)
+            telemetry_python = script.split("emit_bees_status() {", 1)[1]
+            telemetry_python = telemetry_python.split("<<'PY'\n", 1)[1]
+            telemetry_python = telemetry_python.split("\nPY\n", 1)[0]
+            compile(telemetry_python, "bees-status", "exec")
 
     def test_reconcile_bees_runtime_policy_uses_storage_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

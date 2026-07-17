@@ -26,6 +26,7 @@ read-only shaping and availability rules used across that surface.
 import type {
   Host,
   HostBackupStatus,
+  HostBeesStatus,
   HostBillingEnforcement,
   HostBillingEnforcementState,
   HostBillingRecoveryAction,
@@ -87,6 +88,18 @@ const MANAGED_COMPONENT_KINDS = new Set<ManagedComponentKind>([
   "conat-persist",
   "acp-worker",
 ]);
+
+function normalizeBeesStatus(value: unknown): HostBeesStatus | undefined {
+  if (
+    value == null ||
+    typeof value !== "object" ||
+    typeof (value as any).enabled !== "boolean" ||
+    typeof (value as any).running !== "boolean"
+  ) {
+    return undefined;
+  }
+  return value as HostBeesStatus;
+}
 
 function normalizeManagedComponentUpgradePolicy(
   value: unknown,
@@ -1311,6 +1324,7 @@ export function parseRow(
     host_session_id: metadata.host_session_id,
     host_session_started_at: metadata.host_session_started_at,
     public_route_probe: normalizePublicRouteProbe(metadata.public_route_probe),
+    bees: normalizeBeesStatus(metadata.bees),
     metrics:
       currentMetrics || opts.metrics_history
         ? {

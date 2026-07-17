@@ -24,10 +24,26 @@ import { type ChildProcess } from "node:child_process";
 import { install } from "@cocalc/backend/sandbox/install";
 import { getBtrfsQuotaQueueStatus, startBtrfsQuotaQueue } from "./quota-queue";
 import { ensureBtrfsQuotaMode } from "./quota-mode";
+import {
+  collectBeesTelemetry,
+  recordBeesTelemetryError,
+  type BeesTelemetryStatus,
+  updateBeesTelemetry,
+} from "./bees-telemetry";
 
 import getLogger from "@cocalc/backend/logger";
 
 const logger = getLogger("file-server:btrfs:filesystem");
+const DEFAULT_BEES_TELEMETRY_INTERVAL_MS = 5 * 60 * 1000;
+const MIN_BEES_TELEMETRY_INTERVAL_MS = 30 * 1000;
+
+function beesTelemetryIntervalMs(): number {
+  const value = Number(process.env.COCALC_BEES_TELEMETRY_INTERVAL_MS);
+  if (!Number.isFinite(value) || value <= 0) {
+    return DEFAULT_BEES_TELEMETRY_INTERVAL_MS;
+  }
+  return Math.max(MIN_BEES_TELEMETRY_INTERVAL_MS, Math.floor(value));
+}
 
 export interface Options {
   // mount = root mountpoint of the btrfs filesystem. If you specify the image
@@ -60,6 +76,9 @@ export class Filesystem {
   private beesRunningExternally = false;
   private beesRestartTimer?: NodeJS.Timeout;
   private beesRestartAttempts = 0;
+  private beesTelemetry?: BeesTelemetryStatus;
+  private beesTelemetryTimer?: NodeJS.Timeout;
+  private beesTelemetryRunning = false;
   private beesDisabledByConfig = false;
   private beesStopping = false;
   private beesLastExit?: {
@@ -106,6 +125,7 @@ export class Filesystem {
     }
     await this.sync();
     await this.startBees("startup");
+    this.startBeesTelemetry();
   };
 
   sync = async () => {
@@ -126,6 +146,10 @@ export class Filesystem {
     if (this.beesRestartTimer) {
       clearTimeout(this.beesRestartTimer);
       this.beesRestartTimer = undefined;
+    }
+    if (this.beesTelemetryTimer) {
+      clearInterval(this.beesTelemetryTimer);
+      this.beesTelemetryTimer = undefined;
     }
     if (this.bees) {
       const child = this.bees;
@@ -152,8 +176,46 @@ export class Filesystem {
       restartAttempts: this.beesRestartAttempts,
       restartPending: this.beesRestartTimer != null,
       lastExit: this.beesLastExit,
+      telemetry: this.beesTelemetry,
     };
   };
+
+  private async refreshBeesTelemetry(): Promise<void> {
+    if (this.beesTelemetryRunning || this.beesStopping) return;
+    this.beesTelemetryRunning = true;
+    try {
+      const sample = await collectBeesTelemetry(this.opts.mount);
+      const previousAssessment = this.beesTelemetry?.assessment;
+      this.beesTelemetry = updateBeesTelemetry(this.beesTelemetry, sample);
+      if (
+        this.beesTelemetry.assessment === "possible_stall" &&
+        previousAssessment !== "possible_stall"
+      ) {
+        logger.warn("BEES telemetry observed possible crawl stall", {
+          mount: this.opts.mount,
+          telemetry: this.beesTelemetry,
+        });
+      }
+    } catch (err) {
+      this.beesTelemetry = recordBeesTelemetryError(this.beesTelemetry, err);
+      logger.debug("unable to collect BEES telemetry", {
+        mount: this.opts.mount,
+        err: `${err}`,
+      });
+    } finally {
+      this.beesTelemetryRunning = false;
+    }
+  }
+
+  private startBeesTelemetry(): void {
+    if (this.beesTelemetryTimer) return;
+    void this.refreshBeesTelemetry();
+    this.beesTelemetryTimer = setInterval(
+      () => void this.refreshBeesTelemetry(),
+      beesTelemetryIntervalMs(),
+    );
+    this.beesTelemetryTimer.unref();
+  }
 
   getQuotaQueueStatus = () => {
     return getBtrfsQuotaQueueStatus(this.opts.mount);
