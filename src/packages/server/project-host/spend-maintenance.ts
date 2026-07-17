@@ -68,17 +68,26 @@ async function withMaintenanceLock<T>(
   fn: () => Promise<T>,
 ): Promise<T | undefined> {
   const pool = getPool("medium");
-  const { rows } = await pool.query<{ locked: boolean }>(
-    "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-    [LOCK_KEY],
-  );
-  if (!rows[0]?.locked) {
-    return undefined;
-  }
+  const client = await pool.connect();
+  let locked = false;
   try {
+    const { rows } = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      [LOCK_KEY],
+    );
+    locked = rows[0]?.locked === true;
+    if (!locked) return undefined;
     return await fn();
   } finally {
-    await pool.query("SELECT pg_advisory_unlock(hashtext($1))", [LOCK_KEY]);
+    try {
+      if (locked) {
+        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [
+          LOCK_KEY,
+        ]);
+      }
+    } finally {
+      client.release();
+    }
   }
 }
 

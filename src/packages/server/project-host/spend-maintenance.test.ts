@@ -6,6 +6,8 @@
 export {};
 
 let queryMock: jest.Mock;
+let connectMock: jest.Mock;
+let releaseMock: jest.Mock;
 let enqueueCloudVmWorkMock: jest.Mock;
 let getDedicatedHostPolicySnapshotForAccountMock: jest.Mock;
 let estimateDedicatedHostRateUsdPerHourMock: jest.Mock;
@@ -30,6 +32,7 @@ jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
   default: jest.fn(() => ({
     query: (...args: any[]) => queryMock(...args),
+    connect: (...args: any[]) => connectMock(...args),
   })),
 }));
 
@@ -83,6 +86,11 @@ jest.mock("./spend", () => ({
 describe("dedicated host spend maintenance", () => {
   beforeEach(() => {
     jest.resetModules();
+    releaseMock = jest.fn();
+    connectMock = jest.fn(async () => ({
+      query: (...args: any[]) => queryMock(...args),
+      release: releaseMock,
+    }));
     queryMock = jest.fn(async (sql: string, params?: any[]) => {
       if (sql.includes("pg_try_advisory_lock")) {
         return { rows: [{ locked: true }] };
@@ -185,6 +193,15 @@ describe("dedicated host spend maintenance", () => {
       async () => undefined,
     );
     isDedicatedHostLaneCurrentlyAllowedMock = jest.fn(() => false);
+  });
+
+  it("holds and releases the advisory lock on one database session", async () => {
+    const { runDedicatedHostSpendMaintenancePass } =
+      await import("./spend-maintenance");
+    await runDedicatedHostSpendMaintenancePass();
+
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 
   it("requests a drain when a running host active prepaid lane is exhausted", async () => {

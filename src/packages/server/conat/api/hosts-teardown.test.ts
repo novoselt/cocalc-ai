@@ -83,6 +83,7 @@ describe("hosts teardown helpers", () => {
       setHostDesiredStateInternal: jest.fn(async () => undefined),
       enqueueCloudVmWork: jest.fn(async () => undefined),
       logStatusUpdate: jest.fn(),
+      closeHostBillingSession: jest.fn(async () => undefined),
       markHostDeleted: jest.fn(async () => undefined),
       markHostDeprovisioning: jest.fn(async () => undefined),
       markHostStoppedDeprovisioned: jest.fn(async () => undefined),
@@ -106,6 +107,13 @@ describe("hosts teardown helpers", () => {
     const markHostDeleted = jest.fn(async () => undefined);
     const enqueueCloudVmWork = jest.fn(async () => undefined);
     const markHostProjectsUnprovisioned = jest.fn(async () => undefined);
+    const order: string[] = [];
+    const closeHostBillingSession = jest.fn(async () => {
+      order.push("billing");
+    });
+    markHostDeleted.mockImplementation(async () => {
+      order.push("deleted");
+    });
 
     await deleteHostInternalHelper({
       id: "f55ca72e-2d0a-4a93-a1a7-080ebcc7abcb",
@@ -118,6 +126,7 @@ describe("hosts teardown helpers", () => {
       setHostDesiredStateInternal: jest.fn(async () => undefined),
       enqueueCloudVmWork,
       logStatusUpdate: jest.fn(),
+      closeHostBillingSession,
       markHostDeleted,
       markHostDeprovisioning: jest.fn(async () => undefined),
       markHostStoppedDeprovisioned: jest.fn(async () => undefined),
@@ -131,10 +140,45 @@ describe("hosts teardown helpers", () => {
     expect(markHostDeleted).toHaveBeenCalledWith(
       "f55ca72e-2d0a-4a93-a1a7-080ebcc7abcb",
     );
+    expect(closeHostBillingSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "f55ca72e-2d0a-4a93-a1a7-080ebcc7abcb",
+      }),
+    );
+    expect(order).toEqual(["billing", "deleted"]);
     expect(enqueueCloudVmWork).not.toHaveBeenCalled();
     expect(removeHostSshKnownHostAliasMock).toHaveBeenCalledWith({
       host_id: "f55ca72e-2d0a-4a93-a1a7-080ebcc7abcb",
       reason: "delete",
     });
+  });
+
+  it("keeps the host visible when billing cannot be closed", async () => {
+    const markHostDeleted = jest.fn(async () => undefined);
+
+    await expect(
+      deleteHostInternalHelper({
+        id: "f55ca72e-2d0a-4a93-a1a7-080ebcc7abcb",
+        loadOwnedHost: async () => ({
+          id: "f55ca72e-2d0a-4a93-a1a7-080ebcc7abcb",
+          status: "deprovisioned",
+          metadata: { machine: { cloud: "gcp" } },
+        }),
+        normalizeProviderId: (provider) => provider,
+        setHostDesiredStateInternal: jest.fn(async () => undefined),
+        enqueueCloudVmWork: jest.fn(async () => undefined),
+        logStatusUpdate: jest.fn(),
+        closeHostBillingSession: jest.fn(async () => {
+          throw new Error("billing unavailable");
+        }),
+        markHostDeleted,
+        markHostDeprovisioning: jest.fn(async () => undefined),
+        markHostStoppedDeprovisioned: jest.fn(async () => undefined),
+        markHostProjectsUnprovisioned: jest.fn(async () => undefined),
+        clearHostRuntimeDeployments: jest.fn(async () => undefined),
+      }),
+    ).rejects.toThrow("billing unavailable");
+
+    expect(markHostDeleted).not.toHaveBeenCalled();
   });
 });
