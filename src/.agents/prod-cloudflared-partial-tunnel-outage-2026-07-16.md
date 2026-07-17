@@ -91,6 +91,21 @@ of allowing a live-but-broken process to persist until an operator intervenes.
 - `COCALC_HOST_PUBLIC_ROUTE_AUTO_REPAIR_FLEET_SPACING_MS` defaults to 5 minutes.
 - `COCALC_HOST_PUBLIC_ROUTE_AUTO_REPAIR_RPC_TIMEOUT_MS` defaults to 75 seconds.
 
+### Repair claim crash window
+
+The repair claim expires after two minutes, but an expired claim does not bypass
+the 30-minute per-host cooldown. This is deliberate. If a bay worker exits after
+asking the host to restart cloudflared but before persisting the RPC result, the
+database cannot distinguish an unexecuted request from a completed restart with
+a lost response. Waiting for the host cooldown avoids repeatedly interrupting a
+healthy replacement tunnel.
+
+During this uncertainty window the host remains quarantined and the persisted
+`public_route_auto_recovery` metadata retains the claim, trigger, and timestamps
+for operators. A later monitor pass may claim another repair after the cooldown,
+subject to the bay-wide spacing gate. The database-backed maintenance test locks
+in this behavior, including cooldown expiry and fleet spacing.
+
 ## Deployment plan
 
 Do not deploy this change set before operator review.

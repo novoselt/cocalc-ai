@@ -1688,6 +1688,7 @@ export async function runProjectHostRuntimeMaintenance(): Promise<void> {
 
 export const _test = {
   autoRebootDecision,
+  claimPublicRouteAutoRepair,
   deploymentLabel,
   recentRebootAttempts,
   recoveredAutoRebootState,
