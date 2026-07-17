@@ -29,6 +29,8 @@ export type ProjectHostPublicRouteProbeResult = {
   session_status: number;
   websocket_status: number;
   websocket_attempts: number;
+  websocket_successes: number;
+  websocket_failures: number;
   edge_server?: string;
   cf_ray?: string;
 };
@@ -319,7 +321,9 @@ export async function probeProjectHostPublicRoute({
   const websocketFailures = websocketResults.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
-  if (websocketFailures.length) {
+  const websocketSuccesses = websocketResults.length - websocketFailures.length;
+  const minimumWebsocketSuccesses = Math.max(1, Math.ceil(attemptCount * 0.75));
+  if (websocketSuccesses < minimumWebsocketSuccesses) {
     const firstError = websocketFailures[0].reason;
     throw new Error(
       `${websocketFailures.length}/${attemptCount} public project-host WebSocket upgrades failed: ${firstError}`,
@@ -338,6 +342,8 @@ export async function probeProjectHostPublicRoute({
     session_status: session.status,
     websocket_status: websocketPasses[0].value.status,
     websocket_attempts: attemptCount,
+    websocket_successes: websocketSuccesses,
+    websocket_failures: websocketFailures.length,
     edge_server: health.headers.get("server") ?? undefined,
     cf_ray: health.headers.get("cf-ray") ?? undefined,
   };

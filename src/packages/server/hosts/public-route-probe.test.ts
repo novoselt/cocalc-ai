@@ -54,6 +54,8 @@ describe("probeProjectHostPublicRoute", () => {
       session_status: 401,
       websocket_status: 101,
       websocket_attempts: 8,
+      websocket_successes: 8,
+      websocket_failures: 0,
       edge_server: "cloudflare",
       cf_ray: "ray-1",
     });
@@ -83,7 +85,7 @@ describe("probeProjectHostPublicRoute", () => {
     });
   });
 
-  it("fails when any sampled WebSocket route cannot upgrade", async () => {
+  it("tolerates a minority of sampled WebSocket upgrade failures", async () => {
     const fetchImpl = jest
       .fn()
       .mockResolvedValueOnce(response(200))
@@ -103,8 +105,35 @@ describe("probeProjectHostPublicRoute", () => {
         websocketProbeImpl,
         websocket_attempts: 4,
       }),
+    ).resolves.toMatchObject({
+      websocket_attempts: 4,
+      websocket_successes: 3,
+      websocket_failures: 1,
+    });
+  });
+
+  it("fails when fewer than 75 percent of WebSocket upgrades succeed", async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce(response(200))
+      .mockResolvedValueOnce(response(204, corsHeaders()))
+      .mockResolvedValueOnce(response(401, corsHeaders()));
+    const websocketProbeImpl = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("first websocket error"))
+      .mockRejectedValueOnce(new Error("second websocket error"))
+      .mockResolvedValue({ status: 101 });
+
+    await expect(
+      probeProjectHostPublicRoute({
+        public_url: PUBLIC_URL,
+        origin: ORIGIN,
+        fetchImpl,
+        websocketProbeImpl,
+        websocket_attempts: 4,
+      }),
     ).rejects.toThrow(
-      "1/4 public project-host WebSocket upgrades failed: Error: websocket error",
+      "2/4 public project-host WebSocket upgrades failed: Error: first websocket error",
     );
   });
 
