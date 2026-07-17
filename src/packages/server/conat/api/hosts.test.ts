@@ -7118,6 +7118,7 @@ describe("hosts.drainHostInternal", () => {
       channels: ["latest"],
       os: "linux",
       arch: "amd64",
+      history_limit: 2,
     });
 
     expect(rows).toEqual([
@@ -7129,6 +7130,10 @@ describe("hosts.drainHostInternal", () => {
         version: "v2",
         available: true,
       }),
+    ]);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://software.example.test/software/container-runtime/latest-linux-amd64.json",
+      "https://software.example.test/software/container-runtime/versions-latest-linux-amd64.json",
     ]);
   });
 });

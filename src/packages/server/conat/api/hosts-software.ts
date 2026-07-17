@@ -307,12 +307,12 @@ function softwareVersionsIndexUrl({
   arch,
 }: {
   baseUrl: string;
-  artifact: "project-host" | "project" | "tools";
+  artifact: "project-host" | "container-runtime" | "project" | "tools";
   channel: HostSoftwareChannel;
   os: "linux" | "darwin";
   arch: "amd64" | "arm64";
 }): string {
-  if (artifact === "tools") {
+  if (artifact === "tools" || artifact === "container-runtime") {
     return `${baseUrl}/${artifact}/versions-${channel}-${os}-${arch}.json`;
   }
   return `${baseUrl}/${artifact}/versions-${channel}-${os}.json`;
@@ -342,7 +342,11 @@ async function resolvePublishedSoftwareRows({
   const canonical = canonicalizeSoftwareArtifact(artifact);
   const indexUrl = softwareVersionsIndexUrl({
     baseUrl,
-    artifact: canonical as "project-host" | "project" | "tools",
+    artifact: canonical as
+      | "project-host"
+      | "container-runtime"
+      | "project"
+      | "tools",
     channel,
     os,
     arch,
