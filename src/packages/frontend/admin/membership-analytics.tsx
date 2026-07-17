@@ -7,6 +7,7 @@ import {
   Alert,
   Button,
   DatePicker,
+  Flex,
   Space,
   Spin,
   Table,
@@ -25,6 +26,11 @@ import type {
 } from "@cocalc/conat/hub/api/purchases";
 import ShowError from "@cocalc/frontend/components/error";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
+
+import {
+  monthlyRecurringRevenue,
+  totalMonthlyRecurringRevenue,
+} from "./membership-analytics-mrr";
 
 const { RangePicker } = DatePicker;
 const { Text } = Typography;
@@ -185,6 +191,8 @@ export function MembershipAnalyticsAdmin() {
 }
 
 function RevenueTable({ rows }: { rows: MembershipAnalyticsRevenueRow[] }) {
+  const monthlyRecurringRevenueTotal = totalMonthlyRecurringRevenue(rows);
+
   return (
     <Table<MembershipAnalyticsRevenueRow>
       bordered
@@ -192,7 +200,15 @@ function RevenueTable({ rows }: { rows: MembershipAnalyticsRevenueRow[] }) {
       pagination={false}
       rowKey={(row) => `${row.membership_class}:${row.interval}`}
       size="small"
-      title={() => "Revenue by tier and billing period"}
+      title={() => (
+        <Flex align="center" gap="middle" justify="space-between" wrap>
+          <Text strong>Revenue by tier and billing period</Text>
+          <Text>
+            Monthly recurring revenue ={" "}
+            <Text strong>{formatMoney(monthlyRecurringRevenueTotal)}</Text>
+          </Text>
+        </Flex>
+      )}
       columns={[
         {
           title: "Tier",
@@ -201,6 +217,12 @@ function RevenueTable({ rows }: { rows: MembershipAnalyticsRevenueRow[] }) {
         {
           title: "Period",
           dataIndex: "interval",
+        },
+        {
+          title: "Monthly recurring revenue",
+          key: "monthly_recurring_revenue",
+          align: "right",
+          render: (_, row) => formatMoney(monthlyRecurringRevenue(row)),
         },
         {
           title: "Gross revenue",
