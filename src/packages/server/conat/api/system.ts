@@ -279,6 +279,11 @@ import {
   getUxLatencySummary as getUxLatencySummary0,
   recordUxLatencyEvent as recordUxLatencyEvent0,
 } from "@cocalc/server/monitoring/ux-latency";
+import {
+  DEFAULT_ADMIN_ALERT_WINDOW_HOURS,
+  getRecentAdminAlertSummary,
+  MAX_ADMIN_ALERT_WINDOW_HOURS,
+} from "@cocalc/server/monitoring/recent-admin-alerts";
 import { getAccountProjectIndexProjectionMaintenanceStatus } from "@cocalc/server/projections/account-project-index-maintenance";
 import { getAccountCollaboratorIndexProjectionMaintenanceStatus } from "@cocalc/server/projections/account-collaborator-index-maintenance";
 import { getAccountNotificationIndexProjectionMaintenanceStatus } from "@cocalc/server/projections/account-notification-index-maintenance";
@@ -1977,12 +1982,23 @@ export async function recordLaunchSmokeResult({
 
 export async function getLaunchHealth({
   account_id,
+  alert_window_hours,
   window_minutes,
 }: {
   account_id?: string;
+  alert_window_hours?: number;
   window_minutes?: number;
 } = {}): Promise<LaunchHealthStatus> {
   await assertAdmin(account_id);
+  const alertWindowHours = Math.min(
+    Math.max(
+      1,
+      Math.round(
+        Number(alert_window_hours) || DEFAULT_ADMIN_ALERT_WINDOW_HOURS,
+      ),
+    ),
+    MAX_ADMIN_ALERT_WINDOW_HOURS,
+  );
   const latencyWindowMinutes = Math.min(
     Math.max(1, Math.round(Number(window_minutes) || 60)),
     7 * 24 * 60,
@@ -1999,6 +2015,7 @@ export async function getLaunchHealth({
     setupResult,
     configResult,
     smokeResult,
+    adminAlertsResult,
   ] = await Promise.allSettled([
     getPool("medium").query("SELECT 1"),
     getServerSettings(),
@@ -2011,6 +2028,7 @@ export async function getLaunchHealth({
       scope: SERVER_SETTINGS_CONFIG_SCOPE,
     }),
     getLatestLaunchSmokeResult(),
+    getRecentAdminAlertSummary({ windowHours: alertWindowHours }),
   ]);
 
   const settings =
@@ -2028,6 +2046,10 @@ export async function getLaunchHealth({
     configResult.status === "fulfilled" ? configResult.value : undefined;
   const smoke =
     smokeResult.status === "fulfilled" ? smokeResult.value : undefined;
+  const adminAlerts =
+    adminAlertsResult.status === "fulfilled"
+      ? adminAlertsResult.value
+      : undefined;
   const sla = getUxLatencySlaThresholdsFromSettings(settings);
   const killSwitches = launchHealthKillSwitches(settings);
   const projectionTotal = projectionBacklogTotal(load);
@@ -2123,6 +2145,28 @@ export async function getLaunchHealth({
           ? "Postgres answered the operator health probe."
           : "Postgres health probe failed.",
       details: dbResult.status === "rejected" ? [`${dbResult.reason}`] : [],
+    }),
+    launchHealthCheck({
+      id: "recent-admin-alerts",
+      label: "Recent admin alerts",
+      level:
+        adminAlertsResult.status === "rejected"
+          ? "critical"
+          : (adminAlerts?.count ?? 0) > 0
+            ? "warning"
+            : "healthy",
+      summary:
+        adminAlertsResult.status === "rejected"
+          ? `Unable to review admin alerts from the last ${alertWindowHours}h.`
+          : adminAlerts?.count
+            ? `${adminAlerts.count} admin alert${adminAlerts.count === 1 ? "" : "s"} emitted in the last ${alertWindowHours}h; each requires review even if current probes are healthy.`
+            : `No admin alerts were emitted in the last ${alertWindowHours}h.`,
+      details:
+        adminAlertsResult.status === "rejected"
+          ? [`${adminAlertsResult.reason}`]
+          : (adminAlerts?.alerts.map(
+              (alert) => `${alert.sent_at} ${alert.subject}`,
+            ) ?? []),
     }),
     launchHealthCheck({
       id: "kill-switches",
@@ -2287,6 +2331,7 @@ export async function getLaunchHealth({
 
   const counts: LaunchHealthCounts = {
     project_hosts_total: load?.hosts.total_hosts ?? null,
+    recent_admin_alerts: adminAlerts?.count ?? null,
     parallel_ops_queued: load?.parallel_ops.queued_total ?? null,
     parallel_ops_running: load?.parallel_ops.running_total ?? null,
     parallel_ops_stale_running: load?.parallel_ops.stale_running_total ?? null,
@@ -2300,6 +2345,7 @@ export async function getLaunchHealth({
     bay_id: currentBay.bay_id,
     seed_bay_id: seedBayId,
     overall: worstLaunchHealthLevel(checks.map((check) => check.level)),
+    alert_window_hours: alertWindowHours,
     latency_window_minutes: latencyWindowMinutes,
     latency_sla_ms: sla,
     latest_smoke: smoke ?? null,

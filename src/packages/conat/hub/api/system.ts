@@ -433,6 +433,7 @@ export interface LaunchHealthKillSwitches {
 
 export interface LaunchHealthCounts {
   project_hosts_total: number | null;
+  recent_admin_alerts: number | null;
   parallel_ops_queued: number | null;
   parallel_ops_running: number | null;
   parallel_ops_stale_running: number | null;
@@ -455,6 +456,7 @@ export interface LaunchHealthStatus {
   bay_id: string;
   seed_bay_id: string;
   overall: LaunchHealthLevel;
+  alert_window_hours: number;
   latency_window_minutes: number;
   latency_sla_ms: LaunchHealthLatencySla;
   latest_smoke: LaunchSmokeResult | null;
@@ -1907,6 +1909,7 @@ export interface System {
 
   getLaunchHealth: (opts?: {
     account_id?: string;
+    alert_window_hours?: number;
     window_minutes?: number;
   }) => Promise<LaunchHealthStatus>;
 

@@ -39,6 +39,36 @@ keys or bearer tokens.
 Run this first. It is intentionally simple and should usually take under five
 minutes.
 
+### Recent Paging Alerts
+
+Run the consolidated health command before interpreting point-in-time green
+probes. The default alert lookback is 24 hours so a recovered incident remains
+visible during later health checks.
+
+```bash
+"${COCALC[@]}" --profile prod --api https://cocalc.ai admin health --alert-window-hours 24 --wide
+```
+
+Healthy:
+
+- `recent-admin-alerts` reports no paging alerts in the lookback window.
+- Every other check is healthy, or a non-healthy result has a documented and
+  understood explanation.
+
+Actionable:
+
+- Every `Admin Alert - ...` message is a page and must be reviewed, even if the
+  affected subsystem has recovered and current probes are green.
+- Correlate each subject and timestamp with host events, public-route probes,
+  service logs, and any automatic repair metadata.
+- Failure to read recent alerts makes the health check incomplete and must not
+  be interpreted as a clean result.
+
+The query returns only alert timestamps and subjects, never diagnostic message
+bodies. Containment and admission-denial telemetry is monitoring state rather
+than paging alert history; inspect it separately in the admin operations
+dashboard.
+
 ### Bay-0 OS Health
 
 ```bash
