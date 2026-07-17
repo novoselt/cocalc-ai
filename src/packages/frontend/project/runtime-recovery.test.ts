@@ -11,6 +11,7 @@ import {
   projectRuntimeExitKey,
   projectRuntimeExitReason,
   projectRuntimeId,
+  shouldDismissRuntimeRecoveryNotice,
   shouldRecoverFromProjectRuntimeExit,
 } from "./runtime-recovery";
 
@@ -66,6 +67,32 @@ describe("project runtime recovery", () => {
       }),
     ).toBe(false);
     expect(shouldRecoverFromProjectRuntimeExit({ state: {} })).toBe(false);
+  });
+
+  it("dismisses a pending recovery notice once the runtime is running", () => {
+    const notice = {
+      id: "recovery-1",
+      reason: "project_runtime_lost" as const,
+      occurred_at: Date.now(),
+    };
+    expect(
+      shouldDismissRuntimeRecoveryNotice({
+        projectState: "running",
+        notice,
+      }),
+    ).toBe(true);
+    expect(
+      shouldDismissRuntimeRecoveryNotice({
+        projectState: "opened",
+        notice,
+      }),
+    ).toBe(false);
+    expect(
+      shouldDismissRuntimeRecoveryNotice({
+        projectState: "running",
+        notice: undefined,
+      }),
+    ).toBe(false);
   });
 
   it("deduplicates explicit runtime exits without requiring a running transition", () => {

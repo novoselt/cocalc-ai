@@ -954,32 +954,20 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   function renderRuntimeRecoveryBanner() {
     if (runtimeRecoveryNotice == null || hardDeleteBlocked) return;
     const reason = runtimeRecoveryNotice?.get?.("reason");
-    const runtimeExitReason = runtimeRecoveryNotice?.get?.(
-      "runtime_exit_reason",
-    );
     const projectRestarted = reason === "project_runtime_changed";
     const projectRuntimeLost = reason === "project_runtime_lost";
     if (!projectRestarted && !projectRuntimeLost) return;
-    const hostPressure = runtimeExitReason === "host_pressure";
     return (
       <Alert
         showIcon
         closable
-        type="warning"
+        type="info"
         banner
-        message={
-          projectRuntimeLost
-            ? hostPressure
-              ? "Project stopped to protect host stability"
-              : "Project runtime stopped unexpectedly"
-            : "Project restarted"
-        }
+        message="Reconnecting project tools..."
         description={
           projectRuntimeLost
-            ? hostPressure
-              ? "The host ran critically low on resources, so this project runtime was stopped. Previous terminals and notebook kernels ended. CoCalc is restarting the project and reconnecting active terminals automatically; files and collaborative documents remain available."
-              : "The project container exited, so previous terminals and notebook kernels ended. CoCalc is restarting the project and reconnecting active terminals automatically; files and collaborative documents remain available."
-            : "The project runtime restarted, so previous terminals and notebook kernels ended. CoCalc is reconnecting them automatically; files and collaborative documents remain available."
+            ? "CoCalc is restarting the project automatically. Files and collaborative documents remain available. Previous terminal sessions and notebook kernels ended; active tools will reconnect automatically."
+            : "The project runtime restarted. CoCalc is reconnecting active terminals and notebooks automatically; files and collaborative documents remain available."
         }
         onClose={() => actions?.dismissRuntimeRecoveryNotice?.()}
       />

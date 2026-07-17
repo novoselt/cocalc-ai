@@ -12,6 +12,18 @@ export interface RuntimeRecoveryNotice {
   runtime_exit_reason?: string;
 }
 
+export function shouldDismissRuntimeRecoveryNotice({
+  projectState,
+  notice,
+}: {
+  projectState?: string;
+  notice?: unknown;
+}): boolean {
+  // A running projection is the control-plane acknowledgement that the
+  // automatic restart completed; keep the notice visible for all other states.
+  return projectState === "running" && notice != null;
+}
+
 export function projectRuntimeExitReason(project: unknown): string | undefined {
   const state = (project as any)?.get?.("state") ?? (project as any)?.state;
   const reason =
