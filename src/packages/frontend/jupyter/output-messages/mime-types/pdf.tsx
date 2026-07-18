@@ -24,10 +24,10 @@ def create_pdf():
 pdf_data = create_pdf()
 display({'application/pdf': pdf_data}, raw=True)
 */
-register("application/pdf", 6, ({ id, value, actions }) => {
+register("application/pdf", 6, ({ value, actions }) => {
   if (value == null) {
     console.warn("PDF: value must be specified");
     return <pre>Invalid PDF output</pre>;
   }
-  return <PDF value={value} actions={actions} id={id} />;
+  return <PDF value={value} actions={actions} />;
 });

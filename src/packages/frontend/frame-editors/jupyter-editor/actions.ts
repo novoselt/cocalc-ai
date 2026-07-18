@@ -23,7 +23,6 @@ import {
   close_jupyter_actions,
   create_jupyter_actions,
 } from "./jupyter-actions";
-import { HIDE_JUPYTER_SINGLE_DOC_MODE } from "./feature-flags";
 import { revealjs_slideshow_html } from "./slideshow-revealjs/nbconvert";
 
 export interface JupyterEditorState extends CodeEditorState {
@@ -43,9 +42,6 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
   private static NOTEBOOK_FRAME_TYPES = new Set<string>([
     // Frame-tree node types are editor-spec keys (not EditorDescription.type).
     "jupyter_cell_notebook",
-    "jupyter_slate_single_doc_notebook",
-    // Backward compatibility for any stale persisted state.
-    "jupyter-singledoc",
     "jupyter",
   ]);
 
@@ -54,19 +50,6 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
   };
 
   _raw_default_frame_tree(): FrameTree {
-    if (typeof window !== "undefined") {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        if (
-          !HIDE_JUPYTER_SINGLE_DOC_MODE &&
-          params.get("cocalc-test-jupyter-frame") === "jupyter-singledoc"
-        ) {
-          return { type: "jupyter_slate_single_doc_notebook" };
-        }
-      } catch {
-        // fall through to default
-      }
-    }
     return { type: "jupyter_cell_notebook" };
   }
 
@@ -77,10 +60,9 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
   }
 
   _init2(): void {
+    this.normalizeRemovedSingleDocFrames();
     this.init_new_frame();
     this.init_changes_state();
-    this.applyFrameTypeFromUrlForTests();
-    this.normalizeHiddenSingleDocFrames();
 
     this.store.on("close-frame", async ({ id, closingFile }) => {
       const closeFrameActions = () => {
@@ -101,8 +83,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
     });
   }
 
-  private normalizeHiddenSingleDocFrames(): void {
-    if (!HIDE_JUPYTER_SINGLE_DOC_MODE) return;
+  private normalizeRemovedSingleDocFrames(): void {
     for (const id in this._get_leaf_ids()) {
       const node = this._get_frame_node(id);
       const type = `${node?.get("type") ?? ""}`;
@@ -345,26 +326,6 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
 
   private close_jupyter_actions(): void {
     close_jupyter_actions(this.redux, this.name);
-  }
-
-  private applyFrameTypeFromUrlForTests(): void {
-    if (HIDE_JUPYTER_SINGLE_DOC_MODE) return;
-    if (typeof window === "undefined") return;
-    let requested: string | null = null;
-    try {
-      requested = new URLSearchParams(window.location.search).get(
-        "cocalc-test-jupyter-frame",
-      );
-    } catch {
-      return;
-    }
-    if (requested !== "jupyter-singledoc") {
-      return;
-    }
-    setTimeout(() => {
-      if (this.isClosed()) return;
-      this.replace_frame_tree({ type: "jupyter_slate_single_doc_notebook" });
-    }, 0);
   }
 
   public get_frame_actions(id?: string): NotebookFrameActions | undefined {

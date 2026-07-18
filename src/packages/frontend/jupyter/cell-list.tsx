@@ -10,16 +10,7 @@ import useResizeObserver from "use-resize-observer";
 import { delay } from "awaiting";
 import * as immutable from "immutable";
 import { debounce } from "lodash";
-import {
-  MutableRefObject,
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { React, useIsMountedRef } from "@cocalc/frontend/app-framework";
 import { Loading } from "@cocalc/frontend/components";
 import {
@@ -41,16 +32,6 @@ import HeadingTagComponent from "./heading-tag";
 import { useNotebookMinimap } from "./minimap";
 import { INPUT_PROMPT_COLOR, OUTPUT_STYLE } from "./prompt/base";
 import { getDisplayedCellExecCount } from "./run-cell-overlay";
-
-interface StableHtmlContextType {
-  enabled?: boolean;
-  cellListDivRef?: MutableRefObject<any>;
-  scrollOrResize?: { [key: string]: () => void };
-}
-export const StableHtmlContext = createContext<StableHtmlContextType>({});
-export const useStableHtmlContext: () => StableHtmlContextType = () => {
-  return useContext(StableHtmlContext);
-};
 
 const LAZY_RENDER_INITIAL_CELLS = 24;
 const LAZY_RENDER_PLACEHOLDER_MIN_HEIGHT = 96;
@@ -735,24 +716,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     }
   }, [lazyRenderEnabled]);
 
-  const scrollOrResize = useMemo(() => {
-    return {};
-  }, []);
-  const updateScrollOrResize = useCallback(() => {
-    for (const key in scrollOrResize) {
-      scrollOrResize[key]();
-    }
-  }, []);
-
-  useEffect(updateScrollOrResize, [cells]);
-
   let body;
-
-  useEffect(() => {
-    for (const key in scrollOrResize) {
-      scrollOrResize[key]();
-    }
-  }, [cellListResize]);
 
   useEffect(() => {
     if (!lazyRenderEnabled) return;
@@ -817,45 +781,42 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
   v.push(BOTTOM_PADDING_CELL);
 
   body = (
-    <StableHtmlContext.Provider value={{ cellListDivRef, scrollOrResize }}>
+    <div
+      className="smc-vfill"
+      cocalc-test="jupyter-cell-list-mode"
+      data-jupyter-windowed-list="0"
+      ref={minimap.layoutRef}
+      style={{
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "stretch",
+        minHeight: 0,
+      }}
+    >
       <div
+        key="cells"
         className="smc-vfill"
-        cocalc-test="jupyter-cell-list-mode"
-        data-jupyter-windowed-list="0"
-        ref={minimap.layoutRef}
         style={{
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "stretch",
-          minHeight: 0,
+          fontSize: `${font_size}px`,
+          paddingLeft: "5px",
+          flex: 1,
+          minWidth: 0,
+          overflowY: "auto",
+          overflowX: "hidden",
+        }}
+        ref={handleCellListRef}
+        onClick={actions != null && complete != null ? on_click : undefined}
+        onScroll={() => {
+          cancelScrollRestoreIfUserScrolled();
+          hydrateVisibleCells();
+          minimap.onNotebookScroll();
+          saveScrollDebounce();
         }}
       >
-        <div
-          key="cells"
-          className="smc-vfill"
-          style={{
-            fontSize: `${font_size}px`,
-            paddingLeft: "5px",
-            flex: 1,
-            minWidth: 0,
-            overflowY: "auto",
-            overflowX: "hidden",
-          }}
-          ref={handleCellListRef}
-          onClick={actions != null && complete != null ? on_click : undefined}
-          onScroll={() => {
-            cancelScrollRestoreIfUserScrolled();
-            updateScrollOrResize();
-            hydrateVisibleCells();
-            minimap.onNotebookScroll();
-            saveScrollDebounce();
-          }}
-        >
-          {v}
-        </div>
-        {minimap.minimapNode}
+        {v}
       </div>
-    </StableHtmlContext.Provider>
+      {minimap.minimapNode}
+    </div>
   );
 
   if (actions != null) {
