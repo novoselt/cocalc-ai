@@ -233,12 +233,17 @@ export class Filesystem {
       60_000,
       Math.max(1_000, 2 ** (this.beesRestartAttempts - 1) * 1_000),
     );
-    logger.warn("scheduling BEES restart", {
+    const details = {
       mount: this.opts.mount,
       reason,
       attempt: this.beesRestartAttempts,
       delayMs,
-    });
+    };
+    if (reason === "existing-process-handoff") {
+      logger.debug("scheduling BEES restart", details);
+    } else {
+      logger.warn("scheduling BEES restart", details);
+    }
     this.beesRestartTimer = setTimeout(() => {
       this.beesRestartTimer = undefined;
       void this.startBees(`restart:${reason}`);
@@ -266,12 +271,22 @@ export class Filesystem {
         this.bees = undefined;
         this.beesRunningExternally = true;
         this.beesDisabledByConfig = false;
-        this.beesRestartAttempts = 0;
-        logger.warn("BEES dedup already running for this mount", {
+        const details = {
           mount: this.opts.mount,
           reason,
           detail: result.detail,
-        });
+        };
+        if (this.beesRestartAttempts === 0) {
+          logger.warn("BEES dedup already running for this mount", details);
+        } else {
+          logger.debug("BEES dedup already running for this mount", details);
+        }
+        // A rolling project-host upgrade can briefly overlap the old and new
+        // daemons. The old daemon still owns BEES when the new daemon starts,
+        // then stops it as shutdown completes. Keep trying to acquire the
+        // single-instance wrapper lock so that this handoff cannot leave BEES
+        // stopped indefinitely.
+        this.scheduleBeesRestart("existing-process-handoff");
         return;
       }
       const { child } = result;

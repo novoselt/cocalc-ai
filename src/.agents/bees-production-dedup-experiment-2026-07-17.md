@@ -225,6 +225,82 @@ process exit still uses the existing bounded lifecycle restart behavior. The
 initial deployment target is staging only; production requires review of the
 code and staging observations.
 
+### Rolling-upgrade ownership handoff
+
+The first staging rollout exposed a lifecycle race that was not visible in the
+snapshot experiments. The old project-host daemon's detached BEES process was
+still running when the new daemon initialized. The privileged wrapper correctly
+refused to start a duplicate, so the new daemon classified BEES as externally
+owned. The inherited process then exited as old-daemon shutdown completed, but
+the new daemon had no reason to retry and both staging hosts were left without
+BEES.
+
+The supervisor now treats `BEES_ALREADY_RUNNING` as a potentially transient
+rolling-upgrade handoff. It retries acquisition with exponential backoff capped
+at one minute. The wrapper's process check and file lock remain authoritative,
+so retries cannot create two BEES instances. A genuinely external process is
+not signaled or replaced; the new daemon takes ownership only after that process
+exits. A focused fake-timer test covers the observed sequence and verifies that
+the replacement is started and supervised.
+
+## Staging validation
+
+The policy and telemetry were deployed only to staging on 2026-07-17. No
+production component was changed. The tested immutable artifacts are:
+
+```text
+host-bootstrap: 20260717T230856Z-b7851ee7-bees-cgroup-b7851ee70b
+project-host:   20260717T233259Z-667aa8a3-bees-handoff-667aa8a387
+hub:            20260717T230945Z-b7851ee7-bees-cgroup-b7851ee70b
+```
+
+Both four-core, 16 GiB staging hosts run the production BEES binary and 1 GiB
+table with `-c 4`. The observed policy on each host is:
+
+```text
+process cgroup:  /cocalc-bees
+cpu.max:         400000 100000
+cpu.weight:      1
+io.weight:       1
+read limit:      64 MiB/s
+write limit:     16 MiB/s
+memory.high:     1 GiB
+memory.max:      2 GiB
+swap:            0
+pids.max:        64
+```
+
+The 1 GiB high watermark generated reclaim events as intended. Neither host
+reported a `memory.max` event, OOM, OOM kill, or PID-limit failure.
+
+The rolling-upgrade handoff was tested deliberately on `host2`. An inherited
+`bees -v 1 -g 1 /mnt/cocalc` process was running when the new project-host
+artifact started. The wrapper continued to reject duplicate starts. After the
+inherited PID received a clean `SIGINT`, the new supervisor acquired ownership
+at its capped retry interval and started a distinct PID with
+`bees -v 1 -c 4 /mnt/cocalc` in `/cocalc-bees`. No project-host restart and no
+manual replacement start were used.
+
+The end-to-end heartbeat path persisted fresh BEES status for both hosts. One
+host reached `active` after a five-minute sample interval with advancing scan
+counters and 0.065 average core use. The replaced host correctly reset to
+`observing` for its new PID, then reached `idle` on its next 299.98-second
+sample at 0.011 average core with unchanged counters. Stored telemetry includes
+the crawl checkpoint hash, hourly counters and progress table, cgroup limits,
+cumulative CPU and I/O, memory events and pressure, and process cgroup.
+
+Full synthetic project lifecycle probes passed on both hosts while BEES was
+running, in 1.4 and 1.7 seconds. Public route probes returned HTTP 200, CORS
+preflight 204, authenticated-session rejection 401, and 8 of 8 successful
+WebSocket upgrades. Project-host smoke passed on both hosts. Hub smoke passed
+homepage, static shell, favicon, and all four hub-worker-to-host routes. The
+staging health check reported no admin alert in the preceding hour.
+
+Production remains gated on code review and a staging soak. Observe at least 24
+hours for device errors, OOM/max events, project latency regression, sustained
+pressure, and credible `possible_stall` transitions before selecting a
+production canary.
+
 ## Risk controls
 
 - Never run experimental BEES settings first on the only copy of user data.
