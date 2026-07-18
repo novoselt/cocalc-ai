@@ -46,6 +46,16 @@ const DOLLAR_AMOUNT = /\$\s*\d/;
 
 const originalFetch = global.fetch;
 
+beforeAll(async () => {
+  await Promise.all([
+    import("../features/app"),
+    import("../home/app"),
+    import("../pricing/app"),
+    import("../products/app"),
+    import("../support/app"),
+  ]);
+});
+
 beforeEach(() => {
   installMatchMediaStub();
   global.fetch = jest.fn(
