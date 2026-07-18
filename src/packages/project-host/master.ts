@@ -118,6 +118,10 @@ import {
   startRootfsBuild as startRootfsBuildOnHost,
 } from "./rootfs-build-runner";
 import { createProjectHostRuntimeHealthMonitor } from "./runtime-health";
+import {
+  cloudflaredHeartbeatSummary,
+  collectCloudflaredDiagnosticSnapshot,
+} from "./cloudflared-diagnostics";
 
 const logger = getLogger("project-host:master");
 
@@ -252,6 +256,7 @@ const USER_DELTA_CURSOR_KEY = "users-delta-cursor";
 const STOP_POLICY_DELTA_CURSOR_KEY = "stop-policy-delta-cursor";
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 const CLOUDFLARED_CONTROL_WRAPPER = "/usr/local/sbin/cocalc-cloudflared-ctl";
+const CLOUDFLARED_LOGS_WRAPPER = "/usr/local/sbin/cocalc-cloudflared-logs";
 const DEFAULT_RUNTIME_LOG_PATH =
   process.env.COCALC_PROJECT_HOST_LOG?.trim() ||
   process.env.DEBUG_FILE?.trim() ||
@@ -585,10 +590,30 @@ async function readRuntimeLogTail(
   };
 
   if (source === "cloudflared") {
-    return await runJournal({
-      label: "journalctl:cocalc-cloudflared.service",
-      args: ["-u", "cocalc-cloudflared.service"],
+    const { stdout, stderr, exit_code } = await executeCode({
+      command: "/usr/bin/timeout",
+      args: [
+        "8",
+        "sudo",
+        "-n",
+        CLOUDFLARED_LOGS_WRAPPER,
+        String(tailLines),
+        "snapshot",
+      ],
+      timeout: 10,
+      err_on_exit: false,
     });
+    const text = `${stdout ?? ""}`;
+    if (exit_code && !text.trim()) {
+      throw new Error(
+        `cloudflared journal wrapper failed (exit ${exit_code}): ${stderr ?? ""}`,
+      );
+    }
+    return {
+      source: "journalctl:cocalc-cloudflared.service",
+      lines: tailLines,
+      text: redactRuntimeLogText(text),
+    };
   }
   if (source === "sshd") {
     return await runJournal({
@@ -1250,6 +1275,46 @@ export async function startMasterRegistration({
         duration_ms: number;
       }>
     | undefined;
+  let latestCloudflaredDiagnostic:
+    | Awaited<ReturnType<typeof collectCloudflaredDiagnosticSnapshot>>
+    | undefined;
+  let cloudflaredDiagnosticInflight:
+    | Promise<Awaited<ReturnType<typeof collectCloudflaredDiagnosticSnapshot>>>
+    | undefined;
+  let cloudflaredDiagnosticStartedAt = 0;
+
+  const refreshCloudflaredDiagnostic = async ({
+    force = false,
+  }: { force?: boolean } = {}) => {
+    if (cloudflaredDiagnosticInflight) {
+      return await cloudflaredDiagnosticInflight;
+    }
+    if (
+      !force &&
+      latestCloudflaredDiagnostic &&
+      Date.now() - cloudflaredDiagnosticStartedAt < 60_000
+    ) {
+      return latestCloudflaredDiagnostic;
+    }
+    cloudflaredDiagnosticStartedAt = Date.now();
+    cloudflaredDiagnosticInflight = collectCloudflaredDiagnosticSnapshot({
+      execute: async (command, args) =>
+        await executeCode({
+          command,
+          args,
+          timeout: 8,
+          err_on_exit: false,
+        }),
+      readJournal: async () =>
+        (await readRuntimeLogTail("cloudflared", 80)).text,
+    });
+    try {
+      latestCloudflaredDiagnostic = await cloudflaredDiagnosticInflight;
+      return latestCloudflaredDiagnostic;
+    } finally {
+      cloudflaredDiagnosticInflight = undefined;
+    }
+  };
 
   // Control plane for this host (master can ask us to create/start/stop projects).
   const controlImpl: HostControlApi = {
@@ -1258,15 +1323,17 @@ export async function startMasterRegistration({
       if (reason !== "public-route-probe" || !isValidUUID(claim_id)) {
         throw new Error("invalid cloudflared restart request");
       }
-      const startedAt = Date.now();
+      const before = await refreshCloudflaredDiagnostic({ force: true });
       logger.warn("restarting cloudflared after public route probe failures", {
         reason,
         claim_id,
+        diagnostic: cloudflaredHeartbeatSummary(before),
       });
+      const startedAt = Date.now();
       const { stdout, stderr, exit_code } = await executeCode({
         command: "sudo",
         args: ["-n", CLOUDFLARED_CONTROL_WRAPPER, "restart"],
-        timeout: 60,
+        timeout: 45,
         err_on_exit: false,
       });
       if (exit_code) {
@@ -1275,16 +1342,25 @@ export async function startMasterRegistration({
         );
       }
       const finishedAt = Date.now();
+      let after = await refreshCloudflaredDiagnostic({ force: true });
+      for (let attempt = 0; attempt < 5; attempt++) {
+        if ((after.ready?.ready_connections ?? 0) > 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        after = await refreshCloudflaredDiagnostic({ force: true });
+      }
       logger.info("cloudflared restart completed", {
         reason,
         claim_id,
         duration_ms: finishedAt - startedAt,
+        diagnostic: cloudflaredHeartbeatSummary(after),
       });
       return {
         ok: true,
         started_at: new Date(startedAt).toISOString(),
         finished_at: new Date(finishedAt).toISOString(),
         duration_ms: finishedAt - startedAt,
+        before,
+        after,
       };
     },
     async runSyntheticRuntimeProbe() {
@@ -1788,6 +1864,8 @@ export async function startMasterRegistration({
       metadata: {
         ...(basePayload.metadata ?? {}),
         cloudflared_restart_supported: true,
+        cloudflared_diagnostics_supported: true,
+        cloudflared: cloudflaredHeartbeatSummary(latestCloudflaredDiagnostic),
         host_uptime_s: Math.max(0, Math.floor(uptime())),
         ...(currentMetrics
           ? {
@@ -1815,6 +1893,9 @@ export async function startMasterRegistration({
 
   const send = async (fn: "register" | "heartbeat") => {
     await runtimeHealth.refresh();
+    void refreshCloudflaredDiagnostic().catch((err) => {
+      logger.debug("cloudflared diagnostic refresh failed", { err });
+    });
     const payload = buildPayload();
     const started = Date.now();
     try {
@@ -2350,6 +2431,9 @@ export async function startMasterRegistration({
 
   await refreshProjectHostAuthPublicKey("startup");
   await runEnsureMasterConatToken("startup");
+  await refreshCloudflaredDiagnostic({ force: true }).catch((err) => {
+    logger.warn("initial cloudflared diagnostic refresh failed", { err });
+  });
   await send("register");
   try {
     await syncUserDeltas("startup");

@@ -10,6 +10,7 @@ import {
 import "@cocalc/util/public-site-metadata-docs";
 import PublicApp from "../app";
 import { FEATURE_PAGES } from "../features/catalog";
+import PublicHomeApp from "../home/app";
 import { getPublicRouteFromPath, publicPath } from "../routes";
 import {
   installMatchMediaStub,
@@ -49,7 +50,6 @@ const originalFetch = global.fetch;
 beforeAll(async () => {
   await Promise.all([
     import("../features/app"),
-    import("../home/app"),
     import("../pricing/app"),
     import("../products/app"),
     import("../support/app"),
@@ -73,11 +73,16 @@ afterEach(async () => {
 });
 
 async function renderPublicPath(path: string) {
+  const config = { help_email: "help@example.com", site_name: "CoCalc" };
   const result = render(
-    <PublicApp
-      config={{ help_email: "help@example.com", site_name: "CoCalc" }}
-      initialRoute={getPublicRouteFromPath(publicPath(path))}
-    />,
+    path === "" ? (
+      <PublicHomeApp config={config} />
+    ) : (
+      <PublicApp
+        config={config}
+        initialRoute={getPublicRouteFromPath(publicPath(path))}
+      />
+    ),
   );
   await waitFor(() =>
     expect(result.container.textContent?.trim().length).toBeGreaterThan(0),

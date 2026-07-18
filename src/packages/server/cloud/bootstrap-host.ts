@@ -522,6 +522,8 @@ export type BootstrapScripts = {
     token?: string;
     tunnelId?: string;
     credsJson?: string;
+    protocol?: "auto" | "quic" | "http2";
+    gracePeriodSeconds?: number;
   };
 };
 
@@ -1100,6 +1102,21 @@ export async function buildBootstrapScripts(
   const appPublicWildcard = buildAppPublicWildcardHostname({
     hostHostname: tunnel?.hostname,
   });
+  const cloudflaredProtocol = (() => {
+    const value = `${row.metadata?.cloudflared_protocol ?? "auto"}`
+      .trim()
+      .toLowerCase();
+    return ["auto", "quic", "http2"].includes(value)
+      ? (value as "auto" | "quic" | "http2")
+      : "auto";
+  })();
+  const cloudflaredGracePeriodSeconds = Math.max(
+    1,
+    Math.min(
+      30,
+      Math.floor(Number(row.metadata?.cloudflared_grace_period_seconds) || 10),
+    ),
+  );
 
   const cloudflaredConfig: BootstrapScripts["cloudflaredConfig"] = (() => {
     if (tunnel && tunnelEnabled) {
@@ -1131,6 +1148,8 @@ export async function buildBootstrapScripts(
         token: useToken ? tunnel.token : undefined,
         tunnelId: tunnel.id,
         credsJson: creds,
+        protocol: cloudflaredProtocol,
+        gracePeriodSeconds: cloudflaredGracePeriodSeconds,
       };
     }
     return { enabled: false };
