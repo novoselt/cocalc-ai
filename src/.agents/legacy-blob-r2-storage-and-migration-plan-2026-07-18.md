@@ -30,9 +30,9 @@ Implement a deployment-selectable `BlobStore` before migrating legacy data.
 2. In a Cloudflare-enabled deployment, write immutable blob objects to a
    private R2 bucket and serve `/blobs/...?...uuid=...` through a Worker with an
    R2 binding.
-3. Keep the existing public capability-URL behavior. Blob GETs have
-   historically been unauthenticated; changing that would break existing
-   documents, chats, and migrated files.
+3. Make blob-read authentication an explicit product decision. Blob GETs are
+   currently unauthenticated capability URLs; changing that requires
+   Worker-verifiable access tokens and a public-share compatibility path.
 4. Keep content bytes separate from references. One content-addressed blob may
    be referenced by many accounts and projects in different bays.
 5. Do not update PostgreSQL synchronously for every GET. Emit access events
@@ -68,6 +68,10 @@ The current implementation is still the legacy PostgreSQL/GCS design:
 - The public route treats the UUID as a capability. It allows safe image
   extensions inline, forces other extensions to download, sets `nosniff`, and
   uses a long public cache lifetime.
+- A cookie-free request to a current production blob returned HTTP 200 on
+  2026-07-18. The current GET route does not enforce sign-in.
+- Current membership blob quotas limit stored blob count and bytes at upload
+  time. They do not meter public blob download requests or downloaded bytes.
 - TimeTravel/archive blob RPCs have separate authorization checks and must not
   accidentally become public through this migration.
 
@@ -449,8 +453,8 @@ Use two telemetry levels:
    source, bytes, and sampled UUID diagnostics. Its current three-month
    retention makes it useful for operations, not authoritative retention
    policy.
-2. A Cloudflare Queue for durable successful-access events. Queue delivery is
-   at least once, so consumers must be idempotent.
+2. A Cloudflare Queue for durable, deliberately deduplicated access events.
+   Queue delivery is at least once, so consumers must be idempotent.
 
 The queue consumer should:
 
@@ -463,14 +467,156 @@ The queue consumer should:
   daily access manifests for a bay job to ingest;
 - never block the GET path.
 
-Start by emitting one event per successful public read and measure cost and
-volume. If necessary, reduce events to one per UUID per day using idempotent
-daily aggregation. Retention decisions only need a trustworthy coarse last
-access date, not an exact real-time counter.
+Do not enqueue one message per cache hit. At current list pricing, a normally
+consumed Queue message uses one write, one read, and one delete operation, so
+telemetry can cost more than the Worker and R2 request combined. Emit a durable
+event on an R2/cache miss and optionally a sampled or at-most-once-per-day event
+for cache hits. A one-year maximum cache TTL plus a retention grace period
+ensures a continuously accessed object eventually produces a fresh durable
+event. Retention decisions need a trustworthy coarse last-access date, not an
+exact real-time counter.
 
 If production has the required Cloudflare plan, HTTP/Worker Logpush to a
 dedicated R2 log bucket is a useful independent audit stream. It is not the
 sole source because Logpush has no historical backfill after an outage.
+
+## Denial-of-Wallet and Cost Controls
+
+There is a real abuse risk even though R2 and Workers do not charge Internet
+egress. The billable paths are request based:
+
+- Workers Paid currently includes 10 million requests/month, then charges
+  $0.30 per million requests, plus CPU overage.
+- R2 Standard currently includes 10 million Class B operations/month, then
+  charges $0.36 per million. `GetObject` and `HeadObject` are Class B.
+- Cloudflare Queues currently charges $0.40 per million operations after its
+  included amount, and a normally consumed message uses three operations.
+- Workers cache hits still count as Worker requests, although they avoid R2
+  reads and generally avoid Worker CPU under Workers Caching.
+
+At list prices, 100 million hostile requests in one month would cost roughly:
+
+- about $27 in Worker request overage;
+- up to about $32.40 in R2 Class B overage if every request bypassed cache;
+- about $119.60 in Queue operations if every request incorrectly emitted and
+  consumed one telemetry message;
+- additional Worker CPU and any optional product costs.
+
+At one billion requests those components are roughly $297, $356.40, and
+$1,199.60 respectively. These are illustrative list-price calculations, not a
+quote; the actual contract and included usage may differ. They show why cache
+correctness, miss controls, and telemetry deduplication are required.
+
+### Immediate current-production exposure
+
+This is not only a future R2 concern. On 2026-07-18, a cookie-free production
+GET for an existing blob returned HTTP 200 with:
+
+```text
+Cache-Control: public, max-age=31536000
+Set-Cookie: cocalc_bay_frontdoor_worker=...
+CF-Cache-Status: BYPASS
+```
+
+The bay frontdoor adds an affinity cookie when it assigns a hub worker.
+Cloudflare Origin Cache Control does not cache a response containing
+`Set-Cookie`, which explains the observed bypass. Repeated anonymous requests
+therefore reach the hub/database and can incur Google Cloud egress. Random
+display filenames and query parameters can also fragment a naive cache.
+
+A controlled three-request check confirmed the mechanism: request 1 without a
+cookie was `BYPASS` and received the affinity cookie; request 2 replaying that
+cookie was `MISS`; request 3 was `HIT`. A normal browser eventually benefits
+from cache, but a malicious client can discard cookies and force every request
+through the origin.
+
+Mitigate this independently of the R2 project:
+
+1. Match only GET/HEAD `/blobs/*` at Cloudflare.
+2. Make successful responses eligible for cache and set an explicit edge TTL.
+   An explicit status-code TTL can cause Cloudflare to strip `Set-Cookie` before
+   caching; alternatively suppress the bay-frontdoor affinity cookie in code
+   for blob GET/HEAD because those requests do not need sticky sessions.
+3. Cache 2xx responses for the immutable-object interval, cache 404 briefly or
+   not at all, and never cache 5xx responses.
+4. Initially preserve the full path plus normalized `uuid` and `download`
+   semantics in the cache key. A later Worker can safely key the byte body only
+   by UUID while constructing filename/disposition headers per response.
+5. Add a `/blobs` rate-limiting rule that includes cached requests, plus a
+   stricter rule or anomaly alert for misses, ranges, HEAD requests, and 404s.
+6. Monitor Google Cloud network egress and hub blob-read rate immediately.
+7. Verify from a cookie-free client that the first exact request is `MISS`, the
+   second is `HIT`, no affinity cookie reaches the client, byte/ETag match, and
+   error statuses use the intended TTL.
+
+Caching the full URL is only a rapid mitigation. It prevents repeated requests
+to the same URL from causing GCP egress, but an attacker can vary the display
+path. The normalized UUID Worker cache and rate/cost controls remain required.
+
+Implement all of these controls before production cutover:
+
+1. Use R2 Standard, not Infrequent Access, for public/hot blob objects.
+   Infrequent Access adds retrieval charges that amplify abuse.
+2. Construct the cache key from the validated UUID and normalized response
+   representation, not the raw URL. Ignore or reject unrelated query
+   parameters. Random filenames, parameter ordering, and cache-buster query
+   strings must not create new origin reads for the same bytes.
+3. Set display filename and content disposition after retrieving the canonical
+   cached body so filename variation does not fragment the byte cache.
+4. Cache known misses briefly by normalized UUID. Do not use the one-year
+   positive-object TTL for 404 responses.
+5. Permit only GET and HEAD. Support at most one valid byte range, normalize
+   its cache behavior, and apply a stricter rate limit to range requests because
+   tiny/random ranges can force repeated origin operations.
+6. Put Cloudflare WAF, managed DDoS protections, bot controls where available,
+   and a `/blobs` rate-limiting rule in front of the Worker. Rate limits must
+   include cached requests where the goal is to bound Worker-request cost, and
+   separately count origin/cache-miss traffic where the goal is to protect R2.
+7. Rate-limit high miss ratios, UUID scans, repeated 404s, and excessive HEAD
+   traffic more aggressively than normal image loads. Per-IP limits are useful
+   but not sufficient against distributed traffic; combine them with bot/IP
+   reputation and aggregate anomaly detection.
+8. Configure a small Worker CPU limit. The Worker only validates, looks up,
+   streams, and sets headers; it must never buffer or transform the full body.
+9. Set Cloudflare billable-usage notifications and budget alerts for Workers,
+   R2, and Queues. Budget alerts are informational and do not cap spend, so
+   also alert from CoCalc metrics on request-rate and cost-rate projections.
+10. Add a globally controlled emergency mode. When automated thresholds are
+    exceeded, continue serving existing cache hits but reject/challenge new
+    origin misses and uploads until an operator clears the incident. Test this
+    circuit breaker; do not depend on a dashboard change during an attack.
+11. Set per-account download request/byte budgets if sign-in is required in the
+    approved access model. The Worker needs a short-lived, signed,
+    Worker-verifiable account token so it can enforce this without a hub/database
+    lookup on every request.
+12. Record cache-hit, R2-read, bytes, range, 404, blocked, and projected-cost
+    metrics independently. Alert on both absolute volume and sudden changes
+    from baseline.
+
+Cloudflare WAF rate counters are scoped by data center rather than globally, so
+they are one layer, not a hard account-wide spending cap. Workers Paid also has
+no general daily request limit. CoCalc therefore needs the cost anomaly alert
+and emergency origin-miss circuit breaker in addition to WAF rules.
+
+### Authentication policy
+
+The current production route is an unauthenticated capability URL, despite the
+fact that blob uploads and stored bytes are quota-controlled. Requiring sign-in
+would reduce casual abuse and enable per-account download quotas, but it is a
+behavioral change with compatibility costs:
+
+- existing direct links and embedded images may be opened without a CoCalc
+  session;
+- public project shares, support messages, and exported documents may depend
+  on anonymous reads;
+- the current login cookie is not automatically suitable for verification at a
+  Worker without a database lookup.
+
+If sign-in becomes the policy, first introduce a short-lived signed blob-access
+cookie/token that the Worker can verify locally. Add an explicit public-share
+capability for blobs referenced by public content, and define how old/current
+capability URLs transition. Do not simply add a hub callback to every Worker
+GET, since that restores the hub bottleneck and per-request database cost.
 
 ## Legacy Inventory Before Migration
 
@@ -795,6 +941,8 @@ Publish dashboards and alerts for:
 - old DB/GCS read errors and source-missing counts;
 - metadata available with object missing, and object present without metadata;
 - storage/object/operation cost by month;
+- projected hourly/daily/monthly cost from current request rates;
+- abuse blocks/challenges, high-miss clients, and emergency-mode state;
 - PostgreSQL `blobs` table byte size during drain.
 
 Critical alerts:
@@ -803,6 +951,7 @@ Critical alerts:
 - checksum conflict for an existing UUID;
 - Worker cannot read R2 while hub fallback is disabled;
 - access queue lag exceeds the retention-accounting SLO;
+- projected spend or cache-miss rate crosses warning/critical thresholds;
 - migration source disappearance or unexpected object-count decrease.
 
 ## Test Plan
@@ -816,6 +965,10 @@ Critical alerts:
 - R2 failure before/after upload and before/after metadata commit.
 - Retry is idempotent after every injected failure.
 - Range and conditional request behavior.
+- Cache-key normalization across filename and irrelevant query variations.
+- Repeated random cache-buster parameters cause only one canonical R2 read.
+- Rate limits count the intended cached/miss/range request classes.
+- Emergency mode serves cache hits and rejects new origin misses.
 - Queue duplicate/out-of-order events produce monotonic `last_active`.
 - Reference deletion and delayed garbage collection.
 - Legacy gzip/zlib decode and malformed compression.
@@ -842,6 +995,8 @@ Create fixtures covering:
 
 - Sustained public reads with realistic cache distribution.
 - Burst hot UUID and many cold UUIDs.
+- Distributed random valid-format UUID misses and repeated tiny ranges.
+- Cost projection under 10 million, 100 million, and 1 billion requests.
 - Worker/R2 outage with and without fallback.
 - Queue disabled or delayed for hours, followed by replay.
 - Migration at increasing concurrency while monitoring the old DB VM.
@@ -947,6 +1102,9 @@ Gate: no source is deleted merely because the selected migration completed.
    database/GCS sources.
 8. Whether exact access counts matter, or only monotonic last-access day plus
    approximate counts.
+9. Whether blob reads remain public capability URLs or require sign-in. If
+   sign-in is required, approve the public-share compatibility and signed
+   Worker-token design before R2 cutover.
 
 ## Recommended First Implementation Slice
 
@@ -1012,3 +1170,21 @@ Cloudflare documentation reviewed on 2026-07-18:
   https://developers.cloudflare.com/r2/buckets/bucket-locks/
 - R2 pricing:
   https://developers.cloudflare.com/r2/pricing/
+- Workers pricing and CPU limits:
+  https://developers.cloudflare.com/workers/platform/pricing/
+- Workers platform limits:
+  https://developers.cloudflare.com/workers/platform/limits/
+- Cache-key normalization:
+  https://developers.cloudflare.com/cache/how-to/cache-keys/
+- Origin cache control and `Set-Cookie` behavior:
+  https://developers.cloudflare.com/cache/concepts/cache-control/
+- Cache behavior for HEAD and `Set-Cookie`:
+  https://developers.cloudflare.com/cache/concepts/cache-behavior/
+- WAF rate limiting:
+  https://developers.cloudflare.com/waf/rate-limiting-rules/
+- WAF rate-counter scope:
+  https://developers.cloudflare.com/waf/rate-limiting-rules/request-rate/
+- Queue pricing:
+  https://developers.cloudflare.com/queues/platform/pricing/
+- Cloudflare budget alerts:
+  https://developers.cloudflare.com/billing/manage/budget-alerts/
