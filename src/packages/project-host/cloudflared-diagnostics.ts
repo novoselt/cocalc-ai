@@ -91,6 +91,15 @@ export function normalizeCloudflaredProtocol(
   return `${value}`;
 }
 
+export function parseCloudflaredConfiguredProtocol(
+  value: string,
+): CloudflaredDiagnosticSnapshot["configured_protocol"] | undefined {
+  const protocol = value.trim().toLowerCase();
+  if (protocol === "auto" || protocol === "quic" || protocol === "http2") {
+    return protocol;
+  }
+}
+
 export function parseCloudflaredTunnel(
   value: unknown,
 ): NonNullable<CloudflaredDiagnosticSnapshot["tunnel"]> | undefined {
@@ -162,30 +171,42 @@ export async function collectCloudflaredDiagnosticSnapshot({
     expected_version: EXPECTED_CLOUDFLARED_VERSION,
   };
   const errors: string[] = [];
-  const [versionResult, processResult, journalResult, metricsServer] =
-    await Promise.all([
-      execute("/usr/bin/cloudflared", ["--version"]).catch((err) => {
-        errors.push(`version: ${errorText(err)}`);
-        return undefined;
-      }),
-      execute("/bin/ps", [
-        "-C",
-        "cloudflared",
-        "-o",
-        "pid=,stat=,etimes=,rss=,nlwp=",
-      ]).catch((err) => {
-        errors.push(`process: ${errorText(err)}`);
-        return undefined;
-      }),
-      readJournal().catch((err) => {
-        errors.push(`journal: ${errorText(err)}`);
-        return undefined;
-      }),
-      findMetricsServer(fetchImpl, timeout_ms).catch((err) => {
-        errors.push(`metrics discovery: ${errorText(err)}`);
-        return undefined;
-      }),
-    ]);
+  const [
+    versionResult,
+    processResult,
+    configuredProtocolResult,
+    journalResult,
+    metricsServer,
+  ] = await Promise.all([
+    execute("/usr/bin/cloudflared", ["--version"]).catch((err) => {
+      errors.push(`version: ${errorText(err)}`);
+      return undefined;
+    }),
+    execute("/bin/ps", [
+      "-C",
+      "cloudflared",
+      "-o",
+      "pid=,stat=,etimes=,rss=,nlwp=",
+    ]).catch((err) => {
+      errors.push(`process: ${errorText(err)}`);
+      return undefined;
+    }),
+    execute("/usr/bin/awk", [
+      "/^[[:space:]]*protocol:[[:space:]]*/ { print $2; exit }",
+      "/etc/cloudflared/config.yml",
+    ]).catch((err) => {
+      errors.push(`configured protocol: ${errorText(err)}`);
+      return undefined;
+    }),
+    readJournal().catch((err) => {
+      errors.push(`journal: ${errorText(err)}`);
+      return undefined;
+    }),
+    findMetricsServer(fetchImpl, timeout_ms).catch((err) => {
+      errors.push(`metrics discovery: ${errorText(err)}`);
+      return undefined;
+    }),
+  ]);
 
   if (versionResult?.exit_code === 0) {
     snapshot.version = parseCloudflaredVersion(`${versionResult.stdout ?? ""}`);
@@ -202,6 +223,15 @@ export async function collectCloudflaredDiagnosticSnapshot({
   } else if (processResult) {
     errors.push(
       `process exit=${processResult.exit_code}: ${boundedText(processResult.stderr)}`,
+    );
+  }
+  if (configuredProtocolResult?.exit_code === 0) {
+    snapshot.configured_protocol = parseCloudflaredConfiguredProtocol(
+      `${configuredProtocolResult.stdout ?? ""}`,
+    );
+  } else if (configuredProtocolResult) {
+    errors.push(
+      `configured protocol exit=${configuredProtocolResult.exit_code}: ${boundedText(configuredProtocolResult.stderr)}`,
     );
   }
   if (journalResult) snapshot.journal = boundedText(journalResult, 12_000);
@@ -263,6 +293,19 @@ export function cloudflaredHeartbeatSummary(
   snapshot: CloudflaredDiagnosticSnapshot | undefined,
 ): Record<string, any> | undefined {
   if (!snapshot) return;
+  const observedProtocols = Array.from(
+    new Set(
+      (snapshot.tunnel?.connections ?? [])
+        .map(({ protocol }) => protocol)
+        .filter(Boolean),
+    ),
+  );
+  const configuredFallback =
+    observedProtocols.length === 0 &&
+    snapshot.configured_protocol != null &&
+    snapshot.configured_protocol !== "auto"
+      ? [snapshot.configured_protocol]
+      : [];
   return {
     captured_at: snapshot.captured_at,
     expected_version: snapshot.expected_version,
@@ -273,13 +316,16 @@ export function cloudflaredHeartbeatSummary(
     ready_status: snapshot.ready?.status,
     ready_connections: snapshot.ready?.ready_connections,
     connector_id: snapshot.ready?.connector_id ?? snapshot.tunnel?.connector_id,
-    protocols: Array.from(
-      new Set(
-        (snapshot.tunnel?.connections ?? [])
-          .map(({ protocol }) => protocol)
-          .filter(Boolean),
-      ),
-    ),
+    configured_protocol: snapshot.configured_protocol,
+    observed_protocols: observedProtocols,
+    protocols:
+      observedProtocols.length > 0 ? observedProtocols : configuredFallback,
+    protocol_source:
+      observedProtocols.length > 0
+        ? "observed"
+        : configuredFallback.length > 0
+          ? "configured_fallback"
+          : "unknown",
     edge_addresses: (snapshot.tunnel?.connections ?? [])
       .map(({ edge_address }) => edge_address)
       .filter(Boolean),

@@ -448,6 +448,7 @@ export interface HostStaticAppPathInspection {
 export interface CloudflaredDiagnosticSnapshot {
   captured_at: string;
   expected_version: string;
+  configured_protocol?: "auto" | "quic" | "http2";
   version?: string;
   version_drift?: boolean;
   process?: {

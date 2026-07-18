@@ -7,6 +7,7 @@ import {
   cloudflaredHeartbeatSummary,
   collectCloudflaredDiagnosticSnapshot,
   normalizeCloudflaredProtocol,
+  parseCloudflaredConfiguredProtocol,
   parseCloudflaredProcess,
   parseCloudflaredTunnel,
   parseCloudflaredVersion,
@@ -70,6 +71,8 @@ describe("cloudflared diagnostics", () => {
     expect(normalizeCloudflaredProtocol("1")).toBe("quic");
     expect(normalizeCloudflaredProtocol("future")).toBe("future");
     expect(normalizeCloudflaredProtocol(undefined)).toBeUndefined();
+    expect(parseCloudflaredConfiguredProtocol("HTTP2\n")).toBe("http2");
+    expect(parseCloudflaredConfiguredProtocol("invalid")).toBeUndefined();
   });
 
   it("collects only the allowlisted local diagnostics", async () => {
@@ -103,15 +106,21 @@ describe("cloudflared diagnostics", () => {
     }) as typeof fetch;
     const snapshot = await collectCloudflaredDiagnosticSnapshot({
       fetchImpl,
-      execute: async (command) =>
-        command.includes("cloudflared")
-          ? { stdout: "cloudflared version 2026.7.2", exit_code: 0 }
-          : { stdout: "123 Ssl 60 2048 18", exit_code: 0 },
+      execute: async (command) => {
+        if (command.includes("cloudflared")) {
+          return { stdout: "cloudflared version 2026.7.2", exit_code: 0 };
+        }
+        if (command.includes("awk")) {
+          return { stdout: "auto\n", exit_code: 0 };
+        }
+        return { stdout: "123 Ssl 60 2048 18", exit_code: 0 };
+      },
       readJournal: async () => "recent tunnel line",
     });
     expect(snapshot).toMatchObject({
       version: "2026.7.2",
       version_drift: false,
+      configured_protocol: "auto",
       process: { pid: 123 },
       ready: { status: 200, ready_connections: 4 },
       tunnel: { connector_id: "connector-1" },
@@ -126,6 +135,29 @@ describe("cloudflared diagnostics", () => {
       ready_connections: 4,
       connector_id: "connector-1",
       process_elapsed_s: 60,
+      configured_protocol: "auto",
+      observed_protocols: ["quic"],
+      protocols: ["quic"],
+      protocol_source: "observed",
+    });
+  });
+
+  it("labels configured HTTP/2 when cloudflared omits protocol observations", () => {
+    expect(
+      cloudflaredHeartbeatSummary({
+        captured_at: "2026-07-18T00:00:00.000Z",
+        expected_version: "2026.7.2",
+        configured_protocol: "http2",
+        tunnel: {
+          connector_id: "connector-1",
+          connections: [{ index: 0, connected: true }],
+        },
+      }),
+    ).toMatchObject({
+      configured_protocol: "http2",
+      observed_protocols: [],
+      protocols: ["http2"],
+      protocol_source: "configured_fallback",
     });
   });
 });
