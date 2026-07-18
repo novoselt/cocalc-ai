@@ -21,6 +21,35 @@ type WebSocketUpgradeProbe = (opts: {
   timeout_ms: number;
 }) => Promise<{ status: number; cf_ray?: string }>;
 
+export type ProjectHostPublicRouteProbeStage =
+  | "health"
+  | "preflight"
+  | "session"
+  | "websocket";
+
+export type ProjectHostWebSocketProbeSample = {
+  ok: boolean;
+  duration_ms: number;
+  status?: number;
+  cf_ray?: string;
+  error?: string;
+};
+
+export type ProjectHostPublicRouteProbeDiagnostic = {
+  stage: ProjectHostPublicRouteProbeStage;
+  public_url: string;
+  origin: string;
+  health_status?: number;
+  preflight_status?: number;
+  session_status?: number;
+  edge_server?: string;
+  cf_ray?: string;
+  websocket_attempts?: number;
+  websocket_successes?: number;
+  websocket_failures?: number;
+  websocket_samples?: ProjectHostWebSocketProbeSample[];
+};
+
 export type ProjectHostPublicRouteProbeResult = {
   public_url: string;
   origin: string;
@@ -29,9 +58,51 @@ export type ProjectHostPublicRouteProbeResult = {
   session_status: number;
   websocket_status: number;
   websocket_attempts: number;
+  websocket_successes: number;
+  websocket_failures: number;
+  websocket_samples: ProjectHostWebSocketProbeSample[];
   edge_server?: string;
   cf_ray?: string;
 };
+
+export class ProjectHostPublicRouteProbeError extends Error {
+  readonly diagnostic: ProjectHostPublicRouteProbeDiagnostic;
+
+  constructor(
+    message: string,
+    diagnostic: ProjectHostPublicRouteProbeDiagnostic,
+  ) {
+    super(message);
+    this.name = "ProjectHostPublicRouteProbeError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+class WebSocketUpgradeError extends Error {
+  readonly status?: number;
+  readonly cf_ray?: string;
+
+  constructor(message: string, opts?: { status?: number; cf_ray?: string }) {
+    super(message);
+    this.name = "WebSocketUpgradeError";
+    this.status = opts?.status;
+    this.cf_ray = opts?.cf_ray;
+  }
+}
+
+export function projectHostPublicRouteProbeDiagnostic(
+  error: unknown,
+): ProjectHostPublicRouteProbeDiagnostic | undefined {
+  return error instanceof ProjectHostPublicRouteProbeError
+    ? error.diagnostic
+    : undefined;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error
+    ? `${error.name}: ${error.message}`
+    : `${error}`;
+}
 
 function normalizedBaseUrl(value: string): URL {
   const url = new URL(value);
@@ -178,34 +249,40 @@ async function probeWebSocketUpgrade({
       socket.destroy();
       finish(() => {
         const accept = `${response.headers["sec-websocket-accept"] ?? ""}`;
+        const cfRay = `${response.headers["cf-ray"] ?? ""}`.trim() || undefined;
         if (response.statusCode !== 101) {
           reject(
-            new Error(
+            new WebSocketUpgradeError(
               `public project-host WebSocket upgrade returned HTTP ${response.statusCode ?? "unknown"}`,
+              { status: response.statusCode, cf_ray: cfRay },
             ),
           );
           return;
         }
         if (accept !== expectedAccept) {
           reject(
-            new Error(
+            new WebSocketUpgradeError(
               "public project-host WebSocket upgrade returned an invalid Sec-WebSocket-Accept header",
+              { status: response.statusCode, cf_ray: cfRay },
             ),
           );
           return;
         }
         resolve({
           status: response.statusCode,
-          cf_ray: `${response.headers["cf-ray"] ?? ""}`.trim() || undefined,
+          cf_ray: cfRay,
         });
       });
     });
     req.once("response", (response) => {
+      const status = response.statusCode;
+      const cfRay = `${response.headers["cf-ray"] ?? ""}`.trim() || undefined;
       response.resume();
       finish(() =>
         reject(
-          new Error(
-            `public project-host WebSocket upgrade returned HTTP ${response.statusCode ?? "unknown"}`,
+          new WebSocketUpgradeError(
+            `public project-host WebSocket upgrade returned HTTP ${status ?? "unknown"}`,
+            { status, cf_ray: cfRay },
           ),
         ),
       );
@@ -232,103 +309,166 @@ export async function probeProjectHostPublicRoute({
 }): Promise<ProjectHostPublicRouteProbeResult> {
   const baseUrl = normalizedBaseUrl(public_url);
   const normalizedSiteOrigin = normalizedOrigin(origin);
+  const diagnostic: ProjectHostPublicRouteProbeDiagnostic = {
+    stage: "health",
+    public_url: baseUrl.origin,
+    origin: normalizedSiteOrigin,
+  };
+  const fail = (message: string): never => {
+    throw new ProjectHostPublicRouteProbeError(message, {
+      ...diagnostic,
+      websocket_samples: diagnostic.websocket_samples?.map((sample) => ({
+        ...sample,
+      })),
+    });
+  };
   const headers = {
     Origin: normalizedSiteOrigin,
     "Cache-Control": "no-cache",
   };
 
   const healthUrl = new URL("/healthz", baseUrl);
-  const health = await fetchWithTimeout({
-    fetchImpl,
-    url: healthUrl,
-    init: { method: "GET", headers },
-    timeout_ms,
-  });
+  let health!: Response;
+  try {
+    health = await fetchWithTimeout({
+      fetchImpl,
+      url: healthUrl,
+      init: { method: "GET", headers },
+      timeout_ms,
+    });
+  } catch (err) {
+    fail(`public project-host health check failed: ${errorText(err)}`);
+  }
   await discardBody(health);
+  diagnostic.health_status = health.status;
+  diagnostic.edge_server = health.headers.get("server") ?? undefined;
+  diagnostic.cf_ray = health.headers.get("cf-ray") ?? undefined;
   if (health.status !== 200) {
-    throw new Error(
-      `public project-host health check returned HTTP ${health.status}`,
-    );
+    fail(`public project-host health check returned HTTP ${health.status}`);
   }
 
   const sessionUrl = new URL(
     PROJECT_HOST_BROWSER_SESSION_BOOTSTRAP_PATH,
     baseUrl,
   );
-  const preflight = await fetchWithTimeout({
-    fetchImpl,
-    url: sessionUrl,
-    init: {
-      method: "OPTIONS",
-      headers: {
-        ...headers,
-        "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "Authorization, Content-Type",
+  diagnostic.stage = "preflight";
+  let preflight!: Response;
+  try {
+    preflight = await fetchWithTimeout({
+      fetchImpl,
+      url: sessionUrl,
+      init: {
+        method: "OPTIONS",
+        headers: {
+          ...headers,
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "Authorization, Content-Type",
+        },
       },
-    },
-    timeout_ms,
-  });
+      timeout_ms,
+    });
+  } catch (err) {
+    fail(`public project-host CORS preflight failed: ${errorText(err)}`);
+  }
   await discardBody(preflight);
+  diagnostic.preflight_status = preflight.status;
   if (preflight.status !== 204) {
-    throw new Error(
+    fail(
       `public project-host CORS preflight returned HTTP ${preflight.status}`,
     );
   }
-  requireCorsHeaders({
-    response: preflight,
-    origin: normalizedSiteOrigin,
-    requirePreflightHeaders: true,
-  });
+  try {
+    requireCorsHeaders({
+      response: preflight,
+      origin: normalizedSiteOrigin,
+      requirePreflightHeaders: true,
+    });
+  } catch (err) {
+    fail(errorText(err));
+  }
 
-  const session = await fetchWithTimeout({
-    fetchImpl,
-    url: sessionUrl,
-    init: {
-      method: "POST",
-      headers: {
-        ...headers,
-        "Content-Type": "application/json",
+  diagnostic.stage = "session";
+  let session!: Response;
+  try {
+    session = await fetchWithTimeout({
+      fetchImpl,
+      url: sessionUrl,
+      init: {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+        },
+        body: "{}",
       },
-      body: "{}",
-    },
-    timeout_ms,
-  });
+      timeout_ms,
+    });
+  } catch (err) {
+    fail(`public project-host session check failed: ${errorText(err)}`);
+  }
   await discardBody(session);
+  diagnostic.session_status = session.status;
   if (session.status !== 401) {
-    throw new Error(
+    fail(
       `unauthenticated public project-host session check returned HTTP ${session.status}; expected 401`,
     );
   }
-  requireCorsHeaders({
-    response: session,
-    origin: normalizedSiteOrigin,
-    requirePreflightHeaders: false,
-  });
+  try {
+    requireCorsHeaders({
+      response: session,
+      origin: normalizedSiteOrigin,
+      requirePreflightHeaders: false,
+    });
+  } catch (err) {
+    fail(errorText(err));
+  }
 
+  diagnostic.stage = "websocket";
   const attemptCount = Math.max(1, Math.floor(websocket_attempts) || 1);
   const websocketUrl = new URL(ENGINE_IO_WEBSOCKET_PATH, baseUrl);
-  const websocketResults = await Promise.allSettled(
-    Array.from({ length: attemptCount }, () =>
-      websocketProbeImpl({
-        url: websocketUrl,
-        origin: normalizedSiteOrigin,
-        timeout_ms,
-      }),
-    ),
+  const websocketSamples = await Promise.all(
+    Array.from({ length: attemptCount }, async () => {
+      const startedAt = Date.now();
+      try {
+        const result = await websocketProbeImpl({
+          url: websocketUrl,
+          origin: normalizedSiteOrigin,
+          timeout_ms,
+        });
+        return {
+          ok: true,
+          duration_ms: Date.now() - startedAt,
+          status: result.status,
+          cf_ray: result.cf_ray,
+        } satisfies ProjectHostWebSocketProbeSample;
+      } catch (err) {
+        return {
+          ok: false,
+          duration_ms: Date.now() - startedAt,
+          status: err instanceof WebSocketUpgradeError ? err.status : undefined,
+          cf_ray: err instanceof WebSocketUpgradeError ? err.cf_ray : undefined,
+          error: errorText(err),
+        } satisfies ProjectHostWebSocketProbeSample;
+      }
+    }),
   );
-  const websocketFailures = websocketResults.filter(
-    (result): result is PromiseRejectedResult => result.status === "rejected",
-  );
-  if (websocketFailures.length) {
-    const firstError = websocketFailures[0].reason;
-    throw new Error(
-      `${websocketFailures.length}/${attemptCount} public project-host WebSocket upgrades failed: ${firstError}`,
+  const websocketPasses = websocketSamples.filter((sample) => sample.ok);
+  const websocketFailures = websocketSamples.filter((sample) => !sample.ok);
+  const websocketSuccesses = websocketPasses.length;
+  diagnostic.websocket_attempts = attemptCount;
+  diagnostic.websocket_successes = websocketSuccesses;
+  diagnostic.websocket_failures = websocketFailures.length;
+  diagnostic.websocket_samples = websocketSamples;
+  const minimumWebsocketSuccesses = Math.max(1, Math.ceil(attemptCount * 0.75));
+  if (websocketSuccesses < minimumWebsocketSuccesses) {
+    fail(
+      `${websocketFailures.length}/${attemptCount} public project-host WebSocket upgrades failed: ${websocketFailures[0]?.error ?? "unknown error"}`,
     );
   }
-  const websocketPasses = websocketResults as PromiseFulfilledResult<{
-    status: number;
-    cf_ray?: string;
-  }>[];
+  const firstPass = websocketPasses[0];
+  if (!firstPass?.status) {
+    fail("public project-host WebSocket probe had no successful status");
+  }
 
   return {
     public_url: baseUrl.origin,
@@ -336,10 +476,13 @@ export async function probeProjectHostPublicRoute({
     health_status: health.status,
     preflight_status: preflight.status,
     session_status: session.status,
-    websocket_status: websocketPasses[0].value.status,
+    websocket_status: firstPass.status,
     websocket_attempts: attemptCount,
-    edge_server: health.headers.get("server") ?? undefined,
-    cf_ray: health.headers.get("cf-ray") ?? undefined,
+    websocket_successes: websocketSuccesses,
+    websocket_failures: websocketFailures.length,
+    websocket_samples: websocketSamples,
+    edge_server: diagnostic.edge_server,
+    cf_ray: diagnostic.cf_ray,
   };
 }
 

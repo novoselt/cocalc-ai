@@ -10,7 +10,12 @@ import express, {
 } from "express";
 import { getLogger } from "@cocalc/backend/logger";
 import { applyBrowserCors } from "@cocalc/server/bay-public-origin";
-import { discoverApiV2Routes, type ApiV2RouteEntry } from "./api-v2-routes";
+import {
+  discoverApiV2Routes,
+  loadEmbeddedApiV2Routes,
+  validateApiV2Routes,
+  type ApiV2RouteEntry,
+} from "./api-v2-routes";
 import { getLaunchpadApiV2Routes } from "./launchpad-routes";
 
 export interface ApiV2RouterOptions {
@@ -24,6 +29,14 @@ export interface ApiV2RouterOptions {
 function loadBundledRoutes(
   logger: ReturnType<typeof getLogger>,
 ): ApiV2RouteEntry[] | undefined {
+  const embeddedRoutes = loadEmbeddedApiV2Routes();
+  if (embeddedRoutes != null) {
+    logger.info("using embedded api v2 routes", {
+      count: embeddedRoutes.length,
+    });
+    return embeddedRoutes;
+  }
+
   const bundle = process.env.COCALC_API_V2_ROUTES_BUNDLE;
   if (!bundle) {
     return;
@@ -31,18 +44,10 @@ function loadBundledRoutes(
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require(bundle);
-    const routes = mod?.routes ?? mod?.default;
-    if (!Array.isArray(routes)) {
-      throw new Error("bundle does not export a routes array");
-    }
-    for (const route of routes) {
-      if (
-        typeof route?.path !== "string" ||
-        typeof route?.handler !== "function"
-      ) {
-        throw new Error("bundle contains an invalid route entry");
-      }
-    }
+    const routes = validateApiV2Routes(
+      mod?.routes ?? mod?.default,
+      "api v2 route bundle",
+    );
     logger.info("using bundled api v2 routes", {
       bundle,
       count: routes.length,

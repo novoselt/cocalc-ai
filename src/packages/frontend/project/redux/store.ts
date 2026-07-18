@@ -43,6 +43,7 @@ import {
 import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
 import {
   ProjectRuntimeExitTracker,
+  shouldDismissRuntimeRecoveryNotice,
   type RuntimeRecoveryNotice,
 } from "../runtime-recovery";
 export { FILE_ACTIONS as file_actions, type FileAction, ProjectActions };
@@ -306,9 +307,16 @@ export class ProjectStore extends Store<ProjectStoreState> {
         }
       }
       if (new_state === "running") {
-        this.redux
-          .getProjectActions(this.project_id)
-          ?.resumeProjectStatusAfterRuntimeLoss?.();
+        const projectActions = this.redux.getProjectActions(this.project_id);
+        if (
+          shouldDismissRuntimeRecoveryNotice({
+            projectState: new_state,
+            notice: this.get("runtime_recovery_notice"),
+          })
+        ) {
+          projectActions?.dismissRuntimeRecoveryNotice?.();
+        }
+        projectActions?.resumeProjectStatusAfterRuntimeLoss?.();
       }
       if (hasNewRuntimeExit) {
         this.redux

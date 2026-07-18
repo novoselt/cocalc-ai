@@ -44,4 +44,30 @@ describe("persistent stream close lifecycle", () => {
     second.close();
     expect(openPaths.has(path)).toBe(false);
   });
+
+  it("removes a maintenance owner only after the final cached reference closes", () => {
+    const path = join(dir, "tracked");
+    let closes = 0;
+    let mutations = 0;
+    const maintenance = {
+      ownerId: "worker-0",
+      onFinalClose: () => closes++,
+      onMutation: () => mutations++,
+    };
+    const first = pstream({ path });
+    first.addMaintenanceHandle(maintenance);
+    const second = pstream({ path });
+    second.addMaintenanceHandle(maintenance);
+    first.set({
+      key: "first",
+      encoding: DataEncoding.JsonCodec,
+      raw: Buffer.from("one"),
+    });
+    expect(mutations).toBeGreaterThan(0);
+
+    first.close();
+    expect(closes).toBe(0);
+    second.close();
+    expect(closes).toBe(1);
+  });
 });

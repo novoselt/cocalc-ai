@@ -72,6 +72,7 @@ import { once } from "@cocalc/util/async-utils";
 import { UsageMonitor } from "@cocalc/conat/monitor/usage";
 import { getLogger } from "@cocalc/conat/logger";
 import { initLoadBalancer } from "./load-balancer";
+import type { PersistMaintenanceHooks } from "./maintenance/types";
 
 const logger = getLogger("persist:server");
 
@@ -121,6 +122,7 @@ export function server({
   service = SERVICE,
   id = "0",
   clusterMode,
+  maintenance,
 }: {
   client: Client;
   messagesThresh?: number;
@@ -128,6 +130,7 @@ export function server({
   id?: string;
   // if false, runs it's own internal load balancer that always returns this server
   clusterMode?: boolean;
+  maintenance?: PersistMaintenanceHooks;
 }): ConatSocketServer {
   const log = (...args) => {
     logger.debug(id, service, ...args);
@@ -188,8 +191,9 @@ export function server({
           added = true;
           stream = await getStream({
             subject: socket.subject,
-            storage,
+            storage: storage!,
             service,
+            maintenance,
           });
           if (changefeed) {
             startChangefeed({ socket, stream, messagesThresh });

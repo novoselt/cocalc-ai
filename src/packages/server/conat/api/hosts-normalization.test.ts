@@ -37,6 +37,57 @@ describe("parseRow host metrics normalization", () => {
   });
 });
 
+describe("parseRow BEES telemetry normalization", () => {
+  it("preserves valid status and rejects malformed status", () => {
+    const valid = parseRow({
+      id: "host-1",
+      name: "host-1",
+      status: "running",
+      region: "us-west3",
+      metadata: {
+        bees: {
+          enabled: true,
+          running: true,
+          telemetry: {
+            assessment: "active",
+            average_cpu_cores: 1.25,
+            stall_observation_ms: 5_400_000,
+            sample: {
+              cgroup: {
+                path: "/sys/fs/cgroup/cocalc-bees",
+                cpu_max: "400000 100000",
+              },
+            },
+          },
+        },
+      },
+    });
+    const malformed = parseRow({
+      id: "host-2",
+      name: "host-2",
+      status: "running",
+      region: "us-west3",
+      metadata: { bees: { enabled: "yes", running: true } },
+    });
+
+    expect(valid.bees).toMatchObject({
+      enabled: true,
+      running: true,
+      telemetry: {
+        assessment: "active",
+        average_cpu_cores: 1.25,
+        sample: {
+          cgroup: {
+            path: "/sys/fs/cgroup/cocalc-bees",
+            cpu_max: "400000 100000",
+          },
+        },
+      },
+    });
+    expect(malformed.bees).toBeUndefined();
+  });
+});
+
 describe("parseRow bootstrap lifecycle normalization", () => {
   it("rewrites stale bootstrap desired bundle versions from current runtime targets", () => {
     const host = parseRow(

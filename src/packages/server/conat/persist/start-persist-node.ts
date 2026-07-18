@@ -3,6 +3,8 @@ import { initPersistServer } from "@cocalc/backend/conat/persist";
 import { getLogger } from "@cocalc/backend/logger";
 import { addErrorListeners } from "@cocalc/server/metrics/error-listener";
 import { SERVICE as PERSIST_SERVICE } from "@cocalc/conat/persist/util";
+import { createIpcPersistMaintenanceHooks } from "@cocalc/backend/conat/persist-maintenance/ipc";
+import { loadPersistMaintenanceConfig } from "@cocalc/backend/conat/persist-maintenance/config";
 
 const logger = getLogger("server:conat:persist:start-persist-node");
 
@@ -16,6 +18,9 @@ async function main() {
     id,
     clusterMode: true,
     service: PERSIST_SERVICE,
+    maintenance: loadPersistMaintenanceConfig().enabled
+      ? createIpcPersistMaintenanceHooks({ workerId: id ?? "0" })
+      : undefined,
   });
 }
 

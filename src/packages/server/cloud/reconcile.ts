@@ -8,7 +8,7 @@
 // advisory locks so multiple hubs can run safely without duplicating work.
 
 import getLogger from "@cocalc/backend/logger";
-import getPool from "@cocalc/database/pool";
+import getPool, { withSessionAdvisoryLock } from "@cocalc/database/pool";
 import type { ProviderId } from "@cocalc/cloud";
 import { getProviderContext, getProviderPrefix } from "./provider-context";
 import { DisksClient } from "@google-cloud/compute";
@@ -227,16 +227,7 @@ async function withReconcileLock<T>(
   fn: () => Promise<T>,
 ): Promise<T | undefined> {
   const lockKey = `cloud_reconcile:${provider}`;
-  const { rows } = await pool().query(
-    "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-    [lockKey],
-  );
-  if (!rows[0]?.locked) return undefined;
-  try {
-    return await fn();
-  } finally {
-    await pool().query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]);
-  }
+  return await withSessionAdvisoryLock({ lockKey, fn });
 }
 
 async function listProviderInstances(

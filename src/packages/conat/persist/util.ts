@@ -41,13 +41,18 @@ Also getAll using start_seq:
 */
 
 import { assertHasWritePermission } from "./auth";
-import { pstream, PersistentStream } from "./storage";
+import { pstream, PersistentStream, type StorageOptions } from "./storage";
 import { join } from "path";
 import {
   syncFiles,
   ensureContainingDirectoryExists,
   statSync,
 } from "./context";
+import type {
+  PersistMaintenanceHooks,
+  PersistMaintenancePath,
+  PersistMaintenanceScopeType,
+} from "./maintenance/types";
 
 // this is per-server -- and "user" means where the resource is, usually
 // a given project.  E.g., 500 streams in a project, across many users.
@@ -72,7 +77,7 @@ function resolveTemplateBase(base: string, token: string, id: string): string {
   return join(base, id);
 }
 
-function resolveLocalPath(
+export function resolveLocalPath(
   storagePath: string,
   { ephemeral }: { ephemeral?: boolean },
 ): string {
@@ -130,6 +135,24 @@ function resolveLocalPath(
   return join(syncFiles.local, storagePath);
 }
 
+function maintenanceScope(storagePath: string): {
+  scopeType: PersistMaintenanceScopeType;
+  scopeId?: string;
+} {
+  for (const [prefix, scopeType] of [
+    ["projects", "project"],
+    ["accounts", "account"],
+    ["hosts", "host"],
+  ] as const) {
+    const match = storagePath.match(new RegExp(`^${prefix}/([^/]+)`));
+    if (match) return { scopeType, scopeId: match[1] };
+  }
+  if (storagePath === "hub" || storagePath.startsWith("hub/")) {
+    return { scopeType: "hub" };
+  }
+  return { scopeType: "other" };
+}
+
 export function persistSubject({
   account_id,
   project_id,
@@ -151,6 +174,12 @@ export async function getStream({
   subject,
   storage,
   service,
+  maintenance,
+}: {
+  subject: string;
+  storage: StorageOptions;
+  service?: string;
+  maintenance?: PersistMaintenanceHooks;
 }): Promise<PersistentStream> {
   // this permsissions check should always work and use should
   // never see an error here, since
@@ -181,5 +210,42 @@ export async function getStream({
         .map(ensureContainingDirectoryExists),
     );
   }
-  return pstream({ ...storage, path, archive, backup, archiveInterval });
+  if (ephemeral || maintenance == null) {
+    return pstream({ ...storage, path, archive, backup, archiveInterval });
+  }
+
+  const maintenancePath: PersistMaintenancePath = {
+    logicalPath: storage.path,
+    physicalPath: `${path}.db`,
+    archivePath: archive ? `${archive}.db` : undefined,
+    backupPath: backup ? `${backup}.db` : undefined,
+    ...maintenanceScope(storage.path),
+  };
+  let handle;
+  try {
+    handle = await maintenance.beginOpen(maintenancePath);
+  } catch (err) {
+    // Catalog/coordinator failures must never make persist unavailable. The
+    // hook is responsible for dropping worker coverage so promotion remains
+    // fail-closed while this untracked handle exists.
+    maintenance.trackingUnavailable?.(err);
+  }
+  try {
+    const stream = pstream({
+      ...storage,
+      path,
+      archive,
+      backup,
+      archiveInterval,
+    });
+    if (handle != null) {
+      // This is needed on cache hits: the handle in constructor options came
+      // from the first reference, but every later tracked use shares it.
+      stream.addMaintenanceHandle(handle);
+    }
+    return stream;
+  } catch (err) {
+    maintenance.openFailed?.(maintenancePath, err);
+    throw err;
+  }
 }

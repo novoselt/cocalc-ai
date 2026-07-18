@@ -13,6 +13,12 @@ export type ApiV2Handler = (req: Request, res: Response) => any;
 
 export type ApiV2RouteEntry = { path: string; handler: ApiV2Handler };
 
+export const EMBEDDED_API_V2_ROUTES_LOADER = "cocalc.api-v2-routes-loader";
+
+type EmbeddedApiV2RoutesGlobal = {
+  [key: symbol]: unknown;
+};
+
 type ApiV2RouteLogger = Pick<ReturnType<typeof getLogger>, "info" | "warn">;
 
 export interface DiscoverApiV2RoutesOptions {
@@ -20,6 +26,37 @@ export interface DiscoverApiV2RoutesOptions {
   logger?: ApiV2RouteLogger;
   rootDir?: string;
   ensureLibAlias?: boolean;
+}
+
+export function loadEmbeddedApiV2Routes(): ApiV2RouteEntry[] | undefined {
+  const loader = (globalThis as unknown as EmbeddedApiV2RoutesGlobal)[
+    Symbol.for(EMBEDDED_API_V2_ROUTES_LOADER)
+  ];
+  if (loader == null) {
+    return;
+  }
+  if (typeof loader !== "function") {
+    throw new Error("embedded api v2 route loader is not a function");
+  }
+  return validateApiV2Routes(loader(), "embedded api v2 route loader");
+}
+
+export function validateApiV2Routes(
+  value: unknown,
+  source: string,
+): ApiV2RouteEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${source} does not export a routes array`);
+  }
+  for (const route of value) {
+    if (
+      typeof route?.path !== "string" ||
+      typeof route?.handler !== "function"
+    ) {
+      throw new Error(`${source} contains an invalid route entry`);
+    }
+  }
+  return value;
 }
 
 export function discoverApiV2Routes(

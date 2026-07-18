@@ -306,8 +306,80 @@ export async function getTransactionClient(
 export async function getPoolClient(
   options?: PoolOptionInput,
 ): Promise<PoolClient> {
-  const pool = await getPool(options);
+  // Cached pools only expose query(); session-bound work must always use the
+  // underlying write pool so callers can safely hold transactions and locks.
+  const poolOptions =
+    typeof options === "string"
+      ? {}
+      : (() => {
+          const { cacheTime: _unusedCacheTime, ...rest } = options ?? {};
+          return rest;
+        })();
+  const pool = getPool(poolOptions);
   return await pool.connect();
+}
+
+// Session advisory locks belong to one PostgreSQL connection, not to a pool.
+// Keep that client checked out until the protected work and unlock complete.
+export async function withSessionAdvisoryLock<T>({
+  lockKey,
+  fn,
+}: {
+  lockKey: string;
+  fn: () => Promise<T>;
+}): Promise<T | undefined> {
+  const client = await getPoolClient();
+  let locked = false;
+  let result!: T;
+  let workFailed = false;
+  let workError: unknown;
+  let unlockFailed = false;
+  let unlockError: unknown;
+  try {
+    const { rows } = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      [lockKey],
+    );
+    locked = rows[0]?.locked === true;
+    if (!locked) {
+      return undefined;
+    }
+
+    try {
+      result = await fn();
+    } catch (err) {
+      workFailed = true;
+      workError = err;
+    }
+
+    try {
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]);
+    } catch (err) {
+      unlockFailed = true;
+      unlockError = err;
+    }
+  } finally {
+    // Never return a connection that may still hold the session lock.
+    client.release(unlockFailed);
+  }
+
+  if (workFailed) {
+    if (unlockFailed) {
+      L.error(
+        "failed to unlock PostgreSQL session after protected work failed",
+        {
+          lockKey,
+          workError,
+          unlockError,
+        },
+      );
+    }
+    throw workError;
+  }
+  if (unlockFailed) {
+    throw unlockError;
+  }
+  return result;
 }
 
 export function getClient(): Client {

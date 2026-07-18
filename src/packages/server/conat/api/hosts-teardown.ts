@@ -222,6 +222,7 @@ export async function deleteHostInternalHelper({
   setHostDesiredStateInternal,
   enqueueCloudVmWork,
   logStatusUpdate,
+  closeHostBillingSession,
   markHostDeleted,
   markHostDeprovisioning,
   markHostStoppedDeprovisioned,
@@ -242,6 +243,7 @@ export async function deleteHostInternalHelper({
     payload: { provider: string };
   }) => Promise<void>;
   logStatusUpdate: (id: string, status: string, source: string) => void;
+  closeHostBillingSession: (row: any) => Promise<void>;
   markHostDeleted: (id: string) => Promise<void>;
   markHostDeprovisioning: (id: string) => Promise<void>;
   markHostStoppedDeprovisioned: (id: string) => Promise<void>;
@@ -261,6 +263,9 @@ export async function deleteHostInternalHelper({
       reason: "delete",
     });
     await markHostProjectsUnprovisioned(id);
+    // Never hide the host row from billing maintenance while its metered
+    // purchase can still be open.
+    await closeHostBillingSession(row);
     await markHostDeleted(id);
     return;
   }

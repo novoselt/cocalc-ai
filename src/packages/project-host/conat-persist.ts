@@ -24,6 +24,11 @@ import {
   assertSecureUrlOrLocal,
 } from "@cocalc/backend/network/policy";
 import { resolveProjectHostConatRouterUrl } from "./conat-router";
+import {
+  createPersistMaintenanceCoordinator,
+  type PersistMaintenanceCoordinator,
+} from "@cocalc/backend/conat/persist-maintenance/coordinator";
+import { loadPersistMaintenanceConfig } from "@cocalc/backend/conat/persist-maintenance/config";
 
 const logger = getLogger("project-host:conat-persist");
 
@@ -153,6 +158,7 @@ export async function startStandaloneProjectHostConatPersist({
   httpServer: HttpServer;
   id: string;
   persistServer: ConatSocketServer;
+  maintenance?: PersistMaintenanceCoordinator;
   port: number;
 }> {
   const conatRouterUrl = resolveProjectHostConatRouterUrl();
@@ -173,7 +179,25 @@ export async function startStandaloneProjectHostConatPersist({
     systemAccountPassword,
   });
   const id = resolveProjectHostConatPersistId();
-  const persistServer = createPersistServer({ client, id });
+  const maintenanceConfig = loadPersistMaintenanceConfig();
+  let maintenance: PersistMaintenanceCoordinator | undefined;
+  if (maintenanceConfig.enabled) {
+    try {
+      maintenance = createPersistMaintenanceCoordinator({
+        expectedWorkerIds: [id],
+        config: maintenanceConfig,
+      });
+    } catch (err) {
+      // Catalog failure must not prevent the data plane from starting.
+      logger.error("failed starting persist maintenance coordinator", err);
+    }
+  }
+  const persistServer = createPersistServer({
+    client,
+    id,
+    maintenance: maintenance?.createLocalHooks(id),
+  });
+  maintenance?.start();
 
   let persistReady = false;
   const app = express();
@@ -188,6 +212,18 @@ export async function startStandaloneProjectHostConatPersist({
       return;
     }
     res.json({ ok: true, ready: true, id });
+  });
+  app.get("/maintenancez", (_req, res) => {
+    if (!maintenance) {
+      res.json({
+        enabled: false,
+        dryRun: true,
+        catalogHealthy: false,
+        pauseReason: "disabled",
+      });
+      return;
+    }
+    res.json(maintenance.status());
   });
   const httpServer = createHttpServer(app);
   httpServer.listen(bindPort, bindHost);
@@ -207,6 +243,7 @@ export async function startStandaloneProjectHostConatPersist({
     host: bindHost,
     httpServer,
     id,
+    maintenance,
     persistServer,
     port: bindPort,
   };

@@ -2114,6 +2114,11 @@ export function registerAdminCommand(
     .command("health")
     .description("show minimum launch operator health checks (admin-only)")
     .option(
+      "--alert-window-hours <n>",
+      "admin alert lookback window in hours",
+      "24",
+    )
+    .option(
       "--window-minutes <n>",
       "UX latency lookback window in minutes",
       "60",
@@ -2122,6 +2127,7 @@ export function registerAdminCommand(
     .action(
       async (
         opts: {
+          alertWindowHours?: string;
           windowMinutes?: string;
           wide?: boolean;
         },
@@ -2129,6 +2135,12 @@ export function registerAdminCommand(
       ) => {
         await withContext(command, "admin health", async (ctx) => {
           const status = await ctx.hub.system.getLaunchHealth({
+            alert_window_hours: parsePositiveIntegerOption({
+              name: "--alert-window-hours",
+              value: opts.alertWindowHours,
+              fallback: 24,
+              max: 30 * 24,
+            }),
             window_minutes: parsePositiveIntegerOption({
               name: "--window-minutes",
               value: opts.windowMinutes,

@@ -203,6 +203,7 @@ import {
   type DedicatedHostFundingMode,
 } from "@cocalc/server/project-host/admission";
 import {
+  closeDedicatedHostPurchaseSessionForAccount,
   estimateDedicatedHostRateUsdPerHour,
   getDedicatedHostWindowUsageForHostLocal,
   reconcileDedicatedHostPurchaseSessionForAccount,
@@ -8308,6 +8309,14 @@ export async function deleteHostInternal({
       await enqueueCloudVmWork(opts);
     },
     logStatusUpdate,
+    closeHostBillingSession: async (row) => {
+      const owner = `${row.metadata?.owner ?? ""}`.trim();
+      if (!owner) return;
+      await closeDedicatedHostPurchaseSessionForAccount({
+        account_id: owner,
+        host_id: row.id,
+      });
+    },
     markHostDeleted: async (id) => {
       await pool().query(
         `UPDATE project_hosts SET deleted=NOW(), updated=NOW() WHERE id=$1 AND deleted IS NULL`,

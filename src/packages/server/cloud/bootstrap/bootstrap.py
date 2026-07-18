@@ -41,9 +41,14 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260715-v13"
+HELPER_SCHEMA_VERSION = "20260718-v14"
 RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
+CLOUDFLARED_VERSION = "2026.7.2"
+CLOUDFLARED_DEB_SHA256 = {
+    "amd64": "88195157a136199a86977c122a22084dae6907480bbe3640222b7b55834afc3a",
+    "arm64": "ddd7d2a0d55a1879485ac34354e936424f1df92e306bfa6428a81908aaddbe87",
+}
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
 BUNDLE_RETENTION_COUNT = 3
 PROC_ROOT = Path("/proc")
@@ -186,6 +191,8 @@ class CloudflaredSpec:
     token: str | None = None
     tunnel_id: str | None = None
     creds_json: str | None = None
+    protocol: str = "auto"
+    grace_period_seconds: int = 10
 
 
 @dataclass(frozen=True)
@@ -265,6 +272,20 @@ def load_config(bootstrap_dir: str) -> BootstrapConfig:
     shared_scratch = desired.get("shared_scratch") or {}
     bootstrap_meta = desired.get("bootstrap") or {}
     bootstrap_connection = desired.get("bootstrap_connection") or {}
+    cloudflared_protocol = str(cloudflared.get("protocol") or "auto").strip().lower()
+    _require(
+        cloudflared_protocol in {"auto", "quic", "http2"},
+        "cloudflared.protocol must be auto, quic, or http2",
+    )
+    cloudflared_grace_period_seconds = int(
+        cloudflared.get("gracePeriodSeconds")
+        or cloudflared.get("grace_period_seconds")
+        or 10
+    )
+    _require(
+        1 <= cloudflared_grace_period_seconds <= 30,
+        "cloudflared.gracePeriodSeconds must be between 1 and 30",
+    )
     return BootstrapConfig(
         bootstrap_user=_ensure_str(
             facts.get("bootstrap_user"), "bootstrap-host-facts.bootstrap_user"
@@ -392,6 +413,8 @@ def load_config(bootstrap_dir: str) -> BootstrapConfig:
             token=cloudflared.get("token"),
             tunnel_id=cloudflared.get("tunnelId") or cloudflared.get("tunnel_id"),
             creds_json=cloudflared.get("credsJson") or cloudflared.get("creds_json"),
+            protocol=cloudflared_protocol,
+            grace_period_seconds=cloudflared_grace_period_seconds,
         ),
         conat_url=bootstrap_connection.get("conat_url") or None,
         status_url=bootstrap_connection.get("status_url") or None,
@@ -907,6 +930,8 @@ def build_desired_state(cfg: BootstrapConfig) -> dict[str, Any]:
             "ssh_hostname": cfg.cloudflared.ssh_hostname,
             "ssh_port": cfg.cloudflared.ssh_port,
             "tunnel_id": cfg.cloudflared.tunnel_id,
+            "protocol": cfg.cloudflared.protocol,
+            "grace_period_seconds": cfg.cloudflared.grace_period_seconds,
         },
     }
 
@@ -2523,10 +2548,18 @@ fi
 cmd="$1"
 shift
 cd /
-STORAGE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-storage"
-STORAGE_CGROUP_CPU_MAX="100000 100000"
-STORAGE_CGROUP_CPU_WEIGHT="1"
-STORAGE_CGROUP_IO_WEIGHT="1"
+BEES_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-bees"
+BEES_CGROUP_MAX_WORKERS="4"
+BEES_CGROUP_CPU_PERIOD="100000"
+BEES_CGROUP_CPU_WEIGHT="1"
+BEES_CGROUP_IO_WEIGHT="1"
+BEES_CGROUP_IO_READ_BPS="$((64 * 1024 * 1024))"
+BEES_CGROUP_IO_WRITE_BPS="$((16 * 1024 * 1024))"
+BEES_CGROUP_MEMORY_HIGH_MAX="$((4 * 1024 * 1024 * 1024))"
+BEES_CGROUP_MEMORY_MAX_MAX="$((8 * 1024 * 1024 * 1024))"
+BEES_CGROUP_MEMORY_HIGH_MIN="$((1 * 1024 * 1024 * 1024))"
+BEES_CGROUP_MEMORY_MAX_MIN="$((2 * 1024 * 1024 * 1024))"
+BEES_CGROUP_PIDS_MAX="64"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_PROCESS_OOM_SCORE_ADJ="500"
 RUNTIME_USER="__RUNTIME_USER__"
@@ -2737,25 +2770,76 @@ attach_project_launcher() {
   printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${pid}/oom_score_adj"
 }
 
-project_storage_cgroup() {
-  printf '%s\n' "${STORAGE_CGROUP_DEFAULT}"
+bees_cgroup() {
+  printf '%s\n' "${BEES_CGROUP_DEFAULT}"
 }
 
-configure_project_storage_cgroup() {
-  local pool="$1"
-  if [ -w /sys/fs/cgroup/cgroup.subtree_control ]; then
-    printf '+cpu\n' > /sys/fs/cgroup/cgroup.subtree_control || true
-    printf '+io\n' > /sys/fs/cgroup/cgroup.subtree_control || true
+bees_worker_count() {
+  local cpu_count
+  cpu_count="$(/usr/bin/nproc 2>/dev/null || printf '1\n')"
+  if ! echo "$cpu_count" | grep -Eq '^[0-9]+$' || [ "$cpu_count" -lt 1 ]; then
+    cpu_count=1
   fi
+  if [ "$cpu_count" -gt "$BEES_CGROUP_MAX_WORKERS" ]; then
+    cpu_count="$BEES_CGROUP_MAX_WORKERS"
+  fi
+  printf '%s\n' "$cpu_count"
+}
+
+bees_memory_limits() {
+  local total_kib total_bytes memory_high memory_max
+  total_kib="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)"
+  if ! echo "$total_kib" | grep -Eq '^[0-9]+$' || [ "$total_kib" -le 0 ]; then
+    printf '%s %s\n' "$BEES_CGROUP_MEMORY_HIGH_MAX" "$BEES_CGROUP_MEMORY_MAX_MAX"
+    return 0
+  fi
+  total_bytes="$((total_kib * 1024))"
+  memory_high="$((total_bytes / 16))"
+  memory_max="$((total_bytes / 8))"
+  if [ "$memory_high" -lt "$BEES_CGROUP_MEMORY_HIGH_MIN" ]; then
+    memory_high="$BEES_CGROUP_MEMORY_HIGH_MIN"
+  elif [ "$memory_high" -gt "$BEES_CGROUP_MEMORY_HIGH_MAX" ]; then
+    memory_high="$BEES_CGROUP_MEMORY_HIGH_MAX"
+  fi
+  if [ "$memory_max" -lt "$BEES_CGROUP_MEMORY_MAX_MIN" ]; then
+    memory_max="$BEES_CGROUP_MEMORY_MAX_MIN"
+  elif [ "$memory_max" -gt "$BEES_CGROUP_MEMORY_MAX_MAX" ]; then
+    memory_max="$BEES_CGROUP_MEMORY_MAX_MAX"
+  fi
+  printf '%s %s\n' "$memory_high" "$memory_max"
+}
+
+configure_bees_cgroup() {
+  local pool="$1" mountpoint="$2" workers memory_high memory_max
+  local device major_hex minor_hex major minor
+  local -a io_limits=()
+  enable_cgroup_controllers /sys/fs/cgroup
   mkdir -p "$pool"
-  if [ -w "${pool}/cpu.max" ]; then
-    printf '%s\n' "${STORAGE_CGROUP_CPU_MAX}" > "${pool}/cpu.max" || true
+  workers="$(bees_worker_count)"
+  read -r memory_high memory_max < <(bees_memory_limits)
+  printf '%s %s\n' "$((workers * BEES_CGROUP_CPU_PERIOD))" "$BEES_CGROUP_CPU_PERIOD" > "${pool}/cpu.max"
+  printf '%s\n' "$BEES_CGROUP_CPU_WEIGHT" > "${pool}/cpu.weight"
+  printf '%s\n' "$memory_high" > "${pool}/memory.high"
+  printf '%s\n' "$memory_max" > "${pool}/memory.max"
+  if [ -w "${pool}/memory.swap.max" ]; then
+    printf '0\n' > "${pool}/memory.swap.max"
   fi
-  if [ -w "${pool}/cpu.weight" ]; then
-    printf '%s\n' "${STORAGE_CGROUP_CPU_WEIGHT}" > "${pool}/cpu.weight" || true
-  fi
+  printf '0\n' > "${pool}/memory.oom.group"
+  printf '%s\n' "$BEES_CGROUP_PIDS_MAX" > "${pool}/pids.max"
   if [ -w "${pool}/io.weight" ]; then
-    printf 'default %s\n' "${STORAGE_CGROUP_IO_WEIGHT}" > "${pool}/io.weight" || true
+    printf 'default %s\n' "$BEES_CGROUP_IO_WEIGHT" > "${pool}/io.weight"
+  fi
+  if [ -w "${pool}/io.max" ]; then
+    while IFS= read -r device; do
+      [ -b "$device" ] || continue
+      read -r major_hex minor_hex < <(stat -Lc '%t %T' "$device")
+      major="$((16#$major_hex))"
+      minor="$((16#$minor_hex))"
+      io_limits+=("${major}:${minor} rbps=${BEES_CGROUP_IO_READ_BPS} wbps=${BEES_CGROUP_IO_WRITE_BPS}")
+    done < <(/usr/bin/btrfs filesystem show --raw "$mountpoint" 2>/dev/null | awk '$1 == "devid" {print $NF}')
+    if [ "${#io_limits[@]}" -gt 0 ]; then
+      printf '%s\n' "${io_limits[@]}" > "${pool}/io.max"
+    fi
   fi
 }
 
@@ -3037,12 +3121,12 @@ find_bees_pid() {
 }
 
 apply_bees_runtime_policy() {
-  local pid="$1" pool task tid
+  local pid="$1" mountpoint="$2" pool task tid
   if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
     return 0
   fi
-  pool="$(project_storage_cgroup)"
-  configure_project_storage_cgroup "$pool"
+  pool="$(bees_cgroup)"
+  configure_bees_cgroup "$pool" "$mountpoint"
   attach_pid_to_project_pool_storage "$pid" "$pool" || true
   for task in "/proc/${pid}/task/"[0-9]*; do
     [ -d "$task" ] || continue
@@ -3050,6 +3134,146 @@ apply_bees_runtime_policy() {
     /usr/bin/renice -n 19 -p "$tid" >/dev/null 2>&1 || true
     /usr/bin/ionice -c3 -p "$tid" >/dev/null 2>&1 || true
   done
+}
+
+emit_bees_status() {
+  local mountpoint="$1" pid pool
+  pid="$(find_bees_pid "$mountpoint")"
+  pool="$(bees_cgroup)"
+  /usr/bin/python3 - "$mountpoint" "$pid" "$pool" <<'PY'
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+mountpoint, raw_pid, cgroup = sys.argv[1:4]
+beeshome = os.path.join(mountpoint, ".beeshome")
+
+
+def read_text(path, limit=1024 * 1024):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(limit).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def file_status(path, include_hash=False):
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return {"exists": False}
+    result = {
+        "exists": True,
+        "mtime_ms": int(stat.st_mtime * 1000),
+        "size_bytes": stat.st_size,
+    }
+    if include_hash:
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as handle:
+                while chunk := handle.read(128 * 1024):
+                    digest.update(chunk)
+            result["sha256"] = digest.hexdigest()
+        except OSError:
+            pass
+    return result
+
+
+def parse_number(value):
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return value
+
+
+def parse_key_value_lines(text):
+    result = {}
+    for line in (text or "").splitlines():
+        words = line.split()
+        if len(words) == 2:
+            result[words[0]] = parse_number(words[1])
+    return result
+
+
+def parse_stats(text):
+    total = {}
+    progress = []
+    in_total = False
+    in_progress = False
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped == "TOTAL:":
+            in_total = True
+            continue
+        if stripped == "RATES:":
+            in_total = False
+            continue
+        if stripped.startswith("extsz"):
+            in_progress = True
+        if in_progress:
+            progress.append(line.rstrip())
+        if not in_total:
+            continue
+        for word in stripped.split():
+            if "=" not in word:
+                continue
+            key, value = word.split("=", 1)
+            total[key] = parse_number(value)
+    return {"total": total, "progress": "\\n".join(progress)[:32768]}
+
+
+stats_path = os.path.join(beeshome, "beesstats.txt")
+crawl_path = os.path.join(beeshome, "beescrawl.dat")
+stats_text = read_text(stats_path)
+crawl_text = read_text(crawl_path)
+stats = file_status(stats_path)
+stats.update(parse_stats(stats_text))
+crawl = file_status(crawl_path, include_hash=True)
+crawl["root_count"] = sum(
+    1 for line in (crawl_text or "").splitlines() if line.startswith("root ")
+)
+
+pid = int(raw_pid) if raw_pid.isdigit() and int(raw_pid) > 1 else None
+process_cgroup = None
+if pid is not None:
+    process_cgroup = read_text(f"/proc/{pid}/cgroup", 64 * 1024)
+    if process_cgroup is not None:
+        process_cgroup = process_cgroup.strip()
+
+result = {
+    "sampled_at": datetime.now(timezone.utc).isoformat(),
+    "pid": pid,
+    "process_cgroup": process_cgroup,
+    "stats": stats,
+    "crawl": crawl,
+    "cgroup": {
+        "path": cgroup,
+        "cpu_max": (read_text(os.path.join(cgroup, "cpu.max")) or "").strip() or None,
+        "cpu_weight": parse_number((read_text(os.path.join(cgroup, "cpu.weight")) or "").strip()),
+        "cpu_stat": parse_key_value_lines(read_text(os.path.join(cgroup, "cpu.stat"))),
+        "cpu_pressure": (read_text(os.path.join(cgroup, "cpu.pressure")) or "").strip() or None,
+        "io_weight": (read_text(os.path.join(cgroup, "io.weight")) or "").strip() or None,
+        "io_max": (read_text(os.path.join(cgroup, "io.max")) or "").strip() or None,
+        "io_stat": (read_text(os.path.join(cgroup, "io.stat")) or "").strip() or None,
+        "io_pressure": (read_text(os.path.join(cgroup, "io.pressure")) or "").strip() or None,
+        "memory_current": parse_number((read_text(os.path.join(cgroup, "memory.current")) or "").strip()),
+        "memory_high": parse_number((read_text(os.path.join(cgroup, "memory.high")) or "").strip()),
+        "memory_max": parse_number((read_text(os.path.join(cgroup, "memory.max")) or "").strip()),
+        "memory_peak": parse_number((read_text(os.path.join(cgroup, "memory.peak")) or "").strip()),
+        "memory_events": parse_key_value_lines(read_text(os.path.join(cgroup, "memory.events"))),
+        "memory_pressure": (read_text(os.path.join(cgroup, "memory.pressure")) or "").strip() or None,
+        "pids_current": parse_number((read_text(os.path.join(cgroup, "pids.current")) or "").strip()),
+        "pids_max": parse_number((read_text(os.path.join(cgroup, "pids.max")) or "").strip()),
+    },
+}
+json.dump(result, sys.stdout, separators=(",", ":"))
+sys.stdout.write("\\n")
+PY
 }
 
 lexical_absolute_path_is_safe() {
@@ -4363,11 +4587,27 @@ PY' bash "$tree"
     esac
     existing_pid="$(find_bees_pid "$mountpoint")"
     if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
-      apply_bees_runtime_policy "$existing_pid"
+      apply_bees_runtime_policy "$existing_pid" "$mountpoint"
       echo "BEES_POLICY_RECONCILED mountpoint=${mountpoint} pid=${existing_pid}" >&2
     else
       echo "BEES_NOT_RUNNING mountpoint=${mountpoint}" >&2
     fi
+    ;;
+  bees-status)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage bees-status <mountpoint>" >&2
+      exit 2
+    fi
+    mountpoint="$1"
+    check_args "$mountpoint"
+    case "$mountpoint" in
+      /mnt/cocalc|/mnt/cocalc/*)
+        ;;
+      *)
+        deny "bees-mountpoint-not-allowed" "$mountpoint"
+        ;;
+    esac
+    emit_bees_status "$mountpoint"
     ;;
   bees)
     check_args "$@"
@@ -4391,7 +4631,7 @@ PY' bash "$tree"
     fi
     existing_pid="$(find_bees_pid "$mountpoint")"
     if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
-      apply_bees_runtime_policy "$existing_pid"
+      apply_bees_runtime_policy "$existing_pid" "$mountpoint"
       echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} pid=${existing_pid}" >&2
       exit 75
     fi
@@ -4401,8 +4641,8 @@ PY' bash "$tree"
       echo "BEES_ALREADY_RUNNING mountpoint=${mountpoint} lock=${lock_path}" >&2
       exit 75
     fi
-    pool="$(project_storage_cgroup)"
-    configure_project_storage_cgroup "$pool"
+    pool="$(bees_cgroup)"
+    configure_bees_cgroup "$pool" "$mountpoint"
     attach_pid_to_project_pool_storage "$$" "$pool" || true
     if [ -x /opt/cocalc/tools/current/bees ]; then
       exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /opt/cocalc/tools/current/bees "$@"
@@ -4541,7 +4781,24 @@ lines="${1:-200}"
 if ! echo "$lines" | grep -Eq '^[0-9]+$'; then
   lines="200"
 fi
-exec /bin/journalctl -u "$service" -o cat -f -n "$lines"
+if [ "$lines" -lt 1 ]; then
+  lines=1
+elif [ "$lines" -gt 5000 ]; then
+  lines=5000
+fi
+mode="${2:-snapshot}"
+case "$mode" in
+  snapshot)
+    exec /bin/journalctl -u "$service" -o short-iso-precise --no-pager -n "$lines"
+    ;;
+  follow)
+    exec /bin/journalctl -u "$service" -o short-iso-precise -f -n "$lines"
+    ;;
+  *)
+    echo "usage: ${0} [lines] {snapshot|follow}" >&2
+    exit 2
+    ;;
+esac
 """
     storage_wrapper = storage_wrapper.replace(
         "__PROJECT_POOL_CGROUP__", DEFAULT_PROJECT_POOL_CGROUP
@@ -5388,7 +5645,7 @@ if ! sudo -n /usr/local/sbin/cocalc-cloudflared-ctl status >/dev/null 2>&1; then
   echo "cloudflared service not enabled on this host ($service)" >&2
   exit 1
 fi
-exec sudo -n /usr/local/sbin/cocalc-cloudflared-logs 200
+exec sudo -n /usr/local/sbin/cocalc-cloudflared-logs 200 follow
 """
     ctl_cf_script = """#!/usr/bin/env bash
 set -euo pipefail
@@ -6760,18 +7017,36 @@ def configure_cloudflared_with_options(
     cloudflared_missing = shutil.which("cloudflared") is None
     service_changed = install_package or cloudflared_missing
     if install_package or cloudflared_missing:
-        log_line(cfg, "bootstrap: installing cloudflared")
+        log_line(cfg, f"bootstrap: installing cloudflared {CLOUDFLARED_VERSION}")
         arch = cfg.expected_arch
+        expected_sha256 = CLOUDFLARED_DEB_SHA256.get(arch)
+        if not expected_sha256:
+            raise RuntimeError(f"unsupported cloudflared architecture: {arch}")
         deb_name = f"cloudflared-linux-{arch}.deb"
         download_file(
             cfg,
-            f"https://github.com/cloudflare/cloudflared/releases/latest/download/{deb_name}",
+            f"https://github.com/cloudflare/cloudflared/releases/download/{CLOUDFLARED_VERSION}/{deb_name}",
             "/tmp/cloudflared.deb",
             attempts=6,
         )
+        verify_sha256(cfg, "/tmp/cloudflared.deb", expected_sha256)
         run_cmd(cfg, ["dpkg", "-i", "/tmp/cloudflared.deb"], "install cloudflared")
     else:
         log_line(cfg, "bootstrap: reconciling cloudflared config")
+        installed = run_cmd(
+            cfg,
+            ["/usr/bin/cloudflared", "--version"],
+            "inspect cloudflared version",
+            check=False,
+            timeout=15,
+        )
+        match = re.search(r"cloudflared version\s+([^\s(]+)", installed.stdout or "")
+        installed_version = match.group(1) if match else "unknown"
+        if installed_version != CLOUDFLARED_VERSION:
+            log_line(
+                cfg,
+                f"bootstrap: cloudflared version drift installed={installed_version} expected={CLOUDFLARED_VERSION}; leaving existing install unchanged",
+            )
     cloudflared_dir = Path("/etc/cloudflared")
     cloudflared_dir.mkdir(parents=True, exist_ok=True)
     credentials_path = cloudflared_dir / f"{cfg.cloudflared.tunnel_id}.json"
@@ -6854,7 +7129,10 @@ def configure_cloudflared_with_options(
         )
     ingress_lines.append("  - service: http_status:404")
     ingress = "\n".join(ingress_lines)
-    config_lines = []
+    config_lines = [
+        f"protocol: {cfg.cloudflared.protocol}",
+        f"grace-period: {cfg.cloudflared.grace_period_seconds}s",
+    ]
     if use_credentials:
         config_lines.append(f"tunnel: {cfg.cloudflared.tunnel_id}")
         config_lines.append(f"credentials-file: {credentials_path}")
@@ -6873,7 +7151,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 """
-    unit += "ExecStart=/usr/bin/cloudflared --config /etc/cloudflared/config.yml tunnel run"
+    unit += "ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run"
     if not use_credentials:
         unit += f" --token-file {token_path}"
     unit += "\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n"

@@ -3,7 +3,10 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import getPool from "@cocalc/database/pool";
+import getPool, {
+  getTransactionClient,
+  type PoolClient,
+} from "@cocalc/database/pool";
 import { appendProjectOutboxEventForProject } from "@cocalc/database/postgres/project-events-outbox";
 import { getNames } from "@cocalc/server/accounts/get-name";
 import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
@@ -39,6 +42,22 @@ type ProjectRow = {
   rootfs_image: string | null;
   rootfs_image_id: string | null;
 };
+
+async function withRootfsStateTransaction<T>(
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getTransactionClient();
+  try {
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 function trimString(value?: string | null): string | undefined {
   const next = `${value ?? ""}`.trim();
@@ -289,7 +308,6 @@ export async function replaceProjectRootfsStates({
   current?: ProjectRootfsBinding;
   previous?: ProjectRootfsBinding;
 }): Promise<ProjectRootfsStateEntry[]> {
-  const pool = getPool("medium");
   const currentBinding =
     current && trimString(current.image)
       ? await resolveManagedBinding(current)
@@ -298,13 +316,13 @@ export async function replaceProjectRootfsStates({
     previous && trimString(previous.image)
       ? await resolveManagedBinding(previous)
       : undefined;
-  await pool.query("BEGIN");
-  try {
-    await pool.query("DELETE FROM project_rootfs_states WHERE project_id=$1", [
-      project_id,
-    ]);
+  await withRootfsStateTransaction(async (client) => {
+    await client.query(
+      "DELETE FROM project_rootfs_states WHERE project_id=$1",
+      [project_id],
+    );
     if (currentBinding) {
-      await pool.query(
+      await client.query(
         `INSERT INTO project_rootfs_states
          (project_id, state_role, runtime_image, release_id, image_id, set_by_account_id, created, updated)
          VALUES ($1, 'current', $2, $3, $4, NULL, NOW(), NOW())`,
@@ -315,7 +333,7 @@ export async function replaceProjectRootfsStates({
           currentBinding.image_id ?? null,
         ],
       );
-      await pool.query(
+      await client.query(
         `UPDATE projects
          SET rootfs_image=$2,
              rootfs_image_id=$3
@@ -324,7 +342,7 @@ export async function replaceProjectRootfsStates({
       );
     }
     if (previousBinding) {
-      await pool.query(
+      await client.query(
         `INSERT INTO project_rootfs_states
          (project_id, state_role, runtime_image, release_id, image_id, set_by_account_id, created, updated)
          VALUES ($1, 'previous', $2, $3, $4, NULL, NOW(), NOW())`,
@@ -336,11 +354,7 @@ export async function replaceProjectRootfsStates({
         ],
       );
     }
-    await pool.query("COMMIT");
-  } catch (err) {
-    await pool.query("ROLLBACK");
-    throw err;
-  }
+  });
   await publishProjectDetailInvalidationBestEffort({
     project_id,
     fields: ["rootfs"],
@@ -466,11 +480,9 @@ export async function setProjectRootfsImageWithRollback({
       }
     : undefined;
 
-  const pool = getPool("medium");
-  await pool.query("BEGIN");
-  try {
+  await withRootfsStateTransaction(async (client) => {
     if (bindingsEqual(currentBinding, next)) {
-      await pool.query(
+      await client.query(
         `INSERT INTO project_rootfs_states
          (project_id, state_role, runtime_image, release_id, image_id, set_by_account_id, created, updated)
          VALUES ($1, 'current', $2, $3, $4, $5, NOW(), NOW())
@@ -488,7 +500,7 @@ export async function setProjectRootfsImageWithRollback({
           trimString(set_by_account_id) ?? null,
         ],
       );
-      await pool.query(
+      await client.query(
         `UPDATE projects
          SET rootfs_image=$2,
              rootfs_image_id=$3
@@ -496,12 +508,12 @@ export async function setProjectRootfsImageWithRollback({
         [project_id, next.image, next.image_id ?? null],
       );
     } else {
-      await pool.query(
+      await client.query(
         "DELETE FROM project_rootfs_states WHERE project_id=$1 AND state_role='previous'",
         [project_id],
       );
       if (currentBinding?.image) {
-        await pool.query(
+        await client.query(
           `INSERT INTO project_rootfs_states
            (project_id, state_role, runtime_image, release_id, image_id, set_by_account_id, created, updated)
            VALUES ($1, 'previous', $2, $3, $4, $5, NOW(), NOW())
@@ -520,7 +532,7 @@ export async function setProjectRootfsImageWithRollback({
           ],
         );
       }
-      await pool.query(
+      await client.query(
         `INSERT INTO project_rootfs_states
          (project_id, state_role, runtime_image, release_id, image_id, set_by_account_id, created, updated)
          VALUES ($1, 'current', $2, $3, $4, $5, NOW(), NOW())
@@ -539,7 +551,7 @@ export async function setProjectRootfsImageWithRollback({
           trimString(set_by_account_id) ?? null,
         ],
       );
-      await pool.query(
+      await client.query(
         `UPDATE projects
          SET rootfs_image=$2,
              rootfs_image_id=$3
@@ -548,16 +560,12 @@ export async function setProjectRootfsImageWithRollback({
       );
     }
     if (!previousBinding && !currentBinding?.image) {
-      await pool.query(
+      await client.query(
         "DELETE FROM project_rootfs_states WHERE project_id=$1 AND state_role='previous'",
         [project_id],
       );
     }
-    await pool.query("COMMIT");
-  } catch (err) {
-    await pool.query("ROLLBACK");
-    throw err;
-  }
+  });
   await publishProjectDetailInvalidationBestEffort({
     project_id,
     fields: ["rootfs"],
