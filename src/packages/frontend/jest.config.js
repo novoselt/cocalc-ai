@@ -1,6 +1,9 @@
 /** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {
   preset: "ts-jest",
+  // Each ts-jest/JSDOM worker can retain substantial module state. The default
+  // of CPU count minus one exceeds common CoCalc project memory limits.
+  maxWorkers: 4,
   transform: {
     "^.+\\.tsx?$": ["ts-jest", { tsconfig: "<rootDir>/tsconfig.test.json" }],
   },
