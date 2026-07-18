@@ -12,6 +12,12 @@ export interface RuntimeRecoveryNotice {
   runtime_exit_reason?: string;
 }
 
+export function shouldDisplayRuntimeRecoveryNotice(
+  notice: RuntimeRecoveryNotice,
+): boolean {
+  return notice.reason === "project_runtime_lost";
+}
+
 export function shouldDismissRuntimeRecoveryNotice({
   projectState,
   notice,

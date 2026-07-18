@@ -12,6 +12,7 @@ import {
   projectRuntimeExitReason,
   projectRuntimeId,
   shouldDismissRuntimeRecoveryNotice,
+  shouldDisplayRuntimeRecoveryNotice,
   shouldRecoverFromProjectRuntimeExit,
 } from "./runtime-recovery";
 
@@ -91,6 +92,23 @@ describe("project runtime recovery", () => {
       shouldDismissRuntimeRecoveryNotice({
         projectState: "running",
         notice: undefined,
+      }),
+    ).toBe(false);
+  });
+
+  it("displays only an unresolved runtime loss as a project-wide notice", () => {
+    expect(
+      shouldDisplayRuntimeRecoveryNotice({
+        id: "lost-1",
+        reason: "project_runtime_lost",
+        occurred_at: Date.now(),
+      }),
+    ).toBe(true);
+    expect(
+      shouldDisplayRuntimeRecoveryNotice({
+        id: "changed-1",
+        reason: "project_runtime_changed",
+        occurred_at: Date.now(),
       }),
     ).toBe(false);
   });

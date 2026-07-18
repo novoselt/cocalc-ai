@@ -954,9 +954,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   function renderRuntimeRecoveryBanner() {
     if (runtimeRecoveryNotice == null || hardDeleteBlocked) return;
     const reason = runtimeRecoveryNotice?.get?.("reason");
-    const projectRestarted = reason === "project_runtime_changed";
-    const projectRuntimeLost = reason === "project_runtime_lost";
-    if (!projectRestarted && !projectRuntimeLost) return;
+    if (reason !== "project_runtime_lost") return;
     return (
       <Alert
         showIcon
@@ -964,11 +962,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         type="info"
         banner
         message="Reconnecting project tools..."
-        description={
-          projectRuntimeLost
-            ? "CoCalc is restarting the project automatically. Files and collaborative documents remain available. Previous terminal sessions and notebook kernels ended; active tools will reconnect automatically."
-            : "The project runtime restarted. CoCalc is reconnecting active terminals and notebooks automatically; files and collaborative documents remain available."
-        }
+        description="CoCalc is restarting the project automatically. Files and collaborative documents remain available. Previous terminal sessions and notebook kernels ended; active tools will reconnect automatically."
         onClose={() => actions?.dismissRuntimeRecoveryNotice?.()}
       />
     );

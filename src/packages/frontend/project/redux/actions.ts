@@ -92,6 +92,7 @@ import { downloadProjectFile } from "./download-file";
 import {
   PROJECT_RUNTIME_RECOVERY_EVENT,
   ProjectRuntimeTracker,
+  shouldDisplayRuntimeRecoveryNotice,
   type RuntimeRecoveryNotice,
 } from "../runtime-recovery";
 
@@ -2829,7 +2830,11 @@ export class ProjectActions extends Actions<ProjectStoreState> {
   };
 
   private publishRuntimeRecoveryNotice = (notice: RuntimeRecoveryNotice) => {
-    this.setState({ runtime_recovery_notice: notice });
+    if (shouldDisplayRuntimeRecoveryNotice(notice)) {
+      this.setState({ runtime_recovery_notice: notice });
+    } else if (this.get_store()?.get("runtime_recovery_notice") != null) {
+      this.dismissRuntimeRecoveryNotice();
+    }
     this.get_store()?.emit(PROJECT_RUNTIME_RECOVERY_EVENT, notice);
   };
 
