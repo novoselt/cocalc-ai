@@ -122,4 +122,39 @@ describe("public-route automatic repair claims", () => {
       _test.claimPublicRouteAutoRepair(failure(HOST_B, "probe-b")),
     ).resolves.toBeUndefined();
   });
+
+  it("keeps the six most recent tunnel recovery incidents", async () => {
+    const claimId = "8f4b5e51-670b-49d2-b970-976c1b2917b1";
+    await insertHost({
+      host_id: HOST_A,
+      probe_claim_id: "probe-history",
+      recovery: {
+        status: "claiming",
+        claim_id: claimId,
+        attempted_at: new Date().toISOString(),
+      },
+    });
+
+    for (let sequence = 0; sequence < 8; sequence++) {
+      await _test.updatePublicRouteAutoRecovery({
+        host_id: HOST_A,
+        claim_id: claimId,
+        state: {
+          status: "restart_completed",
+          claim_id: claimId,
+          sequence,
+        },
+      });
+    }
+
+    const { rows } = await getPool().query(
+      `SELECT metadata -> 'public_route_incidents' AS incidents
+       FROM project_hosts WHERE id=$1`,
+      [HOST_A],
+    );
+    expect(rows[0]?.incidents).toHaveLength(6);
+    expect(rows[0]?.incidents.map(({ sequence }) => sequence)).toEqual([
+      7, 6, 5, 4, 3, 2,
+    ]);
+  });
 });

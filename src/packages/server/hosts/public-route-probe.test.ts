@@ -6,7 +6,11 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 
-import { _test, probeProjectHostPublicRoute } from "./public-route-probe";
+import {
+  _test,
+  probeProjectHostPublicRoute,
+  projectHostPublicRouteProbeDiagnostic,
+} from "./public-route-probe";
 
 const PUBLIC_URL = "https://host-123-cocalc-prod.cocalc.ai";
 const ORIGIN = "https://cocalc.ai";
@@ -56,6 +60,11 @@ describe("probeProjectHostPublicRoute", () => {
       websocket_attempts: 8,
       websocket_successes: 8,
       websocket_failures: 0,
+      websocket_samples: Array.from({ length: 8 }, () => ({
+        ok: true,
+        duration_ms: expect.any(Number),
+        status: 101,
+      })),
       edge_server: "cloudflare",
       cf_ray: "ray-1",
     });
@@ -93,8 +102,7 @@ describe("probeProjectHostPublicRoute", () => {
       .mockResolvedValueOnce(response(401, corsHeaders()));
     const websocketProbeImpl = jest
       .fn()
-      .mockResolvedValueOnce({ status: 101 })
-      .mockRejectedValueOnce(new Error("websocket error"))
+      .mockRejectedValueOnce(new Error("first websocket error"))
       .mockResolvedValue({ status: 101 });
 
     await expect(
@@ -109,6 +117,16 @@ describe("probeProjectHostPublicRoute", () => {
       websocket_attempts: 4,
       websocket_successes: 3,
       websocket_failures: 1,
+      websocket_status: 101,
+      websocket_samples: [
+        expect.objectContaining({
+          ok: false,
+          error: "Error: first websocket error",
+        }),
+        expect.objectContaining({ ok: true, status: 101 }),
+        expect.objectContaining({ ok: true, status: 101 }),
+        expect.objectContaining({ ok: true, status: 101 }),
+      ],
     });
   });
 
@@ -173,6 +191,59 @@ describe("probeProjectHostPublicRoute", () => {
           timeout_ms: 1000,
         }),
       ).resolves.toEqual({ status: 101, cf_ray: "local-ray" });
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
+  });
+
+  it("retains HTTP status and CF-Ray for failed WebSocket samples", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(520, { "CF-Ray": "failed-ray-DFW" });
+      response.end();
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("test server did not bind a TCP port");
+      }
+      const localUrl = `http://127.0.0.1:${address.port}`;
+      const fetchImpl = jest
+        .fn()
+        .mockResolvedValueOnce(response(200))
+        .mockResolvedValueOnce(response(204, corsHeaders()))
+        .mockResolvedValueOnce(response(401, corsHeaders()));
+      let caught: unknown;
+      try {
+        await probeProjectHostPublicRoute({
+          public_url: localUrl,
+          origin: ORIGIN,
+          fetchImpl,
+          websocket_attempts: 4,
+          timeout_ms: 1000,
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeDefined();
+      expect(projectHostPublicRouteProbeDiagnostic(caught)).toMatchObject({
+        stage: "websocket",
+        websocket_attempts: 4,
+        websocket_successes: 0,
+        websocket_failures: 4,
+        websocket_samples: Array.from({ length: 4 }, () =>
+          expect.objectContaining({
+            ok: false,
+            status: 520,
+            cf_ray: "failed-ray-DFW",
+            duration_ms: expect.any(Number),
+          }),
+        ),
+      });
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),

@@ -2560,6 +2560,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
 
             original_run_cmd = bootstrap.run_cmd
             original_download_file = bootstrap.download_file
+            original_verify_sha256 = bootstrap.verify_sha256
             original_which = bootstrap.shutil.which
             original_mkdir = Path.mkdir
             original_write_text = Path.write_text
@@ -2575,6 +2576,9 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                         (url, dest, kwargs)
                     )
                 )
+                bootstrap.verify_sha256 = lambda _cfg, path, expected: recorded.append(
+                    (["verify", path, expected], "verify cloudflared", {})
+                )
                 bootstrap.shutil.which = lambda name: None if name == "cloudflared" else original_which(name)
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
                 Path.write_text = lambda self, _text, encoding="utf-8": 0  # type: ignore[method-assign]
@@ -2585,6 +2589,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             finally:
                 bootstrap.run_cmd = original_run_cmd
                 bootstrap.download_file = original_download_file
+                bootstrap.verify_sha256 = original_verify_sha256
                 bootstrap.shutil.which = original_which
                 Path.mkdir = original_mkdir  # type: ignore[method-assign]
                 Path.write_text = original_write_text  # type: ignore[method-assign]
@@ -2592,11 +2597,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
 
             self.assertIn(
                 (
-                    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb",
+                    "https://github.com/cloudflare/cloudflared/releases/download/2026.7.2/cloudflared-linux-amd64.deb",
                     "/tmp/cloudflared.deb",
                     {"attempts": 6},
                 ),
                 downloads,
+            )
+            self.assertTrue(
+                any(
+                    args
+                    == [
+                        "verify",
+                        "/tmp/cloudflared.deb",
+                        bootstrap.CLOUDFLARED_DEB_SHA256["amd64"],
+                    ]
+                    for args, _desc, _kwargs in recorded
+                )
             )
             self.assertTrue(
                 any(
@@ -2663,6 +2679,9 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 == "/etc/systemd/system/cocalc-cloudflared.service.d/cocalc-recovery.conf"
             )
             self.assertIn("credentials-file: /etc/cloudflared/tunnel-id.json", config)
+            self.assertIn("protocol: auto", config)
+            self.assertIn("grace-period: 10s", config)
+            self.assertIn("--no-autoupdate", unit)
             self.assertNotIn("--token", unit)
             self.assertNotIn("EnvironmentFile=/etc/cloudflared/token.env", unit)
             self.assertEqual(recovery_dropin, "[Service]\nTimeoutStopSec=30\n")

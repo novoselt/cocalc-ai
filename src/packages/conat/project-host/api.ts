@@ -445,6 +445,39 @@ export interface HostStaticAppPathInspection {
   };
 }
 
+export interface CloudflaredDiagnosticSnapshot {
+  captured_at: string;
+  expected_version: string;
+  version?: string;
+  version_drift?: boolean;
+  process?: {
+    pid?: number;
+    state?: string;
+    elapsed?: string;
+    rss_kb?: number;
+    threads?: number;
+  };
+  metrics_url?: string;
+  ready?: {
+    status: number;
+    ready_connections?: number;
+    connector_id?: string;
+  };
+  tunnel?: {
+    tunnel_id?: string;
+    connector_id?: string;
+    connections: Array<{
+      index?: number;
+      connected?: boolean;
+      protocol?: string;
+      edge_address?: string;
+    }>;
+  };
+  metrics?: string[];
+  journal?: string;
+  errors?: string[];
+}
+
 export interface HostControlApi {
   restartCloudflared: (opts: {
     reason: "public-route-probe";
@@ -454,6 +487,8 @@ export interface HostControlApi {
     started_at: string;
     finished_at: string;
     duration_ms: number;
+    before: CloudflaredDiagnosticSnapshot;
+    after: CloudflaredDiagnosticSnapshot;
   }>;
   runSyntheticRuntimeProbe: () => Promise<{
     project_id: string;

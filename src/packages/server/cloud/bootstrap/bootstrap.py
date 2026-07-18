@@ -41,9 +41,14 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260715-v13"
+HELPER_SCHEMA_VERSION = "20260718-v14"
 RUNTIME_WRAPPER_VERSION = "20260714-v14"
 NVM_VERSION = "0.40.4"
+CLOUDFLARED_VERSION = "2026.7.2"
+CLOUDFLARED_DEB_SHA256 = {
+    "amd64": "88195157a136199a86977c122a22084dae6907480bbe3640222b7b55834afc3a",
+    "arm64": "ddd7d2a0d55a1879485ac34354e936424f1df92e306bfa6428a81908aaddbe87",
+}
 BOOTSTRAP_LOG_MAX_BYTES = 4 * 1024 * 1024
 BUNDLE_RETENTION_COUNT = 3
 PROC_ROOT = Path("/proc")
@@ -186,6 +191,8 @@ class CloudflaredSpec:
     token: str | None = None
     tunnel_id: str | None = None
     creds_json: str | None = None
+    protocol: str = "auto"
+    grace_period_seconds: int = 10
 
 
 @dataclass(frozen=True)
@@ -265,6 +272,20 @@ def load_config(bootstrap_dir: str) -> BootstrapConfig:
     shared_scratch = desired.get("shared_scratch") or {}
     bootstrap_meta = desired.get("bootstrap") or {}
     bootstrap_connection = desired.get("bootstrap_connection") or {}
+    cloudflared_protocol = str(cloudflared.get("protocol") or "auto").strip().lower()
+    _require(
+        cloudflared_protocol in {"auto", "quic", "http2"},
+        "cloudflared.protocol must be auto, quic, or http2",
+    )
+    cloudflared_grace_period_seconds = int(
+        cloudflared.get("gracePeriodSeconds")
+        or cloudflared.get("grace_period_seconds")
+        or 10
+    )
+    _require(
+        1 <= cloudflared_grace_period_seconds <= 30,
+        "cloudflared.gracePeriodSeconds must be between 1 and 30",
+    )
     return BootstrapConfig(
         bootstrap_user=_ensure_str(
             facts.get("bootstrap_user"), "bootstrap-host-facts.bootstrap_user"
@@ -392,6 +413,8 @@ def load_config(bootstrap_dir: str) -> BootstrapConfig:
             token=cloudflared.get("token"),
             tunnel_id=cloudflared.get("tunnelId") or cloudflared.get("tunnel_id"),
             creds_json=cloudflared.get("credsJson") or cloudflared.get("creds_json"),
+            protocol=cloudflared_protocol,
+            grace_period_seconds=cloudflared_grace_period_seconds,
         ),
         conat_url=bootstrap_connection.get("conat_url") or None,
         status_url=bootstrap_connection.get("status_url") or None,
@@ -907,6 +930,8 @@ def build_desired_state(cfg: BootstrapConfig) -> dict[str, Any]:
             "ssh_hostname": cfg.cloudflared.ssh_hostname,
             "ssh_port": cfg.cloudflared.ssh_port,
             "tunnel_id": cfg.cloudflared.tunnel_id,
+            "protocol": cfg.cloudflared.protocol,
+            "grace_period_seconds": cfg.cloudflared.grace_period_seconds,
         },
     }
 
@@ -4756,7 +4781,24 @@ lines="${1:-200}"
 if ! echo "$lines" | grep -Eq '^[0-9]+$'; then
   lines="200"
 fi
-exec /bin/journalctl -u "$service" -o cat -f -n "$lines"
+if [ "$lines" -lt 1 ]; then
+  lines=1
+elif [ "$lines" -gt 5000 ]; then
+  lines=5000
+fi
+mode="${2:-snapshot}"
+case "$mode" in
+  snapshot)
+    exec /bin/journalctl -u "$service" -o short-iso-precise --no-pager -n "$lines"
+    ;;
+  follow)
+    exec /bin/journalctl -u "$service" -o short-iso-precise -f -n "$lines"
+    ;;
+  *)
+    echo "usage: ${0} [lines] {snapshot|follow}" >&2
+    exit 2
+    ;;
+esac
 """
     storage_wrapper = storage_wrapper.replace(
         "__PROJECT_POOL_CGROUP__", DEFAULT_PROJECT_POOL_CGROUP
@@ -5603,7 +5645,7 @@ if ! sudo -n /usr/local/sbin/cocalc-cloudflared-ctl status >/dev/null 2>&1; then
   echo "cloudflared service not enabled on this host ($service)" >&2
   exit 1
 fi
-exec sudo -n /usr/local/sbin/cocalc-cloudflared-logs 200
+exec sudo -n /usr/local/sbin/cocalc-cloudflared-logs 200 follow
 """
     ctl_cf_script = """#!/usr/bin/env bash
 set -euo pipefail
@@ -6975,18 +7017,36 @@ def configure_cloudflared_with_options(
     cloudflared_missing = shutil.which("cloudflared") is None
     service_changed = install_package or cloudflared_missing
     if install_package or cloudflared_missing:
-        log_line(cfg, "bootstrap: installing cloudflared")
+        log_line(cfg, f"bootstrap: installing cloudflared {CLOUDFLARED_VERSION}")
         arch = cfg.expected_arch
+        expected_sha256 = CLOUDFLARED_DEB_SHA256.get(arch)
+        if not expected_sha256:
+            raise RuntimeError(f"unsupported cloudflared architecture: {arch}")
         deb_name = f"cloudflared-linux-{arch}.deb"
         download_file(
             cfg,
-            f"https://github.com/cloudflare/cloudflared/releases/latest/download/{deb_name}",
+            f"https://github.com/cloudflare/cloudflared/releases/download/{CLOUDFLARED_VERSION}/{deb_name}",
             "/tmp/cloudflared.deb",
             attempts=6,
         )
+        verify_sha256(cfg, "/tmp/cloudflared.deb", expected_sha256)
         run_cmd(cfg, ["dpkg", "-i", "/tmp/cloudflared.deb"], "install cloudflared")
     else:
         log_line(cfg, "bootstrap: reconciling cloudflared config")
+        installed = run_cmd(
+            cfg,
+            ["/usr/bin/cloudflared", "--version"],
+            "inspect cloudflared version",
+            check=False,
+            timeout=15,
+        )
+        match = re.search(r"cloudflared version\s+([^\s(]+)", installed.stdout or "")
+        installed_version = match.group(1) if match else "unknown"
+        if installed_version != CLOUDFLARED_VERSION:
+            log_line(
+                cfg,
+                f"bootstrap: cloudflared version drift installed={installed_version} expected={CLOUDFLARED_VERSION}; leaving existing install unchanged",
+            )
     cloudflared_dir = Path("/etc/cloudflared")
     cloudflared_dir.mkdir(parents=True, exist_ok=True)
     credentials_path = cloudflared_dir / f"{cfg.cloudflared.tunnel_id}.json"
@@ -7069,7 +7129,10 @@ def configure_cloudflared_with_options(
         )
     ingress_lines.append("  - service: http_status:404")
     ingress = "\n".join(ingress_lines)
-    config_lines = []
+    config_lines = [
+        f"protocol: {cfg.cloudflared.protocol}",
+        f"grace-period: {cfg.cloudflared.grace_period_seconds}s",
+    ]
     if use_credentials:
         config_lines.append(f"tunnel: {cfg.cloudflared.tunnel_id}")
         config_lines.append(f"credentials-file: {credentials_path}")
@@ -7088,7 +7151,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 """
-    unit += "ExecStart=/usr/bin/cloudflared --config /etc/cloudflared/config.yml tunnel run"
+    unit += "ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run"
     if not use_credentials:
         unit += f" --token-file {token_path}"
     unit += "\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n"
