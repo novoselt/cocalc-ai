@@ -177,6 +177,83 @@ latency/failures, and actual project WebSocket behavior before choosing any
 production transport override. Do not infer a transport winner from one manual
 restart alone.
 
+### Staging validation on 2026-07-18
+
+The full recovery path was exercised on staging `host2` without stopping its VM
+or project runtimes:
+
+1. `SIGSTOP` was sent to the cloudflared main process. Systemd continued to
+   report the service as active with the same PID, the loopback readiness
+   endpoint hung, and the public route returned Cloudflare 502/530 responses.
+   This reproduced the live-but-broken process class from production.
+2. The first failed monitor pass retained HTTP status and `CF-Ray` evidence but
+   did not quarantine or mutate the host. The second consecutive failure
+   quarantined placement and created one repair claim.
+3. The capability-gated restart replaced the stopped connector. The service
+   operation completed in 5.1 seconds, readiness returned with four edge
+   connections, and the before/after snapshots retained different connector
+   IDs plus process, journal, readiness, metric, edge, and version data.
+4. The first successful public probe left quarantine in place. The second
+   successful probe cleared it. The persisted incident ring contained one
+   repair with the same claim ID, and notifications recorded failure, restart,
+   and recovery in order.
+5. Both staging hosts then passed all route checks. A transport comparison ran
+   12 full probes per host, with eight WebSocket upgrades per probe: `auto`
+   passed 96/96 upgrades and forced `http2` passed 96/96. The respective
+   WebSocket P95 latencies were 78 ms and 82 ms. A real project start and marker
+   file exec over the HTTP/2 host completed in 1.5 seconds.
+6. cloudflared 2026.6.1 omits the connection protocol field from
+   `/diag/tunnel` for HTTP/2. Diagnostics now retain `configured_protocol`,
+   `observed_protocols`, and `protocol_source`; this case reports HTTP/2 as a
+   `configured_fallback` rather than an ambiguous empty protocol list.
+7. The temporary HTTP/2 metadata override was audited and restored to `auto`.
+   Reconciliation restarted only the tunnel, returned four ready connections,
+   and the public route immediately passed HTTP, CORS, session, and 8/8
+   WebSocket checks.
+
+The comparison proves both supported transports function in this environment;
+it does not establish that one is more reliable. Production should remain on
+`auto` while incident telemetry accumulates. Existing hosts intentionally keep
+their installed cloudflared binaries and report drift from 2026.7.2; automatic
+binary replacement is not part of this rollout.
+
+### Bootstrap publication caveat
+
+The staging operator CLI used for the first bootstrap deployment updated the
+desired version but did not initially publish the immutable compatibility URL
+`software/bootstrap/<artifact-id>/bootstrap.py`. Reconciliation could therefore
+appear successful by reusing the previously cached local bootstrap. An explicit
+`software push host-bootstrap:<tag>` published the object, after which its
+SHA-256 was verified and both staging hosts installed the exact desired
+bootstrap.
+
+Production must explicitly push the host-bootstrap artifact and verify the
+immutable URL and digest before changing desired state or reconciling any host.
+Treat a missing immutable object as a rollout stop, not as a reason to reuse a
+cached bootstrap.
+
+### Production rollout sequence
+
+1. Build all four artifacts from one reviewed source revision: host-bootstrap,
+   project-host, static, and hub. Record artifact IDs, manifests, and digests.
+2. Explicitly push host-bootstrap. Verify the immutable bootstrap URL and
+   SHA-256 before publishing it as desired.
+3. Reconcile bootstrap on one low-traffic production canary. Verify the unit
+   uses `--no-autoupdate`, config remains `protocol: auto`, grace is 10 seconds,
+   readiness has four connections, and no healthy tunnel was restarted solely
+   because bootstrap ran.
+4. Deploy project-host to that canary. Require a fresh heartbeat with exact
+   artifact version, both capability flags, configured and observed protocol
+   telemetry, zero collection errors, and an 8/8 public WebSocket probe.
+5. Roll bootstrap and project-host through the remaining hosts in bounded
+   batches. Stop if public-route failures correlate across hosts, quarantine is
+   left uncleared, or collection errors appear.
+6. Deploy static, then roll hub last. Run the admin smoke project and full
+   read-only cluster health checks after each control-plane step.
+7. Observe alerts, incident rings, connector churn, `CF-Ray` groupings, and
+   protocol metrics for at least 30 minutes. Do not fault-inject production and
+   do not force HTTP/2 based on the short staging comparison.
+
 ## Rollback
 
 Disable repair immediately with
