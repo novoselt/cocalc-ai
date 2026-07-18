@@ -6,6 +6,7 @@
 import {
   cloudflaredHeartbeatSummary,
   collectCloudflaredDiagnosticSnapshot,
+  normalizeCloudflaredProtocol,
   parseCloudflaredProcess,
   parseCloudflaredTunnel,
   parseCloudflaredVersion,
@@ -44,7 +45,7 @@ describe("cloudflared diagnostics", () => {
         {
           index: 0,
           connected: true,
-          protocol: "1",
+          protocol: "quic",
           edge_address: "198.51.100.2",
         },
       ],
@@ -62,6 +63,13 @@ describe("cloudflared diagnostics", () => {
       'cloudflared_tunnel_server_locations{edge_location="dfw01"} 1',
       'quic_client_lost_packets{conn_index="0",reason="timeout"} 2',
     ]);
+  });
+
+  it("normalizes cloudflared's numeric connection protocol enum", () => {
+    expect(normalizeCloudflaredProtocol(0)).toBe("http2");
+    expect(normalizeCloudflaredProtocol("1")).toBe("quic");
+    expect(normalizeCloudflaredProtocol("future")).toBe("future");
+    expect(normalizeCloudflaredProtocol(undefined)).toBeUndefined();
   });
 
   it("collects only the allowlisted local diagnostics", async () => {

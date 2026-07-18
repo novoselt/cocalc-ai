@@ -82,6 +82,15 @@ export function selectCloudflaredMetrics(value: string): string[] {
   return selected;
 }
 
+export function normalizeCloudflaredProtocol(
+  value: unknown,
+): string | undefined {
+  if (value == null) return;
+  if (value === 0 || value === "0") return "http2";
+  if (value === 1 || value === "1") return "quic";
+  return `${value}`;
+}
+
 export function parseCloudflaredTunnel(
   value: unknown,
 ): NonNullable<CloudflaredDiagnosticSnapshot["tunnel"]> | undefined {
@@ -96,8 +105,7 @@ export function parseCloudflaredTunnel(
           typeof connection?.isConnected === "boolean"
             ? connection.isConnected
             : undefined,
-        protocol:
-          connection?.protocol == null ? undefined : `${connection.protocol}`,
+        protocol: normalizeCloudflaredProtocol(connection?.protocol),
         edge_address:
           connection?.edgeAddress == null
             ? undefined
