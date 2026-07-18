@@ -444,6 +444,7 @@ describe("project-host runtime maintenance policy", () => {
       claim_id: "probe-claim",
       quarantined: true,
       consecutive_failures: 2,
+      origin_health: { status: "healthy" },
     };
     const row = degradedCloudHost({
       cloudflared_restart_supported: true,
@@ -460,6 +461,12 @@ describe("project-host runtime maintenance policy", () => {
     });
 
     row.metadata.cloudflared_restart_supported = true;
+    probe.origin_health = { status: "unknown" };
+    expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
+      action: "wait",
+      reason: "project-host origin health is not proven",
+    });
+    probe.origin_health = { status: "healthy" };
     row.metadata.public_route_auto_recovery = {
       status: "restart_completed",
       attempted_at: new Date(NOW - 5 * 60_000).toISOString(),

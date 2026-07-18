@@ -19,7 +19,10 @@ import { exists } from "@cocalc/backend/misc/async-utils-node";
 import { ensureInitialized } from "@cocalc/backend/sandbox/rustic";
 import { until } from "@cocalc/util/async-utils";
 import { delay } from "awaiting";
-import bees, { signalBeesProcessGroup } from "./bees";
+import bees, {
+  BEES_ALREADY_RUNNING_EXIT_CODE,
+  signalBeesProcessGroup,
+} from "./bees";
 import { type ChildProcess } from "node:child_process";
 import { install } from "@cocalc/backend/sandbox/install";
 import { getBtrfsQuotaQueueStatus, startBtrfsQuotaQueue } from "./quota-queue";
@@ -301,6 +304,14 @@ export class Filesystem {
       child.once("exit", (code, signal) => {
         if (this.bees !== child) return;
         this.bees = undefined;
+        if (code === BEES_ALREADY_RUNNING_EXIT_CODE) {
+          // Older privileged wrappers do not emit the startup handshake. If
+          // their process discovery takes longer than our fallback timeout,
+          // the ownership refusal can arrive after supervision is attached.
+          this.beesRunningExternally = true;
+          this.scheduleBeesRestart("existing-process-handoff");
+          return;
+        }
         this.beesRunningExternally = false;
         this.beesLastExit = {
           code: code ?? null,

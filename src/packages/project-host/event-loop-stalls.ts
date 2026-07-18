@@ -10,6 +10,18 @@ const WARN_THRESHOLDS_MS = [250, 1000, 4000] as const;
 const GC_SHORT_WINDOW_MS = 5_000;
 const GC_LONG_WINDOW_MS = 30_000;
 
+export type ProjectHostEventLoopStallStatus = {
+  started_at: string;
+  last_stall_at?: string;
+  last_stall?: Record<string, any>;
+  stall_count: number;
+};
+
+let projectHostStatus: ProjectHostEventLoopStallStatus = {
+  started_at: new Date().toISOString(),
+  stall_count: 0,
+};
+
 type GcEvent = {
   ended_at_ms: number;
   duration_ms: number;
@@ -115,10 +127,26 @@ function snapshotForLag(lagMs: number, gcSnapshot: Record<string, any>) {
 }
 
 export function startProjectHostEventLoopStallMonitor(): () => void {
+  projectHostStatus = {
+    started_at: new Date().toISOString(),
+    stall_count: 0,
+  };
   return startEventLoopStallMonitor({
     loggerName: "project-host:event-loop-stalls",
     label: "project-host",
+    onStall: (snapshot) => {
+      projectHostStatus = {
+        ...projectHostStatus,
+        last_stall_at: new Date().toISOString(),
+        last_stall: snapshot,
+        stall_count: projectHostStatus.stall_count + 1,
+      };
+    },
   });
+}
+
+export function getProjectHostEventLoopStallStatus(): ProjectHostEventLoopStallStatus {
+  return structuredClone(projectHostStatus);
 }
 
 export function startEventLoopStallMonitor({
@@ -126,11 +154,13 @@ export function startEventLoopStallMonitor({
   label,
   sampleIntervalMs = SAMPLE_INTERVAL_MS,
   warnThresholdsMs = WARN_THRESHOLDS_MS,
+  onStall,
 }: {
   loggerName: string;
   label: string;
   sampleIntervalMs?: number;
   warnThresholdsMs?: readonly number[];
+  onStall?: (snapshot: Record<string, any>) => void;
 }): () => void {
   const logger = getLogger(loggerName);
   const thresholds = [...warnThresholdsMs].sort((a, b) => a - b);
@@ -144,11 +174,13 @@ export function startEventLoopStallMonitor({
     if (threshold == null) {
       return;
     }
-    logger.warn(`${label} event loop stall detected`, {
+    const snapshot = {
       component: label,
       threshold_ms: threshold,
       ...snapshotForLag(lagMs, gcTracker.snapshot(now)),
-    });
+    };
+    onStall?.(snapshot);
+    logger.warn(`${label} event loop stall detected`, snapshot);
   }, sampleIntervalMs);
   timer.unref?.();
   return () => {

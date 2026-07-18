@@ -479,7 +479,20 @@ export interface CloudflaredDiagnosticSnapshot {
   errors?: string[];
 }
 
+export interface ProjectHostOriginHealth {
+  ok: boolean;
+  checked_at: string;
+  duration_ms: number;
+  status?: number;
+  ready?: boolean;
+  pid?: number;
+  activity?: Record<string, any>;
+  event_loop?: Record<string, any>;
+  error?: string;
+}
+
 export interface HostControlApi {
+  probePublicRouteOrigin: () => Promise<ProjectHostOriginHealth>;
   restartCloudflared: (opts: {
     reason: "public-route-probe";
     claim_id: string;

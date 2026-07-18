@@ -2,12 +2,15 @@
 
 Date: 2026-07-17
 
-Status: implemented and validated on staging; production review pending
+Status: implemented and validated on staging; production dry-run inventory
+enabled by default for standalone bay and project-host persist
 
 This document records the implementation of
 `conat-persist-sqlite-maintenance-plan-2026-07-17.md` and the procedure for
-validating it before production. The feature is disabled by default. Deploying
-the code alone cannot compact a database.
+validating it before production. Standalone bay and project-host persist enable
+inventory maintenance in dry-run mode by default. Deploying the code alone
+cannot compact a database: promotion still requires an explicit
+`COCALC_PERSIST_MAINTENANCE_DRY_RUN=0` override.
 
 ## Implemented Architecture
 
@@ -79,15 +82,17 @@ node dist/conat/persist-maintenance/inspect.js /absolute/path/to/file.db
 
 ## Configuration
 
-The global kill switches are:
+The explicit global kill switches are:
 
 ```text
 COCALC_PERSIST_MAINTENANCE_ENABLED=0
 COCALC_PERSIST_MAINTENANCE_DRY_RUN=1
 ```
 
-Those are the code defaults. Mutation requires both `ENABLED=1` and
-`DRY_RUN=0`. Creating the configured pause file also stops candidate work.
+The generic library default remains disabled. Production-shaped standalone bay
+and project-host launchers set `ENABLED=1`, `DRY_RUN=1` unless explicitly
+overridden. Mutation requires both `ENABLED=1` and `DRY_RUN=0`. Creating the
+configured pause file also stops candidate work.
 
 The conservative production-shaped defaults are:
 

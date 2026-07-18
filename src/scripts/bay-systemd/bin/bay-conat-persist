@@ -5,4 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 ensure_dirs
+# Inventory and inspect reclaim candidates by default. Promotion remains
+# impossible unless an operator explicitly disables dry-run in bay.env.
+: "${COCALC_PERSIST_MAINTENANCE_ENABLED:=1}"
+: "${COCALC_PERSIST_MAINTENANCE_DRY_RUN:=1}"
+export COCALC_PERSIST_MAINTENANCE_ENABLED
+export COCALC_PERSIST_MAINTENANCE_DRY_RUN
 run_env_cmd COCALC_BAY_PERSIST_CMD

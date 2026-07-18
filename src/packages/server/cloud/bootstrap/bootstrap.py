@@ -2575,6 +2575,7 @@ PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
 PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
 PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"
+PROJECT_NETWORK_LOCK_ATTEMPTS="3"
 # Full-chain reads are only used by background reconciliation and can take
 # over ten seconds on a busy host with hundreds of cgroup/socket rules.
 # Foreground project creation uses an append-only write and does not pay this
@@ -2596,10 +2597,15 @@ acquire_project_cgroup_lock() {
 }
 
 acquire_project_network_lock() {
+  local attempt
   exec 9>/run/lock/cocalc-project-network.lock
-  if ! flock -x -w "$PROJECT_NETWORK_LOCK_WAIT_SECONDS" 9; then
-    deny "project-network-lock-timeout" "$PROJECT_NETWORK_LOCK_WAIT_SECONDS"
-  fi
+  for attempt in $(seq 1 "$PROJECT_NETWORK_LOCK_ATTEMPTS"); do
+    if flock -x -w "$PROJECT_NETWORK_LOCK_WAIT_SECONDS" 9; then
+      return 0
+    fi
+  done
+  deny "project-network-lock-timeout" \
+    "wait=${PROJECT_NETWORK_LOCK_WAIT_SECONDS},attempts=${PROJECT_NETWORK_LOCK_ATTEMPTS}"
 }
 
 release_project_lock() {
@@ -4644,6 +4650,7 @@ PY' bash "$tree"
     pool="$(bees_cgroup)"
     configure_bees_cgroup "$pool" "$mountpoint"
     attach_pid_to_project_pool_storage "$$" "$pool" || true
+    echo "BEES_STARTING mountpoint=${mountpoint} pid=$$" >&2
     if [ -x /opt/cocalc/tools/current/bees ]; then
       exec /usr/bin/ionice -c3 /usr/bin/nice -n 19 /opt/cocalc/tools/current/bees "$@"
     fi
