@@ -5,6 +5,7 @@ export type BayCommandDeps = {
 };
 
 const BAY_BACKUP_TIMEOUT_MS = 10 * 60 * 1000;
+const BAY_RESTORE_TEST_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
 export function registerBayCommand(
   program: Command,
@@ -185,6 +186,7 @@ export function registerBayCommand(
             keep: opts.keep === true,
             remote_only: opts.remoteOnly === true,
             disposable_gcp: opts.disposableGcp === true,
+            timeout: BAY_RESTORE_TEST_TIMEOUT_MS,
           });
         });
       },

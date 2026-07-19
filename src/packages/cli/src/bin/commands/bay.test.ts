@@ -579,6 +579,7 @@ test("bay restore-test forwards bay id, backup set, target dir, and keep mode", 
     keep: true,
     remote_only: false,
     disposable_gcp: false,
+    timeout: 3 * 60 * 60 * 1000,
   });
   assert.equal(captured?.backup_set_id, "backup-1");
 });
@@ -648,6 +649,7 @@ test("bay restore-test forwards remote-only mode", async () => {
     keep: false,
     remote_only: true,
     disposable_gcp: false,
+    timeout: 3 * 60 * 60 * 1000,
   });
 });
 
@@ -684,6 +686,7 @@ test("bay restore-test forwards disposable GCP mode", async () => {
     keep: false,
     remote_only: false,
     disposable_gcp: true,
+    timeout: 3 * 60 * 60 * 1000,
   });
 });
 

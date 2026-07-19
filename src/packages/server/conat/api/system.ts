@@ -3554,6 +3554,7 @@ export async function runBayRestoreTest({
   keep?: boolean;
   remote_only?: boolean;
   disposable_gcp?: boolean;
+  timeout?: number;
 }): Promise<BayRestoreTestRunResult> {
   await assertAdmin(account_id);
   await requireDangerousSessionAuth({

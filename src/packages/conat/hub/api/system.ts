@@ -2022,6 +2022,7 @@ export interface System {
     keep?: boolean;
     remote_only?: boolean;
     disposable_gcp?: boolean;
+    timeout?: number;
   }) => Promise<BayRestoreTestRunResult>;
 
   getAccountBay: (opts?: {
