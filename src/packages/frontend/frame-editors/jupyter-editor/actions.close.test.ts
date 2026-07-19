@@ -47,10 +47,9 @@ describe("JupyterEditorActions close-frame cleanup", () => {
     const store = new EventEmitter();
     const close = jest.fn();
     const target = {
+      normalizeRemovedSingleDocFrames: jest.fn(),
       init_new_frame: jest.fn(),
       init_changes_state: jest.fn(),
-      applyFrameTypeFromUrlForTests: jest.fn(),
-      normalizeHiddenSingleDocFrames: jest.fn(),
       store,
       frame_actions: {
         "frame-1": { close },
@@ -63,5 +62,32 @@ describe("JupyterEditorActions close-frame cleanup", () => {
 
     expect(close).toHaveBeenCalledTimes(1);
     expect(target.frame_actions["frame-1"]).toBeUndefined();
+  });
+});
+
+describe("JupyterEditorActions removed single-document frame migration", () => {
+  it("converts saved experimental frames to the standard notebook", () => {
+    const frameTypes = {
+      classic: "jupyter_cell_notebook",
+      experimental: "jupyter_slate_single_doc_notebook",
+      legacy: "jupyter-singledoc",
+    };
+    const set_frame_type = jest.fn();
+    const target = {
+      _get_leaf_ids: () => frameTypes,
+      _get_frame_node: (id: keyof typeof frameTypes) => ({
+        get: () => frameTypes[id],
+      }),
+      set_frame_type,
+    } as any;
+
+    (
+      JupyterEditorActions.prototype as any
+    ).normalizeRemovedSingleDocFrames.call(target);
+
+    expect(set_frame_type.mock.calls).toEqual([
+      ["experimental", "jupyter_cell_notebook"],
+      ["legacy", "jupyter_cell_notebook"],
+    ]);
   });
 });
