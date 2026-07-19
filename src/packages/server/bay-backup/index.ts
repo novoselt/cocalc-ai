@@ -4907,12 +4907,16 @@ async function recordRestoreTestState({
     last_restore_tested_at: tested_at,
     last_restore_test_target_dir: target_dir,
     last_restore_test_recovery_ready: recovery_ready,
-    last_pitr_test_backup_set_id: backup_set_id,
-    last_pitr_test_status: status,
-    last_pitr_tested_at: tested_at,
-    last_pitr_test_target_time: pitr_target_time,
-    last_pitr_test_target_dir: target_dir,
-    last_pitr_test_remote_only: remote_only,
+    ...(pitr_target_time
+      ? {
+          last_pitr_test_backup_set_id: backup_set_id,
+          last_pitr_test_status: status,
+          last_pitr_tested_at: tested_at,
+          last_pitr_test_target_time: pitr_target_time,
+          last_pitr_test_target_dir: target_dir,
+          last_pitr_test_remote_only: remote_only,
+        }
+      : {}),
     last_restore_test_evidence: evidence ?? null,
   };
   await writeJson(paths.state_file, nextState);
@@ -5075,20 +5079,28 @@ function disposableRestoreDiskSizing({
 
 function assertDisposableWorkerPassed(
   worker: DisposableRestoreWorkerResult,
+  restoreMode: "snapshot" | "pitr",
 ): void {
   if (worker.status !== "passed") {
     throw new Error(
       `disposable restore worker failed at ${worker.stage}: ${worker.error ?? "unknown error"}`,
     );
   }
+  if (!worker.postgres || worker.postgres.restore_mode !== restoreMode) {
+    throw new Error("disposable restore worker did not validate PostgreSQL");
+  }
   if (
-    worker.postgres?.pitr_verified !== true ||
-    worker.postgres.pre_count !== 1 ||
-    worker.postgres.post_count !== 0
+    restoreMode === "pitr" &&
+    (worker.postgres.pitr_verified !== true ||
+      worker.postgres.pre_count !== 1 ||
+      worker.postgres.post_count !== 0)
   ) {
     throw new Error(
       "disposable restore worker did not verify the PITR boundary",
     );
+  }
+  if (restoreMode === "snapshot" && worker.postgres.pitr_verified !== false) {
+    throw new Error("snapshot restore worker incorrectly reported PITR");
   }
   if (
     worker.conat?.sync_tree_found !== true ||
@@ -5152,14 +5164,8 @@ async function runDisposableGcpBayRestoreTest({
     );
   }
 
-  let pitrRun: PitrRestoreSentinel | null = null;
   let workerRun: DisposableGcpRestoreResult | null = null;
   try {
-    pitrRun = await preparePitrRestoreSentinel({
-      bay_id: resolvedBayId,
-      backup_set_id: resolvedBackupSetId,
-      remote_only: true,
-    });
     const timeoutMs = Math.max(
       30 * 60 * 1000,
       Number.parseInt(
@@ -5172,7 +5178,7 @@ async function runDisposableGcpBayRestoreTest({
       api_token: r2.api_token,
       bucket: r2.bucket_name,
       parent_access_key_id: r2.access_key,
-      prefixes: [rusticRepo.repo_root, `${r2.object_prefix_root}/wal`],
+      prefixes: [rusticRepo.repo_root],
       ttl_seconds: Math.min(
         7 * 24 * 60 * 60,
         Math.ceil(timeoutMs / 1000) + 30 * 60,
@@ -5201,8 +5207,7 @@ async function runDisposableGcpBayRestoreTest({
         bay_id: resolvedBayId,
         backup_set_id: resolvedBackupSetId,
         snapshot_id: snapshotId,
-        target_time: pitrRun.target_time,
-        pitr_run_id: pitrRun.run_id,
+        restore_mode: "snapshot",
         postgres_major,
         postgres_user: pguser,
         postgres_database: pgdatabase,
@@ -5213,12 +5218,11 @@ async function runDisposableGcpBayRestoreTest({
         r2_session_token: temporaryR2.session_token,
         rustic_repo_root: rusticRepo.repo_root,
         rustic_repo_password: await getBayBackupSharedSecret(),
-        wal_object_prefix: `${r2.object_prefix_root}/wal`,
         require_conat: true,
         minimum_free_bytes: sizing.minimum_free_bytes,
       },
     });
-    assertDisposableWorkerPassed(workerRun.worker);
+    assertDisposableWorkerPassed(workerRun.worker, "snapshot");
     const finished_at = new Date().toISOString();
     const conat = workerRun.worker.conat!;
     await recordRestoreTestState({
@@ -5229,7 +5233,7 @@ async function runDisposableGcpBayRestoreTest({
       tested_at: finished_at,
       target_dir: null,
       recovery_ready: true,
-      pitr_target_time: pitrRun.target_time,
+      pitr_target_time: null,
       remote_only: true,
       evidence: {
         execution_mode: "disposable-gcp",
@@ -5253,7 +5257,7 @@ async function runDisposableGcpBayRestoreTest({
       started_at,
       finished_at,
       remote_only: true,
-      target_time: pitrRun.target_time,
+      target_time: null,
       backup_set_id: resolvedBackupSetId,
       target_dir: `gcp://${workerRun.project_id}/${workerRun.zone}/${workerRun.instance_name}`,
       data_dir: null,
@@ -5265,16 +5269,14 @@ async function runDisposableGcpBayRestoreTest({
       source_snapshot_id: snapshotId,
       rustic_repo_selector: rusticRepo.repo_selector,
       wal_archive_dir: null,
-      wal_storage_backend: "r2",
-      wal_segment_count: restorePlan.wal_segment_count,
+      wal_storage_backend: null,
+      wal_segment_count: 0,
       recovery_ready: true,
-      pitr_verified: true,
-      pitr_run_id: pitrRun.run_id,
+      pitr_verified: false,
+      pitr_run_id: null,
       kept_on_disk: false,
       verified_queries: [
-        "pitr_recovery_promoted=true",
-        "pitr_pre_count=1",
-        "pitr_post_count=0",
+        "snapshot_postgres_started=true",
         ...workerRun.worker.postgres!.tables_verified.map(
           (table) => `${table}_table=${table}`,
         ),
@@ -5282,6 +5284,7 @@ async function runDisposableGcpBayRestoreTest({
       ],
       notes: [
         "Restored exclusively from R2 on an isolated disposable GCP VM.",
+        "Validated the full PostgreSQL snapshot at its captured checkpoint; continuous PITR was not tested.",
         "The worker had no GCP service account, no CoCalc registration, no listening service, and short-lived read-only R2 credentials.",
         `Validated ${conat.database_count} Conat SQLite databases (${conat.database_bytes} bytes).`,
         `Deleted disposable worker ${workerRun.instance_name} and its auto-delete boot disk.`,
@@ -5307,7 +5310,7 @@ async function runDisposableGcpBayRestoreTest({
       tested_at: finished_at,
       target_dir: null,
       recovery_ready: restorePlan.recovery_ready,
-      pitr_target_time: pitrRun?.target_time ?? null,
+      pitr_target_time: null,
       remote_only: true,
       evidence: {
         execution_mode: "disposable-gcp",

@@ -29,8 +29,9 @@ export interface DisposableRestoreWorkerConfig {
   bay_id: string;
   backup_set_id: string;
   snapshot_id: string;
-  target_time: string;
-  pitr_run_id: string;
+  restore_mode: "snapshot" | "pitr";
+  target_time?: string;
+  pitr_run_id?: string;
   postgres_major: number;
   postgres_user: string;
   postgres_database: string;
@@ -41,7 +42,7 @@ export interface DisposableRestoreWorkerConfig {
   r2_session_token: string;
   rustic_repo_root: string;
   rustic_repo_password: string;
-  wal_object_prefix: string;
+  wal_object_prefix?: string;
   require_conat: boolean;
   minimum_free_bytes: number;
 }
@@ -56,9 +57,10 @@ export interface DisposableRestoreWorkerResult {
   duration_ms: number;
   error?: string;
   postgres?: {
+    restore_mode: "snapshot" | "pitr";
     pitr_verified: boolean;
-    pre_count: number;
-    post_count: number;
+    pre_count: number | null;
+    post_count: number | null;
     database: string;
     tables_verified: string[];
   };
@@ -383,7 +385,7 @@ try:
         for source in bundled_wal_dirs[0].iterdir():
             if source.is_file():
                 shutil.copy2(source, target_wal / source.name)
-    for stale in ("postmaster.pid", "postmaster.opts", "restore.signal"):
+    for stale in ("postmaster.pid", "postmaster.opts", "restore.signal", "standby.signal"):
         (pgdata / stale).unlink(missing_ok=True)
 
     hba = pgdata / "pg_hba.conf"
@@ -406,14 +408,18 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
     auto_conf = pgdata / "postgresql.auto.conf"
     with auto_conf.open("a", encoding="utf-8") as handle:
         handle.write("\n# cocalc disposable restore drill\n")
-        handle.write("restore_command = '/usr/local/bin/restore-wal.sh %f %p'\n")
         handle.write("archive_mode = 'off'\n")
         handle.write("archive_command = '/bin/false'\n")
-        handle.write("recovery_target_time = " + sql_quote(CONFIG["target_time"]) + "\n")
-        handle.write("recovery_target_inclusive = 'true'\n")
-        handle.write("recovery_target_timeline = 'current'\n")
-        handle.write("recovery_target_action = 'promote'\n")
-    (pgdata / "standby.signal").write_text("", encoding="utf-8")
+        if CONFIG["restore_mode"] == "pitr":
+            if not CONFIG.get("target_time") or not CONFIG.get("pitr_run_id") or not CONFIG.get("wal_object_prefix"):
+                raise RuntimeError("PITR mode requires target time, sentinel run, and WAL prefix")
+            handle.write("restore_command = '/usr/local/bin/restore-wal.sh %f %p'\n")
+            handle.write("recovery_target_time = " + sql_quote(CONFIG["target_time"]) + "\n")
+            handle.write("recovery_target_inclusive = 'true'\n")
+            handle.write("recovery_target_timeline = 'current'\n")
+            handle.write("recovery_target_action = 'promote'\n")
+    if CONFIG["restore_mode"] == "pitr":
+        (pgdata / "standby.signal").write_text("", encoding="utf-8")
 
     context = ROOT / "postgres-image"
     context.mkdir(parents=True, exist_ok=True)
@@ -428,7 +434,7 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
     run(["podman", "build", "-t", "cocalc-restore-postgres", str(context)], timeout=1800)
     run(["chown", "-R", "999:999", str(pgdata)], timeout=600)
 
-    STAGE = "postgres-pitr"
+    STAGE = "postgres-" + CONFIG["restore_mode"]
     run([
         "podman", "run", "--detach", "--name", container,
         "--security-opt=no-new-privileges",
@@ -438,34 +444,43 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
         "--env", "R2_ACCESS_KEY_ID=" + CONFIG["r2_access_key_id"],
         "--env", "R2_SECRET_ACCESS_KEY=" + CONFIG["r2_secret_access_key"],
         "--env", "R2_SESSION_TOKEN=" + CONFIG["r2_session_token"],
-        "--env", "WAL_PREFIX=" + CONFIG["wal_object_prefix"],
+        "--env", "WAL_PREFIX=" + CONFIG.get("wal_object_prefix", ""),
         "cocalc-restore-postgres", "postgres", "-D", "/var/lib/postgresql/data",
         "-c", "listen_addresses=", "-c", "unix_socket_directories=/tmp",
         "-c", "shared_preload_libraries=",
     ], timeout=300)
 
-    deadline = time.time() + 300
     counts = None
+    postgres_ready = False
+    deadline = time.time() + 300
     last_error = "PostgreSQL unavailable"
     while time.time() < deadline:
         try:
-            value = psql(container,
-                "SELECT count(*) FILTER (WHERE phase='pre')::text || ',' || "
-                "count(*) FILTER (WHERE phase='post')::text "
-                "FROM public.bay_restore_test_pitr_events WHERE run_id = " +
-                sql_quote(CONFIG["pitr_run_id"]))
-            pre, post = [int(part) for part in value.split(",")]
-            counts = (pre, post)
-            if counts == (1, 0):
+            if CONFIG["restore_mode"] == "pitr":
+                value = psql(container,
+                    "SELECT count(*) FILTER (WHERE phase='pre')::text || ',' || "
+                    "count(*) FILTER (WHERE phase='post')::text "
+                    "FROM public.bay_restore_test_pitr_events WHERE run_id = " +
+                    sql_quote(CONFIG["pitr_run_id"]))
+                pre, post = [int(part) for part in value.split(",")]
+                counts = (pre, post)
+                if counts == (1, 0):
+                    postgres_ready = True
+                    break
+                if counts == (1, 1):
+                    raise RuntimeError("PITR crossed the requested target transaction")
+            elif psql(container, "SELECT 1") == "1":
+                postgres_ready = True
                 break
-            if counts == (1, 1):
-                raise RuntimeError("PITR crossed the requested target transaction")
         except Exception as err:
             last_error = bounded(err, 1000)
         time.sleep(2)
-    if counts != (1, 0):
+    if CONFIG["restore_mode"] == "pitr" and counts != (1, 0):
         logs = run(["podman", "logs", container], timeout=60, capture=True)
         raise RuntimeError("PITR verification timed out: " + last_error + " logs=" + bounded(logs.stderr, 1500))
+    if CONFIG["restore_mode"] == "snapshot" and not postgres_ready:
+        logs = run(["podman", "logs", container], timeout=60, capture=True)
+        raise RuntimeError("snapshot PostgreSQL startup timed out: " + last_error + " logs=" + bounded(logs.stderr, 1500))
 
     tables = ["accounts", "projects", "server_settings"]
     for table in tables:
@@ -475,9 +490,10 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
     if psql(container, "SELECT pg_is_in_recovery()::text") != "false":
         raise RuntimeError("restored PostgreSQL did not promote after PITR target")
     postgres_result = {
-        "pitr_verified": True,
-        "pre_count": counts[0],
-        "post_count": counts[1],
+        "restore_mode": CONFIG["restore_mode"],
+        "pitr_verified": CONFIG["restore_mode"] == "pitr",
+        "pre_count": counts[0] if counts is not None else None,
+        "post_count": counts[1] if counts is not None else None,
         "database": CONFIG["postgres_database"],
         "tables_verified": tables,
     }

@@ -4,11 +4,18 @@ Date: 2026-07-19
 
 ## Objective
 
-Prove that the remote bay backups are independently recoverable without using
-the production bay's disk, PostgreSQL server, Conat server, container runtime,
-or network path. The first implementation validates PostgreSQL point-in-time
-recovery and the authoritative Conat SQLite databases. It deliberately does not
-start a replacement bay or accept user traffic.
+Prove that the latest remote full bay backup is independently recoverable
+without using the production bay's disk, PostgreSQL server, Conat server,
+container runtime, or network path. The first implementation validates the
+PostgreSQL checkpoint captured by `pg_basebackup` and the authoritative Conat
+SQLite databases. It deliberately does not start a replacement bay or accept
+user traffic.
+
+Continuous WAL archiving is currently disabled because its retained data volume
+was unexpectedly large. This drill therefore does not claim point-in-time
+recovery. Its recovery-point objective is the latest successful full snapshot,
+and potential data loss is bounded by the full-snapshot schedule. PITR storage,
+retention, and cost need a separate design review before being re-enabled.
 
 ## Operator Interface
 
@@ -49,10 +56,9 @@ deletion remains the final orphan safeguard.
 
 The worker never receives the bay's durable R2 access secret or Cloudflare API
 token. The bay asks Cloudflare's R2 Temporary Credentials API for a short-lived
-session with `object-read-only` permission. Its scope is limited to:
-
-- the regional rustic repository used by the selected snapshot; and
-- this bay's WAL archive prefix.
+session with `object-read-only` permission. Its scope is limited to the regional
+rustic repository used by the selected snapshot. Snapshot-only drills do not
+grant the worker access to the WAL archive prefix.
 
 The lifetime is the configured drill timeout plus 30 minutes, capped at seven
 days. The startup script contains only these temporary credentials and the
@@ -76,25 +82,16 @@ meet the computed requirement.
 
 ## PostgreSQL Validation
 
-Immediately before launching the worker, the authoritative bay writes a
-run-scoped `pre` sentinel, forces WAL archival, records a recovery target, then
-writes a `post` sentinel. This is the only deliberate live database load and is
-small and bounded.
+The worker restores the selected rustic snapshot once, installs the bundled
+`pg_wal` files produced by `pg_basebackup -X stream`, and starts the matching
+PostgreSQL major version in an unexposed Podman container. It explicitly
+disables archival in the disposable database.
 
-The worker restores the selected rustic snapshot once, refreshes bundled WAL
-files from the authoritative R2 archive when available, and starts the matching
-PostgreSQL major version in an unexposed Podman container. Archive recovery
-uses the temporary R2 session and promotes at the target time.
-
-The drill passes only when:
-
-- the `pre` sentinel count is exactly one;
-- the `post` sentinel count is zero;
-- recovery has promoted and `pg_is_in_recovery()` is false; and
-- the `accounts`, `projects`, and `server_settings` tables exist.
-
-This proves a target-time boundary rather than only proving that PostgreSQL can
-parse a base backup.
+The drill passes only when PostgreSQL accepts queries, is not in recovery, and
+the `accounts`, `projects`, and `server_settings` tables exist. This proves that
+the remote base backup is a bootable database at its captured checkpoint. The
+result explicitly records `pitr_verified=false` and does not update PITR test
+state.
 
 ## Conat Validation
 
@@ -115,7 +112,7 @@ The worker writes one nonce-bound, size-bounded JSON result to the serial
 console. The bay accepts only its own nonce and run ID, validates the invariants
 again, deletes the VM, and then persists evidence in bay backup readiness state:
 
-- execution mode and duration;
+- execution mode, restore mode, duration, stage, and bounded failure text;
 - worker project, zone, machine type, disk size, and cleanup result;
 - Conat database count, byte count, and quick-check count.
 
@@ -144,11 +141,14 @@ Pending the first real staging deployment and disposable worker run.
 
 Production deployment remains blocked until the staging drill has:
 
-1. restored PostgreSQL from R2 and proved the PITR boundary;
+1. restored PostgreSQL from R2 and started it at the captured checkpoint;
 2. checked every restored authoritative Conat SQLite database;
 3. reported successful worker deletion;
 4. left no restore worker instance or disk behind; and
 5. exposed the persisted evidence through the staging backup-readiness API.
 
 Future iterations can install and start a complete isolated bay clone and run
-application smoke tests. That is intentionally outside this first change.
+application smoke tests. A separate follow-up must design cost-bounded WAL
+retention, likely with explicit lifecycle and recovery-point targets, before
+PITR testing is enabled again. Both are intentionally outside this first
+change.

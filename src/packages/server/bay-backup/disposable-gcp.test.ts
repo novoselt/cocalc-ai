@@ -25,6 +25,7 @@ function config(): DisposableRestoreWorkerConfig {
     bay_id: "bay-1",
     backup_set_id: "backup-1",
     snapshot_id: "snapshot-1",
+    restore_mode: "pitr",
     target_time: "2026-07-19T12:00:00.000Z",
     pitr_run_id: "22222222-2222-4222-8222-222222222222",
     postgres_major: 17,
@@ -53,6 +54,7 @@ function passedWorker(): DisposableRestoreWorkerResult {
     finished_at: "2026-07-19T12:01:00Z",
     duration_ms: 60_000,
     postgres: {
+      restore_mode: "pitr",
       pitr_verified: true,
       pre_count: 1,
       post_count: 0,
@@ -125,6 +127,33 @@ test("startup script does not expose temporary credentials as plaintext", () => 
   expect(encodedBlocks).toHaveLength(2);
   const workerSource = Buffer.from(encodedBlocks[1][1], "base64").toString(
     "utf8",
+  );
+  const compiled = spawnSync(
+    "python3",
+    ["-c", "import sys; compile(sys.stdin.read(), '<worker>', 'exec')"],
+    { input: workerSource, encoding: "utf8" },
+  );
+  expect(compiled.stderr).toBe("");
+  expect(compiled.status).toBe(0);
+});
+
+test("startup script supports checkpoint-only snapshot recovery", () => {
+  const snapshotConfig: DisposableRestoreWorkerConfig = {
+    ...config(),
+    restore_mode: "snapshot",
+    target_time: undefined,
+    pitr_run_id: undefined,
+    wal_object_prefix: undefined,
+  };
+  const script = buildDisposableRestoreStartupScript(snapshotConfig);
+  const encodedBlocks = Array.from(
+    script.matchAll(/printf '%s' '([^']+)' \| base64 -d/g),
+  );
+  const workerSource = Buffer.from(encodedBlocks[1][1], "base64").toString(
+    "utf8",
+  );
+  expect(workerSource).toContain(
+    'STAGE = "postgres-" + CONFIG["restore_mode"]',
   );
   const compiled = spawnSync(
     "python3",
