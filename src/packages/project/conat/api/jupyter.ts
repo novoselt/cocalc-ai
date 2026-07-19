@@ -48,6 +48,16 @@ export async function save(opts: JupyterSaveOptions) {
   await control.save(opts);
 }
 
+export async function load(opts: { path: string }) {
+  await start(opts.path);
+  await control.load(opts);
+}
+
+export async function set(opts: { path: string; ipynb: object }) {
+  await start(opts.path);
+  await control.set(opts);
+}
+
 export async function introspect(opts) {
   await start(opts.path);
   return await control.introspect(opts);

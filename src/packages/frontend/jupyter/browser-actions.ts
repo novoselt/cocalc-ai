@@ -88,7 +88,6 @@ import {
   DELETED_CHECK_INTERVAL,
 } from "@cocalc/sync/editor/generic/sync-doc";
 import { type WatchIterator } from "@cocalc/conat/files/watch";
-import { DiffMatchPatch, decompressPatch } from "@cocalc/util/dmp";
 import { mark_open_phase } from "@cocalc/frontend/project/open-file";
 import { effectivePlainEditorSettings } from "@cocalc/frontend/project/workspaces/editor-theme";
 import {
@@ -123,11 +122,6 @@ import {
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
 
-const dmpFileWatcher = new DiffMatchPatch({
-  matchThreshold: 1,
-  diffTimeout: 0.5,
-});
-
 const OUTPUT_FPS = 29;
 const DEFAULT_OUTPUT_MESSAGE_LIMIT = 500;
 const STALE_LIVE_RUN_IDLE_CHECK_MS = 10_000;
@@ -157,6 +151,44 @@ interface DiskIpynbRead {
   bytes: number;
   text: string;
   ipynb?: any;
+}
+
+function normalizePortableIpynbForComparison(ipynb: any): any {
+  if (ipynb == null) return ipynb;
+  const normalized = JSON.parse(JSON.stringify(ipynb));
+  for (const cell of normalized.cells ?? []) {
+    if (cell?.cell_type !== "markdown" || cell.attachments == null) continue;
+    const entries = cell.metadata?.cocalc?.blob_attachments?.entries;
+    if (entries == null || typeof entries !== "object") continue;
+    const wasArray = Array.isArray(cell.source);
+    const source = wasArray ? cell.source.join("") : `${cell.source ?? ""}`;
+    let complete = true;
+    const rewritten = source.replace(
+      /attachment:([^\s"'<>()[\]]+)/gi,
+      (original, encodedName) => {
+        let name: string;
+        try {
+          name = decodeURIComponent(encodedName);
+        } catch {
+          complete = false;
+          return original;
+        }
+        const entry = entries[name];
+        const variant = entry?.variants?.[entry?.primary_mime];
+        if (typeof variant?.url !== "string") {
+          complete = false;
+          return original;
+        }
+        return variant.url;
+      },
+    );
+    if (!complete) continue;
+    cell.source = wasArray
+      ? (rewritten.match(/.*(?:\n|$)/g)?.filter(Boolean) ?? [])
+      : rewritten;
+    delete cell.attachments;
+  }
+  return normalized;
 }
 
 // local cache: map project_id (string) -> kernels (immutable)
@@ -3733,9 +3765,10 @@ export class JupyterActions extends JupyterActions0 {
     if (diskRead.bytes == 0) {
       return { matches: false, diskRead };
     }
+    const normalizedDisk = normalizePortableIpynbForComparison(diskRead.ipynb);
     const rtcText = JSON.stringify(await this.toIpynb(), undefined, 2);
     return {
-      matches: diskRead.text === rtcText,
+      matches: JSON.stringify(normalizedDisk, undefined, 2) === rtcText,
       diskRead,
     };
   };
@@ -3753,7 +3786,8 @@ export class JupyterActions extends JupyterActions0 {
       this.runDebug("ipynb.load.empty");
       return;
     }
-    await this.setToIpynb(read.ipynb);
+    const api = await this.jupyterApi();
+    await api.load({ path: this.syncdbPath });
     this.hasUnsavedChanges = false;
     this.runDebug("ipynb.load.done", { bytes: read.bytes });
     // good time to refresh status
@@ -3765,19 +3799,37 @@ export class JupyterActions extends JupyterActions0 {
     if (this.isClosed() || this.syncdb?.get_state() != "ready") return;
 
     this.runDebug("ipynb.save.start");
-    const ipynb = await this.toIpynb();
+    const cellIds = this.store.get("cell_list")?.toJS() ?? [];
+    const cells = this.store.get("cells");
+    const expectedCells = cellIds.map((id) => {
+      const cell = cells?.get(id);
+      return {
+        id,
+        cell_type: cell?.get("cell_type") ?? "code",
+        input: cell?.get("input") ?? "",
+      };
+    });
+    const api = await this.jupyterApi();
+    await api.save({
+      path: this.syncdbPath,
+      expectedCellCount: cellIds.length,
+      expectedCellIdsInOrder: cellIds,
+      expectedCells,
+      expectedKernel: this.store.get("kernel") ?? "",
+    });
     if (this.isClosed()) return;
-
-    const serialize = JSON.stringify(ipynb, undefined, 2);
-    this.syncdb.fs.writeFile(this.path, serialize, true);
     this.hasUnsavedChanges = false;
     this.setState({ has_unsaved_changes: false });
     this.store.emit("has-unsaved-changes", false);
-    this.runDebug("ipynb.save.done", { bytes: serialize.length });
+    this.runDebug("ipynb.save.done");
+  };
+
+  setIpynbFromRawEditor = async (ipynb: object): Promise<void> => {
+    const api = await this.jupyterApi();
+    await api.set({ path: this.syncdbPath, ipynb });
   };
 
   private isIpynbDeleted = false;
-  private expectedPatchSeq = -1;
   private watchLoadFromDisk = async ({
     patch,
     patchSeq,
@@ -3789,56 +3841,18 @@ export class JupyterActions extends JupyterActions0 {
   } = {}) => {
     this.runDebug("watch.load.start", () => ({
       patchSeq,
-      expectedPatchSeq: this.expectedPatchSeq,
       ...this.summarizePatch(patch),
     }));
-    let usedPatch = false;
-    if (patch != null && this.expectedPatchSeq == patchSeq) {
-      // use patch
+    try {
+      // Disk notebooks contain native attachment bytes, whereas the live
+      // syncdoc contains global blob URLs. Authoritative reload must therefore
+      // run in the project process instead of applying JSON patches here.
+      await this.loadFromDisk({ diskRead });
       this.isIpynbDeleted = false;
-      // TODO/NOTE: obviously we're just a **TEXT FILE** and ignoring
-      // the json structure here for patching.  It will not work on anything
-      // nontrivial.  In that case, we waste a few cycles, then fall back
-      // to a full normal load from disk.  We could instead convert everything
-      // to the syncdoc format... but maybe later.
-      const ipynb = await this.toIpynb();
-      const [newValue] = dmpFileWatcher.patch_apply(
-        decompressPatch(patch),
-        JSON.stringify(ipynb, undefined, 2),
-      );
-      try {
-        const ipynb = JSON.parse(newValue);
-        await this.setToIpynb(ipynb);
-        usedPatch = true;
-        this.runDebug("watch.load.patch.applied", { patchSeq });
-      } catch (err) {
-        this.runDebug("watch.load.patch.failed", {
-          patchSeq,
-          err: `${err}`,
-        });
-        console.log(
-          "WARNING: error loading from disk using patch (fallback to full load)",
-          err,
-        );
-      }
-    }
-    if (!usedPatch) {
-      // full load
-      try {
-        await this.loadFromDisk({ diskRead });
-        this.isIpynbDeleted = false;
-        this.runDebug("watch.load.full.done", { patchSeq });
-      } catch {
-        this.isIpynbDeleted = true;
-        this.runDebug("watch.load.full.failed", { patchSeq });
-      }
-    }
-    if (patchSeq != null) {
-      this.expectedPatchSeq = patchSeq + 1;
-      this.runDebug("watch.load.expected_patch_seq", {
-        patchSeq,
-        expectedPatchSeq: this.expectedPatchSeq,
-      });
+      this.runDebug("watch.load.full.done", { patchSeq });
+    } catch {
+      this.isIpynbDeleted = true;
+      this.runDebug("watch.load.full.failed", { patchSeq });
     }
   };
 
@@ -3981,7 +3995,6 @@ export class JupyterActions extends JupyterActions0 {
           this.runDebug("watch.stream.opened");
           this.noteOpenInitPhase("watch_stream_opened");
           this.maybeLogOpenInitSummary("watch_stream_opened");
-          this.expectedPatchSeq = 0;
           for await (const { event, ignore, patch, patchSeq } of this
             .fileWatcher) {
             if (done()) return true;
@@ -3997,10 +4010,7 @@ export class JupyterActions extends JupyterActions0 {
               break;
             }
             if (ignore) {
-              this.runDebug("watch.event.ignore-flagged", {
-                patchSeq,
-                expectedPatchSeq: this.expectedPatchSeq,
-              });
+              this.runDebug("watch.event.ignore-flagged", { patchSeq });
             }
             await this.watchLoadFromDisk({ patch, patchSeq });
           }

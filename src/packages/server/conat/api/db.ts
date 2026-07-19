@@ -6,11 +6,16 @@ import { isValidUUID } from "@cocalc/util/misc";
 import { assertCollab } from "./util";
 import { MAX_BLOB_SIZE } from "@cocalc/util/db-schema/blobs";
 import {
-  assertCanSaveBlobForAccount,
   deleteOldestAccountBlobs as deleteOldestAccountBlobsForMembership,
   deleteOldestProjectBlobs as deleteOldestProjectBlobsForMembership,
   type BlobDeleteSummary,
 } from "@cocalc/server/membership/blob-limits";
+import { readBlobFromDatabase } from "@cocalc/server/blobs/read";
+import { saveBlobToDatabase } from "@cocalc/server/blobs/save";
+import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
+import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
+import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 
 export { userQuery };
 
@@ -131,12 +136,14 @@ export async function removeBlobTtls({
 export async function saveBlob({
   account_id,
   project_id,
+  host_id,
   uuid,
   blob,
   ttl,
 }: {
   account_id?: string;
   project_id?: string;
+  host_id?: string;
   uuid: string;
   blob: string;
   ttl?: number;
@@ -150,31 +157,96 @@ export async function saveBlob({
   if (account_id && project_id) {
     await assertCollab({ account_id, project_id });
   }
+  if (host_id) {
+    await assertHostAssignedProject({ host_id, project_id });
+  }
   const buffer = Buffer.from(blob, "base64");
   if (buffer.byteLength > MAX_BLOB_SIZE) {
     throw Error(
       `blob is too large (${buffer.byteLength} bytes; max ${MAX_BLOB_SIZE})`,
     );
   }
-  // Blob ids are content-addressed: uuid must equal uuidsha1(blob bytes).
-  // Clients intentionally compute this id before upload so they can reference
-  // blobs optimistically before the server acknowledges persistence.
-  await assertCanSaveBlobForAccount({
-    account_id,
-    project_id,
-    uuid,
-    blobSize: buffer.byteLength,
-  });
-  const D = db();
-  await callback2(D.save_blob, {
-    uuid,
-    blob: buffer,
-    ttl,
-    project_id,
-    account_id,
-    check: true,
-  });
+  const seedBayId = getConfiguredClusterSeedBayId();
+  if (getConfiguredBayId() === seedBayId) {
+    await saveBlobToDatabase({
+      uuid,
+      blob: buffer,
+      ttl,
+      project_id,
+      account_id,
+    });
+  } else {
+    await createInterBayAccountLocalClient({
+      client: getInterBayFabricClient(),
+      dest_bay: seedBayId,
+      timeout: 60_000,
+    }).saveBlob({
+      uuid,
+      data: buffer,
+      ttl,
+      project_id: project_id ?? null,
+      account_id: account_id ?? null,
+    });
+  }
   return { uuid };
+}
+
+export async function getBlob({
+  project_id,
+  host_id,
+  uuid,
+}: {
+  project_id?: string;
+  host_id?: string;
+  uuid: string;
+}): Promise<{ blob?: string }> {
+  if (!project_id) {
+    throw Error("project_id must be set");
+  }
+  if (host_id) {
+    await assertHostAssignedProject({ host_id, project_id });
+  }
+  if (!isValidUUID(uuid)) {
+    throw Error("uuid is invalid");
+  }
+  const seedBayId = getConfiguredClusterSeedBayId();
+  const bytes =
+    getConfiguredBayId() === seedBayId
+      ? await readBlobFromDatabase(uuid)
+      : (
+          await createInterBayAccountLocalClient({
+            client: getInterBayFabricClient(),
+            dest_bay: seedBayId,
+            timeout: 60_000,
+          }).getBlob({ uuid })
+        ).data;
+  return bytes == null ? {} : { blob: Buffer.from(bytes).toString("base64") };
+}
+
+async function assertHostAssignedProject({
+  host_id,
+  project_id,
+}: {
+  host_id: string;
+  project_id?: string;
+}): Promise<void> {
+  if (!project_id) {
+    throw Error("project_id must be set for a host blob request");
+  }
+  const { rowCount } = await getPool().query(
+    `
+      SELECT 1
+        FROM projects
+       WHERE project_id=$1
+         AND host_id=$2
+         AND deleted IS NOT true
+       LIMIT 1
+    `,
+    [project_id, host_id],
+  );
+  if (!rowCount) {
+    throw Error(`project ${project_id} is not assigned to host ${host_id}`);
+  }
 }
 
 export async function deleteOldestAccountBlobs({

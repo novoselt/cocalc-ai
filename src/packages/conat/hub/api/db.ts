@@ -1,4 +1,8 @@
-import { authFirst, authFirstRequireAccount } from "./util";
+import {
+  authFirst,
+  authFirstRequireAccount,
+  authFirstRequireProjectOrHost,
+} from "./util";
 
 export const db = {
   userQuery: authFirst,
@@ -7,6 +11,7 @@ export const db = {
   getLegacyTimeTravelPatches: authFirst,
   removeBlobTtls: authFirstRequireAccount,
   saveBlob: authFirst,
+  getBlob: authFirstRequireProjectOrHost,
   deleteOldestAccountBlobs: authFirstRequireAccount,
   deleteOldestProjectBlobs: authFirstRequireAccount,
 };
@@ -46,10 +51,16 @@ export interface DB {
   saveBlob: (opts: {
     account_id?: string;
     project_id?: string;
+    host_id?: string;
     uuid: string;
     blob: string;
     ttl?: number;
   }) => Promise<{ uuid: string }>;
+  getBlob: (opts: {
+    project_id?: string;
+    host_id?: string;
+    uuid: string;
+  }) => Promise<{ blob?: string }>;
   deleteOldestAccountBlobs: (opts: {
     account_id?: string;
     limit: number;
