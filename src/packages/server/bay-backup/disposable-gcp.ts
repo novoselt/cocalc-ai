@@ -385,7 +385,7 @@ try:
         for source in bundled_wal_dirs[0].iterdir():
             if source.is_file():
                 shutil.copy2(source, target_wal / source.name)
-    for stale in ("postmaster.pid", "postmaster.opts", "restore.signal", "standby.signal"):
+    for stale in ("postmaster.pid", "postmaster.opts", "recovery.signal", "standby.signal"):
         (pgdata / stale).unlink(missing_ok=True)
 
     hba = pgdata / "pg_hba.conf"
