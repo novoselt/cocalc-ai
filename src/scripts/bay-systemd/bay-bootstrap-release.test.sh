@@ -33,6 +33,9 @@ ln -s "${RELEASES_DIR}/100-live-hub" "${COCALC_BAY_PROC_ROOT}/123/cwd"
 
 prune_old_releases
 
+grep -q '^COCALC_LOCAL_PG_ARCHIVE=1$' "${SCRIPT_DIR}/env/bay.env.example"
+grep -q '^COCALC_LOCAL_PG_ARCHIVE_TIMEOUT=1h$' "${SCRIPT_DIR}/env/bay.env.example"
+
 for release in 100-live-hub 400-static 500-static; do
   if [[ ! -d "${RELEASES_DIR}/${release}" ]]; then
     echo "expected retained release is missing: ${release}" >&2

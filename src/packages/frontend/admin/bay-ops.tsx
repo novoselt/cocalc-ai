@@ -245,6 +245,12 @@ function BackupHealth({ detail }: { detail: BayOpsDetail }) {
           {readiness.last_restore_test_evidence.worker_cleanup
             ? `, worker ${readiness.last_restore_test_evidence.worker_cleanup}`
             : ""}
+          {readiness.last_restore_test_evidence.worker_stage
+            ? `, stage ${readiness.last_restore_test_evidence.worker_stage}`
+            : ""}
+          {readiness.last_restore_test_evidence.worker_error
+            ? `: ${readiness.last_restore_test_evidence.worker_error}`
+            : ""}
         </Typography.Text>
       )}
     </Space>

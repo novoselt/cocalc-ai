@@ -1499,6 +1499,9 @@ export interface BayRestoreReadinessStatus {
 export interface BayRestoreTestEvidence {
   execution_mode: "bay-local" | "disposable-gcp";
   duration_ms: number | null;
+  worker_status: "passed" | "failed" | null;
+  worker_stage: string | null;
+  worker_error: string | null;
   worker_instance_name: string | null;
   worker_project_id: string | null;
   worker_zone: string | null;

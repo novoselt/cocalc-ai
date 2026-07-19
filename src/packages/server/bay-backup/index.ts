@@ -3057,7 +3057,7 @@ async function waitForWalArchiveAdvance({
   previous_last_segment: string | null;
   remote_object_keys?: Set<string> | null;
 }): Promise<WalArchiveSnapshot> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 30_000;
   let snapshot = await getWalArchiveSnapshot({
     paths,
     state,
@@ -3177,6 +3177,12 @@ async function syncBayWalArchive({
   let uploaded_wal_count = 0;
   if (forceSwitch) {
     try {
+      const { rows } = await getPool().query<{ archive_mode: string }>(
+        "SELECT current_setting('archive_mode') AS archive_mode",
+      );
+      if (`${rows[0]?.archive_mode ?? ""}`.toLowerCase() !== "on") {
+        throw new Error("PostgreSQL archive_mode is not on");
+      }
       await getPool().query("SELECT pg_switch_wal()");
       snapshot = await waitForWalArchiveAdvance({
         paths,
@@ -3184,6 +3190,14 @@ async function syncBayWalArchive({
         previous_last_segment,
         remote_object_keys,
       });
+      if (
+        !snapshot.last_archived_wal_segment ||
+        snapshot.last_archived_wal_segment === previous_last_segment
+      ) {
+        throw new Error(
+          "forced WAL switch did not produce a new archived WAL segment",
+        );
+      }
     } catch (err) {
       state = {
         ...state,
@@ -5220,6 +5234,9 @@ async function runDisposableGcpBayRestoreTest({
       evidence: {
         execution_mode: "disposable-gcp",
         duration_ms: workerRun.worker.duration_ms,
+        worker_status: workerRun.worker.status,
+        worker_stage: workerRun.worker.stage,
+        worker_error: workerRun.worker.error ?? null,
         worker_instance_name: workerRun.instance_name,
         worker_project_id: workerRun.project_id,
         worker_zone: workerRun.zone,
@@ -5295,6 +5312,9 @@ async function runDisposableGcpBayRestoreTest({
       evidence: {
         execution_mode: "disposable-gcp",
         duration_ms: workerRun?.worker.duration_ms ?? null,
+        worker_status: workerRun?.worker.status ?? null,
+        worker_stage: workerRun?.worker.stage ?? null,
+        worker_error: workerRun?.worker.error ?? String(err).slice(0, 2_000),
         worker_instance_name: workerRun?.instance_name ?? null,
         worker_project_id: workerRun?.project_id ?? null,
         worker_zone: workerRun?.zone ?? null,
@@ -5560,6 +5580,9 @@ export async function runBayRestoreTest({
         execution_mode: "bay-local",
         duration_ms:
           new Date(finished_at).getTime() - new Date(started_at).getTime(),
+        worker_status: null,
+        worker_stage: null,
+        worker_error: null,
         worker_instance_name: null,
         worker_project_id: null,
         worker_zone: null,
@@ -5622,6 +5645,9 @@ export async function runBayRestoreTest({
       evidence: {
         execution_mode: "bay-local",
         duration_ms: null,
+        worker_status: null,
+        worker_stage: null,
+        worker_error: String(err).slice(0, 2_000),
         worker_instance_name: null,
         worker_project_id: null,
         worker_zone: null,

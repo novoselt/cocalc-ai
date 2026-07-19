@@ -873,6 +873,9 @@ describe("bay-backup runner", () => {
         if (sql === "SELECT pg_sleep(0.25)") {
           return { rows: [] };
         }
+        if (sql === "SELECT current_setting('archive_mode') AS archive_mode") {
+          return { rows: [{ archive_mode: "on" }] };
+        }
         if (sql === "SELECT pg_switch_wal()") {
           writeFileSync(
             join(walArchiveDir, "0000000100000000000000E9"),
@@ -1215,6 +1218,9 @@ describe("bay-backup runner", () => {
         if (sql === "SELECT pg_sleep(0.25)") {
           return { rows: [] };
         }
+        if (sql === "SELECT current_setting('archive_mode') AS archive_mode") {
+          return { rows: [{ archive_mode: "on" }] };
+        }
         if (sql === "SELECT pg_switch_wal()") {
           writeFileSync(
             join(walArchiveDir, "0000000100000000000000E9"),
@@ -1491,6 +1497,9 @@ describe("bay-backup runner", () => {
         }
         if (sql === "SELECT pg_sleep(0.25)") {
           return { rows: [] };
+        }
+        if (sql === "SELECT current_setting('archive_mode') AS archive_mode") {
+          return { rows: [{ archive_mode: "on" }] };
         }
         if (sql === "SELECT pg_switch_wal()") {
           mkdirSync(walArchiveDir, { recursive: true });
