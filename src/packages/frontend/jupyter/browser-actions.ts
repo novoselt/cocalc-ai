@@ -153,6 +153,46 @@ interface DiskIpynbRead {
   ipynb?: any;
 }
 
+function isMissingProjectJupyterMethod(
+  err: unknown,
+  method: "load" | "set",
+): boolean {
+  const message = `${err instanceof Error ? err.message : err}`.toLowerCase();
+  const escapedMethod = method.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (
+    new RegExp(`unknown service method ['\"]?${escapedMethod}['\"]?`).test(
+      message,
+    ) ||
+    new RegExp(
+      `(?:jupyter\\.)?${escapedMethod}[^\\n]*not implemented|not implemented[^\\n]*(?:jupyter\\.)?${escapedMethod}`,
+    ).test(message) ||
+    message.includes(`.${method} is not a function`)
+  );
+}
+
+async function withLegacyProjectJupyterFallback<T>({
+  method,
+  call,
+  fallback,
+}: {
+  method: "load" | "set";
+  call: () => Promise<T>;
+  fallback: () => Promise<T>;
+}): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    if (!isMissingProjectJupyterMethod(err, method)) {
+      throw err;
+    }
+    return await fallback();
+  }
+}
+
+export const __test__ = {
+  withLegacyProjectJupyterFallback,
+};
+
 function normalizePortableIpynbForComparison(ipynb: any): any {
   if (ipynb == null) return ipynb;
   const normalized = JSON.parse(JSON.stringify(ipynb));
@@ -3787,7 +3827,16 @@ export class JupyterActions extends JupyterActions0 {
       return;
     }
     const api = await this.jupyterApi();
-    await api.load({ path: this.syncdbPath });
+    await withLegacyProjectJupyterFallback({
+      method: "load",
+      call: async () => await api.load({ path: this.syncdbPath }),
+      fallback: async () => {
+        // Running projects retain their mounted bundle across deployments. Keep
+        // them usable until the user restarts onto the attachment-aware runtime.
+        this.runDebug("ipynb.load.legacy-fallback");
+        await this.setToIpynb(read.ipynb);
+      },
+    });
     this.hasUnsavedChanges = false;
     this.runDebug("ipynb.load.done", { bytes: read.bytes });
     // good time to refresh status
@@ -3826,7 +3875,14 @@ export class JupyterActions extends JupyterActions0 {
 
   setIpynbFromRawEditor = async (ipynb: object): Promise<void> => {
     const api = await this.jupyterApi();
-    await api.set({ path: this.syncdbPath, ipynb });
+    await withLegacyProjectJupyterFallback({
+      method: "set",
+      call: async () => await api.set({ path: this.syncdbPath, ipynb }),
+      fallback: async () => {
+        this.runDebug("ipynb.set.legacy-fallback");
+        await this.setToIpynb(ipynb);
+      },
+    });
   };
 
   private isIpynbDeleted = false;

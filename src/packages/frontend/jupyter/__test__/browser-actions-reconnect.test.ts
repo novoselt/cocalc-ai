@@ -16,7 +16,7 @@ jest.mock("../widgets/manager", () => ({
   WidgetManager: class WidgetManager {},
 }));
 
-import { JupyterActions } from "../browser-actions";
+import { __test__, JupyterActions } from "../browser-actions";
 
 describe("JupyterActions reconnect coordination", () => {
   beforeEach(() => {
@@ -86,5 +86,82 @@ describe("JupyterActions reconnect coordination", () => {
     expect(clearRunQueue).toHaveBeenCalled();
     expect(clear_all_cell_run_state).toHaveBeenCalled();
     expect(target.runningNow).toBe(false);
+  });
+});
+
+describe("JupyterActions legacy project runtime compatibility", () => {
+  it("loads in the browser when the project does not implement jupyter.load", async () => {
+    const fallback = jest.fn(async () => "fallback");
+
+    await expect(
+      __test__.withLegacyProjectJupyterFallback({
+        method: "load",
+        call: async () => {
+          throw new Error("unknown service method 'load'");
+        },
+        fallback,
+      }),
+    ).resolves.toBe("fallback");
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("recognizes the old not-implemented jupyter.set response", async () => {
+    const fallback = jest.fn(async () => "fallback");
+
+    await expect(
+      __test__.withLegacyProjectJupyterFallback({
+        method: "set",
+        call: async () => {
+          throw new Error("jupyter.set is not implemented");
+        },
+        fallback,
+      }),
+    ).resolves.toBe("fallback");
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("recognizes a missing method on an older local API proxy", async () => {
+    const fallback = jest.fn(async () => "fallback");
+
+    await expect(
+      __test__.withLegacyProjectJupyterFallback({
+        method: "set",
+        call: async () => {
+          throw new TypeError("api.set is not a function");
+        },
+        fallback,
+      }),
+    ).resolves.toBe("fallback");
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hide real project-side failures", async () => {
+    const fallback = jest.fn(async () => "fallback");
+
+    await expect(
+      __test__.withLegacyProjectJupyterFallback({
+        method: "load",
+        call: async () => {
+          throw new Error("permission denied");
+        },
+        fallback,
+      }),
+    ).rejects.toThrow("permission denied");
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("does not treat another missing method as jupyter.load", async () => {
+    const fallback = jest.fn(async () => "fallback");
+
+    await expect(
+      __test__.withLegacyProjectJupyterFallback({
+        method: "load",
+        call: async () => {
+          throw new Error("unknown service method 'set'");
+        },
+        fallback,
+      }),
+    ).rejects.toThrow("unknown service method 'set'");
+    expect(fallback).not.toHaveBeenCalled();
   });
 });
