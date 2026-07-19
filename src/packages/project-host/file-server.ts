@@ -160,6 +160,7 @@ import {
   IMAGE_CACHE,
 } from "@cocalc/project-runner/run/rootfs-base";
 import { createProjectSandboxFilesystem } from "./file-server-sandbox-policy";
+import { importJupyterIpynb, saveJupyterIpynb } from "./jupyter-ipynb";
 import { resetClonedProjectState } from "./clone-state";
 import { withBackupParallelLimit } from "./backup-queue";
 export { getBackupExecutionStatus } from "./backup-queue";
@@ -5080,6 +5081,20 @@ export async function initFsServer({
     onMutation: ({ subject, op }) => {
       const project_id = projectIdFromSubject(subject);
       void touchProjectLastEdited(project_id, `fs:${op}`);
+    },
+    jupyter: {
+      importIpynb: async ({ subject, ipynb }) =>
+        await importJupyterIpynb({
+          project_id: projectIdFromSubject(subject),
+          ipynb,
+        }),
+      saveIpynb: async ({ subject, path, ipynb, fs }) =>
+        await saveJupyterIpynb({
+          project_id: projectIdFromSubject(subject),
+          path,
+          ipynb,
+          fs,
+        }),
     },
   });
 }

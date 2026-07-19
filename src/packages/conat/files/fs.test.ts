@@ -1,3 +1,12 @@
+const testJupyter = {
+  async importIpynb({ ipynb }) {
+    return { ipynb };
+  },
+  async saveIpynb({ ipynb }) {
+    return { ipynb, bytes: 0, converted: false };
+  },
+};
+
 describe("filesystem explicit routing", () => {
   it("builds and parses shared directory filesystem subjects", async () => {
     const { parseShareFsSubject, shareFsSubject } = await import("./fs");
@@ -36,12 +45,27 @@ describe("filesystem explicit routing", () => {
     await expect(
       fsServer({
         service: "fs-test",
+        jupyter: testJupyter,
         fs: async () =>
           ({
             watch: jest.fn(),
           }) as any,
       } as any),
     ).rejects.toThrow("must provide an explicit Conat client");
+  });
+
+  it("requires Jupyter handlers on every writable filesystem service", async () => {
+    const { fsServer } = await import("./fs");
+    const client = { service: jest.fn() } as any;
+
+    await expect(
+      fsServer({
+        service: "fs-test",
+        client,
+        fs: async () => ({}) as any,
+      } as any),
+    ).rejects.toThrow("requires filesystem Jupyter handlers");
+    expect(client.service).not.toHaveBeenCalled();
   });
 
   it("can invalidate a cached filesystem subject", async () => {
@@ -63,6 +87,7 @@ describe("filesystem explicit routing", () => {
       service: "fs-test",
       client,
       fs: fs0 as any,
+      jupyter: testJupyter,
     });
 
     await handlers.readFile.call(
@@ -87,6 +112,77 @@ describe("filesystem explicit routing", () => {
       "utf8",
     );
     expect(fs0).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes Jupyter conversion only through the writable filesystem service", async () => {
+    const { fsServer } = await import("./fs");
+    const filesystem = {
+      writeFile: jest.fn(async () => {}),
+    } as any;
+    const importIpynb = jest.fn(async ({ ipynb }) => ({ ipynb }));
+    const saveIpynb = jest.fn(async ({ ipynb }) => ({
+      ipynb,
+      bytes: 12,
+      converted: false,
+    }));
+    const onMutation = jest.fn();
+    let handlers: any;
+    const client = {
+      service: jest.fn(async (_subject, svc) => {
+        handlers = svc;
+        return { close: jest.fn() };
+      }),
+    } as any;
+    const subject = "fs-test.project-00000000-0000-4000-8000-000000000000";
+
+    const server = await fsServer({
+      service: "fs-test",
+      client,
+      fs: async () => filesystem,
+      onMutation,
+      jupyter: { importIpynb, saveIpynb },
+    });
+    const ipynb = { cells: [] };
+
+    await expect(
+      handlers.jupyterImportIpynb.call({ subject }, ipynb),
+    ).resolves.toEqual({ ipynb });
+    await expect(
+      handlers.jupyterSaveIpynb.call({ subject }, "a.ipynb", ipynb),
+    ).resolves.toMatchObject({ bytes: 12 });
+    expect(importIpynb).toHaveBeenCalledWith({ subject, ipynb });
+    expect(saveIpynb).toHaveBeenCalledWith({
+      subject,
+      path: "a.ipynb",
+      ipynb,
+      fs: filesystem,
+    });
+    expect(onMutation).toHaveBeenCalledWith({
+      subject,
+      op: "jupyterSaveIpynb",
+      path: "a.ipynb",
+    });
+    server.close();
+  });
+
+  it("does not expose Jupyter conversion on read-only filesystem services", async () => {
+    const { fsReadOnlyServer } = await import("./fs");
+    let handlers: any;
+    const client = {
+      service: jest.fn(async (_subject, svc) => {
+        handlers = svc;
+        return { close: jest.fn() };
+      }),
+    } as any;
+    const server = await fsReadOnlyServer({
+      service: "fs-viewer-test",
+      client,
+      fs: async () => ({}) as any,
+    });
+
+    expect(handlers.jupyterImportIpynb).toBeUndefined();
+    expect(handlers.jupyterSaveIpynb).toBeUndefined();
+    server.close();
   });
 
   it("rejects read locks on read-only filesystem service", async () => {

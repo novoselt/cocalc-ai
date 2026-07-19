@@ -121,6 +121,28 @@ export interface WriteFileDeltaOptions {
   minLength?: number;
 }
 
+export interface JupyterImportIpynbResult {
+  ipynb: object;
+}
+
+export interface JupyterSaveIpynbResult extends JupyterImportIpynbResult {
+  bytes: number;
+  converted: boolean;
+}
+
+export interface FilesystemJupyterHandlers {
+  importIpynb: (opts: {
+    subject: string;
+    ipynb: object;
+  }) => Promise<JupyterImportIpynbResult>;
+  saveIpynb: (opts: {
+    subject: string;
+    path: string;
+    ipynb: object;
+    fs: Filesystem;
+  }) => Promise<JupyterSaveIpynbResult>;
+}
+
 export interface CopyOptions {
   dereference?: boolean;
   errorOnExist?: boolean;
@@ -231,6 +253,16 @@ export interface Filesystem {
     content: string | Buffer,
     options?: WriteFileDeltaOptions,
   ) => Promise<void>;
+  // These are optional on the underlying local Filesystem implementation, but
+  // required on FilesystemClient below. Every writable Conat file service must
+  // implement them on the always-on project-host/storage data plane. Never
+  // delegate document load/save operations to the project compute container:
+  // users must be able to edit and save files while compute is stopped.
+  jupyterImportIpynb?: (ipynb: object) => Promise<JupyterImportIpynbResult>;
+  jupyterSaveIpynb?: (
+    path: string,
+    ipynb: object,
+  ) => Promise<JupyterSaveIpynbResult>;
   // Signal interest in a file so the backend can keep a shared watcher alive.
   // active=false drops interest immediately; otherwise the backend prunes stale
   // interest after COCALC_SYNC_FS_HEARTBEAT_TTL_MS (default 60s).
@@ -421,6 +453,7 @@ interface Options {
     op: string;
     path?: string;
   }) => void | Promise<void>;
+  jupyter: FilesystemJupyterHandlers;
 }
 
 interface ReadOnlyOptions {
@@ -573,8 +606,12 @@ export async function fsServer({
   client,
   project_id,
   onMutation,
+  jupyter,
 }: Options) {
   const resolvedClient = requireClient(client, "fsServer");
+  if (jupyter == null) {
+    throw Error("fsServer requires filesystem Jupyter handlers");
+  }
   const subject = project_id
     ? `${service}.project-${project_id}`
     : `${service}.*`;
@@ -812,6 +849,22 @@ export async function fsServer({
         await (await fs(this.subject)).writeFile(path, data, saveLast);
         void reportMutation(this.subject, "writeFile", path);
       },
+      async jupyterImportIpynb(ipynb: object) {
+        return await jupyter.importIpynb({
+          subject: this.subject!,
+          ipynb,
+        });
+      },
+      async jupyterSaveIpynb(path: string, ipynb: object) {
+        const result = await jupyter.saveIpynb({
+          subject: this.subject!,
+          path,
+          ipynb,
+          fs: await fs(this.subject),
+        });
+        void reportMutation(this.subject, "jupyterSaveIpynb", path);
+        return result;
+      },
       // @ts-ignore
       async watch() {
         const subject = this.subject!;
@@ -850,11 +903,15 @@ export async function fsServer({
   };
 }
 
-export type FilesystemClient = Omit<Omit<Filesystem, "stat">, "lstat"> & {
-  listing: (path: string) => Promise<Listing>;
-  stat: (path: string) => Promise<Stats>;
-  lstat: (path: string) => Promise<Stats>;
-};
+export type FilesystemClient = Omit<
+  Filesystem,
+  "stat" | "lstat" | "jupyterImportIpynb" | "jupyterSaveIpynb"
+> &
+  Required<Pick<Filesystem, "jupyterImportIpynb" | "jupyterSaveIpynb">> & {
+    listing: (path: string) => Promise<Listing>;
+    stat: (path: string) => Promise<Stats>;
+    lstat: (path: string) => Promise<Stats>;
+  };
 
 const PATCH_FALLBACK_CODES = new Set([
   "ETAG_MISMATCH",

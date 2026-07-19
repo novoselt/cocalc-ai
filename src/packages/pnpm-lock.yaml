@@ -1261,6 +1261,9 @@ importers:
       '@cocalc/http-api':
         specifier: workspace:*
         version: link:../http-api
+      '@cocalc/jupyter':
+        specifier: workspace:*
+        version: link:../jupyter
       '@cocalc/lite':
         specifier: workspace:*
         version: 'link:'
@@ -1459,6 +1462,9 @@ importers:
       '@cocalc/file-server':
         specifier: workspace:*
         version: link:../file-server
+      '@cocalc/jupyter':
+        specifier: workspace:*
+        version: link:../jupyter
       '@cocalc/lite':
         specifier: workspace:*
         version: link:../lite

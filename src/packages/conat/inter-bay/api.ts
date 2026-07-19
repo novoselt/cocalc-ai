@@ -1050,6 +1050,14 @@ export interface AccountLocalSaveBlobRequest {
   account_id?: string | null;
 }
 
+export interface AccountLocalGetBlobRequest {
+  uuid: string;
+}
+
+export interface AccountLocalGetBlobResult {
+  data?: Uint8Array;
+}
+
 export interface AccountLocalVerifySignInPasswordRequest {
   email_address: string;
   password: string;
@@ -2174,6 +2182,7 @@ export type AccountLocalMethod =
   | "verify-fresh-auth-credentials"
   | "get-account-id-from-remember-me"
   | "save-blob"
+  | "get-blob"
   | "create-cli-login-session"
   | "redeem-verify-email"
   | "send-email-verification"
@@ -3416,6 +3425,9 @@ export interface InterBayAccountLocalApi {
     opts: AccountLocalGetAccountIdFromRememberMeRequest,
   ) => Promise<AccountLocalGetAccountIdFromRememberMeResult>;
   saveBlob: (opts: AccountLocalSaveBlobRequest) => Promise<void>;
+  getBlob: (
+    opts: AccountLocalGetBlobRequest,
+  ) => Promise<AccountLocalGetBlobResult>;
   verifySignInPassword: (
     opts: AccountLocalVerifySignInPasswordRequest,
   ) => Promise<AccountLocalVerifySignInPasswordResult>;
@@ -5549,6 +5561,15 @@ export function createInterBayAccountLocalClient({
       method: "save-blob",
     }),
   });
+  const getBlobClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "getBlob">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "get-blob",
+    }),
+  });
   const getAccountIdFromRememberMeClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "getAccountIdFromRememberMe">
   >({
@@ -6572,6 +6593,7 @@ export function createInterBayAccountLocalClient({
     getAccountIdFromRememberMe: async (opts) =>
       await getAccountIdFromRememberMeClient.getAccountIdFromRememberMe(opts),
     saveBlob: async (opts) => await saveBlobClient.saveBlob(opts),
+    getBlob: async (opts) => await getBlobClient.getBlob(opts),
     verifySignInPassword: async (opts) =>
       await verifySignInPasswordClient.verifySignInPassword(opts),
     createCliLoginSession: async (opts) =>
@@ -7008,6 +7030,17 @@ export function createInterBayAccountLocalHandler({
       }),
       impl: {
         saveBlob: async (opts) => await impl.saveBlob(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayAccountLocalApi, "getBlob">>({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "get-blob",
+      }),
+      impl: {
+        getBlob: async (opts) => await impl.getBlob(opts),
       },
     }),
     createServiceHandler<

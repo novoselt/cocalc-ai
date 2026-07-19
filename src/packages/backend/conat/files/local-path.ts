@@ -1,4 +1,8 @@
-import { fsServer, DEFAULT_FILE_SERVICE } from "@cocalc/conat/files/fs";
+import {
+  fsServer,
+  DEFAULT_FILE_SERVICE,
+  type FilesystemJupyterHandlers,
+} from "@cocalc/conat/files/fs";
 import { SandboxedFilesystem } from "@cocalc/backend/sandbox";
 import { isValidUUID } from "@cocalc/util/misc";
 import { mkdir } from "fs/promises";
@@ -21,6 +25,7 @@ export async function localPathFileserver({
   allowSafeModeSymlink,
   disableOpenAt2,
   onMutation,
+  jupyter,
 }: {
   service?: string;
   client?: Client;
@@ -41,7 +46,8 @@ export async function localPathFileserver({
     op: string;
     path?: string;
   }) => void | Promise<void>;
-} = {}) {
+  jupyter: FilesystemJupyterHandlers;
+}) {
   logger.debug("localPathFileserver", {
     service,
     project_id,
@@ -94,6 +100,7 @@ export async function localPathFileserver({
       });
     },
     onMutation,
+    jupyter,
   });
   logger.debug("created fsServer...", { service });
   return { server, client, path, service, close: () => server.close() };

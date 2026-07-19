@@ -58,6 +58,7 @@ import { APP_PROXY_EXPOSURE_HEADER } from "@cocalc/backend/auth/app-proxy";
 import { attachProjectProxy } from "@cocalc/project-proxy/proxy";
 import { hubApi, init as initHubApi } from "@cocalc/lite/hub/api";
 import { authorizeProjectHostHubApiRequest } from "./hub/api-request-authorization";
+import { wireDbApi } from "./hub/db";
 import { listAcpAutomationProjectIds } from "@cocalc/lite/hub/sqlite/acp-automations";
 import {
   getAccountEffectiveLimits,
@@ -530,6 +531,7 @@ export async function main(
     client: conatClient,
     authorizeRequest: authorizeProjectHostHubApiRequest,
   });
+  wireDbApi();
   wireSystemApi();
   wireHostsApi();
   wireNotificationsApi();

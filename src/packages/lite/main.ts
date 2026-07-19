@@ -20,6 +20,7 @@ import { setConatServer } from "@cocalc/backend/data";
 import { project_id } from "@cocalc/project/data";
 import { initHttpServer, initApp } from "./http";
 import { localPathFileserver } from "@cocalc/backend/conat/files/local-path";
+import { createLiteJupyterFilesystemHandlers } from "./jupyter-ipynb";
 import { init as initBugCounter } from "@cocalc/project/bug-counter";
 import { init as initChangefeeds } from "./hub/changefeeds";
 import { init as initHubApi } from "./hub/api";
@@ -224,6 +225,10 @@ export async function main(opts?: {
     path,
     project_id,
     unsafeMode: true,
+    jupyter: createLiteJupyterFilesystemHandlers({
+      client: conatClient,
+      project_id,
+    }),
   });
 
   logger.debug("start acp conat server");

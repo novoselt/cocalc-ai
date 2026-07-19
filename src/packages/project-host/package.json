@@ -42,6 +42,7 @@
     "@cocalc/backend": "workspace:*",
     "@cocalc/conat": "workspace:*",
     "@cocalc/file-server": "workspace:*",
+    "@cocalc/jupyter": "workspace:*",
     "@cocalc/lite": "workspace:*",
     "@cocalc/openat2": "^0.1.0",
     "@cocalc/project-proxy": "workspace:*",

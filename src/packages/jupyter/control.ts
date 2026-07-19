@@ -491,6 +491,29 @@ export async function save(opts: JupyterSaveOptions) {
   await actions.save_ipynb_file();
 }
 
+export async function load({ path }: { path: string }) {
+  const notebookPath = ipynbPath(path);
+  const actions = jupyterActions[notebookPath];
+  if (actions == null) {
+    throw Error(`${notebookPath} not running`);
+  }
+  const raw = await actions.syncdb.fs.readFile(notebookPath);
+  const text = Buffer.isBuffer(raw) ? raw.toString("utf8") : `${raw}`;
+  if (text.length === 0) {
+    return;
+  }
+  await actions.setToIpynb(JSON.parse(text));
+}
+
+export async function set({ path, ipynb }: { path: string; ipynb: object }) {
+  const notebookPath = ipynbPath(path);
+  const actions = jupyterActions[notebookPath];
+  if (actions == null) {
+    throw Error(`${notebookPath} not running`);
+  }
+  await actions.setToIpynb(ipynb);
+}
+
 // Returns async iterator over outputs
 export async function run({ path, cells, noHalt, socket, run_id }: RunOptions) {
   logger.debug("run:", { path, noHalt, run_id });

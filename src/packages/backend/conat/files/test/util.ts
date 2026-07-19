@@ -36,6 +36,20 @@ export async function createPathFileserver({
     allowSafeModeHardlink,
     allowSafeModeSymlink,
     disableOpenAt2,
+    jupyter: {
+      async importIpynb({ ipynb }) {
+        return { ipynb };
+      },
+      async saveIpynb({ path, ipynb, fs }) {
+        const serialized = JSON.stringify(ipynb, undefined, 2);
+        await fs.writeFile(path, serialized, true);
+        return {
+          ipynb,
+          bytes: Buffer.byteLength(serialized),
+          converted: false,
+        };
+      },
+    },
   });
   servers.push(server);
   return server;

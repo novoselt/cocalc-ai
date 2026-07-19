@@ -26,6 +26,8 @@ export const ACCOUNT_PROJECT_HOST_HUB_METHODS = new Set([
 ]);
 
 export const PROJECT_PROJECT_HOST_HUB_METHODS = new Set([
+  "db.getBlob",
+  "db.saveBlob",
   "projects.getSshKeys",
   "system.assertProjectPublicSharingAllowed",
   "system.getProjectAppPublicPolicy",

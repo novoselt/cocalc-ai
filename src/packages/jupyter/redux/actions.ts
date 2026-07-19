@@ -227,7 +227,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     // this can be overloaded in a derived class
   }
 
-  private requireConatClient = (action: string): ConatClient => {
+  protected requireConatClient = (action: string): ConatClient => {
     const client = this.getConatClient();
     if (client == null) {
       throw Error(`JupyterActions.${action} requires an explicit Conat client`);
@@ -2603,6 +2603,10 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     };
   };
 
+  protected async prepareIpynbForSyncdoc(ipynb: any): Promise<any> {
+    return ipynb;
+  }
+
   setToIpynb = async (
     ipynb: any,
     data_only: boolean = false,
@@ -2619,6 +2623,10 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     if (typeof ipynb != "object") {
       throw Error("ipynb must be an object");
     }
+
+    // Project-side implementations use this asynchronous boundary to replace
+    // native Jupyter attachments before any live syncdoc state is mutated.
+    ipynb = await this.prepareIpynbForSyncdoc(ipynb);
 
     this._state = "load";
 

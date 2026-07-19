@@ -21,6 +21,18 @@ export async function init() {
     path: process.env.HOME ?? "/tmp",
     unsafeMode: true,
     project_id,
+    jupyter: {
+      async importIpynb() {
+        throw Error(
+          "Jupyter file conversion belongs to the always-on project host",
+        );
+      },
+      async saveIpynb() {
+        throw Error(
+          "Jupyter file conversion belongs to the always-on project host",
+        );
+      },
+    },
   });
 }
 
