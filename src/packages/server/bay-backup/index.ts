@@ -90,6 +90,7 @@ import type {
   BayRestoreTestRunResult,
   BayBackupStatus,
   BayRestoreReadinessStatus,
+  BayRestoreTestEvidence,
   BayBackupsPostgresStatus,
 } from "@cocalc/conat/hub/api/system";
 import { getSingleBayInfo } from "@cocalc/server/bay-directory";
@@ -108,6 +109,13 @@ import {
   mapCloudRegionToR2Region,
   parseR2Region,
 } from "@cocalc/util/consts";
+import {
+  createTemporaryR2ReadCredentials,
+  newDisposableRestoreWorkerIdentity,
+  runDisposableGcpRestoreWorker,
+  type DisposableGcpRestoreResult,
+  type DisposableRestoreWorkerResult,
+} from "./disposable-gcp";
 
 const logger = getLogger("server:bay-backup");
 const execFile = promisify(execFile0);
@@ -200,6 +208,7 @@ type StoredBayBackupState = {
   last_pitr_test_target_time: string | null;
   last_pitr_test_target_dir: string | null;
   last_pitr_test_remote_only: boolean | null;
+  last_restore_test_evidence?: BayRestoreTestEvidence | null;
 };
 
 type StoredBayBackupManifest = {
@@ -692,6 +701,7 @@ function defaultState({
     last_pitr_test_target_time: null,
     last_pitr_test_target_dir: null,
     last_pitr_test_remote_only: null,
+    last_restore_test_evidence: null,
   };
 }
 
@@ -3047,7 +3057,7 @@ async function waitForWalArchiveAdvance({
   previous_last_segment: string | null;
   remote_object_keys?: Set<string> | null;
 }): Promise<WalArchiveSnapshot> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 30_000;
   let snapshot = await getWalArchiveSnapshot({
     paths,
     state,
@@ -3167,6 +3177,12 @@ async function syncBayWalArchive({
   let uploaded_wal_count = 0;
   if (forceSwitch) {
     try {
+      const { rows } = await getPool().query<{ archive_mode: string }>(
+        "SELECT current_setting('archive_mode') AS archive_mode",
+      );
+      if (`${rows[0]?.archive_mode ?? ""}`.toLowerCase() !== "on") {
+        throw new Error("PostgreSQL archive_mode is not on");
+      }
       await getPool().query("SELECT pg_switch_wal()");
       snapshot = await waitForWalArchiveAdvance({
         paths,
@@ -3174,6 +3190,14 @@ async function syncBayWalArchive({
         previous_last_segment,
         remote_object_keys,
       });
+      if (
+        !snapshot.last_archived_wal_segment ||
+        snapshot.last_archived_wal_segment === previous_last_segment
+      ) {
+        throw new Error(
+          "forced WAL switch did not produce a new archived WAL segment",
+        );
+      }
     } catch (err) {
       state = {
         ...state,
@@ -3690,6 +3714,18 @@ function mapRestoreReadiness({
     summary = `Latest backup ${latest_backup_set_id} has not been restore-tested. Last tested backup ${last_restore_test_backup_set_id} ${prior} at ${last_restore_tested_at ?? "unknown time"}.`;
   }
 
+  const restoreTestIsNewer =
+    last_restore_tested_at != null &&
+    last_pitr_tested_at != null &&
+    Date.parse(last_restore_tested_at) > Date.parse(last_pitr_tested_at);
+  if (
+    latest_backup_restore_test_status === "passed" &&
+    latest_backup_pitr_test_status === "failed" &&
+    restoreTestIsNewer
+  ) {
+    summary = `Latest backup ${latest_backup_set_id} passed a plain restore test at ${last_restore_tested_at}. PITR remains unverified; its earlier test failed at ${last_pitr_tested_at}.`;
+  }
+
   return {
     latest_backup_set_id,
     latest_backup_format,
@@ -3720,6 +3756,7 @@ function mapRestoreReadiness({
     last_pitr_test_target_time,
     last_pitr_test_target_dir,
     last_pitr_test_remote_only,
+    last_restore_test_evidence: state.last_restore_test_evidence ?? null,
     summary,
   };
 }
@@ -4860,6 +4897,7 @@ async function recordRestoreTestState({
   recovery_ready,
   pitr_target_time,
   remote_only,
+  evidence,
 }: {
   paths: ReturnType<typeof getBayBackupPaths>;
   state: StoredBayBackupState;
@@ -4870,6 +4908,7 @@ async function recordRestoreTestState({
   recovery_ready: boolean;
   pitr_target_time: string | null;
   remote_only: boolean;
+  evidence?: BayRestoreTestEvidence | null;
 }): Promise<StoredBayBackupState> {
   const currentState =
     (await readJsonIfExists<StoredBayBackupState>(paths.state_file)) ?? state;
@@ -4880,12 +4919,17 @@ async function recordRestoreTestState({
     last_restore_tested_at: tested_at,
     last_restore_test_target_dir: target_dir,
     last_restore_test_recovery_ready: recovery_ready,
-    last_pitr_test_backup_set_id: backup_set_id,
-    last_pitr_test_status: status,
-    last_pitr_tested_at: tested_at,
-    last_pitr_test_target_time: pitr_target_time,
-    last_pitr_test_target_dir: target_dir,
-    last_pitr_test_remote_only: remote_only,
+    ...(pitr_target_time
+      ? {
+          last_pitr_test_backup_set_id: backup_set_id,
+          last_pitr_test_status: status,
+          last_pitr_tested_at: tested_at,
+          last_pitr_test_target_time: pitr_target_time,
+          last_pitr_test_target_dir: target_dir,
+          last_pitr_test_remote_only: remote_only,
+        }
+      : {}),
+    last_restore_test_evidence: evidence ?? null,
   };
   await writeJson(paths.state_file, nextState);
   return nextState;
@@ -4973,18 +5017,351 @@ async function waitForRestorePitrSentinel({
   );
 }
 
+const GIB = 1024 ** 3;
+
+async function resolveDisposableRestoreGcpZone(): Promise<string> {
+  const configured =
+    `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_ZONE ?? ""}`.trim();
+  if (configured) return configured;
+  const { rows } = await getPool().query<{ zone: string | null }>(
+    `SELECT metadata #>> '{machine,zone}' AS zone
+       FROM project_hosts
+      WHERE deleted IS NULL
+        AND metadata #>> '{machine,cloud}' = 'gcp'
+        AND COALESCE(metadata #>> '{machine,zone}', '') <> ''
+      ORDER BY last_seen DESC NULLS LAST, updated DESC NULLS LAST
+      LIMIT 1`,
+  );
+  const zone = `${rows[0]?.zone ?? ""}`.trim();
+  if (!zone) {
+    throw new Error(
+      "no GCP zone is available for the restore drill; set COCALC_BAY_RESTORE_DRILL_GCP_ZONE",
+    );
+  }
+  return zone;
+}
+
+async function disposableRestorePostgresSizing(): Promise<{
+  postgres_major: number;
+  database_bytes: number;
+}> {
+  const { rows } = await getPool().query<{
+    server_version_num: string;
+    database_bytes: string;
+  }>(
+    `SELECT current_setting('server_version_num') AS server_version_num,
+            pg_database_size(current_database())::text AS database_bytes`,
+  );
+  const serverVersionNum = Number.parseInt(
+    `${rows[0]?.server_version_num ?? ""}`,
+    10,
+  );
+  const databaseBytes = Number.parseInt(`${rows[0]?.database_bytes ?? ""}`, 10);
+  if (!Number.isFinite(serverVersionNum) || serverVersionNum < 10000) {
+    throw new Error("failed to determine PostgreSQL server major version");
+  }
+  if (!Number.isFinite(databaseBytes) || databaseBytes <= 0) {
+    throw new Error("failed to determine PostgreSQL database size");
+  }
+  return {
+    postgres_major: Math.floor(serverVersionNum / 10000),
+    database_bytes: databaseBytes,
+  };
+}
+
+function disposableRestoreDiskSizing({
+  database_bytes,
+  artifact_bytes,
+}: {
+  database_bytes: number;
+  artifact_bytes: number;
+}): { boot_disk_gb: number; minimum_free_bytes: number } {
+  // The worker restores the rustic tree only once, but also needs PostgreSQL
+  // container layers, WAL replay headroom, and a reserve for unexpectedly high
+  // compression in the non-Postgres artifacts.
+  const minimumFreeBytes = Math.ceil(
+    database_bytes * 1.5 + Math.max(artifact_bytes, GIB) * 2 + 20 * GIB,
+  );
+  const requestedGb = Math.ceil(minimumFreeBytes / 0.7 / GIB);
+  return {
+    boot_disk_gb: Math.max(50, Math.min(2_048, requestedGb)),
+    minimum_free_bytes: minimumFreeBytes,
+  };
+}
+
+function assertDisposableWorkerPassed(
+  worker: DisposableRestoreWorkerResult,
+  restoreMode: "snapshot" | "pitr",
+): void {
+  if (worker.status !== "passed") {
+    throw new Error(
+      `disposable restore worker failed at ${worker.stage}: ${worker.error ?? "unknown error"}`,
+    );
+  }
+  if (!worker.postgres || worker.postgres.restore_mode !== restoreMode) {
+    throw new Error("disposable restore worker did not validate PostgreSQL");
+  }
+  if (
+    restoreMode === "pitr" &&
+    (worker.postgres.pitr_verified !== true ||
+      worker.postgres.pre_count !== 1 ||
+      worker.postgres.post_count !== 0)
+  ) {
+    throw new Error(
+      "disposable restore worker did not verify the PITR boundary",
+    );
+  }
+  if (restoreMode === "snapshot" && worker.postgres.pitr_verified !== false) {
+    throw new Error("snapshot restore worker incorrectly reported PITR");
+  }
+  if (
+    worker.conat?.sync_tree_found !== true ||
+    !worker.conat.database_count ||
+    worker.conat.quick_check_passed !== worker.conat.database_count
+  ) {
+    throw new Error(
+      "disposable restore worker did not validate every Conat SQLite database",
+    );
+  }
+}
+
+async function runDisposableGcpBayRestoreTest({
+  resolvedBayId,
+  resolvedBackupSetId,
+  paths,
+  state,
+  restorePlan,
+  r2,
+  rusticRepo,
+  started_at,
+}: {
+  resolvedBayId: string;
+  resolvedBackupSetId: string;
+  paths: ReturnType<typeof getBayBackupPaths>;
+  state: StoredBayBackupState;
+  restorePlan: BayRestoreRunResult;
+  r2: R2Target;
+  rusticRepo: BayRusticRepoConfig | null;
+  started_at: string;
+}): Promise<BayRestoreTestRunResult> {
+  if (!rusticRepo || restorePlan.source_storage_backend !== "rustic") {
+    throw new Error(
+      "disposable GCP restore tests require a remote rustic snapshot",
+    );
+  }
+  const snapshotId = `${restorePlan.source_snapshot_id ?? ""}`.trim();
+  if (!snapshotId) {
+    throw new Error(
+      "disposable GCP restore test is missing a rustic snapshot id",
+    );
+  }
+  if (
+    !r2.account_id ||
+    !r2.api_token ||
+    !r2.access_key ||
+    !r2.bucket_name ||
+    !r2.bucket_endpoint ||
+    !r2.object_prefix_root
+  ) {
+    throw new Error(
+      "disposable GCP restore tests require the R2 API token and S3 credentials",
+    );
+  }
+  const settings = await getServerSettings();
+  const serviceAccountJson =
+    `${settings.google_cloud_service_account_json ?? ""}`.trim();
+  if (!serviceAccountJson) {
+    throw new Error(
+      "disposable GCP restore tests require google_cloud_service_account_json",
+    );
+  }
+
+  let workerRun: DisposableGcpRestoreResult | null = null;
+  try {
+    const timeoutMs = Math.max(
+      30 * 60 * 1000,
+      Number.parseInt(
+        `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_TIMEOUT_MS ?? ""}`,
+        10,
+      ) || 2 * 60 * 60 * 1000,
+    );
+    const temporaryR2 = await createTemporaryR2ReadCredentials({
+      account_id: r2.account_id,
+      api_token: r2.api_token,
+      bucket: r2.bucket_name,
+      parent_access_key_id: r2.access_key,
+      prefixes: [rusticRepo.repo_root],
+      ttl_seconds: Math.min(
+        7 * 24 * 60 * 60,
+        Math.ceil(timeoutMs / 1000) + 30 * 60,
+      ),
+    });
+    const [{ postgres_major, database_bytes }, zone] = await Promise.all([
+      disposableRestorePostgresSizing(),
+      resolveDisposableRestoreGcpZone(),
+    ]);
+    const sizing = disposableRestoreDiskSizing({
+      database_bytes,
+      artifact_bytes: state.latest_artifact_bytes,
+    });
+    const identity = newDisposableRestoreWorkerIdentity();
+    const machineType =
+      `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_MACHINE_TYPE ?? ""}`.trim() ||
+      "n2-standard-4";
+    workerRun = await runDisposableGcpRestoreWorker({
+      service_account_json: serviceAccountJson,
+      zone,
+      machine_type: machineType,
+      boot_disk_gb: sizing.boot_disk_gb,
+      timeout_ms: timeoutMs,
+      config: {
+        ...identity,
+        bay_id: resolvedBayId,
+        backup_set_id: resolvedBackupSetId,
+        snapshot_id: snapshotId,
+        restore_mode: "snapshot",
+        postgres_major,
+        postgres_user: pguser,
+        postgres_database: pgdatabase,
+        r2_endpoint: r2.bucket_endpoint,
+        r2_bucket: r2.bucket_name,
+        r2_access_key_id: temporaryR2.access_key_id,
+        r2_secret_access_key: temporaryR2.secret_access_key,
+        r2_session_token: temporaryR2.session_token,
+        rustic_repo_root: rusticRepo.repo_root,
+        rustic_repo_password: await getBayBackupSharedSecret(),
+        require_conat: true,
+        minimum_free_bytes: sizing.minimum_free_bytes,
+      },
+    });
+    assertDisposableWorkerPassed(workerRun.worker, "snapshot");
+    const finished_at = new Date().toISOString();
+    const conat = workerRun.worker.conat!;
+    await recordRestoreTestState({
+      paths,
+      state,
+      backup_set_id: resolvedBackupSetId,
+      status: "passed",
+      tested_at: finished_at,
+      target_dir: null,
+      recovery_ready: true,
+      pitr_target_time: null,
+      remote_only: true,
+      evidence: {
+        execution_mode: "disposable-gcp",
+        duration_ms: workerRun.worker.duration_ms,
+        worker_status: workerRun.worker.status,
+        worker_stage: workerRun.worker.stage,
+        worker_error: workerRun.worker.error ?? null,
+        worker_instance_name: workerRun.instance_name,
+        worker_project_id: workerRun.project_id,
+        worker_zone: workerRun.zone,
+        worker_machine_type: workerRun.machine_type,
+        worker_boot_disk_gb: workerRun.boot_disk_gb,
+        worker_cleanup: workerRun.cleanup,
+        conat_database_count: conat.database_count,
+        conat_database_bytes: conat.database_bytes,
+        conat_quick_check_passed: conat.quick_check_passed,
+      },
+    });
+    return {
+      ...getSingleBayInfo(),
+      started_at,
+      finished_at,
+      remote_only: true,
+      target_time: null,
+      backup_set_id: resolvedBackupSetId,
+      target_dir: `gcp://${workerRun.project_id}/${workerRun.zone}/${workerRun.instance_name}`,
+      data_dir: null,
+      sync_dir: null,
+      secrets_dir: null,
+      backup_manifest_path: restorePlan.backup_manifest_path,
+      restore_manifest_path: null,
+      source_storage_backend: "rustic",
+      source_snapshot_id: snapshotId,
+      rustic_repo_selector: rusticRepo.repo_selector,
+      wal_archive_dir: null,
+      wal_storage_backend: null,
+      wal_segment_count: 0,
+      recovery_ready: true,
+      pitr_verified: false,
+      pitr_run_id: null,
+      kept_on_disk: false,
+      verified_queries: [
+        "snapshot_postgres_started=true",
+        ...workerRun.worker.postgres!.tables_verified.map(
+          (table) => `${table}_table=${table}`,
+        ),
+        `conat_sqlite_quick_check=${conat.quick_check_passed}/${conat.database_count}`,
+      ],
+      notes: [
+        "Restored exclusively from R2 on an isolated disposable GCP VM.",
+        "Validated the full PostgreSQL snapshot at its captured checkpoint; continuous PITR was not tested.",
+        "The worker had no GCP service account, no CoCalc registration, no listening service, and short-lived read-only R2 credentials.",
+        `Validated ${conat.database_count} Conat SQLite databases (${conat.database_bytes} bytes).`,
+        `Deleted disposable worker ${workerRun.instance_name} and its auto-delete boot disk.`,
+      ],
+      execution_mode: "disposable-gcp",
+      worker_instance_name: workerRun.instance_name,
+      worker_project_id: workerRun.project_id,
+      worker_zone: workerRun.zone,
+      worker_machine_type: workerRun.machine_type,
+      worker_boot_disk_gb: workerRun.boot_disk_gb,
+      worker_cleanup: workerRun.cleanup,
+      conat_database_count: conat.database_count,
+      conat_database_bytes: conat.database_bytes,
+      conat_quick_check_passed: conat.quick_check_passed,
+    };
+  } catch (err) {
+    const finished_at = new Date().toISOString();
+    await recordRestoreTestState({
+      paths,
+      state,
+      backup_set_id: resolvedBackupSetId,
+      status: "failed",
+      tested_at: finished_at,
+      target_dir: null,
+      recovery_ready: restorePlan.recovery_ready,
+      pitr_target_time: null,
+      remote_only: true,
+      evidence: {
+        execution_mode: "disposable-gcp",
+        duration_ms: workerRun?.worker.duration_ms ?? null,
+        worker_status: workerRun?.worker.status ?? null,
+        worker_stage: workerRun?.worker.stage ?? null,
+        worker_error: workerRun?.worker.error ?? String(err).slice(0, 2_000),
+        worker_instance_name: workerRun?.instance_name ?? null,
+        worker_project_id: workerRun?.project_id ?? null,
+        worker_zone: workerRun?.zone ?? null,
+        worker_machine_type: workerRun?.machine_type ?? null,
+        worker_boot_disk_gb: workerRun?.boot_disk_gb ?? null,
+        worker_cleanup: workerRun?.cleanup ?? null,
+        conat_database_count: workerRun?.worker.conat?.database_count ?? null,
+        conat_database_bytes: workerRun?.worker.conat?.database_bytes ?? null,
+        conat_quick_check_passed:
+          workerRun?.worker.conat?.quick_check_passed ?? null,
+      },
+    });
+    throw new Error(
+      `disposable GCP bay restore-test failed for backup '${resolvedBackupSetId}': ${String(err)}`,
+    );
+  }
+}
+
 export async function runBayRestoreTest({
   bay_id,
   backup_set_id,
   target_dir,
   keep = false,
   remote_only = false,
+  disposable_gcp = false,
 }: {
   bay_id?: string;
   backup_set_id?: string;
   target_dir?: string;
   keep?: boolean;
   remote_only?: boolean;
+  disposable_gcp?: boolean;
 } = {}): Promise<BayRestoreTestRunResult> {
   const currentBay = getSingleBayInfo();
   const resolvedBayId =
@@ -5046,17 +5423,34 @@ export async function runBayRestoreTest({
       paths,
       backup_set_id: resolvedBackupSetId,
     });
+  if (disposable_gcp && (target_dir?.trim() || keep)) {
+    throw new Error(
+      "--target-dir and --keep are only supported for bay-local restore tests",
+    );
+  }
   const restorePlan = await runBayRestore({
     bay_id: resolvedBayId,
     backup_set_id: resolvedBackupSetId,
     target_dir: resolvedTargetDir,
     dry_run: true,
-    remote_only,
+    remote_only: disposable_gcp || remote_only,
   });
   if (!restorePlan.recovery_ready || !restorePlan.data_dir) {
     throw new Error(
       "latest backup is not recovery-ready; restore-test currently requires a pg_basebackup snapshot",
     );
+  }
+  if (disposable_gcp) {
+    return await runDisposableGcpBayRestoreTest({
+      resolvedBayId,
+      resolvedBackupSetId,
+      paths,
+      state,
+      restorePlan,
+      r2,
+      rusticRepo,
+      started_at,
+    });
   }
   let restoreResult: BayRestoreRunResult | null = null;
   let kept_on_disk = keep === true;
@@ -5197,6 +5591,23 @@ export async function runBayRestoreTest({
       recovery_ready: true,
       pitr_target_time: pitr.target_time,
       remote_only,
+      evidence: {
+        execution_mode: "bay-local",
+        duration_ms:
+          new Date(finished_at).getTime() - new Date(started_at).getTime(),
+        worker_status: null,
+        worker_stage: null,
+        worker_error: null,
+        worker_instance_name: null,
+        worker_project_id: null,
+        worker_zone: null,
+        worker_machine_type: null,
+        worker_boot_disk_gb: null,
+        worker_cleanup: null,
+        conat_database_count: null,
+        conat_database_bytes: null,
+        conat_quick_check_passed: null,
+      },
     });
     return {
       ...currentBay,
@@ -5223,6 +5634,16 @@ export async function runBayRestoreTest({
       kept_on_disk,
       verified_queries,
       notes,
+      execution_mode: "bay-local",
+      worker_instance_name: null,
+      worker_project_id: null,
+      worker_zone: null,
+      worker_machine_type: null,
+      worker_boot_disk_gb: null,
+      worker_cleanup: null,
+      conat_database_count: null,
+      conat_database_bytes: null,
+      conat_quick_check_passed: null,
     };
   } catch (err) {
     const finished_at = new Date().toISOString();
@@ -5236,6 +5657,22 @@ export async function runBayRestoreTest({
       recovery_ready: restoreResult?.recovery_ready ?? false,
       pitr_target_time: pitrRun?.target_time ?? null,
       remote_only,
+      evidence: {
+        execution_mode: "bay-local",
+        duration_ms: null,
+        worker_status: null,
+        worker_stage: null,
+        worker_error: String(err).slice(0, 2_000),
+        worker_instance_name: null,
+        worker_project_id: null,
+        worker_zone: null,
+        worker_machine_type: null,
+        worker_boot_disk_gb: null,
+        worker_cleanup: null,
+        conat_database_count: null,
+        conat_database_bytes: null,
+        conat_quick_check_passed: null,
+      },
     });
     throw new Error(
       `bay restore-test failed for backup '${resolvedBackupSetId}': ${String(err)} (workspace kept at ${resolvedTargetDir})`,

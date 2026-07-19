@@ -62,7 +62,7 @@ export async function hubCallByName<T>({
   const rpcTimeoutMs =
     timeout == null
       ? Math.max(1_000, Math.min(timeoutMs, ctx.rpcTimeoutMs))
-      : Math.max(1_000, Math.min(timeoutMs, ctx.timeoutMs));
+      : Math.max(1_000, timeoutMs);
   debug?.("hubCallAccount", {
     name,
     timeoutMs,

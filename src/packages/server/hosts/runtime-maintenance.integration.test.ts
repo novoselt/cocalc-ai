@@ -16,6 +16,7 @@ function probe(claim_id: string) {
     claim_id,
     quarantined: true,
     consecutive_failures: 2,
+    origin_health: { status: "healthy" },
   };
 }
 

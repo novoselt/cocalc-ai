@@ -2021,6 +2021,10 @@ function startManagedConatPersist(opts: {
   const childEnv = withoutHostAgentEnv(env);
   const persistDaemonEnv = {
     ...childEnv,
+    COCALC_PERSIST_MAINTENANCE_ENABLED:
+      childEnv.COCALC_PERSIST_MAINTENANCE_ENABLED ?? "1",
+    COCALC_PERSIST_MAINTENANCE_DRY_RUN:
+      childEnv.COCALC_PERSIST_MAINTENANCE_DRY_RUN ?? "1",
     HOST: persistHealthHost,
     PORT: String(persistHealthPort),
     DEBUG_FILE: persistLogPath,

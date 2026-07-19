@@ -2,12 +2,15 @@
 
 Date: 2026-07-17
 
-Status: implemented and validated on staging; production review pending
+Status: implemented and validated on staging; production dry-run inventory
+enabled by default for standalone bay and project-host persist
 
 This document records the implementation of
 `conat-persist-sqlite-maintenance-plan-2026-07-17.md` and the procedure for
-validating it before production. The feature is disabled by default. Deploying
-the code alone cannot compact a database.
+validating it before production. Standalone bay and project-host persist enable
+inventory maintenance in dry-run mode by default. Deploying the code alone
+cannot compact a database: promotion still requires an explicit
+`COCALC_PERSIST_MAINTENANCE_DRY_RUN=0` override.
 
 ## Implemented Architecture
 
@@ -79,15 +82,17 @@ node dist/conat/persist-maintenance/inspect.js /absolute/path/to/file.db
 
 ## Configuration
 
-The global kill switches are:
+The explicit global kill switches are:
 
 ```text
 COCALC_PERSIST_MAINTENANCE_ENABLED=0
 COCALC_PERSIST_MAINTENANCE_DRY_RUN=1
 ```
 
-Those are the code defaults. Mutation requires both `ENABLED=1` and
-`DRY_RUN=0`. Creating the configured pause file also stops candidate work.
+The generic library default remains disabled. Production-shaped standalone bay
+and project-host launchers set `ENABLED=1`, `DRY_RUN=1` unless explicitly
+overridden. Mutation requires both `ENABLED=1` and `DRY_RUN=0`. Creating the
+configured pause file also stops candidate work.
 
 The conservative production-shaped defaults are:
 
@@ -236,9 +241,34 @@ the parent artifact smoke tests were used instead.
 
 ## Remaining Production Gate
 
-Production must not be enabled merely because staging compaction succeeds.
+Production mutation must not be enabled merely because staging compaction succeeds.
 The review should also confirm measured candidate volume, reclaim estimates,
 runtime duration, I/O impact, event-loop latency, scan duration, catalog size,
 and secondary-refresh backlog on staging. Initial production rollout should be
 dry-run first, then one canary storage domain, then a small fleet fraction,
 with a pause between each phase.
+
+## Production Dry-Run Rollout
+
+Commit `7e760e9007` was deployed to production on 2026-07-18 as immutable
+artifact `reliability-followups-7e760e9007`. Project-host persist was rolled
+across the reachable fleet and bay persist was restarted independently. The
+maintenance coordinator is enabled everywhere with `DRY_RUN=1`; this performs
+catalog backfill and read-only candidate inspection but cannot run or promote a
+`VACUUM INTO` result.
+
+Post-rollout checks found healthy catalogs, complete worker tracking, and no
+maintenance failures, timeouts, invalidations, or secondary-copy backlog. The
+first observations included:
+
+```text
+wstein project host: 322 files; first bounded scan complete
+asia-2 project host:  9,846 files; first bounded scan complete
+bay-0 persist:         42,375 files and increasing during its first scan
+```
+
+The same rollout also passed a production project start/exec smoke in 1.7
+seconds. No new admin alert was emitted during or after deployment. Production
+mutation remains gated on completed inventory scans, candidate/reclaim data,
+and a separate canary decision. Enabling dry-run inventory is not approval to
+set `COCALC_PERSIST_MAINTENANCE_DRY_RUN=0` fleet-wide.

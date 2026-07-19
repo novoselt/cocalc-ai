@@ -7,6 +7,16 @@ describe("browser session sync controller", () => {
     jest.useRealTimers();
   });
 
+  it("assigns stable browser-specific spread offsets", () => {
+    const { browserSessionSyncSpreadMs } = require("./session-heartbeat");
+    const first = browserSessionSyncSpreadMs("browser-1", 15_000);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThanOrEqual(15_000);
+    expect(browserSessionSyncSpreadMs("browser-1", 15_000)).toBe(first);
+    expect(browserSessionSyncSpreadMs("browser-2", 15_000)).not.toBe(first);
+    expect(browserSessionSyncSpreadMs("browser-1", 0)).toBe(0);
+  });
+
   it("syncs only when marked dirty and does not poll periodically", async () => {
     const upsertBrowserSession = jest.fn().mockResolvedValue(undefined);
     let openProjects: string[] = [];
@@ -106,6 +116,26 @@ describe("browser session sync controller", () => {
     heartbeat.resume();
     await jest.runOnlyPendingTimersAsync();
     expect(upsertBrowserSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("can spread reconnect sync without losing a dirty update", async () => {
+    const upsertBrowserSession = jest.fn().mockResolvedValue(undefined);
+    const { createBrowserSessionHeartbeat } = require("./session-heartbeat");
+    const heartbeat = createBrowserSessionHeartbeat({
+      hub: { system: { upsertBrowserSession } },
+      getSnapshot: () => ({ browser_id: "browser-1", open_projects: [] }),
+      retryMs: 4_000,
+      retryJitter: 0,
+    });
+
+    heartbeat.activate("acct-1");
+    heartbeat.suspend();
+    heartbeat.resume(12_345);
+
+    await jest.advanceTimersByTimeAsync(12_344);
+    expect(upsertBrowserSession).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(upsertBrowserSession).toHaveBeenCalledTimes(1);
   });
 
   it("does not let dirty-state rescheduling bypass retry backoff", async () => {

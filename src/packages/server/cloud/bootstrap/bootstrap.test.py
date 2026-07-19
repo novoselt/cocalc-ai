@@ -1421,6 +1421,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('"${parent_args[@]}"', script)
             self.assertIn("normalize-rootfs)", script)
             self.assertIn("BEES_ALREADY_RUNNING", script)
+            self.assertIn("BEES_STARTING", script)
             self.assertIn("flock -n 9", script)
             self.assertIn("flock-missing", script)
             self.assertIn(
@@ -1481,9 +1482,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
             self.assertIn('PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"', script)
+            self.assertIn('PROJECT_NETWORK_LOCK_ATTEMPTS="3"', script)
             self.assertIn('PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="30"', script)
             self.assertIn("project-cgroup-lock-timeout", script)
             self.assertIn("project-network-lock-timeout", script)
+            self.assertIn(
+                '"wait=${PROJECT_NETWORK_LOCK_WAIT_SECONDS},attempts=${PROJECT_NETWORK_LOCK_ATTEMPTS}"',
+                script,
+            )
             self.assertIn("--kill-after=2s", script)
             attach_body = script.split(
                 "  attach-project-cgroup)", 1

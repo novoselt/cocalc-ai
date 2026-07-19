@@ -72,7 +72,10 @@ import {
   type BrowserAutomationAuditRecord,
 } from "./automation-audit";
 import { createBrowserExecOperations } from "./exec-operations";
-import { createBrowserSessionHeartbeat } from "./session-heartbeat";
+import {
+  browserSessionSyncSpreadMs,
+  createBrowserSessionHeartbeat,
+} from "./session-heartbeat";
 import {
   type BrowserExecApi,
   type BrowserExecOutput,
@@ -138,6 +141,7 @@ const HEARTBEAT_RETRY_MAX_MS = 60_000;
 const HEARTBEAT_STALE_PROBE_TIMEOUT_MS = 2_000;
 const HEARTBEAT_STALE_PROBE_AFTER_FAILURES = 1;
 const HEARTBEAT_FORCE_RECONNECT_AFTER_FAILURES = 2;
+const HEARTBEAT_FLEET_SPREAD_MS = 15_000;
 const MAX_EXEC_CODE_LENGTH = 100_000;
 const MAX_EXEC_OPS = 256;
 const MAX_ACTIVE_EXEC_OPS = 2;
@@ -180,6 +184,10 @@ export function createBrowserSessionAutomation({
   let activeExecOps = 0;
   let activeActions = 0;
   let staleHeartbeatProbe: Promise<void> | undefined;
+  const heartbeatSpreadMs = browserSessionSyncSpreadMs(
+    client.browser_id,
+    HEARTBEAT_FLEET_SPREAD_MS,
+  );
 
   const getBrowserRawExecPolicy = () =>
     normalizeRawExecPolicy(
@@ -251,7 +259,7 @@ export function createBrowserSessionAutomation({
   const heartbeatController = createBrowserSessionHeartbeat({
     hub,
     getSnapshot: () => buildSessionSnapshot(client),
-    heartbeatIntervalMs: HEARTBEAT_PERIODIC_MS,
+    heartbeatIntervalMs: HEARTBEAT_PERIODIC_MS + heartbeatSpreadMs,
     retryMs: HEARTBEAT_RETRY_MS,
     maxRetryMs: HEARTBEAT_RETRY_MAX_MS,
     onWarn: (message) => console.warn(message),
@@ -2574,7 +2582,7 @@ export function createBrowserSessionAutomation({
       const cleanAccountId = `${nextAccountId ?? ""}`.trim();
       if (!cleanAccountId) return;
       if (heartbeatController.getAccountId() === cleanAccountId && service) {
-        scheduleSessionSync(0);
+        scheduleSessionSync(heartbeatSpreadMs);
         return;
       }
       await Promise.resolve().then(async () => {
@@ -2597,11 +2605,7 @@ export function createBrowserSessionAutomation({
         client: conat(),
         impl,
       });
-      try {
-        await heartbeatController.heartbeat();
-      } catch (err) {
-        console.warn(`browser-session initial sync failed: ${err}`);
-      }
+      scheduleSessionSync(heartbeatSpreadMs);
     },
 
     stop: async () => {
@@ -2627,7 +2631,7 @@ export function createBrowserSessionAutomation({
       }
     },
     noteConnected: () => {
-      heartbeatController.resume();
+      heartbeatController.resume(heartbeatSpreadMs);
     },
     noteDisconnected: () => {
       heartbeatController.suspend();

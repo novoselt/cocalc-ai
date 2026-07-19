@@ -70,6 +70,10 @@ spec:
                   key: {{ .Values.postgres.passwordSecret.key }}
             - name: CONAT_SERVER
               value: "http://{{ include \"cocalc-rocket.fullname\" . }}-conat-router:5000"
+            - name: COCALC_PERSIST_MAINTENANCE_ENABLED
+              value: "1"
+            - name: COCALC_PERSIST_MAINTENANCE_DRY_RUN
+              value: "1"
           volumeMounts:
             - name: data
               mountPath: {{ .Values.data.path }}

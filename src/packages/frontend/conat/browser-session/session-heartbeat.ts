@@ -1,5 +1,19 @@
 import type { HubApi } from "@cocalc/conat/hub/api";
 
+export function browserSessionSyncSpreadMs(
+  browserId: string,
+  maxMs: number,
+): number {
+  const limit = Math.max(0, Math.floor(maxMs));
+  if (limit === 0) return 0;
+  let hash = 2166136261;
+  for (const char of `${browserId ?? ""}`) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) % (limit + 1);
+}
+
 export function createBrowserSessionHeartbeat({
   hub,
   getSnapshot,
@@ -25,7 +39,7 @@ export function createBrowserSessionHeartbeat({
   activate: (accountId: string) => void;
   deactivate: () => string | undefined;
   suspend: () => void;
-  resume: () => void;
+  resume: (delayMs?: number) => void;
   heartbeat: () => Promise<void>;
   schedule: (delayMs?: number) => void;
   markDirty: (delayMs?: number) => void;
@@ -179,12 +193,12 @@ export function createBrowserSessionHeartbeat({
     clearPeriodicTimer();
   };
 
-  const resume = () => {
+  const resume = (delayMs = 0) => {
     if (!active || !accountId) {
       return;
     }
     suspended = false;
-    schedule(0);
+    schedule(delayMs);
     schedulePeriodicHeartbeat();
   };
 

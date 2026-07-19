@@ -138,7 +138,10 @@ import { initProjectTouchService } from "./touch-service";
 import { initProjectStorageInfoService } from "./storage-info-service";
 import { initProjectDocumentActivityService } from "./document-activity-service";
 import { initProjectArchiveInfoService } from "./archive-info-service";
-import { startProjectHostEventLoopStallMonitor } from "./event-loop-stalls";
+import {
+  getProjectHostEventLoopStallStatus,
+  startProjectHostEventLoopStallMonitor,
+} from "./event-loop-stalls";
 import { runnerConfigFromQuota } from "./run-quota";
 import { getProjectHostActivitySnapshot } from "./health-progress";
 import {
@@ -495,6 +498,7 @@ export async function main(
       ready: healthState.ready,
       pid: process.pid,
       activity: getProjectHostActivitySnapshot(),
+      event_loop: getProjectHostEventLoopStallStatus(),
     }),
   );
   const conatRouterUrl = resolveProjectHostConatRouterUrl();
