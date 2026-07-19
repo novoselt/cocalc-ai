@@ -1,1152 +1,1304 @@
-# Legacy Blob Storage and Migration Plan
+# CoCalc Attachment Blob Architecture and Legacy Migration Plan
 
 Date: 2026-07-18
+
+Last revised: 2026-07-19 after auditing how blob URLs are actually produced,
+copied, rendered, exported, and stored in current CoCalc.
 
 Status: proposed implementation plan. No legacy blob data has been migrated by
 this document.
 
-This plan covers both the long-term CoCalc blob architecture and recovery of
-legacy `cocalc.com/blobs/...?...uuid=...` links. The immediate problem is that
-those URLs now redirect to `cocalc.ai`, but most legacy UUIDs are absent from
-the new database and return "blob not found."
+The immediate migration problem is that documents restored from `cocalc.com`
+contain URLs such as:
 
-The plan deliberately supports two deployment classes:
+```text
+https://cocalc.com/blobs/paste-0.9336086811634844?uuid=c05251d5-6100-47b7-916a-180c689c409e
+```
 
-- CoCalc deployments without Cloudflare, including CoCalc Plus and CoCalc
-  Star, continue to store blob bytes in PostgreSQL. This is a supported and
-  appropriately simple configuration, not a degraded fallback.
-- Cloudflare-enabled managed deployments store blob bytes in private R2 and
-  serve them through a Worker. PostgreSQL stores metadata and references, not
-  the object bytes.
+Those URLs redirect to `cocalc.ai`, but most legacy UUIDs are absent from the
+new database and return "blob not found." Missing pasted images in Jupyter
+Markdown cells are the dominant reported symptom.
 
-The public URL and application APIs must behave the same in both modes.
+This plan also fixes the current storage model before importing legacy data.
+The existing `blobs` row conflates immutable bytes, one uploader association,
+one public identifier, access counters, and deprecated syncstring archives.
+That model was adequate when blob URLs were effectively a permanent public
+free-for-all. It is not adequate for bounded costs, quotas, deletion, multibay
+authority, private R2 storage, and explicit public sharing.
 
 ## Executive Decision
 
-Implement a deployment-selectable `BlobStore` before migrating legacy data.
+Treat the global `/blobs` service as an **attachment/link service**, not as a
+general confidential key-value store.
 
-1. Preserve PostgreSQL as the default backend when Cloudflare/R2 is not fully
-   configured.
-2. In a Cloudflare-enabled deployment, write immutable blob objects to a
-   private R2 bucket and serve `/blobs/...?...uuid=...` through a Worker with an
-   R2 binding.
-3. Make blob-read authentication an explicit product decision. Blob GETs are
-   currently unauthenticated capability URLs; changing that requires
-   Worker-verifiable access tokens and a public-share compatibility path.
-4. Keep content bytes separate from references. One content-addressed blob may
-   be referenced by many accounts and projects in different bays.
-5. Do not update PostgreSQL synchronously for every GET. Emit access events
-   asynchronously and aggregate them into coarse `last_active` and count data.
-6. Migrate the small current production corpus first, then inventory the
-   legacy PostgreSQL/GCS corpus, then migrate policy-selected legacy blobs.
-7. Keep the old database disk and GCS bucket immutable until the migration has
-   been independently verified and a separate retention decision is approved.
+1. Model immutable content separately from logical attachment handles.
+2. Address canonical content by full SHA-256, but expose random, unguessable
+   attachment handles in new URLs.
+3. Create a new handle for every upload, even when the bytes already exist.
+   Handles carry attribution, quota, lifecycle, and read policy; objects carry
+   bytes and integrity metadata.
+4. Preserve old UUID URLs through an alias table. A legacy UUID maps to one
+   synthetic compatibility handle; it is not the new physical object key.
+5. Default ordinary attachment handles to `authenticated-link`: any signed-in
+   user who possesses the unguessable URL may read it. Project/account fields
+   are attribution and lifecycle metadata, not project-membership read ACLs.
+6. Add explicit `public-link` handles for content that must render anonymously,
+   including public shares and public news. Public delivery must have separate
+   Cloudflare cost controls.
+7. Do not attempt to record every Markdown/HTML/notebook occurrence in a
+   normalized reference or grant table. CoCalc copies blob URLs as ordinary
+   text and cannot observe all copies.
+8. Keep PostgreSQL bytes for deployments without Cloudflare. In a
+   Cloudflare-enabled deployment, store canonical bytes in a private global R2
+   bucket and serve them through an authorization-aware Worker.
+9. Exclude deprecated archived syncstrings from migration exactly, then delete
+   the archived-syncstring creation and retrieval code in a separate reviewed
+   cleanup.
+10. Migrate only verified safe raster images from the legacy corpus initially.
+    Do not bulk-migrate PDFs, arbitrary attachments, SVG, or opaque binary
+    data merely because they share the old table.
+11. Preserve the old database disk and GCS bucket, read-only, until migration
+    verification and a separate retention decision are complete.
 
 Do not import millions of legacy bytea values into the cocalc.ai production
-database.
+database, and do not lock the migration into the current flawed UUID ownership
+model.
 
-## Verified Current State
+## What Blobs Actually Mean in CoCalc
+
+This section is authoritative for the product requirements. It is based on a
+read of current producers and consumers, not on assumptions derived from the
+generic database schema.
+
+### Core application semantics
+
+The current global `/blobs` service primarily stores user-pasted or uploaded
+attachments whose URLs are embedded in Markdown, Slate documents, HTML, chat,
+notebooks, settings, and support content. The upload route itself describes
+the feature as a GitHub issue-comment-style Markdown attachment mechanism.
+
+A blob URL is therefore normally a portable link to an attachment. It is not
+normally:
+
+- a project filesystem object;
+- a Jupyter execution output store;
+- a secret store;
+- a generic application database value;
+- an authorization boundary for confidential project state; or
+- an authoritative inventory of which documents contain the link.
+
+This distinction permits a materially simpler model than a generic object
+store with a grant row for every reader and every document occurrence.
+
+### Complete current producer and consumer inventory
+
+The following are all active uses found in the current cocalc-ai code audit.
+Future implementation work must re-run this search and update the inventory
+before schema cutover.
+
+1. **Generic authenticated attachment upload.**
+   `src/packages/hub/servers/app/blob-upload.ts` implements `POST /blobs`,
+   requires sign-in, accepts an optional `project_id`, verifies project
+   collaboration when provided, enforces the current 25 MB limit, derives the
+   legacy UUID from content, and returns a `/blobs/<filename>?uuid=<uuid>` URL.
+
+2. **Shared frontend image upload helper.**
+   `src/packages/frontend/blobs/upload-image.ts` uploads a browser `Blob`,
+   optionally attributes it to a project, and returns the global blob URL.
+
+3. **Generic frontend attachment widget.**
+   `src/packages/frontend/file-upload.tsx` contains `BlobUpload`. It supports
+   files beyond images and returns the same global URL. Although the product
+   is image-first, current code can create non-image attachment blobs.
+
+4. **Slate and rich-text clipboard/drop uploads.**
+   `src/packages/frontend/editors/slate/upload.tsx` uploads pasted binary image
+   clipboard items. Dropped or selected image files become image nodes;
+   non-image files become ordinary Markdown-style links to the blob URL.
+
+5. **Markdown input clipboard/drop/select uploads.**
+   `src/packages/frontend/editors/markdown-input/component.tsx` uploads pasted
+   images and selected/dropped files. Images are inserted as
+   `![](/blobs/...)`; other files are inserted as `[filename](/blobs/...)`.
+   Multimode editor context normally supplies the current project ID and path.
+
+6. **Project Markdown and Slate documents.**
+   The editor upload paths place attachment URLs directly in document text.
+   The database does not receive an event when the URL is later copied,
+   deleted, renamed, or moved inside project files.
+
+7. **Jupyter Markdown cells.**
+   Pasting an image into a Markdown cell uses the global attachment upload and
+   stores the `/blobs` URL in notebook Markdown. This is the key legacy
+   migration case behind reports of missing notebook images.
+
+8. **Project chat.**
+   Chat message composition and edits use
+   `src/packages/frontend/chat/input.tsx`; thread/chat images also use
+   `src/packages/frontend/chat/thread-image-upload.tsx` and
+   `src/packages/frontend/chat/chatroom-modals.tsx`. Blob links are embedded
+   in message content and may outlive the editor session that created them.
+
+9. **Course-management rich text.**
+   Assignment, handout, student-facing, and configuration text fields use the
+   same editors and can contain pasted/uploaded attachment links. Explicit
+   upload-enabled callers include
+   `src/packages/frontend/course/common/student-assignment-info.tsx` and
+   `src/packages/frontend/course/students/students-panel-student.tsx`.
+
+10. **Task descriptions.**
+    `src/packages/frontend/editors/task-editor/desc-editor.tsx` enables uploads
+    in task content through the shared Markdown editor.
+
+11. **Git commit and review comments.**
+    `src/packages/frontend/chat/git-commit/review-editors.tsx` enables uploads
+    in Git-related rich-text and review comments.
+
+12. **Support requests.**
+    `src/packages/frontend/support/create-modal.tsx` uploads screenshots and
+    body images without a project context. These are account-attributed and
+    their URLs may be exported to Zendesk or included in support email. They
+    need a deliberate support/public capability policy rather than accidental
+    anonymous access to every blob.
+
+13. **Theme and identity images.**
+    Account, project, chat, workspace, rootfs, and public-share theme/image
+    settings use blob uploads or blob UUIDs. Public-share theme images are
+    rendered to anonymous visitors and therefore require explicit
+    `public-link` behavior. Relevant callers/helpers include
+    `src/packages/frontend/components/theme-image-input.tsx`,
+    `src/packages/frontend/components/theme-editor-modal.tsx`,
+    `src/packages/frontend/account/account-preferences-other.tsx`,
+    `src/packages/frontend/project/settings/sections.tsx`,
+    `src/packages/frontend/project/page/flyouts/workspaces.tsx`, and
+    `src/packages/frontend/projects/image.ts`.
+
+14. **Admin news content.**
+    `src/packages/frontend/admin/news/page.tsx` enables Markdown and direct
+    thread-image uploads, then renders the result on a public news page. This
+    is another explicit public producer.
+
+15. **Codex/ACP generated images.**
+    `src/packages/project-host/codex/generated-image-blobs.ts` calls the hub
+    `db.saveBlob` path for generated images, with a project context, then
+    returns a blob link for insertion in chat or another document.
+
+16. **Direct browser rendering and downloading.**
+    Markdown, HTML, notebook Markdown cells, chat, themes, and public pages
+    load `/blobs` URLs directly. Safe image extensions are currently served
+    inline; other extensions are forced to download. The filename in the URL
+    is presentation metadata and is attacker-controlled.
+
+17. **Chat, task, and whiteboard exports.**
+    `src/packages/export/blob-assets.ts`, `src/packages/export/chat.ts`,
+    `src/packages/export/tasks.ts`, and `src/packages/export/whiteboard.ts`
+    scan Markdown and HTML `<img>` content for `/blobs` URLs and can fetch the
+    corresponding bytes into an export asset directory. Exports are secondary
+    readers; they do not establish the original attachment's ownership.
+
+18. **Chat imports.**
+    `src/packages/export/chat-import.ts` re-uploads bundled assets into the
+    target project and rewrites imported references. This already demonstrates
+    the correct behavior for a self-contained cross-project copy: create
+    target-context handles rather than mutate the source handle.
+
+19. **ACP prompt materialization.**
+    `src/packages/lite/hub/acp/blob-materialization.ts` and its integration in
+    `src/packages/lite/hub/acp/index.ts` discover blob links and materialize
+    referenced images as local files for model input. This is a
+    signed-in/project action, not an anonymous public read case.
+
+### Systems that are not the global attachment service
+
+These must remain separate even though they may also use the word "blob":
+
+- **Jupyter execution outputs.** Current image, PDF, and iframe HTML execution
+  outputs use a project-scoped Conat AKV store named from
+  `jupyter/<notebook-path>` in `src/packages/jupyter/redux/actions.ts`. They do
+  not use the global `/blobs` table or URL service.
+- **Project file uploads.** Files uploaded in the Files UI go into the project
+  filesystem and inherit project authorization and backup behavior.
+- **Project backups, rootfs images, container images, and other R2 objects.**
+  These use separate storage namespaces and policies.
+- **Historical project socket `save_blob`, Sage, file-transfer, and LaTeX
+  paths in the old cocalc.com repository.** These explain why the legacy table
+  may contain non-image objects, but they are not active global-blob use cases
+  in current cocalc-ai.
+- **Lite's Conat AKV implementation.** Lite may store attachment bytes in an
+  AKV named `blobs`, but it exposes the same application-level attachment URL
+  semantics. The storage backend differs; the product model does not.
+
+### Deprecated archived syncstrings
+
+The old and current PostgreSQL `blobs` table also contains internal archived
+syncstring/TimeTravel patch data. This is an unrelated historical space-saving
+mechanism, not a public attachment feature.
+
+Relevant remaining code includes:
+
+- `src/packages/database/postgres/blobs/archive.ts`;
+- wrappers in the PostgreSQL blob methods/types;
+- `src/packages/hub/run/maintenance-syncstrings.js`;
+- `getLegacyTimeTravelInfo` and `getLegacyTimeTravelPatches` in
+  `src/packages/server/conat/api/db.ts` and their API declarations; and
+- associated tests and package maintenance entry points.
+
+The audit found server/API/test references but no active frontend consumer.
+This code should be deleted in a dedicated cleanup after confirming production
+usage metrics and backups. Regardless of cleanup timing, archived syncstring
+rows are categorically excluded from attachment migration.
+
+### Copy and paste semantics
+
+CoCalc has two materially different copy operations:
+
+1. Copying actual image pixels through the clipboard creates a new upload in
+   the destination editor context. This should create a new handle attributed
+   to the destination account/project, while deduplicating physical bytes.
+2. Copying Markdown, HTML, notebook JSON, chat text, or a literal blob URL
+   copies the URL verbatim. No hub event occurs, so no new project grant or
+   reference row can be created reliably.
+
+The second behavior is fundamental. Blob URLs can also be pasted into external
+documents, email, support systems, source files, and exports. Therefore:
+
+- a normalized table of every document occurrence cannot be authoritative;
+- a read cannot require membership in the handle's original project without
+  breaking ordinary cross-project copy/paste;
+- `project_id` and `account_id` on a handle are attribution, quota, abuse, and
+  lifecycle fields, not an assertion that only those principals may read;
+- operations that promise a self-contained copy or import should explicitly
+  re-upload/rebind assets, as chat import already does; and
+- deletion of a handle can break verbatim copied links, just as deleting an
+  externally linked attachment can. The UI and retention policy must make
+  that behavior clear and conservative.
+
+## Verified Current Storage State
 
 ### Current cocalc.ai implementation
 
-The current implementation is still the legacy PostgreSQL/GCS design:
-
 - `src/packages/util/db-schema/blobs.ts` defines a global `blobs` table with
-  `blob bytea`, `gcloud`, `compress`, `project_id`, `account_id`,
+  `blob bytea`, `gcloud`, `compress`, one `project_id`, one `account_id`,
   `last_active`, `count`, and `size`.
-- `src/packages/database/postgres/blobs/methods-impl.ts` writes new bytes to
-  PostgreSQL. A maintenance path can move bytes to a mounted GCS blob store,
-  set `gcloud`, and clear `blob`, but this is not an R2 implementation.
-- `src/packages/hub/servers/app/blobs.ts` publicly serves `/blobs/...` through
-  the hub, updates access metadata, and redirects non-seed bays to the seed
-  bay.
-- `src/packages/hub/servers/app/blob-upload.ts` and
-  `src/packages/server/blobs/save.ts` route all current writes to the cluster
-  seed bay. In production this means bay 0 is the blob authority and data
-  plane.
-- The user-facing upload limit is currently 25 MB.
-- The public route treats the UUID as a capability. It allows safe image
-  extensions inline, forces other extensions to download, sets `nosniff`, and
-  uses a long public cache lifetime.
-- A cookie-free request to a current production blob returned HTTP 200 on
-  2026-07-18. The current GET route does not enforce sign-in.
-- Current membership blob quotas limit stored blob count and bytes at upload
-  time. They do not meter public blob download requests or downloaded bytes.
-- TimeTravel/archive blob RPCs have separate authorization checks and must not
-  accidentally become public through this migration.
+- `src/packages/database/postgres/blobs/methods-impl.ts` writes bytes to
+  PostgreSQL. An old maintenance path can move bytes to a mounted GCS store,
+  but this is not an R2 implementation.
+- `src/packages/hub/servers/app/blobs.ts` serves `/blobs` through the hub,
+  updates access metadata, and redirects non-seed bays to the seed bay.
+- Current writes route to the cluster seed bay through
+  `src/packages/hub/servers/app/blob-upload.ts` and
+  `src/packages/server/blobs/save.ts`.
+- The current user upload limit is 25 MB.
+- The UUID is derived from SHA-1 using `uuidsha1`, which modifies/truncates
+  bits. It is a compatibility identifier, not a sufficient canonical modern
+  content identity.
+- If an upload finds an existing content UUID, the current path can extend its
+  lifetime without recording the new uploader/project association. This is
+  the concrete deduplication/ownership bug the handle model fixes.
+- Current GET treats knowledge of the UUID as a public capability. A
+  cookie-free production request returned HTTP 200 during the audit.
+- Current upload quotas bound stored count/bytes but do not meter anonymous
+  download requests or downloaded bytes.
 
-A read-only production query on 2026-07-18 found:
-
-- 568 current blob rows.
-- 568 rows still containing PostgreSQL bytea.
-- 0 rows with a `gcloud` marker.
-- 135,067,194 total logical/blob bytes, about 135 MB.
-- 0 rows missing both PostgreSQL bytes and a cloud marker.
-
-This is small enough to migrate and verify exhaustively before touching the
-legacy corpus.
+A read-only production query on 2026-07-18 found 568 rows, all still containing
+PostgreSQL bytea, totaling about 135 MB, with no `gcloud` markers. This corpus
+is small enough to migrate and verify exhaustively.
 
 ### Legacy cocalc.com implementation
 
-The source under `/home/user/upstream/cocalc` confirms the same basic model:
+The source under `/home/user/upstream/cocalc` confirms:
 
-- Metadata and recently used bytes lived in PostgreSQL.
-- A maintenance task copied colder bytes to the `smc-blobs` GCS bucket and
-  normally cleared the PostgreSQL bytea after verification.
-- A row with `blob IS NULL` and `gcloud IS NOT NULL` was read from GCS,
-  decompressed according to `compress`, and served by the hub.
-- Reads incremented `count` and updated `last_active` in PostgreSQL.
-- Public `/blobs` GETs were unauthenticated capability URLs.
-- `project_id` and later `account_id` were recorded, but they are not a
-  complete many-to-many reference graph. Content deduplication means one row
-  can represent bytes used from more than one document, project, or account.
+- metadata and hot bytes lived in PostgreSQL;
+- maintenance copied colder stored bytes to the `smc-blobs` GCS bucket and
+  usually cleared PostgreSQL bytea after verification;
+- a row with `blob IS NULL` and `gcloud IS NOT NULL` was fetched from GCS,
+  decompressed according to the row's `compress` value, and served by the hub;
+- GCS object bytes can therefore be compressed storage bytes, not necessarily
+  directly recognizable image bytes;
+- reads incremented `count` and updated `last_active`;
+- GCS objects were keyed by legacy UUID and did not preserve a trustworthy
+  filename or MIME type; and
+- the one `project_id`/`account_id` association is incomplete when identical
+  bytes were used in multiple contexts.
 
-The final shutdown inventory in
-`/home/user/kucalc/cluster2/notes/2026-shutdown.md` records 23,715,443 legacy
-blob rows. The read-only archive database is currently available on its
-preserved VM, and the old GCS bucket is preserved.
+The final shutdown inventory records 23,715,443 legacy blob rows. The old
+database VM and GCS bucket are currently preserved and available read-only.
 
 ### Existing R2 implementation
 
 CoCalc already has reusable R2/S3 primitives in
-`src/packages/backend/r2.ts` and `src/packages/server/project-backup/r2.ts`, plus
-bucket records in `src/packages/util/db-schema/buckets.ts`. Project backups
-already create buckets using Cloudflare location hints such as `wnam`, `enam`,
-and `weur`.
+`src/packages/backend/r2.ts`, `src/packages/server/project-backup/r2.ts`, and
+bucket records in `src/packages/util/db-schema/buckets.ts`.
 
-Those labels are location hints, not residency guarantees. Cloudflare states
-that hints are best effort. Jurisdictions, currently including `eu`, are the
-mechanism that guarantees a residency boundary. Blob design must not treat a
-project-host region or an R2 location hint as a legal residency guarantee.
+R2 location hints are best effort, not residency guarantees. A global content
+object can be referenced from many accounts, projects, and regions. Use one
+private global blob bucket initially. Add a separate explicit jurisdiction
+realm, such as `eu`, only for contractual residency requirements.
 
 ## Goals
 
-- Make every recoverable selected legacy blob URL work at its existing URL.
-- Keep large blob bytes out of managed PostgreSQL when Cloudflare is enabled.
-- Keep PostgreSQL-only deployments simple and fully functional.
-- Remove the hub from the steady-state managed blob download data plane.
-- Preserve current public-link, cache, download, and security behavior.
-- Support range and conditional requests.
-- Maintain enough access information to make retention decisions without a
-  write to PostgreSQL for every request.
+- Restore every recoverable, selected legacy image at its existing URL.
+- Align the storage model with attachment-link behavior instead of generic
+  confidential object-store behavior.
+- Keep large byte payloads out of managed PostgreSQL when Cloudflare is
+  configured.
+- Keep PostgreSQL-only deployments simple and fully supported.
+- Remove the hub and Google Cloud egress from the steady-state managed blob
+  download data plane.
+- Preserve ordinary signed-in copy/paste behavior across projects.
+- Make anonymous rendering explicit and bounded rather than accidental.
+- Support range, conditional, and cache-friendly requests safely.
 - Make migration idempotent, resumable, auditable, and safe to rerun.
-- Give support a UUID lookup that explains source, migration state,
-  references, errors, and the next recovery action.
+- Give support a lookup explaining alias, handle, object, source, migration
+  state, errors, and recovery action.
 - Keep multibay authority explicit.
 
 ## Non-goals
 
-- Do not recover legacy TimeTravel history as part of public blob migration.
-- Do not make the old read-only database a permanent production dependency.
-- Do not make an R2 bucket or `r2.dev` endpoint publicly listable.
-- Do not infer data residency from the host currently running a project.
-- Do not delete old GCS objects or the old database after initial success.
+- Do not migrate archived syncstrings or legacy TimeTravel history.
+- Do not turn attachments into a general secret/key-value service.
+- Do not discover and normalize every blob URL occurrence in all documents.
+- Do not migrate arbitrary legacy binary data in the first migration.
+- Do not inline or bulk-migrate legacy SVG without a separate sanitization and
+  threat-model decision.
+- Do not make the old database a permanent production dependency.
+- Do not make the R2 bucket or `r2.dev` publicly accessible.
+- Do not infer object ownership or residency from a project's current host.
+- Do not delete old GCS objects or database rows during initial success.
 - Do not require Cloudflare, Workers, or R2 for CoCalc Plus/Star.
 
 ## Required Invariants
 
-1. A blob UUID always identifies the same uncompressed bytes.
-2. Existing UUID URLs remain valid; the filename portion is presentation, not
-   object identity.
-3. A successful write is not visible until its bytes and metadata are both in
-   an `available` state.
-4. A missing telemetry event must never fail a blob read.
-5. A duplicate upload must add its new account/project reference even if the
-   content object already exists.
-6. Deleting one reference must not delete bytes still referenced elsewhere.
-7. Object deletion requires a grace period, a zero-reference check, and an
-   audit record.
-8. R2 mode must fail closed for writes if its configuration is incomplete. It
-   must not silently split new writes between PostgreSQL and R2.
-9. PostgreSQL mode must not require Cloudflare settings or Worker deployment.
-10. Legacy source bytes remain read-only throughout migration.
+1. A canonical content object is immutable and identified by the full SHA-256
+   of its canonical uncompressed bytes.
+2. Every new upload creates a random attachment handle, even when its content
+   object already exists.
+3. Knowledge of content bytes or SHA-256 must not reveal a new attachment URL.
+4. Existing legacy/current UUID URLs remain valid through explicit aliases.
+5. The display filename is presentation only and never participates in object
+   lookup or authorization.
+6. A successful write is not readable until object, handle, and alias metadata
+   are all in an `available` state.
+7. Duplicate handles may share physical bytes but have independent quota,
+   lifecycle, attribution, and access policy.
+8. Deleting one handle never deletes bytes needed by another active handle.
+9. Object deletion requires zero active handles/aliases, a grace period, a
+   second reference check, cache purge, and an audit record.
+10. A missing telemetry event never fails a read.
+11. R2 mode fails closed if required configuration is incomplete. It never
+    silently splits canonical writes between PostgreSQL and R2.
+12. PostgreSQL mode needs no Cloudflare configuration.
+13. Legacy source data remains read-only during migration.
+14. Archived syncstring rows can never enter the public attachment namespace.
 
-## Deployment Modes and Configuration
+## Target Data Model
 
-Add a site setting with explicit values:
+Use three concepts: objects, handles, and aliases. Do not introduce a general
+`blob_grants` table in the first implementation.
+
+### Immutable content objects
+
+```text
+blob_objects
+  content_id             text primary key       # full lowercase SHA-256
+  storage_backend        postgres | r2
+  storage_realm          global | eu | null
+  storage_bucket         text null
+  storage_key            text null
+  storage_state          pending | available | quarantined | deleting | missing
+  size                    bigint
+  detected_media_type    text
+  created_at              timestamptz
+  verified_at             timestamptz null
+  source                  current | legacy-db | legacy-gcs | import | generated
+  source_metadata         jsonb
+```
+
+An object is global within a storage realm and contains no account/project
+ownership. The same bytes are stored once per realm.
+
+### Logical attachment handles
+
+```text
+blob_handles
+  handle_id               uuid primary key       # random UUIDv7 or UUIDv4
+  content_id              text references blob_objects
+  created_by_account_id   uuid null
+  project_id              uuid null
+  owning_bay_id           uuid
+  original_filename       text null
+  safe_filename           text null
+  detected_media_type     text
+  purpose                 attachment | support | theme | news | generated | legacy
+  access_policy           authenticated-link | public-link | disabled
+  created_at              timestamptz
+  expires_at              timestamptz null
+  deleted_at              timestamptz null
+  last_active_day         date null
+  approximate_read_count  bigint
+```
+
+A handle represents one logical upload/attachment creation, not every place
+where its URL appears. The account/project fields support attribution, logical
+quota, abuse response, administration, and lifecycle. They do not impose a
+project-collaborator check on each read.
+
+New URLs should use the random handle:
+
+```text
+https://cocalc.ai/blobs/<display-name>?id=<handle-id>
+```
+
+The exact query name can remain `uuid` if compatibility makes that valuable,
+but new values must be random handles rather than content-derived identifiers.
+
+### Compatibility aliases
+
+```text
+blob_aliases
+  namespace               text                 # legacy-uuid, current-uuid, etc.
+  alias                    text
+  handle_id                uuid references blob_handles
+  created_at               timestamptz
+  source_metadata          jsonb
+  primary key (namespace, alias)
+```
+
+Existing `?uuid=<legacy-uuid>` URLs resolve through `blob_aliases`. Migration
+creates one synthetic legacy handle per selected legacy UUID and then creates
+the alias. If a current and legacy UUID claim different canonical bytes, do
+not overwrite either mapping; quarantine and alert.
+
+### Why there is no occurrence/reference table
+
+References live in unstructured Markdown, HTML, notebooks, chat records,
+exports, support systems, and external documents. Verbatim copy/paste is not
+observable. A normalized occurrence table would be incomplete on day one and
+dangerous if used for authorization or garbage collection.
+
+Optional search indexes may record discovered occurrences for migration,
+support, or impact analysis, but they are evidence only. They must not be the
+authoritative read ACL or sole deletion criterion.
+
+### Multibay authority
+
+The object and alias registries are documented global exceptions because a
+global URL must resolve consistently. Handle creation is authorized by the
+authoritative owner:
+
+- project-attributed upload: the project's `owning_bay_id` authorizes it;
+- account-only upload: the account's `home_bay_id` authorizes it;
+- legacy migration: the seed migration service authorizes it; and
+- public policy change: the authoritative account/project/public-share
+  service authorizes it.
+
+Cross-bay operations must use the inter-bay routing layer. A bay must not
+directly mutate another bay's project/account state. Update
+`table-ownership.ts`; treating the whole old `blobs` table as simply
+project-owned is incorrect.
+
+## Deployment Modes and Storage Abstraction
+
+Add an explicit deployment setting:
 
 ```text
 blob_storage_backend = auto | postgres | r2
 ```
 
-Recommended behavior:
+- `postgres`: canonical bytes remain in PostgreSQL; hub endpoints enforce the
+  same handle/access semantics. This is the default for non-Cloudflare CoCalc
+  Plus/Star deployments.
+- `r2`: canonical bytes are in private R2 and delivered through a Worker.
+  Readiness fails if the bucket, credentials, Worker route, signing keys, or
+  health checks are missing.
+- `auto`: choose `r2` only when Cloudflare is configured and the complete blob
+  subsystem is healthy; otherwise choose `postgres`.
 
-- `postgres`: PostgreSQL bytea is canonical. The hub serves `/blobs`. This is
-  the default for non-Cloudflare deployments.
-- `r2`: private R2 bytes plus Worker delivery are canonical. Startup/readiness
-  fails if dedicated blob bucket, credentials, Worker route, or health checks
-  are missing.
-- `auto`: select `r2` only when `cloudflare_mode=self` and the complete blob R2
-  configuration is provisioned and healthy; otherwise select `postgres`.
+Use purpose-specific blob settings and least-privilege credentials. Do not
+infer readiness from project-backup R2 configuration.
 
-Do not infer R2 readiness merely from project-backup credentials. Add
-purpose-specific settings or bucket records for blobs, for example:
-
-```text
-blob_r2_bucket
-blob_r2_jurisdiction       # empty/global or eu
-blob_worker_hostname
-blob_access_queue
-```
-
-Secrets may reuse account-level R2 credentials where operationally sensible,
-but the blob bucket and its least-privilege token must be distinct from project
-backups. The admin UI should show the resolved backend and a health test.
-
-The selected backend is deployment-wide during the first implementation. Do
-not allow individual bays to choose different backends accidentally.
-
-## Target Storage Abstraction
-
-Introduce a small server-side interface and keep all callers on the existing
-high-level blob APIs:
+Introduce a content-oriented server interface:
 
 ```ts
-interface BlobStore {
-  put(input: PutBlob): Promise<StoredBlob>;
-  head(id: string): Promise<BlobHead | undefined>;
-  get(id: string, options?: BlobGetOptions): Promise<BlobBody | undefined>;
-  delete(id: string): Promise<void>;
+interface BlobObjectStore {
+  put(input: PutBlobObject): Promise<StoredBlobObject>;
+  head(contentId: string): Promise<BlobObjectHead | undefined>;
+  get(
+    contentId: string,
+    options?: BlobGetOptions,
+  ): Promise<BlobObjectBody | undefined>;
+  delete(contentId: string): Promise<void>;
   health(): Promise<BlobStoreHealth>;
 }
 ```
 
-Implementations:
-
-- `PostgresBlobStore`: wraps the current database behavior. It remains the
-  production implementation for non-Cloudflare deployments.
-- `R2BlobStore`: uses existing `@cocalc/backend/r2` primitives for control
-  plane writes, verification, and administrative reads. Public GETs use the
-  Worker binding, not S3 credentials in the browser.
-
-Keep authorization and reference creation above `BlobStore`. Storage backends
-must not decide whether an account is a project collaborator.
+Authorization, handle creation, alias resolution, quota, and lifecycle remain
+above this interface. Storage backends only manage canonical bytes.
 
 ## Object Identity and R2 Layout
 
-Use the existing UUID as the public identity and a deterministic object key:
+Store canonical uncompressed bytes. Use deterministic keys based on full
+SHA-256:
 
 ```text
-blobs/v1/<first-two-hex>/<next-two-hex>/<uuid>
+blob-objects/v2/sha256/<first-2>/<next-2>/<64-hex-sha256>
 ```
 
-Do not include a user filename, project ID, account ID, or bay ID in the object
-key. The same immutable bytes can be shared safely, filenames do not duplicate
-storage, and a Worker can compute the key without querying PostgreSQL.
+Do not put handle IDs, legacy UUIDs, filenames, account IDs, project IDs, or
+bay IDs in the object key. Custom metadata should include content SHA-256,
+canonical size, detected media type, source/migration version, and creation
+time.
 
-Store canonical uncompressed bytes in R2. Legacy `compress` describes storage
-compression in the old system, not an HTTP `Content-Encoding`; migration must
-decompress before upload.
+Use one private global managed bucket initially:
 
-Record custom object metadata:
+- Worker/cache execution occurs near the viewer.
+- Repeated reads are edge-cache hits.
+- Project compute location is a weak proxy for viewer location.
+- A global content object may be used by handles from multiple regions.
+- Deterministic global lookup avoids a bucket-directory database query on
+  every read.
 
-- public UUID
-- SHA-256 of canonical bytes
-- canonical byte size
-- migration/source version
-- creation timestamp
+Measure cold and warm p50/p95/p99 reads from major geographies using 10 KB,
+1 MB, 10 MB, and 25 MB fixtures. Tune tiered cache before considering
+replication. If contractual residency is needed, add an explicit `eu` realm
+using an R2 EU jurisdiction bucket; location hints are not residency controls.
 
-The UUID is derived from SHA-1 for compatibility. SHA-1 is not sufficient for
-new adversarial integrity checks. Calculate SHA-256 for every new and migrated
-object. If an existing UUID has a different size or SHA-256, quarantine both
-inputs and raise a critical alert instead of overwriting.
+## Access Policy and User Experience
 
-Use one private global managed blob bucket initially. R2 location hints are
-performance hints, and an object can have multiple project/account references
-in multiple regions. Splitting by project host region would require a global
-UUID-to-bucket routing lookup on every GET and would make shared blobs
-ambiguous.
+### Authenticated links
 
-### Expected performance of one global bucket
+Default ordinary uploads to `authenticated-link`:
 
-This should not materially hurt normal blob-read performance:
+- any signed-in user possessing the unguessable handle URL may read;
+- no project-membership database lookup is needed on each read;
+- download requests and bytes are charged to the signed-in reader's applicable
+  quota/abuse budget;
+- copied URLs continue to work across projects and accounts; and
+- the private R2 key and content hash are never exposed as authority.
 
-- The Worker and cache run near the viewer. Repeated reads are served from
-  Cloudflare's edge rather than the R2 object location.
-- Object location mainly affects upload latency and the first uncached read in
-  a geography.
-- Current blobs are limited to 25 MB and most are much smaller.
-- A project's compute-host region is not necessarily the location of the user
-  viewing a blob, so project placement is a weak read-locality signal.
-- Avoiding a UUID-to-region directory removes a database/KV lookup from every
-  public GET and reduces both latency and another global availability
-  dependency.
+This is intentionally link-oriented rather than confidential-object ACL
+semantics. If a future product needs confidential attachments, add a separate
+policy with explicit grants and use it only in contexts that can maintain
+those grants correctly.
 
-This is an expectation to test, not an assumption to hide. Before production
-cutover, measure cold and warm p50/p95/p99 time-to-first-byte and total download
-time from at least western/eastern North America, western/eastern Europe,
-Asia-Pacific, and Oceania. Test representative 10 KB, 1 MB, 10 MB, and 25 MB
-objects. The initial acceptance target should be no meaningful regression for
-warm reads and a documented cold-read budget by geography.
+### Public links
 
-If cold-read latency is materially worse, first enable/tune Cloudflare tiered
-cache. Only then consider deterministic replication to a small number of
-storage realms. Do not introduce per-project bucket routing unless measurements
-show that cache and tiering are insufficient.
+Anonymous reads require an explicit `public-link` handle or a short-lived
+public capability minted by an authoritative public-share renderer. Known
+public producers include:
 
-If a contractual residency requirement exists, add an explicit storage realm:
+- public project/share pages and their theme images;
+- public admin news;
+- support-system images that must be readable by an external support service;
+  and
+- deliberately published/exported attachments where anonymous rendering is a
+  product requirement.
 
-- `global`
-- `eu`
+Public rendering of arbitrary Markdown needs a deliberate bridge. Before
+making signed-in-only reads the default, either:
 
-An EU realm must use an R2 EU jurisdiction bucket, not merely a `weur` or `eeur`
-hint. The same content may need one physical object per realm. This should be a
-separate phase after the global path is stable.
+1. scan/rewrite attachments when content is published and create bounded
+   public handles; or
+2. issue short-lived signed Worker capabilities from the public-share service.
 
-## Metadata and Reference Model
+Do not make every blob anonymous because some pages are public.
 
-Use the existing seed-global `blobs` table as the compatibility content
-registry initially, but stop overloading `gcloud` for new R2 state. Add explicit
-fields or a one-to-one `blob_objects` table:
+### Handle deletion and copied URLs
 
-```text
-id                    uuid primary key
-storage_backend       postgres | r2
-storage_realm         global | eu | null
-storage_bucket        text null
-storage_key           text null
-storage_state         pending | available | quarantined | deleting | missing
-size                  bigint
-sha256                text null
-created               timestamptz
-verified_at           timestamptz null
-last_active           timestamptz null
-access_count          bigint
-source                current | legacy-db | legacy-gcs | legacy-support
-source_metadata       jsonb
-```
+Deleting a handle eventually invalidates every verbatim copy of that URL. This
+is expected link behavior but must be conservative:
 
-Create a separate reference table:
+- provide a long retention/grace period;
+- warn where deletion can break embedded documents;
+- allow self-contained import/copy workflows to create destination handles;
+- do not garbage-collect based only on an incomplete occurrence scan; and
+- retain audit/recovery metadata after logical deletion.
 
-```text
-blob_references
-  blob_id
-  reference_id
-  scope_type           account | project | public | system
-  account_id           uuid null
-  project_id           uuid null
-  owning_bay_id        uuid null
-  purpose              upload | chat | paste | support | legacy | syncstring
-  created
-  expires              timestamptz null
-  deleted_at           timestamptz null
-```
-
-Enforce one active logical reference per application object, not merely one per
-blob/account pair. A user may intentionally attach the same bytes twice.
-
-The content registry is a documented seed-global exception because public UUID
-resolution is global. Reference mutations are authorized by the authoritative
-owner:
-
-- Project reference: the project's `owning_bay_id` authorizes it.
-- Account reference: the account's `home_bay_id` authorizes it.
-- Legacy/public reference: the seed migration service authorizes it.
-
-Cross-bay calls must use the existing inter-bay routing layer. A bay must not
-write directly to another bay's project/account state.
-
-Update `table-ownership.ts`; the current declaration that the whole `blobs`
-table is simply project-owned does not describe actual account-only, public,
-deduplicated, or seed-global behavior.
-
-### Quotas
+## Quotas and Accounting
 
 Separate physical storage from logical usage:
 
-- Physical bytes are counted once per R2 object/realm.
-- Account/project quota is charged from active logical references according to
-  an explicit product policy.
-- A duplicate content upload still creates a reference and is visible to quota
-  and deletion logic.
+- physical bytes count once per content object and storage realm;
+- each active handle may charge its full logical size to the creating
+  account/project, so deduplication cannot bypass quota;
+- uploads always create a handle and consume handle/count quota even if the
+  object already exists;
+- authenticated downloads charge request/byte budgets to the reader;
+- public handles charge bounded request/byte budgets to the publisher/share
+  or a site-wide public budget; and
+- object deletion is independent of a single handle's expiration.
 
-Do not preserve the current accidental behavior where finding an existing UUID
-can return before adding the new ownership/reference information.
+The exact logical charging policy needs product approval, but it must not
+preserve the current early-return behavior that loses new attribution.
 
 ## Request Flows
 
-### PostgreSQL mode
+### Upload in both deployment modes
 
-The current flow remains:
+Initial low-risk flow:
 
-1. Authenticate and authorize upload at the hub/bay.
-2. Validate size and UUID against bytes.
-3. Store canonical bytes and metadata in PostgreSQL.
-4. Serve public GET/HEAD through the hub route.
-5. Update `last_active` and count in PostgreSQL.
+1. Client uploads through the existing authenticated hub endpoint with
+   account/project context.
+2. The authoritative bay checks sign-in, collaboration, purpose, size, and
+   applicable quota.
+3. The server sniffs the canonical media type and computes full SHA-256 while
+   streaming/spooling bytes.
+4. It creates a pending random handle.
+5. The object service conditionally writes the canonical content if absent.
+6. It verifies size/hash and commits the object as available.
+7. It commits the handle as available and returns its URL.
+8. Compatibility callers may also receive/create a current-UUID alias during
+   transition.
 
-This path should share response-header and filename-policy helpers with the
-Worker implementation so modes do not diverge.
+In PostgreSQL mode, `blob_objects` stores bytea. In R2 mode, it stores metadata
+and private R2 stores bytes. The application behavior is identical.
 
-### R2 upload flow
+Only after correctness is proven should direct browser upload use short-lived
+presigned PUT URLs for one temporary key followed by server-side finalization.
 
-Use two rollout stages.
+### Verbatim copy and self-contained copy
 
-Stage A, lowest-risk implementation:
+- Verbatim Markdown/HTML copy requires no backend mutation and preserves the
+  source handle.
+- Pasting image pixels invokes upload and creates a destination handle.
+- Import/export or project-copy features promising independent data must fetch
+  and re-upload/rebind assets explicitly.
 
-1. Client uploads through the existing authenticated hub endpoint.
-2. The authoritative bay validates permission, size, and the UUID.
-3. The server computes SHA-256 while streaming/spooling the upload.
-4. The seed blob service writes a temporary R2 key.
-5. It verifies R2 HEAD metadata and, during initial rollout, reads back and
-   hashes the object.
-6. It commits metadata/reference state as `available` and promotes or writes
-   the deterministic immutable key.
+### Authenticated R2 read
 
-Stage B, after correctness is proven:
+1. Client presents its CoCalc session and handle/alias URL.
+2. The edge/hub authorization path verifies sign-in, handle state/policy, and
+   read budget without fetching object bytes.
+3. It returns or internally forwards a short-lived Worker-verifiable
+   capability containing handle, canonical content key, representation, size,
+   expiry, and budget class.
+4. The Worker verifies the capability locally, reads/cache-serves the private
+   R2 object, applies filename/disposition headers, and streams the body.
+5. Telemetry is emitted asynchronously and never blocks the response.
 
-1. Client asks the authoritative bay to begin an upload.
-2. The bay creates a pending upload and returns a short-lived presigned PUT URL
-   for exactly one temporary key.
-3. The browser uploads directly to the R2 S3 endpoint.
-4. Client calls finalize.
-5. Server verifies size, expected UUID/SHA-256, and R2 metadata before marking
-   it available.
+The exact cookie/token exchange should minimize hub lookups while preserving
+revocation and quota. A direct hub callback on every byte request would
+recreate the bottleneck this design is intended to remove.
 
-Cloudflare presigned URLs work only on the S3 API domain, not a custom domain.
-Treat them as bearer credentials, constrain key, method, content type/length
-where possible, keep expiry short, and configure CORS narrowly.
+### Public R2 read
 
-Do not begin with direct browser upload. The current corpus and 25 MB limit are
-small enough that Stage A gives a much safer first cutover.
+1. Worker resolves an explicitly public handle or verifies a bounded public
+   capability.
+2. It validates the normalized handle/alias and representation.
+3. It serves only GET/HEAD and at most one valid range.
+4. It keys the byte cache by canonical content ID and representation, not raw
+   filename/query string.
+5. It sets safe content type, content disposition, `nosniff`, CSP where
+   applicable, ETag, range, and conditional headers.
+6. It applies public budget/rate/circuit-breaker policy before an R2 miss.
 
-### R2 public read flow
-
-Route only `GET` and `HEAD` for `/blobs/*` to a dedicated Worker. Keep the R2
-bucket private and disable `r2.dev` public access.
-
-Worker behavior:
-
-1. Parse and strictly validate the UUID query parameter.
-2. Normalize the R2 key from UUID; never concatenate the filename into a key.
-3. Apply conditional and range headers to the R2 binding.
-4. Stream the body without buffering it in Worker memory.
-5. Preserve ETag, range, and content length semantics.
-6. Apply the same inline/download rules as the hub. Only known safe image
-   content may be inline; all other content is attachment.
-7. Set `X-Content-Type-Options: nosniff` and an explicit content security
-   policy where applicable.
-8. Set immutable cache headers only after the object is available.
-9. Emit telemetry using `waitUntil`; telemetry failure does not affect the
-   response.
-10. Return a non-cacheable miss during migration unless negative caching is
-    deliberately configured. Cloudflare can cache 404s, so a newly migrated
-    blob otherwise may continue to appear missing.
-
-Use the Worker Cache API or a Worker route in front of the private binding, not
-a directly public bucket custom domain. The Worker is required for compatible
-filenames, response headers, access telemetry, R2 realm routing, and future
-on-demand migration.
-
-During cutover the hub route remains a fallback for current PostgreSQL blobs.
-The Worker may call a tightly authenticated internal origin only on an R2 miss;
-it must never expose R2 or database credentials.
+The R2 bucket stays private and `r2.dev` remains disabled.
 
 ## Access Tracking
 
-The old hub performed one PostgreSQL update on every blob request. Do not
-recreate that write amplification.
+Do not recreate the old PostgreSQL write on every GET.
 
-Use two telemetry levels:
+Use:
 
 1. Workers Analytics Engine for request rate, latency, status, cache outcome,
-   source, bytes, and sampled UUID diagnostics. Its current three-month
-   retention makes it useful for operations, not authoritative retention
-   policy.
-2. A Cloudflare Queue for durable, deliberately deduplicated access events.
-   Queue delivery is at least once, so consumers must be idempotent.
+   bytes, policy class, and sampled diagnostics.
+2. A deliberately deduplicated durable stream, such as Cloudflare Queue or
+   daily R2 manifests, for coarse `last_active_day` and approximate counts.
 
-The queue consumer should:
+The consumer must coalesce handles/content IDs, use idempotency keys, update
+last activity monotonically, tolerate duplicate/out-of-order delivery, and
+have a dead-letter path. Do not enqueue one message per cache hit. Emit durable
+evidence on cache/R2 misses and at most a bounded sample/day for hits.
 
-- coalesce duplicate UUIDs in each batch;
-- write `last_active = GREATEST(last_active, event_time)`;
-- use a deterministic event/day idempotency key;
-- maintain exact or explicitly approximate counts;
-- use a dead-letter queue and alert on lag/failures;
-- batch updates through an authenticated seed-bay endpoint or write durable
-  daily access manifests for a bay job to ingest;
-- never block the GET path.
-
-Do not enqueue one message per cache hit. At current list pricing, a normally
-consumed Queue message uses one write, one read, and one delete operation, so
-telemetry can cost more than the Worker and R2 request combined. Emit a durable
-event on an R2/cache miss and optionally a sampled or at-most-once-per-day event
-for cache hits. A one-year maximum cache TTL plus a retention grace period
-ensures a continuously accessed object eventually produces a fresh durable
-event. Retention decisions need a trustworthy coarse last-access date, not an
-exact real-time counter.
-
-If production has the required Cloudflare plan, HTTP/Worker Logpush to a
-dedicated R2 log bucket is a useful independent audit stream. It is not the
-sole source because Logpush has no historical backfill after an outage.
+Access telemetry informs retention but cannot prove that no document contains
+a copied URL.
 
 ## Denial-of-Wallet and Cost Controls
 
-There is a real abuse risk even though R2 and Workers do not charge Internet
-egress. The billable paths are request based:
-
-- Workers Paid currently includes 10 million requests/month, then charges
-  $0.30 per million requests, plus CPU overage.
-- R2 Standard currently includes 10 million Class B operations/month, then
-  charges $0.36 per million. `GetObject` and `HeadObject` are Class B.
-- Cloudflare Queues currently charges $0.40 per million operations after its
-  included amount, and a normally consumed message uses three operations.
-- Workers cache hits still count as Worker requests, although they avoid R2
-  reads and generally avoid Worker CPU under Workers Caching.
-
-At list prices, 100 million hostile requests in one month would cost roughly:
-
-- about $27 in Worker request overage;
-- up to about $32.40 in R2 Class B overage if every request bypassed cache;
-- about $119.60 in Queue operations if every request incorrectly emitted and
-  consumed one telemetry message;
-- additional Worker CPU and any optional product costs.
-
-At one billion requests those components are roughly $297, $356.40, and
-$1,199.60 respectively. These are illustrative list-price calculations, not a
-quote; the actual contract and included usage may differ. They show why cache
-correctness, miss controls, and telemetry deduplication are required.
-
 ### Immediate current-production exposure
 
-This is not only a future R2 concern. On 2026-07-18, a cookie-free production
-GET for an existing blob returned HTTP 200 with:
+The current unauthenticated hub GET is a real denial-of-wallet risk. A
+cookie-free production request returned `200`, and the bay affinity cookie can
+make the first request `CF-Cache-Status: BYPASS`. A hostile client can discard
+cookies or vary display names/query parameters and repeatedly force hub,
+database, and Google Cloud egress.
 
-```text
-Cache-Control: public, max-age=31536000
-Set-Cookie: cocalc_bay_frontdoor_worker=...
-CF-Cache-Status: BYPASS
+Mitigate this independently of the R2 migration:
+
+1. Match only GET/HEAD `/blobs/*` in Cloudflare.
+2. Suppress the unnecessary bay affinity cookie or otherwise make successful
+   immutable responses edge-cacheable.
+3. Normalize the cache key to the validated UUID/handle and representation;
+   ignore attacker-controlled display names and irrelevant query parameters.
+4. Cache 2xx objects appropriately, cache misses only briefly, and never cache
+   5xx.
+5. Add WAF/rate rules for overall reads, cache misses, invalid IDs, ranges,
+   HEAD, and high 404 ratios.
+6. Monitor GCP egress and hub blob-read rate until R2 cutover.
+
+### Required managed R2 controls
+
+- Use R2 Standard, not Infrequent Access, for this workload.
+- Authenticate ordinary handles and enforce per-reader request/byte budgets.
+- Give public handles separate publisher/site budgets.
+- Normalize cache by content and representation so arbitrary filename/query
+  changes cannot force R2 reads.
+- Cache known misses briefly by normalized handle/alias.
+- Allow only GET/HEAD and at most one normalized range.
+- Apply Cloudflare DDoS/WAF/bot controls to cached and uncached traffic.
+- Apply stricter aggregate controls to R2 misses, range abuse, scans, and 404s.
+- Set a small Worker CPU limit; never buffer or transform full objects.
+- Deduplicate telemetry so abuse cannot amplify Queue costs.
+- Configure Cloudflare budget alerts and CoCalc projected-cost alerts.
+- Implement a global emergency mode that continues eligible cache hits but
+  challenges/rejects new public origin misses and uploads.
+- Test the circuit breaker before rollout. Cloudflare budget alerts are not a
+  spending cap, and per-data-center WAF counters are not a global hard limit.
+
+## Legacy Inventory
+
+Produce immutable inventories before selecting data. Use keyset pagination,
+not OFFSET, for the 23.7 million-row PostgreSQL table.
+
+### PostgreSQL metadata inventory
+
+Export:
+
+- UUID;
+- whether bytea exists and `octet_length(blob)`;
+- `gcloud` marker;
+- `compress` codec;
+- logical `size`;
+- `created`, `last_active`, `count`, and `expire`;
+- `project_id` and `account_id` as evidence, not complete ownership;
+- archived-syncstring membership; and
+- relevant backup/status fields.
+
+Write compressed, date-stamped shards plus a manifest containing database
+snapshot identity, query/version, row/byte counts, min/max keys, and shard
+SHA-256. Keep a durable copy outside the old VM.
+
+### Exact archived-syncstring exclusion
+
+Exclude before reading bytes, using the schema's actual relationship:
+
+```sql
+NOT EXISTS (
+  SELECT 1
+    FROM syncstrings s
+   WHERE s.archived = blobs.id
+)
 ```
 
-The bay frontdoor adds an affinity cookie when it assigns a hub worker.
-Cloudflare Origin Cache Control does not cache a response containing
-`Set-Cookie`, which explains the observed bypass. Repeated anonymous requests
-therefore reach the hub/database and can incur Google Cloud egress. Random
-display filenames and query parameters can also fragment a naive cache.
+Use the exact production column/table names after schema verification. Record
+excluded row and byte counts in the inventory. Also exclude any hard-link or
+equivalent internal archive marker discovered in historical schema versions.
 
-A controlled three-request check confirmed the mechanism: request 1 without a
-cookie was `BYPASS` and received the affinity cookie; request 2 replaying that
-cookie was `MISS`; request 3 was `HIT`. A normal browser eventually benefits
-from cache, but a malicious client can discard cookies and force every request
-through the origin.
-
-Mitigate this independently of the R2 project:
-
-1. Match only GET/HEAD `/blobs/*` at Cloudflare.
-2. Make successful responses eligible for cache and set an explicit edge TTL.
-   An explicit status-code TTL can cause Cloudflare to strip `Set-Cookie` before
-   caching; alternatively suppress the bay-frontdoor affinity cookie in code
-   for blob GET/HEAD because those requests do not need sticky sessions.
-3. Cache 2xx responses for the immutable-object interval, cache 404 briefly or
-   not at all, and never cache 5xx responses.
-4. Initially preserve the full path plus normalized `uuid` and `download`
-   semantics in the cache key. A later Worker can safely key the byte body only
-   by UUID while constructing filename/disposition headers per response.
-5. Add a `/blobs` rate-limiting rule that includes cached requests, plus a
-   stricter rule or anomaly alert for misses, ranges, HEAD requests, and 404s.
-6. Monitor Google Cloud network egress and hub blob-read rate immediately.
-7. Verify from a cookie-free client that the first exact request is `MISS`, the
-   second is `HIT`, no affinity cookie reaches the client, byte/ETag match, and
-   error statuses use the intended TTL.
-
-Caching the full URL is only a rapid mitigation. It prevents repeated requests
-to the same URL from causing GCP egress, but an attacker can vary the display
-path. The normalized UUID Worker cache and rate/cost controls remain required.
-
-Implement all of these controls before production cutover:
-
-1. Use R2 Standard, not Infrequent Access, for public/hot blob objects.
-   Infrequent Access adds retrieval charges that amplify abuse.
-2. Construct the cache key from the validated UUID and normalized response
-   representation, not the raw URL. Ignore or reject unrelated query
-   parameters. Random filenames, parameter ordering, and cache-buster query
-   strings must not create new origin reads for the same bytes.
-3. Set display filename and content disposition after retrieving the canonical
-   cached body so filename variation does not fragment the byte cache.
-4. Cache known misses briefly by normalized UUID. Do not use the one-year
-   positive-object TTL for 404 responses.
-5. Permit only GET and HEAD. Support at most one valid byte range, normalize
-   its cache behavior, and apply a stricter rate limit to range requests because
-   tiny/random ranges can force repeated origin operations.
-6. Put Cloudflare WAF, managed DDoS protections, bot controls where available,
-   and a `/blobs` rate-limiting rule in front of the Worker. Rate limits must
-   include cached requests where the goal is to bound Worker-request cost, and
-   separately count origin/cache-miss traffic where the goal is to protect R2.
-7. Rate-limit high miss ratios, UUID scans, repeated 404s, and excessive HEAD
-   traffic more aggressively than normal image loads. Per-IP limits are useful
-   but not sufficient against distributed traffic; combine them with bot/IP
-   reputation and aggregate anomaly detection.
-8. Configure a small Worker CPU limit. The Worker only validates, looks up,
-   streams, and sets headers; it must never buffer or transform the full body.
-9. Set Cloudflare billable-usage notifications and budget alerts for Workers,
-   R2, and Queues. Budget alerts are informational and do not cap spend, so
-   also alert from CoCalc metrics on request-rate and cost-rate projections.
-10. Add a globally controlled emergency mode. When automated thresholds are
-    exceeded, continue serving existing cache hits but reject/challenge new
-    origin misses and uploads until an operator clears the incident. Test this
-    circuit breaker; do not depend on a dashboard change during an attack.
-11. Set per-account download request/byte budgets if sign-in is required in the
-    approved access model. The Worker needs a short-lived, signed,
-    Worker-verifiable account token so it can enforce this without a hub/database
-    lookup on every request.
-12. Record cache-hit, R2-read, bytes, range, 404, blocked, and projected-cost
-    metrics independently. Alert on both absolute volume and sudden changes
-    from baseline.
-
-Cloudflare WAF rate counters are scoped by data center rather than globally, so
-they are one layer, not a hard account-wide spending cap. Workers Paid also has
-no general daily request limit. CoCalc therefore needs the cost anomaly alert
-and emergency origin-miss circuit breaker in addition to WAF rules.
-
-### Authentication policy
-
-The current production route is an unauthenticated capability URL, despite the
-fact that blob uploads and stored bytes are quota-controlled. Requiring sign-in
-would reduce casual abuse and enable per-account download quotas, but it is a
-behavioral change with compatibility costs:
-
-- existing direct links and embedded images may be opened without a CoCalc
-  session;
-- public project shares, support messages, and exported documents may depend
-  on anonymous reads;
-- the current login cookie is not automatically suitable for verification at a
-  Worker without a database lookup.
-
-If sign-in becomes the policy, first introduce a short-lived signed blob-access
-cookie/token that the Worker can verify locally. Add an explicit public-share
-capability for blobs referenced by public content, and define how old/current
-capability URLs transition. Do not simply add a hub callback to every Worker
-GET, since that restores the hub bottleneck and per-request database cost.
-
-## Legacy Inventory Before Migration
-
-Do not choose the final two-year scope from row count alone. Produce immutable
-inventory exports and compute both object count and bytes.
-
-### PostgreSQL inventory
-
-Export all 23,715,443 rows using keyset pagination, not OFFSET. Include:
-
-- UUID
-- `octet_length(blob)` without exporting bytea in the metadata pass
-- whether PostgreSQL bytes exist
-- `gcloud` object/path marker
-- `compress`
-- logical `size`
-- `created`, `last_active`, and `count`
-- `expire`
-- `project_id` and `account_id`
-- any backup/status fields
-
-Write date-stamped compressed Parquet or TSV shards plus a manifest containing
-row count, byte count, query, database snapshot identity, min/max UUID, and
-per-shard SHA-256. Store a durable copy outside the old VM.
-
-Compute these grouped totals:
-
-- DB bytes only
-- GCS marker only
-- both DB bytes and GCS marker
-- neither source
-- compressed by codec
-- expiring versus permanent
-- created/accessed by month
-- associated project/account/null
-- candidate counts and bytes for 6 months, 1 year, 2 years, 3 years, and all
-
-Use July 4, 2024 as the initial two-year activity cutoff relative to the legacy
-shutdown, then record the exact chosen timestamp in the migration manifest.
+This exclusion is categorical, not age-based. Archived syncstrings never enter
+the migration queue, public aliases, attachment handles, or R2 prefix.
 
 ### GCS inventory
 
-Use a GCS Storage Inventory report or an equivalent checkpointed bucket
-inventory, not millions of ad hoc list calls. Capture:
+Use a GCS Storage Inventory report or checkpointed bucket inventory. Capture
+key, size, generation, updated time, storage class, CRC32C, and MD5 where
+available. Reconcile it with database markers into:
 
-- object key
-- size
-- generation
-- updated time
-- storage class
-- CRC32C and MD5 when available
+- metadata and source present;
+- database marker with missing GCS source;
+- unreferenced GCS object;
+- duplicate generations; and
+- size/checksum conflict.
 
-Reconcile database `gcloud` markers against GCS inventory into:
+Do not assume source bytes are uncompressed images. The row's `compress` field
+is required to decode them.
 
-- metadata and source object present
-- metadata points to missing GCS object
-- unreferenced GCS object
-- duplicate generations
-- size/checksum conflict
+### Evidence from migrated content
 
-Do not assume the GCS key can be derived from UUID until the old implementation
-and real rows prove that for every format generation.
+Build priority evidence by scanning already migrated/restored content for
+legacy blob URLs in:
 
-### Reference inventory
+- notebook Markdown cells and raw notebook text;
+- Markdown/HTML/Slate project files;
+- project chat and course/task/git rich text;
+- support records;
+- public news and public-share configuration; and
+- exported/imported content where available.
 
-Legacy `project_id`/`account_id` columns are useful but incomplete. Build
-additional candidate sets from:
+This evidence prioritizes migration and support. It is not an authoritative
+reference/ACL/deletion graph.
 
-- UUID links found in already restored/migrated project files;
-- UUID links in migrated chats, support requests, and database-backed docs;
-- blobs associated with legacy projects/accounts that have migrated;
-- explicit support cases;
-- current requests observed at `cocalc.ai/blobs` misses;
-- recent `last_active` or recent creation in the old database.
+## Image-Only Legacy Selection Policy
 
-Store the reason each UUID was selected. A row can have multiple reasons.
+The initial migration allowlist is based on **decompressed byte signatures**,
+not URL filename, GCS key, extension, or legacy metadata. The old schema and
+GCS objects do not provide trustworthy MIME/filename information.
 
-## Legacy Selection Policy
+### Approved initial media types
 
-Recommended priority tiers:
+Migrate only well-recognized safe raster image formats after robust magic-byte
+and structural validation:
 
-- Tier 0: active support cases and observed missing UUID requests.
-- Tier 1: blobs explicitly referenced by already migrated project files,
-  chats, or documents, regardless of age.
-- Tier 2: blobs whose legacy row was created or accessed on/after the approved
-  two-year cutoff.
-- Tier 3: blobs associated with accounts/projects already migrated, subject to
-  measured size and confidence in the association.
-- Tier 4: remaining cold blobs retained only in the preserved legacy sources
-  unless later policy expands migration.
+- PNG;
+- JPEG;
+- GIF;
+- WebP;
+- AVIF;
+- BMP; and
+- ICO.
 
-Always include Tier 0 and Tier 1 regardless of `last_active`. Include newly
-created blobs even if their access counter is zero. Exclude expiring/transient
-rows only under a documented rule.
+Do not initially migrate:
 
-Do not include legacy syncstring/TimeTravel archival blobs in the public Worker
-namespace merely because they share the table. They require separate
-authorization and the project migration policy says legacy TimeTravel is not
-recoverable through this flow.
+- SVG, because it can contain active content and the current route already
+  avoids treating it as a safe inline image;
+- PDF;
+- HTML;
+- arbitrary application/octet-stream attachments;
+- executable/archive formats;
+- malformed or polyglot content; or
+- anything identified as archived syncstring data.
 
-Before approving Tier 2, publish:
+If support evidence later establishes significant legitimate PDF/non-image
+attachment demand, add a separately approved attachment tier served only as
+download with its own threat model. Do not weaken the image allowlist silently.
 
-- selected UUID count;
-- canonical bytes to read and write;
-- source split between DB and GCS;
-- estimated R2 storage and request cost;
-- estimated duration at tested concurrency;
-- count of selected rows with missing/conflicting source data.
+### Candidate evaluation algorithm
+
+For every metadata-selected candidate:
+
+1. Verify it is not an archived syncstring before fetching bytes.
+2. Fetch PostgreSQL bytea when present; otherwise fetch the exact inventoried
+   GCS generation.
+3. Decode legacy `gzip`/`zlib` storage compression according to `compress`.
+4. Enforce compressed and decompressed size limits to prevent decompression
+   bombs.
+5. Verify canonical bytes produce the expected legacy `uuidsha1` value.
+6. Compute full SHA-256 and canonical size.
+7. Sniff and structurally validate the canonical bytes using a shared,
+   test-covered media detector.
+8. Accept only approved raster types.
+9. Record the rejection reason without publishing an alias or handle.
+
+This requires reading candidate bytes, but bulk migration already requires
+reading selected content. Reduce unnecessary reads first using exact
+syncstring exclusion, activity/reference evidence, and cutoff policy.
+
+### Priority tiers within approved images
+
+- **Tier 0:** UUIDs from active support cases and known broken migrated
+  documents.
+- **Tier 1:** approved images referenced in scans of already migrated/restored
+  notebooks, chats, project files, support records, or public content,
+  regardless of age.
+- **Tier 2:** approved images created or accessed on/after the explicitly
+  approved cutoff, initially proposed as two years before legacy shutdown.
+- **Tier 3:** approved images associated with migrated accounts/projects,
+  subject to measured count/bytes and confidence in the association.
+- **Tier 4:** remaining cold content retained only in preserved legacy sources
+  unless later evidence justifies expansion.
+
+Before approving Tier 2 or Tier 3, publish selected counts, canonical/source
+bytes, source split, format split, rejection counts, estimated cost/duration,
+and missing/conflicting source counts.
 
 ## Legacy Migration Pipeline
 
-Build a durable job table and CLI/LRO, not a one-off shell pipeline.
-
-Suggested states:
+Build a durable job table and CLI/LRO. Suggested states:
 
 ```text
-selected -> reading -> decoded -> verified -> uploading -> available
-         -> source_missing | integrity_failed | quarantined | retryable_failed
+selected -> reading -> decoded -> identity_verified -> media_verified
+         -> object_uploading -> object_available -> handle_available
+         -> source_missing | integrity_failed | media_rejected
+         -> quarantined | retryable_failed
 ```
 
-Each job records:
-
-- UUID and selection reasons
-- expected source location/generation
-- source compression
-- attempt count and lease owner
-- source bytes and canonical bytes
-- SHA-256
-- R2 bucket/key/ETag
-- timestamps for every transition
-- structured error code and bounded error detail
-- worker version and inventory version
+Each job records alias/UUID, tier and selection evidence, exact source and GCS
+generation, compression, attempts/lease, source and canonical sizes, SHA-256,
+detected format, object key/ETag, synthetic handle ID, timestamps, bounded
+error detail, inventory version, and worker version.
 
 Per-object algorithm:
 
-1. Claim with a lease using `FOR UPDATE SKIP LOCKED` or the existing LRO job
-   framework.
-2. If the canonical R2 object exists, verify metadata and mark idempotently
-   available.
-3. Read PostgreSQL bytea when present; otherwise read the exact GCS generation
-   identified by inventory.
-4. Decode legacy `gzip`/`zlib` storage compression.
-5. Verify the uncompressed bytes produce the expected legacy UUID.
-6. Compute SHA-256 and canonical size.
-7. Upload a temporary object or use a conditional create.
-8. HEAD and initially read back/hash the object.
-9. Publish the deterministic key and metadata as available.
-10. Add legacy reference/source records and mark the job complete.
+1. Claim with a lease using `FOR UPDATE SKIP LOCKED` or the LRO framework.
+2. Recheck archived-syncstring exclusion.
+3. Read and decode the exact source with bounded resources.
+4. Verify legacy UUID, full SHA-256, size, and approved raster type.
+5. If the deterministic content object exists, verify all metadata; otherwise
+   conditionally upload and read-back/hash during initial rollout.
+6. Create one synthetic `legacy` handle with the approved access policy.
+7. Atomically publish the `legacy-uuid` alias to that handle.
+8. Mark the job complete only after alias resolution and byte read succeed.
 
-If both DB and GCS bytes exist, verify both on a sample and every conflicting
-row. Define a deterministic preference only after comparison.
+Never overwrite an existing deterministic key or alias on mismatch. Quarantine
+conflicts. Bound old PostgreSQL reads, GCS reads, decompression CPU/memory, R2
+writes, and verification reads independently.
 
-Never overwrite an existing deterministic key without matching UUID, size,
-and SHA-256. Quarantine conflicts for manual review.
+### Legacy handle access policy
 
-Bound concurrency independently for:
+Default migrated legacy attachments to `authenticated-link`, matching the
+primary notebook/chat restoration use case while eliminating anonymous
+free-for-all access. For legacy URLs discovered in content that is actively
+published anonymously, create an explicit public derivative handle/capability
+through the public-share migration process.
 
-- old PostgreSQL reads;
-- GCS reads;
-- decompression/CPU;
-- R2 writes;
-- verification reads.
-
-Start with a small canary and increase based on source VM load, GCS errors,
-queue depth, R2 errors, and checksum throughput. The old database must remain
-responsive for support investigations.
+This behavior must be communicated because old links may previously have
+worked without sign-in. Security and cost bounds take precedence over
+preserving accidental anonymous access for all 23.7 million rows.
 
 ### On-demand recovery
 
-Pre-migration is the primary user experience. It avoids broken images that
-need a manual refresh.
+Pre-migration is the preferred user experience. During transition, a valid
+signed-in miss may enqueue a Tier 0 lookup through a service-authenticated
+legacy source gateway. Requirements:
 
-During the transition, an R2 miss for a valid UUID may call a dedicated,
-service-authenticated legacy source gateway. That gateway can read the old
-catalog/database/GCS, stream the canonical bytes, and enqueue the UUID at Tier 0. Requirements:
-
-- strict UUID-only lookup;
-- no arbitrary object/path access;
+- UUID-only lookup, never arbitrary GCS/database paths;
+- exact syncstring exclusion and image allowlist;
 - request coalescing per UUID;
-- bounded concurrency and timeouts;
-- negative-result caching with short TTL;
-- audit logs and rate limits;
-- no direct Worker connection to PostgreSQL;
-- no permanent dependency on the legacy VM.
+- bounded concurrency, decompression, and timeouts;
+- short negative-result caching;
+- audit logs and account rate limits;
+- no direct Worker connection to PostgreSQL; and
+- no permanent dependency on the old VM.
 
-This fallback is optional and temporary. Do not put it on the critical path
-until it has load and security tests. If it is absent, misses should generate a
-support-visible priority job rather than silently disappearing.
+Do not put synchronous legacy fetching on the anonymous Worker path.
 
-## Current cocalc.ai Migration Before Legacy Data
+## Current cocalc.ai Migration Before Legacy Bulk Data
 
-The 568-object current corpus is the proving ground.
+Use the small current corpus to prove the design:
 
-1. Deploy schema/reference changes with PostgreSQL behavior unchanged.
-2. Backfill references where possible and flag ambiguous rows.
-3. Mirror all current bytes to a staging R2 blob bucket.
-4. Verify every UUID, size, and SHA-256 by reading back from R2.
-5. Deploy the Worker on a canary hostname and compare every response with the
-   hub, including headers, ranges, cache, bad UUIDs, and filenames.
-6. Enable dual read in staging: R2 first, PostgreSQL fallback.
-7. Enable dual write in staging and inject failures at every transition.
-8. Repeat in production while PostgreSQL remains canonical.
-9. Route a small percentage of production GETs to the Worker and compare
-   status/body hashes.
-10. Make R2 canonical only after all objects are mirrored and discrepancy is
-    zero for a sustained window.
-11. Retain PostgreSQL bytes for a rollback interval, then clear bytea in
-    bounded batches after backups and final verification.
+1. Add object/handle/alias schema while keeping current behavior operational.
+2. Backfill one compatibility handle and `current-uuid` alias per current row.
+3. Preserve existing account/project fields as attribution evidence.
+4. Mirror canonical bytes to a private staging R2 bucket and verify every
+   SHA-256, size, media type, and read response.
+5. Update all upload producers to create random handles even on content dedup.
+6. Update all active consumers in the enumerated inventory to accept new
+   handle URLs and compatibility aliases.
+7. Deploy authenticated/public Worker paths and compare with PostgreSQL mode.
+8. Exercise cross-project URL copy, pixel paste, chat import, support images,
+   public news, public shares, exports, and ACP materialization.
+9. Canary production reads with PostgreSQL fallback.
+10. Make R2 canonical only after exhaustive verification and a sustained
+    discrepancy-free window.
+11. Retain PostgreSQL bytes for rollback, then clear them in bounded batches
+    after backups and final verification.
 
-Because the current corpus is only about 135 MB, use exhaustive verification,
-not sampling.
+Because the corpus is about 135 MB, use exhaustive verification, not sampling.
 
 ## URL and Redirect Compatibility
 
-Keep these URLs working:
+Keep legacy/current URLs working through aliases:
 
 ```text
-https://cocalc.com/blobs/<display-name>?uuid=<uuid>
-https://cocalc.ai/blobs/<display-name>?uuid=<uuid>
+https://cocalc.com/blobs/<display-name>?uuid=<legacy-uuid>
+https://cocalc.ai/blobs/<display-name>?uuid=<legacy-or-current-uuid>
 ```
 
-The first may continue redirecting to the second. The second must be the stable
-canonical URL in both storage modes.
+New uploads use random handle URLs. Filename variation must not change object
+lookup, authorization, byte-cache key, or R2 operation count.
 
-Test:
+Test spaces, Unicode, quotes, percent escapes, missing extensions, misleading
+extensions, parameter order, unrelated parameters, GET, HEAD, one range,
+invalid range, conditionals, ETag, current aliases, legacy aliases, random
+handles, misses, disabled handles, and quarantined objects.
 
-- filenames with spaces, Unicode, quotes, percent escapes, and no extension;
-- UUID parameter order and unrelated query parameters;
-- safe images inline;
-- PDF, HTML, SVG, executable, and unknown content as attachment;
-- `GET`, `HEAD`, single range, invalid range, and conditional requests;
-- ETag and cache behavior;
-- current, migrated legacy, missing, quarantined, and expiring blobs;
-- cocalc.com redirect cache behavior.
-
-The response content type should come from trusted stored/sniffed metadata plus
-an allowlist, not solely from an attacker-controlled display filename.
+Content type comes from trusted byte detection. Only approved safe image types
+may be inline; all other supported types are attachment downloads. Always set
+`nosniff` and suitable CSP/Content-Disposition.
 
 ## Retention, Deletion, and Backup
 
-R2 durability is not a substitute for a deletion policy or independent
-recovery evidence.
+- Keep old GCS/database sources unchanged during rollout.
+- Disable accidental lifecycle deletion on canonical object prefixes.
+- Treat handles/aliases as authoritative liveness roots, not discovered
+  document occurrences.
+- Garbage-collect only after no active handle/alias remains, a long grace
+  period, and a second transactional check.
+- Purge edge cache for legal/security deletion or handle disablement.
+- Back up object/handle/alias/job metadata through normal database backups.
+- Export immutable manifests containing content ID, key, size, media type,
+  ETag, state, and legacy alias evidence.
+- Decide separately whether R2 objects require another realm/provider backup.
+- In PostgreSQL mode, normal database backup remains the byte backup.
 
-- Keep migrated legacy sources in the old GCS/database during rollout.
-- Use an R2 bucket lock on migration manifests and audit records, not
-  necessarily on all user blob objects, because a broad lock can prevent legal
-  deletion.
-- Disable accidental lifecycle deletion on canonical blob prefixes.
-- Mark zero-reference objects as garbage candidates; delete only after a long
-  grace period and a second reference check.
-- Purge Cloudflare cache when a legal/security deletion must take effect
-  promptly. Cached custom-domain objects can survive origin deletion until
-  purge/TTL.
-- Back up metadata/reference tables through normal bay/database backups.
-- Periodically export an immutable object manifest with UUID, key, size,
-  SHA-256, ETag, and state.
-- Decide separately whether new R2 blob objects require replication or a
-  second-provider backup. Record the accepted durability model explicitly.
+## Archived Syncstring Code Removal
 
-In PostgreSQL mode, existing database backup/restore remains the byte backup.
-The same metadata/reference and garbage-collection rules should still apply.
+After metrics confirm no active production frontend depends on the deprecated
+archive RPCs:
 
-## Security and Abuse Controls
+1. disable the maintenance task that creates archived syncstring blobs;
+2. remove archive creation and retrieval implementations;
+3. remove Conat API declarations and server wrappers;
+4. remove obsolete tests and package maintenance entry points;
+5. retain only any narrowly required read-only forensic tooling outside the
+   public application; and
+6. verify that no new `syncstrings.archived` values are created.
 
-- Keep canonical buckets private; disable `r2.dev`.
-- Use separate least-privilege credentials for control-plane writes.
-- Never expose S3 secrets to browsers. Presigned upload URLs are short-lived
-  bearer capabilities for one key and method.
-- Validate content length before and after upload.
-- Verify legacy UUID and SHA-256 before publication.
-- Set `nosniff`, safe content disposition, and appropriate CSP.
-- Add WAF/rate limits for hotlink or denial-of-wallet attacks.
-- Do not return account/project association metadata from the public Worker.
-- Redact credentials, signed URLs, and raw bytea from logs.
-- Audit admin recovery, quarantine override, and deletion actions.
-- Test SHA-1 UUID collision handling; never silently replace existing bytes.
-- Keep protected TimeTravel/blob RPCs off the public namespace.
+This cleanup must have its own commit/rollout and database retention review. It
+must not block the immediate migration exclusion.
 
 ## Operations and Support Tooling
 
-Add operator commands along these lines:
+Suggested commands:
 
 ```text
 cocalc blob backend status
-cocalc blob verify <uuid>
+cocalc blob lookup <handle-or-alias>
+cocalc blob verify <handle-or-alias>
 cocalc blob migrate-current --dry-run
 cocalc legacy-blob inventory --snapshot <name>
-cocalc legacy-blob plan --cutoff 2024-07-04
+cocalc legacy-blob plan --images-only --cutoff <date>
 cocalc legacy-blob migrate --tier 0 --concurrency <n>
 cocalc legacy-blob retry <uuid>
-cocalc legacy-blob lookup <uuid>
 cocalc legacy-blob verify --manifest <name>
 ```
 
-All mutation commands require fresh admin elevation. Every bulk command needs
-`--dry-run`, bounded concurrency, checkpointing, structured JSON output, and a
-resume token.
+Mutation commands require fresh admin elevation. Bulk commands need dry-run,
+bounded independent concurrency, checkpointing, structured JSON, leases, and
+resume tokens.
 
-Admin/support lookup should show:
+Support lookup must show:
 
-- current object state and backend;
-- last successful access and approximate count;
-- known account/project references without exposing them publicly;
-- legacy DB/GCS source and exact generation;
-- selection reasons and tier;
-- migration attempts/errors;
-- checksum verification;
-- a button to prioritize recovery or retry a safe failed job.
+- requested handle/alias and normalized resolution;
+- object state, SHA-256, size, and detected media type;
+- attribution and access policy without exposing it publicly;
+- legacy database/GCS source and generation;
+- archived-syncstring exclusion result;
+- tier/selection evidence and media-filter result;
+- migration attempts and classified errors; and
+- safe prioritize/retry/disable actions with audit logs.
 
 ## Metrics and Alerts
 
-Publish dashboards and alerts for:
+Track:
 
-- Worker GET/HEAD rate, status, p50/p95/p99 latency, and bytes;
-- cache hit/miss ratio;
-- R2 not-found rate for known/current UUIDs;
-- PostgreSQL fallback and legacy fallback rate;
+- handle resolutions by policy, status, and source;
+- Worker GET/HEAD/range rates, bytes, latency, and cache outcomes;
+- R2 reads and misses separately from edge cache hits;
+- authenticated/public quota rejections;
+- high-miss/404/range clients and aggregate abuse blocks;
+- projected Worker/R2/Queue/GCP egress cost;
+- emergency-mode state;
 - upload pending age and finalize failures;
-- UUID/SHA-256 integrity failures;
-- Queue depth, oldest event age, retry rate, and dead-letter count;
-- migration selected/running/available/failed counts and bytes by source/tier;
-- old DB/GCS read errors and source-missing counts;
-- metadata available with object missing, and object present without metadata;
-- storage/object/operation cost by month;
-- projected hourly/daily/monthly cost from current request rates;
-- abuse blocks/challenges, high-miss clients, and emergency-mode state;
-- PostgreSQL `blobs` table byte size during drain.
+- object/hash/media integrity failures;
+- telemetry lag/dead letters;
+- migration counts/bytes by source, tier, format, and state;
+- archived-syncstring rows excluded;
+- media-rejected candidates by detected type/reason;
+- aliases whose handles/objects are missing; and
+- objects with zero handles versus handles with missing objects.
 
-Critical alerts:
-
-- current blob advertised as available but missing in canonical storage;
-- checksum conflict for an existing UUID;
-- Worker cannot read R2 while hub fallback is disabled;
-- access queue lag exceeds the retention-accounting SLO;
-- projected spend or cache-miss rate crosses warning/critical thresholds;
-- migration source disappearance or unexpected object-count decrease.
+Critical alerts include available metadata with missing bytes, alias conflict,
+checksum mismatch, Worker/R2 outage after fallback removal, cost-rate threshold
+crossing, emergency mode activation, legacy source disappearance, and
+unexpected selected-object count decrease.
 
 ## Test Plan
 
-### Unit and integration
+### Application semantics
 
-- Shared UUID, filename, header, and disposition policy in both backends.
-- PostgreSQL and R2 `BlobStore` contract tests.
-- Duplicate upload creates a second reference but one physical object.
-- Pending upload is never publicly visible.
-- R2 failure before/after upload and before/after metadata commit.
-- Retry is idempotent after every injected failure.
-- Range and conditional request behavior.
-- Cache-key normalization across filename and irrelevant query variations.
-- Repeated random cache-buster parameters cause only one canonical R2 read.
-- Rate limits count the intended cached/miss/range request classes.
-- Emergency mode serves cache hits and rejects new origin misses.
-- Queue duplicate/out-of-order events produce monotonic `last_active`.
-- Reference deletion and delayed garbage collection.
-- Legacy gzip/zlib decode and malformed compression.
-- UUID mismatch, SHA-256 conflict, truncated GCS read, missing generation.
-- PostgreSQL mode with no Cloudflare settings at all.
-- `auto` mode cannot partially activate R2.
+- Pixel paste into another project creates a new handle but shares content.
+- Verbatim Markdown/HTML copy preserves the source handle and remains readable
+  by a signed-in destination user.
+- Duplicate upload creates two handles and one object.
+- Logical quota is charged per approved handle policy despite deduplication.
+- Chat import rebinds/re-uploads bundled assets.
+- Jupyter Markdown pasted images use global handles.
+- Jupyter execution outputs remain in project-scoped AKV and are unaffected.
+- Support, theme, news, public-share, course, task, git, chat, export, import,
+  ACP materialization, and generated-image paths are covered explicitly.
 
-### Canary data
+### Storage and access
 
-Create fixtures covering:
+- PostgreSQL and R2 object-store contract tests.
+- No-Cloudflare deployment with no Worker/R2 settings.
+- Pending object or handle is never readable.
+- Random handle does not reveal SHA-256 or deterministic object key.
+- Authenticated-link denies anonymous reads and permits signed-in link holders.
+- Public-link works anonymously within public budgets.
+- Disabled/deleted handles stop resolving and trigger cache purge.
+- Alias and handle URLs return identical canonical bytes.
+- Retry is idempotent after failure at every upload/finalize transition.
+- Range, conditional, filename, MIME, `nosniff`, and CSP behavior.
 
-- DB-only legacy bytes;
-- GCS-only legacy bytes;
-- both sources identical;
-- both sources conflicting;
-- missing source;
-- compressed/uncompressed;
-- zero-byte and maximum-size;
-- multiple account/project references;
-- filename/content-type attacks;
-- old and recent access timestamps.
+### Legacy fixtures
 
-### Load and failure testing
+- DB-only, GCS-only, identical dual-source, conflicting dual-source, and
+  missing-source rows.
+- gzip, zlib, uncompressed, malformed, truncated, and decompression-bomb data.
+- archived syncstring row that is provably never fetched/migrated.
+- valid PNG/JPEG/GIF/WebP/AVIF/BMP/ICO fixtures.
+- SVG/PDF/HTML/archive/executable/opaque/polyglot fixtures rejected.
+- UUID mismatch and existing SHA-256/object/alias conflict.
+- old image referenced by a migrated notebook included in Tier 1.
 
-- Sustained public reads with realistic cache distribution.
-- Burst hot UUID and many cold UUIDs.
-- Distributed random valid-format UUID misses and repeated tiny ranges.
-- Cost projection under 10 million, 100 million, and 1 billion requests.
-- Worker/R2 outage with and without fallback.
-- Queue disabled or delayed for hours, followed by replay.
-- Migration at increasing concurrency while monitoring the old DB VM.
-- Hub/bay restart during upload finalization and migration leases.
-- Cache purge after deletion and after a previously cached 404.
+### Abuse and load
+
+- Repeated filename/query variants cause one canonical R2 read.
+- Distributed valid-format misses, scans, HEAD floods, and tiny ranges.
+- Signed-in per-reader and anonymous public budget exhaustion.
+- Cost projections at 10 million, 100 million, and 1 billion requests.
+- Emergency mode serves eligible cache hits but blocks/challenges origin misses.
+- Worker/R2 outage, Queue delay/replay, and hub restart during finalization.
+- Migration concurrency ramp while monitoring old DB/GCS and decompression
+  resources.
 
 ## Rollout Phases and Gates
 
-### Phase 0: Freeze and measure
+### Phase 0: Immediate exposure reduction
 
-- Confirm lifecycle, retention, versioning, and IAM on old GCS and R2 sources.
-- Export final old DB/GCS inventories.
-- Record production current-blob inventory.
-- Make no deletion changes.
+- Fix current Cloudflare caching/cookie behavior for `/blobs`.
+- Add normalized cache and rate/cost alerts around the current hub route.
+- Keep uploads unchanged.
 
-Gate: all sources are reproducibly inventoried and immutable enough for the
-migration window.
+Gate: cookie-free repeated requests do not repeatedly cause GCP egress, and
+abuse alerts/circuit-breaker behavior are tested.
 
-### Phase 1: Backend abstraction and reference correctness
+### Phase 1: Usage and schema correctness
 
-- Add backend setting, `BlobStore`, explicit R2 metadata, and references.
-- Keep production resolved to PostgreSQL.
-- Fix duplicate-reference/quota behavior.
+- Land objects, handles, aliases, backend selection, and object-store
+  abstraction with PostgreSQL still canonical.
+- Update every producer/consumer in the application inventory.
+- Fix duplicate upload attribution/quota behavior.
 
-Gate: existing tests plus new contract tests pass in PostgreSQL mode with no
-Cloudflare configuration.
+Gate: application semantics and PostgreSQL-only tests pass with no Cloudflare
+configuration.
 
-### Phase 2: R2 current-blob canary
+### Phase 2: Private R2 staging canary
 
-- Provision a private staging blob bucket, Worker, Queue, and telemetry.
+- Provision private staging bucket, Worker, signing keys, telemetry, budgets,
+  and circuit breaker.
 - Mirror and exhaustively verify staging/current objects.
-- Exercise failure and load tests.
+- Test authenticated and explicit public paths, failure injection, and abuse.
 
-Gate: zero content/header discrepancies and successful rollback to PostgreSQL.
+Gate: zero byte/header/policy discrepancies and successful rollback.
 
-### Phase 3: Production current blobs
+### Phase 3: Current production corpus
 
-- Mirror all 568 current objects and verify every byte.
+- Backfill compatibility handles/aliases.
+- Mirror all current objects and verify every byte.
 - Canary Worker reads, then R2-first reads with PostgreSQL fallback.
-- Enable R2 writes, retain DB rollback bytes.
+- Enable R2 writes and retain DB rollback bytes.
 
-Gate: sustained zero integrity errors, acceptable latency/error/cost, healthy
-telemetry queue, and tested rollback.
+Gate: sustained zero integrity/policy errors, acceptable latency/cost, healthy
+telemetry, and tested emergency/rollback paths.
 
-### Phase 4: Legacy inventory and policy approval
+### Phase 4: Archived-syncstring shutdown and legacy inventory
 
-- Complete database/GCS/reference inventories.
-- Calculate candidate counts/bytes/costs for every tier/cutoff.
-- Approve the final selection and retention policy.
+- Stop archive creation after usage verification.
+- Complete immutable database/GCS inventories and exact exclusion counts.
+- Scan migrated content for priority UUID evidence.
+- Calculate image candidates by tier, format, bytes, source, and rejection.
 
-Gate: every selected UUID has an auditable reason and expected source state.
+Gate: every candidate is non-syncstring and has auditable source/selection
+evidence; cleanup rollout has independent rollback/review.
 
-### Phase 5: Legacy pilot
+### Phase 5: Legacy image pilot
 
-- Migrate support cases, known broken links, and a stratified fixture/sample.
-- Validate links in real migrated documents.
-- Exercise support lookup and retry tools.
+- Migrate support cases and a stratified fixture/sample.
+- Validate real notebook/chat/public-content rendering.
+- Exercise support lookup, media rejection, retry, and conflict quarantine.
 
-Gate: all recoverable pilot objects serve correctly, and failures are
-classified rather than silently skipped.
+Gate: all recoverable pilot images serve correctly and every failure has a
+classified evidence state.
 
-### Phase 6: Tiered bulk migration
+### Phase 6: Tiered image migration
 
 - Run Tier 0 and Tier 1 first.
-- Run approved recent-access/creation tiers with bounded concurrency.
-- Continuously reconcile manifest, R2, and metadata.
+- Run approved Tier 2/Tier 3 with bounded independent concurrency.
+- Continuously reconcile source, manifest, object, handle, alias, and reads.
 
-Gate: selected manifest is fully accounted for as available or an explicit
+Gate: the selected manifest is fully accounted for as available or a documented
 terminal evidence state.
 
-### Phase 7: On-demand tail and source retirement decision
+### Phase 7: Tail and source-retention decision
 
-- Observe misses and support demand.
-- Optionally enable the temporary legacy source gateway.
-- Reassess cold tiers from actual demand.
-- Make a separate, reviewed decision about old VM/GCS retention.
+- Observe signed-in misses and support demand.
+- Optionally enable bounded on-demand image recovery.
+- Consider a separately designed non-image attachment tier only from evidence.
+- Make a separate reviewed decision about old VM/GCS retention.
 
-Gate: no source is deleted merely because the selected migration completed.
+Gate: no source is deleted merely because the selected image migration
+completed.
 
 ## Rollback Strategy
 
-- Before R2 becomes canonical, rollback is a setting change to PostgreSQL.
-- During R2-first reads, preserve PostgreSQL fallback and bytea.
-- Worker route changes must be independently reversible without a hub deploy.
-- R2 uploads are immutable; a bad rollout changes metadata/routing, not object
-  contents.
-- Legacy jobs are idempotent and do not mutate source data.
-- Never clear current PostgreSQL bytea until the rollback interval and full
-  verification pass.
-- Never delete old legacy source data as part of an application deploy.
+- Keep PostgreSQL canonical until R2 object/handle/alias behavior is proven.
+- Preserve PostgreSQL read fallback and current bytea during R2 canary.
+- Make Worker routing independently reversible from hub deploys.
+- Keep R2 objects immutable; rollback changes metadata/routing, not bytes.
+- Make migration jobs idempotent and source-read-only.
+- Never delete legacy source data or current bytea in an application deploy.
+- Keep archived-syncstring code removal separate from schema/data deletion.
 
 ## Decisions Requiring Explicit Approval
 
-1. Exact legacy cutoff after count/byte inventory. Proposed baseline: created
-   or accessed since 2024-07-04, plus all reference/support tiers.
-2. Whether logical quota charges each active reference or unique bytes per
-   account/project.
-3. Whether managed production needs an EU jurisdiction realm now.
-4. How long current PostgreSQL rollback bytes remain after R2 cutover.
-5. Whether to operate a temporary synchronous legacy fallback gateway.
-6. Whether R2 canonical objects need independent replication/backup.
-7. Long-term retention of Tier 4 cold legacy data and the preserved old
-   database/GCS sources.
-8. Whether exact access counts matter, or only monotonic last-access day plus
-   approximate counts.
-9. Whether blob reads remain public capability URLs or require sign-in. If
-   sign-in is required, approve the public-share compatibility and signed
-   Worker-token design before R2 cutover.
+1. Exact signed Worker token/cookie exchange and revocation behavior.
+2. Public-share/news/support mechanism: durable public handles versus
+   short-lived renderer-issued capabilities.
+3. Logical quota charging per handle and attribution split between account and
+   project.
+4. Legacy image cutoff after inventory count/byte results.
+5. Exact safe raster allowlist and validation library; SVG remains excluded by
+   default.
+6. Retention/grace period for deleted handles and zero-handle objects.
+7. Whether managed production needs an EU jurisdiction realm now.
+8. How long current PostgreSQL rollback bytes remain after R2 cutover.
+9. Whether to operate the temporary signed-in legacy fallback gateway.
+10. Whether R2 canonical objects need independent replication/backup.
+11. Long-term retention of cold/non-image legacy sources.
+12. Whether approximate counts plus monotonic last-active day are sufficient.
 
 ## Recommended First Implementation Slice
 
-Do not start with the 23.7 million legacy rows. Implement this vertical slice:
+Do not start with 23.7 million legacy rows. Implement:
 
-1. `BlobStore` with PostgreSQL and R2 implementations.
-2. Explicit backend selection with PostgreSQL as the no-Cloudflare default.
-3. Private staging R2 bucket and Worker-compatible response policy.
-4. Metadata/reference schema and duplicate-reference correctness.
-5. Mirror all current staging/production blobs, then exhaustively verify the
-   568-object production corpus without changing reads.
-6. Worker canary for GET/HEAD/range/cache/security behavior.
-7. Queue-based access aggregation.
-8. Production R2-first reads with PostgreSQL fallback only after staging and
-   canary gates pass.
+1. object/handle/alias schema and PostgreSQL object store;
+2. random-handle uploads and correct duplicate attribution/quota;
+3. compatibility aliases for the small current corpus;
+4. explicit authenticated/public read policies across every enumerated active
+   use case;
+5. Cloudflare immediate denial-of-wallet mitigation;
+6. private staging R2 object store and Worker;
+7. exhaustive migration/verification of current staging and production blobs;
+8. archived-syncstring exclusion inventory and creation shutdown; and
+9. a Tier 0 legacy safe-raster pilot.
 
-Only then run the legacy inventory and approve the migration cutoff. This
-sequence prevents a large migration from locking CoCalc into another temporary
-storage architecture.
+This sequence validates real attachment behavior and avoids importing legacy
+data into another temporary abstraction.
 
-## Relevant Source and Platform References
+## Relevant Source References
 
-Repository:
+Current application and storage:
 
-- `src/packages/util/db-schema/blobs.ts`
-- `src/packages/database/postgres/blobs/methods-impl.ts`
-- `src/packages/hub/servers/app/blobs.ts`
 - `src/packages/hub/servers/app/blob-upload.ts`
+- `src/packages/hub/servers/app/blobs.ts`
+- `src/packages/frontend/blobs/upload-image.ts`
+- `src/packages/frontend/file-upload.tsx`
+- `src/packages/frontend/editors/slate/upload.tsx`
+- `src/packages/frontend/editors/markdown-input/component.tsx`
+- `src/packages/frontend/support/create-modal.tsx`
+- `src/packages/jupyter/redux/actions.ts`
 - `src/packages/server/blobs/save.ts`
 - `src/packages/server/conat/api/db.ts`
+- `src/packages/database/postgres/blobs/methods-impl.ts`
+- `src/packages/database/postgres/blobs/archive.ts`
+- `src/packages/hub/run/maintenance-syncstrings.js`
 - `src/packages/server/membership/blob-limits.ts`
+- `src/packages/util/db-schema/blobs.ts`
 - `src/packages/util/db-schema/table-ownership.ts`
 - `src/packages/backend/r2.ts`
 - `src/packages/server/project-backup/r2.ts`
 - `src/packages/util/db-schema/buckets.ts`
 - `src/.agents/scalable-architecture.md`
 - `src/.agents/legacy-project-migration-recovery-plan-2026-07-09.md`
+
+Legacy source and operations:
+
 - `/home/user/upstream/cocalc/src/packages/database/postgres/blobs.ts`
 - `/home/user/upstream/cocalc/src/packages/database/postgres-blobs.coffee`
 - `/home/user/kucalc/cluster2/notes/2026-shutdown.md`
 
-Cloudflare documentation reviewed on 2026-07-18:
+## Relevant Cloudflare References
 
 - R2 data location and jurisdictions:
   https://developers.cloudflare.com/r2/reference/data-location/
@@ -1154,37 +1306,24 @@ Cloudflare documentation reviewed on 2026-07-18:
   https://developers.cloudflare.com/r2/api/workers/workers-api-reference/
 - R2 public buckets and custom domains:
   https://developers.cloudflare.com/r2/buckets/public-buckets/
-- R2 cache consistency caveats:
+- R2 cache consistency:
   https://developers.cloudflare.com/r2/reference/consistency/
 - R2 presigned URLs:
   https://developers.cloudflare.com/r2/api/s3/presigned-urls/
-- Workers Analytics Engine limits and retention:
+- Workers Analytics Engine limits:
   https://developers.cloudflare.com/analytics/analytics-engine/limits/
-- Cloudflare Queues batching and retries:
+- Cloudflare Queues batching, delivery, and pricing:
   https://developers.cloudflare.com/queues/configuration/batching-retries/
-- Cloudflare Queues delivery guarantees:
   https://developers.cloudflare.com/queues/reference/delivery-guarantees/
-- Logpush to R2:
-  https://developers.cloudflare.com/logs/logpush/logpush-job/enable-destinations/r2/
-- R2 bucket locks:
-  https://developers.cloudflare.com/r2/buckets/bucket-locks/
-- R2 pricing:
+  https://developers.cloudflare.com/queues/platform/pricing/
+- R2 and Workers pricing:
   https://developers.cloudflare.com/r2/pricing/
-- Workers pricing and CPU limits:
   https://developers.cloudflare.com/workers/platform/pricing/
-- Workers platform limits:
-  https://developers.cloudflare.com/workers/platform/limits/
-- Cache-key normalization:
+- Cache keys and cache control:
   https://developers.cloudflare.com/cache/how-to/cache-keys/
-- Origin cache control and `Set-Cookie` behavior:
   https://developers.cloudflare.com/cache/concepts/cache-control/
-- Cache behavior for HEAD and `Set-Cookie`:
-  https://developers.cloudflare.com/cache/concepts/cache-behavior/
 - WAF rate limiting:
   https://developers.cloudflare.com/waf/rate-limiting-rules/
-- WAF rate-counter scope:
   https://developers.cloudflare.com/waf/rate-limiting-rules/request-rate/
-- Queue pricing:
-  https://developers.cloudflare.com/queues/platform/pricing/
 - Cloudflare budget alerts:
   https://developers.cloudflare.com/billing/manage/budget-alerts/
