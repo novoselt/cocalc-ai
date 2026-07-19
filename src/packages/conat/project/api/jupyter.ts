@@ -32,7 +32,9 @@ export const jupyter = {
 export interface Jupyter {
   stripNotebook: (path_ipynb: string) => Promise<string>;
 
-  // path = the syncdb path (not *.ipynb)
+  // path = the syncdb path (not *.ipynb). These methods run in the compute
+  // container. Passive notebook open/edit/save and portable ipynb conversion
+  // must use the project-host filesystem API so they never autostart compute.
   start: (path: string) => Promise<void>;
   stop: (path: string) => Promise<void>;
   save: (opts: JupyterSaveOptions) => Promise<void>;

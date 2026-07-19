@@ -27,6 +27,16 @@ import handleNbconvertChange from "./handle-nbconvert-change";
 
 const logger = getLogger("jupyter:project-actions");
 
+function isFilesystemJupyterUnsupported(err: unknown): boolean {
+  const code = `${(err as any)?.code ?? ""}`.toUpperCase();
+  const message = `${err instanceof Error ? err.message : err}`.toLowerCase();
+  return (
+    code === "ENOSYS" ||
+    message.includes("unknown service method") ||
+    message.includes("not implemented")
+  );
+}
+
 export class JupyterActions extends JupyterActions0 {
   protected init2(): void {
     this.initIpywidgetsSupport();
@@ -34,6 +44,23 @@ export class JupyterActions extends JupyterActions0 {
 
   save_ipynb_file = async (_opts?) => {
     const ipynb = await this.toIpynb();
+    if (ipynb == null) {
+      throw Error("notebook is not loaded");
+    }
+    const saveIpynb = this.syncdb.fs.jupyterSaveIpynb;
+    if (typeof saveIpynb === "function") {
+      try {
+        const result = await saveIpynb(this.path, ipynb);
+        if (result.converted) {
+          await this.setToIpynb(result.ipynb);
+        }
+        return;
+      } catch (err) {
+        if (!isFilesystemJupyterUnsupported(err)) {
+          throw err;
+        }
+      }
+    }
     let previousIpynb: any;
     try {
       const raw = await this.syncdb.fs.readFile(this.path);
@@ -57,6 +84,16 @@ export class JupyterActions extends JupyterActions0 {
   };
 
   protected override async prepareIpynbForSyncdoc(ipynb: any): Promise<any> {
+    const importIpynb = this.syncdb.fs.jupyterImportIpynb;
+    if (typeof importIpynb === "function") {
+      try {
+        return (await importIpynb(ipynb)).ipynb;
+      } catch (err) {
+        if (!isFilesystemJupyterUnsupported(err)) {
+          throw err;
+        }
+      }
+    }
     return await externalizeJupyterAttachments({
       ipynb,
       loadBlob: async (blobUuid) => await this.loadGlobalBlob(blobUuid),

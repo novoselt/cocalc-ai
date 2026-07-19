@@ -10,6 +10,7 @@ import { isValidUUID } from "@cocalc/util/misc";
 const METADATA_KEY = "blob_attachments";
 const METADATA_VERSION = 1;
 const MAX_NOTEBOOK_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+const MAX_NOTEBOOK_ATTACHMENT_COUNT = 4096;
 
 const MIME_PREFERENCE = [
   "image/png",
@@ -196,6 +197,33 @@ function sourceText(source: unknown): string {
     return source.join("");
   }
   return typeof source === "string" ? source : "";
+}
+
+function assertAttachmentReferenceLimit(
+  ipynb: any,
+  kind: "blob" | "native",
+): void {
+  let count = 0;
+  for (const cell of ipynb?.cells ?? []) {
+    if (cell?.cell_type !== "markdown") continue;
+    const seen = new Set<string>();
+    const regex =
+      kind === "blob"
+        ? new RegExp(GLOBAL_BLOB_URL.source, GLOBAL_BLOB_URL.flags)
+        : new RegExp(ATTACHMENT_URL.source, ATTACHMENT_URL.flags);
+    for (const match of sourceText(cell.source).matchAll(regex)) {
+      const key =
+        kind === "blob" ? parseBlobUrl(match[0])?.uuid : (match[1] ?? match[0]);
+      if (key == null || seen.has(key)) continue;
+      seen.add(key);
+      count += 1;
+      if (count > MAX_NOTEBOOK_ATTACHMENT_COUNT) {
+        throw Error(
+          `notebook has too many image attachments (max ${MAX_NOTEBOOK_ATTACHMENT_COUNT})`,
+        );
+      }
+    }
+  }
 }
 
 function setSource(cell: any, source: string): void {
@@ -404,10 +432,12 @@ export async function embedCoCalcBlobImages({
   previousIpynb,
   loadBlob,
 }: EmbedBlobImagesOptions): Promise<any> {
+  assertAttachmentReferenceLimit(ipynb, "blob");
   const result = deepCopy(ipynb);
   const previous = variantFromPreviousNotebook(previousIpynb);
   const loaded = new Map<string, Promise<ResolvedVariant>>();
   let totalBytes = 0;
+  let attachmentCount = 0;
 
   const resolveVariant = async (
     variant: BlobVariantMetadata,
@@ -469,6 +499,12 @@ export async function embedCoCalcBlobImages({
         const existingName = namesByUuid.get(parsed.uuid);
         if (existingName != null) {
           return `attachment:${encodeURIComponent(existingName)}`;
+        }
+        attachmentCount += 1;
+        if (attachmentCount > MAX_NOTEBOOK_ATTACHMENT_COUNT) {
+          throw Error(
+            `notebook has too many image attachments (max ${MAX_NOTEBOOK_ATTACHMENT_COUNT})`,
+          );
         }
 
         const mapped = findMetadataEntryForUuid(metadata, parsed.uuid);
@@ -580,20 +616,38 @@ export async function externalizeJupyterAttachments({
   loadBlob,
   saveBlob,
 }: ExternalizeAttachmentsOptions): Promise<any> {
+  assertAttachmentReferenceLimit(ipynb, "native");
   const result = deepCopy(ipynb);
   let totalBytes = 0;
+  let attachmentCount = 0;
 
   for (const cell of result.cells ?? []) {
     if (cell?.cell_type !== "markdown") continue;
     const originalMetadata = metadataForCell(cell);
     const newEntries: Record<string, BlobAttachmentEntryMetadata> = {};
     const resolved = new Map<string, Promise<BlobAttachmentEntryMetadata>>();
+    const consumedAttachments = new Set<string>();
+    for (const match of sourceText(cell.source).matchAll(GLOBAL_BLOB_URL)) {
+      const parsed = parseBlobUrl(match[0]);
+      if (parsed == null) continue;
+      const mapped = findMetadataEntryForUuid(originalMetadata, parsed.uuid);
+      if (mapped != null) {
+        newEntries[mapped[0]] = mapped[1];
+      }
+    }
 
     const resolveAttachment = async (
       name: string,
     ): Promise<BlobAttachmentEntryMetadata> => {
       let promise = resolved.get(name);
       if (promise != null) return await promise;
+      attachmentCount += 1;
+      if (attachmentCount > MAX_NOTEBOOK_ATTACHMENT_COUNT) {
+        throw Error(
+          `notebook has too many image attachments (max ${MAX_NOTEBOOK_ATTACHMENT_COUNT})`,
+        );
+      }
+      consumedAttachments.add(name);
       promise = (async () => {
         const bundle = cell.attachments?.[name];
         if (bundle == null || typeof bundle !== "object") {
@@ -674,10 +728,19 @@ export async function externalizeJupyterAttachments({
     );
     setSource(cell, rewritten);
     setCellMetadata(cell, newEntries);
-    delete cell.attachments;
+    for (const name of consumedAttachments) {
+      delete cell.attachments?.[name];
+    }
+    if (
+      cell.attachments != null &&
+      Object.keys(cell.attachments).length === 0
+    ) {
+      delete cell.attachments;
+    }
   }
   return result;
 }
 
 export const BLOB_ATTACHMENT_METADATA_KEY = METADATA_KEY;
 export const MAX_JUPYTER_ATTACHMENT_BYTES = MAX_NOTEBOOK_ATTACHMENT_BYTES;
+export const MAX_JUPYTER_ATTACHMENT_COUNT = MAX_NOTEBOOK_ATTACHMENT_COUNT;

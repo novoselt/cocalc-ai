@@ -121,6 +121,15 @@ export interface WriteFileDeltaOptions {
   minLength?: number;
 }
 
+export interface JupyterImportIpynbResult {
+  ipynb: object;
+}
+
+export interface JupyterSaveIpynbResult extends JupyterImportIpynbResult {
+  bytes: number;
+  converted: boolean;
+}
+
 export interface CopyOptions {
   dereference?: boolean;
   errorOnExist?: boolean;
@@ -231,6 +240,14 @@ export interface Filesystem {
     content: string | Buffer,
     options?: WriteFileDeltaOptions,
   ) => Promise<void>;
+  // These optional operations are implemented by managed project hosts. They
+  // keep portable notebook conversion on the always-on storage data plane,
+  // instead of requiring the project compute container to run.
+  jupyterImportIpynb?: (ipynb: object) => Promise<JupyterImportIpynbResult>;
+  jupyterSaveIpynb?: (
+    path: string,
+    ipynb: object,
+  ) => Promise<JupyterSaveIpynbResult>;
   // Signal interest in a file so the backend can keep a shared watcher alive.
   // active=false drops interest immediately; otherwise the backend prunes stale
   // interest after COCALC_SYNC_FS_HEARTBEAT_TTL_MS (default 60s).
@@ -421,6 +438,18 @@ interface Options {
     op: string;
     path?: string;
   }) => void | Promise<void>;
+  jupyter?: {
+    importIpynb: (opts: {
+      subject: string;
+      ipynb: object;
+    }) => Promise<JupyterImportIpynbResult>;
+    saveIpynb: (opts: {
+      subject: string;
+      path: string;
+      ipynb: object;
+      fs: Filesystem;
+    }) => Promise<JupyterSaveIpynbResult>;
+  };
 }
 
 interface ReadOnlyOptions {
@@ -573,6 +602,7 @@ export async function fsServer({
   client,
   project_id,
   onMutation,
+  jupyter,
 }: Options) {
   const resolvedClient = requireClient(client, "fsServer");
   const subject = project_id
@@ -811,6 +841,36 @@ export async function fsServer({
       ) {
         await (await fs(this.subject)).writeFile(path, data, saveLast);
         void reportMutation(this.subject, "writeFile", path);
+      },
+      async jupyterImportIpynb(ipynb: object) {
+        if (jupyter == null) {
+          const err = new Error(
+            "filesystem Jupyter import is not implemented",
+          ) as Error & { code?: string };
+          err.code = "ENOSYS";
+          throw err;
+        }
+        return await jupyter.importIpynb({
+          subject: this.subject!,
+          ipynb,
+        });
+      },
+      async jupyterSaveIpynb(path: string, ipynb: object) {
+        if (jupyter == null) {
+          const err = new Error(
+            "filesystem Jupyter save is not implemented",
+          ) as Error & { code?: string };
+          err.code = "ENOSYS";
+          throw err;
+        }
+        const result = await jupyter.saveIpynb({
+          subject: this.subject!,
+          path,
+          ipynb,
+          fs: await fs(this.subject),
+        });
+        void reportMutation(this.subject, "jupyterSaveIpynb", path);
+        return result;
       },
       // @ts-ignore
       async watch() {

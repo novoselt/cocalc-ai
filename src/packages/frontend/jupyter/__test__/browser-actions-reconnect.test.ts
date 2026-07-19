@@ -89,15 +89,15 @@ describe("JupyterActions reconnect coordination", () => {
   });
 });
 
-describe("JupyterActions legacy project runtime compatibility", () => {
-  it("loads in the browser when the project does not implement jupyter.load", async () => {
+describe("JupyterActions legacy filesystem compatibility", () => {
+  it("loads in the browser when the host lacks Jupyter import", async () => {
     const fallback = jest.fn(async () => "fallback");
 
     await expect(
-      __test__.withLegacyProjectJupyterFallback({
-        method: "load",
+      __test__.withFilesystemJupyterFallback({
+        method: "jupyterImportIpynb",
         call: async () => {
-          throw new Error("unknown service method 'load'");
+          throw new Error("unknown service method 'jupyterImportIpynb'");
         },
         fallback,
       }),
@@ -105,14 +105,16 @@ describe("JupyterActions legacy project runtime compatibility", () => {
     expect(fallback).toHaveBeenCalledTimes(1);
   });
 
-  it("recognizes the old not-implemented jupyter.set response", async () => {
+  it("recognizes an ENOSYS filesystem response", async () => {
     const fallback = jest.fn(async () => "fallback");
 
     await expect(
-      __test__.withLegacyProjectJupyterFallback({
-        method: "set",
+      __test__.withFilesystemJupyterFallback({
+        method: "jupyterSaveIpynb",
         call: async () => {
-          throw new Error("jupyter.set is not implemented");
+          const err: any = new Error("filesystem extension unavailable");
+          err.code = "ENOSYS";
+          throw err;
         },
         fallback,
       }),
@@ -124,10 +126,10 @@ describe("JupyterActions legacy project runtime compatibility", () => {
     const fallback = jest.fn(async () => "fallback");
 
     await expect(
-      __test__.withLegacyProjectJupyterFallback({
-        method: "set",
+      __test__.withFilesystemJupyterFallback({
+        method: "jupyterSaveIpynb",
         call: async () => {
-          throw new TypeError("api.set is not a function");
+          throw new TypeError(".jupyterSaveIpynb is not a function");
         },
         fallback,
       }),
@@ -135,12 +137,12 @@ describe("JupyterActions legacy project runtime compatibility", () => {
     expect(fallback).toHaveBeenCalledTimes(1);
   });
 
-  it("does not hide real project-side failures", async () => {
+  it("does not hide real host-side failures", async () => {
     const fallback = jest.fn(async () => "fallback");
 
     await expect(
-      __test__.withLegacyProjectJupyterFallback({
-        method: "load",
+      __test__.withFilesystemJupyterFallback({
+        method: "jupyterImportIpynb",
         call: async () => {
           throw new Error("permission denied");
         },
@@ -150,18 +152,18 @@ describe("JupyterActions legacy project runtime compatibility", () => {
     expect(fallback).not.toHaveBeenCalled();
   });
 
-  it("does not treat another missing method as jupyter.load", async () => {
+  it("does not treat another missing method as Jupyter import", async () => {
     const fallback = jest.fn(async () => "fallback");
 
     await expect(
-      __test__.withLegacyProjectJupyterFallback({
-        method: "load",
+      __test__.withFilesystemJupyterFallback({
+        method: "jupyterImportIpynb",
         call: async () => {
-          throw new Error("unknown service method 'set'");
+          throw new Error("unknown service method 'jupyterSaveIpynb'");
         },
         fallback,
       }),
-    ).rejects.toThrow("unknown service method 'set'");
+    ).rejects.toThrow("unknown service method 'jupyterSaveIpynb'");
     expect(fallback).not.toHaveBeenCalled();
   });
 });

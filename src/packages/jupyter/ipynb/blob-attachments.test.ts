@@ -8,6 +8,7 @@ import {
   BLOB_ATTACHMENT_METADATA_KEY,
   embedCoCalcBlobImages,
   externalizeJupyterAttachments,
+  MAX_JUPYTER_ATTACHMENT_COUNT,
 } from "./blob-attachments";
 
 const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
@@ -226,5 +227,38 @@ describe("portable Jupyter blob attachments", () => {
         saveBlob: jest.fn(),
       }),
     ).rejects.toThrow("unsupported MIME type image/svg+xml");
+  });
+
+  it("preserves unreferenced native attachments", async () => {
+    const original = notebook("no image reference", {
+      "unused.png": { "image/png": png.toString("base64") },
+    });
+    const saveBlob = jest.fn();
+
+    const live = await externalizeJupyterAttachments({
+      ipynb: original,
+      loadBlob: jest.fn(),
+      saveBlob,
+    });
+
+    expect(live.cells[0].attachments).toEqual(original.cells[0].attachments);
+    expect(saveBlob).not.toHaveBeenCalled();
+  });
+
+  it("rejects excessive attachment references before blob I/O", async () => {
+    const source = Array.from(
+      { length: MAX_JUPYTER_ATTACHMENT_COUNT + 1 },
+      (_, index) => `![${index}](attachment:image-${index}.png)`,
+    ).join("\n");
+    const saveBlob = jest.fn();
+
+    await expect(
+      externalizeJupyterAttachments({
+        ipynb: notebook(source),
+        loadBlob: jest.fn(),
+        saveBlob,
+      }),
+    ).rejects.toThrow("too many image attachments");
+    expect(saveBlob).not.toHaveBeenCalled();
   });
 });

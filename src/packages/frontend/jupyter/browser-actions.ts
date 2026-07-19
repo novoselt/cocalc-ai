@@ -153,36 +153,40 @@ interface DiskIpynbRead {
   ipynb?: any;
 }
 
-function isMissingProjectJupyterMethod(
+function isMissingFilesystemJupyterMethod(
   err: unknown,
-  method: "load" | "set",
+  method: "jupyterImportIpynb" | "jupyterSaveIpynb",
 ): boolean {
   const message = `${err instanceof Error ? err.message : err}`.toLowerCase();
-  const escapedMethod = method.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const code = `${(err as any)?.code ?? ""}`.toUpperCase();
+  const escapedMethod = method
+    .toLowerCase()
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return (
+    code === "ENOSYS" ||
     new RegExp(`unknown service method ['\"]?${escapedMethod}['\"]?`).test(
       message,
     ) ||
     new RegExp(
       `(?:jupyter\\.)?${escapedMethod}[^\\n]*not implemented|not implemented[^\\n]*(?:jupyter\\.)?${escapedMethod}`,
     ).test(message) ||
-    message.includes(`.${method} is not a function`)
+    message.includes(`.${method.toLowerCase()} is not a function`)
   );
 }
 
-async function withLegacyProjectJupyterFallback<T>({
+async function withFilesystemJupyterFallback<T>({
   method,
   call,
   fallback,
 }: {
-  method: "load" | "set";
+  method: "jupyterImportIpynb" | "jupyterSaveIpynb";
   call: () => Promise<T>;
   fallback: () => Promise<T>;
 }): Promise<T> {
   try {
     return await call();
   } catch (err) {
-    if (!isMissingProjectJupyterMethod(err, method)) {
+    if (!isMissingFilesystemJupyterMethod(err, method)) {
       throw err;
     }
     return await fallback();
@@ -190,7 +194,7 @@ async function withLegacyProjectJupyterFallback<T>({
 }
 
 export const __test__ = {
-  withLegacyProjectJupyterFallback,
+  withFilesystemJupyterFallback,
 };
 
 function normalizePortableIpynbForComparison(ipynb: any): any {
@@ -3826,17 +3830,23 @@ export class JupyterActions extends JupyterActions0 {
       this.runDebug("ipynb.load.empty");
       return;
     }
-    const api = await this.jupyterApi();
-    await withLegacyProjectJupyterFallback({
-      method: "load",
-      call: async () => await api.load({ path: this.syncdbPath }),
+    const { ipynb } = await withFilesystemJupyterFallback({
+      method: "jupyterImportIpynb",
+      call: async () => {
+        const importIpynb = this.syncdb.fs.jupyterImportIpynb;
+        if (typeof importIpynb !== "function") {
+          throw Error(".jupyterImportIpynb is not a function");
+        }
+        return await importIpynb(read.ipynb);
+      },
       fallback: async () => {
-        // Running projects retain their mounted bundle across deployments. Keep
-        // them usable until the user restarts onto the attachment-aware runtime.
-        this.runDebug("ipynb.load.legacy-fallback");
-        await this.setToIpynb(read.ipynb);
+        // An older project host can still open/edit notebooks without waking
+        // compute. Portable conversion becomes active after its host upgrade.
+        this.runDebug("ipynb.load.legacy-filesystem-fallback");
+        return { ipynb: read.ipynb };
       },
     });
+    await this.setToIpynb(ipynb);
     this.hasUnsavedChanges = false;
     this.runDebug("ipynb.load.done", { bytes: read.bytes });
     // good time to refresh status
@@ -3848,41 +3858,56 @@ export class JupyterActions extends JupyterActions0 {
     if (this.isClosed() || this.syncdb?.get_state() != "ready") return;
 
     this.runDebug("ipynb.save.start");
-    const cellIds = this.store.get("cell_list")?.toJS() ?? [];
-    const cells = this.store.get("cells");
-    const expectedCells = cellIds.map((id) => {
-      const cell = cells?.get(id);
-      return {
-        id,
-        cell_type: cell?.get("cell_type") ?? "code",
-        input: cell?.get("input") ?? "",
-      };
-    });
-    const api = await this.jupyterApi();
-    await api.save({
-      path: this.syncdbPath,
-      expectedCellCount: cellIds.length,
-      expectedCellIdsInOrder: cellIds,
-      expectedCells,
-      expectedKernel: this.store.get("kernel") ?? "",
+    const ipynb = await this.toIpynb();
+    if (this.isClosed()) return;
+    if (ipynb == null) {
+      throw Error("notebook is not loaded");
+    }
+    const result = await withFilesystemJupyterFallback({
+      method: "jupyterSaveIpynb",
+      call: async () => {
+        const saveIpynb = this.syncdb.fs.jupyterSaveIpynb;
+        if (typeof saveIpynb !== "function") {
+          throw Error(".jupyterSaveIpynb is not a function");
+        }
+        return await saveIpynb(this.path, ipynb);
+      },
+      fallback: async () => {
+        const serialize = JSON.stringify(ipynb, undefined, 2);
+        await this.syncdb.fs.writeFile(this.path, serialize, true);
+        this.runDebug("ipynb.save.legacy-filesystem-fallback", {
+          bytes: serialize.length,
+        });
+        return { ipynb, bytes: serialize.length, converted: false };
+      },
     });
     if (this.isClosed()) return;
+    if (result.converted) {
+      await this.setToIpynb(result.ipynb);
+      if (this.isClosed()) return;
+    }
     this.hasUnsavedChanges = false;
     this.setState({ has_unsaved_changes: false });
     this.store.emit("has-unsaved-changes", false);
-    this.runDebug("ipynb.save.done");
+    this.runDebug("ipynb.save.done", { bytes: result.bytes });
   };
 
   setIpynbFromRawEditor = async (ipynb: object): Promise<void> => {
-    const api = await this.jupyterApi();
-    await withLegacyProjectJupyterFallback({
-      method: "set",
-      call: async () => await api.set({ path: this.syncdbPath, ipynb }),
+    const imported = await withFilesystemJupyterFallback({
+      method: "jupyterImportIpynb",
+      call: async () => {
+        const importIpynb = this.syncdb.fs.jupyterImportIpynb;
+        if (typeof importIpynb !== "function") {
+          throw Error(".jupyterImportIpynb is not a function");
+        }
+        return await importIpynb(ipynb);
+      },
       fallback: async () => {
-        this.runDebug("ipynb.set.legacy-fallback");
-        await this.setToIpynb(ipynb);
+        this.runDebug("ipynb.set.legacy-filesystem-fallback");
+        return { ipynb };
       },
     });
+    await this.setToIpynb(imported.ipynb);
   };
 
   private isIpynbDeleted = false;
@@ -3902,7 +3927,7 @@ export class JupyterActions extends JupyterActions0 {
     try {
       // Disk notebooks contain native attachment bytes, whereas the live
       // syncdoc contains global blob URLs. Authoritative reload must therefore
-      // run in the project process instead of applying JSON patches here.
+      // run through the project-host converter instead of applying patches.
       await this.loadFromDisk({ diskRead });
       this.isIpynbDeleted = false;
       this.runDebug("watch.load.full.done", { patchSeq });
