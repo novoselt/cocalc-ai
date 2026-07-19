@@ -252,7 +252,7 @@ def report(status, *, error=None, postgres=None, conat=None, disk=None):
         serial.write("\n" + marker + "\n")
         serial.flush()
 
-def run(args, *, timeout=1800, env=None, capture=False):
+def run(args, *, timeout=1800, env=None, capture=False, input_text=None):
     print("restore-drill:", " ".join(str(arg) for arg in args[:4]), flush=True)
     return subprocess.run(
         [str(arg) for arg in args],
@@ -260,6 +260,7 @@ def run(args, *, timeout=1800, env=None, capture=False):
         timeout=timeout,
         env=env,
         text=True,
+        input=input_text,
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.PIPE if capture else None,
     )
@@ -290,7 +291,7 @@ def postgres_diagnostics(container):
         "FATAL:  the database system is starting up",
         "FATAL:  the database system is in recovery mode",
     )
-    lines = logs.stderr.splitlines()
+    lines = (logs.stdout + "\n" + logs.stderr).splitlines()
     filtered = [line for line in lines if not any(value in line for value in noisy)]
     suppressed = len(lines) - len(filtered)
     suffix = f"\n[suppressed {suppressed} repeated readiness failures]" if suppressed else ""
@@ -446,13 +447,29 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
     run(["podman", "build", "-t", "cocalc-restore-postgres", str(context)], timeout=1800)
     run(["chown", "-R", "999:999", str(pgdata)], timeout=600)
 
+    if CONFIG["restore_mode"] == "snapshot":
+        STAGE = "postgres-snapshot-recovery"
+        # Single-user PostgreSQL performs the end-of-recovery checkpoint in the
+        # startup process itself. This avoids Podman denying a signal to a
+        # separate checkpointer while still exercising redo and checkpointing.
+        run([
+            "podman", "run", "--rm",
+            "--security-opt=no-new-privileges",
+            "--user", "999:999",
+            "--volume", f"{pgdata}:/var/lib/postgresql/data:rw",
+            "cocalc-restore-postgres", "postgres", "--single",
+            "-D", "/var/lib/postgresql/data",
+            "-c", "shared_preload_libraries=",
+            "-c", "fsync=off",
+            "-c", "full_page_writes=off",
+            CONFIG["postgres_database"],
+        ], timeout=600, capture=True, input_text="SELECT 1;\n")
+
     STAGE = "postgres-" + CONFIG["restore_mode"]
     postgres_args = [
         "podman", "run", "--detach", "--name", container,
         "--security-opt=no-new-privileges",
-        # Use the image's standard root entrypoint, which immediately drops to
-        # its postgres account. An explicit --user launch caused PostgreSQL's
-        # startup process to receive EPERM when signaling its checkpointer.
+        "--user", "999:999",
         "--volume", f"{pgdata}:/var/lib/postgresql/data:rw",
         "--env", "R2_ENDPOINT=" + CONFIG["r2_endpoint"],
         "--env", "R2_BUCKET=" + CONFIG["r2_bucket"],
