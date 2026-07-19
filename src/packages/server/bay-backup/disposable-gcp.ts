@@ -621,10 +621,12 @@ function parseWorkerResult({
   const marker = `${RESULT_PREFIX}${nonce}=`;
   const index = contents.lastIndexOf(marker);
   if (index < 0) return;
-  const encoded = contents
-    .slice(index + marker.length)
-    .split(/\r?\n/, 1)[0]
-    .trim();
+  const payloadStart = index + marker.length;
+  const payloadEnd = contents.indexOf("\n", payloadStart);
+  // Serial output is chunked arbitrarily. Do not decode a marker until its
+  // newline terminator proves that the complete base64 payload has arrived.
+  if (payloadEnd < 0) return;
+  const encoded = contents.slice(payloadStart, payloadEnd).trim();
   if (!encoded) return;
   const parsed = JSON.parse(
     Buffer.from(encoded, "base64").toString("utf8"),

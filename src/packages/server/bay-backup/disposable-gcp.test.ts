@@ -241,6 +241,46 @@ test("GCP worker parses a bounded result and always deletes the VM", async () =>
   expect(deleteInstance).toHaveBeenCalledTimes(1);
 });
 
+test("GCP worker waits for a complete serial result line", async () => {
+  const worker = passedWorker();
+  const marker = `COCALC_BAY_RESTORE_DRILL_RESULT_V1_nonce-1=${Buffer.from(
+    JSON.stringify(worker),
+  ).toString("base64")}\n`;
+  const splitAt = marker.length - 12;
+  const getSerialPortOutput = jest
+    .fn()
+    .mockResolvedValueOnce([
+      { contents: marker.slice(0, splitAt), next: `${splitAt}` },
+    ])
+    .mockResolvedValueOnce([
+      { contents: marker.slice(splitAt), next: `${marker.length}` },
+    ]);
+  const deleteInstance = jest.fn(async () => [
+    { name: "delete-1", status: "DONE" },
+  ]);
+
+  const result = await runDisposableGcpRestoreWorker({
+    service_account_json: serviceAccount,
+    zone: "us-west1-b",
+    boot_disk_gb: 50,
+    config: config(),
+    sleep: async () => undefined,
+    clients: {
+      instances: {
+        insert: jest.fn(async () => [{ name: "insert-1", status: "DONE" }]),
+        delete: deleteInstance,
+        get: jest.fn(),
+        getSerialPortOutput,
+      } as any,
+      operations: { wait: jest.fn() } as any,
+    },
+  });
+
+  expect(result.worker.status).toBe("passed");
+  expect(getSerialPortOutput).toHaveBeenCalledTimes(2);
+  expect(deleteInstance).toHaveBeenCalledTimes(1);
+});
+
 test("GCP worker deletes the VM when the serial result is invalid", async () => {
   const deleteInstance = jest.fn(async () => [
     { name: "delete-1", status: "DONE" },
