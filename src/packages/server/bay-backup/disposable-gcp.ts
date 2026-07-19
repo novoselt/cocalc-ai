@@ -452,7 +452,8 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
 
     counts = None
     postgres_ready = False
-    deadline = time.time() + 300
+    startup_timeout = 600 if CONFIG["restore_mode"] == "snapshot" else 300
+    deadline = time.time() + startup_timeout
     last_error = "PostgreSQL unavailable"
     while time.time() < deadline:
         try:
@@ -477,10 +478,10 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
         time.sleep(2)
     if CONFIG["restore_mode"] == "pitr" and counts != (1, 0):
         logs = run(["podman", "logs", container], timeout=60, capture=True)
-        raise RuntimeError("PITR verification timed out: " + last_error + " logs=" + bounded(logs.stderr, 1500))
+        raise RuntimeError("PITR verification timed out: " + last_error + " logs_tail=" + bounded(logs.stderr[-1500:], 1500))
     if CONFIG["restore_mode"] == "snapshot" and not postgres_ready:
         logs = run(["podman", "logs", container], timeout=60, capture=True)
-        raise RuntimeError("snapshot PostgreSQL startup timed out: " + last_error + " logs=" + bounded(logs.stderr, 1500))
+        raise RuntimeError("snapshot PostgreSQL startup timed out: " + last_error + " logs_tail=" + bounded(logs.stderr[-1500:], 1500))
 
     tables = ["accounts", "projects", "server_settings"]
     for table in tables:
