@@ -3714,6 +3714,18 @@ function mapRestoreReadiness({
     summary = `Latest backup ${latest_backup_set_id} has not been restore-tested. Last tested backup ${last_restore_test_backup_set_id} ${prior} at ${last_restore_tested_at ?? "unknown time"}.`;
   }
 
+  const restoreTestIsNewer =
+    last_restore_tested_at != null &&
+    last_pitr_tested_at != null &&
+    Date.parse(last_restore_tested_at) > Date.parse(last_pitr_tested_at);
+  if (
+    latest_backup_restore_test_status === "passed" &&
+    latest_backup_pitr_test_status === "failed" &&
+    restoreTestIsNewer
+  ) {
+    summary = `Latest backup ${latest_backup_set_id} passed a plain restore test at ${last_restore_tested_at}. PITR remains unverified; its earlier test failed at ${last_pitr_tested_at}.`;
+  }
+
   return {
     latest_backup_set_id,
     latest_backup_format,

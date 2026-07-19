@@ -574,6 +574,42 @@ describe("bay-backup runner", () => {
     expect(status.restore_readiness.gold_star).toBe(false);
   });
 
+  it("prioritizes a newer successful plain restore over an older PITR failure", async () => {
+    const backupSetId = "snapshot-after-pitr-failure";
+    const stateDir = join(backupRoot, "bay-backups", "bay-0");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(
+      join(stateDir, "state.json"),
+      JSON.stringify({
+        bay_id: "bay-0",
+        latest_backup_set_id: backupSetId,
+        latest_format: "pg_basebackup",
+        last_restore_test_backup_set_id: backupSetId,
+        last_restore_test_status: "passed",
+        last_restore_tested_at: "2026-07-19T04:37:15.635Z",
+        last_pitr_test_backup_set_id: backupSetId,
+        last_pitr_test_status: "failed",
+        last_pitr_tested_at: "2026-07-19T02:06:55.463Z",
+      }),
+    );
+
+    const { getBayBackupStatus } = await import("./index");
+    const status = await getBayBackupStatus();
+
+    expect(status.restore_readiness.latest_backup_restore_test_status).toBe(
+      "passed",
+    );
+    expect(status.restore_readiness.latest_backup_pitr_test_status).toBe(
+      "failed",
+    );
+    expect(status.restore_readiness.summary).toContain(
+      "passed a plain restore test",
+    );
+    expect(status.restore_readiness.summary).toContain(
+      "PITR remains unverified",
+    );
+  });
+
   it("does not start a full backup when another process owns the bay backup lock", async () => {
     const pool = makeMockPool(async () => ({ rows: [] }), {
       lockAvailable: false,

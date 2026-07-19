@@ -83,9 +83,19 @@ meet the computed requirement.
 ## PostgreSQL Validation
 
 The worker restores the selected rustic snapshot once, installs the bundled
-`pg_wal` files produced by `pg_basebackup -X stream`, and starts the matching
-PostgreSQL major version in an unexposed Podman container. It explicitly
-disables archival in the disposable database.
+`pg_wal` files produced by `pg_basebackup -X stream`, and runs the matching
+PostgreSQL major version in unexposed Podman containers. Snapshot recovery first
+runs in PostgreSQL single-user mode, where redo and the end-of-recovery
+checkpoint happen in one process. The worker then starts normal multi-user
+PostgreSQL for query validation. Both processes run as the image's non-root
+PostgreSQL UID with `no-new-privileges`; archival is disabled.
+
+Snapshot validation disables `fsync`, `full_page_writes`, and synchronous
+commit. The VM and disk are destroyed after the test, so durable writes on that
+disk are not a recovery requirement. Redo, checkpoint creation, promotion,
+page reads, schema inspection, and SQL queries remain mandatory. The evidence
+labels this mode `fsync-disabled-disposable-validation` so it cannot be confused
+with a durability or PITR test.
 
 The drill passes only when PostgreSQL accepts queries, is not in recovery, and
 the `accounts`, `projects`, and `server_settings` tables exist. This proves that
@@ -121,10 +131,10 @@ also persisted and never marks recovery readiness as newly successful.
 
 ## Validation Before Staging
 
-Commit `1c78ac8f268c398149e0807e7e943792b05f81d4` passed:
+The initial implementation and staging follow-ups passed:
 
-- 20 focused server restore and disposable-worker tests;
-- all 515 CLI tests;
+- 23 focused server restore and disposable-worker tests;
+- all 516 CLI tests;
 - server and Conat TypeScript builds with an 8 GiB Node heap;
 - full backend lint and frontend lint.
 
@@ -135,11 +145,44 @@ failure.
 
 ## Staging Evidence
 
-Pending the first real staging deployment and disposable worker run.
+The final staging implementation was deployed hub-only as release
+`20260719043204-hub`. All four hub workers remained healthy throughout the
+rolling deployment. PostgreSQL, Conat persist, Conat router, and frontdoor
+health checks passed; no shared service or project host was restarted.
+
+The successful drill ran from `2026-07-19T04:33:45.427Z` through
+`2026-07-19T04:37:15.635Z` against backup set
+`e15aaa4f-fd84-4218-b85a-4f56d61b2ae1` and rustic snapshot
+`c7a403b35601e9955e21fec9dbc00dedf424bbb5fa0950f6dac430a4986361d8`.
+It proved:
+
+- the 2.38 GB remote snapshot could be restored exclusively from R2;
+- PostgreSQL reached its captured checkpoint, left recovery, accepted SQL, and
+  contained `accounts`, `projects`, and `server_settings`;
+- all 102 authoritative Conat SQLite databases, totaling 5,013,504 bytes,
+  passed `PRAGMA quick_check`;
+- temporary R2 credentials were sufficient without granting WAL-prefix access;
+- disposable VM `cocalc-restore-268189c8361a475e82b5` and its 58 GiB
+  auto-delete boot disk were deleted; and
+- persisted readiness state records `worker_status=passed`, `stage=complete`,
+  `cleanup=deleted`, and `pitr_verified=false`.
+
+The real staging exercise also found and fixed operational defects that unit
+tests had not modeled: the CLI's two-layer RPC timeout, incomplete serial result
+lines split across GCP chunks, and Podman denying PostgreSQL's recovery process
+permission to signal a separate checkpointer under an explicit non-root launch.
+The final single-user recovery path removes that cross-process signal from the
+snapshot drill without broadening container privileges.
+
+Staging still has `archive_mode=off`, no archived WAL, and a full snapshot
+interval of 86,400,000 ms (24 hours). The tested recovery point is therefore the
+last complete snapshot, not “a few hours” in the worst case. Reducing that
+interval to an explicitly chosen few-hour RPO is a separate configuration and
+capacity decision. Continuous WAL remains deferred.
 
 ## Production Gate
 
-Production deployment remains blocked until the staging drill has:
+The checkpoint-only staging gate is complete:
 
 1. restored PostgreSQL from R2 and started it at the captured checkpoint;
 2. checked every restored authoritative Conat SQLite database;
@@ -149,6 +192,8 @@ Production deployment remains blocked until the staging drill has:
 
 Future iterations can install and start a complete isolated bay clone and run
 application smoke tests. A separate follow-up must design cost-bounded WAL
-retention, likely with explicit lifecycle and recovery-point targets, before
-PITR testing is enabled again. Both are intentionally outside this first
-change.
+retention, likely in a GCP-internal bucket with explicit lifecycle and
+recovery-point targets, before PITR testing is enabled again. Moving WAL does
+not reduce its generation volume, so compression, retention, observed bytes per
+hour, and restore access must be designed together. Both are intentionally
+outside this first change.
