@@ -157,7 +157,7 @@ test("startup script supports checkpoint-only snapshot recovery", () => {
   );
   expect(workerSource).toContain('"recovery.signal", "standby.signal"');
   expect(workerSource).toContain('"-c", "fsync=off"');
-  expect(workerSource).toContain('"--cap-add=KILL"');
+  expect(workerSource).not.toContain('"--user", "999:999"');
   expect(workerSource).toContain("postgres_diagnostics(container)");
   expect(workerSource).toContain(
     "suppressed {suppressed} repeated readiness failures",

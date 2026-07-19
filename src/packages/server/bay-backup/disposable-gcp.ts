@@ -450,10 +450,10 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
     postgres_args = [
         "podman", "run", "--detach", "--name", container,
         "--security-opt=no-new-privileges",
-        # PostgreSQL recovery asks the checkpointer process to checkpoint via a
-        # signal. The explicit non-root container user otherwise receives EPERM.
-        "--cap-add=KILL",
-        "--user", "999:999", "--volume", f"{pgdata}:/var/lib/postgresql/data:rw",
+        # Use the image's standard root entrypoint, which immediately drops to
+        # its postgres account. An explicit --user launch caused PostgreSQL's
+        # startup process to receive EPERM when signaling its checkpointer.
+        "--volume", f"{pgdata}:/var/lib/postgresql/data:rw",
         "--env", "R2_ENDPOINT=" + CONFIG["r2_endpoint"],
         "--env", "R2_BUCKET=" + CONFIG["r2_bucket"],
         "--env", "R2_ACCESS_KEY_ID=" + CONFIG["r2_access_key_id"],
