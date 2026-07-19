@@ -113,6 +113,7 @@ import {
   createTemporaryR2ReadCredentials,
   newDisposableRestoreWorkerIdentity,
   runDisposableGcpRestoreWorker,
+  type DisposableGcpRestoreResult,
   type DisposableRestoreWorkerResult,
 } from "./disposable-gcp";
 
@@ -5139,6 +5140,7 @@ async function runDisposableGcpBayRestoreTest({
   }
 
   let pitrRun: PitrRestoreSentinel | null = null;
+  let workerRun: DisposableGcpRestoreResult | null = null;
   try {
     pitrRun = await preparePitrRestoreSentinel({
       bay_id: resolvedBayId,
@@ -5175,7 +5177,7 @@ async function runDisposableGcpBayRestoreTest({
     const machineType =
       `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_MACHINE_TYPE ?? ""}`.trim() ||
       "n2-standard-4";
-    const workerRun = await runDisposableGcpRestoreWorker({
+    workerRun = await runDisposableGcpRestoreWorker({
       service_account_json: serviceAccountJson,
       zone,
       machine_type: machineType,
@@ -5293,16 +5295,17 @@ async function runDisposableGcpBayRestoreTest({
       remote_only: true,
       evidence: {
         execution_mode: "disposable-gcp",
-        duration_ms: null,
-        worker_instance_name: null,
-        worker_project_id: null,
-        worker_zone: null,
-        worker_machine_type: null,
-        worker_boot_disk_gb: null,
-        worker_cleanup: null,
-        conat_database_count: null,
-        conat_database_bytes: null,
-        conat_quick_check_passed: null,
+        duration_ms: workerRun?.worker.duration_ms ?? null,
+        worker_instance_name: workerRun?.instance_name ?? null,
+        worker_project_id: workerRun?.project_id ?? null,
+        worker_zone: workerRun?.zone ?? null,
+        worker_machine_type: workerRun?.machine_type ?? null,
+        worker_boot_disk_gb: workerRun?.boot_disk_gb ?? null,
+        worker_cleanup: workerRun?.cleanup ?? null,
+        conat_database_count: workerRun?.worker.conat?.database_count ?? null,
+        conat_database_bytes: workerRun?.worker.conat?.database_bytes ?? null,
+        conat_quick_check_passed:
+          workerRun?.worker.conat?.quick_check_passed ?? null,
       },
     });
     throw new Error(
