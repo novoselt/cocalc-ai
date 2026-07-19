@@ -1,3 +1,12 @@
+const testJupyter = {
+  async importIpynb({ ipynb }) {
+    return { ipynb };
+  },
+  async saveIpynb({ ipynb }) {
+    return { ipynb, bytes: 0, converted: false };
+  },
+};
+
 describe("filesystem explicit routing", () => {
   it("builds and parses shared directory filesystem subjects", async () => {
     const { parseShareFsSubject, shareFsSubject } = await import("./fs");
@@ -36,12 +45,27 @@ describe("filesystem explicit routing", () => {
     await expect(
       fsServer({
         service: "fs-test",
+        jupyter: testJupyter,
         fs: async () =>
           ({
             watch: jest.fn(),
           }) as any,
       } as any),
     ).rejects.toThrow("must provide an explicit Conat client");
+  });
+
+  it("requires Jupyter handlers on every writable filesystem service", async () => {
+    const { fsServer } = await import("./fs");
+    const client = { service: jest.fn() } as any;
+
+    await expect(
+      fsServer({
+        service: "fs-test",
+        client,
+        fs: async () => ({}) as any,
+      } as any),
+    ).rejects.toThrow("requires filesystem Jupyter handlers");
+    expect(client.service).not.toHaveBeenCalled();
   });
 
   it("can invalidate a cached filesystem subject", async () => {
@@ -63,6 +87,7 @@ describe("filesystem explicit routing", () => {
       service: "fs-test",
       client,
       fs: fs0 as any,
+      jupyter: testJupyter,
     });
 
     await handlers.readFile.call(

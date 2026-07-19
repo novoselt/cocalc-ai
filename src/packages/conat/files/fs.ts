@@ -130,6 +130,19 @@ export interface JupyterSaveIpynbResult extends JupyterImportIpynbResult {
   converted: boolean;
 }
 
+export interface FilesystemJupyterHandlers {
+  importIpynb: (opts: {
+    subject: string;
+    ipynb: object;
+  }) => Promise<JupyterImportIpynbResult>;
+  saveIpynb: (opts: {
+    subject: string;
+    path: string;
+    ipynb: object;
+    fs: Filesystem;
+  }) => Promise<JupyterSaveIpynbResult>;
+}
+
 export interface CopyOptions {
   dereference?: boolean;
   errorOnExist?: boolean;
@@ -240,9 +253,11 @@ export interface Filesystem {
     content: string | Buffer,
     options?: WriteFileDeltaOptions,
   ) => Promise<void>;
-  // These optional operations are implemented by managed project hosts. They
-  // keep portable notebook conversion on the always-on storage data plane,
-  // instead of requiring the project compute container to run.
+  // These are optional on the underlying local Filesystem implementation, but
+  // required on FilesystemClient below. Every writable Conat file service must
+  // implement them on the always-on project-host/storage data plane. Never
+  // delegate document load/save operations to the project compute container:
+  // users must be able to edit and save files while compute is stopped.
   jupyterImportIpynb?: (ipynb: object) => Promise<JupyterImportIpynbResult>;
   jupyterSaveIpynb?: (
     path: string,
@@ -438,18 +453,7 @@ interface Options {
     op: string;
     path?: string;
   }) => void | Promise<void>;
-  jupyter?: {
-    importIpynb: (opts: {
-      subject: string;
-      ipynb: object;
-    }) => Promise<JupyterImportIpynbResult>;
-    saveIpynb: (opts: {
-      subject: string;
-      path: string;
-      ipynb: object;
-      fs: Filesystem;
-    }) => Promise<JupyterSaveIpynbResult>;
-  };
+  jupyter: FilesystemJupyterHandlers;
 }
 
 interface ReadOnlyOptions {
@@ -605,6 +609,9 @@ export async function fsServer({
   jupyter,
 }: Options) {
   const resolvedClient = requireClient(client, "fsServer");
+  if (jupyter == null) {
+    throw Error("fsServer requires filesystem Jupyter handlers");
+  }
   const subject = project_id
     ? `${service}.project-${project_id}`
     : `${service}.*`;
@@ -843,26 +850,12 @@ export async function fsServer({
         void reportMutation(this.subject, "writeFile", path);
       },
       async jupyterImportIpynb(ipynb: object) {
-        if (jupyter == null) {
-          const err = new Error(
-            "filesystem Jupyter import is not implemented",
-          ) as Error & { code?: string };
-          err.code = "ENOSYS";
-          throw err;
-        }
         return await jupyter.importIpynb({
           subject: this.subject!,
           ipynb,
         });
       },
       async jupyterSaveIpynb(path: string, ipynb: object) {
-        if (jupyter == null) {
-          const err = new Error(
-            "filesystem Jupyter save is not implemented",
-          ) as Error & { code?: string };
-          err.code = "ENOSYS";
-          throw err;
-        }
         const result = await jupyter.saveIpynb({
           subject: this.subject!,
           path,
@@ -910,11 +903,15 @@ export async function fsServer({
   };
 }
 
-export type FilesystemClient = Omit<Omit<Filesystem, "stat">, "lstat"> & {
-  listing: (path: string) => Promise<Listing>;
-  stat: (path: string) => Promise<Stats>;
-  lstat: (path: string) => Promise<Stats>;
-};
+export type FilesystemClient = Omit<
+  Filesystem,
+  "stat" | "lstat" | "jupyterImportIpynb" | "jupyterSaveIpynb"
+> &
+  Required<Pick<Filesystem, "jupyterImportIpynb" | "jupyterSaveIpynb">> & {
+    listing: (path: string) => Promise<Listing>;
+    stat: (path: string) => Promise<Stats>;
+    lstat: (path: string) => Promise<Stats>;
+  };
 
 const PATCH_FALLBACK_CODES = new Set([
   "ETAG_MISMATCH",

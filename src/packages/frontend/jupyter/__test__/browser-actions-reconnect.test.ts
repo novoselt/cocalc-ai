@@ -16,7 +16,7 @@ jest.mock("../widgets/manager", () => ({
   WidgetManager: class WidgetManager {},
 }));
 
-import { __test__, JupyterActions } from "../browser-actions";
+import { JupyterActions } from "../browser-actions";
 
 describe("JupyterActions reconnect coordination", () => {
   beforeEach(() => {
@@ -86,84 +86,5 @@ describe("JupyterActions reconnect coordination", () => {
     expect(clearRunQueue).toHaveBeenCalled();
     expect(clear_all_cell_run_state).toHaveBeenCalled();
     expect(target.runningNow).toBe(false);
-  });
-});
-
-describe("JupyterActions legacy filesystem compatibility", () => {
-  it("loads in the browser when the host lacks Jupyter import", async () => {
-    const fallback = jest.fn(async () => "fallback");
-
-    await expect(
-      __test__.withFilesystemJupyterFallback({
-        method: "jupyterImportIpynb",
-        call: async () => {
-          throw new Error("unknown service method 'jupyterImportIpynb'");
-        },
-        fallback,
-      }),
-    ).resolves.toBe("fallback");
-    expect(fallback).toHaveBeenCalledTimes(1);
-  });
-
-  it("recognizes an ENOSYS filesystem response", async () => {
-    const fallback = jest.fn(async () => "fallback");
-
-    await expect(
-      __test__.withFilesystemJupyterFallback({
-        method: "jupyterSaveIpynb",
-        call: async () => {
-          const err: any = new Error("filesystem extension unavailable");
-          err.code = "ENOSYS";
-          throw err;
-        },
-        fallback,
-      }),
-    ).resolves.toBe("fallback");
-    expect(fallback).toHaveBeenCalledTimes(1);
-  });
-
-  it("recognizes a missing method on an older local API proxy", async () => {
-    const fallback = jest.fn(async () => "fallback");
-
-    await expect(
-      __test__.withFilesystemJupyterFallback({
-        method: "jupyterSaveIpynb",
-        call: async () => {
-          throw new TypeError(".jupyterSaveIpynb is not a function");
-        },
-        fallback,
-      }),
-    ).resolves.toBe("fallback");
-    expect(fallback).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not hide real host-side failures", async () => {
-    const fallback = jest.fn(async () => "fallback");
-
-    await expect(
-      __test__.withFilesystemJupyterFallback({
-        method: "jupyterImportIpynb",
-        call: async () => {
-          throw new Error("permission denied");
-        },
-        fallback,
-      }),
-    ).rejects.toThrow("permission denied");
-    expect(fallback).not.toHaveBeenCalled();
-  });
-
-  it("does not treat another missing method as Jupyter import", async () => {
-    const fallback = jest.fn(async () => "fallback");
-
-    await expect(
-      __test__.withFilesystemJupyterFallback({
-        method: "jupyterImportIpynb",
-        call: async () => {
-          throw new Error("unknown service method 'jupyterSaveIpynb'");
-        },
-        fallback,
-      }),
-    ).rejects.toThrow("unknown service method 'jupyterSaveIpynb'");
-    expect(fallback).not.toHaveBeenCalled();
   });
 });

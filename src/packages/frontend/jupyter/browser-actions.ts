@@ -153,50 +153,6 @@ interface DiskIpynbRead {
   ipynb?: any;
 }
 
-function isMissingFilesystemJupyterMethod(
-  err: unknown,
-  method: "jupyterImportIpynb" | "jupyterSaveIpynb",
-): boolean {
-  const message = `${err instanceof Error ? err.message : err}`.toLowerCase();
-  const code = `${(err as any)?.code ?? ""}`.toUpperCase();
-  const escapedMethod = method
-    .toLowerCase()
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return (
-    code === "ENOSYS" ||
-    new RegExp(`unknown service method ['\"]?${escapedMethod}['\"]?`).test(
-      message,
-    ) ||
-    new RegExp(
-      `(?:jupyter\\.)?${escapedMethod}[^\\n]*not implemented|not implemented[^\\n]*(?:jupyter\\.)?${escapedMethod}`,
-    ).test(message) ||
-    message.includes(`.${method.toLowerCase()} is not a function`)
-  );
-}
-
-async function withFilesystemJupyterFallback<T>({
-  method,
-  call,
-  fallback,
-}: {
-  method: "jupyterImportIpynb" | "jupyterSaveIpynb";
-  call: () => Promise<T>;
-  fallback: () => Promise<T>;
-}): Promise<T> {
-  try {
-    return await call();
-  } catch (err) {
-    if (!isMissingFilesystemJupyterMethod(err, method)) {
-      throw err;
-    }
-    return await fallback();
-  }
-}
-
-export const __test__ = {
-  withFilesystemJupyterFallback,
-};
-
 function normalizePortableIpynbForComparison(ipynb: any): any {
   if (ipynb == null) return ipynb;
   const normalized = JSON.parse(JSON.stringify(ipynb));
@@ -3830,22 +3786,7 @@ export class JupyterActions extends JupyterActions0 {
       this.runDebug("ipynb.load.empty");
       return;
     }
-    const { ipynb } = await withFilesystemJupyterFallback({
-      method: "jupyterImportIpynb",
-      call: async () => {
-        const importIpynb = this.syncdb.fs.jupyterImportIpynb;
-        if (typeof importIpynb !== "function") {
-          throw Error(".jupyterImportIpynb is not a function");
-        }
-        return await importIpynb(read.ipynb);
-      },
-      fallback: async () => {
-        // An older project host can still open/edit notebooks without waking
-        // compute. Portable conversion becomes active after its host upgrade.
-        this.runDebug("ipynb.load.legacy-filesystem-fallback");
-        return { ipynb: read.ipynb };
-      },
-    });
+    const { ipynb } = await this.syncdb.fs.jupyterImportIpynb!(read.ipynb);
     await this.setToIpynb(ipynb);
     this.hasUnsavedChanges = false;
     this.runDebug("ipynb.load.done", { bytes: read.bytes });
@@ -3863,24 +3804,7 @@ export class JupyterActions extends JupyterActions0 {
     if (ipynb == null) {
       throw Error("notebook is not loaded");
     }
-    const result = await withFilesystemJupyterFallback({
-      method: "jupyterSaveIpynb",
-      call: async () => {
-        const saveIpynb = this.syncdb.fs.jupyterSaveIpynb;
-        if (typeof saveIpynb !== "function") {
-          throw Error(".jupyterSaveIpynb is not a function");
-        }
-        return await saveIpynb(this.path, ipynb);
-      },
-      fallback: async () => {
-        const serialize = JSON.stringify(ipynb, undefined, 2);
-        await this.syncdb.fs.writeFile(this.path, serialize, true);
-        this.runDebug("ipynb.save.legacy-filesystem-fallback", {
-          bytes: serialize.length,
-        });
-        return { ipynb, bytes: serialize.length, converted: false };
-      },
-    });
+    const result = await this.syncdb.fs.jupyterSaveIpynb!(this.path, ipynb);
     if (this.isClosed()) return;
     if (result.converted) {
       await this.setToIpynb(result.ipynb);
@@ -3893,20 +3817,7 @@ export class JupyterActions extends JupyterActions0 {
   };
 
   setIpynbFromRawEditor = async (ipynb: object): Promise<void> => {
-    const imported = await withFilesystemJupyterFallback({
-      method: "jupyterImportIpynb",
-      call: async () => {
-        const importIpynb = this.syncdb.fs.jupyterImportIpynb;
-        if (typeof importIpynb !== "function") {
-          throw Error(".jupyterImportIpynb is not a function");
-        }
-        return await importIpynb(ipynb);
-      },
-      fallback: async () => {
-        this.runDebug("ipynb.set.legacy-filesystem-fallback");
-        return { ipynb };
-      },
-    });
+    const imported = await this.syncdb.fs.jupyterImportIpynb!(ipynb);
     await this.setToIpynb(imported.ipynb);
   };
 
