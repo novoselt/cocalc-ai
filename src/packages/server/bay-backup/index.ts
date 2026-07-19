@@ -4994,12 +4994,11 @@ async function resolveDisposableRestoreGcpZone(): Promise<string> {
     `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_ZONE ?? ""}`.trim();
   if (configured) return configured;
   const { rows } = await getPool().query<{ zone: string | null }>(
-    `SELECT zone
+    `SELECT metadata #>> '{machine,zone}' AS zone
        FROM project_hosts
-      WHERE provider='gcp'
-        AND deleted IS NULL
-        AND zone IS NOT NULL
-        AND zone <> ''
+      WHERE deleted IS NULL
+        AND metadata #>> '{machine,cloud}' = 'gcp'
+        AND COALESCE(metadata #>> '{machine,zone}', '') <> ''
       ORDER BY last_seen DESC NULLS LAST, updated DESC NULLS LAST
       LIMIT 1`,
   );
