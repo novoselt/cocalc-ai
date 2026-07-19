@@ -3543,6 +3543,7 @@ export async function runBayRestoreTest({
   target_dir,
   keep = false,
   remote_only = false,
+  disposable_gcp = false,
 }: {
   account_id?: string;
   browser_id?: string | null;
@@ -3552,6 +3553,7 @@ export async function runBayRestoreTest({
   target_dir?: string;
   keep?: boolean;
   remote_only?: boolean;
+  disposable_gcp?: boolean;
 }): Promise<BayRestoreTestRunResult> {
   await assertAdmin(account_id);
   await requireDangerousSessionAuth({
@@ -3566,6 +3568,7 @@ export async function runBayRestoreTest({
     target_dir,
     keep,
     remote_only,
+    disposable_gcp,
   });
 }
 

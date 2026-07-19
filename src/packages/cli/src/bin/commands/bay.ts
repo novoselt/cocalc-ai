@@ -160,6 +160,11 @@ export function registerBayCommand(
       "ignore the local backup cache and restore-test only from rustic/R2",
       false,
     )
+    .option(
+      "--disposable-gcp",
+      "run the R2-only restore test on an isolated, auto-deleted GCP VM",
+      false,
+    )
     .action(
       async (
         bay_id: string | undefined,
@@ -168,6 +173,7 @@ export function registerBayCommand(
           targetDir?: string;
           keep?: boolean;
           remoteOnly?: boolean;
+          disposableGcp?: boolean;
         },
         command: Command,
       ) => {
@@ -178,6 +184,7 @@ export function registerBayCommand(
             target_dir: opts.targetDir?.trim() || undefined,
             keep: opts.keep === true,
             remote_only: opts.remoteOnly === true,
+            disposable_gcp: opts.disposableGcp === true,
           });
         });
       },

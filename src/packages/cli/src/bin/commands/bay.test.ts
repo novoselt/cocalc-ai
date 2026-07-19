@@ -578,6 +578,7 @@ test("bay restore-test forwards bay id, backup set, target dir, and keep mode", 
     target_dir: "/tmp/restore-test-target",
     keep: true,
     remote_only: false,
+    disposable_gcp: false,
   });
   assert.equal(captured?.backup_set_id, "backup-1");
 });
@@ -646,6 +647,43 @@ test("bay restore-test forwards remote-only mode", async () => {
     target_dir: undefined,
     keep: false,
     remote_only: true,
+    disposable_gcp: false,
+  });
+});
+
+test("bay restore-test forwards disposable GCP mode", async () => {
+  let callOpts: any;
+  const program = new Command();
+  registerBayCommand(program, {
+    withContext: async (_command, _label, fn) => {
+      await fn({
+        hub: {
+          system: {
+            runBayRestoreTest: async (opts: any) => {
+              callOpts = opts;
+              return { backup_set_id: "backup-1" };
+            },
+          },
+        },
+      });
+    },
+  } as any);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "bay",
+    "restore-test",
+    "--disposable-gcp",
+  ]);
+
+  assert.deepEqual(callOpts, {
+    bay_id: undefined,
+    backup_set_id: undefined,
+    target_dir: undefined,
+    keep: false,
+    remote_only: false,
+    disposable_gcp: true,
   });
 });
 

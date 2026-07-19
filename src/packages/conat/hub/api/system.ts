@@ -1492,7 +1492,22 @@ export interface BayRestoreReadinessStatus {
   last_pitr_test_target_time: string | null;
   last_pitr_test_target_dir: string | null;
   last_pitr_test_remote_only: boolean | null;
+  last_restore_test_evidence?: BayRestoreTestEvidence | null;
   summary: string;
+}
+
+export interface BayRestoreTestEvidence {
+  execution_mode: "bay-local" | "disposable-gcp";
+  duration_ms: number | null;
+  worker_instance_name: string | null;
+  worker_project_id: string | null;
+  worker_zone: string | null;
+  worker_machine_type: string | null;
+  worker_boot_disk_gb: number | null;
+  worker_cleanup: "deleted" | "already-deleted" | null;
+  conat_database_count: number | null;
+  conat_database_bytes: number | null;
+  conat_quick_check_passed: number | null;
 }
 
 export interface BayBackupsInfo extends BayInfo {
@@ -1575,6 +1590,16 @@ export interface BayRestoreTestRunResult extends BayInfo {
   kept_on_disk: boolean;
   verified_queries: string[];
   notes: string[];
+  execution_mode?: "bay-local" | "disposable-gcp";
+  worker_instance_name?: string | null;
+  worker_project_id?: string | null;
+  worker_zone?: string | null;
+  worker_machine_type?: string | null;
+  worker_boot_disk_gb?: number | null;
+  worker_cleanup?: "deleted" | "already-deleted" | null;
+  conat_database_count?: number | null;
+  conat_database_bytes?: number | null;
+  conat_quick_check_passed?: number | null;
 }
 
 export interface AccountBayLocation {
@@ -1996,6 +2021,7 @@ export interface System {
     target_dir?: string;
     keep?: boolean;
     remote_only?: boolean;
+    disposable_gcp?: boolean;
   }) => Promise<BayRestoreTestRunResult>;
 
   getAccountBay: (opts?: {
