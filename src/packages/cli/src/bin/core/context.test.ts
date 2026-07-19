@@ -193,3 +193,25 @@ test("hubCallByName lets explicit timeouts exceed the default rpc timeout", asyn
 
   assert.equal(calls[0].timeout, 120_000);
 });
+
+test("hubCallByName lets a command-specific timeout exceed global defaults", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+
+  await hubCallByName({
+    ctx: {
+      timeoutMs: 30_000,
+      rpcTimeoutMs: 30_000,
+      accountId: "acct-1",
+      remote: { client: {} as any },
+    },
+    name: "system.runBayRestoreTest",
+    args: [{ timeout: 3 * 60 * 60 * 1000 }],
+    timeout: 3 * 60 * 60 * 1000,
+    callHub: async (opts) => {
+      calls.push(opts);
+      return { ok: true };
+    },
+  });
+
+  assert.equal(calls[0].timeout, 3 * 60 * 60 * 1000);
+});
