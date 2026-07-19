@@ -284,6 +284,18 @@ def psql(container, sql):
     ], timeout=60, capture=True)
     return completed.stdout.strip()
 
+def postgres_diagnostics(container):
+    logs = run(["podman", "logs", container], timeout=60, capture=True)
+    noisy = (
+        "FATAL:  the database system is starting up",
+        "FATAL:  the database system is in recovery mode",
+    )
+    lines = logs.stderr.splitlines()
+    filtered = [line for line in lines if not any(value in line for value in noisy)]
+    suppressed = len(lines) - len(filtered)
+    suffix = f"\n[suppressed {suppressed} repeated readiness failures]" if suppressed else ""
+    return bounded("\n".join(filtered[-80:]) + suffix, 3000)
+
 postgres_result = None
 conat_result = None
 disk_result = None
@@ -435,7 +447,7 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
     run(["chown", "-R", "999:999", str(pgdata)], timeout=600)
 
     STAGE = "postgres-" + CONFIG["restore_mode"]
-    run([
+    postgres_args = [
         "podman", "run", "--detach", "--name", container,
         "--security-opt=no-new-privileges",
         "--user", "999:999", "--volume", f"{pgdata}:/var/lib/postgresql/data:rw",
@@ -448,7 +460,17 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
         "cocalc-restore-postgres", "postgres", "-D", "/var/lib/postgresql/data",
         "-c", "listen_addresses=", "-c", "unix_socket_directories=/tmp",
         "-c", "shared_preload_libraries=",
-    ], timeout=300)
+    ]
+    if CONFIG["restore_mode"] == "snapshot":
+        # This VM is destroyed after validation. Avoid making the restore drill's
+        # result depend on an end-of-recovery fsync of the entire restored tree;
+        # redo, page reads, schema checks, and promotion are still required.
+        postgres_args.extend([
+            "-c", "fsync=off",
+            "-c", "full_page_writes=off",
+            "-c", "synchronous_commit=off",
+        ])
+    run(postgres_args, timeout=300)
 
     counts = None
     postgres_ready = False
@@ -477,11 +499,9 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
             last_error = bounded(err, 1000)
         time.sleep(2)
     if CONFIG["restore_mode"] == "pitr" and counts != (1, 0):
-        logs = run(["podman", "logs", container], timeout=60, capture=True)
-        raise RuntimeError("PITR verification timed out: " + last_error + " logs_tail=" + bounded(logs.stderr[-1500:], 1500))
+        raise RuntimeError("PITR verification timed out: " + last_error + " logs=" + postgres_diagnostics(container))
     if CONFIG["restore_mode"] == "snapshot" and not postgres_ready:
-        logs = run(["podman", "logs", container], timeout=60, capture=True)
-        raise RuntimeError("snapshot PostgreSQL startup timed out: " + last_error + " logs_tail=" + bounded(logs.stderr[-1500:], 1500))
+        raise RuntimeError("snapshot PostgreSQL startup timed out: " + last_error + " logs=" + postgres_diagnostics(container))
 
     tables = ["accounts", "projects", "server_settings"]
     for table in tables:
@@ -492,6 +512,7 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
         raise RuntimeError("restored PostgreSQL did not promote after PITR target")
     postgres_result = {
         "restore_mode": CONFIG["restore_mode"],
+        "durability": "fsync-disabled-disposable-validation" if CONFIG["restore_mode"] == "snapshot" else "normal",
         "pitr_verified": CONFIG["restore_mode"] == "pitr",
         "pre_count": counts[0] if counts is not None else None,
         "post_count": counts[1] if counts is not None else None,

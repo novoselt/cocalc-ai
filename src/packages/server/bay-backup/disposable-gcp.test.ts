@@ -156,7 +156,11 @@ test("startup script supports checkpoint-only snapshot recovery", () => {
     'STAGE = "postgres-" + CONFIG["restore_mode"]',
   );
   expect(workerSource).toContain('"recovery.signal", "standby.signal"');
-  expect(workerSource).toContain("logs.stderr[-1500:]");
+  expect(workerSource).toContain('"-c", "fsync=off"');
+  expect(workerSource).toContain("postgres_diagnostics(container)");
+  expect(workerSource).toContain(
+    "suppressed {suppressed} repeated readiness failures",
+  );
   const compiled = spawnSync(
     "python3",
     ["-c", "import sys; compile(sys.stdin.read(), '<worker>', 'exec')"],
