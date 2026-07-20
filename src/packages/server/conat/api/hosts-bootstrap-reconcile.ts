@@ -212,6 +212,23 @@ function hostBootstrapActivityChanged(
   );
 }
 
+function hostBootstrapLifecycleActivityChanged(
+  baseline: HostBootstrapReconcileState,
+  current: HostBootstrapReconcileState,
+): boolean {
+  return (
+    current.lifecycle_summary_status !== baseline.lifecycle_summary_status ||
+    current.lifecycle_summary_message !== baseline.lifecycle_summary_message ||
+    current.lifecycle_current_operation !==
+      baseline.lifecycle_current_operation ||
+    current.lifecycle_last_error !== baseline.lifecycle_last_error ||
+    current.lifecycle_last_reconcile_started_at !==
+      baseline.lifecycle_last_reconcile_started_at ||
+    current.lifecycle_last_reconcile_finished_at !==
+      baseline.lifecycle_last_reconcile_finished_at
+  );
+}
+
 function timestampIsAfter(value?: string, baseline?: string): boolean {
   const ms = parseBootstrapTimestampMs(value);
   if (ms == null) return false;
@@ -263,6 +280,14 @@ function hostBootstrapReconcileSucceeded(
       ? hostBootstrapReconcileObservedAfterBaseline(baseline, state)
       : true;
   }
+  if (
+    baseline &&
+    state.lifecycle_summary_status === "error" &&
+    !hostBootstrapLifecycleActivityChanged(baseline, state) &&
+    state.bootstrap_status === "done"
+  ) {
+    return hostBootstrapReconcileObservedAfterBaseline(baseline, state);
+  }
   if (state.lifecycle_summary_status) {
     return false;
   }
@@ -286,10 +311,7 @@ function hostBootstrapReconcileFailure(
     );
   }
   if (state.lifecycle_summary_status === "error") {
-    if (
-      baseline &&
-      !hostBootstrapReconcileObservedAfterBaseline(baseline, state)
-    ) {
+    if (baseline && !hostBootstrapLifecycleActivityChanged(baseline, state)) {
       return undefined;
     }
     return (

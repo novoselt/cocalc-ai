@@ -3285,7 +3285,7 @@ test("software deploy project-host publishes compatibility object and sets fleet
   assert.equal(history.deployments[0].artifact_id, artifactId);
 });
 
-test("software deploy host-bootstrap clears overrides before reconciling hosts", async () => {
+test("software deploy host-bootstrap separates publish from rollout", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-host-bootstrap-"));
   const localStore = join(dir, "store");
   const bootstrapSource = join(
@@ -3323,8 +3323,6 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
       "software",
       "deploy",
       "--build",
-      "--bootstrap-scope",
-      "helpers",
       "host-bootstrap:bootstrap-fix",
       "staging",
       "--env-file",
@@ -3354,7 +3352,7 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
       .toString("utf8"),
     `${sha256}  bootstrap.py\n`,
   );
-  assert.equal(runs.length, 3);
+  assert.equal(runs.length, 2);
   assert.deepEqual(runs[0].args, [
     "--profile",
     "staging",
@@ -3379,6 +3377,49 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
     "--artifact",
     "bootstrap-environment",
   ]);
+  let history = JSON.parse(
+    r2.objects
+      .get("software/deployments/staging/host-bootstrap/index.json")!
+      .toString("utf8"),
+  );
+  assert.equal(history.deployments[0].status, "succeeded");
+  assert.equal(history.deployments[0].artifact_component, "host-bootstrap");
+  assert.equal(history.deployments[0].target.kind, "project-host-fleet");
+  let record = JSON.parse(
+    r2.objects
+      .get(
+        `software/deployments/staging/host-bootstrap/${history.deployments[0].deployment_id}.json`,
+      )!
+      .toString("utf8"),
+  );
+  assert.equal(
+    record.details.host_bootstrap_url,
+    `https://software.example.test/software/bootstrap/${artifactId}/bootstrap.py`,
+  );
+  assert.equal(record.details.host_bootstrap_reconcile, false);
+  assert.equal(record.details.host_bootstrap_scope, undefined);
+
+  runs.length = 0;
+  process.argv[1] = "software";
+  try {
+    await program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "--rollout",
+      "--bootstrap-scope",
+      "helpers",
+      "host-bootstrap:bootstrap-fix",
+      "staging",
+      "--env-file",
+      join(dir, "missing.env"),
+    ]);
+  } finally {
+    process.argv[1] = originalArgv1;
+  }
+  assert.equal(runs.length, 3);
   assert.deepEqual(runs[2].args, [
     "--profile",
     "staging",
@@ -3390,30 +3431,23 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
     "helpers",
     "--wait",
   ]);
-  const history = JSON.parse(
+  history = JSON.parse(
     r2.objects
       .get("software/deployments/staging/host-bootstrap/index.json")!
       .toString("utf8"),
   );
-  assert.equal(history.deployments[0].status, "succeeded");
-  assert.equal(history.deployments[0].artifact_component, "host-bootstrap");
-  assert.equal(history.deployments[0].target.kind, "project-host-fleet");
-  const record = JSON.parse(
+  record = JSON.parse(
     r2.objects
       .get(
         `software/deployments/staging/host-bootstrap/${history.deployments[0].deployment_id}.json`,
       )!
       .toString("utf8"),
   );
-  assert.equal(
-    record.details.host_bootstrap_url,
-    `https://software.example.test/software/bootstrap/${artifactId}/bootstrap.py`,
-  );
   assert.equal(record.details.host_bootstrap_reconcile, true);
   assert.equal(record.details.host_bootstrap_scope, "helpers");
 });
 
-test("software deploy host-bootstrap requires an explicit reconcile scope", async () => {
+test("software deploy host-bootstrap requires scope only with rollout", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-bootstrap-scope-"));
   const program = createProgram(
     makeDeps({
@@ -3430,10 +3464,25 @@ test("software deploy host-bootstrap requires an explicit reconcile scope", asyn
       "--quiet",
       "software",
       "deploy",
+      "--rollout",
       "host-bootstrap",
       "staging",
     ]),
-    /requires --bootstrap-scope full or helpers/,
+    /--rollout requires --bootstrap-scope full or helpers/,
+  );
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "--bootstrap-scope",
+      "helpers",
+      "host-bootstrap",
+      "staging",
+    ]),
+    /--bootstrap-scope requires --rollout/,
   );
 });
 

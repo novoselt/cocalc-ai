@@ -19,6 +19,53 @@ describe("markdown editor Actions", () => {
     );
   });
 
+  it("does not persist a trailing blank line added only by Slate serialization", () => {
+    const actions: any = Object.create(Actions.prototype);
+    const syncstring = {
+      to_str: jest.fn(() => "performance.\n"),
+      get_state: jest.fn(() => "ready"),
+      from_str: jest.fn(),
+      commit: jest.fn(),
+      save: jest.fn(),
+      emit: jest.fn(),
+    };
+    actions._state = "ready";
+    actions._syncstring = syncstring;
+    actions._get_cm = jest.fn(() => undefined);
+    actions._get_active_id = jest.fn(() => "slate-frame");
+    actions._get_frame_type = jest.fn(() => "slate");
+    actions.getSlateEditor = jest.fn(() => ({
+      getMarkdownValue: () => "performance.\n\n",
+    }));
+
+    actions.set_syncstring_to_codemirror(undefined, true);
+
+    expect(syncstring.from_str).not.toHaveBeenCalled();
+    expect(syncstring.commit).not.toHaveBeenCalled();
+    expect(syncstring.save).not.toHaveBeenCalled();
+  });
+
+  it("still persists substantive Slate edits", () => {
+    const actions: any = Object.create(Actions.prototype);
+    const syncstring = {
+      to_str: jest.fn(() => "before\n"),
+      get_state: jest.fn(() => "ready"),
+      from_str: jest.fn(),
+      commit: jest.fn(),
+      save: jest.fn(),
+      emit: jest.fn(),
+    };
+    actions._state = "ready";
+    actions._syncstring = syncstring;
+    actions._get_cm = jest.fn(() => undefined);
+
+    actions.set_value("after\n\n", true, "slate");
+
+    expect(syncstring.from_str).toHaveBeenCalledWith("after\n\n");
+    expect(syncstring.commit).toHaveBeenCalledTimes(1);
+    expect(syncstring.save).toHaveBeenCalledTimes(1);
+  });
+
   it("flushes Slate markdown before opening the CodeMirror split", () => {
     const actions: any = Object.create(Actions.prototype);
     actions.getSlateEditor = jest.fn(() => ({
