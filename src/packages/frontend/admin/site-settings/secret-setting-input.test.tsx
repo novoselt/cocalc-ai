@@ -47,4 +47,13 @@ describe("SecretSettingInput", () => {
 
     expect(onChange).toHaveBeenCalledWith("new-secret");
   });
+
+  it("passes blur through to the caller", () => {
+    const onBlur = jest.fn();
+    render(<SecretSettingInput value="" onChange={() => {}} onBlur={onBlur} />);
+
+    fireEvent.blur(screen.getByRole("textbox"));
+
+    expect(onBlur).toHaveBeenCalledTimes(1);
+  });
 });

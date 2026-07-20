@@ -4,7 +4,8 @@
  */
 
 import { Input, Select, Switch } from "antd";
-import { CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { isEqual } from "lodash";
 import { LOCALIZATIONS } from "@cocalc/frontend/i18n";
 import { LOCALE } from "@cocalc/util/consts/locale";
@@ -39,11 +40,35 @@ export function RowEntryInner({
   isClearing,
   multiline,
   onChangeEntry,
+  onDraftEntry,
   isReadonly,
   clearable,
-  update,
   onClearSecret,
 }: RowEntryInnerProps) {
+  const externalValue = value ?? "";
+  const [draftValue, setDraftValue] = useState(externalValue);
+  const draftValueRef = useRef(draftValue);
+  const isEditingRef = useRef(false);
+
+  useEffect(() => {
+    if (isEditingRef.current) return;
+    draftValueRef.current = externalValue;
+    setDraftValue(externalValue);
+  }, [externalValue]);
+
+  function changeDraft(nextValue: string): void {
+    isEditingRef.current = true;
+    draftValueRef.current = nextValue;
+    setDraftValue(nextValue);
+    onDraftEntry(name, nextValue);
+  }
+
+  function commitDraft(): void {
+    if (!isEditingRef.current) return;
+    isEditingRef.current = false;
+    onChangeEntry(name, draftValueRef.current);
+  }
+
   if (isReadonly == null) return null; // typescript
   const disabled = isReadonly[name] == true;
 
@@ -57,7 +82,6 @@ export function RowEntryInner({
         defaultValue={to_list_of_locale(value, false)}
         onChange={(value: Array<string>) => {
           onChangeEntry(name, value.join(","));
-          update();
         }}
         options={LOCALE.map((l) => {
           return { label: LOCALIZATIONS[l].name, value: l };
@@ -78,7 +102,6 @@ export function RowEntryInner({
         unCheckedChildren="no"
         onChange={(checked) => {
           onChangeEntry(name, checked ? "yes" : "no");
-          update();
         }}
       />
     );
@@ -94,7 +117,6 @@ export function RowEntryInner({
             return;
           }
           onChangeEntry(name, value);
-          update();
         }}
         style={{ width: "100%" }}
         options={valid.map((value) => {
@@ -106,22 +128,23 @@ export function RowEntryInner({
     if (password) {
       return (
         <SecretSettingInput
-          value={value}
+          value={draftValue}
           isSet={isSet}
           isClearing={isClearing}
           multiline={multiline}
           disabled={disabled}
-          inputStyle={rowEntryStyle(value, valid)}
+          inputStyle={rowEntryStyle(draftValue, valid)}
           onClear={
             !disabled && onClearSecret ? () => onClearSecret(name) : undefined
           }
-          onChange={(value) => onChangeEntry(name, value)}
+          onChange={changeDraft}
+          onBlur={commitDraft}
         />
       );
     } else {
       if (multiline != null) {
         const style = {
-          ...rowEntryStyle(value, valid),
+          ...rowEntryStyle(draftValue, valid),
           fontFamily: "monospace",
           fontSize: "80%",
         } as CSSProperties;
@@ -130,19 +153,21 @@ export function RowEntryInner({
             autoComplete="off"
             rows={multiline}
             style={style}
-            value={value ?? ""}
+            value={draftValue}
             disabled={disabled}
-            onChange={(e) => onChangeEntry(name, e.target.value)}
+            onChange={(e) => changeDraft(e.target.value)}
+            onBlur={commitDraft}
           />
         );
       } else {
         return (
           <Input
             autoComplete="off"
-            style={rowEntryStyle(value, valid)}
-            value={value ?? ""}
+            style={rowEntryStyle(draftValue, valid)}
+            value={draftValue}
             disabled={disabled}
-            onChange={(e) => onChangeEntry(name, e.target.value)}
+            onChange={(e) => changeDraft(e.target.value)}
+            onBlur={commitDraft}
             allowClear={clearable}
           />
         );

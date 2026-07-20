@@ -19,7 +19,10 @@ import { ProjectPage } from "@cocalc/frontend/project/page/page";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { tab_to_path } from "@cocalc/util/misc";
 import { projectRuntimeHomeRelativePath } from "@cocalc/util/project-runtime";
-import { shareRouteCandidates } from "./public-directory-share-route";
+import {
+  classifySharePath,
+  shareRouteCandidates,
+} from "./public-directory-share-route";
 
 function authHref(view: "sign-in" | "sign-up"): string {
   const target = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -35,35 +38,38 @@ async function grantShareRoute(rawPath: string): Promise<{
 }> {
   let lastError: unknown;
   for (const candidate of shareRouteCandidates(rawPath)) {
+    let grant: GrantTemporaryViewerAccessResponse;
     try {
-      const grant =
+      grant =
         await webapp_client.conat_client.hub.publicDirectoryShares.grantTemporaryViewerAccess(
           {
             slug: candidate.slug,
           },
         );
-      let relativePathIsDirectory = candidate.relativePath.trim() === "";
-      if (!relativePathIsDirectory) {
-        try {
+    } catch (err) {
+      lastError = err;
+      continue;
+    }
+
+    const relativePathIsDirectory =
+      (await classifySharePath({
+        relativePath: candidate.relativePath,
+        listDirectory: async () => {
           await webapp_client.conat_client.hub.publicDirectoryShares.listDirectory(
             {
               slug: candidate.slug,
               path: candidate.relativePath,
             },
           );
-          relativePathIsDirectory = true;
-        } catch {}
-      }
-      return {
-        grant,
-        projectId: grant.project_id,
-        relativePath: candidate.relativePath,
-        relativePathIsDirectory,
-        slug: candidate.slug,
-      };
-    } catch (err) {
-      lastError = err;
-    }
+        },
+      })) === "directory";
+    return {
+      grant,
+      projectId: grant.project_id,
+      relativePath: candidate.relativePath,
+      relativePathIsDirectory,
+      slug: candidate.slug,
+    };
   }
   throw lastError ?? new Error("Published folder not found");
 }

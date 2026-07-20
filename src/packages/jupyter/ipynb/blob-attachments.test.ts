@@ -14,6 +14,7 @@ import {
 const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
 const jpeg = Buffer.from([255, 216, 255, 224, 1, 2, 3]);
 const pngUuid = uuidsha1(png);
+const jpegUuid = uuidsha1(jpeg);
 
 function notebook(source: string | string[], attachments?: object): any {
   return {
@@ -202,15 +203,39 @@ describe("portable Jupyter blob attachments", () => {
     );
   });
 
-  it("fails before producing a partial notebook when a blob is missing", async () => {
-    const live = notebook(`![lost](/blobs/lost.png?uuid=${pngUuid})`);
+  it("preserves unavailable blob URLs while embedding available images", async () => {
+    const missing = `/blobs/legacy.png?uuid=${pngUuid}`;
+    const available = `/blobs/current.jpg?uuid=${jpegUuid}`;
+    const live = notebook(
+      `![legacy](${missing})\n![current](${available})\n![legacy again](${missing})`,
+    );
+    const loadBlob = jest.fn(async (uuid: string) =>
+      uuid === jpegUuid ? { bytes: jpeg } : undefined,
+    );
+
+    const saved = await embedCoCalcBlobImages({ ipynb: live, loadBlob });
+
+    expect(saved.cells[0].source).toBe(
+      `![legacy](${missing})\n![current](attachment:current.jpg)\n![legacy again](${missing})`,
+    );
+    expect(saved.cells[0].attachments).toEqual({
+      "current.jpg": { "image/jpeg": jpeg.toString("base64") },
+    });
+    expect(loadBlob).toHaveBeenCalledTimes(2);
+    expect(live.cells[0].attachments).toBeUndefined();
+  });
+
+  it("still propagates blob service errors", async () => {
+    const live = notebook(`![image](/blobs/image.png?uuid=${pngUuid})`);
 
     await expect(
       embedCoCalcBlobImages({
         ipynb: live,
-        loadBlob: async () => undefined,
+        loadBlob: async () => {
+          throw Error("blob service unavailable");
+        },
       }),
-    ).rejects.toThrow(`CoCalc image blob ${pngUuid} is not available`);
+    ).rejects.toThrow("blob service unavailable");
     expect(live.cells[0].attachments).toBeUndefined();
   });
 
