@@ -3,8 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-UPSTREAM_DIR="${CODEX_UPSTREAM_DIR:-/home/user/upstream/codex}"
-CODEX_VERSION="${CODEX_VERSION:-0.144.1}"
+CODEX_VERSION="${CODEX_VERSION:-0.144.6}"
 RELEASE_REPO="${CODEX_RELEASE_REPO:-sagemathinc/codex}"
 RELEASE_TAG="${CODEX_RELEASE_TAG:-v${CODEX_VERSION}}"
 LOCAL_BIN_ROOT="${COCALC_CODEX_LOCAL_BIN_DIR:-${REPO_ROOT}/src/.cache/codex-binaries}"
@@ -59,7 +58,6 @@ else
   exit 1
 fi
 
-MANIFEST_TAG="$(get_manifest_field tag)"
 UPSTREAM_HEAD="$(get_manifest_field upstream_head)"
 BUILD_TIMESTAMP="$(get_manifest_field built_at_utc)"
 RELEASE_TARGET="${CODEX_RELEASE_TARGET:-main}"
@@ -80,7 +78,7 @@ cat > "${RELEASE_NOTES}" <<EOF
 Codex ${CODEX_VERSION} for CoCalc.
 
 Built from upstream commit \`${UPSTREAM_HEAD}\` with CoCalc patches:
-- TCP user timeout override support
+- Linux TCP user timeout override for long-running requests and remote compaction
 
 Assets:
 - \`${X64_ASSET}\`
