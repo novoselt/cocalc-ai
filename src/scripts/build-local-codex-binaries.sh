@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 UPSTREAM_DIR="${CODEX_UPSTREAM_DIR:-/home/user/upstream/codex}"
 CODEX_UPSTREAM_REPO="${CODEX_UPSTREAM_REPO:-https://github.com/openai/codex.git}"
-CODEX_VERSION="${CODEX_VERSION:-0.144.1}"
+CODEX_VERSION="${CODEX_VERSION:-0.144.6}"
 CODEX_TAG="rust-v${CODEX_VERSION}"
 CODEX_BRANCH="cocalc-local-build-v${CODEX_VERSION}"
 PATCH_DIR="${REPO_ROOT}/src/scripts/patches"
@@ -17,6 +17,8 @@ CARGO_MANIFEST="${UPSTREAM_DIR}/codex-rs/Cargo.toml"
 ARM_LINKER="${CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER:-aarch64-linux-gnu-gcc}"
 ARM64_BUILD_TOOL="${CODEX_ARM64_BUILD_TOOL:-auto}"
 ARM64_PKG_CONFIG_PATH="${AARCH64_UNKNOWN_LINUX_GNU_PKG_CONFIG_PATH:-/usr/lib/aarch64-linux-gnu/pkgconfig}"
+RUST_TOOLCHAIN="${CODEX_RUST_TOOLCHAIN:-1.94.0}"
+BUILD_JOBS="${CODEX_BUILD_JOBS:-1}"
 RELEASE_LTO="${CODEX_RELEASE_LTO:-off}"
 RELEASE_CODEGEN_UNITS="${CODEX_RELEASE_CODEGEN_UNITS:-16}"
 ARM64_RELEASE_LTO="${CODEX_ARM64_RELEASE_LTO:-${RELEASE_LTO}}"
@@ -105,6 +107,10 @@ strip_binary_if_available() {
 echo "Using upstream checkout: ${UPSTREAM_DIR}"
 echo "Using upstream source: ${CODEX_UPSTREAM_REPO}"
 echo "Using output directory: ${LOCAL_BIN_ROOT}/${CODEX_VERSION}"
+echo "Using Rust toolchain: ${RUST_TOOLCHAIN}"
+echo "Using Cargo build jobs: ${BUILD_JOBS}"
+
+export RUSTUP_TOOLCHAIN="${RUST_TOOLCHAIN}"
 
 git -C "${UPSTREAM_DIR}" fetch "${CODEX_UPSTREAM_REPO}" "refs/tags/${CODEX_TAG}:refs/tags/${CODEX_TAG}"
 git -C "${UPSTREAM_DIR}" restore --source=HEAD --staged --worktree .
@@ -124,7 +130,7 @@ cargo metadata --format-version 1 --manifest-path "${CARGO_MANIFEST}" >/dev/null
 CARGO_PROFILE_RELEASE_LTO="${RELEASE_LTO}" \
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${RELEASE_CODEGEN_UNITS}" \
   CARGO_PROFILE_RELEASE_STRIP="${RELEASE_STRIP}" \
-  cargo build --release --locked -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+  cargo build --release --locked --jobs "${BUILD_JOBS}" -p codex-cli --manifest-path "${CARGO_MANIFEST}"
 case "${ARM64_BUILD_TOOL}" in
   auto)
     if [[ -f "${ARM64_PKG_CONFIG_PATH}/openssl.pc" ]]; then
@@ -135,12 +141,12 @@ case "${ARM64_BUILD_TOOL}" in
         CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
         CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-        cargo build --release --locked --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+        cargo build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
     elif command -v cross >/dev/null 2>&1; then
       CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
         CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-        cross build --release --locked --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+        cross build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
     else
       require_arm64_cross_libs
       PKG_CONFIG_ALLOW_CROSS=1 \
@@ -149,14 +155,14 @@ case "${ARM64_BUILD_TOOL}" in
         CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
         CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-        cargo build --release --locked --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+        cargo build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
     fi
     ;;
   cross)
     CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
       CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-      cross build --release --locked --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+      cross build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
     ;;
   cargo)
     require_arm64_cross_libs
@@ -166,7 +172,7 @@ case "${ARM64_BUILD_TOOL}" in
       CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
       CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-      cargo build --release --locked --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+      cargo build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
     ;;
   *)
     echo "Unsupported CODEX_ARM64_BUILD_TOOL=${ARM64_BUILD_TOOL}" >&2
