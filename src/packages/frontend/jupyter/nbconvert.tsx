@@ -16,7 +16,7 @@ import { A, Icon, Loading, TimeAgo } from "@cocalc/frontend/components";
 import { labels } from "@cocalc/frontend/i18n";
 import { BASE_URL } from "@cocalc/frontend/misc/base-url";
 import * as misc from "@cocalc/util/misc";
-import { JupyterActions } from "./browser-actions";
+import type { JupyterActions } from "./browser-actions";
 import ProgressEstimate from "@cocalc/frontend/components/progress-estimate";
 
 const NAMES = {
@@ -144,7 +144,7 @@ const Error: React.FC<ErrorProps> = (props: ErrorProps) => {
 };
 
 interface NBConvertProps {
-  actions: any;
+  actions: JupyterActions;
   path: string;
   project_id: string;
   nbconvert?: immutable.Map<any, any>;
@@ -175,18 +175,17 @@ export const NBConvert: React.FC<NBConvertProps> = React.memo(
         return {};
       }
       let ext: string;
-      // --to script converts to probably a .py file
-      if (to === "script" && backend_kernel_info != null) {
-        // special case where extension may be different
-        ext = (
-          backend_kernel_info.getIn(
-            ["language_info", "file_extension"],
-            "",
-          ) as string
-        ).slice(1);
-        if (ext === "") {
-          ext = "py";
-        }
+      if (to === "script") {
+        // Script extensions come from notebook metadata/the selected kernelspec.
+        // This does not require starting a kernel just to export the notebook.
+        const fileExtension =
+          actions.store.get_language_info()?.file_extension ??
+          backend_kernel_info?.getIn(["language_info", "file_extension"]);
+        ext =
+          typeof fileExtension === "string"
+            ? fileExtension.replace(/^\./, "")
+            : "";
+        if (!ext) ext = "py";
       } else {
         ext = info.ext;
       }
@@ -350,13 +349,6 @@ export const NBConvert: React.FC<NBConvertProps> = React.memo(
     }
 
     function run(): void {
-      const to = nbconvert_dialog?.get("to");
-      if (to == "script") {
-        // ensure kernel info is initialized, which is used for
-        // determining the target file extension in case of exporting
-        // to an executable script.  This makes backend_kernel_info get set.
-        actions.set_backend_kernel_info();
-      }
       // start it going
       actions.nbconvert(args());
     }
