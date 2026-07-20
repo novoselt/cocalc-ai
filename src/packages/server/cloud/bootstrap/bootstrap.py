@@ -2570,6 +2570,10 @@ PROJECT_TCP_NEW_RATE="50"
 PROJECT_TCP_NEW_BURST="200"
 PROJECT_UDP_NEW_RATE="100"
 PROJECT_UDP_NEW_BURST="400"
+# Block exact cloud metadata endpoints without blocking pasta's other
+# link-local DNS and host aliases.
+PROJECT_METADATA_IPV4="169.254.169.254"
+PROJECT_METADATA_IPV6="fd20:ce::254"
 PROJECT_NETWORK_NFT="/usr/sbin/nft"
 PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
@@ -2929,10 +2933,15 @@ find_pasta_pids_for_project() {
 }
 
 project_network_cgroup_path() {
-  local project_id="$1" relative
+  local project_id="$1"
+  printf '%s/project-%s\\n' "$(project_network_pool_cgroup_path)" "$project_id"
+}
+
+project_network_pool_cgroup_path() {
+  local relative
   relative="${PROJECT_POOL_CGROUP_DEFAULT#/sys/fs/cgroup/}"
   relative="${relative#/}"
-  printf '%s/project-%s\\n' "$relative" "$project_id"
+  printf '%s\\n' "$relative"
 }
 
 project_network_cgroup_level() {
@@ -2992,7 +3001,22 @@ ensure_project_network_rule() {
     return 0
   fi
   configure_project_network_table
-  emit_project_network_rules "$project_id" | run_project_network_nft -f -
+  {
+    emit_project_metadata_rules
+    emit_project_network_rules "$project_id"
+  } | run_project_network_nft -f -
+}
+
+emit_project_metadata_rules() {
+  local path level marker="cocalc-project-network-metadata"
+  path="$(project_network_pool_cgroup_path)"
+  level="$(awk -F/ '{print NF}' <<< "$path")"
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip daddr %s counter drop comment "%s-ipv4"\\n' \
+    "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
+    "$PROJECT_METADATA_IPV4" "$marker"
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip6 daddr %s counter drop comment "%s-ipv6"\\n' \
+    "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
+    "$PROJECT_METADATA_IPV6" "$marker"
 }
 
 emit_project_network_rules() {
@@ -3035,7 +3059,7 @@ project_cgroup_has_processes() {
 }
 
 verify_project_network_limits() {
-  local project_id="$1" marker rules tcp_count udp_count pid found=0 limits
+  local project_id="$1" marker rules metadata_ipv4_count metadata_ipv6_count tcp_count udp_count pid found=0 limits
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
   require_project_network_tools
   marker="$(project_network_rule_marker "$project_id")"
@@ -3043,10 +3067,12 @@ verify_project_network_limits() {
     echo "project network nftables chain is missing" >&2
     return 1
   fi
+  metadata_ipv4_count="$(grep -Fc 'comment "cocalc-project-network-metadata-ipv4"' <<< "$rules" || true)"
+  metadata_ipv6_count="$(grep -Fc 'comment "cocalc-project-network-metadata-ipv6"' <<< "$rules" || true)"
   tcp_count="$(grep -Fc "comment \\\"${marker}-tcp\\\"" <<< "$rules" || true)"
   udp_count="$(grep -Fc "comment \\\"${marker}-udp\\\"" <<< "$rules" || true)"
-  if [ "$tcp_count" -ne 1 ] || [ "$udp_count" -ne 1 ]; then
-    echo "project network nftables rules are missing or duplicated: tcp=${tcp_count} udp=${udp_count}" >&2
+  if [ "$metadata_ipv4_count" -ne 1 ] || [ "$metadata_ipv6_count" -ne 1 ] || [ "$tcp_count" -ne 1 ] || [ "$udp_count" -ne 1 ]; then
+    echo "project network nftables rules are missing or duplicated: metadata_ipv4=${metadata_ipv4_count} metadata_ipv6=${metadata_ipv6_count} tcp=${tcp_count} udp=${udp_count}" >&2
     return 1
   fi
   while IFS= read -r pid; do
@@ -3069,6 +3095,7 @@ render_project_network_rules() {
   {
     printf 'flush chain inet %s %s\\n' \
       "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN"
+    emit_project_metadata_rules
     for cgroup in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
       [ -d "$cgroup" ] || continue
       project_cgroup_has_processes "$cgroup" || continue

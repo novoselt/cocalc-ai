@@ -1460,13 +1460,32 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('PROJECT_PASTA_NOFILE_LIMIT="4096"', script)
             self.assertIn('PROJECT_TCP_NEW_RATE="50"', script)
             self.assertIn('PROJECT_UDP_NEW_RATE="100"', script)
+            self.assertIn('PROJECT_METADATA_IPV4="169.254.169.254"', script)
+            self.assertIn('PROJECT_METADATA_IPV6="fd20:ce::254"', script)
             self.assertIn("socket cgroupv2 level", script)
             self.assertIn("apply_pasta_resource_limits", script)
             self.assertIn("ensure_project_network_rule", script)
+            self.assertIn("emit_project_metadata_rules", script)
             self.assertIn("emit_project_network_rules", script)
+            emit_metadata_body = script.split(
+                "emit_project_metadata_rules() {", 1
+            )[1].split("\n}\n\nemit_project_network_rules()", 1)[0]
+            self.assertIn('comment "%s-ipv4"', emit_metadata_body)
+            self.assertIn('comment "%s-ipv6"', emit_metadata_body)
+            self.assertIn(
+                'marker="cocalc-project-network-metadata"', emit_metadata_body
+            )
+            self.assertIn(
+                'path="$(project_network_pool_cgroup_path)"', emit_metadata_body
+            )
+            verify_network_body = script.split(
+                "verify_project_network_limits() {", 1
+            )[1].split("\n}\n\nrender_project_network_rules()", 1)[0]
+            self.assertIn("metadata_ipv4_count", verify_network_body)
+            self.assertIn("metadata_ipv6_count", verify_network_body)
             ensure_network_body = script.split(
                 "ensure_project_network_rule() {", 1
-            )[1].split("\n}\n\nemit_project_network_rules()", 1)[0]
+            )[1].split("\n}\n\nemit_project_metadata_rules()", 1)[0]
             self.assertNotIn("project_network_rule_handles", ensure_network_body)
             self.assertIn(
                 'if emit_project_network_rules "$project_id" | run_project_network_nft -f -; then',
@@ -1475,6 +1494,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("configure_project_network_table", ensure_network_body)
             self.assertIn(
                 "printf 'flush chain inet %s %s\\n'", script
+            )
+            render_network_body = script.split(
+                "render_project_network_rules() {", 1
+            )[1].split("\n}\n\napply_project_network_process_limits()", 1)[0]
+            self.assertLess(
+                render_network_body.index("emit_project_metadata_rules"),
+                render_network_body.index(
+                    'for cgroup in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*'
+                ),
             )
             self.assertIn(
                 "printf '%s\\n' \"$rules\" | run_project_network_nft -f -",
