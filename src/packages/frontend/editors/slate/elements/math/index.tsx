@@ -9,10 +9,13 @@ import { register, RenderElementProps, SlateElement } from "../register";
 import { useFileContext } from "@cocalc/frontend/lib/file-context";
 import DefaultMath from "@cocalc/frontend/components/math/ssr";
 
+type MathDelimiter = "$" | "$$" | "\\(" | "\\[" | "\\";
+
 export interface DisplayMath extends SlateElement {
   type: "math_block";
   value: string;
   isVoid?: boolean;
+  sourceDelimiter?: MathDelimiter;
 }
 
 export interface InlineMath extends SlateElement {
@@ -21,6 +24,7 @@ export interface InlineMath extends SlateElement {
   display?: boolean; // inline but acts as displayed math
   isInline: true;
   isVoid?: boolean;
+  sourceDelimiter?: MathDelimiter;
 }
 
 export const StaticElement: React.FC<RenderElementProps> = ({
@@ -72,6 +76,20 @@ function stripMathDelimiters(s: string): string {
   return s;
 }
 
+function getSourceDelimiter(token): MathDelimiter | undefined {
+  const delimiter = token.markup || token.tag;
+  if (
+    delimiter === "$" ||
+    delimiter === "$$" ||
+    delimiter === "\\(" ||
+    delimiter === "\\[" ||
+    delimiter === "\\"
+  ) {
+    return delimiter;
+  }
+  return undefined;
+}
+
 register({
   slateType: ["math_inline", "math_inline_double"],
   StaticElement,
@@ -84,6 +102,7 @@ register({
       isVoid: true,
       children: [{ text: value }],
       display: token.type == "math_inline_double",
+      sourceDelimiter: getSourceDelimiter(token),
     } as Element;
   },
 });
@@ -95,6 +114,7 @@ export function toDisplayMath({ token }) {
     value,
     isVoid: true,
     children: [{ text: value }],
+    sourceDelimiter: getSourceDelimiter(token),
   } as Element;
 }
 

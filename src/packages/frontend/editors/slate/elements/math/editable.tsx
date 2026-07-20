@@ -183,8 +183,11 @@ register({
   Element,
   fromSlate: ({ node }) => {
     const value = (node.value ?? Node.string(node)).trim();
-    const delim = value.startsWith("\\begin{") ? "" : node.display ? "$$" : "$";
-    return `${delim}${value}${delim}`;
+    const [start, end] = mathDelimiters(
+      node.sourceDelimiter,
+      value.startsWith("\\begin{") ? "\\" : node.display ? "$$" : "$",
+    );
+    return `${start}${value}${end}`;
   },
 });
 
@@ -193,14 +196,33 @@ register({
   Element,
   fromSlate: ({ node }) => {
     const value = (node.value ?? Node.string(node)).trim();
-    let start, end;
-    if (value.startsWith("\\begin{")) {
-      start = "";
-      end = "\n\n";
-    } else {
-      start = "\n$$\n";
-      end = "\n$$\n\n";
+    const [open, close] = mathDelimiters(
+      node.sourceDelimiter,
+      value.startsWith("\\begin{") ? "\\" : "$$",
+    );
+    if (!open && !close) {
+      return `${value}\n\n`;
     }
-    return `${start}${value}${end}`;
+    return `\n${open}\n${value}\n${close}\n\n`;
   },
 });
+
+function mathDelimiters(
+  sourceDelimiter: string | undefined,
+  fallback: "$" | "$$" | "\\",
+): [string, string] {
+  switch (sourceDelimiter ?? fallback) {
+    case "$":
+      return ["$", "$"];
+    case "$$":
+      return ["$$", "$$"];
+    case "\\(":
+      return ["\\(", "\\)"];
+    case "\\[":
+      return ["\\[", "\\]"];
+    case "\\":
+      return ["", ""];
+    default:
+      return mathDelimiters(undefined, fallback);
+  }
+}
