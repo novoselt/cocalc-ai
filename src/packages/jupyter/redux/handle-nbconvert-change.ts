@@ -67,6 +67,7 @@ export default async function handleChange(
   log.debug("tell client that we started running");
   let error: any = null;
   actions.set_runtime_nbconvert({
+    args,
     state: "run",
     start: new Date().getTime(),
     error,
@@ -93,6 +94,7 @@ export default async function handleChange(
     log.debug("error", error);
   }
   actions.set_runtime_nbconvert({
+    args,
     state: "done",
     error,
     time: new Date().getTime(),
