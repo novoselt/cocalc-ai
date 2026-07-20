@@ -280,6 +280,14 @@ function hostBootstrapReconcileSucceeded(
       ? hostBootstrapReconcileObservedAfterBaseline(baseline, state)
       : true;
   }
+  if (
+    baseline &&
+    state.lifecycle_summary_status === "error" &&
+    !hostBootstrapLifecycleActivityChanged(baseline, state) &&
+    state.bootstrap_status === "done"
+  ) {
+    return hostBootstrapReconcileObservedAfterBaseline(baseline, state);
+  }
   if (state.lifecycle_summary_status) {
     return false;
   }

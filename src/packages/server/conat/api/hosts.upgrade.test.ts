@@ -843,12 +843,6 @@ describe("hosts.reconcileHostSoftwareInternal", () => {
                   updated_at: "2026-05-10T15:02:01Z",
                   message: "Privileged host helpers reconciled",
                 },
-                bootstrap_lifecycle: {
-                  summary_status: "in_sync",
-                  last_reconcile_result: "success",
-                  last_reconcile_started_at: "2026-05-10T15:02:00Z",
-                  last_reconcile_finished_at: "2026-05-10T15:02:01Z",
-                },
               },
             },
           ],
