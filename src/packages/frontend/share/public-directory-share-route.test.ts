@@ -1,4 +1,7 @@
-import { shareRouteCandidates } from "./public-directory-share-route";
+import {
+  classifySharePath,
+  shareRouteCandidates,
+} from "./public-directory-share-route";
 
 describe("shareRouteCandidates", () => {
   it("treats a single segment as a share path first", () => {
@@ -85,5 +88,73 @@ describe("shareRouteCandidates", () => {
       { slug: "test2/files", relativePath: "a.py" },
       { slug: "test2", relativePath: "files/a.py" },
     ]);
+  });
+});
+
+describe("classifySharePath", () => {
+  it("does not probe the root of a resolved share", async () => {
+    const listDirectory = jest.fn();
+
+    await expect(
+      classifySharePath({ relativePath: "", listDirectory }),
+    ).resolves.toBe("directory");
+    expect(listDirectory).not.toHaveBeenCalled();
+  });
+
+  it("retries transient failures before identifying a directory", async () => {
+    const transientError = new Error("project connection closed");
+    const listDirectory = jest
+      .fn()
+      .mockRejectedValueOnce(transientError)
+      .mockRejectedValueOnce(transientError)
+      .mockResolvedValueOnce({ files: [] });
+    const wait = jest.fn().mockResolvedValue(undefined);
+
+    await expect(
+      classifySharePath({
+        relativePath: "Fall2025",
+        listDirectory,
+        retryDelaysMs: [100, 300],
+        wait,
+      }),
+    ).resolves.toBe("directory");
+    expect(listDirectory).toHaveBeenCalledTimes(3);
+    expect(wait.mock.calls).toEqual([[100], [300]]);
+  });
+
+  it("identifies a file only from a definitive not-directory error", async () => {
+    const listDirectory = jest.fn().mockRejectedValue({
+      error: {
+        code: "ENOTDIR",
+        message: "not a directory",
+      },
+    });
+    const wait = jest.fn();
+
+    await expect(
+      classifySharePath({
+        relativePath: "DPAC.md",
+        listDirectory,
+        retryDelaysMs: [100],
+        wait,
+      }),
+    ).resolves.toBe("file");
+    expect(listDirectory).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("surfaces persistent probe failures instead of treating them as files", async () => {
+    const error = new Error("no responders for project filesystem");
+    const listDirectory = jest.fn().mockRejectedValue(error);
+
+    await expect(
+      classifySharePath({
+        relativePath: "Fall2025",
+        listDirectory,
+        retryDelaysMs: [100, 300],
+        wait: async () => {},
+      }),
+    ).rejects.toBe(error);
+    expect(listDirectory).toHaveBeenCalledTimes(3);
   });
 });
