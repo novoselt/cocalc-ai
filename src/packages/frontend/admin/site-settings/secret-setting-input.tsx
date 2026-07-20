@@ -13,6 +13,7 @@ import { COLORS } from "@cocalc/util/theme";
 export interface SecretSettingInputProps {
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
   isSet?: boolean;
   isClearing?: boolean;
   multiline?: number;
@@ -26,6 +27,7 @@ export interface SecretSettingInputProps {
 export default function SecretSettingInput({
   value,
   onChange,
+  onBlur,
   isSet,
   isClearing,
   multiline,
@@ -65,6 +67,7 @@ export default function SecretSettingInput({
         visibilityToggle={visibilityToggle}
         disabled={disabled}
         onChange={handleChange}
+        onBlur={onBlur}
       />
     ) : (
       <Password
@@ -75,6 +78,7 @@ export default function SecretSettingInput({
         visibilityToggle={visibilityToggle}
         disabled={disabled}
         onChange={handleChange}
+        onBlur={onBlur}
       />
     );
 

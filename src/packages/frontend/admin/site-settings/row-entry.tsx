@@ -34,8 +34,8 @@ export interface RowEntryInnerProps {
   multiline?: number;
   isReadonly: IsReadonly | null;
   onChangeEntry: (name: string, value: string) => void;
+  onDraftEntry: (name: string, value: string) => void;
   clearable?: boolean;
-  update: () => void;
   onClearSecret?: (name: string) => void;
 }
 
@@ -63,8 +63,8 @@ export function RowEntry({
   isReadonly,
   onJsonEntryChange,
   onChangeEntry,
+  onDraftEntry,
   clearable,
-  update,
   onClearSecret,
   rootfsManifestUrls,
 }: RowEntryProps) {
@@ -128,9 +128,9 @@ export function RowEntry({
               isClearing={isClearing}
               multiline={multiline}
               onChangeEntry={onChangeEntry}
+              onDraftEntry={onDraftEntry}
               isReadonly={isReadonly}
               clearable={clearable}
-              update={update}
               onClearSecret={onClearSecret}
             />
             <div style={{ fontSize: "90%", display: "inlineBlock" }}>
