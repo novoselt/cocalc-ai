@@ -9,8 +9,10 @@ import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
 import { promoteProjectHostRuntimeDeployments } from "@cocalc/database/postgres/project-host-runtime-deployments";
 import type { LroSummary } from "@cocalc/conat/hub/api/lro";
+import type { ManagedComponentKind } from "@cocalc/conat/project-host/api";
 import {
   getHostRuntimeDeploymentStatus,
+  rolloutHostManagedComponents,
   upgradeHostSoftware,
 } from "@cocalc/server/conat/api/hosts";
 import { computeHostOperationalAvailability } from "@cocalc/server/conat/api/hosts-normalization";
@@ -38,6 +40,7 @@ type RolloutHostResult = {
   host_id: string;
   status: "succeeded" | "failed";
   child_op_id?: string;
+  managed_component_op_id?: string;
   started_at: string;
   finished_at: string;
   stabilization_seconds: number;
@@ -53,25 +56,100 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function projectHostObservationIsStable({
+function normalizedRolloutComponents(value: unknown): ManagedComponentKind[] {
+  const componentOrder: ManagedComponentKind[] = [
+    "project-host",
+    "conat-router",
+    "conat-persist",
+    "acp-worker",
+  ];
+  const allowed = new Set<ManagedComponentKind>(componentOrder);
+  const requested = Array.isArray(value) ? value : ["project-host"];
+  const normalized = Array.from(
+    new Set(
+      requested.map((component) => `${component ?? ""}`.trim()).filter(Boolean),
+    ),
+  );
+  if (!normalized.length) {
+    throw new Error("fleet rollout requires at least one managed component");
+  }
+  const invalid = normalized.filter(
+    (component) => !allowed.has(component as ManagedComponentKind),
+  );
+  if (invalid.length) {
+    throw new Error(`unsupported managed component(s): ${invalid.join(", ")}`);
+  }
+  const selected = new Set(normalized as ManagedComponentKind[]);
+  return componentOrder.filter((component) => selected.has(component));
+}
+
+function runtimeDeploymentsForPromotion({
+  version,
+  components,
+  reason,
+  metadata,
+}: {
+  version: string;
+  components: ManagedComponentKind[];
+  reason?: string;
+  metadata: Record<string, any>;
+}) {
+  const promotedComponents = Array.from(
+    new Set<ManagedComponentKind>(["project-host", ...components]),
+  );
+  return [
+    {
+      target_type: "artifact" as const,
+      target: "project-host" as const,
+      desired_version: version,
+      rollout_reason: reason,
+      metadata,
+    },
+    ...promotedComponents.map((component) => ({
+      target_type: "component" as const,
+      target: component,
+      desired_version: version,
+      rollout_policy:
+        component === "acp-worker"
+          ? ("drain_then_replace" as const)
+          : ("restart_now" as const),
+      rollout_reason: reason,
+      metadata,
+    })),
+  ];
+}
+
+function runtimeObservationIsStable({
   status,
   version,
+  components,
 }: {
   status: Awaited<ReturnType<typeof getHostRuntimeDeploymentStatus>>;
   version: string;
+  components: ManagedComponentKind[];
 }): boolean {
   if (`${status.observation_error ?? ""}`.trim()) return false;
   const artifact = (status.observed_artifacts ?? []).find(
     (entry) => entry.artifact === "project-host",
   );
-  const component = (status.observed_components ?? []).find(
-    (entry) => entry.component === "project-host",
+  const observedComponents = new Map(
+    (status.observed_components ?? []).map((entry) => [entry.component, entry]),
   );
+  const requiredComponents = new Set<ManagedComponentKind>([
+    "project-host",
+    ...components,
+  ]);
+  const componentsStable = Array.from(requiredComponents).every((component) => {
+    const observed = observedComponents.get(component);
+    return (
+      observed?.runtime_state === "running" &&
+      observed.version_state === "aligned"
+    );
+  });
   const rollout = status.observed_host_agent?.project_host?.rollout;
   return (
     artifact?.current_version === version &&
-    component?.runtime_state === "running" &&
-    component.version_state === "aligned" &&
+    componentsStable &&
     rollout?.target_version === version &&
     rollout?.running_version === version &&
     rollout?.healthy === true &&
@@ -79,16 +157,18 @@ function projectHostObservationIsStable({
   );
 }
 
-async function waitForStableProjectHost({
+async function waitForStableRuntime({
   account_id,
   host_id,
   version,
+  components,
   stabilize_seconds,
   shouldCancel,
 }: {
   account_id: string;
   host_id: string;
   version: string;
+  components: ManagedComponentKind[];
   stabilize_seconds: number;
   shouldCancel: () => Promise<boolean>;
 }): Promise<void> {
@@ -106,14 +186,14 @@ async function waitForStableProjectHost({
         account_id,
         id: host_id,
       });
-      if (projectHostObservationIsStable({ status, version })) {
+      if (runtimeObservationIsStable({ status, version, components })) {
         stableSince ??= Date.now();
         if (Date.now() - stableSince >= requiredStableMs) return;
       } else {
         stableSince = undefined;
         lastError =
           status.observation_error ||
-          `project-host has not converged to ${version}`;
+          `runtime components have not converged to ${version}`;
       }
     } catch (err) {
       stableSince = undefined;
@@ -130,19 +210,24 @@ async function runHostRollout({
   account_id,
   host_id,
   version,
+  components,
   base_url,
+  reason,
   stabilize_seconds,
   shouldCancel,
 }: {
   account_id: string;
   host_id: string;
   version: string;
+  components: ManagedComponentKind[];
   base_url?: string;
+  reason?: string;
   stabilize_seconds: number;
   shouldCancel: () => Promise<boolean>;
 }): Promise<RolloutHostResult> {
   const startedAt = new Date();
   let childOpId: string | undefined;
+  let managedComponentOpId: string | undefined;
   try {
     const child = await upgradeHostSoftware({
       account_id,
@@ -165,10 +250,37 @@ async function runHostRollout({
         summary.error ?? `project-host child rollout ${summary.status}`,
       );
     }
-    await waitForStableProjectHost({
+    const auxiliaryComponents = components.filter(
+      (component) => component !== "project-host",
+    );
+    if (auxiliaryComponents.length) {
+      const componentChild = await rolloutHostManagedComponents({
+        account_id,
+        id: host_id,
+        components: auxiliaryComponents,
+        base_url,
+        reason,
+      });
+      managedComponentOpId = componentChild.op_id;
+      const componentSummary = await waitForDurableLroCompletion({
+        op_id: componentChild.op_id,
+        scope_type: componentChild.scope_type,
+        scope_id: componentChild.scope_id,
+        client: conat(),
+        timeout_ms: CHILD_TIMEOUT_MS,
+      });
+      if (componentSummary.status !== "succeeded") {
+        throw new Error(
+          componentSummary.error ??
+            `managed component child rollout ${componentSummary.status}`,
+        );
+      }
+    }
+    await waitForStableRuntime({
       account_id,
       host_id,
       version,
+      components,
       stabilize_seconds,
       shouldCancel,
     });
@@ -176,6 +288,9 @@ async function runHostRollout({
       host_id,
       status: "succeeded",
       child_op_id: childOpId,
+      ...(managedComponentOpId
+        ? { managed_component_op_id: managedComponentOpId }
+        : {}),
       started_at: startedAt.toISOString(),
       finished_at: new Date().toISOString(),
       stabilization_seconds: stabilize_seconds,
@@ -185,6 +300,9 @@ async function runHostRollout({
       host_id,
       status: "failed",
       ...(childOpId ? { child_op_id: childOpId } : {}),
+      ...(managedComponentOpId
+        ? { managed_component_op_id: managedComponentOpId }
+        : {}),
       started_at: startedAt.toISOString(),
       finished_at: new Date().toISOString(),
       stabilization_seconds: stabilize_seconds,
@@ -273,6 +391,7 @@ async function handleRollout(op: LroSummary): Promise<void> {
     ),
   );
   const version = `${input.version ?? ""}`.trim();
+  const components = normalizedRolloutComponents(input.components);
   const maxConcurrent = Math.max(
     1,
     Math.min(5, Math.floor(Number(input.max_concurrent) || 1)),
@@ -321,6 +440,7 @@ async function handleRollout(op: LroSummary): Promise<void> {
       phase,
       message,
       version,
+      components,
       completed: resultByHost.size,
       total: hostIds.length,
       progress,
@@ -357,7 +477,7 @@ async function handleRollout(op: LroSummary): Promise<void> {
   try {
     await publishProgress({
       phase: "starting",
-      message: `starting paced rollout of ${version}`,
+      message: `starting paced rollout of ${components.join(", ")} from ${version}`,
     });
     const waves = buildRolloutWaves({
       host_ids: hostIds,
@@ -384,7 +504,9 @@ async function handleRollout(op: LroSummary): Promise<void> {
             account_id,
             host_id,
             version,
+            components,
             base_url: `${input.base_url ?? ""}`.trim() || undefined,
+            reason: `${input.reason ?? ""}`.trim() || undefined,
             stabilize_seconds: wave.stabilize_seconds,
             shouldCancel,
           }),
@@ -413,33 +535,24 @@ async function handleRollout(op: LroSummary): Promise<void> {
       await assertPromotionCohortStillComplete(hostIds);
       const metadata = {
         fleet_rollout_op_id: op.op_id,
+        components,
         completed_at: new Date().toISOString(),
       };
       await promoteProjectHostRuntimeDeployments({
         host_ids: hostIds,
         requested_by: account_id,
-        deployments: [
-          {
-            target_type: "artifact",
-            target: "project-host",
-            desired_version: version,
-            rollout_reason: input.reason,
-            metadata,
-          },
-          {
-            target_type: "component",
-            target: "project-host",
-            desired_version: version,
-            rollout_policy: "restart_now",
-            rollout_reason: input.reason,
-            metadata,
-          },
-        ],
+        deployments: runtimeDeploymentsForPromotion({
+          version,
+          components,
+          reason: input.reason,
+          metadata,
+        }),
       });
     }
 
     const result = {
       version,
+      components,
       host_count: hostIds.length,
       promote_global: input.promote_global === true,
       hosts: results,
@@ -449,7 +562,9 @@ async function handleRollout(op: LroSummary): Promise<void> {
       status: "succeeded",
       progress_summary: {
         phase: "done",
-        message: "paced project-host rollout complete",
+        message: "paced runtime fleet rollout complete",
+        version,
+        components,
         completed: hostIds.length,
         total: hostIds.length,
         progress: 100,
@@ -473,6 +588,8 @@ async function handleRollout(op: LroSummary): Promise<void> {
       progress_summary: {
         phase: canceled ? "canceled" : "paused",
         message: `${err instanceof Error ? err.message : err}`,
+        version,
+        components,
         completed: Array.from(resultByHost.values()).filter(
           (result) => result.status === "succeeded",
         ).length,
@@ -554,5 +671,7 @@ export function startHostRuntimeFleetRolloutWorker({
 
 export const __test__ = {
   buildRolloutWaves,
-  projectHostObservationIsStable,
+  normalizedRolloutComponents,
+  runtimeDeploymentsForPromotion,
+  runtimeObservationIsStable,
 };

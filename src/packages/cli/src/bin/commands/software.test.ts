@@ -3246,7 +3246,7 @@ test("software deploy project-host starts a paced fleet campaign by default", as
   );
   assert.equal(versions.versions[0].version, artifactId);
   assert.equal(runs.length, 1);
-  assert.deepEqual(runs[0].args.slice(-19), [
+  assert.deepEqual(runs[0].args.slice(-21), [
     "--profile",
     "staging",
     "host",
@@ -3255,6 +3255,8 @@ test("software deploy project-host starts a paced fleet campaign by default", as
     "--all-online",
     "--desired-version",
     artifactId,
+    "--component",
+    "project-host",
     "--base-url",
     "https://software.example.test/software",
     "--max-concurrent",
@@ -3527,7 +3529,7 @@ test("software deploy project-host accepts explicit rollout tuning", async () =>
 
   const artifactId = "20260614T235912Z-e882d124-host-rollout";
   assert.equal(runs.length, 1);
-  assert.deepEqual(runs[0].args.slice(-21), [
+  assert.deepEqual(runs[0].args.slice(-23), [
     "--profile",
     "staging",
     "host",
@@ -3536,6 +3538,8 @@ test("software deploy project-host accepts explicit rollout tuning", async () =>
     "--all-online",
     "--desired-version",
     artifactId,
+    "--component",
+    "project-host",
     "--base-url",
     "https://software.example.test/software",
     "--max-concurrent",
@@ -3806,7 +3810,7 @@ test("software deploy bay-scaffold uses bay artifact and scaffold-only Rocket fl
   ]);
 });
 
-test("software deploy host-conat-router sets project-host and component fleet defaults", async () => {
+test("software deploy host-conat-router starts a paced component campaign", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-host-router-"));
   const localStore = join(dir, "store");
   const source = join(dir, "bundle-linux.tar.xz");
@@ -3845,36 +3849,29 @@ test("software deploy host-conat-router sets project-host and component fleet de
     r2.objects.get("software/indexes/project-host.json")!.toString("utf8"),
   ).artifacts[0].artifact_id;
 
-  assert.equal(runs.length, 2);
-  assert.deepEqual(runs[0].args.slice(-12), [
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].args.slice(-21), [
     "--profile",
     "staging",
     "host",
     "deploy",
-    "set",
-    "--global",
-    "--artifact",
-    "project-host",
+    "rollout-fleet",
+    "--all-online",
     "--desired-version",
     artifactId,
-    "--reason",
-    "software-deploy-host-conat-router",
-  ]);
-  assert.deepEqual(runs[1].args.slice(-14), [
-    "--profile",
-    "staging",
-    "host",
-    "deploy",
-    "set",
-    "--global",
     "--component",
     "conat-router",
-    "--desired-version",
-    artifactId,
-    "--policy",
-    "restart_now",
+    "--base-url",
+    "https://software.example.test/software",
+    "--max-concurrent",
+    "2",
+    "--canary-stabilize-seconds",
+    "180",
+    "--stabilize-seconds",
+    "60",
     "--reason",
     "software-deploy-host-conat-router",
+    "--wait",
   ]);
 
   const history = JSON.parse(
@@ -3886,7 +3883,7 @@ test("software deploy host-conat-router sets project-host and component fleet de
   assert.equal(history.deployments[0].target.kind, "project-host-fleet");
 });
 
-test("software deploy host-conat-router --rollout reconciles one online component", async () => {
+test("software deploy host-conat-router --rollout uses the same paced campaign", async () => {
   const dir = mkdtempSync(
     join(tmpdir(), "software-deploy-host-router-rollout-"),
   );
@@ -3928,60 +3925,26 @@ test("software deploy host-conat-router --rollout reconciles one online componen
     r2.objects.get("software/indexes/project-host.json")!.toString("utf8"),
   ).artifacts[0].artifact_id;
 
-  assert.equal(runs.length, 4);
-  assert.deepEqual(runs[0].args.slice(-12), [
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].args.slice(-21), [
     "--profile",
     "staging",
     "host",
     "deploy",
-    "set",
-    "--global",
-    "--artifact",
-    "project-host",
+    "rollout-fleet",
+    "--all-online",
     "--desired-version",
     artifactId,
-    "--reason",
-    "software-deploy-host-conat-router",
-  ]);
-  assert.deepEqual(runs[1].args.slice(-14), [
-    "--profile",
-    "staging",
-    "host",
-    "deploy",
-    "set",
-    "--global",
     "--component",
     "conat-router",
-    "--desired-version",
-    artifactId,
-    "--policy",
-    "restart_now",
-    "--reason",
-    "software-deploy-host-conat-router",
-  ]);
-  assert.deepEqual(runs[2].args.slice(-12), [
-    "--profile",
-    "staging",
-    "host",
-    "upgrade",
-    "--all-online",
-    "--artifact",
-    "project-host",
-    "--artifact-version",
-    artifactId,
     "--base-url",
     "https://software.example.test/software",
-    "--wait",
-  ]);
-  assert.deepEqual(runs[3].args.slice(-11), [
-    "--profile",
-    "staging",
-    "host",
-    "deploy",
-    "reconcile",
-    "--all-online",
-    "--component",
-    "conat-router",
+    "--max-concurrent",
+    "2",
+    "--canary-stabilize-seconds",
+    "180",
+    "--stabilize-seconds",
+    "60",
     "--reason",
     "software-deploy-host-conat-router",
     "--wait",
@@ -3996,7 +3959,7 @@ test("software deploy host-conat-router --rollout reconciles one online componen
   assert.equal(history.deployments[0].target.kind, "project-host-fleet");
 });
 
-test("software deploy host-acp-worker uses drain replacement policy", async () => {
+test("software deploy host-acp-worker starts a paced component campaign", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-host-acp-"));
   const localStore = join(dir, "store");
   const source = join(dir, "bundle-linux.tar.xz");
@@ -4035,40 +3998,33 @@ test("software deploy host-acp-worker uses drain replacement policy", async () =
     r2.objects.get("software/indexes/project-host.json")!.toString("utf8"),
   ).artifacts[0].artifact_id;
 
-  assert.equal(runs.length, 2);
-  assert.deepEqual(runs[0].args.slice(-12), [
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].args.slice(-21), [
     "--profile",
     "staging",
     "host",
     "deploy",
-    "set",
-    "--global",
-    "--artifact",
-    "project-host",
+    "rollout-fleet",
+    "--all-online",
     "--desired-version",
     artifactId,
-    "--reason",
-    "software-deploy-host-acp-worker",
-  ]);
-  assert.deepEqual(runs[1].args.slice(-14), [
-    "--profile",
-    "staging",
-    "host",
-    "deploy",
-    "set",
-    "--global",
     "--component",
     "acp-worker",
-    "--desired-version",
-    artifactId,
-    "--policy",
-    "drain_then_replace",
+    "--base-url",
+    "https://software.example.test/software",
+    "--max-concurrent",
+    "2",
+    "--canary-stabilize-seconds",
+    "180",
+    "--stabilize-seconds",
+    "60",
     "--reason",
     "software-deploy-host-acp-worker",
+    "--wait",
   ]);
 });
 
-test("software deploy host-runtime-stack sets all managed component defaults", async () => {
+test("software deploy host-runtime-stack starts one paced stack campaign", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-host-stack-"));
   const localStore = join(dir, "store");
   const source = join(dir, "bundle-linux.tar.xz");
@@ -4107,33 +4063,36 @@ test("software deploy host-runtime-stack sets all managed component defaults", a
     r2.objects.get("software/indexes/project-host.json")!.toString("utf8"),
   ).artifacts[0].artifact_id;
 
-  assert.equal(runs.length, 5);
-  assert.deepEqual(runs[0].args.slice(-12), [
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].args.slice(-27), [
     "--profile",
     "staging",
     "host",
     "deploy",
-    "set",
-    "--global",
-    "--artifact",
-    "project-host",
+    "rollout-fleet",
+    "--all-online",
     "--desired-version",
     artifactId,
+    "--component",
+    "project-host",
+    "--component",
+    "conat-router",
+    "--component",
+    "conat-persist",
+    "--component",
+    "acp-worker",
+    "--base-url",
+    "https://software.example.test/software",
+    "--max-concurrent",
+    "2",
+    "--canary-stabilize-seconds",
+    "180",
+    "--stabilize-seconds",
+    "60",
     "--reason",
     "software-deploy-host-runtime-stack",
+    "--wait",
   ]);
-  assert.deepEqual(
-    runs.slice(1).map((run) => ({
-      component: run.args[run.args.indexOf("--component") + 1],
-      policy: run.args[run.args.indexOf("--policy") + 1],
-    })),
-    [
-      { component: "project-host", policy: "restart_now" },
-      { component: "conat-router", policy: "restart_now" },
-      { component: "conat-persist", policy: "restart_now" },
-      { component: "acp-worker", policy: "drain_then_replace" },
-    ],
-  );
 });
 
 test("software smoke static runs HTTP checks against the profile API", async () => {

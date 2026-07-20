@@ -651,9 +651,9 @@ function rawSoftwareComponentInfo(
         "Build a project-host artifact.",
         "Publish host compatibility metadata.",
         fullStack
-          ? "Set desired managed component versions for project-host, conat-router, conat-persist, and acp-worker."
-          : `Set the desired managed component version for ${service}.`,
-        "Reconcile online project hosts and wait for convergence.",
+          ? "Run one durable canary-first campaign for project-host, conat-router, conat-persist, and acp-worker."
+          : `Run one durable canary-first campaign for ${service}.`,
+        "Promote the artifact and selected component defaults only after every online host converges.",
       ],
       commands: {
         build: ["cocalc software build project-host:<tag>"],
@@ -669,13 +669,13 @@ function rawSoftwareComponentInfo(
       operator_notes: [
         fullStack
           ? "This is intentionally broad and should be used only when all host-managed services must move together."
-          : "This updates host deploy desired state and reconciles only the selected managed component.",
+          : "This rolls only the selected managed component after safely staging the shared project-host artifact.",
         "Offline hosts converge when the host deployment machinery sees them later.",
       ],
       agent_notes: [
         "Resolve artifacts using artifact_component=project-host.",
         `Managed component target(s): ${managedComponents?.join(", ") ?? "none"}.`,
-        "Expect host deploy set and host deploy reconcile subprocesses during deploy.",
+        "Expect one host deploy rollout-fleet subprocess during deploy.",
       ],
       common_failure_modes: [
         "No online representative host is available for smoke verification.",
@@ -3302,6 +3302,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: "project-host",
       upgradeArtifact: "project-host",
       managedComponents: ["conat-router"],
+      pacedFleetRollout: true,
     };
   }
   if (component === "host-conat-persist") {
@@ -3309,6 +3310,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: "project-host",
       upgradeArtifact: "project-host",
       managedComponents: ["conat-persist"],
+      pacedFleetRollout: true,
     };
   }
   if (component === "host-acp-worker") {
@@ -3316,6 +3318,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: "project-host",
       upgradeArtifact: "project-host",
       managedComponents: ["acp-worker"],
+      pacedFleetRollout: true,
     };
   }
   if (component === "host-runtime-stack") {
@@ -3323,6 +3326,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: "project-host",
       upgradeArtifact: "project-host",
       managedComponents: HOST_RUNTIME_STACK_COMPONENTS,
+      pacedFleetRollout: true,
     };
   }
   return undefined;
@@ -3332,12 +3336,6 @@ function hostManagedComponentsForDeployComponent(
   component: SoftwareDeployComponent,
 ): HostManagedSoftwareComponent[] | undefined {
   return hostDeployTargetForComponent(component)?.managedComponents;
-}
-
-function hostManagedComponentPolicy(
-  component: HostManagedSoftwareComponent,
-): "restart_now" | "drain_then_replace" {
-  return component === "acp-worker" ? "drain_then_replace" : "restart_now";
 }
 
 function hostBootstrapDeployTargetForComponent(
@@ -4131,6 +4129,10 @@ Supported deploy/smoke components:
                     "--all-online",
                     "--desired-version",
                     artifact.artifact_id,
+                    ...(hostManagedComponents ?? []).flatMap((component) => [
+                      "--component",
+                      component,
+                    ]),
                     "--base-url",
                     hostBaseUrl,
                     "--max-concurrent",
@@ -4169,26 +4171,6 @@ Supported deploy/smoke components:
                         reason,
                       ],
                     ];
-                for (const hostManagedComponent of hostManagedComponents ??
-                  []) {
-                  commandArgsList.push([
-                    ...cli.args,
-                    "--profile",
-                    deployTarget,
-                    "host",
-                    "deploy",
-                    "set",
-                    "--global",
-                    "--component",
-                    hostManagedComponent,
-                    "--desired-version",
-                    artifact.artifact_id,
-                    "--policy",
-                    hostManagedComponentPolicy(hostManagedComponent),
-                    "--reason",
-                    reason,
-                  ]);
-                }
                 if (opts.rollout) {
                   commandArgsList.push([
                     ...cli.args,
@@ -4205,24 +4187,6 @@ Supported deploy/smoke components:
                     hostBaseUrl,
                     "--wait",
                   ]);
-                  if (hostManagedComponents?.length) {
-                    commandArgsList.push([
-                      ...cli.args,
-                      "--profile",
-                      deployTarget,
-                      "host",
-                      "deploy",
-                      "reconcile",
-                      "--all-online",
-                      ...hostManagedComponents.flatMap((component) => [
-                        "--component",
-                        component,
-                      ]),
-                      "--reason",
-                      reason,
-                      "--wait",
-                    ]);
-                  }
                   if (component === "project" || component === "tools") {
                     commandArgsList.push([
                       ...cli.args,

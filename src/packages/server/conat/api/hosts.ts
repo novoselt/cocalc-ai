@@ -7167,11 +7167,47 @@ function normalizeFleetRolloutInteger({
   return parsed;
 }
 
+const HOST_RUNTIME_FLEET_COMPONENT_ORDER: ManagedComponentKind[] = [
+  "project-host",
+  "conat-router",
+  "conat-persist",
+  "acp-worker",
+];
+const HOST_RUNTIME_FLEET_COMPONENTS = new Set<ManagedComponentKind>(
+  HOST_RUNTIME_FLEET_COMPONENT_ORDER,
+);
+
+function normalizeFleetRolloutComponents(
+  components: ManagedComponentKind[] | undefined,
+): ManagedComponentKind[] {
+  const requested = components == null ? ["project-host"] : components;
+  const normalized = Array.from(
+    new Set(
+      requested.map((component) => `${component ?? ""}`.trim()).filter(Boolean),
+    ),
+  );
+  if (!normalized.length) {
+    throw new Error("fleet rollout requires at least one managed component");
+  }
+  const invalid = normalized.filter(
+    (component) =>
+      !HOST_RUNTIME_FLEET_COMPONENTS.has(component as ManagedComponentKind),
+  );
+  if (invalid.length) {
+    throw new Error(`unsupported managed component(s): ${invalid.join(", ")}`);
+  }
+  const selected = new Set(normalized as ManagedComponentKind[]);
+  return HOST_RUNTIME_FLEET_COMPONENT_ORDER.filter((component) =>
+    selected.has(component),
+  );
+}
+
 export async function rolloutHostRuntimeFleet({
   account_id,
   host_ids,
   artifact,
   version,
+  components,
   base_url,
   canary_host_id,
   max_concurrent,
@@ -7188,13 +7224,14 @@ export async function rolloutHostRuntimeFleet({
   }
   const desiredVersion = `${version ?? ""}`.trim();
   if (!desiredVersion) {
-    throw new Error("project-host rollout version is required");
+    throw new Error("runtime fleet rollout version is required");
   }
+  const normalizedComponents = normalizeFleetRolloutComponents(components);
   const uniqueHostIds = Array.from(
     new Set((host_ids ?? []).map((id) => `${id ?? ""}`.trim()).filter(Boolean)),
   );
   if (!uniqueHostIds.length) {
-    throw new Error("project-host fleet rollout requires at least one host");
+    throw new Error("runtime fleet rollout requires at least one host");
   }
   const canaryHostId = `${canary_host_id ?? ""}`.trim() || uniqueHostIds[0];
   if (!uniqueHostIds.includes(canaryHostId)) {
@@ -7207,9 +7244,7 @@ export async function rolloutHostRuntimeFleet({
   const rowsById = new Map(rows.map((row) => [`${row.id}`, row]));
   const missing = uniqueHostIds.filter((id) => !rowsById.has(id));
   if (missing.length) {
-    throw new Error(
-      `project-host rollout host(s) not found: ${missing.join(", ")}`,
-    );
+    throw new Error(`runtime rollout host(s) not found: ${missing.join(", ")}`);
   }
   const localBayId = getConfiguredBayId();
   const remote = uniqueHostIds.filter((id) => {
@@ -7218,7 +7253,7 @@ export async function rolloutHostRuntimeFleet({
   });
   if (remote.length) {
     throw new Error(
-      `project-host fleet rollout is bay-local; create a separate campaign on the authoritative bay for: ${remote.join(", ")}`,
+      `runtime fleet rollout is bay-local; create a separate campaign on the authoritative bay for: ${remote.join(", ")}`,
     );
   }
   const unavailable = uniqueHostIds.flatMap((id) => {
@@ -7232,7 +7267,7 @@ export async function rolloutHostRuntimeFleet({
   });
   if (unavailable.length) {
     throw new Error(
-      `project-host fleet rollout requires an initially healthy cohort: ${unavailable.join("; ")}`,
+      `runtime fleet rollout requires an initially healthy cohort: ${unavailable.join("; ")}`,
     );
   }
   if (promote_global === true) {
@@ -7250,7 +7285,7 @@ export async function rolloutHostRuntimeFleet({
       .map((row) => `${row.name ?? row.id}`);
     if (omittedHealthyHosts.length) {
       throw new Error(
-        `cannot promote a global project-host default while omitting healthy local hosts: ${omittedHealthyHosts.join(", ")}`,
+        `cannot promote global runtime defaults while omitting healthy local hosts: ${omittedHealthyHosts.join(", ")}`,
       );
     }
   }
@@ -7296,17 +7331,19 @@ export async function rolloutHostRuntimeFleet({
       host_ids: orderedHostIds,
       artifact,
       version: desiredVersion,
+      components: normalizedComponents,
       base_url: `${base_url ?? ""}`.trim() || undefined,
       canary_host_id: canaryHostId,
       max_concurrent: normalizedMaxConcurrent,
       canary_stabilize_seconds: normalizedCanaryStabilizeSeconds,
       stabilize_seconds: normalizedStabilizeSeconds,
       promote_global: promote_global === true,
-      reason: `${reason ?? ""}`.trim() || "paced_project_host_rollout",
+      reason: `${reason ?? ""}`.trim() || "paced_runtime_fleet_rollout",
     },
     dedupe_key: `${HOST_RUNTIME_FLEET_ROLLOUT_LRO_KIND}:${JSON.stringify({
       artifact,
       version: desiredVersion,
+      components: normalizedComponents,
       host_ids: [...orderedHostIds].sort(),
     })}`,
     status: "queued",

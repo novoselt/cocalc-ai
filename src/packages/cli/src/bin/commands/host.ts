@@ -3562,9 +3562,15 @@ automatic reconcile or artifact upgrade work.
   deploy
     .command("rollout-fleet")
     .description(
-      "roll out project-host to an online bay cohort using a canary and bounded waves",
+      "roll out host runtime components to an online bay cohort using a canary and bounded waves",
     )
     .requiredOption("--desired-version <version>", "project-host version")
+    .option(
+      "--component <component>",
+      "managed component (repeatable or comma-separated; default: project-host)",
+      (value, prev: string[] = []) => [...prev, value],
+      [],
+    )
     .option("--all-online", "target every currently online host")
     .option("--canary <host>", "canary host name or host_id")
     .option(
@@ -3605,6 +3611,7 @@ rejected instead of routing a fleet mutation through a non-authoritative bay.
       async (
         opts: {
           desiredVersion?: string;
+          component?: string[];
           allOnline?: boolean;
           canary?: string;
           maxConcurrent?: string;
@@ -3647,6 +3654,9 @@ rejected instead of routing a fleet mutation through a non-authoritative bay.
               admin_view: true,
             })) as HostRow[]
           ).filter(isHostOnlineForUpgrade);
+          const components = opts.component?.length
+            ? parseManagedComponentKindsOption(opts.component)
+            : (["project-host"] as const);
           if (!hosts.length) {
             return {
               status: "skipped",
@@ -3700,6 +3710,7 @@ rejected instead of routing a fleet mutation through a non-authoritative bay.
             ],
             artifact: "project-host",
             version: `${opts.desiredVersion ?? ""}`.trim(),
+            components: [...components],
             base_url: `${opts.baseUrl ?? ""}`.trim() || undefined,
             canary_host_id: canary.id,
             max_concurrent: parseInteger({
@@ -3737,18 +3748,18 @@ rejected instead of routing a fleet mutation through a non-authoritative bay.
             pollMs: ctx.pollMs,
             onUpdate: createHostLroProgressReporter(ctx, {
               host_id: rollout.scope_id,
-              name: "project-host fleet rollout",
+              name: "runtime fleet rollout",
               op_id: rollout.op_id,
             }),
           });
           if (summary.timedOut) {
             throw new Error(
-              `project-host fleet rollout timed out (op=${rollout.op_id}, last_status=${summary.status})`,
+              `runtime fleet rollout timed out (op=${rollout.op_id}, last_status=${summary.status})`,
             );
           }
           if (summary.status !== "succeeded") {
             throw new Error(
-              `project-host fleet rollout ${summary.status}: ${summary.error ?? "unknown error"}`,
+              `runtime fleet rollout ${summary.status}: ${summary.error ?? "unknown error"}`,
             );
           }
           return {

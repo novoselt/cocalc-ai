@@ -1148,6 +1148,7 @@ test("host deploy rollout-fleet queues one canary-first durable campaign", async
       host_ids: ["quiet-host", "busy-host"],
       artifact: "project-host",
       version: "ph-v2",
+      components: ["project-host"],
       base_url: "https://software.example.test/software",
       canary_host_id: "quiet-host",
       max_concurrent: 2,

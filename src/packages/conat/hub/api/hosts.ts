@@ -209,6 +209,7 @@ export interface HostRuntimeFleetRolloutRequest {
   host_ids: string[];
   artifact: "project-host";
   version: string;
+  components?: ManagedComponentKind[];
   base_url?: string;
   canary_host_id?: string;
   max_concurrent?: number;
