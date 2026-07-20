@@ -16,8 +16,10 @@ history, and reconciles online hosts.
 
 The reconcile scope is mandatory:
 
-- `helpers` atomically updates privileged host helpers and their sudo policy
-  without restarting project-host, Conat, or ACP services.
+- `helpers` atomically updates privileged host helpers and their sudo policy,
+  reconciles cloudflared configuration and version, and does not restart
+  project-host, Conat, ACP, or project containers. Cloudflared itself restarts
+  only when its package or configuration changes.
 - `full` runs the complete bootstrap reconcile and restarts project-host. Use
   it only when the changed bootstrap code requires full host convergence.
 

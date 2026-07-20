@@ -7024,8 +7024,25 @@ def configure_cloudflared_with_options(
     if not cfg.cloudflared.enabled:
         return
     cloudflared_missing = shutil.which("cloudflared") is None
-    service_changed = install_package or cloudflared_missing
-    if install_package or cloudflared_missing:
+    should_install = install_package or cloudflared_missing
+    if not should_install:
+        installed = run_cmd(
+            cfg,
+            ["/usr/bin/cloudflared", "--version"],
+            "inspect cloudflared version",
+            check=False,
+            timeout=15,
+        )
+        match = re.search(r"cloudflared version\s+([^\s(]+)", installed.stdout or "")
+        installed_version = match.group(1) if match else "unknown"
+        should_install = installed_version != CLOUDFLARED_VERSION
+        if should_install:
+            log_line(
+                cfg,
+                f"bootstrap: upgrading cloudflared version drift installed={installed_version} expected={CLOUDFLARED_VERSION}",
+            )
+    service_changed = should_install
+    if should_install:
         log_line(cfg, f"bootstrap: installing cloudflared {CLOUDFLARED_VERSION}")
         arch = cfg.expected_arch
         expected_sha256 = CLOUDFLARED_DEB_SHA256.get(arch)
@@ -7042,20 +7059,6 @@ def configure_cloudflared_with_options(
         run_cmd(cfg, ["dpkg", "-i", "/tmp/cloudflared.deb"], "install cloudflared")
     else:
         log_line(cfg, "bootstrap: reconciling cloudflared config")
-        installed = run_cmd(
-            cfg,
-            ["/usr/bin/cloudflared", "--version"],
-            "inspect cloudflared version",
-            check=False,
-            timeout=15,
-        )
-        match = re.search(r"cloudflared version\s+([^\s(]+)", installed.stdout or "")
-        installed_version = match.group(1) if match else "unknown"
-        if installed_version != CLOUDFLARED_VERSION:
-            log_line(
-                cfg,
-                f"bootstrap: cloudflared version drift installed={installed_version} expected={CLOUDFLARED_VERSION}; leaving existing install unchanged",
-            )
     cloudflared_dir = Path("/etc/cloudflared")
     cloudflared_dir.mkdir(parents=True, exist_ok=True)
     credentials_path = cloudflared_dir / f"{cfg.cloudflared.tunnel_id}.json"
@@ -7464,6 +7467,7 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
         configure_runtime_sudoers(cfg)
         verify_runtime_sudoers(cfg)
         reconcile_project_network_limits(cfg)
+        configure_cloudflared_with_options(cfg, install_package=False)
         record_operation_success(cfg, "reconcile")
         report_bootstrap_status(cfg, "done", "Privileged host helpers reconciled")
         log_line(cfg, "bootstrap: helper-only reconcile completed successfully")
