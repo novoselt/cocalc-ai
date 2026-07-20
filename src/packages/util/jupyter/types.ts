@@ -6,6 +6,10 @@ export interface NbconvertParams {
   timeout?: number; // in seconds!
 }
 
+export interface NbconvertResult {
+  output?: string;
+}
+
 interface HelpLink {
   text: string;
   url: string;

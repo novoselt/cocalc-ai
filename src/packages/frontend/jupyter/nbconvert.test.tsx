@@ -97,4 +97,39 @@ describe("NBConvert", () => {
       expect(downloadFile).toHaveBeenCalledWith({ path: "analysis.R" });
     });
   });
+
+  it("uses the output path reported by the project-side converter", async () => {
+    const actions = createActions(".py");
+    const dialog = fromJS({ to: "script" });
+    const { rerender } = render(
+      <NBConvert
+        actions={actions}
+        path="analysis.ipynb"
+        project_id="project-1"
+        nbconvert={fromJS({ state: "run" })}
+        nbconvert_dialog={dialog}
+      />,
+    );
+
+    rerender(
+      <NBConvert
+        actions={actions}
+        path="analysis.ipynb"
+        project_id="project-1"
+        nbconvert={fromJS({
+          state: "done",
+          args: ["--to", "script"],
+          output: "/home/user/analysis.txt",
+          time: Date.now(),
+        })}
+        nbconvert_dialog={dialog}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(downloadFile).toHaveBeenCalledWith({
+        path: "/home/user/analysis.txt",
+      });
+    });
+  });
 });

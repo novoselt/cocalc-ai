@@ -320,9 +320,18 @@ export class JupyterActions extends Actions<JupyterStoreState> {
 
   private setRuntimeRecordValue = (key: string, value: object): void => {
     this.pendingDeletedRuntimeRecords.delete(key);
-    this.pendingRuntimeRecords.set(key, value);
     if (this.runtimeState != null) {
       this.runtimeState.set(key, value);
+      if (isJupyterRuntimeCellKey(key)) {
+        // Cell state needs to remain optimistic until its exact value echoes.
+        this.pendingRuntimeRecords.set(key, value);
+      } else {
+        // Other runtime records are state machines whose remote transitions
+        // (e.g. nbconvert start -> run -> done) must remain authoritative.
+        this.pendingRuntimeRecords.delete(key);
+      }
+    } else {
+      this.pendingRuntimeRecords.set(key, value);
     }
   };
 
@@ -463,8 +472,11 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     if (this.runtimeState == null || this.pendingRuntimeRecords.size === 0) {
       return;
     }
-    for (const [key, value] of this.pendingRuntimeRecords.entries()) {
+    for (const [key, value] of [...this.pendingRuntimeRecords.entries()]) {
       this.runtimeState.set(key, value);
+      if (!isJupyterRuntimeCellKey(key)) {
+        this.pendingRuntimeRecords.delete(key);
+      }
     }
     for (const key of this.pendingDeletedRuntimeRecords) {
       this.runtimeState.delete(key);
