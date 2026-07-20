@@ -71,10 +71,11 @@ function projectHostObservationIsStable({
   return (
     artifact?.current_version === version &&
     component?.runtime_state === "running" &&
-    component.running_versions.includes(version) &&
-    rollout?.healthy !== false &&
-    rollout?.phase !== "rollback_requested" &&
-    rollout?.phase !== "rolled_back"
+    component.version_state === "aligned" &&
+    rollout?.target_version === version &&
+    rollout?.running_version === version &&
+    rollout?.healthy === true &&
+    rollout?.phase === "promoted"
   );
 }
 
