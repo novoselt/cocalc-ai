@@ -435,14 +435,26 @@ export async function embedCoCalcBlobImages({
   assertAttachmentReferenceLimit(ipynb, "blob");
   const result = deepCopy(ipynb);
   const previous = variantFromPreviousNotebook(previousIpynb);
-  const loaded = new Map<string, Promise<ResolvedVariant>>();
+  const blobLoads = new Map<string, Promise<LoadedBlob | undefined>>();
+  const loaded = new Map<string, Promise<ResolvedVariant | undefined>>();
   let totalBytes = 0;
   let attachmentCount = 0;
+
+  const loadAvailableBlob = async (
+    uuid: string,
+  ): Promise<LoadedBlob | undefined> => {
+    let promise = blobLoads.get(uuid);
+    if (promise == null) {
+      promise = loadBlob(uuid);
+      blobLoads.set(uuid, promise);
+    }
+    return await promise;
+  };
 
   const resolveVariant = async (
     variant: BlobVariantMetadata,
     declaredMime?: string,
-  ): Promise<ResolvedVariant> => {
+  ): Promise<ResolvedVariant | undefined> => {
     const cached = previous.get(variant.uuid);
     if (
       cached != null &&
@@ -455,9 +467,9 @@ export async function embedCoCalcBlobImages({
     let promise = loaded.get(variant.uuid);
     if (promise == null) {
       promise = (async () => {
-        const blob = await loadBlob(variant.uuid);
+        const blob = await loadAvailableBlob(variant.uuid);
         if (blob == null) {
-          throw Error(`CoCalc image blob ${variant.uuid} is not available`);
+          return;
         }
         const info = validateRaster(
           blob.bytes,
@@ -511,9 +523,9 @@ export async function embedCoCalcBlobImages({
         let name = mapped?.[0];
         let entry = mapped?.[1];
         if (entry == null) {
-          const blob = await loadBlob(parsed.uuid);
+          const blob = await loadAvailableBlob(parsed.uuid);
           if (blob == null) {
-            throw Error(`CoCalc image blob ${parsed.uuid} is not available`);
+            return candidate;
           }
           const info = validateRaster(
             blob.bytes,
@@ -541,7 +553,8 @@ export async function embedCoCalcBlobImages({
             [info.mediaType]: blob.bytes.toString("base64"),
           };
         } else {
-          if (used.has(name!)) {
+          const nameWasUsed = used.has(name!);
+          if (nameWasUsed) {
             used.delete(name!);
           }
           const primaryVariant = entry.variants[entry.primary_mime];
@@ -549,20 +562,32 @@ export async function embedCoCalcBlobImages({
             return candidate;
           }
           const bundle: Record<string, string> = {};
+          let bundleBytes = 0;
           for (const [mime, variant] of Object.entries(entry.variants)) {
             if (variant == null) continue;
             const resolved = await resolveVariant(variant, mime);
-            totalBytes += resolved.byte_length;
-            if (totalBytes > MAX_NOTEBOOK_ATTACHMENT_BYTES) {
-              throw Error(
-                `notebook image attachments exceed ${MAX_NOTEBOOK_ATTACHMENT_BYTES} bytes`,
-              );
+            if (resolved == null) {
+              // Preserve the live blob URL until its bytes become available.
+              // This is especially important for legacy cocalc.com blobs that
+              // have not yet been migrated into the current blob store.
+              if (nameWasUsed) {
+                used.add(name!);
+              }
+              newEntries[name!] = entry;
+              return candidate;
             }
+            bundleBytes += resolved.byte_length;
             bundle[mime] = resolved.base64;
           }
           if (Object.keys(bundle).length === 0) {
             throw Error(
               `CoCalc image blob ${parsed.uuid} has no image variants`,
+            );
+          }
+          totalBytes += bundleBytes;
+          if (totalBytes > MAX_NOTEBOOK_ATTACHMENT_BYTES) {
+            throw Error(
+              `notebook image attachments exceed ${MAX_NOTEBOOK_ATTACHMENT_BYTES} bytes`,
             );
           }
           cell.attachments[name!] = bundle;

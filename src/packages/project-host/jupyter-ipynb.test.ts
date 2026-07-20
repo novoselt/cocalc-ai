@@ -110,6 +110,48 @@ describe("project-host Jupyter ipynb conversion", () => {
     expect(result.bytes).toBeGreaterThan(0);
   });
 
+  it("saves unresolved legacy blob URLs unchanged", async () => {
+    mockGetBlob.mockResolvedValue({});
+    const writeFile = jest.fn(async () => {});
+    const fs = {
+      stat: jest.fn(async () => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      }),
+      readFile: jest.fn(),
+      writeFile,
+    } as any;
+    const legacyUrl = `https://cocalc.com/blobs/paste-image.png?uuid=${blobUuid}`;
+    const live = {
+      cells: [
+        {
+          cell_type: "markdown",
+          metadata: {},
+          source: `![legacy image](${legacyUrl})`,
+        },
+      ],
+      metadata: {},
+      nbformat: 4,
+      nbformat_minor: 5,
+    };
+
+    await expect(
+      saveJupyterIpynb({
+        project_id,
+        path: "legacy.ipynb",
+        ipynb: live,
+        fs,
+      }),
+    ).resolves.toBeDefined();
+
+    const disk = JSON.parse(writeFile.mock.calls[0][1]);
+    expect(disk.cells[0].source).toBe(`![legacy image](${legacyUrl})`);
+    expect(disk.cells[0].attachments).toBeUndefined();
+    expect(mockGetBlob).toHaveBeenCalledWith({
+      project_id,
+      uuid: blobUuid,
+    });
+  });
+
   it("rejects non-notebook destinations before writing", async () => {
     const writeFile = jest.fn();
     await expect(
