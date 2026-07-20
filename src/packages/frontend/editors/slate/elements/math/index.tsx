@@ -38,8 +38,18 @@ export const StaticElement: React.FC<RenderElementProps> = ({
   }
   const value = stripMathDelimiters(element.value ?? Node.string(element));
   const C = MathComponent ?? DefaultMath;
+  const isDisplay =
+    element.type === "math_block" ||
+    (element.type === "math_inline" && element.display);
   return (
-    <span {...attributes}>
+    <span
+      {...attributes}
+      style={
+        isDisplay
+          ? { display: "block", textAlign: "center", width: "100%" }
+          : undefined
+      }
+    >
       <C
         data={wrap(value, element.type == "math_inline" && !element.display)}
       />

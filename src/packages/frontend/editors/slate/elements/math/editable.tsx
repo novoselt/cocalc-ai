@@ -71,34 +71,38 @@ const Element: React.FC<RenderElementProps> = ({
   }, [editor, element, isEditing]);
   const value = element.value ?? Node.string(element);
 
+  const isDisplay = element.type === "math_block" || !!element.display;
   const Wrapper: any = element.type === "math_block" ? "div" : "span";
-  const delim = element.type === "math_block" ? "$$" : "$";
-  const wrapperStyle =
-    element.type === "math_block"
-      ? { display: "block", position: "relative" as const }
-      : { display: "inline-block", position: "relative" as const };
-  const previewStyle: React.CSSProperties =
-    element.type === "math_block"
-      ? {
-          display: "block",
-          marginTop: "4px",
-          background: "rgba(255,255,255,0.95)",
-          padding: "0 4px",
-          borderRadius: "4px",
-          pointerEvents: "none",
-          zIndex: 2,
-          maxWidth: "100%",
-        }
-      : {
-          display: "inline-block",
-          marginLeft: "6px",
-          background: "rgba(255,255,255,0.95)",
-          padding: "0 4px",
-          borderRadius: "4px",
-          pointerEvents: "none",
-          zIndex: 2,
-          whiteSpace: "nowrap",
-        };
+  const delim = isDisplay ? "$$" : "$";
+  const wrapperStyle = isDisplay
+    ? {
+        display: "block",
+        position: "relative" as const,
+        textAlign: "center" as const,
+        width: "100%",
+      }
+    : { display: "inline-block", position: "relative" as const };
+  const previewStyle: React.CSSProperties = isDisplay
+    ? {
+        display: "block",
+        marginTop: "4px",
+        background: "rgba(255,255,255,0.95)",
+        padding: "0 4px",
+        borderRadius: "4px",
+        pointerEvents: "none",
+        zIndex: 2,
+        maxWidth: "100%",
+      }
+    : {
+        display: "inline-block",
+        marginLeft: "6px",
+        background: "rgba(255,255,255,0.95)",
+        padding: "0 4px",
+        borderRadius: "4px",
+        pointerEvents: "none",
+        zIndex: 2,
+        whiteSpace: "nowrap",
+      };
   return (
     <Wrapper {...attributes} style={wrapperStyle}>
       {!isEditing && (
@@ -145,7 +149,7 @@ const Element: React.FC<RenderElementProps> = ({
       {isEditing && (
         <span
           style={
-            element.type === "math_block"
+            isDisplay
               ? { display: "block", marginTop: "4px" }
               : { display: "inline-block", marginLeft: "6px" }
           }

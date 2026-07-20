@@ -53,6 +53,7 @@ test("math inline toggles void state when selection enters/leaves", async () => 
   const inlineMath = container.querySelector(
     '[data-slate-inline="true"]',
   ) as HTMLElement | null;
+  expect(inlineMath?.style.display).toBe("inline-block");
   const editHandle = inlineMath?.querySelector(
     'span[contenteditable="false"]',
   ) as HTMLElement | null;
@@ -73,6 +74,44 @@ test("math inline toggles void state when selection enters/leaves", async () => 
     Transforms.select(editor, { path: [0, 0], offset: 1 });
   });
   await waitFor(() => expect(hasVoid()).toBe(true));
+
+  unmount();
+});
+
+test("display-style inline math occupies a centered full-width line", () => {
+  const editor = withReact(createEditor());
+  editor.isInline = (el) => el.type === "math_inline";
+  editor.isVoid = (el) => el.type === "math_inline";
+  withIsVoid(editor);
+
+  const value = [
+    {
+      type: "paragraph",
+      children: [
+        { text: "before" },
+        {
+          type: "math_inline",
+          value: String.raw`\begin{pmatrix}x\\y\end{pmatrix}`,
+          display: true,
+          sourceDelimiter: "$$",
+          children: [{ text: "" }],
+        },
+      ],
+    },
+  ];
+
+  const { container, unmount } = render(
+    <Slate editor={editor} value={value as any} onChange={() => undefined}>
+      <Editable renderElement={renderElement} />
+    </Slate>,
+  );
+  const displayMath = container.querySelector(
+    '[data-slate-inline="true"]',
+  ) as HTMLElement | null;
+
+  expect(displayMath?.style.display).toBe("block");
+  expect(displayMath?.style.textAlign).toBe("center");
+  expect(displayMath?.style.width).toBe("100%");
 
   unmount();
 });
