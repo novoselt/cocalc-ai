@@ -5,6 +5,7 @@
 
 import {
   getPlannedProjectHostRuntimeTransition,
+  isPlannedProjectHostReplacementSession,
   isPlannedProjectHostRuntimeTransitionActive,
   isProjectHostUpgradeBannerSuppressed,
 } from "./runtime-transition";
@@ -53,5 +54,28 @@ describe("planned project-host runtime transitions", () => {
         },
       }),
     ).toBeUndefined();
+  });
+
+  test("only recognizes a replacement process when the prior session is known", () => {
+    const transition = {
+      operation_id: "op-1",
+      component: "project-host" as const,
+      previous_host_session_id: "session-old",
+      started_at: "2026-07-20T11:59:00.000Z",
+      deadline_at: "2026-07-20T12:09:00.000Z",
+      banner_suppression_until: "2026-07-20T12:02:00.000Z",
+    };
+    expect(
+      isPlannedProjectHostReplacementSession({
+        transition,
+        host_session_id: "session-old",
+      }),
+    ).toBe(false);
+    expect(
+      isPlannedProjectHostReplacementSession({
+        transition,
+        host_session_id: "session-new",
+      }),
+    ).toBe(true);
   });
 });

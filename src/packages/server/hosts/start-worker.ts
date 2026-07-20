@@ -294,6 +294,14 @@ function requestedProjectHostUpgradeVersion(
   );
 }
 
+function projectHostRestartWasScheduled(response: any): boolean {
+  return (response?.results ?? []).some(
+    (result: any) =>
+      result?.component === "project-host" &&
+      result?.action === "restart_scheduled",
+  );
+}
+
 function redundantProjectHostRollbackReason({
   row,
   rollbackVersion,
@@ -1559,6 +1567,7 @@ async function handleOp(op: LroSummary): Promise<void> {
     canceled: false,
   };
   let plannedProjectHostTransition = false;
+  let plannedProjectHostTransitionAwaitingReady = false;
 
   const shouldCancel = async () => {
     if (cancelState.canceled) return true;
@@ -1623,6 +1632,9 @@ async function handleOp(op: LroSummary): Promise<void> {
           operation_id: op_id,
           target_version: requestedProjectHostTargetVersion,
           previous_version: knownGoodProjectHostVersion,
+          previous_host_session_id:
+            `${preUpgradeRow?.metadata?.host_session_id ?? ""}`.trim() ||
+            undefined,
           reason: `${input?.rollout_reason ?? "host_software_upgrade"}`,
         });
         plannedProjectHostTransition = true;
@@ -1708,6 +1720,8 @@ async function handleOp(op: LroSummary): Promise<void> {
                 },
               }),
           );
+          plannedProjectHostTransitionAwaitingReady =
+            projectHostRestartWasScheduled(rolloutResponse);
         }
       } catch (err) {
         const targetProjectHostVersion =
@@ -2377,7 +2391,10 @@ async function handleOp(op: LroSummary): Promise<void> {
       });
     }
   } finally {
-    if (plannedProjectHostTransition) {
+    if (
+      plannedProjectHostTransition &&
+      !plannedProjectHostTransitionAwaitingReady
+    ) {
       await endPlannedProjectHostRuntimeTransition({
         host_id,
         operation_id: op_id,
@@ -2479,6 +2496,7 @@ export const __test__ = {
   currentBootstrapFailure,
   completedProjectHostUpgradeVersion,
   requestedProjectHostUpgradeVersion,
+  projectHostRestartWasScheduled,
   redundantProjectHostRollbackReason,
   waitForHostStatus,
   billingEnforcementDrainCompleteMetadata,

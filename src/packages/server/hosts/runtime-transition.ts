@@ -13,6 +13,7 @@ export interface PlannedProjectHostRuntimeTransition {
   component: "project-host";
   target_version?: string;
   previous_version?: string;
+  previous_host_session_id?: string;
   reason?: string;
   started_at: string;
   deadline_at: string;
@@ -60,11 +61,24 @@ export function isProjectHostUpgradeBannerSuppressed(
   );
 }
 
+export function isPlannedProjectHostReplacementSession({
+  transition,
+  host_session_id,
+}: {
+  transition: PlannedProjectHostRuntimeTransition;
+  host_session_id?: string;
+}): boolean {
+  const previous = `${transition.previous_host_session_id ?? ""}`.trim();
+  const current = `${host_session_id ?? ""}`.trim();
+  return !previous || (!!current && current !== previous);
+}
+
 export async function beginPlannedProjectHostRuntimeTransition({
   host_id,
   operation_id,
   target_version,
   previous_version,
+  previous_host_session_id,
   reason,
   now = new Date(),
 }: {
@@ -72,6 +86,7 @@ export async function beginPlannedProjectHostRuntimeTransition({
   operation_id: string;
   target_version?: string;
   previous_version?: string;
+  previous_host_session_id?: string;
   reason?: string;
   now?: Date;
 }): Promise<PlannedProjectHostRuntimeTransition> {
@@ -80,6 +95,7 @@ export async function beginPlannedProjectHostRuntimeTransition({
     component: "project-host",
     ...(target_version ? { target_version } : {}),
     ...(previous_version ? { previous_version } : {}),
+    ...(previous_host_session_id ? { previous_host_session_id } : {}),
     ...(reason ? { reason } : {}),
     started_at: now.toISOString(),
     deadline_at: new Date(
