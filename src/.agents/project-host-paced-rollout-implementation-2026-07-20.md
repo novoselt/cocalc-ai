@@ -79,8 +79,10 @@ cocalc host deploy rollout-fleet \
 ## Availability behavior
 
 Every per-host project-host upgrade records a bounded planned-transition marker
-before installation starts and removes the matching marker in a `finally`
-block. While active:
+before installation starts. Failures, cancellations, rollbacks, and upgrades
+that do not schedule a daemon restart remove the matching marker when the child
+operation finishes. A successful scheduled restart retains the marker until a
+replacement host session reports runtime ready. While active:
 
 - ordinary operational availability remains false, so the host receives no new
   project placement;
@@ -94,6 +96,12 @@ The marker has a ten-minute hard deadline. A transition that runs beyond the
 three-minute UI grace becomes visible as a real outage. A crashed worker cannot
 suppress health indefinitely.
 
+`metadata.runtime_deployments` is hub-owned. Host registration and heartbeat
+upserts atomically preserve the current database subtree instead of accepting a
+stale copy from the restarting daemon. Marker cleanup is operation-id guarded,
+and the recorded prior host session prevents the old daemon's final healthy
+heartbeat from completing a transition intended for its replacement.
+
 ## Failure semantics
 
 - A canary failure prevents every later host from starting.
@@ -105,24 +113,35 @@ suppress health indefinitely.
 - Publishing an artifact alone cannot trigger watchdog convergence.
 - Direct fleet rollout is fresh-auth protected.
 
-## Staging validation
+## Staging validation performed
 
-Before production, validate both negative and positive paths:
+Validation used the two healthy staging hosts `host2` and `host`.
 
-1. Publish/deploy the hub containing the campaign API and worker.
-2. Use at least two healthy staging project hosts.
-3. Queue an invalid, non-promoting canary campaign. Verify the canary fails,
-   no later host changes version, the parent LRO fails, and global desired state
-   is unchanged.
-4. Deploy a real project-host artifact with short staging observation windows.
-5. Verify only the canary changes first, then each bounded wave; the global
-   desired state changes only after all hosts pass.
-6. During the canary daemon replacement, verify an existing project terminal
-   remains usable and no false host-unavailable banner appears.
-7. Verify the host is excluded from new placement while its planned marker is
-   active and that the marker is removed afterward.
-8. Verify artifact/component observations, last-known-good versions, heartbeat,
-   route probe, synthetic probe, and fleet LRO result after completion.
+1. An invalid-artifact canary failed on download. The second host did not start,
+   both hosts retained their versions, and global desired state was unchanged.
+2. The real artifact
+   `20260720T174757Z-7538ce85-project-host-paced-rollout-20260720` first exposed
+   and then covered the distinction between artifact ID and internal build ID.
+3. Campaign `5b9d33e2-cd5f-44b5-b1ff-d854d28ace40` upgraded the canary and only
+   started the second host after canary completion and stabilization. Atomic
+   promotion removed only project-host overrides and retained an unrelated
+   host-specific tools pin.
+4. A controlled downgrade exposed two marker lifecycle races: shallow host
+   metadata replacement and child completion preceding the scheduled daemon
+   restart. Both received regression tests and hub-only staging deployments.
+5. Final campaign `fa509eac-ee6b-4dd5-8533-3d7f149ade7c` upgraded `host2` as
+   canary, observed 20 seconds of continuous health, then processed `host` and
+   observed 10 seconds before atomic promotion.
+6. The canary's replacement session was recorded as planned maintenance from
+   `18:21:55.547Z` through `18:22:01.737Z`. The marker included the prior and
+   replacement session IDs, survived the starting registration, and was absent
+   after the ready heartbeat.
+7. All 80 direct project command probes succeeded from `18:21:38Z` through
+   `18:23:41Z`, spanning the canary restart and second-host wave.
+8. The final project-host software smoke passed representative-host selection,
+   deployment observation, and rootfs RPC checks. Both hosts were running with
+   fresh ready heartbeats, no transition marker, no project-host override, and
+   the target artifact/component version.
 
 Production should use the default 180/60-second observation windows unless
 staging reveals a reason to lengthen them.
