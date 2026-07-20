@@ -58,6 +58,7 @@ import { APP_PROXY_EXPOSURE_HEADER } from "@cocalc/backend/auth/app-proxy";
 import { attachProjectProxy } from "@cocalc/project-proxy/proxy";
 import { hubApi, init as initHubApi } from "@cocalc/lite/hub/api";
 import { authorizeProjectHostHubApiRequest } from "./hub/api-request-authorization";
+import { wireDbApi } from "./hub/db";
 import { listAcpAutomationProjectIds } from "@cocalc/lite/hub/sqlite/acp-automations";
 import {
   getAccountEffectiveLimits,
@@ -138,7 +139,10 @@ import { initProjectTouchService } from "./touch-service";
 import { initProjectStorageInfoService } from "./storage-info-service";
 import { initProjectDocumentActivityService } from "./document-activity-service";
 import { initProjectArchiveInfoService } from "./archive-info-service";
-import { startProjectHostEventLoopStallMonitor } from "./event-loop-stalls";
+import {
+  getProjectHostEventLoopStallStatus,
+  startProjectHostEventLoopStallMonitor,
+} from "./event-loop-stalls";
 import { runnerConfigFromQuota } from "./run-quota";
 import { getProjectHostActivitySnapshot } from "./health-progress";
 import {
@@ -495,6 +499,7 @@ export async function main(
       ready: healthState.ready,
       pid: process.pid,
       activity: getProjectHostActivitySnapshot(),
+      event_loop: getProjectHostEventLoopStallStatus(),
     }),
   );
   const conatRouterUrl = resolveProjectHostConatRouterUrl();
@@ -526,6 +531,7 @@ export async function main(
     client: conatClient,
     authorizeRequest: authorizeProjectHostHubApiRequest,
   });
+  wireDbApi();
   wireSystemApi();
   wireHostsApi();
   wireNotificationsApi();

@@ -1612,8 +1612,8 @@ async function hubCallByName<T>(
 }
 
 function createHubApiForContext(ctx: CommandContext): HubApi {
-  return createTypedHubApiForContext((name, args = []) =>
-    hubCallByName(ctx, name, args),
+  return createTypedHubApiForContext((name, args = [], timeout) =>
+    hubCallByName(ctx, name, args, timeout),
   );
 }
 

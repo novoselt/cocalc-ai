@@ -344,6 +344,7 @@ describe("project-host runtime maintenance policy", () => {
       status: "failed",
       consecutive_failures: 1,
       quarantined: false,
+      incident_started_at: new Date(NOW).toISOString(),
     });
 
     const secondFailure = _test.publicRouteProbeOutcome({
@@ -352,16 +353,17 @@ describe("project-host runtime maintenance policy", () => {
         ...baseClaim,
         claim_id: "claim-2",
         previous_failures: 1,
+        incident_started_at: firstFailure.incident_started_at,
       },
-      checkedAt: new Date(NOW).toISOString(),
+      checkedAt: new Date(NOW + 60_000).toISOString(),
       duration_ms: 100,
       error: new Error("CORS missing"),
-      alerted_at: new Date(NOW).toISOString(),
     });
     expect(secondFailure).toMatchObject({
       status: "failed",
       consecutive_failures: 2,
       quarantined: true,
+      incident_started_at: new Date(NOW).toISOString(),
     });
 
     const firstSuccess = _test.publicRouteProbeOutcome({
@@ -372,6 +374,7 @@ describe("project-host runtime maintenance policy", () => {
         previous_failures: 2,
         was_quarantined: true,
         alerted_at: new Date(NOW).toISOString(),
+        incident_started_at: firstFailure.incident_started_at,
       },
       checkedAt: new Date(NOW).toISOString(),
       duration_ms: 100,
@@ -390,6 +393,7 @@ describe("project-host runtime maintenance policy", () => {
       consecutive_successes: 1,
       quarantined: true,
       alerted_at: new Date(NOW).toISOString(),
+      incident_started_at: new Date(NOW).toISOString(),
     });
 
     const secondSuccess = _test.publicRouteProbeOutcome({
@@ -421,21 +425,51 @@ describe("project-host runtime maintenance policy", () => {
     expect(secondSuccess.alerted_at).toBeUndefined();
   });
 
-  it("alerts once per public-route quarantine incident", () => {
-    const row = degradedCloudHost({
-      public_route_probe: {
-        status: "failed",
-        quarantined: true,
-        alerted_at: new Date(NOW - 5 * 60_000).toISOString(),
+  it("escalates persistent or correlated public-route incidents once", () => {
+    const row = degradedCloudHost();
+    const failure = {
+      row,
+      error: "public route timed out",
+      consecutive_failures: 2,
+      probe: {
+        claim_id: "claim-2",
+        incident_started_at: new Date(NOW - 9 * 60_000).toISOString(),
       },
-    });
-    expect(_test.publicRouteProbeFailureAlertDue(row)).toBe(false);
-    row.metadata.public_route_probe.alerted_at = new Date(
-      NOW - 24 * 60 * 60_000,
+      fleet: {
+        checked_hosts: 8,
+        passed_hosts: 7,
+        failed_hosts: 1,
+        failed_host_ids: [row.id],
+        failure_classes: { timeout: 1 },
+        correlated_failure: false,
+      },
+    };
+    expect(_test.publicRouteFailureEscalationDue(failure, NOW)).toBe(false);
+    failure.probe.incident_started_at = new Date(
+      NOW - 10 * 60_000,
     ).toISOString();
-    expect(_test.publicRouteProbeFailureAlertDue(row)).toBe(false);
-    delete row.metadata.public_route_probe.alerted_at;
-    expect(_test.publicRouteProbeFailureAlertDue(row)).toBe(true);
+    expect(_test.publicRouteFailureEscalationDue(failure, NOW)).toBe(true);
+    failure.probe.alerted_at = new Date(NOW).toISOString();
+    expect(_test.publicRouteFailureEscalationDue(failure, NOW)).toBe(false);
+
+    delete failure.probe.alerted_at;
+    failure.probe.incident_started_at = new Date(NOW).toISOString();
+    failure.fleet.correlated_failure = true;
+    failure.fleet.failed_hosts = 2;
+    expect(_test.publicRouteFailureEscalationDue(failure, NOW)).toBe(true);
+
+    expect(
+      _test.publicRouteEscalationRecovered(
+        {
+          claim_id: "recovery-claim",
+          previous_failures: 1,
+          previous_successes: 0,
+          was_quarantined: false,
+          alerted_at: new Date(NOW).toISOString(),
+        },
+        { status: "passed", quarantined: false },
+      ),
+    ).toBe(true);
   });
 
   it("only repairs quarantined capable hosts outside the cooldown", () => {
@@ -444,6 +478,7 @@ describe("project-host runtime maintenance policy", () => {
       claim_id: "probe-claim",
       quarantined: true,
       consecutive_failures: 2,
+      origin_health: { status: "healthy" },
     };
     const row = degradedCloudHost({
       cloudflared_restart_supported: true,
@@ -460,6 +495,12 @@ describe("project-host runtime maintenance policy", () => {
     });
 
     row.metadata.cloudflared_restart_supported = true;
+    probe.origin_health = { status: "unknown" };
+    expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
+      action: "wait",
+      reason: "project-host origin health is not proven",
+    });
+    probe.origin_health = { status: "healthy" };
     row.metadata.public_route_auto_recovery = {
       status: "restart_completed",
       attempted_at: new Date(NOW - 5 * 60_000).toISOString(),

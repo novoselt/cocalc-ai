@@ -77,7 +77,7 @@ function commandList(bay: BayOpsOverviewBay): string[] {
     `cocalc bay backups ${id}`,
     `cocalc bay drain-preflight ${id}`,
     `cocalc bay backup ${id}`,
-    `cocalc bay restore-test ${id} --remote-only`,
+    `cocalc bay restore-test ${id} --disposable-gcp`,
     `cocalc bay project-ownership-admission ${id} --accepts no --note "maintenance drain"`,
     `cocalc project rehome-drain --source-bay ${id} --dest-bay <dest-bay> --limit 25 --reason maintenance`,
     `cocalc project rehome-drain --source-bay ${id} --dest-bay <dest-bay> --limit 25 --reason maintenance --write --unsafe-rehome`,
@@ -230,6 +230,29 @@ function BackupHealth({ detail }: { detail: BayOpsDetail }) {
         timestamp={backup.maintenance_last_error_at}
       />
       <Typography.Text type="secondary">{readiness.summary}</Typography.Text>
+      {readiness.last_restore_test_evidence && (
+        <Typography.Text type="secondary">
+          Last drill: {readiness.last_restore_test_evidence.execution_mode}
+          {readiness.last_restore_test_evidence.worker_zone
+            ? ` in ${readiness.last_restore_test_evidence.worker_zone}`
+            : ""}
+          {readiness.last_restore_test_evidence.duration_ms != null
+            ? `, ${Math.round(readiness.last_restore_test_evidence.duration_ms / 1000)}s`
+            : ""}
+          {readiness.last_restore_test_evidence.conat_database_count != null
+            ? `, ${readiness.last_restore_test_evidence.conat_database_count} Conat databases checked`
+            : ""}
+          {readiness.last_restore_test_evidence.worker_cleanup
+            ? `, worker ${readiness.last_restore_test_evidence.worker_cleanup}`
+            : ""}
+          {readiness.last_restore_test_evidence.worker_stage
+            ? `, stage ${readiness.last_restore_test_evidence.worker_stage}`
+            : ""}
+          {readiness.last_restore_test_evidence.worker_error
+            ? `: ${readiness.last_restore_test_evidence.worker_error}`
+            : ""}
+        </Typography.Text>
+      )}
     </Space>
   );
 }

@@ -152,6 +152,7 @@ import { createImpersonationGrantLocal } from "@cocalc/server/auth/impersonation
 import { getAccountIdFromRememberMe as getLocalAccountIdFromRememberMe } from "@cocalc/server/auth/get-account";
 import { verifyFreshAuthCredentials } from "@cocalc/server/auth/two-factor";
 import { saveBlobToDatabase } from "@cocalc/server/blobs/save";
+import { readBlobFromDatabase } from "@cocalc/server/blobs/read";
 import { assertAccountTrustedForProductAccess } from "@cocalc/server/accounts/trusted-product-access";
 import {
   activateMembershipClaimIdentityDirect,
@@ -858,6 +859,9 @@ async function startAccountLocalService(): Promise<void> {
         account_id,
       });
     },
+    getBlob: async ({ uuid }) => ({
+      data: await readBlobFromDatabase(uuid),
+    }),
     verifySignInPassword: async ({ email_address, password }) =>
       await verifyLocalSignInPassword({ email_address, password }),
     createCliLoginSession: async (opts) =>
@@ -2518,6 +2522,8 @@ async function startHostControlService(): Promise<void> {
       timeout,
     });
   const impl: InterBayHostControlApi = {
+    probePublicRouteOrigin: async ({ host_id }) =>
+      await (await getHostClient(host_id, 10_000)).probePublicRouteOrigin(),
     restartCloudflared: async ({ host_id, restart }) =>
       await (await getHostClient(host_id, 75_000)).restartCloudflared(restart),
     runSyntheticRuntimeProbe: async ({ host_id }) =>

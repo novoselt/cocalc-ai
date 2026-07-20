@@ -5,6 +5,7 @@ import { Filesystem } from "./filesystem";
 
 jest.mock("./bees", () => ({
   __esModule: true,
+  BEES_ALREADY_RUNNING_EXIT_CODE: 75,
   default: jest.fn(),
   signalBeesProcessGroup: jest.fn(),
 }));
@@ -61,6 +62,38 @@ describe("BEES process supervision", () => {
       external: false,
       pid: 1234,
       restartAttempts: 0,
+      restartPending: false,
+    });
+
+    filesystem.close();
+  });
+
+  it("treats a late wrapper ownership refusal as a handoff", async () => {
+    const refused = childProcess();
+    const replacement = childProcess();
+    Object.assign(replacement, { pid: 5678 });
+    mockedBees
+      .mockResolvedValueOnce({ status: "started", child: refused })
+      .mockResolvedValueOnce({ status: "started", child: replacement });
+
+    const filesystem = new Filesystem({
+      mount: "/mnt/cocalc",
+      rustic: "/tmp/rustic.toml",
+    });
+    await (filesystem as any).startBees("startup");
+    refused.emit("exit", 75, null);
+
+    expect(filesystem.getBeesStatus()).toMatchObject({
+      running: true,
+      external: true,
+      restartPending: true,
+    });
+
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(filesystem.getBeesStatus()).toMatchObject({
+      running: true,
+      external: false,
+      pid: 5678,
       restartPending: false,
     });
 

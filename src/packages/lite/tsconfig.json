@@ -33,6 +33,7 @@
     { "path": "../chat" },
     { "path": "../conat" },
     { "path": "../http-api" },
+    { "path": "../jupyter" },
     { "path": "../project" },
     { "path": "../static" },
     { "path": "../util" }

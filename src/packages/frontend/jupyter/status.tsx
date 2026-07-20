@@ -136,7 +136,6 @@ interface KernelProps {
   expected_cell_runtime?: number;
   style?: CSS;
   is_fullscreen?: boolean;
-  onOpenSingleDoc?: () => void;
   hideHeader?: boolean;
   compact?: boolean;
 }
@@ -147,7 +146,6 @@ export function Kernel({
   style,
   usage,
   is_fullscreen,
-  onOpenSingleDoc,
   hideHeader,
   compact,
 }: KernelProps) {
@@ -968,15 +966,6 @@ export function Kernel({
             {body}
             {renderKernelState()}
           </div>
-          {onOpenSingleDoc != null && (
-            <Button
-              size="small"
-              data-cocalc-test="jupyter-open-singledoc"
-              onClick={onOpenSingleDoc}
-            >
-              Single Doc
-            </Button>
-          )}
         </div>
       )}
       {!hideHeader && !compact && (
@@ -1013,17 +1002,6 @@ export function Kernel({
               </div>
             )}
           </div>
-          {onOpenSingleDoc != null && (
-            <div style={{ marginLeft: "6px", marginTop: "1px" }}>
-              <Button
-                size="small"
-                data-cocalc-test="jupyter-open-singledoc"
-                onClick={onOpenSingleDoc}
-              >
-                Single Doc
-              </Button>
-            </div>
-          )}
         </div>
       )}
       {kernel_undecided ? (

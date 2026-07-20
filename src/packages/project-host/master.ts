@@ -1318,6 +1318,40 @@ export async function startMasterRegistration({
 
   // Control plane for this host (master can ask us to create/start/stop projects).
   const controlImpl: HostControlApi = {
+    async probePublicRouteOrigin() {
+      await awaitReadyForControl("probePublicRouteOrigin", waitUntilReady);
+      const startedAt = Date.now();
+      const localHost = ["0.0.0.0", "::", "[::]"].includes(host)
+        ? "127.0.0.1"
+        : host;
+      const urlHost = localHost.includes(":")
+        ? `[${localHost.replace(/^\[|\]$/g, "")}]`
+        : localHost;
+      const url = `http://${urlHost}:${port}/healthz`;
+      try {
+        const response = await fetch(url, {
+          signal: AbortSignal.timeout(3_000),
+        });
+        const body = (await response.json()) as Record<string, any>;
+        return {
+          ok: response.ok && body.ready === true,
+          checked_at: new Date().toISOString(),
+          duration_ms: Date.now() - startedAt,
+          status: response.status,
+          ready: body.ready === true,
+          pid: Number.isInteger(body.pid) ? body.pid : undefined,
+          activity: body.activity,
+          event_loop: body.event_loop,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          checked_at: new Date().toISOString(),
+          duration_ms: Date.now() - startedAt,
+          error: `${err}`,
+        };
+      }
+    },
     async restartCloudflared({ reason, claim_id }) {
       await awaitReadyForControl("restartCloudflared", waitUntilReady);
       if (reason !== "public-route-probe" || !isValidUUID(claim_id)) {

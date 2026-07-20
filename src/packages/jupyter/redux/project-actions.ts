@@ -18,9 +18,24 @@ import { JupyterActions as JupyterActions0 } from "@cocalc/jupyter/redux/actions
 import { kernel as createJupyterKernel } from "@cocalc/jupyter/kernel";
 import { getLogger } from "@cocalc/backend/logger";
 import { uuid } from "@cocalc/util/misc";
+import callHub from "@cocalc/conat/hub/call-hub";
+import {
+  embedCoCalcBlobImages,
+  externalizeJupyterAttachments,
+} from "@cocalc/jupyter/ipynb/blob-attachments";
 import handleNbconvertChange from "./handle-nbconvert-change";
 
 const logger = getLogger("jupyter:project-actions");
+
+function isFilesystemJupyterUnsupported(err: unknown): boolean {
+  const code = `${(err as any)?.code ?? ""}`.toUpperCase();
+  const message = `${err instanceof Error ? err.message : err}`.toLowerCase();
+  return (
+    code === "ENOSYS" ||
+    message.includes("unknown service method") ||
+    message.includes("not implemented")
+  );
+}
 
 export class JupyterActions extends JupyterActions0 {
   protected init2(): void {
@@ -29,12 +44,96 @@ export class JupyterActions extends JupyterActions0 {
 
   save_ipynb_file = async (_opts?) => {
     const ipynb = await this.toIpynb();
+    if (ipynb == null) {
+      throw Error("notebook is not loaded");
+    }
+    const saveIpynb = this.syncdb.fs.jupyterSaveIpynb;
+    if (typeof saveIpynb === "function") {
+      try {
+        const result = await saveIpynb(this.path, ipynb);
+        if (result.converted) {
+          await this.setToIpynb(result.ipynb);
+        }
+        return;
+      } catch (err) {
+        if (!isFilesystemJupyterUnsupported(err)) {
+          throw err;
+        }
+      }
+    }
+    let previousIpynb: any;
+    try {
+      const raw = await this.syncdb.fs.readFile(this.path);
+      previousIpynb = JSON.parse(
+        Buffer.isBuffer(raw) ? raw.toString("utf8") : `${raw}`,
+      );
+    } catch {
+      // The previous file is only an attachment-byte cache. A missing,
+      // unreadable, or malformed file does not prevent a complete new save.
+    }
+    const portableIpynb = await embedCoCalcBlobImages({
+      ipynb,
+      previousIpynb,
+      loadBlob: async (blobUuid) => await this.loadGlobalBlob(blobUuid),
+    });
     await this.syncdb.fs.writeFile(
       this.path,
-      JSON.stringify(ipynb, undefined, 2),
+      JSON.stringify(portableIpynb, undefined, 2),
       true,
     );
   };
+
+  protected override async prepareIpynbForSyncdoc(ipynb: any): Promise<any> {
+    const importIpynb = this.syncdb.fs.jupyterImportIpynb;
+    if (typeof importIpynb === "function") {
+      try {
+        return (await importIpynb(ipynb)).ipynb;
+      } catch (err) {
+        if (!isFilesystemJupyterUnsupported(err)) {
+          throw err;
+        }
+      }
+    }
+    return await externalizeJupyterAttachments({
+      ipynb,
+      loadBlob: async (blobUuid) => await this.loadGlobalBlob(blobUuid),
+      saveBlob: async ({ bytes, content_id, filename }) => {
+        const { uuid: savedUuid } = await callHub({
+          client: this.requireConatClient("saveJupyterAttachment"),
+          project_id: this.project_id,
+          name: "db.saveBlob",
+          args: [
+            {
+              project_id: this.project_id,
+              uuid: content_id,
+              blob: bytes.toString("base64"),
+            },
+          ],
+          timeout: 60_000,
+        });
+        return {
+          uuid: savedUuid,
+          url: `/blobs/${encodeURIComponent(filename)}?uuid=${savedUuid}`,
+        };
+      },
+    });
+  }
+
+  private async loadGlobalBlob(
+    blobUuid: string,
+  ): Promise<{ bytes: Buffer } | undefined> {
+    const result = await callHub({
+      client: this.requireConatClient("loadJupyterAttachment"),
+      project_id: this.project_id,
+      name: "db.getBlob",
+      args: [{ project_id: this.project_id, uuid: blobUuid }],
+      timeout: 60_000,
+    });
+    if (result?.blob == null) {
+      return;
+    }
+    return { bytes: Buffer.from(result.blob, "base64") };
+  }
 
   ensureKernelIsReady = () => {
     const kernel = this.store.get("kernel");

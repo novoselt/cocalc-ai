@@ -5,6 +5,7 @@ export type BayCommandDeps = {
 };
 
 const BAY_BACKUP_TIMEOUT_MS = 10 * 60 * 1000;
+const BAY_RESTORE_TEST_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
 export function registerBayCommand(
   program: Command,
@@ -143,9 +144,7 @@ export function registerBayCommand(
 
   bay
     .command("restore-test [bay_id]")
-    .description(
-      "restore the latest bay backup into a fenced workspace and verify PITR recovery",
-    )
+    .description("restore and validate the latest bay backup")
     .option(
       "--backup-set-id <backup_set_id>",
       "test a specific backup set instead of the latest one",
@@ -160,6 +159,11 @@ export function registerBayCommand(
       "ignore the local backup cache and restore-test only from rustic/R2",
       false,
     )
+    .option(
+      "--disposable-gcp",
+      "run the R2-only restore test on an isolated, auto-deleted GCP VM",
+      false,
+    )
     .action(
       async (
         bay_id: string | undefined,
@@ -168,6 +172,7 @@ export function registerBayCommand(
           targetDir?: string;
           keep?: boolean;
           remoteOnly?: boolean;
+          disposableGcp?: boolean;
         },
         command: Command,
       ) => {
@@ -178,6 +183,8 @@ export function registerBayCommand(
             target_dir: opts.targetDir?.trim() || undefined,
             keep: opts.keep === true,
             remote_only: opts.remoteOnly === true,
+            disposable_gcp: opts.disposableGcp === true,
+            timeout: BAY_RESTORE_TEST_TIMEOUT_MS,
           });
         });
       },

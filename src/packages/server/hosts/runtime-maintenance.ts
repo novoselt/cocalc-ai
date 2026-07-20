@@ -6,10 +6,7 @@
 import { randomUUID } from "node:crypto";
 
 import getLogger from "@cocalc/backend/logger";
-import {
-  createHostControlClient,
-  type CloudflaredDiagnosticSnapshot,
-} from "@cocalc/conat/project-host/api";
+import { createHostControlClient } from "@cocalc/conat/project-host/api";
 import getPool from "@cocalc/database/pool";
 import { getSitePublicOrigin } from "@cocalc/server/bay-public-origin";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
@@ -90,6 +87,10 @@ const PUBLIC_ROUTE_PROBE_WEBSOCKET_ATTEMPTS = Math.max(
     ) || 8,
   ),
 );
+const PUBLIC_ROUTE_ORIGIN_PROBE_TIMEOUT_MS = Math.max(
+  2_000,
+  Number(process.env.COCALC_HOST_PUBLIC_ROUTE_ORIGIN_PROBE_TIMEOUT_MS ?? 5_000),
+);
 const PUBLIC_ROUTE_PROBE_CONCURRENCY = Math.max(
   1,
   Math.min(
@@ -114,6 +115,12 @@ const PUBLIC_ROUTE_PROBE_SUCCESSES_TO_RECOVER = Math.max(
       process.env.COCALC_HOST_PUBLIC_ROUTE_PROBE_SUCCESSES_TO_RECOVER ?? 2,
     ),
   ) || 2,
+);
+const PUBLIC_ROUTE_ALERT_ESCALATION_MS = Math.max(
+  PUBLIC_ROUTE_PROBE_FAILURE_RETRY_MS,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_ALERT_ESCALATION_MS ?? 10 * 60_000,
+  ),
 );
 const PUBLIC_ROUTE_AUTO_REPAIR_HOST_COOLDOWN_MS = Math.max(
   5 * 60_000,
@@ -213,6 +220,7 @@ type PublicRouteProbeClaim = {
   previous_successes: number;
   was_quarantined: boolean;
   alerted_at?: string;
+  incident_started_at?: string;
 };
 
 type PublicRouteFailure = {
@@ -221,6 +229,15 @@ type PublicRouteFailure = {
   consecutive_failures: number;
   probe: Record<string, any>;
   fleet?: PublicRouteFleetContext;
+  origin_health?: PublicRouteOriginAssessment;
+};
+
+type PublicRouteOriginAssessment = {
+  status: "healthy" | "unhealthy" | "unknown";
+  checked_at: string;
+  duration_ms: number;
+  diagnostic?: Record<string, any>;
+  error?: string;
 };
 
 type PublicRouteFleetContext = {
@@ -398,10 +415,6 @@ function publicRouteProbeDue(row: RuntimeHostRow, nowMs = Date.now()): boolean {
   return nowMs - checkedAt >= PUBLIC_ROUTE_PROBE_SUCCESS_INTERVAL_MS;
 }
 
-function publicRouteProbeFailureAlertDue(row: RuntimeHostRow): boolean {
-  return timestampMs(row.metadata?.public_route_probe?.alerted_at) == null;
-}
-
 function publicRouteProbeOutcome({
   row,
   claim,
@@ -429,6 +442,11 @@ function publicRouteProbeOutcome({
       consecutiveFailures >= PUBLIC_ROUTE_PROBE_FAILURES_TO_QUARANTINE
     : claim.was_quarantined &&
       consecutiveSuccesses < PUBLIC_ROUTE_PROBE_SUCCESSES_TO_RECOVER;
+  const incidentStartedAt = failed
+    ? (claim.incident_started_at ?? checkedAt)
+    : quarantined
+      ? claim.incident_started_at
+      : undefined;
   return {
     status: failed ? "failed" : quarantined ? "recovering" : "passed",
     claim_id: claim.claim_id,
@@ -441,12 +459,37 @@ function publicRouteProbeOutcome({
     quarantined,
     error: failed ? errorText(error) : undefined,
     result,
+    incident_started_at: incidentStartedAt,
     alerted_at: failed
       ? (alerted_at ?? claim.alerted_at)
       : quarantined
         ? claim.alerted_at
         : undefined,
   };
+}
+
+function publicRouteFailureEscalationDue(
+  failure: PublicRouteFailure,
+  nowMs = Date.now(),
+): boolean {
+  if (timestampMs(failure.probe.alerted_at) != null) return false;
+  if (failure.fleet?.correlated_failure) return true;
+  const incidentStartedAt = timestampMs(failure.probe.incident_started_at);
+  return (
+    incidentStartedAt != null &&
+    nowMs - incidentStartedAt >= PUBLIC_ROUTE_ALERT_ESCALATION_MS
+  );
+}
+
+function publicRouteEscalationRecovered(
+  claim: PublicRouteProbeClaim,
+  probe: Record<string, any>,
+): boolean {
+  return (
+    claim.alerted_at != null &&
+    probe.status === "passed" &&
+    probe.quarantined !== true
+  );
 }
 
 function publicRouteAutoRepairDecision(
@@ -471,6 +514,12 @@ function publicRouteAutoRepairDecision(
     PUBLIC_ROUTE_PROBE_FAILURES_TO_QUARANTINE
   ) {
     return { action: "wait", reason: "failure threshold is not met" };
+  }
+  if (probe.origin_health?.status !== "healthy") {
+    return {
+      action: "wait",
+      reason: "project-host origin health is not proven",
+    };
   }
   const recovery = row.metadata?.public_route_auto_recovery ?? {};
   const attemptedAt = timestampMs(recovery.attempted_at);
@@ -895,6 +944,8 @@ async function claimPublicRouteProbe(
     previous_successes: Number(previous.consecutive_successes) || 0,
     was_quarantined: previous.quarantined === true,
     alerted_at: `${previous.alerted_at ?? ""}`.trim() || undefined,
+    incident_started_at:
+      `${previous.incident_started_at ?? ""}`.trim() || undefined,
   };
   const probe = {
     status: "running",
@@ -906,6 +957,7 @@ async function claimPublicRouteProbe(
     consecutive_successes: claim.previous_successes,
     quarantined: claim.was_quarantined,
     alerted_at: claim.alerted_at,
+    incident_started_at: claim.incident_started_at,
   };
   const { rowCount } = await pool().query(
     `
@@ -993,9 +1045,8 @@ async function executePublicRouteProbe({
 }): Promise<{
   passed: boolean;
   quarantined: boolean;
-  recovered: boolean;
+  recovered_alerted: boolean;
   failure?: PublicRouteFailure;
-  alert?: PublicRouteFailure;
 }> {
   const startedAt = Date.now();
   try {
@@ -1021,21 +1072,15 @@ async function executePublicRouteProbe({
     return {
       passed: true,
       quarantined: probe.quarantined === true,
-      recovered: claim.was_quarantined && probe.quarantined !== true,
+      recovered_alerted: publicRouteEscalationRecovered(claim, probe),
     };
   } catch (err) {
-    const nextFailures = claim.previous_failures + 1;
-    const willQuarantine =
-      claim.was_quarantined ||
-      nextFailures >= PUBLIC_ROUTE_PROBE_FAILURES_TO_QUARANTINE;
-    const alertDue = willQuarantine && publicRouteProbeFailureAlertDue(row);
     const probe = await finishPublicRouteProbe({
       row,
       claim,
       startedAt,
       result: projectHostPublicRouteProbeDiagnostic(err),
       error: err,
-      alerted_at: alertDue ? new Date().toISOString() : undefined,
     });
     logger.warn("project-host public route probe failed", {
       host_id: row.id,
@@ -1054,9 +1099,8 @@ async function executePublicRouteProbe({
     return {
       passed: false,
       quarantined: probe.quarantined === true,
-      recovered: false,
+      recovered_alerted: false,
       failure,
-      alert: alertDue ? failure : undefined,
     };
   }
 }
@@ -1124,6 +1168,53 @@ async function attachPublicRouteFleetContext({
   );
 }
 
+async function assessPublicRouteOrigin(
+  failure: PublicRouteFailure,
+): Promise<void> {
+  const startedAt = Date.now();
+  let assessment: PublicRouteOriginAssessment;
+  try {
+    const client = createHostControlClient({
+      host_id: failure.row.id,
+      client: await getExplicitHostControlClient({
+        host_id: failure.row.id,
+        fresh: true,
+      }),
+      timeout: PUBLIC_ROUTE_ORIGIN_PROBE_TIMEOUT_MS,
+    });
+    const diagnostic = await client.probePublicRouteOrigin();
+    assessment = {
+      status: diagnostic.ok ? "healthy" : "unhealthy",
+      checked_at: diagnostic.checked_at,
+      duration_ms: diagnostic.duration_ms,
+      diagnostic,
+    };
+  } catch (err) {
+    assessment = {
+      status: "unknown",
+      checked_at: new Date().toISOString(),
+      duration_ms: Date.now() - startedAt,
+      error: errorText(err),
+    };
+  }
+  failure.origin_health = assessment;
+  failure.probe.origin_health = assessment;
+  await pool().query(
+    `
+      UPDATE project_hosts
+      SET metadata=jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{public_route_probe,origin_health}',
+        $3::jsonb,
+        true
+      ), updated=NOW()
+      WHERE id=$1
+        AND metadata -> 'public_route_probe' ->> 'claim_id'=$2
+    `,
+    [failure.row.id, failure.probe.claim_id, JSON.stringify(assessment)],
+  );
+}
+
 async function alertPublicRouteFailures({
   origin,
   failures,
@@ -1138,18 +1229,19 @@ async function alertPublicRouteFailures({
   await adminAlert({
     subject: `[${sites}] ${failures.length} project-host public route${failures.length === 1 ? "" : "s"} failed`,
     body: [
-      `${failures.length} public project-host browser route${failures.length === 1 ? " has" : "s have"} failed repeated probes.`,
+      `${failures.length} public project-host browser route${failures.length === 1 ? " requires" : "s require"} operator attention after automatic monitoring and recovery.`,
       `site=${sites}`,
       `origin=${origin}`,
-      "The hosts still have fresh backend heartbeats, but are quarantined from placement because browser CORS/session traffic may not reach them.",
-      "This signal never reboots a VM or project runtime. A supported host may receive one rate-limited cloudflared restart.",
+      "Affected hosts that crossed the repeated-failure threshold are quarantined from placement because browser CORS/session traffic may not reach them.",
+      "Cloudflared is restarted only when an independent host-local origin probe succeeds; an unhealthy or unknown origin is preserved for investigation instead.",
       `fleet=${JSON.stringify(failures[0]?.fleet ?? {})}`,
       "",
-      ...failures.map(({ row, error, consecutive_failures }) =>
+      ...failures.map(({ row, error, consecutive_failures, origin_health }) =>
         [
           `${hostName(row)} host_id=${row.id}`,
           `failures=${consecutive_failures}`,
           `error=${error}`,
+          `origin_health=${JSON.stringify(origin_health ?? { status: "unknown" })}`,
           row.public_url ? `url=${row.public_url}` : undefined,
         ]
           .filter(Boolean)
@@ -1161,6 +1253,30 @@ async function alertPublicRouteFailures({
   });
 }
 
+async function markPublicRouteFailureEscalated(
+  failure: PublicRouteFailure,
+  alertedAt = new Date().toISOString(),
+): Promise<boolean> {
+  const { rowCount } = await pool().query(
+    `
+      UPDATE project_hosts
+      SET metadata=jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{public_route_probe,alerted_at}',
+        to_jsonb($3::text),
+        true
+      ), updated=NOW()
+      WHERE id=$1
+        AND metadata -> 'public_route_probe' ->> 'claim_id'=$2
+        AND metadata -> 'public_route_probe' ->> 'alerted_at' IS NULL
+    `,
+    [failure.row.id, failure.probe.claim_id, alertedAt],
+  );
+  if (!rowCount) return false;
+  failure.probe.alerted_at = alertedAt;
+  return true;
+}
+
 async function alertPublicRouteRecoveries(
   rows: RuntimeHostRow[],
 ): Promise<void> {
@@ -1169,7 +1285,7 @@ async function alertPublicRouteRecoveries(
   await adminAlert({
     subject: `[${sites}] ${rows.length} project-host public route${rows.length === 1 ? "" : "s"} recovered`,
     body: [
-      `${rows.length} public project-host browser route${rows.length === 1 ? " has" : "s have"} passed two consecutive recovery probes and returned to placement.`,
+      `${rows.length} previously escalated public project-host browser route${rows.length === 1 ? " is" : "s are"} healthy again. Quarantined hosts passed the required recovery probes and returned to placement.`,
       ...rows.map(
         (row) => `${hostName(row)} host_id=${row.id} url=${row.public_url}`,
       ),
@@ -1194,6 +1310,7 @@ async function claimPublicRouteAutoRepair(
     probe_claim_id: failure.probe.claim_id,
     consecutive_failures: failure.consecutive_failures,
     trigger_error: failure.error,
+    origin_health: failure.origin_health,
     fleet: failure.fleet,
   };
   const { rowCount } = await pool().query(
@@ -1219,6 +1336,8 @@ async function claimPublicRouteAutoRepair(
         AND target.metadata ->> 'cloudflared_restart_supported'='true'
         AND target.metadata -> 'public_route_probe' ->> 'claim_id'=$4
         AND target.metadata -> 'public_route_probe' ->> 'quarantined'='true'
+        AND target.metadata -> 'public_route_probe' -> 'origin_health'
+          ->> 'status'='healthy'
         AND COALESCE(
           (target.metadata -> 'public_route_probe' ->> 'consecutive_failures')::integer,
           0
@@ -1347,6 +1466,7 @@ async function executePublicRouteAutoRepair({
         probe_claim_id: failure.probe.claim_id,
         consecutive_failures: failure.consecutive_failures,
         trigger_error: failure.error,
+        origin_health: failure.origin_health,
         fleet: failure.fleet,
         error: errorText(err),
       },
@@ -1363,23 +1483,37 @@ async function executePublicRouteAutoRepair({
       claim_id,
       err: errorText(err),
     });
-    await adminAlert({
-      subject: `Automatic project-host tunnel restart failed: ${hostName(failure.row)}`,
-      body: [
-        `CoCalc could not restart cloudflared on ${hostName(failure.row)} after repeated browser route failures.`,
-        `host_id=${failure.row.id}`,
-        `claim_id=${claim_id}`,
-        `error=${errorText(err)}`,
-        "The host remains quarantined and requires operator investigation.",
-      ].join("\n"),
-      dedupMinutes: 15,
-    }).catch((alertErr) => {
-      logger.error("unable to alert failed cloudflared restart", {
-        host_id: failure.row.id,
-        claim_id,
-        err: errorText(alertErr),
+    const newlyEscalated = await markPublicRouteFailureEscalated(failure).catch(
+      (metadataErr) => {
+        logger.error("unable to mark failed tunnel repair as escalated", {
+          host_id: failure.row.id,
+          claim_id,
+          err: errorText(metadataErr),
+        });
+        // The repair failure itself must still page if recording escalation
+        // metadata fails; otherwise a database hiccup could hide the outage.
+        return true;
+      },
+    );
+    if (newlyEscalated) {
+      await adminAlert({
+        subject: `Automatic project-host tunnel restart failed: ${hostName(failure.row)}`,
+        body: [
+          `CoCalc could not restart cloudflared on ${hostName(failure.row)} after repeated browser route failures.`,
+          `host_id=${failure.row.id}`,
+          `claim_id=${claim_id}`,
+          `error=${errorText(err)}`,
+          "The host remains quarantined and requires operator investigation.",
+        ].join("\n"),
+        dedupMinutes: 15,
+      }).catch((alertErr) => {
+        logger.error("unable to alert failed cloudflared restart", {
+          host_id: failure.row.id,
+          claim_id,
+          err: errorText(alertErr),
+        });
       });
-    });
+    }
     return false;
   }
 
@@ -1394,6 +1528,7 @@ async function executePublicRouteAutoRepair({
       probe_claim_id: failure.probe.claim_id,
       consecutive_failures: failure.consecutive_failures,
       trigger_error: failure.error,
+      origin_health: failure.origin_health,
       fleet: failure.fleet,
       result,
     },
@@ -1404,54 +1539,14 @@ async function executePublicRouteAutoRepair({
       err: errorText(err),
     });
   });
-  logger.error("automatically restarted cloudflared for failed public route", {
+  logger.warn("automatically restarted cloudflared for failed public route", {
     host_id: failure.row.id,
     host_name: hostName(failure.row),
     claim_id,
     consecutive_failures: failure.consecutive_failures,
     duration_ms: result.duration_ms,
   });
-  await adminAlert({
-    subject: `Automatically restarted project-host tunnel: ${hostName(failure.row)}`,
-    body: [
-      `CoCalc restarted cloudflared on ${hostName(failure.row)} after repeated browser WebSocket route failures.`,
-      `host_id=${failure.row.id}`,
-      `claim_id=${claim_id}`,
-      `consecutive_failures=${failure.consecutive_failures}`,
-      `restart_duration_ms=${result.duration_ms}`,
-      `trigger_error=${failure.error}`,
-      `fleet=${JSON.stringify(failure.fleet ?? {})}`,
-      `before=${JSON.stringify(cloudflaredAlertDiagnostic(result.before))}`,
-      `after=${JSON.stringify(cloudflaredAlertDiagnostic(result.after))}`,
-      "The host remains quarantined until two subsequent public route probes pass.",
-    ].join("\n"),
-    dedupMinutes: 15,
-  }).catch((err) => {
-    logger.error("unable to alert completed cloudflared restart", {
-      host_id: failure.row.id,
-      claim_id,
-      err: errorText(err),
-    });
-  });
   return true;
-}
-
-function cloudflaredAlertDiagnostic(
-  snapshot: CloudflaredDiagnosticSnapshot,
-): Record<string, any> {
-  return {
-    captured_at: snapshot.captured_at,
-    expected_version: snapshot.expected_version,
-    version: snapshot.version,
-    version_drift: snapshot.version_drift,
-    process: snapshot.process,
-    metrics_url: snapshot.metrics_url,
-    ready: snapshot.ready,
-    tunnel: snapshot.tunnel,
-    metric_lines: snapshot.metrics?.length ?? 0,
-    journal_tail: snapshot.journal?.split("\n").slice(-12).join("\n"),
-    errors: snapshot.errors,
-  };
 }
 
 async function runPublicRouteAutoRepair(
@@ -1549,21 +1644,30 @@ export async function runProjectHostPublicRouteProbes(): Promise<{
   const allFailures = results
     .map(({ failure }) => failure)
     .filter((failure): failure is PublicRouteFailure => failure != null);
+  await Promise.all(allFailures.map(assessPublicRouteOrigin));
   const fleet = publicRouteFleetContext({
     checked_hosts: results.length,
     failures: allFailures,
   });
   await attachPublicRouteFleetContext({ failures: allFailures, fleet });
-  const failures = results
-    .map(({ alert }) => alert)
-    .filter((alert): alert is NonNullable<typeof alert> => alert != null);
+  const failures = (
+    await Promise.all(
+      allFailures
+        .filter((failure) => publicRouteFailureEscalationDue(failure))
+        .map(async (failure) =>
+          (await markPublicRouteFailureEscalated(failure))
+            ? failure
+            : undefined,
+        ),
+    )
+  ).filter((failure): failure is PublicRouteFailure => failure != null);
+  const repairs = await runPublicRouteAutoRepair(allFailures);
   await alertPublicRouteFailures({ origin, failures });
   await alertPublicRouteRecoveries(
     results.flatMap((result, index) =>
-      result.recovered ? [claimed[index].row] : [],
+      result.recovered_alerted ? [claimed[index].row] : [],
     ),
   );
-  const repairs = await runPublicRouteAutoRepair(allFailures);
   const passed = results.filter(({ passed }) => passed).length;
   return {
     attempted: results.length,
@@ -1823,7 +1927,8 @@ export const _test = {
   recentRebootAttempts,
   recoveredAutoRebootState,
   publicRouteProbeDue,
-  publicRouteProbeFailureAlertDue,
+  publicRouteFailureEscalationDue,
+  publicRouteEscalationRecovered,
   publicRouteProbeOutcome,
   publicRouteFailureClass,
   publicRouteFleetContext,

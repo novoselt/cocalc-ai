@@ -201,8 +201,69 @@ describe("classifyHostAvailabilitySnapshot", () => {
       },
     ]);
     expect(body).toContain("montreal-1");
-    expect(body).toContain("stale>=5m");
+    expect(body).toContain("stale>=10m");
     expect(body).not.toContain("stale>=6m");
+  });
+
+  it("defers stale-heartbeat escalation while remediation can still work", () => {
+    const now = Date.UTC(2026, 6, 20, 12, 0, 0);
+    const base = {
+      id: "12869982-da11-495e-9914-ee784ee8d5a8",
+      status: "running",
+      stale_ms: 6 * 60_000,
+      metadata: {},
+    };
+    expect(_test.runningStaleEscalationSuppressionReason(base)).toBe(
+      "automatic remediation grace period",
+    );
+    expect(
+      _test.runningStaleEscalationSuppressionReason(
+        { ...base, stale_ms: 12 * 60_000 },
+        "host-reconcile-software",
+      ),
+    ).toBe("active host-reconcile-software operation");
+    expect(
+      _test.runningStaleEscalationSuppressionReason(
+        {
+          ...base,
+          stale_ms: 12 * 60_000,
+          metadata: {
+            spot_recovery_state: { phase: "returning_to_spot" },
+          },
+        },
+        undefined,
+        now,
+      ),
+    ).toBe("active spot recovery phase returning_to_spot");
+    expect(
+      _test.runningStaleEscalationSuppressionReason(
+        {
+          ...base,
+          stale_ms: 12 * 60_000,
+          metadata: {
+            bootstrap: {
+              status: "pending",
+              pending_at: new Date(now - 2 * 60_000).toISOString(),
+            },
+          },
+        },
+        undefined,
+        now,
+      ),
+    ).toBe("active host bootstrap");
+  });
+
+  it("escalates a stale host after lifecycle suppression expires", () => {
+    expect(
+      _test.runningStaleEscalationSuppressionReason({
+        id: "12869982-da11-495e-9914-ee784ee8d5a8",
+        status: "running",
+        stale_ms: 31 * 60_000,
+        metadata: {
+          spot_recovery_state: { phase: "returning_to_spot" },
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("identifies host pressure states that need admin attention", () => {

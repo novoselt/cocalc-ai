@@ -3,7 +3,6 @@ Automate running BEES on the btrfs pool.
 */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { delay } from "awaiting";
 import getLogger from "@cocalc/backend/logger";
 import { sudo, STORAGE_WRAPPER } from "./util";
 import { exists } from "@cocalc/backend/misc/async-utils-node";
@@ -11,7 +10,9 @@ import { join } from "node:path";
 import { availableParallelism } from "node:os";
 
 const logger = getLogger("file-server:btrfs:bees");
-const BEES_ALREADY_RUNNING_EXIT_CODE = 75;
+export const BEES_ALREADY_RUNNING_EXIT_CODE = 75;
+const BEES_STARTING_MARKER = "BEES_STARTING";
+const BEES_STARTUP_HANDSHAKE_TIMEOUT_MS = 10_000;
 
 interface Options {
   // Explicit worker ceiling. Resource contention is handled by the dedicated
@@ -71,33 +72,67 @@ export default async function bees(
   logger.debug(`Running 'sudo -n ${STORAGE_WRAPPER} ${args.join(" ")}'`);
   const child = spawn("sudo", ["-n", STORAGE_WRAPPER, ...args], {
     detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "ignore", "pipe"],
   });
   child.unref();
-  let error: string = "";
-  child.once("error", (err) => {
-    error = `${err}`;
-  });
   let stderr = "";
-  const f = (chunk: Buffer) => {
-    stderr += chunk.toString();
-  };
-  child.stderr.on("data", f);
-  await delay(1000);
-  if (error) {
-    error += stderr;
-  } else if (child.exitCode === BEES_ALREADY_RUNNING_EXIT_CODE) {
-    child.stderr.removeListener("data", f);
+  const startup = await new Promise<
+    | { status: "starting" | "timeout" }
+    | { status: "exit"; code: number | null; signal: NodeJS.Signals | null }
+    | { status: "error"; error: Error }
+  >((resolve) => {
+    let settled = false;
+    const finish = (result: Parameters<typeof resolve>[0]) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("error", onError);
+      child.off("exit", onExit);
+      child.stderr.off("data", onData);
+      resolve(result);
+    };
+    const onError = (error: Error) => finish({ status: "error", error });
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+      finish({ status: "exit", code, signal });
+    const onData = (chunk: Buffer) => {
+      stderr += chunk.toString();
+      if (stderr.includes(BEES_STARTING_MARKER)) {
+        finish({ status: "starting" });
+      }
+    };
+    const timer = setTimeout(
+      () => finish({ status: "timeout" }),
+      BEES_STARTUP_HANDSHAKE_TIMEOUT_MS,
+    );
+    timer.unref();
+    child.once("error", onError);
+    child.once("exit", onExit);
+    child.stderr.on("data", onData);
+  });
+  if (
+    startup.status === "exit" &&
+    startup.code === BEES_ALREADY_RUNNING_EXIT_CODE
+  ) {
     return { status: "already-running", detail: stderr.trim() };
-  } else if (child.exitCode != null) {
-    error = `failed to start bees: exited with code ${child.exitCode}: ${stderr}`;
   }
-  if (error) {
+  if (startup.status === "error" || startup.status === "exit") {
+    const error =
+      startup.status === "error"
+        ? `${startup.error}: ${stderr}`
+        : `failed to start bees: exited with code ${startup.code}, signal ${startup.signal ?? "none"}: ${stderr}`;
     logger.debug("ERROR: ", error);
     signalBeesProcessGroup(child, "SIGKILL");
     throw new Error(error);
   }
-  child.stderr.removeListener("data", f);
+  if (startup.status === "timeout") {
+    logger.warn("BEES wrapper did not emit startup handshake", {
+      mountpoint,
+      timeout_ms: BEES_STARTUP_HANDSHAKE_TIMEOUT_MS,
+    });
+  }
+  // The wrapper execs verbose BEES with the same stderr descriptor. Keep
+  // draining it after the startup handshake so a full pipe cannot stall BEES.
+  child.stderr.resume();
   children.push(child);
   return { status: "started", child };
 }

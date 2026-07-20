@@ -29,6 +29,8 @@ export async function getRoutedHostControlClient({
       timeout_ms: timeout,
     });
     return {
+      probePublicRouteOrigin: async () =>
+        await bridge.probePublicRouteOrigin({ host_id }),
       restartCloudflared: async (restart) =>
         await bridge.restartCloudflared({ host_id, restart }),
       runSyntheticRuntimeProbe: async () =>

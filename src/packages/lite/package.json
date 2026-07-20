@@ -41,6 +41,7 @@
     "@cocalc/chat": "workspace:*",
     "@cocalc/conat": "workspace:*",
     "@cocalc/http-api": "workspace:*",
+    "@cocalc/jupyter": "workspace:*",
     "@cocalc/lite": "workspace:*",
     "@cocalc/project": "workspace:*",
     "@cocalc/static": "workspace:*",

@@ -446,6 +446,8 @@ describe("project-host daemon stop", () => {
     });
     expect((spawnSpy.mock.calls[1]?.[2] as any)?.env).toMatchObject({
       COCALC_PROJECT_HOST_CONAT_PERSIST_DAEMON: "1",
+      COCALC_PERSIST_MAINTENANCE_ENABLED: "1",
+      COCALC_PERSIST_MAINTENANCE_DRY_RUN: "1",
       PORT: "9202",
     });
     expect(killSpy).toHaveBeenCalledWith(7373, 0);
