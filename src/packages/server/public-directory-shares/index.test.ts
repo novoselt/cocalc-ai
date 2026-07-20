@@ -9,6 +9,7 @@ import {
   ensurePublicDirectorySharesSchema,
   getTemporaryViewerReadPolicy,
   grantTemporaryViewerAccess,
+  listDirectory,
   normalizePublicDirectorySharePath,
   normalizePublicDirectoryShareSlug,
   publicDirectoryShareReadPolicyForPath,
@@ -25,9 +26,12 @@ import {
 import { viewerReadPolicyAllowsPath } from "@cocalc/util/project-access";
 
 let mockGetProjectFsClient: jest.Mock;
+let mockGetProjectShareFsClient: jest.Mock;
 
 jest.mock("@cocalc/server/conat/file-server-client", () => ({
   getProjectFsClient: (...args: any[]) => mockGetProjectFsClient(...args),
+  getProjectShareFsClient: (...args: any[]) =>
+    mockGetProjectShareFsClient(...args),
 }));
 
 jest.mock("@cocalc/server/conat/api/util", () => ({
@@ -185,6 +189,9 @@ describe("public directory temporary viewer grants", () => {
 
   beforeEach(async () => {
     mockGetProjectFsClient = jest.fn(async () => ({
+      getListing: jest.fn(async () => ({ files: {}, truncated: false })),
+    }));
+    mockGetProjectShareFsClient = jest.fn(async () => ({
       getListing: jest.fn(async () => ({ files: {}, truncated: false })),
     }));
     await getPool().query(`
@@ -416,6 +423,35 @@ describe("public directory temporary viewer grants", () => {
       project_id: PROJECT_ID,
     });
     expect(policy.read_policy).toEqual(grant.read_policy);
+  });
+
+  it("lists directories through the exact share-scoped filesystem", async () => {
+    await insertShare();
+    const getListing = jest.fn(async () => ({
+      files: {
+        "notes.md": { type: "f", size: 12, mtime: 123 },
+      },
+      truncated: false,
+    }));
+    mockGetProjectShareFsClient.mockResolvedValue({ getListing });
+
+    await expect(
+      listDirectory({
+        account_id: ACCOUNT_ID,
+        slug: "test2",
+        path: "Fall2025",
+      }),
+    ).resolves.toMatchObject({
+      path: "Fall2025",
+      entries: [{ name: "notes.md", path: "Fall2025/notes.md" }],
+    });
+    expect(mockGetProjectShareFsClient).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      share_id: SHARE_ID,
+    });
+    expect(getListing).toHaveBeenCalledWith("share/Fall2025");
+    expect(mockGetProjectFsClient).not.toHaveBeenCalled();
   });
 
   it("revokes temporary viewer grants when a share is disabled", async () => {

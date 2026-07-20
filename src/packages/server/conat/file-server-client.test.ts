@@ -40,6 +40,16 @@ jest.mock("@cocalc/conat/files/fs", () => ({
   fsClient: (...args: any[]) => fsClientMock(...args),
   fsSubject: ({ project_id }: { project_id: string }) =>
     `fs.project-${project_id}`,
+  shareFsSubject: ({
+    project_id,
+    share_id,
+    account_id,
+  }: {
+    project_id: string;
+    share_id: string;
+    account_id: string;
+  }) =>
+    `fs-share.project-${project_id}.share-${share_id}.account-${account_id}`,
 }));
 
 describe("conat/file-server-client", () => {
@@ -226,6 +236,28 @@ describe("conat/file-server-client", () => {
       fresh: true,
     });
     expect(getExplicitProjectHostRoutedHubClientMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the share-scoped read-only filesystem subject for public shares", async () => {
+    const { getProjectShareFsClient } = await import("./file-server-client");
+    await getProjectShareFsClient({
+      project_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      share_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      account_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    });
+
+    expect(getExplicitProjectRoutedClientMock).toHaveBeenCalledWith({
+      project_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      account_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      fresh: true,
+    });
+    expect(fsClientMock).toHaveBeenCalledWith({
+      client: { id: "explicit-project-client" },
+      subject:
+        "fs-share.project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.share-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.account-cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      timeout: undefined,
+      waitForInterest: true,
+    });
   });
 
   it("pings the file-server service when explicitly asked to ensure readiness", async () => {
