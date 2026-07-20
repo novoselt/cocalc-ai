@@ -93,6 +93,7 @@ export type SoftwareCommandDeps = {
       env?: NodeJS.ProcessEnv;
     },
   ) => Promise<{ code: number; stdout: string; stderr: string }>;
+  deployPreflight?: () => Promise<void>;
   r2Client?: SoftwareR2Client | (() => SoftwareR2Client);
   loadAuthConfig?: () => AuthConfig;
   fetch?: typeof fetch;
@@ -1267,6 +1268,27 @@ function resolveRepoLayout({
   const repoRoot = resolve(deps.repoRoot?.(cwd) ?? defaultRepoRoot(cwd));
   const srcRoot = repoRoot.endsWith("/src") ? repoRoot : join(repoRoot, "src");
   return { repoRoot, srcRoot };
+}
+
+async function runDeployTypecheck(deps: SoftwareCommandDeps): Promise<void> {
+  if (deps.deployPreflight) {
+    await deps.deployPreflight();
+    return;
+  }
+  if (!deps.runCommand) {
+    throw new Error("software deploy typecheck requires runCommand dependency");
+  }
+  const cwd = resolve(deps.cwd ?? process.cwd());
+  const { srcRoot } = resolveRepoLayout({ cwd, deps });
+  const code = await deps.runCommand("pnpm", ["-C", srcRoot, "tsc"], {
+    stdio: "inherit",
+    env: deps.env ?? process.env,
+  });
+  if (code !== 0) {
+    throw new Error(
+      `software deploy typecheck failed with exit status ${code}`,
+    );
+  }
 }
 
 function rocketBuildInfo(component: SoftwareBuildComponent):
@@ -3910,6 +3932,7 @@ Supported deploy/smoke components:
             "--bootstrap-scope is only valid when deploying host-bootstrap",
           );
         }
+        await runDeployTypecheck(deps);
         const startedAt = deps.now?.() ?? new Date();
         const config = await resolveSoftwareRemoteConfig({
           env: deps.env ?? process.env,
