@@ -9,6 +9,7 @@ import type {
   HostCatalog,
   HostSoftwareArtifact,
   HostSoftwareAvailableVersion,
+  HostBootstrapReconcileScope,
   HostSoftwareChannel,
   HostSoftwareUpgradeTarget,
   HostSoftwareUpgradeResponse,
@@ -7196,11 +7197,23 @@ export async function reconcileHostSoftware({
   account_id,
   id,
   force_bootstrap = false,
+  bootstrap_scope,
 }: {
   account_id?: string;
   id: string;
   force_bootstrap?: boolean;
+  bootstrap_scope?: HostBootstrapReconcileScope;
 }): Promise<HostLroResponse> {
+  if (
+    bootstrap_scope != null &&
+    bootstrap_scope !== "full" &&
+    bootstrap_scope !== "helpers"
+  ) {
+    throw new Error("bootstrap_scope must be full or helpers");
+  }
+  if (bootstrap_scope && !force_bootstrap) {
+    throw new Error("bootstrap_scope requires force_bootstrap");
+  }
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
     return await getInterBayBridge()
@@ -7209,6 +7222,7 @@ export async function reconcileHostSoftware({
         account_id,
         id,
         ...(force_bootstrap ? { force_bootstrap: true } : {}),
+        ...(bootstrap_scope ? { bootstrap_scope } : {}),
       });
   }
   const row = await loadHostForRootfsManagement(id, account_id);
@@ -7221,9 +7235,12 @@ export async function reconcileHostSoftware({
       id: row.id,
       account_id,
       ...(force_bootstrap ? { force_bootstrap: true } : {}),
+      ...(bootstrap_scope ? { bootstrap_scope } : {}),
     },
     dedupe_key: force_bootstrap
-      ? `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap`
+      ? bootstrap_scope === "helpers"
+        ? `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap:helpers`
+        : `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap`
       : `${HOST_RECONCILE_LRO_KIND}:${row.id}`,
   });
 }
@@ -7765,16 +7782,32 @@ export async function reconcileHostSoftwareInternal({
   account_id,
   id,
   force_bootstrap = false,
+  bootstrap_scope,
 }: {
   account_id?: string;
   id: string;
   force_bootstrap?: boolean;
+  bootstrap_scope?: HostBootstrapReconcileScope;
 }): Promise<void> {
+  if (
+    bootstrap_scope != null &&
+    bootstrap_scope !== "full" &&
+    bootstrap_scope !== "helpers"
+  ) {
+    throw new Error("bootstrap_scope must be full or helpers");
+  }
+  if (bootstrap_scope && !force_bootstrap) {
+    throw new Error("bootstrap_scope requires force_bootstrap");
+  }
   const row = await loadHostForStartStop(id, account_id);
   assertHostRunningForUpgrade(row);
   if (force_bootstrap) {
     assertCloudHostBootstrapReconcileSupported(row);
-    await reconcileCloudHostBootstrapOverSsh({ host_id: id, row });
+    await reconcileCloudHostBootstrapOverSsh({
+      host_id: id,
+      row,
+      scope: bootstrap_scope ?? "full",
+    });
     return;
   }
   const availability = computeHostOperationalAvailability(row);

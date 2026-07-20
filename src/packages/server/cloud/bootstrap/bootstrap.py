@@ -2578,8 +2578,7 @@ PROJECT_NETWORK_NFT="/usr/sbin/nft"
 PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
 PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
-PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"
-PROJECT_NETWORK_LOCK_ATTEMPTS="3"
+PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"
 # Full-chain reads are only used by background reconciliation and can take
 # over ten seconds on a busy host with hundreds of cgroup/socket rules.
 # Foreground project creation uses an append-only write and does not pay this
@@ -2598,18 +2597,6 @@ acquire_project_cgroup_lock() {
   if ! flock -x -w "$PROJECT_CGROUP_LOCK_WAIT_SECONDS" 9; then
     deny "project-cgroup-lock-timeout" "$PROJECT_CGROUP_LOCK_WAIT_SECONDS"
   fi
-}
-
-acquire_project_network_lock() {
-  local attempt
-  exec 9>/run/lock/cocalc-project-network.lock
-  for attempt in $(seq 1 "$PROJECT_NETWORK_LOCK_ATTEMPTS"); do
-    if flock -x -w "$PROJECT_NETWORK_LOCK_WAIT_SECONDS" 9; then
-      return 0
-    fi
-  done
-  deny "project-network-lock-timeout" \
-    "wait=${PROJECT_NETWORK_LOCK_WAIT_SECONDS},attempts=${PROJECT_NETWORK_LOCK_ATTEMPTS}"
 }
 
 release_project_lock() {
@@ -2968,25 +2955,16 @@ run_project_network_nft() {
 configure_project_network_table() {
   require_project_network_tools
   if ! run_project_network_nft list table inet "$PROJECT_NETWORK_TABLE" >/dev/null 2>&1; then
-    run_project_network_nft add table inet "$PROJECT_NETWORK_TABLE"
+    if ! run_project_network_nft add table inet "$PROJECT_NETWORK_TABLE" 2>/dev/null; then
+      run_project_network_nft list table inet "$PROJECT_NETWORK_TABLE" >/dev/null
+    fi
   fi
   if ! run_project_network_nft list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
-    printf 'add chain inet %s %s { type filter hook output priority filter; policy accept; }\\n' \
-      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" | run_project_network_nft -f -
+    if ! printf 'add chain inet %s %s { type filter hook output priority filter; policy accept; }\\n' \
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" | run_project_network_nft -f - 2>/dev/null; then
+      run_project_network_nft list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null
+    fi
   fi
-}
-
-project_network_rule_handles() {
-  local project_id="$1" marker
-  marker="$(project_network_rule_marker "$project_id")"
-  run_project_network_nft -a list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" 2>/dev/null | \
-    awk -v marker="comment \\\"${marker}-" '
-      index($0, marker) {
-        for (i = 1; i < NF; i++) {
-          if ($i == "handle") print $(i + 1)
-        }
-      }
-    '
 }
 
 ensure_project_network_rule() {
@@ -3030,18 +3008,6 @@ emit_project_network_rules() {
   printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto udp ct state new limit rate over %s/second burst %s packets counter drop comment "%s-udp"\\n' \
     "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
     "$PROJECT_UDP_NEW_RATE" "$PROJECT_UDP_NEW_BURST" "$marker"
-}
-
-remove_project_network_rule() {
-  local project_id="$1" handle handles
-  if ! run_project_network_nft list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" >/dev/null 2>&1; then
-    return 0
-  fi
-  handles="$(project_network_rule_handles "$project_id")"
-  while IFS= read -r handle; do
-    [ -n "$handle" ] || continue
-    run_project_network_nft delete rule inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" handle "$handle"
-  done <<< "$handles"
 }
 
 apply_pasta_resource_limits() {
@@ -3091,10 +3057,12 @@ verify_project_network_limits() {
 }
 
 render_project_network_rules() {
-  local cgroup project_id
+  local snapshot="$1" cgroup project_id
   {
-    printf 'flush chain inet %s %s\\n' \
-      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN"
+    # Add a complete fresh rule set before deleting the handles observed in
+    # the snapshot. The nft batch is atomic, so containment is never absent.
+    # Rules appended by a concurrent project start are not in the snapshot
+    # and survive. A concurrent cleanup can only make this batch retry.
     emit_project_metadata_rules
     for cgroup in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
       [ -d "$cgroup" ] || continue
@@ -3103,6 +3071,15 @@ render_project_network_rules() {
       is_project_uuid "$project_id" || continue
       emit_project_network_rules "$project_id"
     done
+    awk -v table="$PROJECT_NETWORK_TABLE" -v chain="$PROJECT_NETWORK_CHAIN" '
+      index($0, "comment \\"cocalc-project-network-") {
+        for (i = 1; i < NF; i++) {
+          if ($i == "handle" && $(i + 1) ~ /^[0-9]+$/) {
+            printf "delete rule inet %s %s handle %s\\n", table, chain, $(i + 1)
+          }
+        }
+      }
+    ' <<< "$snapshot"
   }
 }
 
@@ -3119,17 +3096,19 @@ apply_project_network_process_limits() {
 }
 
 reconcile_project_network_limits() {
-  local rules
-  # Discovering hundreds of project cgroups and pasta processes can take
-  # minutes on a large host. Build the atomic nftables update before taking
-  # the foreground project-start lock, and keep per-process prlimit work
-  # outside it entirely.
-  rules="$(render_project_network_rules)"
-  acquire_project_network_lock
+  local attempt snapshot rules
   configure_project_network_table
-  printf '%s\\n' "$rules" | run_project_network_nft -f -
-  release_project_lock
-  apply_project_network_process_limits
+  for attempt in $(seq 1 "$PROJECT_NETWORK_RECONCILE_ATTEMPTS"); do
+    snapshot="$(run_project_network_nft -a list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN")"
+    rules="$(render_project_network_rules "$snapshot")"
+    if printf '%s\\n' "$rules" | run_project_network_nft -f -; then
+      apply_project_network_process_limits
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "project network nftables reconciliation failed after ${PROJECT_NETWORK_RECONCILE_ATTEMPTS} attempts" >&2
+  return 1
 }
 
 find_bees_pid() {
@@ -3519,9 +3498,7 @@ case "$cmd" in
     printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
     verify_project_pid_in_pool "$project_id" "$launcher_pid"
     release_project_lock
-    acquire_project_network_lock
     ensure_project_network_rule "$project_id"
-    release_project_lock
     ;;
   enter-project-cgroup)
     if [ "$#" -ne 2 ] || ! is_project_uuid "$1"; then
@@ -3625,9 +3602,8 @@ case "$cmd" in
       fi
     fi
     release_project_lock
-    acquire_project_network_lock
-    remove_project_network_rule "$1"
-    release_project_lock
+    # Periodic reconciliation removes the now-stale socket-cgroup rules.
+    # Avoid a global foreground nftables lock and start/stop deletion races.
     ;;
   attach-pasta-cgroups)
     if [ "$#" -ne 0 ]; then
@@ -4847,8 +4823,7 @@ esac
     }
     for path, content in wrappers.items():
         p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
+        text_write_atomic(p, content, default_mode=0o755)
         os.chown(p, 0, 0)
         p.chmod(0o755)
 
@@ -7478,6 +7453,26 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         raise
 
 
+def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
+    log_line(cfg, "bootstrap: starting helper-only reconcile")
+    report_bootstrap_status(cfg, "running", "Reconciling privileged host helpers")
+    record_operation_start(cfg, "reconcile")
+    try:
+        ensure_runtime_user(cfg)
+        ensure_bootstrap_paths(cfg)
+        install_privileged_wrappers(cfg)
+        configure_runtime_sudoers(cfg)
+        verify_runtime_sudoers(cfg)
+        reconcile_project_network_limits(cfg)
+        record_operation_success(cfg, "reconcile")
+        report_bootstrap_status(cfg, "done", "Privileged host helpers reconciled")
+        log_line(cfg, "bootstrap: helper-only reconcile completed successfully")
+        return 0
+    except Exception as exc:
+        record_operation_failure(cfg, "reconcile", str(exc))
+        raise
+
+
 def run_bootstrap(cfg: BootstrapConfig) -> int:
     run_provision(cfg)
     run_reconcile(cfg)
@@ -7497,7 +7492,7 @@ def main(argv: list[str]) -> int:
         "mode",
         nargs="?",
         default="bootstrap",
-        choices=["bootstrap", "provision", "reconcile", "status"],
+        choices=["bootstrap", "provision", "reconcile", "helpers", "status"],
     )
     parser.add_argument("--bootstrap-dir")
     parser.add_argument("--config", help=argparse.SUPPRESS)
@@ -7547,6 +7542,9 @@ def main(argv: list[str]) -> int:
         if args.mode == "reconcile":
             with bootstrap_operation_lock(cfg):
                 return run_reconcile(cfg)
+        if args.mode == "helpers":
+            with bootstrap_operation_lock(cfg):
+                return run_reconcile_helpers(cfg)
         with bootstrap_operation_lock(cfg):
             return run_bootstrap(cfg)
     except Exception as exc:

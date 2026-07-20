@@ -1377,25 +1377,31 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             cfg = make_cfg(tmpdir)
             captured: dict[str, str] = {}
 
-            original_write_text = bootstrap.Path.write_text
+            original_text_write_atomic = bootstrap.text_write_atomic
             original_chmod = bootstrap.os.chmod
             original_chown = bootstrap.os.chown
 
-            def capture_write(self, data, encoding="utf-8"):
-                captured[str(self)] = data
+            def capture_write(path, data, **_kwargs):
+                captured[str(path)] = data
                 return len(data)
 
             try:
-                bootstrap.Path.write_text = capture_write
+                bootstrap.text_write_atomic = capture_write
                 bootstrap.os.chmod = lambda *_args, **_kwargs: None
                 bootstrap.os.chown = lambda *_args, **_kwargs: None
                 bootstrap.install_privileged_wrappers(cfg)
             finally:
-                bootstrap.Path.write_text = original_write_text
+                bootstrap.text_write_atomic = original_text_write_atomic
                 bootstrap.os.chmod = original_chmod
                 bootstrap.os.chown = original_chown
 
             script = captured["/usr/local/sbin/cocalc-runtime-storage"]
+            subprocess.run(
+                ["bash", "-n"],
+                input=script,
+                text=True,
+                check=True,
+            )
             self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
             self.assertIn("project-rustic-backup)", script)
             self.assertIn("project-rustic-restore)", script)
@@ -1492,9 +1498,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 ensure_network_body,
             )
             self.assertIn("configure_project_network_table", ensure_network_body)
-            self.assertIn(
-                "printf 'flush chain inet %s %s\\n'", script
-            )
+            self.assertNotIn("flush chain inet", script)
             render_network_body = script.split(
                 "render_project_network_rules() {", 1
             )[1].split("\n}\n\napply_project_network_process_limits()", 1)[0]
@@ -1504,20 +1508,21 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                     'for cgroup in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*'
                 ),
             )
+            self.assertLess(
+                render_network_body.index("emit_project_metadata_rules"),
+                render_network_body.index("delete rule inet"),
+            )
+            self.assertIn('local snapshot="$1"', render_network_body)
             self.assertIn(
                 "printf '%s\\n' \"$rules\" | run_project_network_nft -f -",
                 script,
             )
             self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
-            self.assertIn('PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"', script)
-            self.assertIn('PROJECT_NETWORK_LOCK_ATTEMPTS="3"', script)
+            self.assertIn('PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"', script)
             self.assertIn('PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="30"', script)
             self.assertIn("project-cgroup-lock-timeout", script)
-            self.assertIn("project-network-lock-timeout", script)
-            self.assertIn(
-                '"wait=${PROJECT_NETWORK_LOCK_WAIT_SECONDS},attempts=${PROJECT_NETWORK_LOCK_ATTEMPTS}"',
-                script,
-            )
+            self.assertNotIn("project-network-lock-timeout", script)
+            self.assertNotIn("acquire_project_network_lock", script)
             self.assertIn("--kill-after=2s", script)
             attach_body = script.split(
                 "  attach-project-cgroup)", 1
@@ -1538,13 +1543,26 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 reconcile_body,
             )
             self.assertLess(
-                reconcile_body.index('rules="$(render_project_network_rules)"'),
-                reconcile_body.index("acquire_project_network_lock"),
+                reconcile_body.index(
+                    'snapshot="$(run_project_network_nft -a list chain'
+                ),
+                reconcile_body.index(
+                    'rules="$(render_project_network_rules "$snapshot")"'
+                ),
             )
             self.assertLess(
-                reconcile_body.index("release_project_lock"),
+                reconcile_body.index("run_project_network_nft -f -"),
                 reconcile_body.index("apply_project_network_process_limits"),
             )
+            prepare_body = script.split(
+                "  prepare-project-cgroup)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertIn('ensure_project_network_rule "$project_id"', prepare_body)
+            self.assertNotIn("acquire_project_network_lock", prepare_body)
+            cleanup_body = script.split(
+                "  cleanup-project-cgroup)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertNotIn("remove_project_network_rule", cleanup_body)
             self.assertIn("project_cgroup_has_processes", script)
             self.assertNotIn('[ -s "$cgroup/cgroup.procs" ]', script)
             self.assertIn(
@@ -2930,6 +2948,66 @@ class BootstrapModesTest(unittest.TestCase):
 
             self.assertEqual(result, 0)
             self.assertEqual(events, ["lock-enter", "run-reconcile", "lock-exit"])
+
+    def test_helper_reconcile_does_not_restart_runtime_services(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            events: list[str] = []
+            originals = {}
+
+            def patch(name: str, replacement) -> None:
+                originals[name] = getattr(bootstrap, name)
+                setattr(bootstrap, name, replacement)
+
+            for name in (
+                "ensure_runtime_user",
+                "ensure_bootstrap_paths",
+                "install_privileged_wrappers",
+                "configure_runtime_sudoers",
+                "verify_runtime_sudoers",
+                "reconcile_project_network_limits",
+            ):
+                patch(name, lambda _cfg, name=name: events.append(name))
+            patch(
+                "start_project_host",
+                lambda _cfg: self.fail("helper reconcile restarted project-host"),
+            )
+            patch(
+                "record_operation_start",
+                lambda _cfg, operation: events.append(f"start:{operation}"),
+            )
+            patch(
+                "record_operation_success",
+                lambda _cfg, operation: events.append(f"success:{operation}"),
+            )
+            patch(
+                "record_operation_failure",
+                lambda _cfg, operation, error: events.append(
+                    f"failure:{operation}:{error}"
+                ),
+            )
+            patch("report_bootstrap_status", lambda *_args, **_kwargs: None)
+            patch("log_line", lambda *_args, **_kwargs: None)
+            try:
+                result = bootstrap.run_reconcile_helpers(cfg)
+            finally:
+                for name, original in originals.items():
+                    setattr(bootstrap, name, original)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                events,
+                [
+                    "start:reconcile",
+                    "ensure_runtime_user",
+                    "ensure_bootstrap_paths",
+                    "install_privileged_wrappers",
+                    "configure_runtime_sudoers",
+                    "verify_runtime_sudoers",
+                    "reconcile_project_network_limits",
+                    "success:reconcile",
+                ],
+            )
 
     def test_reconcile_mode_records_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

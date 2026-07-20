@@ -395,8 +395,9 @@ describe("hosts.reconcileHostSoftwareInternal", () => {
       {},
     );
     expect(ssh.getScript()).toContain(
-      'BOOTSTRAP_PID="$(sudo -n bash -lc \'nohup bash "$1" >>"$2" 2>&1 </dev/null & echo $!\' -- "$BOOTSTRAP_SH" "$BOOTSTRAP_LOG")"',
+      'BOOTSTRAP_PID="$(sudo -n bash -lc \'nohup env COCALC_BOOTSTRAP_RECONCILE_SCOPE="$3" bash "$1" >>"$2" 2>&1 </dev/null & echo $!\'',
     );
+    expect(ssh.getScript()).toContain('"$BOOTSTRAP_LOG" "full")');
   });
 
   it("does not fail bootstrap reconcile on stale drift before the new reconcile reports", async () => {
@@ -691,7 +692,7 @@ describe("hosts.reconcileHostSoftwareInternal", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("forces bootstrap reconcile even when the reported lifecycle is in sync", async () => {
+  it("forces helper-only bootstrap reconcile without runtime rollout", async () => {
     const ssh = makeSshChild();
     spawnMock = jest.fn(() => ssh.child);
     const row = makeHostRow({
@@ -759,10 +760,13 @@ describe("hosts.reconcileHostSoftwareInternal", () => {
         account_id: ACCOUNT_ID,
         id: HOST_ID,
         force_bootstrap: true,
+        bootstrap_scope: "helpers",
       }),
     ).resolves.toBeUndefined();
 
     expect(spawnMock).toHaveBeenCalled();
+    expect(ssh.getScript()).toContain('COCALC_BOOTSTRAP_RECONCILE_SCOPE="$3"');
+    expect(ssh.getScript()).toContain('"helpers")');
     expect(
       loadEffectiveProjectHostRuntimeDeploymentsMock,
     ).not.toHaveBeenCalled();

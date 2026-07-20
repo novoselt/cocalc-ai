@@ -3277,6 +3277,8 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
       "software",
       "deploy",
       "--build",
+      "--bootstrap-scope",
+      "helpers",
       "host-bootstrap:bootstrap-fix",
       "staging",
       "--env-file",
@@ -3338,6 +3340,8 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
     "reconcile",
     "--all-online",
     "--force-bootstrap",
+    "--bootstrap-scope",
+    "helpers",
     "--wait",
   ]);
   const history = JSON.parse(
@@ -3360,6 +3364,31 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
     `https://software.example.test/software/bootstrap/${artifactId}/bootstrap.py`,
   );
   assert.equal(record.details.host_bootstrap_reconcile, true);
+  assert.equal(record.details.host_bootstrap_scope, "helpers");
+});
+
+test("software deploy host-bootstrap requires an explicit reconcile scope", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-bootstrap-scope-"));
+  const program = createProgram(
+    makeDeps({
+      localStore: join(dir, "store"),
+      env: r2Env,
+      r2Client: makeR2Client().client,
+    }),
+  );
+
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "host-bootstrap",
+      "staging",
+    ]),
+    /requires --bootstrap-scope full or helpers/,
+  );
 });
 
 test("software deploy project-host --rollout sets fleet default and upgrades online hosts", async () => {
