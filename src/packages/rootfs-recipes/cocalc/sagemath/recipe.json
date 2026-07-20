@@ -13,6 +13,8 @@
     "build_dir": { "type": "string", "default": "/tmp/cocalc-sagemath-build" },
     "jobs": { "type": "string", "default": "auto" },
     "clean_build_dir": { "type": "string", "default": "true" },
+    "clone_depth": { "type": "string", "default": "1" },
+    "preserve_build_artifacts": { "type": "string", "default": "false" },
     "install_recommended_apt_packages": { "type": "string", "default": "true" },
     "install_sagetex": { "type": "string", "default": "true" },
     "priority_optional_packages": { "type": "array", "default": [] },
