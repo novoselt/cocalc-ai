@@ -586,27 +586,30 @@ function rawSoftwareComponentInfo(
         build: ["cocalc software build host-bootstrap:<tag>"],
         push: ["cocalc software push host-bootstrap:<tag-or-id>"],
         deploy: [
-          "cocalc software deploy --build --bootstrap-scope helpers host-bootstrap:<tag> <profile>",
-          "cocalc software deploy --build --bootstrap-scope full host-bootstrap:<tag> <profile>",
+          "cocalc software deploy --build host-bootstrap:<tag> <profile>",
+          "cocalc software deploy --build --rollout --bootstrap-scope helpers host-bootstrap:<tag> <profile>",
+          "cocalc software deploy --build --rollout --bootstrap-scope full host-bootstrap:<tag> <profile>",
         ],
         smoke: ["cocalc software smoke host-bootstrap <profile>"],
         history: ["cocalc software history host-bootstrap <profile>"],
         rollback: [
-          "cocalc software rollback host-bootstrap <profile> <artifact-id> --bootstrap-scope helpers",
+          "cocalc software rollback host-bootstrap <profile> <artifact-id>",
+          "cocalc software rollback host-bootstrap <profile> <artifact-id> --rollout --bootstrap-scope helpers",
         ],
       },
       related_components: ["project-host"],
       operator_notes: [
         "This replaces the old manual publish:bootstrap step for normal deploys.",
         "The latest bootstrap URL is mutable, so deploy history is the audit trail for what changed.",
-        "The required --bootstrap-scope makes daemon restart behavior explicit.",
+        "Deploy updates desired state without touching running hosts unless --rollout is explicit.",
+        "A rollout requires --bootstrap-scope so daemon restart behavior is explicit.",
         "Use helpers for privileged helper/sudo policy changes; it does not restart project-host, Conat, or ACP.",
         "Use full only when complete host convergence is required; it restarts project-host.",
         "Use this after bootstrap/sysctl/rootctl changes that do not require rebuilding project-host runtime.",
       ],
       agent_notes: [
         "Build does not run pnpm; it records the source bootstrap.py file.",
-        "Deploy publishes the latest bootstrap object and runs host reconcile --all-online --wait.",
+        "Deploy publishes the latest bootstrap object and desired state; --rollout additionally runs host reconcile --all-online --wait.",
       ],
       common_failure_modes: [
         "R2 software credentials are missing.",
@@ -2485,12 +2488,19 @@ function rollbackDeployArgs({
   if (opts.envFile) args.push("--env-file", opts.envFile);
   if (component === "host-bootstrap") {
     const bootstrapScope = parseHostBootstrapScope(opts.bootstrapScope);
-    if (!bootstrapScope) {
+    if (opts.rollout && !bootstrapScope) {
       throw new Error(
-        "software rollback host-bootstrap requires --bootstrap-scope full or helpers",
+        "software rollback host-bootstrap --rollout requires --bootstrap-scope full or helpers",
       );
     }
-    args.push("--bootstrap-scope", bootstrapScope);
+    if (!opts.rollout && bootstrapScope) {
+      throw new Error(
+        "software rollback host-bootstrap --bootstrap-scope requires --rollout",
+      );
+    }
+    if (opts.rollout) {
+      args.push("--rollout", "--bootstrap-scope", bootstrapScope!);
+    }
   }
   if (component === "plus") {
     const toolsMinimal =
@@ -3872,7 +3882,7 @@ Supported deploy/smoke components:
     )
     .option(
       "--bootstrap-scope <scope>",
-      "required for host-bootstrap: full restarts project-host; helpers updates privileged helpers without daemon restarts",
+      "with host-bootstrap --rollout: full restarts project-host; helpers updates privileged helpers without daemon restarts",
     )
     .option("--local-store <path>", "local artifact store")
     .option("--config <path>", "rocket config path")
@@ -3922,9 +3932,14 @@ Supported deploy/smoke components:
         }
         const bootstrapScope = parseHostBootstrapScope(opts.bootstrapScope);
         const deploysHostBootstrap = components.includes("host-bootstrap");
-        if (deploysHostBootstrap && !bootstrapScope) {
+        if (deploysHostBootstrap && opts.rollout && !bootstrapScope) {
           throw new Error(
-            "software deploy host-bootstrap requires --bootstrap-scope full or helpers",
+            "software deploy host-bootstrap --rollout requires --bootstrap-scope full or helpers",
+          );
+        }
+        if (deploysHostBootstrap && !opts.rollout && bootstrapScope) {
+          throw new Error(
+            "software deploy host-bootstrap --bootstrap-scope requires --rollout",
           );
         }
         if (!deploysHostBootstrap && bootstrapScope) {
@@ -4205,7 +4220,9 @@ Supported deploy/smoke components:
                   "--artifact",
                   "bootstrap-environment",
                 ],
-                [
+              ];
+              if (opts.rollout) {
+                commandArgsList.push([
                   ...cli.args,
                   "--profile",
                   deployTarget,
@@ -4216,8 +4233,8 @@ Supported deploy/smoke components:
                   "--bootstrap-scope",
                   bootstrapScope!,
                   "--wait",
-                ],
-              ];
+                ]);
+              }
             } else if (releaseTarget) {
               releaseProduct = releaseProductForArtifactComponent(
                 releaseTarget.artifactComponent,
@@ -4309,8 +4326,10 @@ Supported deploy/smoke components:
                 ...(hostTarget ? { host_rollout: opts.rollout === true } : {}),
                 ...(hostBootstrapTarget
                   ? {
-                      host_bootstrap_reconcile: true,
-                      host_bootstrap_scope: bootstrapScope,
+                      host_bootstrap_reconcile: opts.rollout === true,
+                      ...(bootstrapScope
+                        ? { host_bootstrap_scope: bootstrapScope }
+                        : {}),
                     }
                   : {}),
                 ...(hostBootstrapUrl
@@ -4454,8 +4473,10 @@ Supported deploy/smoke components:
                     host_bootstrap_selector: published.selector,
                     host_bootstrap_url: hostBootstrapUrl,
                     host_bootstrap_sha256_url: hostBootstrapSha256Url,
-                    host_bootstrap_reconcile: true,
-                    host_bootstrap_scope: bootstrapScope,
+                    host_bootstrap_reconcile: opts.rollout === true,
+                    ...(bootstrapScope
+                      ? { host_bootstrap_scope: bootstrapScope }
+                      : {}),
                   };
                 }
                 for (const args of commandArgsList) {
@@ -4519,8 +4540,10 @@ Supported deploy/smoke components:
                 : {}),
               ...(hostBootstrapTarget
                 ? {
-                    host_bootstrap_reconcile: true,
-                    host_bootstrap_scope: bootstrapScope,
+                    host_bootstrap_reconcile: opts.rollout === true,
+                    ...(bootstrapScope
+                      ? { host_bootstrap_scope: bootstrapScope }
+                      : {}),
                   }
                 : {}),
               ...(releaseProduct ? { release_product: releaseProduct } : {}),
@@ -4668,7 +4691,11 @@ Supported deploy/smoke components:
     )
     .option(
       "--bootstrap-scope <scope>",
-      "required for host-bootstrap rollback: full or helpers",
+      "with host-bootstrap --rollout: full or helpers",
+    )
+    .option(
+      "--rollout",
+      "for host-bootstrap, immediately reconcile all online hosts after updating desired state",
     )
     .action(
       async (

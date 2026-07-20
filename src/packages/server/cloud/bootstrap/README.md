@@ -6,7 +6,8 @@ to the software bucket so updates don't require rebuilding the hub bundle.
 Preferred deploy path (from repo root):
 
 ```
-cocalc software deploy --build --bootstrap-scope helpers host-bootstrap:<tag> <profile>
+cocalc software deploy --build host-bootstrap:<tag> <profile>
+cocalc software deploy --build --rollout --bootstrap-scope helpers host-bootstrap:<tag> <profile>
 ```
 
 This records `bootstrap.py` as an immutable software artifact, publishes the
