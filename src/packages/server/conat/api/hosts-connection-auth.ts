@@ -449,6 +449,7 @@ export async function resolveHostConnectionLocalHelper({
   // data plane from projects that are already assigned to this host.
   const availability = computeHostOperationalAvailability(row, {
     includeSyntheticProbe: false,
+    allowPlannedProjectHostTransition: true,
   });
   const normalizedStatus =
     row.status === "active" ? "running" : (row.status ?? null);

@@ -41,6 +41,10 @@ import { sleep } from "@cocalc/util/async-utils";
 import { notifyProjectHostUpdate } from "./route-project";
 import { recordHostAvailabilityObservation } from "@cocalc/server/hosts/availability";
 import { cancelStaleProjectStartLrosForHostSession } from "@cocalc/server/projects/start-lro-cleanup";
+import {
+  getPlannedProjectHostRuntimeTransition,
+  isPlannedProjectHostRuntimeTransitionActive,
+} from "@cocalc/server/hosts/runtime-transition";
 
 const logger = getLogger("server:conat:host-registry");
 const pool = () => getPool();
@@ -1311,18 +1315,31 @@ export async function initHostRegistryService() {
           host_session_id: nextSessionId,
         });
         const runtimeAvailability = hostRuntimeAvailability(sanitized.metadata);
+        const plannedRuntimeTransition = getPlannedProjectHostRuntimeTransition(
+          previousRows[0]?.metadata,
+        );
+        const planned =
+          runtimeAvailability.state !== "online" &&
+          isPlannedProjectHostRuntimeTransitionActive(
+            previousRows[0]?.metadata,
+          );
         await recordHostAvailabilityObservation({
           host_id: info.id,
           state: runtimeAvailability.state,
-          planned: false,
-          category: runtimeAvailability.category,
+          planned,
+          category: planned ? "maintenance" : runtimeAvailability.category,
           source: "host_register",
-          summary: runtimeAvailability.summary,
+          summary: planned
+            ? "Host is applying a planned project-host upgrade."
+            : runtimeAvailability.summary,
           details: {
             status: "running",
             host_session_id: nextSessionId,
             host_boot_id: nextBootId,
             runtime_health: sanitized.metadata?.runtime_health,
+            ...(plannedRuntimeTransition
+              ? { planned_runtime_transition: plannedRuntimeTransition }
+              : {}),
           },
         });
         await ensureHostRestartRecovery({
@@ -1389,18 +1406,31 @@ export async function initHostRegistryService() {
           host_session_id: nextSessionId,
         });
         const runtimeAvailability = hostRuntimeAvailability(sanitized.metadata);
+        const plannedRuntimeTransition = getPlannedProjectHostRuntimeTransition(
+          previousRows[0]?.metadata,
+        );
+        const planned =
+          runtimeAvailability.state !== "online" &&
+          isPlannedProjectHostRuntimeTransitionActive(
+            previousRows[0]?.metadata,
+          );
         await recordHostAvailabilityObservation({
           host_id: info.id,
           state: runtimeAvailability.state,
-          planned: false,
-          category: runtimeAvailability.category,
+          planned,
+          category: planned ? "maintenance" : runtimeAvailability.category,
           source: "host_heartbeat",
-          summary: runtimeAvailability.summary,
+          summary: planned
+            ? "Host is applying a planned project-host upgrade."
+            : runtimeAvailability.summary,
           details: {
             status: "running",
             host_session_id: nextSessionId,
             host_boot_id: nextBootId,
             runtime_health: sanitized.metadata?.runtime_health,
+            ...(plannedRuntimeTransition
+              ? { planned_runtime_transition: plannedRuntimeTransition }
+              : {}),
           },
         });
         await ensureHostRestartRecovery({

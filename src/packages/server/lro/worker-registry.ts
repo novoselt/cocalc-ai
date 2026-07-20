@@ -49,6 +49,24 @@ const HOST_OP_LRO_KINDS = [
 
 export const parallelOpsWorkerRegistry: ParallelOpsWorkerRegistration[] = [
   {
+    worker_kind: "host-runtime-fleet-rollout",
+    category: "lro",
+    scope_model: "global",
+    dynamic_limit_supported: false,
+    lro_kinds: ["host-runtime-fleet-rollout"],
+    lease_ms: 120_000,
+    notes: [
+      "Only the primary bay worker runs this campaign worker.",
+      "Each campaign enforces its own canary and bounded host concurrency.",
+    ],
+    getLimitSnapshot: () => ({
+      default_limit: 1,
+      configured_limit: 1,
+      effective_limit: 1,
+      config_source: "constant",
+    }),
+  },
+  {
     worker_kind: "project-move",
     category: "lro",
     scope_model: "global",

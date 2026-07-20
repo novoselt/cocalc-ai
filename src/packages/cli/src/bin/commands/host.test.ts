@@ -23,6 +23,7 @@ type Capture = {
     base_url?: string;
     align_runtime_stack?: boolean;
   }>;
+  fleetRolloutRequests?: Array<Record<string, any>>;
   reconciles: string[];
   reconcileRequests?: Array<{
     id: string;
@@ -141,6 +142,7 @@ function makeDeps(
   capture.runtimeDeploymentRollbacks ??= [];
   capture.reconcileRequests ??= [];
   capture.upgradeRequests ??= [];
+  capture.fleetRolloutRequests ??= [];
   capture.hostRootfsImageRequests ??= [];
   capture.hostProjectsRequests ??= [];
   capture.hostProjectStops ??= [];
@@ -247,6 +249,18 @@ function makeDeps(
                 align_runtime_stack,
               });
               return { op_id: `op-${id}` };
+            },
+            rolloutHostRuntimeFleet: async (request) => {
+              capture.fleetRolloutRequests!.push(request);
+              return {
+                op_id: "fleet-op-1",
+                scope_type: "hub",
+                scope_id: "fleet-scope-1",
+                service: "persist",
+                stream_name: "lro-fleet-op-1",
+                kind: "host-runtime-fleet-rollout",
+                host_ids: request.host_ids,
+              };
             },
             reconcileHostSoftware: async ({
               id,
@@ -1067,6 +1081,84 @@ test("host upgrade --all-online --wait returns all successful hosts", async () =
   assert.equal(capture.data.status, "succeeded");
   assert.equal(capture.data.count, 2);
   assert.equal(capture.data.hosts.length, 2);
+});
+
+test("host deploy rollout-fleet queues one canary-first durable campaign", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const now = new Date().toISOString();
+  const deps = makeDeps(capture, {
+    listHosts: async () => [
+      {
+        id: "busy-host",
+        name: "busy-host",
+        status: "running",
+        bay_id: "bay-1",
+        last_seen: now,
+        metrics: { current: { running_project_count: 12 } },
+      },
+      {
+        id: "quiet-host",
+        name: "quiet-host",
+        status: "running",
+        bay_id: "bay-1",
+        last_seen: now,
+        metrics: { current: { running_project_count: 1 } },
+      },
+      {
+        id: "offline-host",
+        name: "offline-host",
+        status: "running",
+        bay_id: "bay-1",
+        last_seen: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+  const program = new Command();
+  registerHostCommand(program, deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "deploy",
+    "rollout-fleet",
+    "--all-online",
+    "--desired-version",
+    "ph-v2",
+    "--base-url",
+    "https://software.example.test/software",
+    "--max-concurrent",
+    "2",
+    "--canary-stabilize-seconds",
+    "30",
+    "--stabilize-seconds",
+    "10",
+    "--wait",
+  ]);
+
+  assert.deepEqual(capture.fleetRolloutRequests, [
+    {
+      host_ids: ["quiet-host", "busy-host"],
+      artifact: "project-host",
+      version: "ph-v2",
+      base_url: "https://software.example.test/software",
+      canary_host_id: "quiet-host",
+      max_concurrent: 2,
+      canary_stabilize_seconds: 30,
+      stabilize_seconds: 10,
+      promote_global: true,
+      reason: undefined,
+    },
+  ]);
+  assert.equal(capture.data.status, "succeeded");
+  assert.equal(capture.data.op_id, "fleet-op-1");
 });
 
 test("host upgrade --wait emits progress on stderr in json output mode", async () => {

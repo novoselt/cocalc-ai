@@ -230,6 +230,81 @@ export async function listProjectHostRuntimeDeployments({
   return await selectScopeRows(pool(), { scope_type, host_id });
 }
 
+async function upsertScopeDeployments({
+  client,
+  scope_type,
+  host_id,
+  deployments,
+  requested_by,
+  replace,
+}: {
+  client: PoolClient;
+  scope_type: HostRuntimeDeploymentScopeType;
+  host_id?: string;
+  deployments: HostRuntimeDeploymentUpsert[];
+  requested_by: string;
+  replace?: boolean;
+}): Promise<HostRuntimeDeploymentUpsert[]> {
+  const scope_id = scopeIdOf({ scope_type, host_id });
+  const normalized = normalizeDeployments(deployments);
+  if (replace) {
+    await client.query(
+      `
+        DELETE FROM project_host_runtime_deployments
+        WHERE scope_type=$1 AND scope_id=$2
+      `,
+      [scope_type, scope_id],
+    );
+  }
+  for (const deployment of normalized) {
+    await client.query(
+      `
+        INSERT INTO project_host_runtime_deployments (
+          scope_type,
+          scope_id,
+          host_id,
+          target_type,
+          target,
+          desired_version,
+          rollout_policy,
+          drain_deadline_seconds,
+          rollout_reason,
+          requested_by,
+          requested_at,
+          updated_at,
+          metadata
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW(),$11::jsonb)
+        ON CONFLICT (scope_type, scope_id, target_type, target)
+        DO UPDATE SET
+          host_id = EXCLUDED.host_id,
+          desired_version = EXCLUDED.desired_version,
+          rollout_policy = EXCLUDED.rollout_policy,
+          drain_deadline_seconds = EXCLUDED.drain_deadline_seconds,
+          rollout_reason = EXCLUDED.rollout_reason,
+          requested_by = EXCLUDED.requested_by,
+          requested_at = EXCLUDED.requested_at,
+          updated_at = NOW(),
+          metadata = EXCLUDED.metadata
+      `,
+      [
+        scope_type,
+        scope_id,
+        scope_type === "host" ? host_id : null,
+        deployment.target_type,
+        deployment.target,
+        deployment.desired_version,
+        deployment.rollout_policy ?? null,
+        deployment.drain_deadline_seconds ?? null,
+        deployment.rollout_reason ?? null,
+        requested_by,
+        JSON.stringify(deployment.metadata ?? {}),
+      ],
+    );
+  }
+  return normalized;
+}
+
 export async function setProjectHostRuntimeDeployments({
   scope_type,
   host_id,
@@ -244,64 +319,57 @@ export async function setProjectHostRuntimeDeployments({
   replace?: boolean;
 }): Promise<HostRuntimeDeploymentRecord[]> {
   await ensureProjectHostRuntimeDeploymentsSchema();
-  const scope_id = scopeIdOf({ scope_type, host_id });
-  const normalized = normalizeDeployments(deployments);
   const client = await pool().connect();
   try {
     await client.query("BEGIN");
-    if (replace) {
+    await upsertScopeDeployments({
+      client,
+      scope_type,
+      host_id,
+      deployments,
+      requested_by,
+      replace,
+    });
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+  return await listProjectHostRuntimeDeployments({ scope_type, host_id });
+}
+
+export async function promoteProjectHostRuntimeDeployments({
+  host_ids,
+  deployments,
+  requested_by,
+}: {
+  host_ids: string[];
+  deployments: HostRuntimeDeploymentUpsert[];
+  requested_by: string;
+}): Promise<void> {
+  await ensureProjectHostRuntimeDeploymentsSchema();
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    const normalized = await upsertScopeDeployments({
+      client,
+      scope_type: "global",
+      deployments,
+      requested_by,
+      replace: false,
+    });
+    const targetKeys = normalized.map(targetKey);
+    if (host_ids.length && targetKeys.length) {
       await client.query(
         `
           DELETE FROM project_host_runtime_deployments
-          WHERE scope_type=$1 AND scope_id=$2
+          WHERE scope_type='host'
+            AND host_id = ANY($1::uuid[])
+            AND (target_type || ':' || target) = ANY($2::text[])
         `,
-        [scope_type, scope_id],
-      );
-    }
-    for (const deployment of normalized) {
-      await client.query(
-        `
-          INSERT INTO project_host_runtime_deployments (
-            scope_type,
-            scope_id,
-            host_id,
-            target_type,
-            target,
-            desired_version,
-            rollout_policy,
-            drain_deadline_seconds,
-            rollout_reason,
-            requested_by,
-            requested_at,
-            updated_at,
-            metadata
-          )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW(),$11::jsonb)
-          ON CONFLICT (scope_type, scope_id, target_type, target)
-          DO UPDATE SET
-            host_id = EXCLUDED.host_id,
-            desired_version = EXCLUDED.desired_version,
-            rollout_policy = EXCLUDED.rollout_policy,
-            drain_deadline_seconds = EXCLUDED.drain_deadline_seconds,
-            rollout_reason = EXCLUDED.rollout_reason,
-            requested_by = EXCLUDED.requested_by,
-            requested_at = EXCLUDED.requested_at,
-            updated_at = NOW(),
-            metadata = EXCLUDED.metadata
-        `,
-        [
-          scope_type,
-          scope_id,
-          scope_type === "host" ? host_id : null,
-          deployment.target_type,
-          deployment.target,
-          deployment.desired_version,
-          deployment.rollout_policy ?? null,
-          deployment.drain_deadline_seconds ?? null,
-          deployment.rollout_reason ?? null,
-          requested_by,
-          JSON.stringify(deployment.metadata ?? {}),
-        ],
+        [host_ids, targetKeys],
       );
     }
     await client.query("COMMIT");
@@ -311,7 +379,6 @@ export async function setProjectHostRuntimeDeployments({
   } finally {
     client.release();
   }
-  return await listProjectHostRuntimeDeployments({ scope_type, host_id });
 }
 
 export async function clearProjectHostRuntimeDeployments({
