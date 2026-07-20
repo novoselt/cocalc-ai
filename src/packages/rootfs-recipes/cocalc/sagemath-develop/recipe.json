@@ -1,0 +1,77 @@
+{
+  "id": "cocalc/sagemath-develop",
+  "version": 1,
+  "description": "Build the latest SageMath develop branch as a complete, writable source checkout with full Git history, retained build artifacts, and Sage/Python Jupyter kernels.",
+  "timeout": 172800,
+  "inputs": {
+    "method": { "type": "string", "default": "source" },
+    "version": { "type": "string", "default": "develop" },
+    "source_url": {
+      "type": "string",
+      "default": "https://github.com/sagemath/sage.git"
+    },
+    "build_dir": {
+      "type": "string",
+      "default": "/tmp/cocalc-sagemath-develop-build"
+    },
+    "jobs": { "type": "string", "default": "auto" },
+    "clean_build_dir": { "type": "string", "default": "false" },
+    "clone_depth": { "type": "string", "default": "full" },
+    "preserve_build_artifacts": { "type": "string", "default": "true" },
+    "install_recommended_apt_packages": {
+      "type": "string",
+      "default": "true"
+    },
+    "install_sagetex": { "type": "string", "default": "true" },
+    "prefix": { "type": "string", "default": "/opt/sage" },
+    "owner_uid": { "type": "string", "default": "2001" },
+    "owner_gid": { "type": "string", "default": "2001" },
+    "incremental_build_max_seconds": {
+      "type": "string",
+      "default": "1800"
+    }
+  },
+  "run": { "shell": "bash", "script": "../sagemath/install.sh" },
+  "verify": { "shell": "bash", "script": "verify.sh" },
+  "contributes": {
+    "metadata": {
+      "family": "sagemath-develop",
+      "default_jupyter_kernel": "sagemath",
+      "tags": ["sagemath", "development", "source", "git", "jupyter"]
+    },
+    "theme": {
+      "icon": "code",
+      "color": "#ffffff",
+      "accent_color": "#0f766e"
+    },
+    "content": {
+      "version": 1,
+      "title": "SageMath Develop",
+      "subtitle": "The latest SageMath develop branch, already built and ready for incremental development.",
+      "highlights": [
+        "Latest SageMath develop branch",
+        "Writable /opt/sage source checkout",
+        "Full Git history and retained build artifacts",
+        "Verified incremental Cython rebuild",
+        "Sage and Python Jupyter kernels"
+      ],
+      "actions": [
+        {
+          "kind": "browse",
+          "label": "Browse SageMath source",
+          "path": "/opt/sage"
+        },
+        {
+          "kind": "external-link",
+          "label": "SageMath developer guide",
+          "url": "https://doc.sagemath.org/html/en/developer/"
+        },
+        {
+          "kind": "external-link",
+          "label": "SageMath repository",
+          "url": "https://github.com/sagemath/sage"
+        }
+      ]
+    }
+  }
+}
