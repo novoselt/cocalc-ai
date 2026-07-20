@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { Command } from "commander";
-import type { HostRuntimeDeploymentStatus } from "@cocalc/conat/hub/api/hosts";
+import type {
+  HostBootstrapReconcileScope,
+  HostRuntimeDeploymentStatus,
+} from "@cocalc/conat/hub/api/hosts";
 import {
   HOST_RUNTIME_LOG_SOURCES,
   type HostRuntimeLogSource,
@@ -70,6 +73,14 @@ const HOST_SHARED_SCRATCH_DISK_TYPES = new Set([
 ]);
 const NEBIUS_DISK_INCREMENT_GB = 93;
 const HOST_SHARED_SCRATCH_RPC_TIMEOUT_MS = 120_000;
+
+function parseBootstrapReconcileScope(
+  value: string | undefined,
+): HostBootstrapReconcileScope | undefined {
+  if (value == null) return undefined;
+  if (value === "full" || value === "helpers") return value;
+  throw new Error("--bootstrap-scope must be full or helpers");
+}
 
 export function assertHostRehomeConfirmed({
   host_id,
@@ -2732,6 +2743,10 @@ Examples:
       "--force-bootstrap",
       "run the host bootstrap even when the reported lifecycle is in sync",
     )
+    .option(
+      "--bootstrap-scope <scope>",
+      "forced bootstrap scope: full restarts project-host; helpers updates privileged helpers without daemon restarts",
+    )
     .option("--wait", "wait for completion")
     .action(
       async (
@@ -2739,6 +2754,7 @@ Examples:
         opts: {
           allOnline?: boolean;
           forceBootstrap?: boolean;
+          bootstrapScope?: string;
           wait?: boolean;
         },
         command: Command,
@@ -2749,6 +2765,12 @@ Examples:
           }
           if (!hostIdentifier && !opts.allOnline) {
             throw new Error("specify <host> or use --all-online");
+          }
+          const bootstrapScope = parseBootstrapReconcileScope(
+            opts.bootstrapScope,
+          );
+          if (bootstrapScope && !opts.forceBootstrap) {
+            throw new Error("--bootstrap-scope requires --force-bootstrap");
           }
           const hosts = opts.allOnline
             ? (
@@ -2773,6 +2795,7 @@ Examples:
               const op = await ctx.hub.hosts.reconcileHostSoftware({
                 id: h.id,
                 force_bootstrap: opts.forceBootstrap === true,
+                ...(bootstrapScope ? { bootstrap_scope: bootstrapScope } : {}),
               });
               return {
                 host_id: h.id,

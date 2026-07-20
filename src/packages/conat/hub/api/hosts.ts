@@ -1083,6 +1083,7 @@ export type HostSoftwareArtifact =
   | "bootstrap-environment";
 
 export type HostSoftwareChannel = "latest" | "staging";
+export type HostBootstrapReconcileScope = "full" | "helpers";
 
 export interface HostSoftwareUpgradeTarget {
   artifact: HostSoftwareArtifact;
@@ -1980,6 +1981,7 @@ export interface Hosts {
     account_id?: string;
     id: string;
     force_bootstrap?: boolean;
+    bootstrap_scope?: HostBootstrapReconcileScope;
   }) => Promise<HostLroResponse>;
   getHostManagedComponentStatus: (opts: {
     account_id?: string;

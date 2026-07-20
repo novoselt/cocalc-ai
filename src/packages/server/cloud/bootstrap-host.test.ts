@@ -215,6 +215,10 @@ describe("bootstrap-host shell templates", () => {
     expect(source).toContain(
       `python3 "$BOOTSTRAP_DIR/bootstrap.py" reconcile --bootstrap-dir "$BOOTSTRAP_DIR"`,
     );
+    expect(source).toContain(
+      `python3 "$BOOTSTRAP_DIR/bootstrap.py" helpers --bootstrap-dir "$BOOTSTRAP_DIR"`,
+    );
+    expect(source).toContain(`COCALC_BOOTSTRAP_RECONCILE_SCOPE`);
     expect(source).not.toContain(
       `python3 "$BOOTSTRAP_DIR/bootstrap.py" --config "$BOOTSTRAP_DIR/bootstrap-config.json" --only cloudflared`,
     );

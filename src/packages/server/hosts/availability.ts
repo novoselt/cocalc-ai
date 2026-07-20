@@ -30,10 +30,30 @@ const HOST_RUNNING_STALE_ALERT_MS = Math.max(
   60_000,
   Number(process.env.COCALC_HOST_RUNNING_STALE_ALERT_MS ?? 5 * 60_000),
 );
+const HOST_RUNNING_STALE_ESCALATION_MS = Math.max(
+  HOST_RUNNING_STALE_ALERT_MS + 60_000,
+  Number(process.env.COCALC_HOST_RUNNING_STALE_ESCALATION_MS ?? 10 * 60_000),
+);
+const HOST_RUNNING_STALE_TRANSITION_SUPPRESS_MS = Math.max(
+  HOST_RUNNING_STALE_ESCALATION_MS,
+  Number(
+    process.env.COCALC_HOST_RUNNING_STALE_TRANSITION_SUPPRESS_MS ?? 30 * 60_000,
+  ),
+);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 60 * 1000;
 const STALE_ALERT_LIMIT = 25;
+const STALE_SCAN_LIMIT = 1000;
 const HOST_RECONCILE_LRO_KIND = "host-reconcile-software";
+const HOST_HEARTBEAT_TRANSITION_LRO_KINDS = [
+  "host-start",
+  "host-restart",
+  HOST_RECONCILE_LRO_KIND,
+  "host-reconcile-runtime-deployments",
+  "host-rollback-runtime-deployments",
+  "host-upgrade-software",
+  "host-rollout-managed-components",
+];
 const RUNNING_STALE_REPAIR_LIMIT = Math.max(
   0,
   Math.floor(Number(process.env.COCALC_HOST_RUNNING_STALE_REPAIR_LIMIT ?? 3)) ||
@@ -665,11 +685,11 @@ function formatStaleDuration(ms: number): string {
 
 function formatRunningStaleHostAlertBody(rows: RunningStaleHostRow[]): string {
   return [
-    `${rows.length} project host${rows.length === 1 ? " is" : "s are"} marked running but not reporting heartbeats for at least ${formatStaleDuration(HOST_RUNNING_STALE_ALERT_MS)}.`,
+    `${rows.length} project host${rows.length === 1 ? " is" : "s are"} marked running but not reporting heartbeats for at least ${formatStaleDuration(HOST_RUNNING_STALE_ESCALATION_MS)}.`,
     "",
     "This indicates a VM/provider state that is up while the project-host app is not connected to the hub, or a control-plane heartbeat observation problem.",
     "",
-    `Automatic remediation: up to ${RUNNING_STALE_REPAIR_LIMIT} deduped host reconcile job${RUNNING_STALE_REPAIR_LIMIT === 1 ? "" : "s"} will be requested per maintenance tick, with a ${formatStaleDuration(RUNNING_STALE_REPAIR_SUPPRESS_MS)} per-host suppression window.`,
+    `Automatic remediation was attempted before this alert. Up to ${RUNNING_STALE_REPAIR_LIMIT} deduped host reconcile job${RUNNING_STALE_REPAIR_LIMIT === 1 ? "" : "s"} can be requested per maintenance tick, with a ${formatStaleDuration(RUNNING_STALE_REPAIR_SUPPRESS_MS)} per-host suppression window.`,
     "",
     "Hosts:",
     "",
@@ -679,7 +699,7 @@ function formatRunningStaleHostAlertBody(rows: RunningStaleHostRow[]): string {
         [
           `- ${staleHostName(row)}`,
           `host_id=${row.id}`,
-          `stale>=${formatStaleDuration(HOST_RUNNING_STALE_ALERT_MS)}`,
+          `stale>=${formatStaleDuration(HOST_RUNNING_STALE_ESCALATION_MS)}`,
           row.public_url ? `url=${row.public_url}` : undefined,
         ]
           .filter((part) => part != null)
@@ -691,6 +711,69 @@ function formatRunningStaleHostAlertBody(rows: RunningStaleHostRow[]): string {
   ]
     .filter((line) => line != null)
     .join("\n");
+}
+
+function recentMetadataTransition(value: unknown, nowMs: number): boolean {
+  const time = timestampMs(value);
+  return (
+    time != null &&
+    nowMs - time >= 0 &&
+    nowMs - time < HOST_RUNNING_STALE_TRANSITION_SUPPRESS_MS
+  );
+}
+
+function runningStaleEscalationSuppressionReason(
+  row: RunningStaleHostRow,
+  activeOperationKind?: string,
+  nowMs = Date.now(),
+): string | undefined {
+  if (Number(row.stale_ms) < HOST_RUNNING_STALE_ESCALATION_MS) {
+    return "automatic remediation grace period";
+  }
+  if (activeOperationKind) {
+    return `active ${activeOperationKind} operation`;
+  }
+  const metadata = row.metadata ?? {};
+  const spotPhase = `${metadata.spot_recovery_state?.phase ?? ""}`;
+  if (
+    ["retrying_spot", "probing_spot", "returning_to_spot"].includes(
+      spotPhase,
+    ) &&
+    Number(row.stale_ms) < HOST_RUNNING_STALE_TRANSITION_SUPPRESS_MS
+  ) {
+    return `active spot recovery phase ${spotPhase}`;
+  }
+  const restart = metadata.runtime_auto_recovery ?? {};
+  if (
+    ["claiming", "scheduled"].includes(`${restart.status ?? ""}`) &&
+    recentMetadataTransition(
+      restart.claimed_at ?? restart.scheduled_at ?? restart.attempted_at,
+      nowMs,
+    )
+  ) {
+    return "active automatic runtime recovery";
+  }
+  const bootstrap = metadata.bootstrap ?? {};
+  if (
+    ["pending", "running", "starting"].includes(`${bootstrap.status ?? ""}`) &&
+    recentMetadataTransition(
+      bootstrap.updated_at ?? bootstrap.pending_at,
+      nowMs,
+    )
+  ) {
+    return "active host bootstrap";
+  }
+  if (
+    `${metadata.bootstrap_lifecycle?.summary_status ?? ""}` === "reconciling" &&
+    recentMetadataTransition(
+      metadata.bootstrap_lifecycle?.last_reconcile_started_at ??
+        metadata.bootstrap_lifecycle?.updated_at,
+      nowMs,
+    )
+  ) {
+    return "active bootstrap reconciliation";
+  }
+  return undefined;
 }
 
 async function getRunningStaleHosts(): Promise<RunningStaleHostRow[]> {
@@ -716,7 +799,7 @@ async function getRunningStaleHosts(): Promise<RunningStaleHostRow[]> {
       ORDER BY last_seen ASC NULLS FIRST
       LIMIT $2
     `,
-    [HOST_RUNNING_STALE_ALERT_MS, STALE_ALERT_LIMIT + 1],
+    [HOST_RUNNING_STALE_ALERT_MS, STALE_SCAN_LIMIT],
   );
   return rows;
 }
@@ -752,12 +835,38 @@ async function recentRunningStaleRepairExists(
   return rows.length > 0;
 }
 
+async function getActiveHostHeartbeatTransitions(
+  hostIds: string[],
+): Promise<Map<string, string>> {
+  if (!hostIds.length) return new Map();
+  await ensureLroSchema();
+  const { rows } = await pool().query<{ scope_id: string; kind: string }>(
+    `
+      SELECT DISTINCT ON (scope_id) scope_id, kind
+      FROM long_running_operations
+      WHERE scope_type='host'
+        AND scope_id=ANY($1::uuid[])
+        AND kind=ANY($2::text[])
+        AND status IN ('queued', 'running')
+        AND updated_at > NOW() - ($3::double precision * INTERVAL '1 millisecond')
+      ORDER BY scope_id, updated_at DESC
+    `,
+    [
+      hostIds,
+      HOST_HEARTBEAT_TRANSITION_LRO_KINDS,
+      HOST_RUNNING_STALE_TRANSITION_SUPPRESS_MS,
+    ],
+  );
+  return new Map(rows.map(({ scope_id, kind }) => [scope_id, kind]));
+}
+
 async function enqueueRunningStaleHostRepairs(
   rows: RunningStaleHostRow[],
 ): Promise<number> {
   if (RUNNING_STALE_REPAIR_LIMIT <= 0) return 0;
   let queued = 0;
-  for (const row of rows.slice(0, RUNNING_STALE_REPAIR_LIMIT)) {
+  for (const row of rows) {
+    if (queued >= RUNNING_STALE_REPAIR_LIMIT) break;
     const account_id = ownerAccountId(row);
     if (!account_id) {
       logger.warn("skipping stale-running host repair without owner", {
@@ -799,14 +908,43 @@ export async function runRunningStaleHostAlertCheck(): Promise<number> {
   const rows = await getRunningStaleHosts();
   if (!rows.length) return 0;
   const repairCount = await enqueueRunningStaleHostRepairs(rows);
-  await adminAlert({
-    subject: "Running project hosts are not reporting",
-    body: formatRunningStaleHostAlertBody(rows),
-    dedupMinutes: 30,
-  });
+  const activeTransitions = await getActiveHostHeartbeatTransitions(
+    rows.map(({ id }) => id),
+  );
+  const escalatedRows = rows.filter(
+    (row) =>
+      !runningStaleEscalationSuppressionReason(
+        row,
+        activeTransitions.get(row.id),
+      ),
+  );
+  if (escalatedRows.length) {
+    await adminAlert({
+      subject: "Running project hosts remain unresponsive after remediation",
+      body: formatRunningStaleHostAlertBody(escalatedRows),
+      dedupMinutes: 30,
+    });
+  }
   if (repairCount) {
     logger.warn("enqueued stale-running host reconcile repairs", {
       count: repairCount,
+    });
+  }
+  if (rows.length !== escalatedRows.length) {
+    const deferred = rows
+      .map((row) => ({
+        host_id: row.id,
+        reason: runningStaleEscalationSuppressionReason(
+          row,
+          activeTransitions.get(row.id),
+        ),
+      }))
+      .filter(({ reason }) => reason != null)
+      .slice(0, STALE_ALERT_LIMIT);
+    logger.info("stale-running host alerts deferred for automatic recovery", {
+      stale: rows.length,
+      escalated: escalatedRows.length,
+      deferred,
     });
   }
   return rows.length;
@@ -1375,4 +1513,5 @@ export const _test = {
   formatRunningStaleHostAlertBody,
   formatStaleDuration,
   pressureAlertRow,
+  runningStaleEscalationSuppressionReason,
 };

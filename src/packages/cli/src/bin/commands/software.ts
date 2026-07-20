@@ -93,6 +93,7 @@ export type SoftwareCommandDeps = {
       env?: NodeJS.ProcessEnv;
     },
   ) => Promise<{ code: number; stdout: string; stderr: string }>;
+  deployPreflight?: () => Promise<void>;
   r2Client?: SoftwareR2Client | (() => SoftwareR2Client);
   loadAuthConfig?: () => AuthConfig;
   fetch?: typeof fetch;
@@ -127,7 +128,16 @@ type DeployOptions = {
   toolsMinimal?: string;
   build?: boolean;
   rollout?: boolean;
+  bootstrapScope?: string;
 };
+
+function parseHostBootstrapScope(
+  value: string | undefined,
+): "full" | "helpers" | undefined {
+  if (value == null) return undefined;
+  if (value === "full" || value === "helpers") return value;
+  throw new Error("--bootstrap-scope must be full or helpers");
+}
 
 type HistoryOptions = {
   envFile?: string;
@@ -576,18 +586,22 @@ function rawSoftwareComponentInfo(
         build: ["cocalc software build host-bootstrap:<tag>"],
         push: ["cocalc software push host-bootstrap:<tag-or-id>"],
         deploy: [
-          "cocalc software deploy --build host-bootstrap:<tag> <profile>",
+          "cocalc software deploy --build --bootstrap-scope helpers host-bootstrap:<tag> <profile>",
+          "cocalc software deploy --build --bootstrap-scope full host-bootstrap:<tag> <profile>",
         ],
         smoke: ["cocalc software smoke host-bootstrap <profile>"],
         history: ["cocalc software history host-bootstrap <profile>"],
         rollback: [
-          "cocalc software rollback host-bootstrap <profile> <artifact-id>",
+          "cocalc software rollback host-bootstrap <profile> <artifact-id> --bootstrap-scope helpers",
         ],
       },
       related_components: ["project-host"],
       operator_notes: [
         "This replaces the old manual publish:bootstrap step for normal deploys.",
         "The latest bootstrap URL is mutable, so deploy history is the audit trail for what changed.",
+        "The required --bootstrap-scope makes daemon restart behavior explicit.",
+        "Use helpers for privileged helper/sudo policy changes; it does not restart project-host, Conat, or ACP.",
+        "Use full only when complete host convergence is required; it restarts project-host.",
         "Use this after bootstrap/sysctl/rootctl changes that do not require rebuilding project-host runtime.",
       ],
       agent_notes: [
@@ -1254,6 +1268,27 @@ function resolveRepoLayout({
   const repoRoot = resolve(deps.repoRoot?.(cwd) ?? defaultRepoRoot(cwd));
   const srcRoot = repoRoot.endsWith("/src") ? repoRoot : join(repoRoot, "src");
   return { repoRoot, srcRoot };
+}
+
+async function runDeployTypecheck(deps: SoftwareCommandDeps): Promise<void> {
+  if (deps.deployPreflight) {
+    await deps.deployPreflight();
+    return;
+  }
+  if (!deps.runCommand) {
+    throw new Error("software deploy typecheck requires runCommand dependency");
+  }
+  const cwd = resolve(deps.cwd ?? process.cwd());
+  const { srcRoot } = resolveRepoLayout({ cwd, deps });
+  const code = await deps.runCommand("pnpm", ["-C", srcRoot, "tsc"], {
+    stdio: "inherit",
+    env: deps.env ?? process.env,
+  });
+  if (code !== 0) {
+    throw new Error(
+      `software deploy typecheck failed with exit status ${code}`,
+    );
+  }
 }
 
 function rocketBuildInfo(component: SoftwareBuildComponent):
@@ -2448,6 +2483,15 @@ function rollbackDeployArgs({
   if (opts.remote) args.push("--remote", opts.remote);
   if (opts.api) args.push("--api", opts.api);
   if (opts.envFile) args.push("--env-file", opts.envFile);
+  if (component === "host-bootstrap") {
+    const bootstrapScope = parseHostBootstrapScope(opts.bootstrapScope);
+    if (!bootstrapScope) {
+      throw new Error(
+        "software rollback host-bootstrap requires --bootstrap-scope full or helpers",
+      );
+    }
+    args.push("--bootstrap-scope", bootstrapScope);
+  }
   if (component === "plus") {
     const toolsMinimal =
       opts.toolsMinimal || toolsMinimalArtifactIdFromRecord(record);
@@ -3826,6 +3870,10 @@ Supported deploy/smoke components:
       "--rollout",
       "for host runtime components, immediately upgrade/reconcile all online hosts after setting fleet defaults",
     )
+    .option(
+      "--bootstrap-scope <scope>",
+      "required for host-bootstrap: full restarts project-host; helpers updates privileged helpers without daemon restarts",
+    )
     .option("--local-store <path>", "local artifact store")
     .option("--config <path>", "rocket config path")
     .option("--remote <ssh-target>", "bay SSH target")
@@ -3872,6 +3920,19 @@ Supported deploy/smoke components:
             "software deploy cannot mix site-profile components and release-channel components in one command",
           );
         }
+        const bootstrapScope = parseHostBootstrapScope(opts.bootstrapScope);
+        const deploysHostBootstrap = components.includes("host-bootstrap");
+        if (deploysHostBootstrap && !bootstrapScope) {
+          throw new Error(
+            "software deploy host-bootstrap requires --bootstrap-scope full or helpers",
+          );
+        }
+        if (!deploysHostBootstrap && bootstrapScope) {
+          throw new Error(
+            "--bootstrap-scope is only valid when deploying host-bootstrap",
+          );
+        }
+        await runDeployTypecheck(deps);
         const startedAt = deps.now?.() ?? new Date();
         const config = await resolveSoftwareRemoteConfig({
           env: deps.env ?? process.env,
@@ -4152,6 +4213,8 @@ Supported deploy/smoke components:
                   "reconcile",
                   "--all-online",
                   "--force-bootstrap",
+                  "--bootstrap-scope",
+                  bootstrapScope!,
                   "--wait",
                 ],
               ];
@@ -4245,7 +4308,10 @@ Supported deploy/smoke components:
                   : {}),
                 ...(hostTarget ? { host_rollout: opts.rollout === true } : {}),
                 ...(hostBootstrapTarget
-                  ? { host_bootstrap_reconcile: true }
+                  ? {
+                      host_bootstrap_reconcile: true,
+                      host_bootstrap_scope: bootstrapScope,
+                    }
                   : {}),
                 ...(hostBootstrapUrl
                   ? { host_bootstrap_url: hostBootstrapUrl }
@@ -4389,6 +4455,7 @@ Supported deploy/smoke components:
                     host_bootstrap_url: hostBootstrapUrl,
                     host_bootstrap_sha256_url: hostBootstrapSha256Url,
                     host_bootstrap_reconcile: true,
+                    host_bootstrap_scope: bootstrapScope,
                   };
                 }
                 for (const args of commandArgsList) {
@@ -4451,7 +4518,10 @@ Supported deploy/smoke components:
                 ? { host_bootstrap_sha256_url: hostBootstrapSha256Url }
                 : {}),
               ...(hostBootstrapTarget
-                ? { host_bootstrap_reconcile: true }
+                ? {
+                    host_bootstrap_reconcile: true,
+                    host_bootstrap_scope: bootstrapScope,
+                  }
                 : {}),
               ...(releaseProduct ? { release_product: releaseProduct } : {}),
               ...(releaseChannel ? { channel: releaseChannel } : {}),
@@ -4595,6 +4665,10 @@ Supported deploy/smoke components:
     .option(
       "--tools-minimal <tag-or-id>",
       "tools-minimal artifact selector for plus rollback; defaults to historical deployment metadata",
+    )
+    .option(
+      "--bootstrap-scope <scope>",
+      "required for host-bootstrap rollback: full or helpers",
     )
     .action(
       async (

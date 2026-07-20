@@ -72,6 +72,7 @@ function makeDeps({
   fetch,
   outputRuns,
   now,
+  deployPreflight,
 }: {
   localStore: string;
   runs?: CapturedRun[];
@@ -83,6 +84,7 @@ function makeDeps({
   loadAuthConfig?: SoftwareCommandDeps["loadAuthConfig"];
   fetch?: SoftwareCommandDeps["fetch"];
   now?: () => Date;
+  deployPreflight?: SoftwareCommandDeps["deployPreflight"];
 }): SoftwareCommandDeps {
   const resolvedRepoRoot = repoRoot ?? makeRepoRoot();
   const resolvedCwd = cwd ?? resolvedRepoRoot;
@@ -98,6 +100,7 @@ function makeDeps({
       status_porcelain: "",
     }),
     repoRoot: () => resolvedRepoRoot,
+    deployPreflight: deployPreflight ?? (async () => {}),
     runCommand: async (command, args, options) => {
       runs?.push({
         command,
@@ -106,7 +109,8 @@ function makeDeps({
           ? { options: { timeoutMs: options.timeoutMs } }
           : {}),
       });
-      let bundle = command === "pnpm" ? args.at(-1) : undefined;
+      let bundle =
+        command === "pnpm" && args.includes("run") ? args.at(-1) : undefined;
       const artifactId =
         options?.env?.COCALC_SOFTWARE_ARTIFACT_ID ??
         env?.COCALC_SOFTWARE_ARTIFACT_ID;
@@ -1518,9 +1522,14 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
   writeFileSync(source, "static bundle");
   const runs: CapturedRun[] = [];
   const r2 = makeR2Client();
-  const program = createProgram(
-    makeDeps({ localStore, runs, env: r2Env, r2Client: r2.client }),
-  );
+  const deps = makeDeps({
+    localStore,
+    runs,
+    env: r2Env,
+    r2Client: r2.client,
+  });
+  delete deps.deployPreflight;
+  const program = createProgram(deps);
   const originalArgv1 = process.argv[1];
   process.argv[1] = join(dir, "cocalc-bin");
 
@@ -1563,8 +1572,12 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
     process.argv[1] = originalArgv1;
   }
 
-  assert.equal(runs.length, 1);
-  const run = runs[0];
+  assert.equal(runs.length, 2);
+  assert.deepEqual(runs[0], {
+    command: "pnpm",
+    args: ["-C", join(deps.repoRoot!(deps.cwd!), "src"), "tsc"],
+  });
+  const run = runs[1];
   assert.equal(run.command, join(dir, "cocalc-bin"));
   const rocketIndex = run.args.indexOf("rocket");
   assert.notEqual(rocketIndex, -1);
@@ -1596,6 +1609,39 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
   assert.equal(history.deployments[0].status, "succeeded");
   assert.equal(history.deployments[0].tag, "deploy-test");
   assert.equal(history.deployments[0].profile_or_channel, "staging");
+});
+
+test("software deploy stops before remote work when typecheck fails", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-deploy-typecheck-fail-"));
+  const runs: CapturedRun[] = [];
+  const r2 = makeR2Client();
+  const program = createProgram(
+    makeDeps({
+      localStore: join(dir, "store"),
+      runs,
+      env: r2Env,
+      r2Client: r2.client,
+      deployPreflight: async () => {
+        throw new Error("typecheck failed");
+      },
+    }),
+  );
+
+  await assert.rejects(
+    async () =>
+      await program.parseAsync([
+        "node",
+        "test",
+        "--quiet",
+        "software",
+        "deploy",
+        "static",
+        "staging",
+      ]),
+    /typecheck failed/,
+  );
+  assert.equal(runs.length, 0);
+  assert.equal(r2.objects.size, 0);
 });
 
 test("software deploy static accepts comma-separated profiles", async () => {
@@ -3277,6 +3323,8 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
       "software",
       "deploy",
       "--build",
+      "--bootstrap-scope",
+      "helpers",
       "host-bootstrap:bootstrap-fix",
       "staging",
       "--env-file",
@@ -3338,6 +3386,8 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
     "reconcile",
     "--all-online",
     "--force-bootstrap",
+    "--bootstrap-scope",
+    "helpers",
     "--wait",
   ]);
   const history = JSON.parse(
@@ -3360,6 +3410,31 @@ test("software deploy host-bootstrap clears overrides before reconciling hosts",
     `https://software.example.test/software/bootstrap/${artifactId}/bootstrap.py`,
   );
   assert.equal(record.details.host_bootstrap_reconcile, true);
+  assert.equal(record.details.host_bootstrap_scope, "helpers");
+});
+
+test("software deploy host-bootstrap requires an explicit reconcile scope", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-bootstrap-scope-"));
+  const program = createProgram(
+    makeDeps({
+      localStore: join(dir, "store"),
+      env: r2Env,
+      r2Client: makeR2Client().client,
+    }),
+  );
+
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "host-bootstrap",
+      "staging",
+    ]),
+    /requires --bootstrap-scope full or helpers/,
+  );
 });
 
 test("software deploy project-host --rollout sets fleet default and upgrades online hosts", async () => {

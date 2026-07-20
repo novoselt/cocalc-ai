@@ -1463,6 +1463,8 @@ async function runHostAction(
         account_id,
         id: host_id,
         force_bootstrap: input?.force_bootstrap === true,
+        bootstrap_scope:
+          input?.bootstrap_scope === "helpers" ? "helpers" : undefined,
       });
       return undefined;
     case "host-deprovision":
@@ -2082,6 +2084,8 @@ async function handleOp(op: LroSummary): Promise<void> {
         account_id,
         id: host_id,
         force_bootstrap: input?.force_bootstrap === true,
+        bootstrap_scope:
+          input?.bootstrap_scope === "helpers" ? "helpers" : undefined,
       });
       await progressStep("waiting", "waiting for host to return", {
         host_id,

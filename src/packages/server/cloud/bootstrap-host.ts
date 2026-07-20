@@ -1475,8 +1475,21 @@ else
 fi
 
 if [ "$BOOTSTRAP_ALREADY_DONE" = "1" ]; then
-  echo "bootstrap: already complete; reconciling host software"
-  python3 "$BOOTSTRAP_DIR/bootstrap.py" reconcile --bootstrap-dir "$BOOTSTRAP_DIR"
+  BOOTSTRAP_RECONCILE_SCOPE="$(printenv COCALC_BOOTSTRAP_RECONCILE_SCOPE 2>/dev/null || printf full)"
+  case "$BOOTSTRAP_RECONCILE_SCOPE" in
+    full)
+      echo "bootstrap: already complete; reconciling host software"
+      python3 "$BOOTSTRAP_DIR/bootstrap.py" reconcile --bootstrap-dir "$BOOTSTRAP_DIR"
+      ;;
+    helpers)
+      echo "bootstrap: already complete; reconciling privileged host helpers only"
+      python3 "$BOOTSTRAP_DIR/bootstrap.py" helpers --bootstrap-dir "$BOOTSTRAP_DIR"
+      ;;
+    *)
+      echo "bootstrap: invalid reconcile scope: $BOOTSTRAP_RECONCILE_SCOPE" >&2
+      exit 2
+      ;;
+  esac
   exit 0
 fi
 
