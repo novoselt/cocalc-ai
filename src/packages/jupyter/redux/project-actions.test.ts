@@ -29,13 +29,14 @@ function createActions(ipynb: any, loadResult?: { bytes: Buffer }) {
 }
 
 describe("project-side portable ipynb save", () => {
-  it("does not replace the disk file when an authored image is unavailable", async () => {
+  it("preserves an authored image URL when its blob is unavailable", async () => {
+    const source = `![lost](/blobs/lost.png?uuid=${blobUuid})`;
     const { actions, writeFile } = createActions({
       cells: [
         {
           cell_type: "markdown",
           metadata: {},
-          source: `![lost](/blobs/lost.png?uuid=${blobUuid})`,
+          source,
         },
       ],
       metadata: {},
@@ -43,10 +44,14 @@ describe("project-side portable ipynb save", () => {
       nbformat_minor: 5,
     });
 
-    await expect(actions.save_ipynb_file()).rejects.toThrow(
-      `CoCalc image blob ${blobUuid} is not available`,
-    );
-    expect(writeFile).not.toHaveBeenCalled();
+    await actions.save_ipynb_file();
+
+    expect(writeFile).toHaveBeenCalledTimes(1);
+    const [, raw, saveLast] = writeFile.mock.calls[0];
+    const saved = JSON.parse(raw);
+    expect(saved.cells[0].source).toBe(source);
+    expect(saved.cells[0].attachments).toBeUndefined();
+    expect(saveLast).toBe(true);
   });
 
   it("writes a native attachment only after conversion succeeds", async () => {
