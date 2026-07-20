@@ -3560,6 +3560,208 @@ automatic reconcile or artifact upgrade work.
     );
 
   deploy
+    .command("rollout-fleet")
+    .description(
+      "roll out project-host to an online bay cohort using a canary and bounded waves",
+    )
+    .requiredOption("--desired-version <version>", "project-host version")
+    .option("--all-online", "target every currently online host")
+    .option("--canary <host>", "canary host name or host_id")
+    .option(
+      "--max-concurrent <count>",
+      "maximum hosts in each post-canary wave",
+      "2",
+    )
+    .option(
+      "--canary-stabilize-seconds <seconds>",
+      "continuous healthy time required after the canary",
+      "180",
+    )
+    .option(
+      "--stabilize-seconds <seconds>",
+      "continuous healthy time required after each later wave",
+      "60",
+    )
+    .option("--base-url <url>", "software base URL")
+    .option("--reason <reason>", "rollout reason")
+    .option(
+      "--no-promote-global",
+      "leave the successful hosts as explicit exceptions instead of updating the bay default",
+    )
+    .option("--wait", "wait for the durable campaign to finish")
+    .addHelpText(
+      "after",
+      `
+The campaign is durable and runs on the authoritative bay. It upgrades one
+canary first, requires a continuous healthy stabilization interval, and then
+continues in bounded waves. Any failed host or automatic rollback pauses the
+campaign before another wave starts.
+
+The initial implementation is deliberately bay-local. A mixed-bay cohort is
+rejected instead of routing a fleet mutation through a non-authoritative bay.
+`,
+    )
+    .action(
+      async (
+        opts: {
+          desiredVersion?: string;
+          allOnline?: boolean;
+          canary?: string;
+          maxConcurrent?: string;
+          canaryStabilizeSeconds?: string;
+          stabilizeSeconds?: string;
+          baseUrl?: string;
+          reason?: string;
+          promoteGlobal?: boolean;
+          wait?: boolean;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "host deploy rollout-fleet", async (ctx) => {
+          if (!opts.allOnline) {
+            throw new Error("host deploy rollout-fleet requires --all-online");
+          }
+          const parseInteger = ({
+            value,
+            name,
+            min,
+            max,
+          }: {
+            value: string | undefined;
+            name: string;
+            min: number;
+            max: number;
+          }) => {
+            const parsed = Number(value);
+            if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+              throw new Error(
+                `${name} must be an integer from ${min} through ${max}`,
+              );
+            }
+            return parsed;
+          };
+          const hosts = (
+            (await listHosts(ctx, {
+              include_deleted: false,
+              catalog: false,
+              admin_view: true,
+            })) as HostRow[]
+          ).filter(isHostOnlineForUpgrade);
+          if (!hosts.length) {
+            return {
+              status: "skipped",
+              reason: "no online hosts matched",
+              hosts: [],
+            };
+          }
+          const bayIds = new Set(
+            hosts.map((host) => `${host.bay_id ?? ""}`.trim()).filter(Boolean),
+          );
+          if (bayIds.size > 1) {
+            throw new Error(
+              `host deploy rollout-fleet requires one authoritative bay; matched bays: ${Array.from(bayIds).join(", ")}`,
+            );
+          }
+          const projectCount = (host: HostRow) => {
+            const sampled = Number(
+              host?.metrics?.current?.running_project_count ??
+                host?.metrics?.current?.assigned_project_count,
+            );
+            if (Number.isFinite(sampled)) return sampled;
+            const projects = (host as any).projects;
+            if (Array.isArray(projects)) return projects.length;
+            const count = Number(projects ?? 0);
+            return Number.isFinite(count) ? count : 0;
+          };
+          const ordered = [...hosts].sort(
+            (left, right) =>
+              projectCount(left) - projectCount(right) ||
+              `${left.name ?? left.id}`.localeCompare(
+                `${right.name ?? right.id}`,
+              ),
+          );
+          let canary = ordered[0];
+          if (`${opts.canary ?? ""}`.trim()) {
+            const resolved = await resolveHost(ctx, opts.canary!);
+            canary =
+              hosts.find((host) => host.id === resolved.id) ??
+              (() => {
+                throw new Error(
+                  "canary host is not in the online rollout cohort",
+                );
+              })();
+          }
+          const rollout = await ctx.hub.hosts.rolloutHostRuntimeFleet({
+            host_ids: [
+              canary.id,
+              ...ordered
+                .filter((host) => host.id !== canary.id)
+                .map((host) => host.id),
+            ],
+            artifact: "project-host",
+            version: `${opts.desiredVersion ?? ""}`.trim(),
+            base_url: `${opts.baseUrl ?? ""}`.trim() || undefined,
+            canary_host_id: canary.id,
+            max_concurrent: parseInteger({
+              value: opts.maxConcurrent,
+              name: "--max-concurrent",
+              min: 1,
+              max: 5,
+            }),
+            canary_stabilize_seconds: parseInteger({
+              value: opts.canaryStabilizeSeconds,
+              name: "--canary-stabilize-seconds",
+              min: 0,
+              max: 1800,
+            }),
+            stabilize_seconds: parseInteger({
+              value: opts.stabilizeSeconds,
+              name: "--stabilize-seconds",
+              min: 0,
+              max: 600,
+            }),
+            promote_global: opts.promoteGlobal !== false,
+            reason: `${opts.reason ?? ""}`.trim() || undefined,
+          });
+          if (!opts.wait) {
+            return {
+              status: "queued",
+              ...rollout,
+              canary_host_id: canary.id,
+            };
+          }
+          const summary = await waitForLro(ctx, rollout.op_id, {
+            // The default command timeout is often shorter than the deliberate
+            // canary and wave observation windows.
+            timeoutMs: Math.max(ctx.timeoutMs, 60 * 60_000),
+            pollMs: ctx.pollMs,
+            onUpdate: createHostLroProgressReporter(ctx, {
+              host_id: rollout.scope_id,
+              name: "project-host fleet rollout",
+              op_id: rollout.op_id,
+            }),
+          });
+          if (summary.timedOut) {
+            throw new Error(
+              `project-host fleet rollout timed out (op=${rollout.op_id}, last_status=${summary.status})`,
+            );
+          }
+          if (summary.status !== "succeeded") {
+            throw new Error(
+              `project-host fleet rollout ${summary.status}: ${summary.error ?? "unknown error"}`,
+            );
+          }
+          return {
+            status: summary.status,
+            op_id: rollout.op_id,
+            canary_host_id: canary.id,
+            result: summary.result,
+          };
+        });
+      },
+    );
+
+  deploy
     .command("set")
     .description(
       "upsert desired runtime deployment state for one host or for the global default scope",

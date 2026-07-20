@@ -128,6 +128,10 @@ type DeployOptions = {
   toolsMinimal?: string;
   build?: boolean;
   rollout?: boolean;
+  rolloutCanary?: string;
+  rolloutMaxConcurrent?: string;
+  rolloutCanaryStabilizeSeconds?: string;
+  rolloutStabilizeSeconds?: string;
   bootstrapScope?: string;
 };
 
@@ -3267,6 +3271,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
         | "tools";
       managedComponents?: HostManagedSoftwareComponent[];
       publishOnly?: boolean;
+      pacedFleetRollout?: boolean;
     }
   | undefined {
   if (component === "project-host") {
@@ -3274,6 +3279,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: component,
       upgradeArtifact: component,
       managedComponents: ["project-host"],
+      pacedFleetRollout: true,
     };
   }
   if (component === "container-runtime") {
@@ -3878,7 +3884,23 @@ Supported deploy/smoke components:
     )
     .option(
       "--rollout",
-      "for host runtime components, immediately upgrade/reconcile all online hosts after setting fleet defaults",
+      "for host runtime components, run a durable canary-first rollout before promoting fleet defaults",
+    )
+    .option("--rollout-canary <host>", "project-host rollout canary")
+    .option(
+      "--rollout-max-concurrent <count>",
+      "maximum project hosts in each post-canary wave",
+      "2",
+    )
+    .option(
+      "--rollout-canary-stabilize-seconds <seconds>",
+      "healthy time required after the project-host canary",
+      "180",
+    )
+    .option(
+      "--rollout-stabilize-seconds <seconds>",
+      "healthy time required after later project-host waves",
+      "60",
     )
     .option(
       "--bootstrap-scope <scope>",
@@ -4097,98 +4119,125 @@ Supported deploy/smoke components:
               hostManagedComponents = hostTarget.managedComponents;
               targetKind = "project-host-fleet";
               const reason = `software-deploy-${component}`;
-              commandArgsList = hostTarget.publishOnly
-                ? []
-                : [
-                    [
+              if (hostTarget.pacedFleetRollout) {
+                commandArgsList = [
+                  [
+                    ...cli.args,
+                    "--profile",
+                    deployTarget,
+                    "host",
+                    "deploy",
+                    "rollout-fleet",
+                    "--all-online",
+                    "--desired-version",
+                    artifact.artifact_id,
+                    "--base-url",
+                    hostBaseUrl,
+                    "--max-concurrent",
+                    `${opts.rolloutMaxConcurrent ?? "2"}`,
+                    "--canary-stabilize-seconds",
+                    `${opts.rolloutCanaryStabilizeSeconds ?? "180"}`,
+                    "--stabilize-seconds",
+                    `${opts.rolloutStabilizeSeconds ?? "60"}`,
+                    "--reason",
+                    reason,
+                    ...(opts.rolloutCanary
+                      ? ["--canary", opts.rolloutCanary]
+                      : []),
+                    "--wait",
+                  ],
+                ];
+              } else {
+                commandArgsList = hostTarget.publishOnly
+                  ? []
+                  : [
+                      [
+                        ...cli.args,
+                        "--profile",
+                        deployTarget,
+                        "host",
+                        "deploy",
+                        "set",
+                        "--global",
+                        "--artifact",
+                        runtimeArtifactForHostUpgradeArtifact(
+                          hostTarget.upgradeArtifact,
+                        ),
+                        "--desired-version",
+                        artifact.artifact_id,
+                        "--reason",
+                        reason,
+                      ],
+                    ];
+                for (const hostManagedComponent of hostManagedComponents ??
+                  []) {
+                  commandArgsList.push([
+                    ...cli.args,
+                    "--profile",
+                    deployTarget,
+                    "host",
+                    "deploy",
+                    "set",
+                    "--global",
+                    "--component",
+                    hostManagedComponent,
+                    "--desired-version",
+                    artifact.artifact_id,
+                    "--policy",
+                    hostManagedComponentPolicy(hostManagedComponent),
+                    "--reason",
+                    reason,
+                  ]);
+                }
+                if (opts.rollout) {
+                  commandArgsList.push([
+                    ...cli.args,
+                    "--profile",
+                    deployTarget,
+                    "host",
+                    "upgrade",
+                    "--all-online",
+                    "--artifact",
+                    hostTarget.upgradeArtifact,
+                    "--artifact-version",
+                    artifact.artifact_id,
+                    "--base-url",
+                    hostBaseUrl,
+                    "--wait",
+                  ]);
+                  if (hostManagedComponents?.length) {
+                    commandArgsList.push([
                       ...cli.args,
                       "--profile",
                       deployTarget,
                       "host",
                       "deploy",
-                      "set",
-                      "--global",
+                      "reconcile",
+                      "--all-online",
+                      ...hostManagedComponents.flatMap((component) => [
+                        "--component",
+                        component,
+                      ]),
+                      "--reason",
+                      reason,
+                      "--wait",
+                    ]);
+                  }
+                  if (component === "project" || component === "tools") {
+                    commandArgsList.push([
+                      ...cli.args,
+                      "--profile",
+                      deployTarget,
+                      "host",
+                      "deploy",
+                      "resume-default",
+                      "--all-hosts",
                       "--artifact",
                       runtimeArtifactForHostUpgradeArtifact(
                         hostTarget.upgradeArtifact,
                       ),
-                      "--desired-version",
-                      artifact.artifact_id,
-                      "--reason",
-                      reason,
-                    ],
-                  ];
-              for (const hostManagedComponent of hostManagedComponents ?? []) {
-                commandArgsList.push([
-                  ...cli.args,
-                  "--profile",
-                  deployTarget,
-                  "host",
-                  "deploy",
-                  "set",
-                  "--global",
-                  "--component",
-                  hostManagedComponent,
-                  "--desired-version",
-                  artifact.artifact_id,
-                  "--policy",
-                  hostManagedComponentPolicy(hostManagedComponent),
-                  "--reason",
-                  reason,
-                ]);
-              }
-              if (opts.rollout) {
-                commandArgsList.push([
-                  ...cli.args,
-                  "--profile",
-                  deployTarget,
-                  "host",
-                  "upgrade",
-                  "--all-online",
-                  "--artifact",
-                  hostTarget.upgradeArtifact,
-                  "--artifact-version",
-                  artifact.artifact_id,
-                  "--base-url",
-                  hostBaseUrl,
-                  "--wait",
-                ]);
-                if (hostManagedComponents?.length) {
-                  commandArgsList.push([
-                    ...cli.args,
-                    "--profile",
-                    deployTarget,
-                    "host",
-                    "deploy",
-                    "reconcile",
-                    "--all-online",
-                    ...hostManagedComponents.flatMap((component) => [
-                      "--component",
-                      component,
-                    ]),
-                    "--reason",
-                    reason,
-                    "--wait",
-                  ]);
-                }
-                if (
-                  component === "project-host" ||
-                  component === "project" ||
-                  component === "tools"
-                ) {
-                  commandArgsList.push([
-                    ...cli.args,
-                    "--profile",
-                    deployTarget,
-                    "host",
-                    "deploy",
-                    "resume-default",
-                    "--all-hosts",
-                    "--artifact",
-                    runtimeArtifactForHostUpgradeArtifact(
-                      hostTarget.upgradeArtifact,
-                    ),
-                  ]);
+                    ]);
+                  }
                 }
               }
             } else if (hostBootstrapTarget) {

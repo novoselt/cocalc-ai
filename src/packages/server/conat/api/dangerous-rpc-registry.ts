@@ -287,6 +287,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "internal-auth-only",
     reason: INTERNAL_AUTH_ONLY,
   },
+  "hosts.rolloutHostRuntimeFleet": {
+    decision: "fresh-auth-required",
+    reason: "restarts project-host control daemons across a fleet cohort",
+  },
   "hosts.setHostAccess": {
     decision: "fresh-auth-required",
     reason: "host access mutation",

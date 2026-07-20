@@ -9,6 +9,7 @@ import { uuid } from "@cocalc/util/misc";
 import {
   listProjectHostRuntimeDeployments,
   loadEffectiveProjectHostRuntimeDeployments,
+  promoteProjectHostRuntimeDeployments,
   setProjectHostRuntimeDeployments,
 } from "./project-host-runtime-deployments";
 
@@ -171,5 +172,117 @@ describe("project host runtime deployments", () => {
         }),
       ]),
     );
+  });
+
+  it("clears only the temporary targets promoted by a fleet rollout", async () => {
+    const host_id = uuid();
+    await insertProjectHost(host_id);
+    await setProjectHostRuntimeDeployments({
+      scope_type: "host",
+      host_id,
+      requested_by: "acct-host",
+      deployments: [
+        {
+          target_type: "artifact",
+          target: "project-host",
+          desired_version: "project-host-v2",
+        },
+        {
+          target_type: "component",
+          target: "project-host",
+          desired_version: "project-host-v2",
+        },
+        {
+          target_type: "component",
+          target: "acp-worker",
+          desired_version: "project-host-v1",
+        },
+      ],
+    });
+
+    await promoteProjectHostRuntimeDeployments({
+      host_ids: [host_id],
+      requested_by: "acct-global",
+      deployments: [
+        {
+          target_type: "artifact",
+          target: "project-host",
+          desired_version: "project-host-v2",
+        },
+        {
+          target_type: "component",
+          target: "project-host",
+          desired_version: "project-host-v2",
+        },
+      ],
+    });
+
+    const remaining = await listProjectHostRuntimeDeployments({
+      scope_type: "host",
+      host_id,
+    });
+    expect(remaining).toEqual([
+      expect.objectContaining({
+        target_type: "component",
+        target: "acp-worker",
+        desired_version: "project-host-v1",
+      }),
+    ]);
+    const global = await listProjectHostRuntimeDeployments({
+      scope_type: "global",
+    });
+    expect(global).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target_type: "artifact",
+          target: "project-host",
+          desired_version: "project-host-v2",
+        }),
+        expect.objectContaining({
+          target_type: "component",
+          target: "project-host",
+          desired_version: "project-host-v2",
+        }),
+      ]),
+    );
+  });
+
+  it("rolls back global promotion when temporary override cleanup fails", async () => {
+    await setProjectHostRuntimeDeployments({
+      scope_type: "global",
+      requested_by: "acct-global",
+      deployments: [
+        {
+          target_type: "artifact",
+          target: "project-host",
+          desired_version: "project-host-v1",
+        },
+      ],
+    });
+
+    await expect(
+      promoteProjectHostRuntimeDeployments({
+        host_ids: ["not-a-uuid"],
+        requested_by: "acct-global",
+        deployments: [
+          {
+            target_type: "artifact",
+            target: "project-host",
+            desired_version: "project-host-v2",
+          },
+        ],
+      }),
+    ).rejects.toThrow();
+
+    const global = await listProjectHostRuntimeDeployments({
+      scope_type: "global",
+    });
+    expect(global).toEqual([
+      expect.objectContaining({
+        target_type: "artifact",
+        target: "project-host",
+        desired_version: "project-host-v1",
+      }),
+    ]);
   });
 });

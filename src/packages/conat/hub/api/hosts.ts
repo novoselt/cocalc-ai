@@ -186,6 +186,7 @@ export const HOST_LRO_KINDS = [
   "host-reconcile-runtime-deployments",
   "host-rollback-runtime-deployments",
   "host-upgrade-software",
+  "host-runtime-fleet-rollout",
   "host-rollout-managed-components",
   "host-deprovision",
   "host-delete",
@@ -203,6 +204,29 @@ export type HostLroResponse = {
   stream_name: string;
   kind: HostLroKind;
 };
+
+export interface HostRuntimeFleetRolloutRequest {
+  host_ids: string[];
+  artifact: "project-host";
+  version: string;
+  base_url?: string;
+  canary_host_id?: string;
+  max_concurrent?: number;
+  canary_stabilize_seconds?: number;
+  stabilize_seconds?: number;
+  promote_global?: boolean;
+  reason?: string;
+}
+
+export interface HostRuntimeFleetRolloutResponse {
+  op_id: string;
+  scope_type: "hub";
+  scope_id: string;
+  service: string;
+  stream_name: string;
+  kind: "host-runtime-fleet-rollout";
+  host_ids: string[];
+}
 
 export type HostDrainOptions = {
   id: string;
@@ -1395,6 +1419,7 @@ export const hosts = {
   setHostRuntimeDeployments: authFirstRequireAccount,
   reconcileHostRuntimeDeployments: authFirstRequireAccount,
   rollbackHostRuntimeDeployments: authFirstRequireAccount,
+  rolloutHostRuntimeFleet: authFirstRequireAccount,
   getHostManagedComponentStatus: authFirstRequireAccount,
   rolloutHostManagedComponents: authFirstRequireAccount,
   upgradeHostConnector: authFirstRequireAccount,
@@ -1639,6 +1664,9 @@ export interface Hosts {
     last_known_good?: boolean;
     reason?: string;
   }) => Promise<HostLroResponse>;
+  rolloutHostRuntimeFleet: (
+    opts: HostRuntimeFleetRolloutRequest & { account_id?: string },
+  ) => Promise<HostRuntimeFleetRolloutResponse>;
 
   // host calls getBackupConfig function to get backup configuration
   getBackupConfig: (opts: {

@@ -48,6 +48,10 @@ import {
   reserveProjectRuntimeSlot,
 } from "@cocalc/server/projects/runtime-slots";
 import { stopSelfHostReverseTunnel } from "@cocalc/server/self-host/ssh-target";
+import {
+  beginPlannedProjectHostRuntimeTransition,
+  endPlannedProjectHostRuntimeTransition,
+} from "./runtime-transition";
 
 const logger = getLogger("server:hosts:ops-worker");
 
@@ -287,6 +291,14 @@ function requestedProjectHostUpgradeVersion(
   return (
     `${targets?.find((target) => target.artifact === "project-host")?.version ?? ""}`.trim() ||
     undefined
+  );
+}
+
+function projectHostRestartWasScheduled(response: any): boolean {
+  return (response?.results ?? []).some(
+    (result: any) =>
+      result?.component === "project-host" &&
+      result?.action === "restart_scheduled",
   );
 }
 
@@ -1554,6 +1566,8 @@ async function handleOp(op: LroSummary): Promise<void> {
     lastCheck: 0,
     canceled: false,
   };
+  let plannedProjectHostTransition = false;
+  let plannedProjectHostTransitionAwaitingReady = false;
 
   const shouldCancel = async () => {
     if (cancelState.canceled) return true;
@@ -1612,6 +1626,19 @@ async function handleOp(op: LroSummary): Promise<void> {
       );
       const requestedProjectHostTargetVersion =
         requestedProjectHostUpgradeVersion(input?.targets);
+      if (requestedProjectHostUpgrade) {
+        await beginPlannedProjectHostRuntimeTransition({
+          host_id,
+          operation_id: op_id,
+          target_version: requestedProjectHostTargetVersion,
+          previous_version: knownGoodProjectHostVersion,
+          previous_host_session_id:
+            `${preUpgradeRow?.metadata?.host_session_id ?? ""}`.trim() ||
+            undefined,
+          reason: `${input?.rollout_reason ?? "host_software_upgrade"}`,
+        });
+        plannedProjectHostTransition = true;
+      }
       let response;
       let rolloutResponse;
       const phase_timings_ms: Record<string, number> = {};
@@ -1693,6 +1720,8 @@ async function handleOp(op: LroSummary): Promise<void> {
                 },
               }),
           );
+          plannedProjectHostTransitionAwaitingReady =
+            projectHostRestartWasScheduled(rolloutResponse);
         }
       } catch (err) {
         const targetProjectHostVersion =
@@ -2362,6 +2391,21 @@ async function handleOp(op: LroSummary): Promise<void> {
       });
     }
   } finally {
+    if (
+      plannedProjectHostTransition &&
+      !plannedProjectHostTransitionAwaitingReady
+    ) {
+      await endPlannedProjectHostRuntimeTransition({
+        host_id,
+        operation_id: op_id,
+      }).catch((err) =>
+        logger.warn("failed to clear planned project-host transition", {
+          host_id,
+          op_id,
+          err: `${err}`,
+        }),
+      );
+    }
     clearInterval(heartbeat);
   }
 }
@@ -2452,6 +2496,7 @@ export const __test__ = {
   currentBootstrapFailure,
   completedProjectHostUpgradeVersion,
   requestedProjectHostUpgradeVersion,
+  projectHostRestartWasScheduled,
   redundantProjectHostRollbackReason,
   waitForHostStatus,
   billingEnforcementDrainCompleteMetadata,

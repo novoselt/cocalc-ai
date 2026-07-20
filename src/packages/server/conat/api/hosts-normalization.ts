@@ -63,6 +63,10 @@ import {
   spotRecoveryState as spotRecoveryStateFromHost,
 } from "@cocalc/server/cloud/spot-restore";
 import { observedHostAgentFromMetadata } from "./hosts-runtime-observation";
+import {
+  isPlannedProjectHostRuntimeTransitionActive,
+  isProjectHostUpgradeBannerSuppressed,
+} from "@cocalc/server/hosts/runtime-transition";
 
 // This gates placement, recovery, and runtime management. Keep it short; the
 // operator UI uses its own display grace so false stale dashboards do not delay
@@ -372,8 +376,10 @@ export function computeHostOperationalAvailability(
   row: any,
   {
     includeSyntheticProbe = true,
+    allowPlannedProjectHostTransition = false,
   }: {
     includeSyntheticProbe?: boolean;
+    allowPlannedProjectHostTransition?: boolean;
   } = {},
 ): {
   operational: boolean;
@@ -401,7 +407,26 @@ export function computeHostOperationalAvailability(
   }
 
   const seenMs = hostLastSeenMs(row);
+  const plannedTransitionActive = isPlannedProjectHostRuntimeTransitionActive(
+    row?.metadata,
+  );
+  const suppressPlannedTransitionBanner =
+    allowPlannedProjectHostTransition &&
+    isProjectHostUpgradeBannerSuppressed(row?.metadata);
+  if (plannedTransitionActive && !allowPlannedProjectHostTransition) {
+    return {
+      operational: false,
+      online:
+        seenMs != null &&
+        Date.now() - seenMs <= HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS,
+      status,
+      reason_unavailable: "Host is undergoing a planned project-host upgrade.",
+    };
+  }
   if (seenMs == null) {
+    if (suppressPlannedTransitionBanner) {
+      return { operational: true, online: true, status };
+    }
     return {
       operational: false,
       online: false,
@@ -412,6 +437,9 @@ export function computeHostOperationalAvailability(
 
   const online = Date.now() - seenMs <= HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS;
   if (!online) {
+    if (suppressPlannedTransitionBanner) {
+      return { operational: true, online: true, status };
+    }
     return {
       operational: false,
       online: false,
@@ -430,6 +458,9 @@ export function computeHostOperationalAvailability(
     Number(runtimeHealth?.consecutive_failures ?? 0) === 0 &&
     Number.isFinite(Number(runtimeHealth?.podman_latency_ms));
   if (!runtimeStatus || typeof runtimeHealth?.ready !== "boolean") {
+    if (suppressPlannedTransitionBanner) {
+      return { operational: true, online: true, status };
+    }
     return {
       operational: false,
       online: true,
@@ -441,6 +472,9 @@ export function computeHostOperationalAvailability(
     !syntheticOnlyRuntimeDegradation &&
     (runtimeStatus !== "ready" || runtimeHealth?.ready !== true)
   ) {
+    if (suppressPlannedTransitionBanner) {
+      return { operational: true, online: true, status };
+    }
     const runtimeError = `${runtimeHealth?.error ?? ""}`.trim();
     return {
       operational: false,
@@ -470,6 +504,9 @@ export function computeHostOperationalAvailability(
 
   const publicRouteProbe = row?.metadata?.public_route_probe;
   if (publicRouteProbe?.quarantined === true) {
+    if (suppressPlannedTransitionBanner) {
+      return { operational: true, online: true, status };
+    }
     const publicRouteError = `${publicRouteProbe?.error ?? ""}`.trim();
     return {
       operational: false,

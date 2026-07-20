@@ -423,6 +423,87 @@ describe("parseRow bootstrap lifecycle normalization", () => {
 });
 
 describe("computeHostOperationalAvailability", () => {
+  const plannedTransitionMetadata = (overrides: Record<string, any> = {}) => ({
+    runtime_deployments: {
+      planned_project_host_transition: {
+        operation_id: "upgrade-op-1",
+        component: "project-host",
+        started_at: new Date(Date.now() - 30_000).toISOString(),
+        deadline_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+        banner_suppression_until: new Date(
+          Date.now() + 3 * 60_000,
+        ).toISOString(),
+      },
+    },
+    ...overrides,
+  });
+
+  it("removes a host from placement during a planned project-host upgrade", () => {
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: new Date(),
+        metadata: plannedTransitionMetadata({
+          runtime_health: { status: "ready", ready: true },
+        }),
+      }),
+    ).toMatchObject({
+      operational: false,
+      online: true,
+      reason_unavailable: "Host is undergoing a planned project-host upgrade.",
+    });
+  });
+
+  it("suppresses transient runtime and route failures for assigned projects during the planned grace window", () => {
+    expect(
+      computeHostOperationalAvailability(
+        {
+          status: "running",
+          last_seen: new Date(),
+          metadata: plannedTransitionMetadata({
+            runtime_health: { status: "starting", ready: false },
+            public_route_probe: {
+              status: "failed",
+              quarantined: true,
+              error: "Cloudflare returned 520",
+            },
+          }),
+        },
+        { allowPlannedProjectHostTransition: true },
+      ),
+    ).toMatchObject({ operational: true, online: true });
+  });
+
+  it("does not suppress a real failure after the planned grace window", () => {
+    expect(
+      computeHostOperationalAvailability(
+        {
+          status: "running",
+          last_seen: new Date(),
+          metadata: plannedTransitionMetadata({
+            runtime_deployments: {
+              planned_project_host_transition: {
+                operation_id: "upgrade-op-1",
+                component: "project-host",
+                started_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+                deadline_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+                banner_suppression_until: new Date(
+                  Date.now() - 60_000,
+                ).toISOString(),
+              },
+            },
+            runtime_health: { status: "starting", ready: false },
+          }),
+        },
+        { allowPlannedProjectHostTransition: true },
+      ),
+    ).toMatchObject({
+      operational: false,
+      online: true,
+      reason_unavailable: "Host project runtime is still starting.",
+    });
+  });
+
   it("quarantines hosts without runtime-health metadata", () => {
     expect(
       computeHostOperationalAvailability({

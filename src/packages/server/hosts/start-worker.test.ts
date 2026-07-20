@@ -61,6 +61,22 @@ describe("hosts start-worker bootstrap wait failure detection", () => {
 });
 
 describe("hosts start-worker project-host upgrade convergence detection", () => {
+  test("keeps a planned transition until a scheduled restart reports ready", () => {
+    expect(
+      __test__.projectHostRestartWasScheduled({
+        results: [
+          { component: "conat-router", action: "restarted" },
+          { component: "project-host", action: "restart_scheduled" },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      __test__.projectHostRestartWasScheduled({
+        results: [{ component: "project-host", action: "noop" }],
+      }),
+    ).toBe(false);
+  });
+
   test("recovers an explicit project-host target from the upgrade request", () => {
     expect(
       __test__.requestedProjectHostUpgradeVersion([

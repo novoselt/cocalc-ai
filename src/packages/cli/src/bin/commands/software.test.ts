@@ -3177,7 +3177,7 @@ test("software deploy bay uses the full bay Rocket scope", async () => {
   ]);
 });
 
-test("software deploy project-host publishes compatibility object and sets fleet default", async () => {
+test("software deploy project-host starts a paced fleet campaign by default", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-project-host-"));
   const localStore = join(dir, "store");
   const source = join(dir, "bundle-linux.tar.xz");
@@ -3245,36 +3245,27 @@ test("software deploy project-host publishes compatibility object and sets fleet
       .toString("utf8"),
   );
   assert.equal(versions.versions[0].version, artifactId);
-  assert.equal(runs.length, 2);
-  assert.deepEqual(runs[0].args, [
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].args.slice(-19), [
     "--profile",
     "staging",
     "host",
     "deploy",
-    "set",
-    "--global",
-    "--artifact",
-    "project-host",
+    "rollout-fleet",
+    "--all-online",
     "--desired-version",
     artifactId,
+    "--base-url",
+    "https://software.example.test/software",
+    "--max-concurrent",
+    "2",
+    "--canary-stabilize-seconds",
+    "180",
+    "--stabilize-seconds",
+    "60",
     "--reason",
     "software-deploy-project-host",
-  ]);
-  assert.deepEqual(runs[1].args, [
-    "--profile",
-    "staging",
-    "host",
-    "deploy",
-    "set",
-    "--global",
-    "--component",
-    "project-host",
-    "--desired-version",
-    artifactId,
-    "--policy",
-    "restart_now",
-    "--reason",
-    "software-deploy-project-host",
+    "--wait",
   ]);
   const history = JSON.parse(
     r2.objects
@@ -3486,7 +3477,7 @@ test("software deploy host-bootstrap requires scope only with rollout", async ()
   );
 });
 
-test("software deploy project-host --rollout sets fleet default and upgrades online hosts", async () => {
+test("software deploy project-host accepts explicit rollout tuning", async () => {
   const dir = mkdtempSync(
     join(tmpdir(), "software-deploy-project-host-rollout-"),
   );
@@ -3519,6 +3510,14 @@ test("software deploy project-host --rollout sets fleet default and upgrades onl
     "software",
     "deploy",
     "--rollout",
+    "--rollout-canary",
+    "quiet-host",
+    "--rollout-max-concurrent",
+    "3",
+    "--rollout-canary-stabilize-seconds",
+    "30",
+    "--rollout-stabilize-seconds",
+    "10",
     "project-host",
     "host-rollout",
     "staging",
@@ -3527,73 +3526,29 @@ test("software deploy project-host --rollout sets fleet default and upgrades onl
   ]);
 
   const artifactId = "20260614T235912Z-e882d124-host-rollout";
-  assert.equal(runs.length, 5);
-  assert.deepEqual(runs[0].args.slice(-12), [
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].args.slice(-21), [
     "--profile",
     "staging",
     "host",
     "deploy",
-    "set",
-    "--global",
-    "--artifact",
-    "project-host",
-    "--desired-version",
-    artifactId,
-    "--reason",
-    "software-deploy-project-host",
-  ]);
-  assert.deepEqual(runs[1].args.slice(-14), [
-    "--profile",
-    "staging",
-    "host",
-    "deploy",
-    "set",
-    "--global",
-    "--component",
-    "project-host",
-    "--desired-version",
-    artifactId,
-    "--policy",
-    "restart_now",
-    "--reason",
-    "software-deploy-project-host",
-  ]);
-  assert.deepEqual(runs[2].args.slice(-12), [
-    "--profile",
-    "staging",
-    "host",
-    "upgrade",
+    "rollout-fleet",
     "--all-online",
-    "--artifact",
-    "project-host",
-    "--artifact-version",
+    "--desired-version",
     artifactId,
     "--base-url",
     "https://software.example.test/software",
-    "--wait",
-  ]);
-  assert.deepEqual(runs[3].args.slice(-11), [
-    "--profile",
-    "staging",
-    "host",
-    "deploy",
-    "reconcile",
-    "--all-online",
-    "--component",
-    "project-host",
+    "--max-concurrent",
+    "3",
+    "--canary-stabilize-seconds",
+    "30",
+    "--stabilize-seconds",
+    "10",
     "--reason",
     "software-deploy-project-host",
+    "--canary",
+    "quiet-host",
     "--wait",
-  ]);
-  assert.deepEqual(runs[4].args.slice(-8), [
-    "--profile",
-    "staging",
-    "host",
-    "deploy",
-    "resume-default",
-    "--all-hosts",
-    "--artifact",
-    "project-host",
   ]);
   const history = JSON.parse(
     r2.objects

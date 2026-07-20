@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { delay } from "awaiting";
 import type {
   Host,
@@ -23,6 +24,8 @@ import type {
   HostRuntimeDeploymentUpsert,
   HostLroResponse,
   HostLroKind,
+  HostRuntimeFleetRolloutRequest,
+  HostRuntimeFleetRolloutResponse,
   HostProjectRow,
   HostProjectsResponse,
   HostProjectStateFilter,
@@ -606,6 +609,7 @@ const HOST_RECONCILE_RUNTIME_DEPLOYMENTS_LRO_KIND =
 const HOST_ROLLBACK_RUNTIME_DEPLOYMENTS_LRO_KIND =
   "host-rollback-runtime-deployments";
 const HOST_UPGRADE_LRO_KIND = "host-upgrade-software";
+const HOST_RUNTIME_FLEET_ROLLOUT_LRO_KIND = "host-runtime-fleet-rollout";
 const HOST_ROLLOUT_MANAGED_COMPONENTS_LRO_KIND =
   "host-rollout-managed-components";
 const HOST_DEPROVISION_LRO_KIND = "host-deprovision";
@@ -7140,6 +7144,200 @@ export async function updateHostMachine({
     await reconcileCloudHostBootstrapOverSsh({ host_id: row.id, row: rows[0] });
   }
   return parseRow(rows[0]);
+}
+
+function normalizeFleetRolloutInteger({
+  value,
+  fallback,
+  min,
+  max,
+  name,
+}: {
+  value: unknown;
+  fallback: number;
+  min: number;
+  max: number;
+  name: string;
+}): number {
+  if (value == null || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be an integer from ${min} through ${max}`);
+  }
+  return parsed;
+}
+
+export async function rolloutHostRuntimeFleet({
+  account_id,
+  host_ids,
+  artifact,
+  version,
+  base_url,
+  canary_host_id,
+  max_concurrent,
+  canary_stabilize_seconds,
+  stabilize_seconds,
+  promote_global,
+  reason,
+}: HostRuntimeFleetRolloutRequest & {
+  account_id?: string;
+}): Promise<HostRuntimeFleetRolloutResponse> {
+  const requested_by = await assertRuntimeDeploymentGlobalAccess(account_id);
+  if (artifact !== "project-host") {
+    throw new Error("paced fleet rollout currently supports project-host only");
+  }
+  const desiredVersion = `${version ?? ""}`.trim();
+  if (!desiredVersion) {
+    throw new Error("project-host rollout version is required");
+  }
+  const uniqueHostIds = Array.from(
+    new Set((host_ids ?? []).map((id) => `${id ?? ""}`.trim()).filter(Boolean)),
+  );
+  if (!uniqueHostIds.length) {
+    throw new Error("project-host fleet rollout requires at least one host");
+  }
+  const canaryHostId = `${canary_host_id ?? ""}`.trim() || uniqueHostIds[0];
+  if (!uniqueHostIds.includes(canaryHostId)) {
+    throw new Error("canary host must be included in the rollout host cohort");
+  }
+  const { rows } = await pool().query(
+    `SELECT * FROM project_hosts WHERE id::text = ANY($1::text[]) AND deleted IS NULL`,
+    [uniqueHostIds],
+  );
+  const rowsById = new Map(rows.map((row) => [`${row.id}`, row]));
+  const missing = uniqueHostIds.filter((id) => !rowsById.has(id));
+  if (missing.length) {
+    throw new Error(
+      `project-host rollout host(s) not found: ${missing.join(", ")}`,
+    );
+  }
+  const localBayId = getConfiguredBayId();
+  const remote = uniqueHostIds.filter((id) => {
+    const bayId = `${rowsById.get(id)?.bay_id ?? ""}`.trim();
+    return bayId && bayId !== localBayId;
+  });
+  if (remote.length) {
+    throw new Error(
+      `project-host fleet rollout is bay-local; create a separate campaign on the authoritative bay for: ${remote.join(", ")}`,
+    );
+  }
+  const unavailable = uniqueHostIds.flatMap((id) => {
+    const row = rowsById.get(id);
+    const availability = computeHostOperationalAvailability(row);
+    return availability.operational
+      ? []
+      : [
+          `${row?.name ?? id}: ${availability.reason_unavailable ?? "unavailable"}`,
+        ];
+  });
+  if (unavailable.length) {
+    throw new Error(
+      `project-host fleet rollout requires an initially healthy cohort: ${unavailable.join("; ")}`,
+    );
+  }
+  if (promote_global === true) {
+    const { rows: fleetRows } = await pool().query(
+      `SELECT * FROM project_hosts WHERE deleted IS NULL`,
+    );
+    const omittedHealthyHosts = fleetRows
+      .filter((row) => {
+        const bayId = `${row.bay_id ?? ""}`.trim();
+        return (!bayId || bayId === localBayId) &&
+          computeHostOperationalAvailability(row).operational
+          ? !rowsById.has(`${row.id}`)
+          : false;
+      })
+      .map((row) => `${row.name ?? row.id}`);
+    if (omittedHealthyHosts.length) {
+      throw new Error(
+        `cannot promote a global project-host default while omitting healthy local hosts: ${omittedHealthyHosts.join(", ")}`,
+      );
+    }
+  }
+  const normalizedMaxConcurrent = normalizeFleetRolloutInteger({
+    value: max_concurrent,
+    fallback: 2,
+    min: 1,
+    max: 5,
+    name: "max_concurrent",
+  });
+  const normalizedCanaryStabilizeSeconds = normalizeFleetRolloutInteger({
+    value: canary_stabilize_seconds,
+    fallback: 180,
+    min: 0,
+    max: 1800,
+    name: "canary_stabilize_seconds",
+  });
+  const normalizedStabilizeSeconds = normalizeFleetRolloutInteger({
+    value: stabilize_seconds,
+    fallback: 60,
+    min: 0,
+    max: 600,
+    name: "stabilize_seconds",
+  });
+  const orderedHostIds = [
+    canaryHostId,
+    ...uniqueHostIds
+      .filter((id) => id !== canaryHostId)
+      .sort((left, right) => {
+        const leftName = `${rowsById.get(left)?.name ?? left}`;
+        const rightName = `${rowsById.get(right)?.name ?? right}`;
+        return leftName.localeCompare(rightName);
+      }),
+  ];
+  const scope_id = randomUUID();
+  const op = await createLro({
+    kind: HOST_RUNTIME_FLEET_ROLLOUT_LRO_KIND,
+    scope_type: "hub",
+    scope_id,
+    created_by: requested_by,
+    routing: "hub",
+    input: {
+      host_ids: orderedHostIds,
+      artifact,
+      version: desiredVersion,
+      base_url: `${base_url ?? ""}`.trim() || undefined,
+      canary_host_id: canaryHostId,
+      max_concurrent: normalizedMaxConcurrent,
+      canary_stabilize_seconds: normalizedCanaryStabilizeSeconds,
+      stabilize_seconds: normalizedStabilizeSeconds,
+      promote_global: promote_global === true,
+      reason: `${reason ?? ""}`.trim() || "paced_project_host_rollout",
+    },
+    dedupe_key: `${HOST_RUNTIME_FLEET_ROLLOUT_LRO_KIND}:${JSON.stringify({
+      artifact,
+      version: desiredVersion,
+      host_ids: [...orderedHostIds].sort(),
+    })}`,
+    status: "queued",
+  });
+  await publishLroSummary({
+    scope_type: op.scope_type,
+    scope_id: op.scope_id,
+    summary: op,
+  });
+  await publishLroEvent({
+    scope_type: op.scope_type,
+    scope_id: op.scope_id,
+    op_id: op.op_id,
+    event: {
+      type: "progress",
+      ts: Date.now(),
+      phase: "queued",
+      message: "paced project-host rollout queued",
+      progress: 0,
+      detail: op.input,
+    },
+  }).catch(() => undefined);
+  return {
+    op_id: op.op_id,
+    scope_type: "hub",
+    scope_id,
+    service: PERSIST_SERVICE,
+    stream_name: lroStreamName(op.op_id),
+    kind: HOST_RUNTIME_FLEET_ROLLOUT_LRO_KIND,
+    host_ids: orderedHostIds,
+  };
 }
 
 export async function upgradeHostSoftware({
