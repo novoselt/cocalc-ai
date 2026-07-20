@@ -412,6 +412,42 @@ describe("SyncFsService", () => {
     svc.close();
   }, 10_000);
 
+  it("retains trusted heads when an incremental stream refresh fails", async () => {
+    const projectId = "p-head-refresh";
+    const syncPath = "head-refresh.txt";
+    const stringId = syncStringId(projectId, syncPath);
+    const head = legacyPatchId(100);
+    const store = new SyncFsWatchStore();
+    store.setFsHead({
+      string_id: stringId,
+      time: head,
+      version: 1,
+      heads: [head],
+      lastSeq: 1,
+      formatVersion: 2,
+    });
+    const fake = new FakeAStream();
+    (fake as any).getAll = async function* (opts: { start_seq?: number }) {
+      fake.lastStartSeq = opts.start_seq;
+      throw new Error("incremental refresh unavailable");
+    };
+    const svc = new SyncFsService(store);
+    (svc as any).getPatchWriter = async () => fake;
+
+    const result = await (svc as any).getStreamHeads({
+      project_id: projectId,
+      string_id: stringId,
+      path: syncPath,
+    });
+
+    expect(result).toMatchObject({
+      heads: [head],
+      maxVersion: 1,
+    });
+    expect(fake.lastStartSeq).toBe(2);
+    svc.close();
+  }, 10_000);
+
   it("does not resurrect an old patch as a head when its snapshot is appended later", async () => {
     const first = legacyPatchId(100);
     const latest = legacyPatchId(200);
@@ -638,7 +674,7 @@ describe("SyncFsService", () => {
     svc.close();
   }, 10_000);
 
-  it("falls back to disk reconciliation when stream baseline load fails", async () => {
+  it("does not reconcile disk when stream baseline load fails", async () => {
     const path = join(dir, "history-fallback.txt");
     writeFileSync(path, "disk-new");
 
@@ -647,7 +683,6 @@ describe("SyncFsService", () => {
       postfix: ".db",
     });
     const store = new SyncFsWatchStore(dbPath);
-    store.setContent(path, "stale-cache");
 
     const fake = new FakeAStream([
       { mesg: { time: legacyPatchId(100), parents: [], version: 1 }, seq: 1 },
@@ -661,9 +696,71 @@ describe("SyncFsService", () => {
       syncPath: "history-fallback.txt",
     });
 
-    // Existing stream message + one published reconciliation patch.
-    expect(fake.messages.length).toBe(2);
-    expect((svc as any).store.get(path)?.content).toBe("disk-new");
+    // Without the authoritative stream value, diffing from an empty local
+    // cache would publish an insertion of the entire file and duplicate it.
+    expect(fake.messages.length).toBe(1);
+    expect((svc as any).store.get(path)).toBeUndefined();
+    svc.close();
+  }, 10_000);
+
+  it("does not arm a watcher until stream baseline loading succeeds", async () => {
+    const path = join(dir, "history-retry.txt");
+    writeFileSync(path, "disk-value");
+
+    const fake = new FakeAStream([
+      { mesg: { time: legacyPatchId(100), parents: [], version: 1 }, seq: 1 },
+    ]);
+    const svc = new SyncFsService();
+    (svc as any).getPatchWriter = async () => fake;
+    const loadBaseline = jest
+      .spyOn(svc as any, "loadDocViaSyncDoc")
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue("disk-value");
+    const meta = {
+      project_id: "p-history-retry",
+      syncPath: "history-retry.txt",
+    };
+
+    await svc.heartbeat(path, true, meta);
+
+    expect(fake.messages).toHaveLength(1);
+    expect((svc as any).store.get(path)).toBeUndefined();
+    expect(svc.getDebugStats()).toMatchObject({
+      activePaths: 0,
+      activeDirs: 0,
+    });
+
+    await svc.heartbeat(path, true, meta);
+
+    expect(loadBaseline).toHaveBeenCalledTimes(2);
+    expect(fake.messages).toHaveLength(1);
+    expect((svc as any).store.get(path)?.content).toBe("disk-value");
+    expect(svc.getDebugStats()).toMatchObject({
+      activePaths: 1,
+      activeDirs: 1,
+    });
+    svc.close();
+  }, 10_000);
+
+  it("does not treat a failed stream read as empty history", async () => {
+    const path = join(dir, "history-read-error.txt");
+    writeFileSync(path, "existing document");
+
+    const fake = new FakeAStream();
+    (fake as any).getAll = async function* () {
+      throw new Error("stream unavailable");
+    };
+    const svc = new SyncFsService();
+    svc.on("error", () => undefined);
+    (svc as any).getPatchWriter = async () => fake;
+
+    await (svc as any).initPath(path, {
+      project_id: "p-history-read-error",
+      syncPath: "history-read-error.txt",
+    });
+
+    expect(fake.messages).toHaveLength(0);
+    expect((svc as any).store.get(path)).toBeUndefined();
     svc.close();
   }, 10_000);
 
