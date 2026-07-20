@@ -12,7 +12,7 @@ so that Typescript can meaningfully type check everything.
 */
 
 import type { JupyterSockets } from "@cocalc/jupyter/zmq";
-import type { KernelInfo } from "@cocalc/util/jupyter/types";
+import type { KernelInfo, NbconvertResult } from "@cocalc/util/jupyter/types";
 export type { KernelInfo };
 import type { EventIterator } from "@cocalc/util/event-iterator";
 import { type BackendState, type KernelState } from "@cocalc/jupyter/types";
@@ -116,7 +116,7 @@ export interface JupyterKernelInterface extends EventEmitterInterface {
   }): Promise<any>;
   kernel_info(): Promise<KernelInfo>;
   more_output(id: string): any[];
-  nbconvert(args: string[], timeout?: number): Promise<void>;
+  nbconvert(args: string[], timeout?: number): Promise<NbconvertResult>;
   sendCommMessageToKernel(msg: {
     msg_id: string;
     comm_id: string;

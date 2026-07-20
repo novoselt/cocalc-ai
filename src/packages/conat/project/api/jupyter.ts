@@ -1,4 +1,7 @@
-import type { NbconvertParams } from "@cocalc/util/jupyter/types";
+import type {
+  NbconvertParams,
+  NbconvertResult,
+} from "@cocalc/util/jupyter/types";
 import type { RunNotebookOptions } from "@cocalc/util/jupyter/nbgrader-types";
 import type { KernelSpec } from "@cocalc/util/jupyter/types";
 import { type ProjectJupyterApiOptions } from "@cocalc/util/jupyter/api-types";
@@ -45,7 +48,7 @@ export interface Jupyter {
     kernel_state: string;
   }>;
 
-  nbconvert: (opts: NbconvertParams) => Promise<void>;
+  nbconvert: (opts: NbconvertParams) => Promise<NbconvertResult>;
 
   runNotebook: (opts: RunNotebookOptions) => Promise<string>;
 

@@ -9,15 +9,21 @@ Node.js interface to nbconvert.
 
 import { executeCode } from "@cocalc/backend/execute-code";
 import htmlToPDF from "./html-to-pdf";
-import { parseSource, parseTo } from "./util";
+import { parseSource, parseTo, outputPath } from "./util";
 import { join, parse } from "path";
+import { readFile } from "fs/promises";
 import { getLogger } from "@cocalc/project/logger";
 import { sanitize_nbconvert_path } from "@cocalc/util/sanitize-nbconvert";
-import type { NbconvertParams } from "@cocalc/util/jupyter/types";
+import type {
+  NbconvertParams,
+  NbconvertResult,
+} from "@cocalc/util/jupyter/types";
 
 const log = getLogger("jupyter-nbconvert");
 
-export async function nbconvert(opts: NbconvertParams): Promise<void> {
+export async function nbconvert(
+  opts: NbconvertParams,
+): Promise<NbconvertResult> {
   log.debug("start", opts);
   try {
     if (!opts.timeout) {
@@ -25,9 +31,27 @@ export async function nbconvert(opts: NbconvertParams): Promise<void> {
     }
 
     let { to } = parseTo(opts.args);
+    const requestedTo = to;
 
     let convertToPDF = false;
     const originalSource = parseSource(opts.args); // before any mangling for the benefit of nbconvert.
+    let languageInfo: { file_extension?: unknown } | undefined;
+    if (requestedTo === "script") {
+      try {
+        const notebook = JSON.parse(
+          await readFile(join(opts.directory ?? "", originalSource), "utf8"),
+        );
+        languageInfo = notebook?.metadata?.language_info;
+      } catch {
+        // Nbconvert also falls back to .txt when language metadata is absent.
+      }
+    }
+    const outputFile = outputPath({
+      directory: opts.directory,
+      languageInfo,
+      source: originalSource,
+      to: requestedTo,
+    });
     if (to == "lab-pdf") {
       for (let i = 0; i < opts.args.length; i++) {
         if (opts.args[i] == "lab-pdf") {
@@ -60,7 +84,7 @@ export async function nbconvert(opts: NbconvertParams): Promise<void> {
     // Note about bash/ulimit_timeout below.  This is critical since nbconvert
     // could launch things like pdflatex that might run forever and without
     // ulimit they do not get killed properly; this has happened in production!
-    const output = await executeCode({
+    const commandOutput = await executeCode({
       command,
       args,
       path: opts.directory,
@@ -69,14 +93,15 @@ export async function nbconvert(opts: NbconvertParams): Promise<void> {
       ulimit_timeout: true,
       bash: true,
     });
-    if (output.exit_code != 0) {
-      throw Error(output.stderr);
+    if (commandOutput.exit_code != 0) {
+      throw Error(commandOutput.stderr);
     }
 
     if (convertToPDF) {
       // Important to use *unmangled* source here!
       await htmlToPDF(htmlPath(join(opts.directory ?? "", originalSource)));
     }
+    return { output: outputFile };
   } finally {
     log.debug("finished");
   }

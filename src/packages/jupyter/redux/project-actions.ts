@@ -156,6 +156,10 @@ export class JupyterActions extends JupyterActions0 {
     });
   };
 
+  override ensure_backend_kernel_setup(): void {
+    this.ensureKernelIsReady();
+  }
+
   // not actually async...
   signal = async (signal = "SIGINT"): Promise<void> => {
     this.jupyter_kernel?.signal(signal);

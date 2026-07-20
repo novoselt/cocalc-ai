@@ -71,7 +71,10 @@ import { type BackendState, type KernelState } from "@cocalc/jupyter/types";
 import { redux_name } from "@cocalc/util/redux/name";
 import { redux } from "@cocalc/jupyter/redux/app";
 import { VERSION } from "@cocalc/jupyter/kernel/version";
-import type { NbconvertParams } from "@cocalc/util/jupyter/types";
+import type {
+  NbconvertParams,
+  NbconvertResult,
+} from "@cocalc/util/jupyter/types";
 import type { Client } from "@cocalc/sync/client/types";
 import { getLogger } from "@cocalc/backend/logger";
 import { base64ToBuffer } from "@cocalc/util/base64";
@@ -159,7 +162,9 @@ function killKernel(kernel: SpawnedKernel) {
 // this code (e.g., remote kernels) don't need to provide nbconvert
 // functionality, and our implementation has some heavy dependencies,
 // e.g., on a big chunk of the react frontend.
-let nbconvert: (opts: NbconvertParams) => Promise<void> = async () => {
+let nbconvert: (
+  opts: NbconvertParams,
+) => Promise<NbconvertResult> = async () => {
   throw Error("nbconvert is not enabled");
 };
 export function initNbconvert(f) {
@@ -1037,7 +1042,7 @@ export class JupyterKernel
   };
 
   nbconvert = reuseInFlight(
-    async (args: string[], timeout?: number): Promise<void> => {
+    async (args: string[], timeout?: number): Promise<NbconvertResult> => {
       if (timeout === undefined) {
         timeout = 60; // seconds
       }
@@ -1047,7 +1052,7 @@ export class JupyterKernel
       args = copy(args);
       args.push("--");
       args.push(this._filename);
-      await nbconvert({
+      return await nbconvert({
         args,
         timeout,
         directory: this._directory,
