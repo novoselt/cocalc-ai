@@ -4336,7 +4336,13 @@ Supported deploy/smoke components:
                 ...(hostManagedComponents?.length
                   ? { host_managed_components: hostManagedComponents }
                   : {}),
-                ...(hostTarget ? { host_rollout: opts.rollout === true } : {}),
+                ...(hostTarget
+                  ? {
+                      host_rollout:
+                        hostTarget.pacedFleetRollout === true ||
+                        opts.rollout === true,
+                    }
+                  : {}),
                 ...(hostBootstrapTarget
                   ? {
                       host_bootstrap_reconcile: opts.rollout === true,
@@ -4544,7 +4550,13 @@ Supported deploy/smoke components:
               ...(hostManagedComponents?.length
                 ? { host_managed_components: hostManagedComponents }
                 : {}),
-              ...(hostTarget ? { host_rollout: opts.rollout === true } : {}),
+              ...(hostTarget
+                ? {
+                    host_rollout:
+                      hostTarget.pacedFleetRollout === true ||
+                      opts.rollout === true,
+                  }
+                : {}),
               ...(hostBootstrapUrl
                 ? { host_bootstrap_url: hostBootstrapUrl }
                 : {}),

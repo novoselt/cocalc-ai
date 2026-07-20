@@ -3276,6 +3276,14 @@ test("software deploy project-host starts a paced fleet campaign by default", as
   );
   assert.equal(history.deployments[0].status, "succeeded");
   assert.equal(history.deployments[0].artifact_id, artifactId);
+  const deploymentRecord = JSON.parse(
+    r2.objects
+      .get(
+        `software/deployments/staging/project-host/${history.deployments[0].deployment_id}.json`,
+      )!
+      .toString("utf8"),
+  );
+  assert.equal(deploymentRecord.details.host_rollout, true);
 });
 
 test("software deploy host-bootstrap separates publish from rollout", async () => {
@@ -3881,6 +3889,14 @@ test("software deploy host-conat-router starts a paced component campaign", asyn
   );
   assert.equal(history.deployments[0].artifact_component, "project-host");
   assert.equal(history.deployments[0].target.kind, "project-host-fleet");
+  const deploymentRecord = JSON.parse(
+    r2.objects
+      .get(
+        `software/deployments/staging/host-conat-router/${history.deployments[0].deployment_id}.json`,
+      )!
+      .toString("utf8"),
+  );
+  assert.equal(deploymentRecord.details.host_rollout, true);
 });
 
 test("software deploy host-conat-router --rollout uses the same paced campaign", async () => {
