@@ -772,6 +772,104 @@ describe("hosts.reconcileHostSoftwareInternal", () => {
     ).not.toHaveBeenCalled();
   });
 
+  it("ignores an unchanged lifecycle error while a new helper reconcile starts", async () => {
+    const ssh = makeSshChild();
+    spawnMock = jest.fn(() => ssh.child);
+    const row = makeHostRow({
+      version: "1776486535462",
+      lifecycleStatus: "error",
+      publicIp: "34.11.143.149",
+    });
+    row.metadata.bootstrap = {
+      status: "error",
+      updated_at: "2026-05-10T15:00:00Z",
+      message: "bootstrap failed (exit 1) at line 211",
+    };
+    row.metadata.bootstrap_lifecycle = {
+      summary_status: "error",
+      summary_message:
+        "reconcile per-project network containment failed with exit code 1",
+      last_error:
+        "reconcile per-project network containment failed with exit code 1",
+      last_reconcile_started_at: "2026-05-10T15:00:00Z",
+      last_reconcile_finished_at: "2026-05-10T15:00:01Z",
+    };
+
+    let stateLoads = 0;
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
+        return { rows: [row] };
+      }
+      if (sql.includes("SELECT status, deleted, metadata FROM project_hosts")) {
+        stateLoads += 1;
+        if (stateLoads === 1) {
+          return {
+            rows: [
+              {
+                status: "running",
+                deleted: null,
+                metadata: row.metadata,
+              },
+            ],
+          };
+        }
+        if (stateLoads === 2) {
+          return {
+            rows: [
+              {
+                status: "running",
+                deleted: null,
+                metadata: {
+                  ...row.metadata,
+                  bootstrap: {
+                    status: "running",
+                    updated_at: "2026-05-10T15:02:00Z",
+                    message: "Reconciling privileged host helpers",
+                  },
+                },
+              },
+            ],
+          };
+        }
+        return {
+          rows: [
+            {
+              status: "running",
+              deleted: null,
+              metadata: {
+                ...row.metadata,
+                bootstrap: {
+                  status: "done",
+                  updated_at: "2026-05-10T15:02:01Z",
+                  message: "Privileged host helpers reconciled",
+                },
+                bootstrap_lifecycle: {
+                  summary_status: "in_sync",
+                  last_reconcile_result: "success",
+                  last_reconcile_started_at: "2026-05-10T15:02:00Z",
+                  last_reconcile_finished_at: "2026-05-10T15:02:01Z",
+                },
+              },
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { reconcileHostSoftwareInternal } = await import("./hosts");
+    await expect(
+      reconcileHostSoftwareInternal({
+        account_id: ACCOUNT_ID,
+        id: HOST_ID,
+        force_bootstrap: true,
+        bootstrap_scope: "helpers",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(delayMock).toHaveBeenCalled();
+  });
+
   it("uses the effective runtime deployment artifact target during software reconcile", async () => {
     const initialRow = makeHostRow({
       version: "1776405602543",
