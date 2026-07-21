@@ -2848,6 +2848,25 @@ apply_existing_project_io_policy() {
   fi
 }
 
+normalize_project_io_class_state() {
+  local state_file project_id io_class
+  mkdir -p "$PROJECT_IO_CLASS_STATE_DIR"
+  for state_file in "${PROJECT_IO_CLASS_STATE_DIR}"/*; do
+    [ -f "$state_file" ] || continue
+    project_id="${state_file##*/}"
+    if ! is_project_uuid "$project_id"; then
+      rm -f -- "$state_file"
+      continue
+    fi
+    io_class="$(cat "$state_file")"
+    case "$io_class" in
+      standard|member|premium) ;;
+      *) io_class="standard" ;;
+    esac
+    printf '%s\n' "$io_class" > "$state_file"
+  done
+}
+
 enable_cgroup_controllers() {
   local parent="$1" controller
   [ -w "${parent}/cgroup.subtree_control" ] || return 0
@@ -3921,6 +3940,7 @@ PY
       exit 2
     fi
     acquire_project_cgroup_lock
+    normalize_project_io_class_state
     configure_project_pool_hierarchy
     for pool in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
       [ -d "$pool" ] || continue

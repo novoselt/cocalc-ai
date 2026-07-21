@@ -1484,6 +1484,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn('io_class="${12:-standard}"', script)
             self.assertIn("reconcile-project-io-policy)", script)
+            self.assertIn("normalize_project_io_class_state", script)
             self.assertIn(
                 'PROJECT_IO_CLASS_STATE_DIR="/var/lib/cocalc/project-io-classes"',
                 script,
