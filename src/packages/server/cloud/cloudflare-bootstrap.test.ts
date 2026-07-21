@@ -52,6 +52,11 @@ describe("bootstrapCloudflareConfiguration", () => {
             scopes: ["com.cloudflare.api.account.zone"],
           },
           {
+            id: "config-rules-write",
+            name: "Config Rules Write",
+            scopes: ["com.cloudflare.api.account.zone"],
+          },
+          {
             id: "managed-headers-write",
             name: "Managed headers Write",
             scopes: ["com.cloudflare.api.account.zone"],

@@ -18,6 +18,7 @@ import {
 import { deriveProjectHostHostname } from "./derived-domains";
 import {
   deleteHostDns,
+  ensureCloudflareProjectHostSslRule,
   ensureHostDns,
   ensureProxiedAddressDns,
   getCloudflareIpv4Cidrs,
@@ -194,12 +195,20 @@ async function prepareDirectRoute({
     throw new Error("GCP provider cannot reconcile public HTTPS ingress");
   }
 
-  let cloudflareOrigin: Record<string, any>;
+  const sslRule = await ensureCloudflareProjectHostSslRule({
+    hostname: stableHostname,
+    host_id: row.id,
+  });
+  let zoneSslMode: Record<string, any>;
   try {
-    cloudflareOrigin = await getCloudflareZoneSslMode(stableHostname);
+    zoneSslMode = await getCloudflareZoneSslMode(stableHostname);
   } catch (err) {
-    cloudflareOrigin = { error: `${err}` };
+    zoneSslMode = { error: `${err}` };
   }
+  const cloudflareOrigin = {
+    project_host_ssl_rule: sslRule,
+    zone_ssl_mode: zoneSslMode,
+  };
 
   await onProgress?.({
     phase: "firewall",

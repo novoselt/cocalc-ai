@@ -146,6 +146,129 @@ describe("cloud dns", () => {
     });
   });
 
+  it("adds a hostname-scoped Full SSL rule without replacing existing rules", async () => {
+    const rules: any[] = [
+      {
+        id: "unrelated-rule",
+        ref: "unrelated",
+        description: "unrelated configuration",
+      },
+    ];
+    fetchMock.mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/zones?")) return zoneResponse;
+      if (url.endsWith("/zones/zone-1/rulesets")) {
+        if (init?.method === "POST") {
+          throw new Error("existing ruleset must not be replaced");
+        }
+        return responseWith([
+          {
+            id: "config-ruleset",
+            kind: "zone",
+            phase: "http_config_settings",
+          },
+        ]);
+      }
+      if (
+        url.endsWith("/rulesets/config-ruleset/rules") &&
+        init?.method === "POST"
+      ) {
+        const rule = JSON.parse(init.body as string);
+        rules.push({ ...rule, id: "project-host-rule" });
+        return responseWith(rules.at(-1));
+      }
+      if (url.endsWith("/rulesets/config-ruleset")) {
+        return responseWith({
+          id: "config-ruleset",
+          kind: "zone",
+          phase: "http_config_settings",
+          rules,
+        });
+      }
+      return responseWith({});
+    });
+    (global as any).fetch = fetchMock;
+
+    const { ensureCloudflareProjectHostSslRule } = await import("./dns");
+    const result = await ensureCloudflareProjectHostSslRule({
+      hostname: "host-abc123-dev.example.com",
+      host_id: "abc123",
+    });
+
+    expect(result).toMatchObject({
+      ruleset_id: "config-ruleset",
+      rule_id: "project-host-rule",
+      ref: "cocalc_project_host_direct_tls",
+      ssl: "full",
+    });
+    expect(result.expression).toContain('starts_with(http.host, "host-")');
+    expect(result.expression).toContain(
+      'ends_with(http.host, "-dev.example.com")',
+    );
+    expect(result.expression).toContain(
+      'starts_with(http.host, "direct-check-")',
+    );
+    expect(rules[0]?.id).toBe("unrelated-rule");
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url).endsWith("/rulesets/config-ruleset/rules") &&
+        init?.method === "POST",
+    );
+    expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({
+      action: "set_config",
+      action_parameters: { ssl: "full" },
+      enabled: true,
+    });
+  });
+
+  it("updates the managed SSL rule in place", async () => {
+    const managedRule = {
+      id: "project-host-rule",
+      ref: "cocalc_project_host_direct_tls",
+      description:
+        "CoCalc project-host direct ingress uses encrypted Cloudflare origin traffic",
+    };
+    fetchMock.mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/zones?")) return zoneResponse;
+      if (url.endsWith("/zones/zone-1/rulesets")) {
+        return responseWith([
+          {
+            id: "config-ruleset",
+            kind: "zone",
+            phase: "http_config_settings",
+          },
+        ]);
+      }
+      if (
+        url.endsWith("/rulesets/config-ruleset/rules/project-host-rule") &&
+        init?.method === "PATCH"
+      ) {
+        return responseWith(managedRule);
+      }
+      if (url.endsWith("/rulesets/config-ruleset")) {
+        return responseWith({ id: "config-ruleset", rules: [managedRule] });
+      }
+      return responseWith({});
+    });
+    (global as any).fetch = fetchMock;
+
+    const { ensureCloudflareProjectHostSslRule } = await import("./dns");
+    await ensureCloudflareProjectHostSslRule({
+      hostname: "host-abc123-dev.example.com",
+      host_id: "abc123",
+    });
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith(
+            "/rulesets/config-ruleset/rules/project-host-rule",
+          ) && init?.method === "PATCH",
+      ),
+    ).toBe(true);
+  });
+
   it("updates an existing record when record_id is provided", async () => {
     const { ensureHostDns } = await import("./dns");
     await ensureHostDns({

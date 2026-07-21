@@ -200,6 +200,16 @@ async function createDurableTunnelToken(opts: {
     requirePermissionGroup(groups, ["DNS Write", "DNS Edit"], zoneScope),
     requirePermissionGroup(
       groups,
+      [
+        "Config Rules Write",
+        "Config Rules Edit",
+        "Config Settings Write",
+        "Select Configuration Write",
+      ],
+      zoneScope,
+    ),
+    requirePermissionGroup(
+      groups,
       ["Managed headers Write", "Managed Headers Write"],
       zoneScope,
     ),
