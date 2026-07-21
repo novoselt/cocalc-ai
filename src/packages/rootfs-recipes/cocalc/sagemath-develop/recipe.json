@@ -1,6 +1,6 @@
 {
   "id": "cocalc/sagemath-develop",
-  "version": 1,
+  "version": 2,
   "description": "Build the latest SageMath develop branch as a complete, writable source checkout with full Git history, retained build artifacts, and Sage/Python Jupyter kernels.",
   "timeout": 172800,
   "inputs": {
@@ -22,10 +22,13 @@
       "type": "string",
       "default": "true"
     },
+    "install_development_tools": { "type": "string", "default": "true" },
     "install_sagetex": { "type": "string", "default": "true" },
     "prefix": { "type": "string", "default": "/opt/sage" },
     "owner_uid": { "type": "string", "default": "2001" },
     "owner_gid": { "type": "string", "default": "2001" },
+    "owner_home": { "type": "string", "default": "/home/user" },
+    "python_change_max_seconds": { "type": "string", "default": "60" },
     "incremental_build_max_seconds": {
       "type": "string",
       "default": "1800"
@@ -52,7 +55,9 @@
         "Latest SageMath develop branch",
         "Writable /opt/sage source checkout",
         "Full Git history and retained build artifacts",
+        "Verified immediate Python source changes",
         "Verified incremental Cython rebuild",
+        "Sage development command-line tools",
         "Sage and Python Jupyter kernels"
       ],
       "actions": [
