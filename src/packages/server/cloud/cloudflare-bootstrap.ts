@@ -204,10 +204,10 @@ async function createDurableTunnelToken(opts: {
     requirePermissionGroup(
       groups,
       [
-        "Select Configuration Write",
         "Config Settings Write",
         "Config Rules Write",
         "Config Rules Edit",
+        "Select Configuration Write",
       ],
       zoneScope,
     ),

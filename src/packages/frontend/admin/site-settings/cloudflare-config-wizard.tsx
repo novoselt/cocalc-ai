@@ -213,6 +213,7 @@ export default function CloudflareConfigWizard({
   const [locationHeadersResult, setLocationHeadersResult] =
     useState<VisitorLocationHeaderTestResult | null>(null);
   const [notice, setNotice] = useState("");
+  const [applyError, setApplyError] = useState("");
   const [applying, setApplying] = useState(false);
 
   useEffect(() => {
@@ -234,6 +235,7 @@ export default function CloudflareConfigWizard({
       setLocationHeadersTestError("");
       setLocationHeadersResult(null);
       setNotice("");
+      setApplyError("");
       setApplying(false);
       return;
     }
@@ -320,6 +322,8 @@ export default function CloudflareConfigWizard({
 
   async function applySettings() {
     setApplying(true);
+    setApplyError("");
+    setNotice("");
     const updates: Record<string, string> = {};
     try {
       updates.cloudflare_mode = mode;
@@ -368,6 +372,8 @@ export default function CloudflareConfigWizard({
       setR2ApiToken("");
       setR2SecretKey("");
       setNotice("Settings applied and saved. You can now run diagnostics.");
+    } catch (err) {
+      setApplyError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setApplying(false);
     }
@@ -523,11 +529,10 @@ export default function CloudflareConfigWizard({
                   <br />
                   Use your Cloudflare zone instead of cocalc.ai.
                   <br />
-                  The zone permissions must include Zone Read, DNS Write, Select
-                  Configuration Write, and Managed Headers Write. The account
-                  permissions must include Cloudflare Tunnel Write. Select
-                  Configuration Write is required for encrypted direct
-                  project-host routing.
+                  The zone permissions must include Zone Read, DNS Edit, Config
+                  Rules Edit, and Managed Headers Edit. The account permissions
+                  must include Cloudflare Tunnel Edit. Config Rules Edit is
+                  required for encrypted direct project-host routing.
                   <br />
                   Paste the token into the input box here.
                 </Paragraph>
@@ -802,6 +807,14 @@ export default function CloudflareConfigWizard({
             />
           ) : null}
           {notice ? <Alert type="success" showIcon title={notice} /> : null}
+          {applyError ? (
+            <Alert
+              type="error"
+              showIcon
+              title="Cloudflare settings were not saved"
+              description={applyError}
+            />
+          ) : null}
         </Space>
       </Form>
     </Modal>

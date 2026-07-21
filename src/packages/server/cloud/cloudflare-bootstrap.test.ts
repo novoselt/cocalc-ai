@@ -57,6 +57,11 @@ describe("bootstrapCloudflareConfiguration", () => {
             scopes: ["com.cloudflare.api.account.zone"],
           },
           {
+            id: "config-settings-write",
+            name: "Config Settings Write",
+            scopes: ["com.cloudflare.api.account.zone"],
+          },
+          {
             id: "select-configuration-write",
             name: "Select Configuration Write",
             scopes: ["com.cloudflare.api.account.zone"],
@@ -122,7 +127,7 @@ describe("bootstrapCloudflareConfiguration", () => {
       expect.objectContaining({
         method: "POST",
         body: expect.stringMatching(
-          /account-analytics-read[\s\S]*select-configuration-write|select-configuration-write[\s\S]*account-analytics-read/,
+          /account-analytics-read[\s\S]*config-settings-write|config-settings-write[\s\S]*account-analytics-read/,
         ),
       }),
     );
@@ -130,6 +135,9 @@ describe("bootstrapCloudflareConfiguration", () => {
       return String(url).endsWith("/user/tokens") && init?.method === "POST";
     });
     expect(createTokenCall?.[1]?.body).not.toContain("config-rules-write");
+    expect(createTokenCall?.[1]?.body).not.toContain(
+      "select-configuration-write",
+    );
     expect(fetchMock).toHaveBeenLastCalledWith(
       "https://api.cloudflare.com/client/v4/user/tokens/bootstrap-id",
       expect.objectContaining({ method: "DELETE" }),

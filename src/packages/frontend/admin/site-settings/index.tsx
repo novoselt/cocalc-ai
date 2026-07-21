@@ -619,6 +619,7 @@ export default function SiteSettings({ close }) {
     } catch (err) {
       setState("error");
       setError(err);
+      throw err;
     }
   }
 

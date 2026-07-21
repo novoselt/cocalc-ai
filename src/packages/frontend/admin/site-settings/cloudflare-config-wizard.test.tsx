@@ -268,4 +268,44 @@ describe("CloudflareConfigWizard", () => {
       "https://cocalc.example.edu/customize",
     );
   });
+
+  it("keeps a failed save dirty and does not show false success", async () => {
+    const onApply = jest.fn(async () => {
+      throw new Error("save rejected");
+    });
+    render(
+      <CloudflareConfigWizard
+        open
+        onClose={() => {}}
+        data={{
+          ...baseData,
+          r2_access_key_id: "r2-access-key",
+          r2_bucket_prefix: "",
+        }}
+        isSet={{
+          project_hosts_cloudflare_tunnel_api_token: true,
+          r2_api_token: true,
+          r2_secret_access_key: true,
+        }}
+        onApply={onApply}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Apply Settings" }));
+    });
+
+    expect(
+      screen.getByText("Cloudflare settings were not saved"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("save rejected")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Settings applied and saved. You can now run diagnostics.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply Settings" }),
+    ).toBeEnabled();
+  });
 });
