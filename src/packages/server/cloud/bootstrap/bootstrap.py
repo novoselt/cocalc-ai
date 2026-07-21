@@ -2700,7 +2700,7 @@ mode = policy.get("mode")
 if mode not in ("disabled", "observe", "enforce"):
     raise ValueError("invalid project I/O policy mode")
 mountpoint = str(policy.get("mountpoint") or "/mnt/cocalc")
-if not mountpoint.startswith("/") or "\t" in mountpoint or "\n" in mountpoint:
+if not mountpoint.startswith("/") or "\\t" in mountpoint or "\\n" in mountpoint:
     raise ValueError("invalid project I/O mountpoint")
 pool = policy.get("pool") or {}
 leaf = (policy.get("leafClasses") or {}).get(io_class) or {}

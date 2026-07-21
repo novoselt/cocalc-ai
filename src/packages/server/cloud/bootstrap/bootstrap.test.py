@@ -1402,6 +1402,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
+            policy_parser = script.split(
+                "<<'PY'\n", 1
+            )[1].split("\nPY\n", 1)[0]
+            compile(policy_parser, "embedded-project-io-policy.py", "exec")
             self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
             self.assertIn("project-rustic-backup)", script)
             self.assertIn("project-rustic-restore)", script)
