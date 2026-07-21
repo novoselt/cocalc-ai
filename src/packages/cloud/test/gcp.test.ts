@@ -17,6 +17,7 @@ const setSchedulingMock = jest.fn();
 const setMachineTypeMock = jest.fn();
 const setTagsMock = jest.fn();
 const firewallGetMock = jest.fn();
+const firewallListMock = jest.fn();
 const firewallInsertMock = jest.fn();
 const firewallPatchMock = jest.fn();
 const authRequestMock = jest.fn();
@@ -65,6 +66,7 @@ jest.mock("@google-cloud/compute", () => {
   }
   class FirewallsClient {
     get = firewallGetMock;
+    list = firewallListMock;
     insert = firewallInsertMock;
     patch = firewallPatchMock;
     constructor(_opts?: any) {}
@@ -109,6 +111,7 @@ describe("GcpProvider", () => {
     setMachineTypeMock.mockReset();
     setTagsMock.mockReset();
     firewallGetMock.mockReset();
+    firewallListMock.mockReset();
     firewallInsertMock.mockReset();
     firewallPatchMock.mockReset();
     authRequestMock.mockReset();
@@ -117,7 +120,27 @@ describe("GcpProvider", () => {
   });
 
   it("restricts public ingress to the supplied ranges and preserves VM tags", async () => {
-    firewallGetMock.mockRejectedValueOnce({ code: 404 });
+    firewallGetMock.mockRejectedValueOnce({ code: 404 }).mockResolvedValueOnce([
+      {
+        name: "cocalc-project-host-public-https",
+        priority: 1000,
+        sourceRanges: ["103.21.244.0/22", "173.245.48.0/20"],
+        targetTags: ["cocalc-project-host-public-https"],
+        allowed: [{ IPProtocol: "tcp", ports: ["443"] }],
+      },
+    ]);
+    firewallListMock.mockResolvedValueOnce([
+      [
+        {
+          name: "deny-project-host-ingress",
+          priority: 900,
+          direction: "INGRESS",
+          sourceRanges: ["0.0.0.0/0"],
+          targetTags: ["cocalc-project-host-public-https"],
+          denied: [{ IPProtocol: "tcp" }],
+        },
+      ],
+    ]);
     firewallInsertMock.mockResolvedValueOnce([
       { latestResponse: { name: "firewall-op", status: "DONE" } },
     ]);
@@ -134,7 +157,7 @@ describe("GcpProvider", () => {
     ]);
 
     const provider = new GcpProvider();
-    await provider.ensurePublicIngress(
+    const result = await provider.ensurePublicIngress(
       {
         provider: "gcp",
         instance_id: "ph-test",
@@ -170,6 +193,24 @@ describe("GcpProvider", () => {
         },
       }),
     );
+    expect(result).toEqual({
+      rule: {
+        name: "cocalc-project-host-public-https",
+        priority: 1000,
+        source_ranges: ["103.21.244.0/22", "173.245.48.0/20"],
+        target_tags: ["cocalc-project-host-public-https"],
+        allowed: [{ IPProtocol: "tcp", ports: ["443"] }],
+      },
+      potential_conflicts: [
+        {
+          name: "deny-project-host-ingress",
+          priority: 900,
+          source_ranges: ["0.0.0.0/0"],
+          target_tags: ["cocalc-project-host-public-https"],
+          denied: [{ IPProtocol: "tcp" }],
+        },
+      ],
+    });
   });
 
   it("creates a host with boot + data disks and startup script", async () => {

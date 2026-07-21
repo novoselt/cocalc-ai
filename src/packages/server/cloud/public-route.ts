@@ -199,11 +199,17 @@ async function prepareDirectRoute({
     progress: 15,
   });
   const sourceRanges = await getCloudflareIpv4Cidrs();
-  await entry.provider.ensurePublicIngress(
+  const publicIngress = await entry.provider.ensurePublicIngress(
     runtime,
     { ports: [443], source_ranges: sourceRanges },
     creds,
   );
+  await onProgress?.({
+    phase: "firewall",
+    message: "direct HTTPS ingress is reconciled",
+    detail: { public_ingress: publicIngress ?? null },
+    progress: 20,
+  });
 
   await onProgress?.({
     phase: "bootstrap",
@@ -231,7 +237,13 @@ async function prepareDirectRoute({
       ipAddress: runtime.public_ip,
     });
     probeRecordId = probeDns.record_id;
-    await probeCloudflareRoute({ hostname: probeHostname, origin });
+    try {
+      await probeCloudflareRoute({ hostname: probeHostname, origin });
+    } catch (err) {
+      throw new Error(
+        `${err}; provider ingress diagnostics: ${JSON.stringify(publicIngress ?? null)}`,
+      );
+    }
   } finally {
     if (probeRecordId) {
       await deleteHostDns({

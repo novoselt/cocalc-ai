@@ -65,6 +65,23 @@ export type PublicIngressSpec = {
   source_ranges: string[];
 };
 
+export type PublicIngressResult = {
+  rule?: {
+    name?: string;
+    priority?: number;
+    source_ranges?: string[];
+    target_tags?: string[];
+    allowed?: unknown[];
+  };
+  potential_conflicts?: Array<{
+    name?: string;
+    priority?: number;
+    source_ranges?: string[];
+    target_tags?: string[];
+    denied?: unknown[];
+  }>;
+};
+
 export interface CloudProvider {
   createHost(spec: HostSpec, creds: any): Promise<HostRuntime>;
   startHost(runtime: HostRuntime, creds: any): Promise<void>;
@@ -91,7 +108,7 @@ export interface CloudProvider {
     runtime: HostRuntime,
     spec: PublicIngressSpec,
     creds: any,
-  ): Promise<void>;
+  ): Promise<PublicIngressResult | void>;
   deleteHost(
     runtime: HostRuntime,
     creds: any,

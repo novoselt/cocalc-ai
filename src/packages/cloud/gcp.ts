@@ -13,6 +13,7 @@ import type {
   CloudProvider,
   HostRuntime,
   HostSpec,
+  PublicIngressResult,
   PublicIngressSpec,
   RemoteInstance,
 } from "./types";
@@ -919,7 +920,7 @@ export class GcpProvider implements CloudProvider {
     runtime: HostRuntime,
     spec: PublicIngressSpec,
     creds: any,
-  ): Promise<void> {
+  ): Promise<PublicIngressResult> {
     if (!runtime.zone) {
       throw new Error("gcp.ensurePublicIngress requires zone");
     }
@@ -1001,6 +1002,7 @@ export class GcpProvider implements CloudProvider {
     });
 
     const instances = new InstancesClient(credentials);
+    let instanceTags: string[] = [];
     for (let attempt = 1; attempt <= 3; attempt++) {
       const [instance] = await instances.get({
         project: credentials.projectId,
@@ -1010,7 +1012,10 @@ export class GcpProvider implements CloudProvider {
       const existingTags = Array.isArray(instance?.tags?.items)
         ? instance.tags.items.map((tag) => `${tag}`)
         : [];
-      if (existingTags.includes(PROJECT_HOST_PUBLIC_HTTPS_TAG)) return;
+      if (existingTags.includes(PROJECT_HOST_PUBLIC_HTTPS_TAG)) {
+        instanceTags = existingTags;
+        break;
+      }
       try {
         const [response] = await instances.setTags({
           project: credentials.projectId,
@@ -1026,11 +1031,71 @@ export class GcpProvider implements CloudProvider {
           zone: runtime.zone,
           credentials,
         });
-        return;
+        instanceTags = [...existingTags, PROJECT_HOST_PUBLIC_HTTPS_TAG];
+        break;
       } catch (err) {
         if (!isFingerprintConflictError(err) || attempt === 3) throw err;
       }
     }
+
+    const [effectiveRule] = await firewalls.get({
+      project: credentials.projectId,
+      firewall: PROJECT_HOST_PUBLIC_HTTPS_FIREWALL,
+    });
+    const [allRules] = await firewalls.list({
+      project: credentials.projectId,
+    });
+    const rulePriority = Number(effectiveRule?.priority ?? 1000);
+    const potentialConflicts = (Array.isArray(allRules) ? allRules : [])
+      .filter((rule: any) => {
+        if (rule?.disabled === true) return false;
+        if (`${rule?.direction ?? "INGRESS"}`.toUpperCase() !== "INGRESS") {
+          return false;
+        }
+        if (!Array.isArray(rule?.denied) || rule.denied.length === 0) {
+          return false;
+        }
+        if (Number(rule?.priority ?? 1000) > rulePriority) return false;
+        const targetTags = Array.isArray(rule?.targetTags)
+          ? rule.targetTags.map((tag: unknown) => `${tag}`)
+          : [];
+        return (
+          targetTags.length === 0 ||
+          targetTags.some((tag: string) => instanceTags.includes(tag))
+        );
+      })
+      .map((rule: any) => ({
+        name: `${rule?.name ?? ""}` || undefined,
+        priority: Number(rule?.priority ?? 1000),
+        source_ranges: Array.isArray(rule?.sourceRanges)
+          ? rule.sourceRanges.map((range: unknown) => `${range}`)
+          : [],
+        target_tags: Array.isArray(rule?.targetTags)
+          ? rule.targetTags.map((tag: unknown) => `${tag}`)
+          : [],
+        denied: Array.isArray(rule?.denied) ? rule.denied : [],
+      }));
+    const result: PublicIngressResult = {
+      rule: {
+        name: `${effectiveRule?.name ?? PROJECT_HOST_PUBLIC_HTTPS_FIREWALL}`,
+        priority: rulePriority,
+        source_ranges: Array.isArray(effectiveRule?.sourceRanges)
+          ? effectiveRule.sourceRanges.map((range: unknown) => `${range}`)
+          : [],
+        target_tags: Array.isArray(effectiveRule?.targetTags)
+          ? effectiveRule.targetTags.map((tag: unknown) => `${tag}`)
+          : [],
+        allowed: Array.isArray(effectiveRule?.allowed)
+          ? effectiveRule.allowed
+          : [],
+      },
+      potential_conflicts: potentialConflicts,
+    };
+    logger.info("gcp public HTTPS ingress reconciled", {
+      instance_id: runtime.instance_id,
+      ...result,
+    });
+    return result;
   }
 
   async stopHost(runtime: HostRuntime, creds: any): Promise<void> {
