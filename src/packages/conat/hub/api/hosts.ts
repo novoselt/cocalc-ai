@@ -702,6 +702,58 @@ export interface HostResourcePressureMetrics {
   largest_inotify_watches?: HostResourcePressureProjectSummary;
 }
 
+export type HostIoCapabilityState =
+  | "available"
+  | "enabled"
+  | "validated"
+  | "unsupported";
+
+export interface HostIoDeviceMetrics {
+  device: string;
+  major_minor: string;
+  scheduler?: string;
+  read_bytes_per_second?: number;
+  write_bytes_per_second?: number;
+  read_iops?: number;
+  write_iops?: number;
+  io_time_percent?: number;
+}
+
+export interface HostIoProjectMetrics {
+  project_id: string;
+  sampled_at: string;
+  read_bytes_per_second?: number;
+  write_bytes_per_second?: number;
+  read_iops?: number;
+  write_iops?: number;
+}
+
+export interface HostIoContainmentMetrics {
+  collected_at: string;
+  policy_mode: "disabled" | "observe" | "enforce" | "invalid";
+  policy_version?: number;
+  policy_profile?: string;
+  capacity_source?: string;
+  mountpoint: string;
+  filesystem?: string;
+  capability: HostIoCapabilityState;
+  capability_reason?: string;
+  pool_cgroup: string;
+  pool_io_max?: string;
+  pressure_some_percent?: number;
+  pressure_full_percent?: number;
+  pressure_some_total?: number;
+  pressure_full_total?: number;
+  devices: HostIoDeviceMetrics[];
+  top_projects: HostIoProjectMetrics[];
+  sampled_project_count: number;
+  total_project_count: number;
+  stale_project_count: number;
+  truncated: boolean;
+  legacy_process_count?: number;
+  last_reconcile_error?: string;
+}
+
 export interface HostCurrentMetrics {
   collected_at?: string;
   cpu_percent?: number;
@@ -737,6 +789,7 @@ export interface HostCurrentMetrics {
   stopping_project_count?: number;
   kernel_sysctls?: HostKernelSysctlSnapshot;
   resource_pressure?: HostResourcePressureMetrics;
+  io_containment?: HostIoContainmentMetrics;
 }
 
 export type HostPressureZone = "normal" | "observe" | "pressure" | "emergency";

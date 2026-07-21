@@ -8,6 +8,7 @@ describe("runtime conformance", () => {
       "root-owned-path",
       "sudo-policy-visible",
       "project-cgroup-helper-contract",
+      "project-io-policy",
       "sudo-direct-deny",
       "sudo-generic-mount-deny",
     ]);
@@ -15,6 +16,9 @@ describe("runtime conformance", () => {
       "project-cgroup-helper-contract",
     );
     expect(__test__.periodicCheckIds()).toContain("sudo-wrapper-allow");
+    expect(__test__.requiredProjectCgroupCommands()).toContain(
+      "verify-project-io-limits",
+    );
   });
 
   it("distinguishes supported helper usage from an old helper", () => {
