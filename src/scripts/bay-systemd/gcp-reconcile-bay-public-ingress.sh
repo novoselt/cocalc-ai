@@ -37,7 +37,8 @@ Networking:
   --proxy-subnet-range <cidr>   required when the proxy-only subnet does not exist
   --backend-port <port>         bay frontdoor port, default: 9400
   --test-source-cidr <cidr>     temporarily allow one non-Cloudflare test source
-  --cloudflare-token-file <p>   reconcile an exact-host Cloudflare SSL rule
+  --cloudflare-token-file <p>   reconcile an exact-host Cloudflare SSL rule;
+                                requires Zone > Config Rules > Edit
 
 Control:
   --apply                       create/update resources

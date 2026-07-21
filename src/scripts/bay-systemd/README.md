@@ -205,8 +205,7 @@ any hostname that does not start with `staging.` or any VM without a
 The safe two-pass provisioning and cutover order is:
 
 1. Apply the GCP plan without changing the public hostname. Supply a
-   Cloudflare token with `Select Configuration:Write` (shown as `Edit` in some
-   Cloudflare UI surfaces); the script creates and
+   Cloudflare token with `Zone > Config Rules > Edit`; the script creates and
    reads back an exact-host `ssl=full` rule but does not change DNS. On this
    first pass it creates the DNS authorization and reserves the frontend IP,
    but deliberately does not create a certificate yet.
