@@ -2563,7 +2563,9 @@ BEES_CGROUP_PIDS_MAX="64"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_IO_POLICY_DEFAULT="/etc/cocalc/project-io-policy.json"
 PROJECT_IO_POLICY_OVERRIDE_DEFAULT="/etc/cocalc/project-io-policy.override.json"
-PROJECT_IO_CLASS_STATE_DIR="/run/cocalc-project-io-classes"
+# This state is needed when cgroups are reconstructed at boot, before each
+# project has necessarily restarted and reported its authoritative class.
+PROJECT_IO_CLASS_STATE_DIR="/var/lib/cocalc/project-io-classes"
 PROJECT_STORAGE_WORKER_MEMORY_MAX="$((2 * 1024 * 1024 * 1024))"
 PROJECT_STORAGE_WORKER_MEMORY_HIGH="$((1 * 1024 * 1024 * 1024))"
 PROJECT_PROCESS_OOM_SCORE_ADJ="500"
