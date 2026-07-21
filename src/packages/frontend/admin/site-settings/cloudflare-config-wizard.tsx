@@ -498,6 +498,12 @@ export default function CloudflareConfigWizard({
                   <br />
                   Use your Cloudflare zone instead of cocalc.ai.
                   <br />
+                  The zone permissions must include Zone Read, DNS Write, Select
+                  Configuration Write, and Managed Headers Write. The account
+                  permissions must include Cloudflare Tunnel Write. Select
+                  Configuration Write is required for encrypted direct
+                  project-host routing.
+                  <br />
                   Paste the token into the input box here.
                 </Paragraph>
                 <Screenshot
