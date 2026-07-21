@@ -33,8 +33,26 @@ import {
 
 const logger = getLogger("server:cloud:public-route");
 const PROBE_TIMEOUT_MS = 10_000;
-const PROBE_DEADLINE_MS = 2 * 60_000;
+const PROBE_DEADLINE_MS = Math.max(
+  2 * 60_000,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_VERIFY_DEADLINE_MS ?? 10 * 60_000,
+  ),
+);
 const PROBE_RETRY_MS = 2_000;
+const STABLE_ROUTE_CONFIRMATION_MS = Math.max(
+  0,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_CONFIRMATION_MS ?? 5 * 60_000,
+  ),
+);
+const STABLE_ROUTE_SUCCESS_INTERVAL_MS = Math.max(
+  0,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_SUCCESS_INTERVAL_MS ?? 30_000,
+  ),
+);
+const STABLE_ROUTE_REQUIRED_SUCCESSES = 3;
 
 type HostRow = {
   id: string;
@@ -126,22 +144,41 @@ async function probeCloudflareRoute({
   hostname,
   origin,
   deadlineMs = PROBE_DEADLINE_MS,
+  requiredSuccesses = 1,
+  confirmationMs = 0,
 }: {
   hostname: string;
   origin: string;
   deadlineMs?: number;
+  requiredSuccesses?: number;
+  confirmationMs?: number;
 }): Promise<ProjectHostPublicRouteProbeResult> {
   const deadline = Date.now() + deadlineMs;
   let lastError = "route probe did not run";
+  let consecutiveSuccesses = 0;
+  let firstSuccessAt: number | undefined;
   while (Date.now() < deadline) {
     try {
-      return await probeProjectHostPublicRoute({
+      const result = await probeProjectHostPublicRoute({
         public_url: `https://${hostname}`,
         origin,
         timeout_ms: PROBE_TIMEOUT_MS,
       });
+      const now = Date.now();
+      firstSuccessAt ??= now;
+      consecutiveSuccesses += 1;
+      if (
+        consecutiveSuccesses >= requiredSuccesses &&
+        now - firstSuccessAt >= confirmationMs
+      ) {
+        return result;
+      }
+      await delay(STABLE_ROUTE_SUCCESS_INTERVAL_MS);
+      continue;
     } catch (err) {
       lastError = `${err}`;
+      consecutiveSuccesses = 0;
+      firstSuccessAt = undefined;
     }
     await delay(PROBE_RETRY_MS);
   }
@@ -304,7 +341,12 @@ async function prepareDirectRoute({
       row.metadata?.cloudflare_tunnel?.record_id,
   });
   await setMetadataField(row.id, "dns", dns);
-  await probeCloudflareRoute({ hostname: stableHostname, origin });
+  await probeCloudflareRoute({
+    hostname: stableHostname,
+    origin,
+    requiredSuccesses: STABLE_ROUTE_REQUIRED_SUCCESSES,
+    confirmationMs: STABLE_ROUTE_CONFIRMATION_MS,
+  });
   return dns;
 }
 

@@ -1911,10 +1911,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertTrue(rootctl.exists())
             self.assertTrue(core_handler.exists())
-            self.assertIn(str(rootctl), (runtime_bin / "ctl").read_text(encoding="utf-8"))
+            ctl_text = (runtime_bin / "ctl").read_text(encoding="utf-8")
+            rootctl_text = rootctl.read_text(encoding="utf-8")
+            self.assertIn(str(rootctl), ctl_text)
+            self.assertIn("start|ensure|restart|stop)", ctl_text)
+            self.assertIn(
+                'DAEMON_CONTROL_LOCK="/mnt/cocalc/data/tmp/project-host-daemon-control.lock"',
+                rootctl_text,
+            )
+            self.assertIn(
+                'flock -x -w "${DAEMON_CONTROL_LOCK_WAIT_SECONDS}" 8',
+                rootctl_text,
+            )
+            self.assertIn("start|ensure|restart|stop|protect)", rootctl_text)
             self.assertIn(
                 'COCALC_PROJECT_HOST_OOM_SCORE_ADJ:--900',
-                rootctl.read_text(encoding="utf-8"),
+                rootctl_text,
             )
             self.assertIn(
                 f'PROJECT_POOL_CGROUP_DEFAULT="{bootstrap.DEFAULT_PROJECT_POOL_CGROUP}"',

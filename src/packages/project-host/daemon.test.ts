@@ -549,6 +549,71 @@ describe("project-host daemon stop", () => {
     );
   });
 
+  it("ensureHostAgent stops duplicate agents while preserving the pid-file owner", () => {
+    const dataDir = mkTempDir("cocalc-project-host-daemon-");
+    const agentPidPath = path.join(dataDir, "host-agent.pid");
+    fs.writeFileSync(agentPidPath, "7374");
+    process.env.COCALC_DATA = dataDir;
+    process.env.PORT = "9002";
+
+    const realReadFileSync = fs.readFileSync;
+    const realReaddirSync = fs.readdirSync;
+    jest.spyOn(fs, "readdirSync").mockImplementation(((
+      file: any,
+      opts?: any,
+    ) => {
+      if (file === "/proc") {
+        return [
+          { name: "7374", isDirectory: () => true },
+          { name: "7474", isDirectory: () => true },
+        ] as any;
+      }
+      return (realReaddirSync as any)(file, opts);
+    }) as typeof fs.readdirSync);
+    jest.spyOn(fs, "readFileSync").mockImplementation(((
+      file: any,
+      options?: any,
+    ) => {
+      if (file === "/proc/7374/cmdline" || file === "/proc/7474/cmdline") {
+        return Buffer.from("project-host:host-agent:0\u0000") as any;
+      }
+      if (file === "/proc/7374/environ" || file === "/proc/7474/environ") {
+        return Buffer.from(
+          `COCALC_DATA=${dataDir}\u0000COCALC_PROJECT_HOST_AGENT=1\u0000COCALC_PROJECT_HOST_AGENT_INDEX=0\u0000`,
+        ) as any;
+      }
+      return (realReadFileSync as any)(file, options);
+    }) as typeof fs.readFileSync);
+
+    const alive = new Set([7374, 7474]);
+    const killSpy = jest.spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
+      if (signal === 0 || signal === undefined) {
+        if (alive.has(pid)) return true;
+        const err: NodeJS.ErrnoException = new Error("ESRCH");
+        err.code = "ESRCH";
+        throw err;
+      }
+      if (pid === 7474 && signal === "SIGTERM") {
+        alive.delete(pid);
+        return true;
+      }
+      throw new Error(`unexpected signal ${signal} for pid ${pid}`);
+    }) as typeof process.kill);
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    ensureHostAgent(0);
+
+    expect(killSpy).toHaveBeenCalledWith(7474, "SIGTERM");
+    expect(killSpy).not.toHaveBeenCalledWith(7374, "SIGTERM");
+    expect(warnSpy).toHaveBeenCalledWith(
+      "Stopped 1 stray project-host host-agent process(es) while preserving pid 7374.",
+    );
+    expect(fs.readFileSync(agentPidPath, "utf8")).toBe("7374");
+  });
+
   it("ensureHostAgent restarts a running agent when it is on the wrong bundle version", () => {
     const dataDir = mkTempDir("cocalc-project-host-daemon-");
     const bundleRoot = mkTempDir("cocalc-project-host-bundle-");
