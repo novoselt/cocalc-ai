@@ -25,6 +25,7 @@ export interface ProjectCgroupLimits {
   cpu_max_period: string;
   cpu_weight: string;
   io_weight: string;
+  io_class: "standard" | "member" | "premium";
 }
 
 function parseMemoryRatio(
@@ -171,6 +172,7 @@ function cpuSharesToWeight(shares: number): number {
 
 export function projectCgroupLimitsFromPodmanArgs(
   args: string[],
+  ioClass?: Configuration["io_class"],
 ): ProjectCgroupLimits {
   const memoryMax = integerArgument(args, "--memory=");
   const memoryHigh = integerArgument(args, "--cgroup-conf=memory.high=");
@@ -201,6 +203,8 @@ export function projectCgroupLimitsFromPodmanArgs(
     cpu_max_period: `${CGROUP_CPU_PERIOD_US}`,
     cpu_weight: `${cpuWeight}`,
     io_weight: `${DEFAULT_PROJECT_IO_WEIGHT}`,
+    io_class:
+      ioClass === "member" || ioClass === "premium" ? ioClass : "standard",
   };
 }
 

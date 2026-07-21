@@ -362,38 +362,6 @@ async function startHttpListener(
   return { app, httpServer, isHttps: tls.enabled };
 }
 
-function resolveDirectHttpsConfig({
-  host,
-  primaryPort,
-  primaryTls,
-}: {
-  host: string;
-  primaryPort: number;
-  primaryTls: TlsConfig;
-}): { enabled: boolean; port: number; tls: TlsConfig } {
-  const rawPort =
-    `${process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT ?? ""}`.trim();
-  if (!rawPort) {
-    return { enabled: false, port: 0, tls: { enabled: true, hostname: host } };
-  }
-  const port = Number(rawPort);
-  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
-    throw new Error(
-      "COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT must be an integer from 1 through 65535",
-    );
-  }
-  const hostname =
-    `${process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME ?? ""}`.trim() ||
-    primaryTls.hostname ||
-    host;
-  const duplicatesPrimary = port === primaryPort && primaryTls.enabled;
-  return {
-    enabled: !duplicatesPrimary,
-    port,
-    tls: { enabled: true, hostname },
-  };
-}
-
 async function waitForProjectHttpPort(project_id: string): Promise<number> {
   const deadline = Date.now() + PROJECT_HTTP_PORT_WAIT_MS;
   while (true) {
@@ -529,24 +497,6 @@ export async function main(
   const app = express();
   app.use(express.json());
   const { httpServer } = await startHttpListener(app, port, host, tls);
-  const httpServers = [httpServer];
-  const directHttps = resolveDirectHttpsConfig({
-    host,
-    primaryPort: port,
-    primaryTls: tls,
-  });
-  if (directHttps.enabled) {
-    const direct = await startHttpListener(
-      app,
-      directHttps.port,
-      host,
-      directHttps.tls,
-    );
-    httpServers.push(direct.httpServer);
-    logger.info(
-      `direct HTTPS ingress enabled on https://${host}:${directHttps.port}`,
-    );
-  }
   app.get("/healthz", (_req, res) =>
     res.json({
       ok: true,
@@ -559,7 +509,7 @@ export async function main(
   const conatRouterUrl = resolveProjectHostConatRouterUrl();
   attachProjectHostConatRouterProxy({
     app,
-    httpServers,
+    httpServer,
     target: conatRouterUrl,
   });
   const conatClient: ConatClient = connectToConat({
@@ -1249,7 +1199,7 @@ export async function main(
     req.headers[PUBLIC_APP_HOST_HEADER] = hostname;
   };
   attachProjectProxy({
-    httpServers,
+    httpServers: [httpServer],
     app,
     rewriteRequest: maybeRewritePublicHostnameRequest,
     noteUpstreamHttpBytes: ({ req, bytes }) => {

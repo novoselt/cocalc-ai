@@ -65,6 +65,60 @@ export type PublicIngressSpec = {
   source_ranges: string[];
 };
 
+export type PublicIngressResult = {
+  instance?: {
+    network?: string;
+    network_interface?: string;
+    public_ip?: string;
+    private_ip?: string;
+    tags?: string[];
+  };
+  rule?: {
+    name?: string;
+    priority?: number;
+    source_ranges?: string[];
+    target_tags?: string[];
+    allowed?: unknown[];
+  };
+  potential_conflicts?: Array<{
+    name?: string;
+    priority?: number;
+    source_ranges?: string[];
+    target_tags?: string[];
+    denied?: unknown[];
+  }>;
+  effective_firewalls?: {
+    firewalls?: Array<{
+      name?: string;
+      priority?: number;
+      direction?: string;
+      source_ranges?: string[];
+      target_tags?: string[];
+      allowed?: unknown[];
+      denied?: unknown[];
+    }>;
+    policies?: Array<{
+      name?: string;
+      short_name?: string;
+      type?: string;
+      priority?: number;
+      rules?: Array<{
+        action?: string;
+        direction?: string;
+        disabled?: boolean;
+        priority?: number;
+        rule_name?: string;
+        source_ranges?: string[];
+        destination_ranges?: string[];
+        layer4_configs?: unknown[];
+        target_resources?: string[];
+        target_service_accounts?: string[];
+      }>;
+    }>;
+    error?: string;
+  };
+};
+
 export interface CloudProvider {
   createHost(spec: HostSpec, creds: any): Promise<HostRuntime>;
   startHost(runtime: HostRuntime, creds: any): Promise<void>;
@@ -91,7 +145,7 @@ export interface CloudProvider {
     runtime: HostRuntime,
     spec: PublicIngressSpec,
     creds: any,
-  ): Promise<void>;
+  ): Promise<PublicIngressResult | void>;
   deleteHost(
     runtime: HostRuntime,
     creds: any,

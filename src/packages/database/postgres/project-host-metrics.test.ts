@@ -52,6 +52,28 @@ describe("project host metrics history", () => {
         btrfs_metadata_total_bytes: 100,
         btrfs_metadata_used_bytes: 20,
         running_project_count: 2,
+        io_containment: {
+          collected_at: first.toISOString(),
+          policy: {
+            version: 1,
+            mode: "enforce",
+            profile: "test-profile",
+            capacity_source: "test",
+            mountpoint: "/mnt/cocalc",
+          },
+          capability: {
+            available: true,
+            enabled: true,
+            validated: true,
+          },
+          devices: [],
+          pressure: {},
+          pool_io_max: "8:16 rbps=1 wbps=1 riops=1 wiops=1",
+          projects: [],
+          sampled_project_count: 0,
+          total_project_count: 0,
+          truncated: false,
+        },
       },
     });
 
@@ -95,6 +117,9 @@ describe("project host metrics history", () => {
     expect(entry?.point_count).toBe(2);
     expect(entry?.points).toHaveLength(2);
     expect(entry?.points[0].cpu_percent).toBe(10);
+    expect(entry?.points[0].io_containment?.policy.profile).toBe(
+      "test-profile",
+    );
     expect(entry?.points[1].cpu_percent).toBe(30);
     expect(entry?.points[0].disk_used_percent).toBe(40);
     expect(entry?.points[1].disk_used_percent).toBe(70);

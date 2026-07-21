@@ -54,7 +54,10 @@ import {
   issueRootfsReleaseArtifactUpload,
   upsertPublishedRootfsRelease,
 } from "@cocalc/server/rootfs/releases";
-import { getMembershipProjectDefaultsForAccount } from "@cocalc/server/membership/project-defaults";
+import {
+  getMembershipIoClassForAccount,
+  getMembershipProjectDefaultsForAccount,
+} from "@cocalc/server/membership/project-defaults";
 import { applyProjectEntitlementOverrideToRunQuota } from "@cocalc/server/membership/project-entitlement-overrides";
 import { assertLocalProjectOwnership } from "@cocalc/server/conat/project-local-access";
 import type { ManagedProjectEgressOverride } from "@cocalc/conat/files/file-server";
@@ -607,10 +610,13 @@ export class BaseProject extends EventEmitter {
         last_active,
         last_started_by,
       });
-      const runtimeDefaults =
-        await getMembershipProjectDefaultsForAccount(runtime_account_id);
+      const [runtimeDefaults, ioClass] = await Promise.all([
+        getMembershipProjectDefaultsForAccount(runtime_account_id),
+        getMembershipIoClassForAccount(runtime_account_id),
+      ]);
       const site_settings = await getQuotaSiteSettings(); // quick, usually cached
       nextRunQuota = quota(runtimeDefaults, undefined, site_settings);
+      nextRunQuota.io_class = ioClass;
 
       if (storage_account_id && storage_account_id !== runtime_account_id) {
         const storageDefaults =

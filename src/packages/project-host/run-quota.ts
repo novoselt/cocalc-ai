@@ -50,6 +50,11 @@ export function runnerConfigFromQuota(
   };
   if (!run_quota) return limits;
 
+  limits.io_class =
+    run_quota.io_class === "member" || run_quota.io_class === "premium"
+      ? run_quota.io_class
+      : "standard";
+
   if (run_quota.cpu_limit != null) {
     limits.cpu = run_quota.cpu_limit;
   }

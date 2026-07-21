@@ -23,6 +23,7 @@ import {
   type HostProjectStopPolicyRow,
   type HostRuntimeLogSource,
 } from "@cocalc/conat/project-host/api";
+import { createCachedPodmanSnapshotReader } from "./podman-diagnostics";
 import type {
   HostPressureState,
   HostPressureZone,
@@ -885,12 +886,6 @@ async function readPodmanSnapshot({
       sudoFallback: true,
       lineLimit: normalizedLimit,
     }),
-    system_df: await runDiagnosticCommand({
-      command: "podman",
-      args: ["system", "df", "--format", "json"],
-      env: podmanEnv(),
-      sudoFallback: true,
-    }),
   };
 }
 
@@ -1260,6 +1255,10 @@ export async function startMasterRegistration({
   const registry = createHostRegistryClient({ client });
   const runtimeHealth = createProjectHostRuntimeHealthMonitor({
     isApplicationReady: isApplicationReady ?? (() => true),
+  });
+  const getPodmanSnapshot = createCachedPodmanSnapshotReader({
+    capture: async (limit) => await readPodmanSnapshot({ limit }),
+    runRuntimeDiagnostic: runtimeHealth.runRuntimeDiagnostic,
   });
 
   const awaitRuntimeReadyForControl = async (op: string) => {
@@ -1635,7 +1634,7 @@ export async function startMasterRegistration({
       return await readFilesystemSnapshot();
     },
     async getPodmanSnapshot(opts) {
-      return await readPodmanSnapshot(opts);
+      return await getPodmanSnapshot(normalizeSnapshotLimit(opts?.limit));
     },
     async getProjectRuntimeLog({ project_id, lines }) {
       return await readProjectRuntimeLogTail(project_id, lines);

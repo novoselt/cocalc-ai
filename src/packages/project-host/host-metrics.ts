@@ -13,6 +13,7 @@ import {
 import { getActiveStorageReservationSummary } from "./storage-reservations";
 import { readProjectHostKernelSysctls } from "./host-sysctl";
 import { refreshResourcePressureMetrics } from "./resource-pressure";
+import { readIoContainmentMetrics } from "./io-metrics";
 
 const logger = getLogger("project-host:host-metrics");
 
@@ -155,14 +156,21 @@ async function collectSnapshot(
   prevCpuSample: CpuSample | undefined,
 ): Promise<{ snapshot: HostCurrentMetrics; cpuSample: CpuSample }> {
   const cpuSample = readCpuSample();
-  const [memory, disk, sharedScratch, kernel_sysctls, resource_pressure] =
-    await Promise.all([
-      readMeminfo(),
-      readDiskMetrics(),
-      readSharedScratchMetrics(),
-      readProjectHostKernelSysctls(),
-      refreshResourcePressureMetrics(),
-    ]);
+  const [
+    memory,
+    disk,
+    sharedScratch,
+    kernel_sysctls,
+    resource_pressure,
+    io_containment,
+  ] = await Promise.all([
+    readMeminfo(),
+    readDiskMetrics(),
+    readSharedScratchMetrics(),
+    readProjectHostKernelSysctls(),
+    refreshResourcePressureMetrics(),
+    readIoContainmentMetrics(),
+  ]);
   const projects = readProjectCounts();
   const reservation_bytes = getActiveStorageReservationSummary().total_bytes;
   const disk_available_for_admission_bytes = computeDiskAdmissionAvailableBytes(
@@ -185,6 +193,7 @@ async function collectSnapshot(
       ...projects,
       kernel_sysctls,
       ...(resource_pressure ? { resource_pressure } : {}),
+      io_containment,
     },
   };
 }

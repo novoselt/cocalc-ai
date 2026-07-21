@@ -103,6 +103,14 @@ type ProjectHostRow = {
   metadata?: HostMetadata;
 };
 
+function shouldPublishTunnelBrowserDns(metadata: HostMetadata): boolean {
+  const route = metadata.public_route;
+  if (route?.active_mode === "cloudflare-proxy") return false;
+  return !(
+    route?.status === "preparing" && route?.desired_mode === "cloudflare-proxy"
+  );
+}
+
 const DEFAULT_SOFTWARE_BASE_URL = "https://software.cocalc.ai/software";
 type BootstrapManagedArtifact =
   | "project-host"
@@ -941,6 +949,7 @@ export async function buildBootstrapScripts(
       (await ensureCloudflareTunnelForHost({
         host_id: row.id,
         existing: metadata.cloudflare_tunnel,
+        publish_browser_dns: shouldPublishTunnelBrowserDns(metadata),
       })));
   const tunnelEnabled = !!tunnel;
   const directHttpsEnabled = providerId === "gcp" && !useOnPremSettings;
@@ -1003,7 +1012,10 @@ export async function buildBootstrapScripts(
         : row.internal_url
           ? row.internal_url.replace(/^http:\/\//, "https://")
           : `https://${publicIp || onPremUrlHost}`;
-  const sshServer = row.ssh_server ?? `${publicIp || onPremUrlHost}:${sshPort}`;
+  const sshServer =
+    providerId === "gcp" && publicIp
+      ? `${publicIp}:${sshPort}`
+      : (row.ssh_server ?? `${publicIp || onPremUrlHost}:${sshPort}`);
   const dataDir = "/mnt/cocalc/data";
   const envFile = "/etc/cocalc/project-host.env";
   const dataDiskCandidates = dataDiskDevices || "none";

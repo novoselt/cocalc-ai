@@ -7,6 +7,7 @@ import type {
   HostMetricsHistoryPoint,
   HostMetricsRiskLevel,
   HostMetricsRiskState,
+  HostIoContainmentMetrics,
 } from "@cocalc/conat/hub/api/hosts";
 import type { Pool } from "pg";
 
@@ -78,6 +79,7 @@ type ProjectHostMetricsSampleRow = {
   running_project_count: number | string | null;
   starting_project_count: number | string | null;
   stopping_project_count: number | string | null;
+  io_containment: HostIoContainmentMetrics | string | null;
 };
 
 function pool(): Pool {
@@ -108,6 +110,19 @@ function toInteger(value: unknown): number | undefined {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return undefined;
   return Math.max(0, Math.floor(parsed));
+}
+
+function toIoContainment(
+  value: ProjectHostMetricsSampleRow["io_containment"],
+): HostIoContainmentMetrics | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "object") return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeWindowMinutes(value?: number): number {
@@ -262,6 +277,7 @@ function toPoint(row: ProjectHostMetricsSampleRow): HostMetricsHistoryPoint {
     running_project_count: toInteger(row.running_project_count),
     starting_project_count: toInteger(row.starting_project_count),
     stopping_project_count: toInteger(row.stopping_project_count),
+    io_containment: toIoContainment(row.io_containment),
   };
   point.disk_used_percent = computeDiskUsedPercent(point);
   point.shared_scratch_used_percent = computeSharedScratchUsedPercent(point);
@@ -720,6 +736,7 @@ export async function ensureProjectHostMetricsSamplesSchema(): Promise<void> {
           running_project_count INTEGER,
           starting_project_count INTEGER,
           stopping_project_count INTEGER,
+          io_containment JSONB,
           PRIMARY KEY (host_id, collected_at)
         )
       `);
@@ -734,6 +751,9 @@ export async function ensureProjectHostMetricsSamplesSchema(): Promise<void> {
       );
       await pool().query(
         "ALTER TABLE project_host_metrics_samples ADD COLUMN IF NOT EXISTS shared_scratch_available_bytes BIGINT",
+      );
+      await pool().query(
+        "ALTER TABLE project_host_metrics_samples ADD COLUMN IF NOT EXISTS io_containment JSONB",
       );
     })().catch((err) => {
       schemaReady = undefined;
@@ -791,15 +811,16 @@ export async function recordProjectHostMetricsSample({
         assigned_project_count,
         running_project_count,
         starting_project_count,
-        stopping_project_count
+        stopping_project_count,
+        io_containment
       )
       SELECT
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34
       WHERE NOT EXISTS (
         SELECT 1
         FROM project_host_metrics_samples
         WHERE host_id = $1
-          AND collected_at >= $2::timestamptz - ($34::bigint * INTERVAL '1 millisecond')
+          AND collected_at >= $2::timestamptz - ($35::bigint * INTERVAL '1 millisecond')
       )
     `,
     [
@@ -836,6 +857,7 @@ export async function recordProjectHostMetricsSample({
       metrics.running_project_count ?? null,
       metrics.starting_project_count ?? null,
       metrics.stopping_project_count ?? null,
+      metrics.io_containment ?? null,
       SAMPLE_INTERVAL_MS,
     ],
   );

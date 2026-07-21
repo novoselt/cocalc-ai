@@ -14,6 +14,7 @@ const DIAGNOSTIC_TIMEOUT_SECONDS = 8;
 const DIAGNOSTIC_COOLDOWN_MS = 10 * 60_000;
 const DIAGNOSTIC_OUTPUT_LIMIT = 12_000;
 const ERROR_LIMIT = 1000;
+const RUNTIME_FAILURES_BEFORE_DEGRADED = 2;
 
 export type ProjectHostRuntimeHealthStatus = "starting" | "ready" | "degraded";
 export type ProjectHostSyntheticProbeFailureKind = "port_bind_collision";
@@ -188,8 +189,10 @@ export function createProjectHostRuntimeHealthMonitor({
     consecutive_failures: 0,
   };
   let inflight: Promise<ProjectHostRuntimeHealthSnapshot> | undefined;
+  let runtimeDiagnosticCount = 0;
   let diagnosticsInflight = false;
   let lastDiagnosticsAt = 0;
+  let hasSuccessfulProbe = false;
 
   const requestDiagnostics = () => {
     if (
@@ -239,6 +242,9 @@ export function createProjectHostRuntimeHealthMonitor({
       };
       return snapshot;
     }
+    if (runtimeDiagnosticCount > 0) {
+      return snapshot;
+    }
     if (inflight) {
       return await inflight;
     }
@@ -246,6 +252,7 @@ export function createProjectHostRuntimeHealthMonitor({
       const started = Date.now();
       try {
         await probe();
+        hasSuccessfulProbe = true;
         snapshot = {
           ...snapshot,
           status: "ready",
@@ -257,14 +264,17 @@ export function createProjectHostRuntimeHealthMonitor({
         };
       } catch (err) {
         const consecutiveFailures = snapshot.consecutive_failures + 1;
+        const tolerateTransientFailure =
+          hasSuccessfulProbe &&
+          consecutiveFailures < RUNTIME_FAILURES_BEFORE_DEGRADED;
         const shouldCaptureDiagnostics =
-          consecutiveFailures >= 2 &&
+          consecutiveFailures >= RUNTIME_FAILURES_BEFORE_DEGRADED &&
           !diagnosticsInflight &&
           Date.now() - lastDiagnosticsAt >= DIAGNOSTIC_COOLDOWN_MS;
         snapshot = {
           ...snapshot,
-          status: "degraded",
-          ready: false,
+          status: tolerateTransientFailure ? "ready" : "degraded",
+          ready: tolerateTransientFailure,
           checked_at: new Date().toISOString(),
           podman_latency_ms: Date.now() - started,
           consecutive_failures: consecutiveFailures,
@@ -293,6 +303,18 @@ export function createProjectHostRuntimeHealthMonitor({
     }
   };
 
+  const runRuntimeDiagnostic = async <T>(fn: () => Promise<T>): Promise<T> => {
+    runtimeDiagnosticCount += 1;
+    try {
+      if (inflight) {
+        await inflight;
+      }
+      return await fn();
+    } finally {
+      runtimeDiagnosticCount -= 1;
+    }
+  };
+
   const recordSyntheticProbe = ({
     startedAt,
     error,
@@ -310,9 +332,6 @@ export function createProjectHostRuntimeHealthMonitor({
       : undefined;
     snapshot = {
       ...snapshot,
-      status: snapshot.consecutive_failures ? "degraded" : "ready",
-      ready: snapshot.consecutive_failures === 0,
-      error: snapshot.consecutive_failures ? snapshot.error : undefined,
       synthetic_probe: {
         status: failed ? "failed" : "passed",
         checked_at: new Date().toISOString(),
@@ -332,6 +351,7 @@ export function createProjectHostRuntimeHealthMonitor({
   return {
     refresh,
     assertReady,
+    runRuntimeDiagnostic,
     recordSyntheticProbe,
     getSnapshot: () => ({ ...snapshot }),
   };

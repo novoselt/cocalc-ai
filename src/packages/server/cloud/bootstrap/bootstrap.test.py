@@ -1402,6 +1402,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
+            policy_parser = script.split(
+                "<<'PY'\n", 1
+            )[1].split("\nPY\n", 1)[0]
+            compile(policy_parser, "embedded-project-io-policy.py", "exec")
             self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
             self.assertIn("project-rustic-backup)", script)
             self.assertIn("project-rustic-restore)", script)
@@ -1462,6 +1466,33 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("verify-project-pool)", script)
             self.assertIn("attach-project-cgroup)", script)
             self.assertIn("verify-project-network-limits)", script)
+            self.assertIn("verify-project-io-limits)", script)
+            self.assertIn("verify-project-io-policy)", script)
+            self.assertIn("project-io-status)", script)
+            self.assertIn('"capability": "validated"', script)
+            self.assertIn('"policy_profile": policy_profile', script)
+            self.assertIn('"capacity_source": capacity_source', script)
+            self.assertIn('"pool_io_weight": io_weight.strip()', script)
+            self.assertIn(
+                "io_class _policy_version _policy_profile _capacity_source",
+                script,
+            )
+            self.assertIn('*) io_class="standard" ;;', script)
+            self.assertIn(
+                '"$io_class" > "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}"',
+                script,
+            )
+            self.assertIn('io_class="${12:-standard}"', script)
+            self.assertIn("reconcile-project-io-policy)", script)
+            self.assertIn("normalize_project_io_class_state", script)
+            self.assertIn(
+                'PROJECT_IO_CLASS_STATE_DIR="/var/lib/cocalc/project-io-classes"',
+                script,
+            )
+            self.assertNotIn(
+                'PROJECT_IO_CLASS_STATE_DIR="/run/cocalc-project-io-classes"',
+                script,
+            )
             self.assertIn("reconcile-project-network-limits)", script)
             self.assertIn('PROJECT_PASTA_NOFILE_LIMIT="4096"', script)
             self.assertIn('PROJECT_TCP_NEW_RATE="50"', script)
@@ -1519,8 +1550,17 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
             self.assertIn('PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"', script)
+            self.assertIn(
+                'PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"', script
+            )
+            self.assertIn(
+                'PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"', script
+            )
             self.assertIn('PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="30"', script)
             self.assertIn("project-cgroup-lock-timeout", script)
+            self.assertIn("attach_storage_worker_to_project", script)
+            self.assertIn('"$$" > "$target/cgroup.procs"', script)
+            self.assertIn("PROJECT_STORAGE_WORKER_MEMORY_MAX", script)
             self.assertNotIn("project-network-lock-timeout", script)
             self.assertNotIn("acquire_project_network_lock", script)
             self.assertIn("--kill-after=2s", script)
@@ -1541,6 +1581,20 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertNotIn(
                 'ensure_project_network_rule "$project_id"',
                 reconcile_body,
+            )
+            self.assertLess(
+                reconcile_body.index(
+                    'for attempt in $(seq 1 "$PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS")'
+                ),
+                reconcile_body.index("configure_project_pool_hierarchy"),
+            )
+            self.assertIn(
+                'sleep "$PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS"',
+                reconcile_body,
+            )
+            self.assertLess(
+                reconcile_body.index("configure_project_pool_hierarchy"),
+                reconcile_body.index("configure_project_network_table"),
             )
             self.assertLess(
                 reconcile_body.index(
