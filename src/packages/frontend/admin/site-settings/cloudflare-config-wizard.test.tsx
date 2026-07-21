@@ -213,6 +213,15 @@ describe("CloudflareConfigWizard", () => {
         "Settings applied and saved. You can now run diagnostics.",
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply Settings" }),
+    ).toBeDisabled();
+
+    fireEvent.click(screen.getByText("Close").closest("button")!);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByText("Discard unsaved Cloudflare settings?"),
+    ).not.toBeInTheDocument();
   });
 
   it("tests visitor location headers through the saved public domain diagnostic", async () => {
