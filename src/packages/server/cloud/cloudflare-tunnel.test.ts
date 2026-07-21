@@ -382,3 +382,91 @@ describe("ensureCloudflareTunnelForHost", () => {
     expect(deletedIds).not.toContain("record-caa");
   });
 });
+
+describe("deleteCloudflareTunnel", () => {
+  beforeEach(() => {
+    jest.resetModules();
+    getServerSettingsMock = jest.fn(async () => ({
+      cloudflare_mode: "self",
+      dns: "staging.example.test",
+      project_hosts_cloudflare_tunnel_account_id: "account-id",
+      project_hosts_cloudflare_tunnel_api_token: "token",
+      project_hosts_cloudflare_tunnel_host_suffix: "staging.example.test",
+    }));
+  });
+
+  it("removes exact-name records when stored record ids are stale", async () => {
+    const fetchMock = jest.fn(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/zones?")) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            result: [{ name: "example.test", id: "zone-id" }],
+          }),
+        };
+      }
+      if (
+        init?.method === "DELETE" &&
+        (url.endsWith("/stale-browser-id") || url.endsWith("/stale-ssh-id"))
+      ) {
+        return {
+          ok: false,
+          status: 404,
+          statusText: "Not Found",
+          text: async () => "not found",
+        };
+      }
+      if (init?.method === "GET" && url.includes("/dns_records?")) {
+        const name = new URL(url).searchParams.get("name");
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            result: [
+              {
+                id: name?.startsWith("ssh-")
+                  ? "current-ssh-id"
+                  : "current-browser-id",
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ success: true, result: {} }),
+      };
+    });
+    (global as any).fetch = fetchMock;
+
+    const { deleteCloudflareTunnel } = await import("./cloudflare-tunnel");
+    await deleteCloudflareTunnel({
+      host_id: "abc",
+      tunnel: {
+        id: "tunnel-id",
+        name: "host-abc",
+        hostname: "host-abc-staging.example.test",
+        ssh_hostname: "ssh-host-abc-staging.example.test",
+        tunnel_secret: "secret",
+        account_id: "account-id",
+        record_id: "stale-browser-id",
+        ssh_record_id: "stale-ssh-id",
+      },
+    });
+
+    const deletedUrls = fetchMock.mock.calls
+      .filter(([, init]) => init?.method === "DELETE")
+      .map(([url]) => String(url));
+    expect(deletedUrls).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("/dns_records/stale-browser-id"),
+        expect.stringContaining("/dns_records/current-browser-id"),
+        expect.stringContaining("/dns_records/stale-ssh-id"),
+        expect.stringContaining("/dns_records/current-ssh-id"),
+        expect.stringContaining("/cfd_tunnel/tunnel-id"),
+      ]),
+    );
+  });
+});

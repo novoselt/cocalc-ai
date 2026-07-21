@@ -788,9 +788,16 @@ export async function deleteCloudflareTunnel(opts: {
         logger.warn("cloudflare tunnel dns delete failed", { err });
       }
     }
-  } else if (zoneIdValue && hostname) {
+  }
+  if (zoneIdValue && hostname) {
     try {
-      const records = await listDnsRecords(config.token, zoneIdValue, hostname);
+      // Bootstrap can recreate a record after the stored id was captured.
+      // Always remove any exact-name remainder after the best-effort id delete.
+      const records = await listDnsRecordsByName(
+        config.token,
+        zoneIdValue,
+        hostname,
+      );
       for (const record of records) {
         if (!record.id) continue;
         try {
@@ -821,7 +828,8 @@ export async function deleteCloudflareTunnel(opts: {
         logger.warn("cloudflare tunnel ssh dns delete failed", { err });
       }
     }
-  } else if (zoneIdValue && sshHostname) {
+  }
+  if (zoneIdValue && sshHostname) {
     try {
       const records = await listDnsRecordsByName(
         config.token,
