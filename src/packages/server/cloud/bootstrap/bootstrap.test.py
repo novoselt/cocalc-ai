@@ -1478,6 +1478,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn('*) io_class="standard" ;;', script)
+            self.assertIn(
+                '"$io_class" > "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}"',
+                script,
+            )
             self.assertIn('io_class="${12:-standard}"', script)
             self.assertIn("reconcile-project-io-policy)", script)
             self.assertIn(

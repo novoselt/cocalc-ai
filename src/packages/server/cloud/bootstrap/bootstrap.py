@@ -2835,6 +2835,7 @@ apply_existing_project_io_policy() {
       standard|member|premium) ;;
       *) io_class="standard" ;;
     esac
+    printf '%s\n' "$io_class" > "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}"
   fi
   fields="$(project_io_policy_fields "$io_class")" || deny "project-io-policy-invalid" "$io_class"
   IFS=$'\t' read -r mode mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops weight _class _policy_version _policy_profile _capacity_source <<< "$fields"
