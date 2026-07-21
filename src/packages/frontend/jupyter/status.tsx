@@ -64,6 +64,7 @@ const KERNEL_USAGE_STYLE: CSS = {
   borderRight: `1px solid ${COLORS.GRAY}`,
   paddingRight: "5px",
   display: "flex",
+  alignItems: "center",
   flex: 1,
 } as const;
 
@@ -799,13 +800,11 @@ export function Kernel({
       flex: compact ? undefined : 1,
       borderLeft: `1px solid ${COLORS.GRAY}`,
       cursor: "pointer",
-      alignItems: compact ? "center" : undefined,
+      alignItems: "center",
     };
     const pstyle: CSS = {
       margin: compact ? "0 2px" : "2px",
       width: "100%",
-      position: "relative",
-      top: compact ? 0 : "-1px",
     };
     const railColor = compact ? COLORS.GRAY_LL : "white";
     const showLabel = is_fullscreen || compact;
@@ -1068,7 +1067,12 @@ export function Kernel({
             {renderKernelState()}
             {!IS_MOBILE && (
               <div
-                style={{ flex: 1, marginTop: "2.5px", cursor: "pointer" }}
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  cursor: "pointer",
+                }}
                 onClick={openKernelDrawer}
               >
                 {renderUsage()}
