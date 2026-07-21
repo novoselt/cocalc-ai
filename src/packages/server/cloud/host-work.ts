@@ -2427,7 +2427,7 @@ async function handleDelete(row: any) {
     });
     await entry.provider.deleteHost(runtime, creds);
   }
-  if (row.metadata?.cloudflare_tunnel && (await hasCloudflareTunnel())) {
+  if (await hasCloudflareTunnel()) {
     await deleteCloudflareTunnel({
       host_id: row.id,
       tunnel: row.metadata?.cloudflare_tunnel,

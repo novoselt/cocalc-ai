@@ -762,7 +762,15 @@ export async function deleteCloudflareTunnel(opts: {
     (opts.host_id && config.hostSuffix
       ? `host-${opts.host_id}${config.hostSuffix}`
       : undefined);
-  const sshHostname = opts.tunnel?.ssh_hostname;
+  const sshHostname =
+    opts.tunnel?.ssh_hostname ??
+    (opts.host_id && config.hostSuffix
+      ? `ssh-host-${opts.host_id}${config.hostSuffix}`
+      : undefined);
+  const prefix = config.prefix ? `${config.prefix}-` : "";
+  const tunnelName = opts.host_id
+    ? `${prefix}host-${opts.host_id}`
+    : opts.tunnel?.name;
   let zoneIdValue: string | undefined;
   try {
     zoneIdValue = await getZoneIdForHostname(
@@ -855,16 +863,58 @@ export async function deleteCloudflareTunnel(opts: {
     }
   }
 
+  const tunnelIds = new Set<string>();
   if (opts.tunnel?.id) {
+    tunnelIds.add(opts.tunnel.id);
+  }
+  if (tunnelName) {
+    try {
+      const tunnels = await listTunnelsByName(
+        config.accountId,
+        config.token,
+        tunnelName,
+      );
+      for (const tunnel of tunnels) {
+        if (tunnel.id && !tunnel.deleted_at) {
+          tunnelIds.add(tunnel.id);
+        }
+      }
+    } catch (err) {
+      logger.warn("cloudflare tunnel lookup during delete failed", {
+        err,
+        tunnel_name: tunnelName,
+      });
+    }
+  }
+  for (const tunnelId of tunnelIds) {
+    try {
+      // Cloudflare can retain disconnected connectors for several minutes.
+      // Remove those tracked connections before deleting the host tunnel.
+      await cloudflareRequest(
+        config.token,
+        "DELETE",
+        `accounts/${config.accountId}/cfd_tunnel/${tunnelId}/connections`,
+      );
+    } catch (err) {
+      if (!isNotFoundError(err)) {
+        logger.warn("cloudflare tunnel connection cleanup failed", {
+          err,
+          tunnel_id: tunnelId,
+        });
+      }
+    }
     try {
       await cloudflareRequest(
         config.token,
         "DELETE",
-        `accounts/${config.accountId}/cfd_tunnel/${opts.tunnel.id}`,
+        `accounts/${config.accountId}/cfd_tunnel/${tunnelId}`,
       );
     } catch (err) {
       if (!isNotFoundError(err)) {
-        logger.warn("cloudflare tunnel delete failed", { err });
+        logger.warn("cloudflare tunnel delete failed", {
+          err,
+          tunnel_id: tunnelId,
+        });
       }
     }
   }

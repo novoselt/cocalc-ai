@@ -434,6 +434,15 @@ describe("deleteCloudflareTunnel", () => {
           }),
         };
       }
+      if (init?.method === "GET" && url.includes("/cfd_tunnel?")) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            result: [{ id: "current-tunnel-id", name: "host-abc" }],
+          }),
+        };
+      }
       return {
         ok: true,
         json: async () => ({ success: true, result: {} }),
@@ -465,7 +474,65 @@ describe("deleteCloudflareTunnel", () => {
         expect.stringContaining("/dns_records/current-browser-id"),
         expect.stringContaining("/dns_records/stale-ssh-id"),
         expect.stringContaining("/dns_records/current-ssh-id"),
+        expect.stringContaining("/cfd_tunnel/tunnel-id/connections"),
         expect.stringContaining("/cfd_tunnel/tunnel-id"),
+        expect.stringContaining("/cfd_tunnel/current-tunnel-id/connections"),
+        expect.stringContaining("/cfd_tunnel/current-tunnel-id"),
+      ]),
+    );
+  });
+
+  it("discovers tunnel and dns resources when host metadata was lost", async () => {
+    const fetchMock = jest.fn(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/zones?")) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            result: [{ name: "example.test", id: "zone-id" }],
+          }),
+        };
+      }
+      if (init?.method === "GET" && url.includes("/dns_records?")) {
+        const name = new URL(url).searchParams.get("name");
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            result: [{ id: name?.startsWith("ssh-") ? "ssh-id" : "web-id" }],
+          }),
+        };
+      }
+      if (init?.method === "GET" && url.includes("/cfd_tunnel?")) {
+        expect(new URL(url).searchParams.get("name")).toBe("host-abc");
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            result: [{ id: "discovered-tunnel-id", name: "host-abc" }],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ success: true, result: {} }),
+      };
+    });
+    (global as any).fetch = fetchMock;
+
+    const { deleteCloudflareTunnel } = await import("./cloudflare-tunnel");
+    await deleteCloudflareTunnel({ host_id: "abc" });
+
+    const deletedUrls = fetchMock.mock.calls
+      .filter(([, init]) => init?.method === "DELETE")
+      .map(([url]) => String(url));
+    expect(deletedUrls).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("/dns_records/web-id"),
+        expect.stringContaining("/dns_records/ssh-id"),
+        expect.stringContaining("/cfd_tunnel/discovered-tunnel-id/connections"),
+        expect.stringContaining("/cfd_tunnel/discovered-tunnel-id"),
       ]),
     );
   });
