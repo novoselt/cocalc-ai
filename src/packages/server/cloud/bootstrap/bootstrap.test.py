@@ -1519,6 +1519,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
             self.assertIn('PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"', script)
+            self.assertIn(
+                'PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"', script
+            )
+            self.assertIn(
+                'PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"', script
+            )
             self.assertIn('PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="30"', script)
             self.assertIn("project-cgroup-lock-timeout", script)
             self.assertNotIn("project-network-lock-timeout", script)
@@ -1540,6 +1546,16 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )[1].split("\n}\n", 1)[0]
             self.assertNotIn(
                 'ensure_project_network_rule "$project_id"',
+                reconcile_body,
+            )
+            self.assertLess(
+                reconcile_body.index(
+                    'for attempt in $(seq 1 "$PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS")'
+                ),
+                reconcile_body.index("configure_project_pool_hierarchy"),
+            )
+            self.assertIn(
+                'sleep "$PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS"',
                 reconcile_body,
             )
             self.assertLess(

@@ -2579,6 +2579,8 @@ PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
 PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
 PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"
+PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"
+PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"
 # Full-chain reads are only used by background reconciliation and can take
 # over ten seconds on a busy host with hundreds of cgroup/socket rules.
 # Foreground project creation uses an append-only write and does not pay this
@@ -3097,18 +3099,22 @@ apply_project_network_process_limits() {
 
 reconcile_project_network_limits() {
   local attempt snapshot rules
-  configure_project_pool_hierarchy
-  configure_project_network_table
-  for attempt in $(seq 1 "$PROJECT_NETWORK_RECONCILE_ATTEMPTS"); do
+  # During early boot, systemd may still be settling the cgroup v2 tree. nft
+  # resolves socket cgroup paths while parsing the batch and rejects rules
+  # whose paths are not visible yet. Recreate the hierarchy on every attempt
+  # and give it time to become stable instead of aborting host bootstrap.
+  for attempt in $(seq 1 "$PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS"); do
+    configure_project_pool_hierarchy
+    configure_project_network_table
     snapshot="$(run_project_network_nft -a list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN")"
     rules="$(render_project_network_rules "$snapshot")"
     if printf '%s\\n' "$rules" | run_project_network_nft -f -; then
       apply_project_network_process_limits
       return 0
     fi
-    sleep 0.1
+    sleep "$PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS"
   done
-  echo "project network nftables reconciliation failed after ${PROJECT_NETWORK_RECONCILE_ATTEMPTS} attempts" >&2
+  echo "project network nftables reconciliation failed after ${PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS} attempts" >&2
   return 1
 }
 
