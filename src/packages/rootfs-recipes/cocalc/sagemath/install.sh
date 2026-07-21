@@ -24,6 +24,7 @@ clean_build_dir="${CLEAN_BUILD_DIR:-true}"
 clone_depth="${CLONE_DEPTH:-1}"
 preserve_build_artifacts="${PRESERVE_BUILD_ARTIFACTS:-false}"
 install_recommended_apt_packages="${INSTALL_RECOMMENDED_APT_PACKAGES:-true}"
+install_development_tools="${INSTALL_DEVELOPMENT_TOOLS:-false}"
 install_sagetex="${INSTALL_SAGETEX:-true}"
 priority_optional_packages="${PRIORITY_OPTIONAL_PACKAGES:-}"
 optional_packages="${OPTIONAL_PACKAGES:-}"
@@ -34,6 +35,7 @@ micromamba_prefix="${MICROMAMBA_PREFIX:-/opt/micromamba}"
 conda_packages="${CONDA_PACKAGES:-sage}"
 owner_uid="${OWNER_UID:-2001}"
 owner_gid="${OWNER_GID:-2001}"
+owner_home="${OWNER_HOME:-${COCALC_RUNTIME_HOME:-/home/user}}"
 
 log() {
   echo "[cocalc/sagemath] $*"
@@ -97,6 +99,29 @@ apt_install_available() {
   if [ "${#packages[@]}" -gt 0 ]; then
     run_noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
   fi
+}
+
+prepare_owner_runtime_home() {
+  if [ -z "$owner_home" ] || [ "$owner_home" = "/" ]; then
+    echo "Invalid SageMath owner home: $owner_home" >&2
+    exit 1
+  fi
+  log "Preparing SageMath runtime state in ${owner_home}"
+  $SUDO mkdir -p \
+    "$owner_home/.sage/R" \
+    "$owner_home/.ipython" \
+    "$owner_home/.jupyter" \
+    "$owner_home/.local/share/jupyter"
+  $SUDO chown -R "$owner_uid:$owner_gid" \
+    "$owner_home/.sage" \
+    "$owner_home/.ipython" \
+    "$owner_home/.jupyter" \
+    "$owner_home/.local/share/jupyter"
+  $SUDO chmod -R u+rwX \
+    "$owner_home/.sage" \
+    "$owner_home/.ipython" \
+    "$owner_home/.jupyter" \
+    "$owner_home/.local/share/jupyter"
 }
 
 has_optional_packages() {
@@ -447,6 +472,24 @@ install_source_sage() {
       xz-utils \
       zlib1g-dev
   fi
+  if [ "$install_development_tools" = "true" ]; then
+    apt_install_available \
+      ccache \
+      gdb \
+      git-lfs \
+      htop \
+      jq \
+      less \
+      lsof \
+      nano \
+      ripgrep \
+      strace \
+      tmux \
+      tree \
+      unzip \
+      vim \
+      zip
+  fi
 
   if [ "$jobs" = "auto" ]; then
     make_jobs="$(nproc 2>/dev/null || echo 2)"
@@ -601,3 +644,5 @@ case "$method" in
     exit 1
     ;;
 esac
+
+prepare_owner_runtime_home

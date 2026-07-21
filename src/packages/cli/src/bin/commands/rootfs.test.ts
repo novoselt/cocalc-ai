@@ -935,6 +935,10 @@ test("rootfs recipe explain parses bundled sagemath-develop recipe", async () =>
   assert.equal(harness.captured.steps[0].inputs.version, "develop");
   assert.equal(harness.captured.steps[0].inputs.clone_depth, "full");
   assert.equal(
+    harness.captured.steps[0].inputs.install_development_tools,
+    "true",
+  );
+  assert.equal(
     harness.captured.steps[0].inputs.preserve_build_artifacts,
     "true",
   );
