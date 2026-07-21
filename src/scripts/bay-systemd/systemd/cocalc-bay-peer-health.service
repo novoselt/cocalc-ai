@@ -13,6 +13,7 @@ EnvironmentFile=-/etc/cocalc/bay-workers.env
 EnvironmentFile=-/etc/cocalc/bay-overlay.env
 EnvironmentFile=-/etc/cocalc/bay-topology.env
 EnvironmentFile=-/etc/cocalc/bay-secrets.env
+EnvironmentFile=-/etc/cocalc/bay-local.env
 ExecStart=/opt/cocalc/bay/current/bin/bay-peer-healthd
 Restart=always
 RestartSec=2

@@ -4,6 +4,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
+public_ingress_mode="${COCALC_BAY_PUBLIC_INGRESS_MODE:-cloudflare-tunnel}"
+case "$public_ingress_mode" in
+  cloudflare-tunnel|cloudflare-proxy) ;;
+  *)
+    bay_log "invalid COCALC_BAY_PUBLIC_INGRESS_MODE: ${public_ingress_mode}"
+    exit 64
+    ;;
+esac
+
+cloudflared_enabled="${COCALC_BAY_CLOUDFLARED_ENABLED:-auto}"
+case "$cloudflared_enabled" in
+  auto)
+    if [[ "$public_ingress_mode" == "cloudflare-tunnel" ]]; then
+      cloudflared_enabled=1
+    else
+      cloudflared_enabled=0
+    fi
+    ;;
+  1|true|yes) cloudflared_enabled=1 ;;
+  0|false|no) cloudflared_enabled=0 ;;
+  *)
+    bay_log "invalid COCALC_BAY_CLOUDFLARED_ENABLED: ${cloudflared_enabled}"
+    exit 64
+    ;;
+esac
+if [[ "$cloudflared_enabled" -eq 0 ]]; then
+  bay_log "cloudflared is disabled; public ingress uses a direct Cloudflare-proxied route"
+  exit 0
+fi
+
 if [[ -z "${COCALC_BAY_CLOUDFLARED_CMD:-}" ]]; then
   bay_log "cloudflared command is not configured; skipping"
   exit 0

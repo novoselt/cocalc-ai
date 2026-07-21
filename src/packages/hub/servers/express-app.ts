@@ -93,6 +93,15 @@ function cloudflareTunnelEnabled(settings: Record<string, any>): boolean {
   return tunnelEnabled;
 }
 
+function cloudflareProxyHeadersEnabled(settings: Record<string, any>): boolean {
+  const bayIngressMode = `${process.env.COCALC_BAY_PUBLIC_INGRESS_MODE ?? ""}`
+    .trim()
+    .toLowerCase();
+  return (
+    bayIngressMode === "cloudflare-proxy" || cloudflareTunnelEnabled(settings)
+  );
+}
+
 function normalizeIp(ip?: string): string {
   let v = `${ip ?? ""}`.trim();
   if (!v) return "";
@@ -184,16 +193,17 @@ export default async function init(opts: Options): Promise<{
   // supposed to be keyed by client IP.
   //
   // Therefore:
-  //   - strict-cloudflare mode: trust forwarded headers only from local tunnel
-  //     proxy peers (loopback).
+  //   - strict-cloudflare mode: trust forwarded headers only from the local
+  //     frontdoor/tunnel proxy peer (loopback).
   //   - off mode: ignore forwarded headers and use direct socket address.
   //
-  // In launchpad self-host mode we only enable strict-cloudflare when tunnel mode
-  // is explicitly enabled in settings.
+  // In launchpad self-host mode we enable strict-cloudflare when either tunnel
+  // mode is configured or the bay frontdoor explicitly normalizes headers from
+  // a Cloudflare-proxied direct ingress.
   const settings = await getServerSettings();
   let strictCloudflareProxy = false;
   const applyTrustProxy = () => {
-    const nextStrict = cloudflareTunnelEnabled(
+    const nextStrict = cloudflareProxyHeadersEnabled(
       settings.all as Record<string, any>,
     );
     strictCloudflareProxy = nextStrict;
