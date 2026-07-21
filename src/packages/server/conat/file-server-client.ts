@@ -5,6 +5,7 @@ import {
 import {
   fsClient,
   fsSubject,
+  shareFsSubject,
   type FilesystemClient,
 } from "@cocalc/conat/files/fs";
 import type { Client } from "@cocalc/conat/core/client";
@@ -173,6 +174,35 @@ export async function getProjectFsClient({
   return fsClient({
     client: conatClient,
     subject: fsSubject({ project_id }),
+    timeout,
+    waitForInterest: true,
+  });
+}
+
+export async function getProjectShareFsClient({
+  project_id,
+  share_id,
+  account_id,
+  timeout,
+  ensure_route = true,
+  fresh = true,
+}: {
+  project_id: string;
+  share_id: string;
+  account_id: string;
+  timeout?: number;
+  ensure_route?: boolean;
+  fresh?: boolean;
+}): Promise<FilesystemClient> {
+  const conatClient = await getProjectConatClient({
+    project_id,
+    account_id,
+    ensure_route,
+    fresh,
+  });
+  return fsClient({
+    client: conatClient,
+    subject: shareFsSubject({ project_id, share_id, account_id }),
     timeout,
     waitForInterest: true,
   });

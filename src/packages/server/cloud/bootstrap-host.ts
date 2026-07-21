@@ -61,6 +61,7 @@ import {
   ensureCloudflareTunnelForHost,
   type CloudflareTunnel,
 } from "./cloudflare-tunnel";
+import { deriveProjectHostHostname } from "./derived-domains";
 import { machineHasGpu } from "./host-gpu";
 import {
   DEFAULT_GCP_BAY_ROUTER_PORT,
@@ -786,12 +787,13 @@ export async function buildBootstrapScripts(
     throw new Error("bootstrap requires public_ip");
   }
 
+  const serverSettings = await getServerSettings();
   const {
     project_hosts_software_base_url,
     project_hosts_bootstrap_channel,
     project_hosts_bootstrap_version,
     google_cloud_service_account_json,
-  } = await getServerSettings();
+  } = serverSettings;
   const forcedSoftwareBaseUrl =
     process.env.COCALC_PROJECT_HOST_SOFTWARE_BASE_URL_FORCE?.trim() || "";
   const softwareBaseConfigured =
@@ -941,6 +943,11 @@ export async function buildBootstrapScripts(
         existing: metadata.cloudflare_tunnel,
       })));
   const tunnelEnabled = !!tunnel;
+  const directHttpsEnabled = providerId === "gcp" && !useOnPremSettings;
+  const directHttpsHostname =
+    deriveProjectHostHostname(row.id, serverSettings) ??
+    tunnel?.hostname ??
+    publicIp;
 
   const spec = await buildHostSpec(row);
   const storageMode = machine.storage_mode ?? machine.metadata?.storage_mode;
@@ -1074,6 +1081,12 @@ export async function buildBootstrapScripts(
     `DEBUG_CONSOLE=yes`,
     `COCALC_SSH_SERVER=0.0.0.0:${sshPort}`,
   ];
+  if (directHttpsEnabled) {
+    envLines.push(`COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT=443`);
+    envLines.push(
+      `COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME=${directHttpsHostname}`,
+    );
+  }
   if (!isLoopbackBindHost) {
     // Current project-host cloud bootstrap defaults to non-loopback binding.
     // Keep startup explicit and deterministic under network policy guard.
@@ -1255,6 +1268,7 @@ fi
     "cron",
     "chrony",
     "libatomic1",
+    "libcap2-bin",
     "cloud-guest-utils",
   ]);
   const envLinesJson = JSON.stringify(scripts.envLines);
@@ -1475,8 +1489,21 @@ else
 fi
 
 if [ "$BOOTSTRAP_ALREADY_DONE" = "1" ]; then
-  echo "bootstrap: already complete; reconciling host software"
-  python3 "$BOOTSTRAP_DIR/bootstrap.py" reconcile --bootstrap-dir "$BOOTSTRAP_DIR"
+  BOOTSTRAP_RECONCILE_SCOPE="$(printenv COCALC_BOOTSTRAP_RECONCILE_SCOPE 2>/dev/null || printf full)"
+  case "$BOOTSTRAP_RECONCILE_SCOPE" in
+    full)
+      echo "bootstrap: already complete; reconciling host software"
+      python3 "$BOOTSTRAP_DIR/bootstrap.py" reconcile --bootstrap-dir "$BOOTSTRAP_DIR"
+      ;;
+    helpers)
+      echo "bootstrap: already complete; reconciling privileged host helpers only"
+      python3 "$BOOTSTRAP_DIR/bootstrap.py" helpers --bootstrap-dir "$BOOTSTRAP_DIR"
+      ;;
+    *)
+      echo "bootstrap: invalid reconcile scope: $BOOTSTRAP_RECONCILE_SCOPE" >&2
+      exit 2
+      ;;
+  esac
   exit 0
 fi
 

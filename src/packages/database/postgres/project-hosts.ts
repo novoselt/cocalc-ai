@@ -42,8 +42,15 @@ export async function upsertProjectHost({
   host_session_id,
 }: ProjectHostRecord): Promise<void> {
   const now = last_seen ?? new Date();
+  // These subtrees are written by the hub control plane. A host may report
+  // stale metadata during restart, so never let an observation replace them.
+  const hostMetadata = { ...(metadata ?? {}) };
+  delete hostMetadata.runtime_deployments;
+  delete hostMetadata.public_route;
+  delete hostMetadata.dns;
+  delete hostMetadata.cloudflare_tunnel;
   const mergedMetadata = {
-    ...(metadata ?? {}),
+    ...hostMetadata,
     ...(sshpiperd_public_key ? { sshpiperd_public_key } : {}),
     ...(host_session_id ? { host_session_id } : {}),
   };
@@ -63,7 +70,12 @@ export async function upsertProjectHost({
       status = COALESCE(EXCLUDED.status, project_hosts.status),
       version = EXCLUDED.version,
       capacity = EXCLUDED.capacity,
-      metadata = COALESCE(project_hosts.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb),
+      metadata = COALESCE(project_hosts.metadata, '{}'::jsonb)
+        || (COALESCE(EXCLUDED.metadata, '{}'::jsonb)
+          - 'runtime_deployments'
+          - 'public_route'
+          - 'dns'
+          - 'cloudflare_tunnel'),
       tier = COALESCE(EXCLUDED.tier, project_hosts.tier),
       last_seen = EXCLUDED.last_seen,
       updated = NOW()

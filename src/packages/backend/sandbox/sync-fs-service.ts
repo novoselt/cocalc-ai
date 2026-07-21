@@ -302,7 +302,7 @@ export class SyncFsService extends EventEmitter {
   private closed = false;
   private watchers: Map<string, WatchEntry> = new Map();
   private watcherInFlight: Map<string, Promise<WatchEntry>> = new Map();
-  private initInFlight: Map<string, Promise<void>> = new Map();
+  private initInFlight: Map<string, Promise<boolean>> = new Map();
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private pathStates: Map<string, PathState> = new Map();
   private patchWriters: Map<string, AStream<any>> = new Map();
@@ -551,8 +551,8 @@ export class SyncFsService extends EventEmitter {
     }
   }
 
-  private async initPath(path: string, meta?: WatchMeta): Promise<void> {
-    if (!this.canInitMeta(meta)) return;
+  private async initPath(path: string, meta?: WatchMeta): Promise<boolean> {
+    if (!this.canInitMeta(meta)) return true;
     const string_id = this.syncStringId(meta);
     const codec = this.resolveCodec(meta);
     try {
@@ -565,6 +565,7 @@ export class SyncFsService extends EventEmitter {
         project_id: meta.project_id,
         string_id,
         path: meta.syncPath,
+        requireComplete: true,
       });
       const hasHistory = heads.length > 0 || maxVersion > 0;
       if (hasHistory) {
@@ -578,12 +579,14 @@ export class SyncFsService extends EventEmitter {
           doctype: meta.doctype,
         });
         if (current == null) {
-          if (process.env.SYNC_FS_DEBUG) {
-            console.log("sync-fs initPath: unable to load stream baseline", {
+          logger.warn(
+            "sync-fs refusing disk reconciliation without stream baseline",
+            {
               path: meta.syncPath,
               string_id,
-            });
-          }
+            },
+          );
+          return false;
         } else {
           this.store.setContent(path, current);
         }
@@ -604,7 +607,7 @@ export class SyncFsService extends EventEmitter {
             maxTimeMs,
           });
         }
-        return;
+        return true;
       }
 
       const change = await this.store.handleExternalChange(
@@ -617,16 +620,17 @@ export class SyncFsService extends EventEmitter {
         const payload: ExternalChange = { ...change, deleted: false };
         await this.appendPatch({ ...meta, string_id }, "change", payload);
       }
+      return true;
     } catch (err) {
       this.emit("error", err);
+      return false;
     }
   }
 
-  private async initPathOnce(path: string, meta?: WatchMeta): Promise<void> {
+  private async initPathOnce(path: string, meta?: WatchMeta): Promise<boolean> {
     const existing = this.initInFlight.get(path);
     if (existing != null) {
-      await existing;
-      return;
+      return await existing;
     }
     const run = this.initPath(path, meta).finally(() => {
       if (this.initInFlight.get(path) === run) {
@@ -634,7 +638,7 @@ export class SyncFsService extends EventEmitter {
       }
     });
     this.initInFlight.set(path, run);
-    await run;
+    return await run;
   }
 
   close(): void {
@@ -791,7 +795,14 @@ export class SyncFsService extends EventEmitter {
       let entry = this.watchers.get(dir);
 
       if (!entry?.paths.has(path) || shouldReinitialize) {
-        await this.initPathOnce(path, normalizedMeta);
+        const initialized = await this.initPathOnce(path, normalizedMeta);
+        if (!initialized) {
+          // A watcher without an authoritative Patchflow baseline can turn a
+          // full disk file into an insertion and duplicate the document.
+          // Leave the path unarmed; a later heartbeat will retry initialization.
+          this.releasePath(path, "init-failed");
+          return;
+        }
       }
 
       if (!entry) {
@@ -1432,10 +1443,12 @@ export class SyncFsService extends EventEmitter {
     project_id,
     string_id,
     path,
+    requireComplete = false,
   }: {
     project_id: string;
     string_id: string;
     path: string;
+    requireComplete?: boolean;
   }): Promise<{
     heads: PatchId[];
     maxVersion: number;
@@ -1469,6 +1482,12 @@ export class SyncFsService extends EventEmitter {
       maxTimeMs:
         info.maxTimeMs ??
         this.timeMs(this.normalizePatchId((persisted as any)?.time)),
+      lastSeq: info.lastSeq,
+    };
+    const infoBeforeRead: StreamInfo = {
+      heads: new Set(info.heads),
+      maxVersion: info.maxVersion,
+      maxTimeMs: info.maxTimeMs,
       lastSeq: info.lastSeq,
     };
     // If we don't have any heads persisted yet, rebuild from the beginning so
@@ -1519,7 +1538,21 @@ export class SyncFsService extends EventEmitter {
       if (process.env.SYNC_FS_DEBUG) {
         console.log("sync-fs getStreamHeads error", err);
       }
-      // fall through with whatever we gathered
+      if (requireComplete) {
+        // AStream.getAll() throws rather than returning incomplete history.
+        // During initialization, do not reinterpret a failed authoritative
+        // read as an empty stream: that can turn the entire disk file into an
+        // insertion against live history.
+        throw err;
+      }
+      // Established watchers retain their last known causal state on a
+      // transient incremental refresh failure.
+      this.streamInfo.set(string_id, infoBeforeRead);
+      return {
+        heads: [...infoBeforeRead.heads],
+        maxVersion: infoBeforeRead.maxVersion,
+        maxTimeMs: infoBeforeRead.maxTimeMs,
+      };
     }
     // A full read can begin at a Patchflow snapshot checkpoint. In that case
     // the snapshot stands in for omitted history and is a head only when no
@@ -1571,7 +1604,12 @@ export class SyncFsService extends EventEmitter {
       if (process.env.SYNC_FS_DEBUG) {
         console.log("sync-fs getStreamHeads retry from start", { string_id });
       }
-      return this.getStreamHeads({ project_id, string_id, path });
+      return this.getStreamHeads({
+        project_id,
+        string_id,
+        path,
+        requireComplete,
+      });
     }
     if (process.env.SYNC_FS_DEBUG) {
       console.log("sync-fs getStreamHeads done", {

@@ -15,8 +15,13 @@ const stopMock = jest.fn();
 const deleteMock = jest.fn();
 const setSchedulingMock = jest.fn();
 const setMachineTypeMock = jest.fn();
+const setTagsMock = jest.fn();
+const firewallGetMock = jest.fn();
+const firewallInsertMock = jest.fn();
+const firewallPatchMock = jest.fn();
 const authRequestMock = jest.fn();
 const waitMock = jest.fn();
+const globalWaitMock = jest.fn();
 
 jest.mock("@google-cloud/compute", () => {
   class ImagesClient {
@@ -42,6 +47,7 @@ jest.mock("@google-cloud/compute", () => {
     delete = deleteMock;
     setScheduling = setSchedulingMock;
     setMachineType = setMachineTypeMock;
+    setTags = setTagsMock;
     auth = {
       getClient: async () => ({
         request: authRequestMock,
@@ -53,7 +59,24 @@ jest.mock("@google-cloud/compute", () => {
     wait = waitMock;
     constructor(_opts?: any) {}
   }
-  return { InstancesClient, ZoneOperationsClient, ImagesClient, DisksClient };
+  class GlobalOperationsClient {
+    wait = globalWaitMock;
+    constructor(_opts?: any) {}
+  }
+  class FirewallsClient {
+    get = firewallGetMock;
+    insert = firewallInsertMock;
+    patch = firewallPatchMock;
+    constructor(_opts?: any) {}
+  }
+  return {
+    InstancesClient,
+    ZoneOperationsClient,
+    GlobalOperationsClient,
+    FirewallsClient,
+    ImagesClient,
+    DisksClient,
+  };
 });
 
 function buildSpec(overrides: Partial<HostSpec> = {}): HostSpec {
@@ -84,8 +107,69 @@ describe("GcpProvider", () => {
     deleteMock.mockReset();
     setSchedulingMock.mockReset();
     setMachineTypeMock.mockReset();
+    setTagsMock.mockReset();
+    firewallGetMock.mockReset();
+    firewallInsertMock.mockReset();
+    firewallPatchMock.mockReset();
     authRequestMock.mockReset();
     waitMock.mockReset();
+    globalWaitMock.mockReset();
+  });
+
+  it("restricts public ingress to the supplied ranges and preserves VM tags", async () => {
+    firewallGetMock.mockRejectedValueOnce({ code: 404 });
+    firewallInsertMock.mockResolvedValueOnce([
+      { latestResponse: { name: "firewall-op", status: "DONE" } },
+    ]);
+    getMock.mockResolvedValueOnce([
+      {
+        tags: {
+          fingerprint: "tag-fingerprint",
+          items: ["existing-tag"],
+        },
+      },
+    ]);
+    setTagsMock.mockResolvedValueOnce([
+      { latestResponse: { name: "tags-op", status: "DONE" } },
+    ]);
+
+    const provider = new GcpProvider();
+    await provider.ensurePublicIngress(
+      {
+        provider: "gcp",
+        instance_id: "ph-test",
+        zone: "us-west1-a",
+        ssh_user: "ubuntu",
+      },
+      {
+        ports: [443],
+        source_ranges: ["173.245.48.0/20", "103.21.244.0/22"],
+      },
+      {
+        project_id: "proj-1",
+        client_email: "svc@example.com",
+        private_key: "key",
+      },
+    );
+
+    expect(firewallInsertMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: "proj-1",
+        firewallResource: expect.objectContaining({
+          allowed: [{ IPProtocol: "tcp", ports: ["443"] }],
+          sourceRanges: ["103.21.244.0/22", "173.245.48.0/20"],
+          targetTags: ["cocalc-project-host-public-https"],
+        }),
+      }),
+    );
+    expect(setTagsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tagsResource: {
+          fingerprint: "tag-fingerprint",
+          items: ["existing-tag", "cocalc-project-host-public-https"],
+        },
+      }),
+    );
   });
 
   it("creates a host with boot + data disks and startup script", async () => {

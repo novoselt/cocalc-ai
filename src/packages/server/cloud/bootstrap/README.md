@@ -7,11 +7,21 @@ Preferred deploy path (from repo root):
 
 ```
 cocalc software deploy --build host-bootstrap:<tag> <profile>
+cocalc software deploy --build --rollout --bootstrap-scope helpers host-bootstrap:<tag> <profile>
 ```
 
 This records `bootstrap.py` as an immutable software artifact, publishes the
 mutable `software/bootstrap/latest/bootstrap.py` pointer, writes deployment
 history, and reconciles online hosts.
+
+The reconcile scope is mandatory:
+
+- `helpers` atomically updates privileged host helpers and their sudo policy,
+  reconciles cloudflared configuration and version, and does not restart
+  project-host, Conat, ACP, or project containers. Cloudflared itself restarts
+  only when its package or configuration changes.
+- `full` runs the complete bootstrap reconcile and restarts project-host. Use
+  it only when the changed bootstrap code requires full host convergence.
 
 Low-level publish fallback:
 

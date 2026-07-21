@@ -48,6 +48,11 @@ import {
   reserveProjectRuntimeSlot,
 } from "@cocalc/server/projects/runtime-slots";
 import { stopSelfHostReverseTunnel } from "@cocalc/server/self-host/ssh-target";
+import {
+  beginPlannedProjectHostRuntimeTransition,
+  endPlannedProjectHostRuntimeTransition,
+} from "./runtime-transition";
+import { migrateHostPublicRouteInternal } from "@cocalc/server/cloud/public-route";
 
 const logger = getLogger("server:hosts:ops-worker");
 
@@ -79,6 +84,7 @@ const HOST_OP_KINDS = [
   "host-rollback-runtime-deployments",
   "host-upgrade-software",
   "host-rollout-managed-components",
+  "host-public-route",
   "host-deprovision",
   "host-delete",
   "host-force-deprovision",
@@ -287,6 +293,14 @@ function requestedProjectHostUpgradeVersion(
   return (
     `${targets?.find((target) => target.artifact === "project-host")?.version ?? ""}`.trim() ||
     undefined
+  );
+}
+
+function projectHostRestartWasScheduled(response: any): boolean {
+  return (response?.results ?? []).some(
+    (result: any) =>
+      result?.component === "project-host" &&
+      result?.action === "restart_scheduled",
   );
 }
 
@@ -1463,6 +1477,8 @@ async function runHostAction(
         account_id,
         id: host_id,
         force_bootstrap: input?.force_bootstrap === true,
+        bootstrap_scope:
+          input?.bootstrap_scope === "helpers" ? "helpers" : undefined,
       });
       return undefined;
     case "host-deprovision":
@@ -1552,6 +1568,8 @@ async function handleOp(op: LroSummary): Promise<void> {
     lastCheck: 0,
     canceled: false,
   };
+  let plannedProjectHostTransition = false;
+  let plannedProjectHostTransitionAwaitingReady = false;
 
   const shouldCancel = async () => {
     if (cancelState.canceled) return true;
@@ -1610,6 +1628,19 @@ async function handleOp(op: LroSummary): Promise<void> {
       );
       const requestedProjectHostTargetVersion =
         requestedProjectHostUpgradeVersion(input?.targets);
+      if (requestedProjectHostUpgrade) {
+        await beginPlannedProjectHostRuntimeTransition({
+          host_id,
+          operation_id: op_id,
+          target_version: requestedProjectHostTargetVersion,
+          previous_version: knownGoodProjectHostVersion,
+          previous_host_session_id:
+            `${preUpgradeRow?.metadata?.host_session_id ?? ""}`.trim() ||
+            undefined,
+          reason: `${input?.rollout_reason ?? "host_software_upgrade"}`,
+        });
+        plannedProjectHostTransition = true;
+      }
       let response;
       let rolloutResponse;
       const phase_timings_ms: Record<string, number> = {};
@@ -1691,6 +1722,8 @@ async function handleOp(op: LroSummary): Promise<void> {
                 },
               }),
           );
+          plannedProjectHostTransitionAwaitingReady =
+            projectHostRestartWasScheduled(rolloutResponse);
         }
       } catch (err) {
         const targetProjectHostVersion =
@@ -2082,6 +2115,8 @@ async function handleOp(op: LroSummary): Promise<void> {
         account_id,
         id: host_id,
         force_bootstrap: input?.force_bootstrap === true,
+        bootstrap_scope:
+          input?.bootstrap_scope === "helpers" ? "helpers" : undefined,
       });
       await progressStep("waiting", "waiting for host to return", {
         host_id,
@@ -2107,6 +2142,40 @@ async function handleOp(op: LroSummary): Promise<void> {
       await progressStep("done", "reconcile complete", {
         host_id,
       });
+      return;
+    }
+
+    if (kind === "host-public-route") {
+      await progressStep("waiting", "preparing public route migration", {
+        host_id,
+        mode: input?.mode,
+      });
+      const result = await migrateHostPublicRouteInternal({
+        id: host_id,
+        mode: input?.mode,
+        onProgress: async (update) => {
+          await progressStep(
+            update.phase,
+            update.message,
+            { host_id, mode: input?.mode, ...(update.detail ?? {}) },
+            update.progress,
+          );
+        },
+      });
+      const updated = await updateLro({
+        op_id,
+        status: "succeeded",
+        progress_summary: {
+          phase: "done",
+          host_id,
+          mode: input?.mode,
+        },
+        result,
+        error: null,
+      });
+      if (updated) {
+        await publishSummary(updated);
+      }
       return;
     }
 
@@ -2358,6 +2427,21 @@ async function handleOp(op: LroSummary): Promise<void> {
       });
     }
   } finally {
+    if (
+      plannedProjectHostTransition &&
+      !plannedProjectHostTransitionAwaitingReady
+    ) {
+      await endPlannedProjectHostRuntimeTransition({
+        host_id,
+        operation_id: op_id,
+      }).catch((err) =>
+        logger.warn("failed to clear planned project-host transition", {
+          host_id,
+          op_id,
+          err: `${err}`,
+        }),
+      );
+    }
     clearInterval(heartbeat);
   }
 }
@@ -2448,6 +2532,7 @@ export const __test__ = {
   currentBootstrapFailure,
   completedProjectHostUpgradeVersion,
   requestedProjectHostUpgradeVersion,
+  projectHostRestartWasScheduled,
   redundantProjectHostRollbackReason,
   waitForHostStatus,
   billingEnforcementDrainCompleteMetadata,

@@ -341,6 +341,7 @@ import {
   recordServiceAdmissionNearLimitLocal,
   reconcileHostRuntimeDeployments,
   reconcileHostSoftware,
+  setHostPublicRouteMode,
   refreshHostCloudState,
   removeSelfHostConnector,
   restartHost,
@@ -2158,6 +2159,8 @@ async function startHostConnectionService(): Promise<void> {
         id,
         force_bootstrap,
       }),
+    setHostPublicRouteMode: async ({ account_id, id, mode }) =>
+      await setHostPublicRouteMode({ account_id, id, mode }),
     reconcileHostRuntimeDeployments: async ({
       account_id,
       id,

@@ -19,6 +19,57 @@ async function closeServer(server: Server | http.Server): Promise<void> {
 }
 
 describe("project proxy upstream boundary metering", () => {
+  it("attaches websocket upgrades to every ingress listener", async () => {
+    const upstream = http.createServer();
+    upstream.on("upgrade", (_req, socket) => {
+      socket.end(
+        "HTTP/1.1 101 Switching Protocols\r\n" +
+          "Upgrade: websocket\r\n" +
+          "Connection: Upgrade\r\n\r\n",
+      );
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    const app = express();
+    const servers = [http.createServer(app), http.createServer(app)];
+    attachProjectProxy({
+      httpServers: servers,
+      app,
+      resolveTarget: async () => ({
+        handled: true,
+        target: { host: "127.0.0.1", port: upstreamPort },
+      }),
+    });
+    for (const server of servers) {
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+    }
+
+    try {
+      for (const server of servers) {
+        const port = (server.address() as AddressInfo).port;
+        const client = connect({ host: "127.0.0.1", port });
+        await once(client, "connect");
+        client.write(
+          `GET /${PROJECT_ID}/port/9999/ HTTP/1.1\r\n` +
+            "Host: 127.0.0.1\r\n" +
+            "Connection: Upgrade\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n" +
+            "Sec-WebSocket-Version: 13\r\n\r\n",
+        );
+        const [chunk] = (await once(client, "data")) as [Buffer];
+        expect(chunk.toString("utf8")).toContain("101 Switching Protocols");
+        client.destroy();
+      }
+    } finally {
+      for (const server of servers) await closeServer(server);
+      await closeServer(upstream);
+    }
+  });
+
   it("forwards JSON bodies already parsed by Express middleware", async () => {
     const upstream = http.createServer((req, res) => {
       const chunks: Buffer[] = [];

@@ -13,7 +13,10 @@ import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import { assertCollab } from "@cocalc/server/conat/api/util";
 import { getSiteLicenseOverview } from "@cocalc/server/conat/api/purchases";
-import { getProjectFsClient } from "@cocalc/server/conat/file-server-client";
+import {
+  getProjectFsClient,
+  getProjectShareFsClient,
+} from "@cocalc/server/conat/file-server-client";
 import createProject from "@cocalc/server/projects/create";
 import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
 import {
@@ -614,9 +617,10 @@ async function copySourceForPublicDirectoryShare({
     };
   }
 
-  const fs = await getProjectFsClient({
+  const fs = await getProjectShareFsClient({
     account_id,
     project_id: share.project_id,
+    share_id: share.id,
   });
   const listing = await fs.getListing(".");
   const paths = Object.keys(listing.files ?? {})
@@ -2641,6 +2645,9 @@ export async function listDirectory({
   slug,
   path,
 }: ListPublicDirectoryShareDirectoryOptions): Promise<ListPublicDirectoryShareDirectoryResponse> {
+  if (!account_id) {
+    throw Error("user must be signed in");
+  }
   const share = await resolve({ account_id, slug });
   if (!share.available) {
     throw Error(
@@ -2652,9 +2659,10 @@ export async function listDirectory({
   if (!entryAllowed({ share, relativePath })) {
     throw Error("path is not part of this shared directory");
   }
-  const fs = await getProjectFsClient({
+  const fs = await getProjectShareFsClient({
     account_id,
     project_id: share.project_id,
+    share_id: share.id,
   });
   const projectPath = joinProjectSharePath(share.path, relativePath);
   const listing = await fs.getListing(projectPath);

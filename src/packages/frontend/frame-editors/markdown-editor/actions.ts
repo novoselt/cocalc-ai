@@ -16,8 +16,9 @@ import {
   TableOfContentsEntryList,
 } from "@cocalc/frontend/components";
 import { scrollToHeading } from "@cocalc/frontend/editors/slate/control";
-import { SlateEditor } from "@cocalc/frontend/editors/slate/editable-markdown";
+import type { SlateEditor } from "@cocalc/frontend/editors/slate/editable-markdown";
 import { formatAction as slateFormatAction } from "@cocalc/frontend/editors/slate/format";
+import { preserveSourceForTrailingBlankWhitespaceOnly } from "@cocalc/frontend/editors/slate/trailing-whitespace";
 import {
   findSlatePointNearMarkdownPosition,
   markdownPositionToSlatePoint,
@@ -188,6 +189,24 @@ export class Actions extends CodeEditorActions<MarkdownEditorState> {
       return editor.getMarkdownValue();
     }
     return undefined;
+  }
+
+  public set_value(
+    value: string,
+    do_not_exit_undo_mode?: boolean,
+    localSource?: string,
+  ): void {
+    if (localSource === "slate") {
+      try {
+        value = preserveSourceForTrailingBlankWhitespaceOnly({
+          source: this._syncstring.to_str(),
+          normalized: value,
+        });
+      } catch {
+        // The syncstring can be unavailable while the editor is opening/closing.
+      }
+    }
+    super.set_value(value, do_not_exit_undo_mode, localSource);
   }
 
   set_syncstring_to_codemirror(

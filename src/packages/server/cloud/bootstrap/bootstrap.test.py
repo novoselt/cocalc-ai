@@ -1377,25 +1377,31 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             cfg = make_cfg(tmpdir)
             captured: dict[str, str] = {}
 
-            original_write_text = bootstrap.Path.write_text
+            original_text_write_atomic = bootstrap.text_write_atomic
             original_chmod = bootstrap.os.chmod
             original_chown = bootstrap.os.chown
 
-            def capture_write(self, data, encoding="utf-8"):
-                captured[str(self)] = data
+            def capture_write(path, data, **_kwargs):
+                captured[str(path)] = data
                 return len(data)
 
             try:
-                bootstrap.Path.write_text = capture_write
+                bootstrap.text_write_atomic = capture_write
                 bootstrap.os.chmod = lambda *_args, **_kwargs: None
                 bootstrap.os.chown = lambda *_args, **_kwargs: None
                 bootstrap.install_privileged_wrappers(cfg)
             finally:
-                bootstrap.Path.write_text = original_write_text
+                bootstrap.text_write_atomic = original_text_write_atomic
                 bootstrap.os.chmod = original_chmod
                 bootstrap.os.chown = original_chown
 
             script = captured["/usr/local/sbin/cocalc-runtime-storage"]
+            subprocess.run(
+                ["bash", "-n"],
+                input=script,
+                text=True,
+                check=True,
+            )
             self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
             self.assertIn("project-rustic-backup)", script)
             self.assertIn("project-rustic-restore)", script)
@@ -1460,36 +1466,63 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('PROJECT_PASTA_NOFILE_LIMIT="4096"', script)
             self.assertIn('PROJECT_TCP_NEW_RATE="50"', script)
             self.assertIn('PROJECT_UDP_NEW_RATE="100"', script)
+            self.assertIn('PROJECT_METADATA_IPV4="169.254.169.254"', script)
+            self.assertIn('PROJECT_METADATA_IPV6="fd20:ce::254"', script)
             self.assertIn("socket cgroupv2 level", script)
             self.assertIn("apply_pasta_resource_limits", script)
             self.assertIn("ensure_project_network_rule", script)
+            self.assertIn("emit_project_metadata_rules", script)
             self.assertIn("emit_project_network_rules", script)
+            emit_metadata_body = script.split(
+                "emit_project_metadata_rules() {", 1
+            )[1].split("\n}\n\nemit_project_network_rules()", 1)[0]
+            self.assertIn('comment "%s-ipv4"', emit_metadata_body)
+            self.assertIn('comment "%s-ipv6"', emit_metadata_body)
+            self.assertIn(
+                'marker="cocalc-project-network-metadata"', emit_metadata_body
+            )
+            self.assertIn(
+                'path="$(project_network_pool_cgroup_path)"', emit_metadata_body
+            )
+            verify_network_body = script.split(
+                "verify_project_network_limits() {", 1
+            )[1].split("\n}\n\nrender_project_network_rules()", 1)[0]
+            self.assertIn("metadata_ipv4_count", verify_network_body)
+            self.assertIn("metadata_ipv6_count", verify_network_body)
             ensure_network_body = script.split(
                 "ensure_project_network_rule() {", 1
-            )[1].split("\n}\n\nemit_project_network_rules()", 1)[0]
+            )[1].split("\n}\n\nemit_project_metadata_rules()", 1)[0]
             self.assertNotIn("project_network_rule_handles", ensure_network_body)
             self.assertIn(
                 'if emit_project_network_rules "$project_id" | run_project_network_nft -f -; then',
                 ensure_network_body,
             )
             self.assertIn("configure_project_network_table", ensure_network_body)
-            self.assertIn(
-                "printf 'flush chain inet %s %s\\n'", script
+            self.assertNotIn("flush chain inet", script)
+            render_network_body = script.split(
+                "render_project_network_rules() {", 1
+            )[1].split("\n}\n\napply_project_network_process_limits()", 1)[0]
+            self.assertLess(
+                render_network_body.index("emit_project_metadata_rules"),
+                render_network_body.index(
+                    'for cgroup in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*'
+                ),
             )
+            self.assertLess(
+                render_network_body.index("emit_project_metadata_rules"),
+                render_network_body.index("delete rule inet"),
+            )
+            self.assertIn('local snapshot="$1"', render_network_body)
             self.assertIn(
                 "printf '%s\\n' \"$rules\" | run_project_network_nft -f -",
                 script,
             )
             self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
-            self.assertIn('PROJECT_NETWORK_LOCK_WAIT_SECONDS="5"', script)
-            self.assertIn('PROJECT_NETWORK_LOCK_ATTEMPTS="3"', script)
+            self.assertIn('PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"', script)
             self.assertIn('PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="30"', script)
             self.assertIn("project-cgroup-lock-timeout", script)
-            self.assertIn("project-network-lock-timeout", script)
-            self.assertIn(
-                '"wait=${PROJECT_NETWORK_LOCK_WAIT_SECONDS},attempts=${PROJECT_NETWORK_LOCK_ATTEMPTS}"',
-                script,
-            )
+            self.assertNotIn("project-network-lock-timeout", script)
+            self.assertNotIn("acquire_project_network_lock", script)
             self.assertIn("--kill-after=2s", script)
             attach_body = script.split(
                 "  attach-project-cgroup)", 1
@@ -1510,13 +1543,26 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 reconcile_body,
             )
             self.assertLess(
-                reconcile_body.index('rules="$(render_project_network_rules)"'),
-                reconcile_body.index("acquire_project_network_lock"),
+                reconcile_body.index(
+                    'snapshot="$(run_project_network_nft -a list chain'
+                ),
+                reconcile_body.index(
+                    'rules="$(render_project_network_rules "$snapshot")"'
+                ),
             )
             self.assertLess(
-                reconcile_body.index("release_project_lock"),
+                reconcile_body.index("run_project_network_nft -f -"),
                 reconcile_body.index("apply_project_network_process_limits"),
             )
+            prepare_body = script.split(
+                "  prepare-project-cgroup)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertIn('ensure_project_network_rule "$project_id"', prepare_body)
+            self.assertNotIn("acquire_project_network_lock", prepare_body)
+            cleanup_body = script.split(
+                "  cleanup-project-cgroup)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertNotIn("remove_project_network_rule", cleanup_body)
             self.assertIn("project_cgroup_has_processes", script)
             self.assertNotIn('[ -s "$cgroup/cgroup.procs" ]', script)
             self.assertIn(
@@ -2635,6 +2681,92 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 )
             )
 
+    def test_reconcile_cloudflared_upgrades_version_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = replace(
+                make_cfg(tmpdir),
+                cloudflared=bootstrap.CloudflaredSpec(
+                    True,
+                    hostname="host.example.test",
+                    port=9002,
+                    token="token",
+                ),
+            )
+            recorded = []
+            downloads = []
+
+            original_run_cmd = bootstrap.run_cmd
+            original_download_file = bootstrap.download_file
+            original_verify_sha256 = bootstrap.verify_sha256
+            original_which = bootstrap.shutil.which
+            original_mkdir = Path.mkdir
+            original_write_text = Path.write_text
+            original_chmod = bootstrap.os.chmod
+            try:
+                def record_run(_cfg, args, desc, **kwargs):
+                    recorded.append((args, desc, kwargs))
+                    stdout = (
+                        "cloudflared version 2026.6.0 (built 2026-06-01)"
+                        if desc == "inspect cloudflared version"
+                        else ""
+                    )
+                    return bootstrap.subprocess.CompletedProcess(
+                        args, 0, stdout=stdout
+                    )
+
+                bootstrap.run_cmd = record_run
+                bootstrap.download_file = (
+                    lambda _cfg, url, dest, **kwargs: downloads.append(
+                        (url, dest, kwargs)
+                    )
+                )
+                bootstrap.verify_sha256 = lambda _cfg, path, expected: recorded.append(
+                    (["verify", path, expected], "verify cloudflared", {})
+                )
+                bootstrap.shutil.which = lambda name: (
+                    "/usr/bin/cloudflared"
+                    if name == "cloudflared"
+                    else original_which(name)
+                )
+                Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
+                Path.write_text = lambda self, _text, encoding="utf-8": 0  # type: ignore[method-assign]
+                bootstrap.os.chmod = lambda *_args, **_kwargs: None
+                bootstrap.configure_cloudflared_with_options(
+                    cfg, install_package=False
+                )
+            finally:
+                bootstrap.run_cmd = original_run_cmd
+                bootstrap.download_file = original_download_file
+                bootstrap.verify_sha256 = original_verify_sha256
+                bootstrap.shutil.which = original_which
+                Path.mkdir = original_mkdir  # type: ignore[method-assign]
+                Path.write_text = original_write_text  # type: ignore[method-assign]
+                bootstrap.os.chmod = original_chmod
+
+            self.assertEqual(
+                downloads,
+                [
+                    (
+                        "https://github.com/cloudflare/cloudflared/releases/download/2026.7.2/cloudflared-linux-amd64.deb",
+                        "/tmp/cloudflared.deb",
+                        {"attempts": 6},
+                    )
+                ],
+            )
+            self.assertTrue(
+                any(
+                    args == ["dpkg", "-i", "/tmp/cloudflared.deb"]
+                    and desc == "install cloudflared"
+                    for args, desc, _kwargs in recorded
+                )
+            )
+            self.assertTrue(
+                any(
+                    args == ["systemctl", "restart", "cocalc-cloudflared"]
+                    for args, _desc, _kwargs in recorded
+                )
+            )
+
     def test_configure_cloudflared_prefers_credentials_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = replace(
@@ -2657,7 +2789,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_exists = Path.exists
             original_chmod = bootstrap.os.chmod
             try:
-                bootstrap.run_cmd = lambda _cfg, args, _desc, **_kwargs: bootstrap.subprocess.CompletedProcess(args, 0)
+                bootstrap.run_cmd = lambda _cfg, args, desc, **_kwargs: bootstrap.subprocess.CompletedProcess(
+                    args,
+                    0,
+                    stdout=(
+                        f"cloudflared version {bootstrap.CLOUDFLARED_VERSION}"
+                        if desc == "inspect cloudflared version"
+                        else ""
+                    ),
+                )
                 bootstrap.shutil.which = lambda name: "/usr/bin/cloudflared"
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
                 Path.write_text = lambda self, text, encoding="utf-8": writes.append(  # type: ignore[method-assign]
@@ -2713,7 +2853,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_exists = Path.exists
             original_chmod = bootstrap.os.chmod
             try:
-                bootstrap.run_cmd = lambda _cfg, args, _desc, **_kwargs: bootstrap.subprocess.CompletedProcess(args, 0)
+                bootstrap.run_cmd = lambda _cfg, args, desc, **_kwargs: bootstrap.subprocess.CompletedProcess(
+                    args,
+                    0,
+                    stdout=(
+                        f"cloudflared version {bootstrap.CLOUDFLARED_VERSION}"
+                        if desc == "inspect cloudflared version"
+                        else ""
+                    ),
+                )
                 bootstrap.shutil.which = lambda name: "/usr/bin/cloudflared"
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
                 Path.write_text = lambda self, text, encoding="utf-8": writes.append(  # type: ignore[method-assign]
@@ -2768,7 +2916,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             try:
                 def record_run(_cfg, args, desc, **kwargs):
                     commands.append((args, desc, kwargs))
-                    return bootstrap.subprocess.CompletedProcess(args, 0)
+                    return bootstrap.subprocess.CompletedProcess(
+                        args,
+                        0,
+                        stdout=(
+                            f"cloudflared version {bootstrap.CLOUDFLARED_VERSION}"
+                            if desc == "inspect cloudflared version"
+                            else ""
+                        ),
+                    )
 
                 def read_stored(self, encoding="utf-8"):
                     try:
@@ -2902,6 +3058,73 @@ class BootstrapModesTest(unittest.TestCase):
 
             self.assertEqual(result, 0)
             self.assertEqual(events, ["lock-enter", "run-reconcile", "lock-exit"])
+
+    def test_helper_reconcile_does_not_restart_runtime_services(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            events: list[str] = []
+            originals = {}
+
+            def patch(name: str, replacement) -> None:
+                originals[name] = getattr(bootstrap, name)
+                setattr(bootstrap, name, replacement)
+
+            for name in (
+                "ensure_runtime_user",
+                "ensure_bootstrap_paths",
+                "install_privileged_wrappers",
+                "configure_runtime_sudoers",
+                "verify_runtime_sudoers",
+                "reconcile_project_network_limits",
+            ):
+                patch(name, lambda _cfg, name=name: events.append(name))
+            patch(
+                "configure_cloudflared_with_options",
+                lambda _cfg, *, install_package: events.append(
+                    f"configure_cloudflared:{install_package}"
+                ),
+            )
+            patch(
+                "start_project_host",
+                lambda _cfg: self.fail("helper reconcile restarted project-host"),
+            )
+            patch(
+                "record_operation_start",
+                lambda _cfg, operation: events.append(f"start:{operation}"),
+            )
+            patch(
+                "record_operation_success",
+                lambda _cfg, operation: events.append(f"success:{operation}"),
+            )
+            patch(
+                "record_operation_failure",
+                lambda _cfg, operation, error: events.append(
+                    f"failure:{operation}:{error}"
+                ),
+            )
+            patch("report_bootstrap_status", lambda *_args, **_kwargs: None)
+            patch("log_line", lambda *_args, **_kwargs: None)
+            try:
+                result = bootstrap.run_reconcile_helpers(cfg)
+            finally:
+                for name, original in originals.items():
+                    setattr(bootstrap, name, original)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                events,
+                [
+                    "start:reconcile",
+                    "ensure_runtime_user",
+                    "ensure_bootstrap_paths",
+                    "install_privileged_wrappers",
+                    "configure_runtime_sudoers",
+                    "verify_runtime_sudoers",
+                    "reconcile_project_network_limits",
+                    "configure_cloudflared:False",
+                    "success:reconcile",
+                ],
+            )
 
     def test_reconcile_mode_records_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

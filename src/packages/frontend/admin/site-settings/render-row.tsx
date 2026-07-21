@@ -29,9 +29,9 @@ interface RenderRowProps {
   data: Data | null;
   isSet: IsSet | null;
   isClearing: { [name: string]: boolean };
-  update: () => void;
   isReadonly: IsReadonly | null;
   onChangeEntry: (name: string, value: string) => void;
+  onDraftEntry: (name: string, value: string) => void;
   onJsonEntryChange: (name: string, value: string) => void;
   filterStr: string;
   filterTag: Tag | null;
@@ -50,9 +50,9 @@ export function RenderRow({
   data,
   isSet,
   isClearing,
-  update,
   isReadonly,
   onChangeEntry,
+  onDraftEntry,
   onJsonEntryChange,
   filterStr,
   filterTag,
@@ -235,8 +235,8 @@ export function RenderRow({
         isReadonly={isReadonly}
         onJsonEntryChange={onJsonEntryChange}
         onChangeEntry={onChangeEntry}
+        onDraftEntry={onDraftEntry}
         clearable={conf.clearable}
-        update={update}
         onClearSecret={onClearSecret}
         rootfsManifestUrls={rootfsManifestUrls}
       />

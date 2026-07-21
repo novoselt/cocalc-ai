@@ -14,7 +14,7 @@ import {
   Switch,
 } from "antd";
 import { isEqual } from "lodash";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { Well } from "@cocalc/frontend/antd-bootstrap";
 import { redux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import useCounter from "@cocalc/frontend/app-framework/counter-hook";
@@ -529,15 +529,8 @@ export default function SiteSettings({ close }) {
   }
 
   function SaveButton() {
-    if (data == null || savedRef.current == null) return null;
-    let disabled: boolean = true;
-    for (const name in { ...savedRef.current, ...data }) {
-      const value = savedRef.current[name];
-      if (!isEqual(value, data[name])) {
-        disabled = false;
-        break;
-      }
-    }
+    if (editedRef.current == null || savedRef.current == null) return null;
+    const disabled = getModifiedSettings().length === 0;
 
     return (
       <Button type="primary" disabled={disabled} onClick={saveAll}>
@@ -550,15 +543,26 @@ export default function SiteSettings({ close }) {
     return <Button onClick={close}>Cancel</Button>;
   }
 
-  function onChangeEntry(name: string, val: string) {
-    if (editedRef.current == null) return;
+  function editEntry(name: string, val: string): boolean {
+    if (editedRef.current == null) return false;
     clearSecretsRef.current[name] = false;
     editedRef.current[name] = val;
     if (name === "cloudflare_mode") {
       editedRef.current.project_hosts_cloudflare_tunnel_enabled =
         val === "self" ? "yes" : "no";
     }
-    change();
+    return true;
+  }
+
+  function onDraftEntry(name: string, val: string) {
+    if (!editEntry(name, val)) return;
+    // Keep typing synchronous and defer the lightweight save-state refresh.
+    // The expensive settings tree remains memoized until the field is blurred.
+    startTransition(change);
+  }
+
+  function onChangeEntry(name: string, val: string) {
+    if (!editEntry(name, val)) return;
     update();
   }
 
@@ -566,7 +570,6 @@ export default function SiteSettings({ close }) {
     if (editedRef.current == null) return;
     editedRef.current[name] = "";
     clearSecretsRef.current[name] = true;
-    change();
     update();
   }
 
@@ -580,7 +583,6 @@ export default function SiteSettings({ close }) {
       // TODO: obviously this should be visible to the user!  Gees.
       console.warn(`Error saving json of ${name}`, err.message);
     }
-    change();
     update(); // without that, the "green save button" does not show up. this makes it consistent.
   }
 
@@ -1307,9 +1309,9 @@ export default function SiteSettings({ close }) {
                           data={data}
                           isSet={isSet}
                           isClearing={clearSecretsRef.current}
-                          update={update}
                           isReadonly={isReadonly}
                           onChangeEntry={onChangeEntry}
+                          onDraftEntry={onDraftEntry}
                           onJsonEntryChange={onJsonEntryChange}
                           isModified={isModified}
                           isHeader={isHeader(name)}

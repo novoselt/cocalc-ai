@@ -23,8 +23,13 @@ type Capture = {
     base_url?: string;
     align_runtime_stack?: boolean;
   }>;
+  fleetRolloutRequests?: Array<Record<string, any>>;
   reconciles: string[];
-  reconcileRequests?: Array<{ id: string; force_bootstrap?: boolean }>;
+  reconcileRequests?: Array<{
+    id: string;
+    force_bootstrap?: boolean;
+    bootstrap_scope?: "full" | "helpers";
+  }>;
   rollouts: Array<{ id: string; components: string[]; reason?: string }>;
   runtimeDeploymentReconciles: Array<{
     id: string;
@@ -137,6 +142,7 @@ function makeDeps(
   capture.runtimeDeploymentRollbacks ??= [];
   capture.reconcileRequests ??= [];
   capture.upgradeRequests ??= [];
+  capture.fleetRolloutRequests ??= [];
   capture.hostRootfsImageRequests ??= [];
   capture.hostProjectsRequests ??= [];
   capture.hostProjectStops ??= [];
@@ -244,9 +250,29 @@ function makeDeps(
               });
               return { op_id: `op-${id}` };
             },
-            reconcileHostSoftware: async ({ id, force_bootstrap }) => {
+            rolloutHostRuntimeFleet: async (request) => {
+              capture.fleetRolloutRequests!.push(request);
+              return {
+                op_id: "fleet-op-1",
+                scope_type: "hub",
+                scope_id: "fleet-scope-1",
+                service: "persist",
+                stream_name: "lro-fleet-op-1",
+                kind: "host-runtime-fleet-rollout",
+                host_ids: request.host_ids,
+              };
+            },
+            reconcileHostSoftware: async ({
+              id,
+              force_bootstrap,
+              bootstrap_scope,
+            }) => {
               capture.reconciles.push(id);
-              capture.reconcileRequests!.push({ id, force_bootstrap });
+              capture.reconcileRequests!.push({
+                id,
+                force_bootstrap,
+                ...(bootstrap_scope ? { bootstrap_scope } : {}),
+              });
               return { op_id: `reconcile-${id}` };
             },
             rolloutHostManagedComponents: async ({
@@ -1057,6 +1083,85 @@ test("host upgrade --all-online --wait returns all successful hosts", async () =
   assert.equal(capture.data.hosts.length, 2);
 });
 
+test("host deploy rollout-fleet queues one canary-first durable campaign", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const now = new Date().toISOString();
+  const deps = makeDeps(capture, {
+    listHosts: async () => [
+      {
+        id: "busy-host",
+        name: "busy-host",
+        status: "running",
+        bay_id: "bay-1",
+        last_seen: now,
+        metrics: { current: { running_project_count: 12 } },
+      },
+      {
+        id: "quiet-host",
+        name: "quiet-host",
+        status: "running",
+        bay_id: "bay-1",
+        last_seen: now,
+        metrics: { current: { running_project_count: 1 } },
+      },
+      {
+        id: "offline-host",
+        name: "offline-host",
+        status: "running",
+        bay_id: "bay-1",
+        last_seen: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+  const program = new Command();
+  registerHostCommand(program, deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "deploy",
+    "rollout-fleet",
+    "--all-online",
+    "--desired-version",
+    "ph-v2",
+    "--base-url",
+    "https://software.example.test/software",
+    "--max-concurrent",
+    "2",
+    "--canary-stabilize-seconds",
+    "30",
+    "--stabilize-seconds",
+    "10",
+    "--wait",
+  ]);
+
+  assert.deepEqual(capture.fleetRolloutRequests, [
+    {
+      host_ids: ["quiet-host", "busy-host"],
+      artifact: "project-host",
+      version: "ph-v2",
+      components: ["project-host"],
+      base_url: "https://software.example.test/software",
+      canary_host_id: "quiet-host",
+      max_concurrent: 2,
+      canary_stabilize_seconds: 30,
+      stabilize_seconds: 10,
+      promote_global: true,
+      reason: undefined,
+    },
+  ]);
+  assert.equal(capture.data.status, "succeeded");
+  assert.equal(capture.data.op_id, "fleet-op-1");
+});
+
 test("host upgrade --wait emits progress on stderr in json output mode", async () => {
   const capture: Capture = {
     upgrades: [],
@@ -1197,10 +1302,18 @@ test("host where returns the bay for the resolved host", async () => {
               capture.upgrades.push(id);
               return { op_id: `op-${id}` };
             },
-            reconcileHostSoftware: async ({ id, force_bootstrap }) => {
+            reconcileHostSoftware: async ({
+              id,
+              force_bootstrap,
+              bootstrap_scope,
+            }) => {
               capture.reconciles.push(id);
               capture.reconcileRequests ??= [];
-              capture.reconcileRequests.push({ id, force_bootstrap });
+              capture.reconcileRequests.push({
+                id,
+                force_bootstrap,
+                ...(bootstrap_scope ? { bootstrap_scope } : {}),
+              });
               return { op_id: `reconcile-${id}` };
             },
             getHostMetricsHistory: async (opts) => ({
@@ -2065,6 +2178,38 @@ test("host reconcile forwards forced bootstrap requests", async () => {
 
   assert.deepEqual(capture.reconcileRequests, [
     { id: "host-1", force_bootstrap: true },
+  ]);
+});
+
+test("host reconcile forwards non-disruptive helper bootstrap scope", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const program = new Command();
+  registerHostCommand(program, makeDeps(capture));
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "reconcile",
+    "host-1",
+    "--force-bootstrap",
+    "--bootstrap-scope",
+    "helpers",
+  ]);
+
+  assert.deepEqual(capture.reconcileRequests, [
+    {
+      id: "host-1",
+      force_bootstrap: true,
+      bootstrap_scope: "helpers",
+    },
   ]);
 });
 

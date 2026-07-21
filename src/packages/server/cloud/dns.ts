@@ -54,6 +54,7 @@ type DnsRecord = {
 };
 
 const CNAME_CONFLICT_RECORD_TYPES = new Set(["A", "AAAA"]);
+const ADDRESS_ROUTE_RECORD_TYPES = new Set(["A", "AAAA", "CNAME"]);
 
 async function cloudflareRequest<T>(
   token: string,
@@ -236,9 +237,26 @@ export async function ensureHostDns(opts: {
   if (!opts.host_id) throw new Error("host_id required for DNS");
   if (!opts.ipAddress) throw new Error("ipAddress required for DNS");
 
-  const { token, settings } = await getClient();
+  const { settings } = await getClient();
   const name = deriveProjectHostHostname(opts.host_id, settings);
   if (!name) throw new Error("cloudflare DNS not configured");
+  return await ensureProxiedAddressDns({
+    name,
+    ipAddress: opts.ipAddress,
+    record_id: opts.record_id,
+  });
+}
+
+export async function ensureProxiedAddressDns(opts: {
+  name: string;
+  ipAddress: string;
+  record_id?: string;
+}): Promise<{ name: string; record_id: string }> {
+  const name = `${opts.name ?? ""}`.trim().toLowerCase();
+  if (!name) throw new Error("hostname required for DNS");
+  if (!opts.ipAddress) throw new Error("ipAddress required for DNS");
+
+  const { token } = await getClient();
   const zoneId = await getZoneIdForHostname(token, name);
 
   const updateRecord = async (record_id: string) => {
@@ -279,8 +297,11 @@ export async function ensureHostDns(opts: {
     return record_id;
   };
 
-  let records = await listDnsRecords(token, zoneId, name);
-  let recordIds = records
+  let records = await listDnsRecordsByName(token, zoneId, name);
+  let routeRecords = records.filter((record) =>
+    ADDRESS_ROUTE_RECORD_TYPES.has(`${record.type ?? ""}`.toUpperCase()),
+  );
+  let recordIds = routeRecords
     .map((record) => record.id)
     .filter((id): id is string => !!id);
   let record_id = opts.record_id;
@@ -301,6 +322,7 @@ export async function ensureHostDns(opts: {
     if (!recordIds.length) {
       record_id = await createRecord();
       records = [];
+      routeRecords = [];
       recordIds = [];
     } else {
       record_id = recordIds[0];
@@ -326,6 +348,34 @@ export async function ensureHostDns(opts: {
   }
 
   return { name, record_id };
+}
+
+export async function getCloudflareIpv4Cidrs(): Promise<string[]> {
+  const response = await fetch("https://api.cloudflare.com/client/v4/ips", {
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `cloudflare IP range lookup failed: ${response.status} ${response.statusText}`,
+    );
+  }
+  const data = (await response.json()) as CloudflareResponse<{
+    ipv4_cidrs?: string[];
+  }>;
+  if (!data?.success) {
+    throw new Error("cloudflare IP range lookup failed");
+  }
+  const cidrs = Array.from(
+    new Set(
+      (data.result?.ipv4_cidrs ?? [])
+        .map((cidr) => `${cidr ?? ""}`.trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+  if (cidrs.length === 0) {
+    throw new Error("cloudflare returned no IPv4 ranges");
+  }
+  return cidrs;
 }
 
 export async function deleteHostDns(opts: {

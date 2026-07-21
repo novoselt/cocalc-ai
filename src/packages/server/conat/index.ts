@@ -17,6 +17,7 @@ import { startMoveLroWorker } from "@cocalc/server/projects/move-worker";
 import { startRootfsPublishLroWorker } from "@cocalc/server/projects/rootfs-publish-worker";
 import { startRestoreLroWorker } from "@cocalc/server/projects/restore-worker";
 import { startHostLroWorker } from "@cocalc/server/hosts/start-worker";
+import { startHostRuntimeFleetRolloutWorker } from "@cocalc/server/hosts/runtime-fleet-rollout-worker";
 import { startLegacyMigrationProjectRestoreWorker } from "@cocalc/server/legacy-migration/restore-worker";
 import { startLegacyMigrationArtifactRefreshMaintenance } from "@cocalc/server/legacy-migration/artifact-refresh-maintenance";
 import { isLaunchpadProduct } from "@cocalc/server/launchpad/mode";
@@ -121,6 +122,9 @@ export async function initConatApi() {
     });
   }
   startHostLroWorker();
+  if (isPrimaryBayWorker()) {
+    startHostRuntimeFleetRolloutWorker();
+  }
   startAccountProjectIndexProjectionMaintenance();
   if (isPrimaryBayWorker()) {
     startAccountCollaboratorIndexProjectionMaintenance();

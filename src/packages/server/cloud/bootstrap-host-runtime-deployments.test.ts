@@ -5,6 +5,7 @@
 
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { networkInterfaces } from "node:os";
 
 let getServerSettingsMock: jest.Mock;
 let loadEffectiveProjectHostRuntimeDeploymentsMock: jest.Mock;
@@ -51,6 +52,14 @@ describe("bootstrap-host promoted artifact defaults", () => {
   let softwareBaseUrl: string;
 
   beforeAll(async () => {
+    const testHost = Object.values(networkInterfaces())
+      .flatMap((addresses) => addresses ?? [])
+      .find(
+        (address) => address.family === "IPv4" && !address.internal,
+      )?.address;
+    if (!testHost) {
+      throw new Error("managed-host bootstrap test requires a non-loopback IP");
+    }
     server = http.createServer((req, res) => {
       const path = req.url ?? "/";
       const sendJson = (payload: any) => {
@@ -100,11 +109,9 @@ describe("bootstrap-host promoted artifact defaults", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) =>
-      server.listen(0, "127.0.0.1", resolve),
-    );
+    await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
     const address = server.address() as AddressInfo;
-    softwareBaseUrl = `http://127.0.0.1:${address.port}/software`;
+    softwareBaseUrl = `http://${testHost}:${address.port}/software`;
   });
 
   afterAll(async () => {
@@ -222,6 +229,48 @@ describe("bootstrap-host promoted artifact defaults", () => {
       `${softwareBaseUrl}/tools/latest-linux-amd64.json`,
     );
     expect(scripts.bootstrapSelector).toBe("latest");
+  });
+
+  it("enables additive direct HTTPS ingress for managed GCP hosts", async () => {
+    getServerSettingsMock.mockResolvedValue({
+      project_hosts_software_base_url: softwareBaseUrl,
+      project_hosts_bootstrap_channel: "latest",
+      project_hosts_bootstrap_version: "",
+      dns: "https://staging.example.com",
+      project_hosts_cloudflare_tunnel_host_suffix: "staging",
+    });
+    ensureCloudflareTunnelForHostMock.mockResolvedValue({
+      id: "tunnel-id",
+      hostname: "host-host-123-staging.example.com",
+      ssh_hostname: "ssh-host-123-staging.example.com",
+    });
+    const { buildBootstrapScripts } = await loadBootstrapHost();
+    const scripts = await buildBootstrapScripts({
+      id: "host-123",
+      name: "gcp-host",
+      region: "us-central1",
+      metadata: {
+        machine: { cloud: "gcp", zone: "us-central1-a" },
+        runtime: {
+          provider: "gcp",
+          instance_id: "gcp-host",
+          public_ip: "203.0.113.20",
+          private_ip: "10.0.0.20",
+          ssh_user: "ubuntu",
+          zone: "us-central1-a",
+        },
+      },
+    } as any);
+
+    expect(scripts.envLines).toContain(
+      "COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT=443",
+    );
+    expect(scripts.envLines).toContain(
+      "COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME=host-host-123-staging.example.com",
+    );
+    expect(scripts.envLines).toContain("PORT=9002");
+    expect(scripts.envLines).toContain("COCALC_PROJECT_HOST_HTTPS=0");
+    expect(scripts.cloudflaredConfig.enabled).toBe(true);
   });
 
   it("prefers a newer observed installed artifact version over stale desired runtime deployments", async () => {

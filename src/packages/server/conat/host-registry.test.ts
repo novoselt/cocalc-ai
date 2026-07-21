@@ -343,6 +343,85 @@ describe("host-registry automatic convergence retry", () => {
     );
   });
 
+  it("clears a planned project-host transition only after runtime is ready", async () => {
+    const operationId = "beab4b03-dbbe-40d0-a35a-fc50d40dfc1f";
+    currentMetadata = {
+      host_session_id: "session-new",
+      host_boot_id: "boot-1",
+      machine: { cloud: "gcp" },
+      runtime_health: { status: "starting", ready: false },
+      runtime_deployments: {
+        planned_project_host_transition: {
+          operation_id: operationId,
+          component: "project-host",
+          previous_host_session_id: "session-old",
+          started_at: new Date(Date.now() - 10_000).toISOString(),
+          deadline_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+          banner_suppression_until: new Date(
+            Date.now() + 3 * 60_000,
+          ).toISOString(),
+        },
+      },
+    };
+    queryMock = jest.fn(async (sql: string, params: any[]) => {
+      const availabilityResult = handleAvailabilityQuery(sql);
+      if (availabilityResult) return availabilityResult;
+      if (
+        sql.includes(
+          "SELECT status FROM project_hosts WHERE id=$1 AND deleted IS NULL",
+        )
+      ) {
+        return { rows: [{ status: "running" }] };
+      }
+      if (
+        sql.includes(
+          "SELECT metadata, bay_id FROM project_hosts WHERE id=$1 AND deleted IS NULL",
+        ) ||
+        sql.includes(
+          "SELECT metadata FROM project_hosts WHERE id=$1 AND deleted IS NULL",
+        )
+      ) {
+        return { rows: [{ metadata: currentMetadata, bay_id: "bay-1" }] };
+      }
+      if (
+        sql.includes("planned_project_host_transition") &&
+        sql.includes("UPDATE project_hosts")
+      ) {
+        expect(params).toEqual(["host-1", operationId]);
+        return { rows: [] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    ensureAutomaticHostRuntimeDeploymentsReconcileMock = jest.fn(async () => ({
+      queued: false,
+      host_id: "host-1",
+      reason: "no_reconcile_needed",
+    }));
+    ensureAutomaticHostArtifactDeploymentsReconcileMock = jest.fn(async () => ({
+      queued: false,
+      host_id: "host-1",
+      reason: "no_reconcile_needed",
+    }));
+
+    const { initHostRegistryService } = await import("./host-registry");
+    const service = await initHostRegistryService();
+
+    await service.heartbeat({
+      id: "host-1",
+      metadata: {
+        host_session_id: "session-new",
+        host_boot_id: "boot-1",
+        machine: { cloud: "gcp" },
+        runtime_health: { status: "ready", ready: true },
+      },
+    } as any);
+
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining("planned_project_host_transition"),
+      ["host-1", operationId],
+    );
+  });
+
   it("accepts heartbeats while a host is starting", async () => {
     currentMetadata = {
       host_session_id: "session-1",

@@ -3,6 +3,7 @@
 import { render } from "@testing-library/react";
 import "../elements/types";
 import { markdown_to_slate } from "../markdown-to-slate";
+import { slate_to_markdown } from "../slate-to-markdown";
 import StaticMarkdown from "../static-markdown";
 
 function findByType(nodes: any[], type: string): any | undefined {
@@ -40,5 +41,19 @@ a^{10} = 7^{10} = 282{,}475{,}249.
     );
     expect(container.innerHTML).not.toContain("\\(");
     expect(container.innerHTML).not.toContain("\\[");
+  });
+
+  it("preserves bracket delimiters when serializing an edited document", () => {
+    const doc = markdown_to_slate(markdown, false, {}) as any[];
+    const paragraph = doc.find((node) => node.type === "paragraph");
+    paragraph.children[0].text = "When ";
+
+    const serialized = slate_to_markdown(doc, {
+      preserveBlankLines: true,
+    });
+
+    expect(serialized).toContain(String.raw`\(a = 7\)`);
+    expect(serialized).toContain(String.raw`\[`);
+    expect(serialized).toContain(String.raw`\]`);
   });
 });

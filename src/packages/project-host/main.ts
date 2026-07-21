@@ -338,10 +338,12 @@ function resolveTlsConfig(host: string, port: number): TlsConfig {
   return { enabled, hostname };
 }
 
-async function startHttpServer(port: number, host: string, tls: TlsConfig) {
-  const app = express();
-  app.use(express.json());
-
+async function startHttpListener(
+  app: express.Application,
+  port: number,
+  host: string,
+  tls: TlsConfig,
+) {
   let httpServer:
     | ReturnType<typeof createHttpServer>
     | ReturnType<typeof createHttpsServer>;
@@ -358,6 +360,38 @@ async function startHttpServer(port: number, host: string, tls: TlsConfig) {
   await once(httpServer, "listening");
 
   return { app, httpServer, isHttps: tls.enabled };
+}
+
+function resolveDirectHttpsConfig({
+  host,
+  primaryPort,
+  primaryTls,
+}: {
+  host: string;
+  primaryPort: number;
+  primaryTls: TlsConfig;
+}): { enabled: boolean; port: number; tls: TlsConfig } {
+  const rawPort =
+    `${process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT ?? ""}`.trim();
+  if (!rawPort) {
+    return { enabled: false, port: 0, tls: { enabled: true, hostname: host } };
+  }
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new Error(
+      "COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT must be an integer from 1 through 65535",
+    );
+  }
+  const hostname =
+    `${process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME ?? ""}`.trim() ||
+    primaryTls.hostname ||
+    host;
+  const duplicatesPrimary = port === primaryPort && primaryTls.enabled;
+  return {
+    enabled: !duplicatesPrimary,
+    port,
+    tls: { enabled: true, hostname },
+  };
 }
 
 async function waitForProjectHttpPort(project_id: string): Promise<number> {
@@ -492,7 +526,27 @@ export async function main(
   });
 
   // 1) HTTP + conat server
-  const { app, httpServer } = await startHttpServer(port, host, tls);
+  const app = express();
+  app.use(express.json());
+  const { httpServer } = await startHttpListener(app, port, host, tls);
+  const httpServers = [httpServer];
+  const directHttps = resolveDirectHttpsConfig({
+    host,
+    primaryPort: port,
+    primaryTls: tls,
+  });
+  if (directHttps.enabled) {
+    const direct = await startHttpListener(
+      app,
+      directHttps.port,
+      host,
+      directHttps.tls,
+    );
+    httpServers.push(direct.httpServer);
+    logger.info(
+      `direct HTTPS ingress enabled on https://${host}:${directHttps.port}`,
+    );
+  }
   app.get("/healthz", (_req, res) =>
     res.json({
       ok: true,
@@ -505,7 +559,7 @@ export async function main(
   const conatRouterUrl = resolveProjectHostConatRouterUrl();
   attachProjectHostConatRouterProxy({
     app,
-    httpServer,
+    httpServers,
     target: conatRouterUrl,
   });
   const conatClient: ConatClient = connectToConat({
@@ -1195,7 +1249,7 @@ export async function main(
     req.headers[PUBLIC_APP_HOST_HEADER] = hostname;
   };
   attachProjectProxy({
-    httpServer,
+    httpServers,
     app,
     rewriteRequest: maybeRewritePublicHostnameRequest,
     noteUpstreamHttpBytes: ({ req, bytes }) => {

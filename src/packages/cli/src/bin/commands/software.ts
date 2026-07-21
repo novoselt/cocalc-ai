@@ -93,6 +93,7 @@ export type SoftwareCommandDeps = {
       env?: NodeJS.ProcessEnv;
     },
   ) => Promise<{ code: number; stdout: string; stderr: string }>;
+  deployPreflight?: () => Promise<void>;
   r2Client?: SoftwareR2Client | (() => SoftwareR2Client);
   loadAuthConfig?: () => AuthConfig;
   fetch?: typeof fetch;
@@ -127,7 +128,20 @@ type DeployOptions = {
   toolsMinimal?: string;
   build?: boolean;
   rollout?: boolean;
+  rolloutCanary?: string;
+  rolloutMaxConcurrent?: string;
+  rolloutCanaryStabilizeSeconds?: string;
+  rolloutStabilizeSeconds?: string;
+  bootstrapScope?: string;
 };
+
+function parseHostBootstrapScope(
+  value: string | undefined,
+): "full" | "helpers" | undefined {
+  if (value == null) return undefined;
+  if (value === "full" || value === "helpers") return value;
+  throw new Error("--bootstrap-scope must be full or helpers");
+}
 
 type HistoryOptions = {
   envFile?: string;
@@ -577,22 +591,29 @@ function rawSoftwareComponentInfo(
         push: ["cocalc software push host-bootstrap:<tag-or-id>"],
         deploy: [
           "cocalc software deploy --build host-bootstrap:<tag> <profile>",
+          "cocalc software deploy --build --rollout --bootstrap-scope helpers host-bootstrap:<tag> <profile>",
+          "cocalc software deploy --build --rollout --bootstrap-scope full host-bootstrap:<tag> <profile>",
         ],
         smoke: ["cocalc software smoke host-bootstrap <profile>"],
         history: ["cocalc software history host-bootstrap <profile>"],
         rollback: [
           "cocalc software rollback host-bootstrap <profile> <artifact-id>",
+          "cocalc software rollback host-bootstrap <profile> <artifact-id> --rollout --bootstrap-scope helpers",
         ],
       },
       related_components: ["project-host"],
       operator_notes: [
         "This replaces the old manual publish:bootstrap step for normal deploys.",
         "The latest bootstrap URL is mutable, so deploy history is the audit trail for what changed.",
+        "Deploy updates desired state without touching running hosts unless --rollout is explicit.",
+        "A rollout requires --bootstrap-scope so daemon restart behavior is explicit.",
+        "Use helpers for privileged helper/sudo policy changes; it does not restart project-host, Conat, or ACP.",
+        "Use full only when complete host convergence is required; it restarts project-host.",
         "Use this after bootstrap/sysctl/rootctl changes that do not require rebuilding project-host runtime.",
       ],
       agent_notes: [
         "Build does not run pnpm; it records the source bootstrap.py file.",
-        "Deploy publishes the latest bootstrap object and runs host reconcile --all-online --wait.",
+        "Deploy publishes the latest bootstrap object and desired state; --rollout additionally runs host reconcile --all-online --wait.",
       ],
       common_failure_modes: [
         "R2 software credentials are missing.",
@@ -630,9 +651,9 @@ function rawSoftwareComponentInfo(
         "Build a project-host artifact.",
         "Publish host compatibility metadata.",
         fullStack
-          ? "Set desired managed component versions for project-host, conat-router, conat-persist, and acp-worker."
-          : `Set the desired managed component version for ${service}.`,
-        "Reconcile online project hosts and wait for convergence.",
+          ? "Run one durable canary-first campaign for project-host, conat-router, conat-persist, and acp-worker."
+          : `Run one durable canary-first campaign for ${service}.`,
+        "Promote the artifact and selected component defaults only after every online host converges.",
       ],
       commands: {
         build: ["cocalc software build project-host:<tag>"],
@@ -648,13 +669,13 @@ function rawSoftwareComponentInfo(
       operator_notes: [
         fullStack
           ? "This is intentionally broad and should be used only when all host-managed services must move together."
-          : "This updates host deploy desired state and reconciles only the selected managed component.",
+          : "This rolls only the selected managed component after safely staging the shared project-host artifact.",
         "Offline hosts converge when the host deployment machinery sees them later.",
       ],
       agent_notes: [
         "Resolve artifacts using artifact_component=project-host.",
         `Managed component target(s): ${managedComponents?.join(", ") ?? "none"}.`,
-        "Expect host deploy set and host deploy reconcile subprocesses during deploy.",
+        "Expect one host deploy rollout-fleet subprocess during deploy.",
       ],
       common_failure_modes: [
         "No online representative host is available for smoke verification.",
@@ -1254,6 +1275,27 @@ function resolveRepoLayout({
   const repoRoot = resolve(deps.repoRoot?.(cwd) ?? defaultRepoRoot(cwd));
   const srcRoot = repoRoot.endsWith("/src") ? repoRoot : join(repoRoot, "src");
   return { repoRoot, srcRoot };
+}
+
+async function runDeployTypecheck(deps: SoftwareCommandDeps): Promise<void> {
+  if (deps.deployPreflight) {
+    await deps.deployPreflight();
+    return;
+  }
+  if (!deps.runCommand) {
+    throw new Error("software deploy typecheck requires runCommand dependency");
+  }
+  const cwd = resolve(deps.cwd ?? process.cwd());
+  const { srcRoot } = resolveRepoLayout({ cwd, deps });
+  const code = await deps.runCommand("pnpm", ["-C", srcRoot, "tsc"], {
+    stdio: "inherit",
+    env: deps.env ?? process.env,
+  });
+  if (code !== 0) {
+    throw new Error(
+      `software deploy typecheck failed with exit status ${code}`,
+    );
+  }
 }
 
 function rocketBuildInfo(component: SoftwareBuildComponent):
@@ -2448,6 +2490,22 @@ function rollbackDeployArgs({
   if (opts.remote) args.push("--remote", opts.remote);
   if (opts.api) args.push("--api", opts.api);
   if (opts.envFile) args.push("--env-file", opts.envFile);
+  if (component === "host-bootstrap") {
+    const bootstrapScope = parseHostBootstrapScope(opts.bootstrapScope);
+    if (opts.rollout && !bootstrapScope) {
+      throw new Error(
+        "software rollback host-bootstrap --rollout requires --bootstrap-scope full or helpers",
+      );
+    }
+    if (!opts.rollout && bootstrapScope) {
+      throw new Error(
+        "software rollback host-bootstrap --bootstrap-scope requires --rollout",
+      );
+    }
+    if (opts.rollout) {
+      args.push("--rollout", "--bootstrap-scope", bootstrapScope!);
+    }
+  }
   if (component === "plus") {
     const toolsMinimal =
       opts.toolsMinimal || toolsMinimalArtifactIdFromRecord(record);
@@ -3213,6 +3271,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
         | "tools";
       managedComponents?: HostManagedSoftwareComponent[];
       publishOnly?: boolean;
+      pacedFleetRollout?: boolean;
     }
   | undefined {
   if (component === "project-host") {
@@ -3220,6 +3279,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: component,
       upgradeArtifact: component,
       managedComponents: ["project-host"],
+      pacedFleetRollout: true,
     };
   }
   if (component === "container-runtime") {
@@ -3242,6 +3302,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: "project-host",
       upgradeArtifact: "project-host",
       managedComponents: ["conat-router"],
+      pacedFleetRollout: true,
     };
   }
   if (component === "host-conat-persist") {
@@ -3249,6 +3310,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: "project-host",
       upgradeArtifact: "project-host",
       managedComponents: ["conat-persist"],
+      pacedFleetRollout: true,
     };
   }
   if (component === "host-acp-worker") {
@@ -3256,6 +3318,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: "project-host",
       upgradeArtifact: "project-host",
       managedComponents: ["acp-worker"],
+      pacedFleetRollout: true,
     };
   }
   if (component === "host-runtime-stack") {
@@ -3263,6 +3326,7 @@ function hostDeployTargetForComponent(component: SoftwareDeployComponent):
       artifactComponent: "project-host",
       upgradeArtifact: "project-host",
       managedComponents: HOST_RUNTIME_STACK_COMPONENTS,
+      pacedFleetRollout: true,
     };
   }
   return undefined;
@@ -3272,12 +3336,6 @@ function hostManagedComponentsForDeployComponent(
   component: SoftwareDeployComponent,
 ): HostManagedSoftwareComponent[] | undefined {
   return hostDeployTargetForComponent(component)?.managedComponents;
-}
-
-function hostManagedComponentPolicy(
-  component: HostManagedSoftwareComponent,
-): "restart_now" | "drain_then_replace" {
-  return component === "acp-worker" ? "drain_then_replace" : "restart_now";
 }
 
 function hostBootstrapDeployTargetForComponent(
@@ -3824,7 +3882,27 @@ Supported deploy/smoke components:
     )
     .option(
       "--rollout",
-      "for host runtime components, immediately upgrade/reconcile all online hosts after setting fleet defaults",
+      "for host runtime components, run a durable canary-first rollout before promoting fleet defaults",
+    )
+    .option("--rollout-canary <host>", "project-host rollout canary")
+    .option(
+      "--rollout-max-concurrent <count>",
+      "maximum project hosts in each post-canary wave",
+      "2",
+    )
+    .option(
+      "--rollout-canary-stabilize-seconds <seconds>",
+      "healthy time required after the project-host canary",
+      "180",
+    )
+    .option(
+      "--rollout-stabilize-seconds <seconds>",
+      "healthy time required after later project-host waves",
+      "60",
+    )
+    .option(
+      "--bootstrap-scope <scope>",
+      "with host-bootstrap --rollout: full restarts project-host; helpers updates privileged helpers without daemon restarts",
     )
     .option("--local-store <path>", "local artifact store")
     .option("--config <path>", "rocket config path")
@@ -3872,6 +3950,24 @@ Supported deploy/smoke components:
             "software deploy cannot mix site-profile components and release-channel components in one command",
           );
         }
+        const bootstrapScope = parseHostBootstrapScope(opts.bootstrapScope);
+        const deploysHostBootstrap = components.includes("host-bootstrap");
+        if (deploysHostBootstrap && opts.rollout && !bootstrapScope) {
+          throw new Error(
+            "software deploy host-bootstrap --rollout requires --bootstrap-scope full or helpers",
+          );
+        }
+        if (deploysHostBootstrap && !opts.rollout && bootstrapScope) {
+          throw new Error(
+            "software deploy host-bootstrap --bootstrap-scope requires --rollout",
+          );
+        }
+        if (!deploysHostBootstrap && bootstrapScope) {
+          throw new Error(
+            "--bootstrap-scope is only valid when deploying host-bootstrap",
+          );
+        }
+        await runDeployTypecheck(deps);
         const startedAt = deps.now?.() ?? new Date();
         const config = await resolveSoftwareRemoteConfig({
           env: deps.env ?? process.env,
@@ -4021,98 +4117,91 @@ Supported deploy/smoke components:
               hostManagedComponents = hostTarget.managedComponents;
               targetKind = "project-host-fleet";
               const reason = `software-deploy-${component}`;
-              commandArgsList = hostTarget.publishOnly
-                ? []
-                : [
-                    [
+              if (hostTarget.pacedFleetRollout) {
+                commandArgsList = [
+                  [
+                    ...cli.args,
+                    "--profile",
+                    deployTarget,
+                    "host",
+                    "deploy",
+                    "rollout-fleet",
+                    "--all-online",
+                    "--desired-version",
+                    artifact.artifact_id,
+                    ...(hostManagedComponents ?? []).flatMap((component) => [
+                      "--component",
+                      component,
+                    ]),
+                    "--base-url",
+                    hostBaseUrl,
+                    "--max-concurrent",
+                    `${opts.rolloutMaxConcurrent ?? "2"}`,
+                    "--canary-stabilize-seconds",
+                    `${opts.rolloutCanaryStabilizeSeconds ?? "180"}`,
+                    "--stabilize-seconds",
+                    `${opts.rolloutStabilizeSeconds ?? "60"}`,
+                    "--reason",
+                    reason,
+                    ...(opts.rolloutCanary
+                      ? ["--canary", opts.rolloutCanary]
+                      : []),
+                    "--wait",
+                  ],
+                ];
+              } else {
+                commandArgsList = hostTarget.publishOnly
+                  ? []
+                  : [
+                      [
+                        ...cli.args,
+                        "--profile",
+                        deployTarget,
+                        "host",
+                        "deploy",
+                        "set",
+                        "--global",
+                        "--artifact",
+                        runtimeArtifactForHostUpgradeArtifact(
+                          hostTarget.upgradeArtifact,
+                        ),
+                        "--desired-version",
+                        artifact.artifact_id,
+                        "--reason",
+                        reason,
+                      ],
+                    ];
+                if (opts.rollout) {
+                  commandArgsList.push([
+                    ...cli.args,
+                    "--profile",
+                    deployTarget,
+                    "host",
+                    "upgrade",
+                    "--all-online",
+                    "--artifact",
+                    hostTarget.upgradeArtifact,
+                    "--artifact-version",
+                    artifact.artifact_id,
+                    "--base-url",
+                    hostBaseUrl,
+                    "--wait",
+                  ]);
+                  if (component === "project" || component === "tools") {
+                    commandArgsList.push([
                       ...cli.args,
                       "--profile",
                       deployTarget,
                       "host",
                       "deploy",
-                      "set",
-                      "--global",
+                      "resume-default",
+                      "--all-hosts",
                       "--artifact",
                       runtimeArtifactForHostUpgradeArtifact(
                         hostTarget.upgradeArtifact,
                       ),
-                      "--desired-version",
-                      artifact.artifact_id,
-                      "--reason",
-                      reason,
-                    ],
-                  ];
-              for (const hostManagedComponent of hostManagedComponents ?? []) {
-                commandArgsList.push([
-                  ...cli.args,
-                  "--profile",
-                  deployTarget,
-                  "host",
-                  "deploy",
-                  "set",
-                  "--global",
-                  "--component",
-                  hostManagedComponent,
-                  "--desired-version",
-                  artifact.artifact_id,
-                  "--policy",
-                  hostManagedComponentPolicy(hostManagedComponent),
-                  "--reason",
-                  reason,
-                ]);
-              }
-              if (opts.rollout) {
-                commandArgsList.push([
-                  ...cli.args,
-                  "--profile",
-                  deployTarget,
-                  "host",
-                  "upgrade",
-                  "--all-online",
-                  "--artifact",
-                  hostTarget.upgradeArtifact,
-                  "--artifact-version",
-                  artifact.artifact_id,
-                  "--base-url",
-                  hostBaseUrl,
-                  "--wait",
-                ]);
-                if (hostManagedComponents?.length) {
-                  commandArgsList.push([
-                    ...cli.args,
-                    "--profile",
-                    deployTarget,
-                    "host",
-                    "deploy",
-                    "reconcile",
-                    "--all-online",
-                    ...hostManagedComponents.flatMap((component) => [
-                      "--component",
-                      component,
-                    ]),
-                    "--reason",
-                    reason,
-                    "--wait",
-                  ]);
-                }
-                if (
-                  component === "project-host" ||
-                  component === "project" ||
-                  component === "tools"
-                ) {
-                  commandArgsList.push([
-                    ...cli.args,
-                    "--profile",
-                    deployTarget,
-                    "host",
-                    "deploy",
-                    "resume-default",
-                    "--all-hosts",
-                    "--artifact",
-                    runtimeArtifactForHostUpgradeArtifact(
-                      hostTarget.upgradeArtifact,
-                    ),
-                  ]);
+                    ]);
+                  }
                 }
               }
             } else if (hostBootstrapTarget) {
@@ -4144,7 +4233,9 @@ Supported deploy/smoke components:
                   "--artifact",
                   "bootstrap-environment",
                 ],
-                [
+              ];
+              if (opts.rollout) {
+                commandArgsList.push([
                   ...cli.args,
                   "--profile",
                   deployTarget,
@@ -4152,9 +4243,11 @@ Supported deploy/smoke components:
                   "reconcile",
                   "--all-online",
                   "--force-bootstrap",
+                  "--bootstrap-scope",
+                  bootstrapScope!,
                   "--wait",
-                ],
-              ];
+                ]);
+              }
             } else if (releaseTarget) {
               releaseProduct = releaseProductForArtifactComponent(
                 releaseTarget.artifactComponent,
@@ -4243,9 +4336,20 @@ Supported deploy/smoke components:
                 ...(hostManagedComponents?.length
                   ? { host_managed_components: hostManagedComponents }
                   : {}),
-                ...(hostTarget ? { host_rollout: opts.rollout === true } : {}),
+                ...(hostTarget
+                  ? {
+                      host_rollout:
+                        hostTarget.pacedFleetRollout === true ||
+                        opts.rollout === true,
+                    }
+                  : {}),
                 ...(hostBootstrapTarget
-                  ? { host_bootstrap_reconcile: true }
+                  ? {
+                      host_bootstrap_reconcile: opts.rollout === true,
+                      ...(bootstrapScope
+                        ? { host_bootstrap_scope: bootstrapScope }
+                        : {}),
+                    }
                   : {}),
                 ...(hostBootstrapUrl
                   ? { host_bootstrap_url: hostBootstrapUrl }
@@ -4388,7 +4492,10 @@ Supported deploy/smoke components:
                     host_bootstrap_selector: published.selector,
                     host_bootstrap_url: hostBootstrapUrl,
                     host_bootstrap_sha256_url: hostBootstrapSha256Url,
-                    host_bootstrap_reconcile: true,
+                    host_bootstrap_reconcile: opts.rollout === true,
+                    ...(bootstrapScope
+                      ? { host_bootstrap_scope: bootstrapScope }
+                      : {}),
                   };
                 }
                 for (const args of commandArgsList) {
@@ -4443,7 +4550,13 @@ Supported deploy/smoke components:
               ...(hostManagedComponents?.length
                 ? { host_managed_components: hostManagedComponents }
                 : {}),
-              ...(hostTarget ? { host_rollout: opts.rollout === true } : {}),
+              ...(hostTarget
+                ? {
+                    host_rollout:
+                      hostTarget.pacedFleetRollout === true ||
+                      opts.rollout === true,
+                  }
+                : {}),
               ...(hostBootstrapUrl
                 ? { host_bootstrap_url: hostBootstrapUrl }
                 : {}),
@@ -4451,7 +4564,12 @@ Supported deploy/smoke components:
                 ? { host_bootstrap_sha256_url: hostBootstrapSha256Url }
                 : {}),
               ...(hostBootstrapTarget
-                ? { host_bootstrap_reconcile: true }
+                ? {
+                    host_bootstrap_reconcile: opts.rollout === true,
+                    ...(bootstrapScope
+                      ? { host_bootstrap_scope: bootstrapScope }
+                      : {}),
+                  }
                 : {}),
               ...(releaseProduct ? { release_product: releaseProduct } : {}),
               ...(releaseChannel ? { channel: releaseChannel } : {}),
@@ -4595,6 +4713,14 @@ Supported deploy/smoke components:
     .option(
       "--tools-minimal <tag-or-id>",
       "tools-minimal artifact selector for plus rollback; defaults to historical deployment metadata",
+    )
+    .option(
+      "--bootstrap-scope <scope>",
+      "with host-bootstrap --rollout: full or helpers",
+    )
+    .option(
+      "--rollout",
+      "for host-bootstrap, immediately reconcile all online hosts after updating desired state",
     )
     .action(
       async (

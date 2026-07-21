@@ -51,6 +51,10 @@ import { maybeAutoGrowHostDiskForReservationFailure } from "@cocalc/server/proje
 import { computeHostOperationalAvailability } from "@cocalc/server/conat/api/hosts-normalization";
 import { enqueueRootfsPrepullForHost } from "./rootfs-prepull";
 import { removeHostSshKnownHostAlias } from "./host-ssh-known-hosts";
+import {
+  activeHostPublicRouteMode,
+  hostPublicRouteMigrationInProgress,
+} from "./public-route";
 
 const logger = getLogger("server:cloud:host-work");
 const pool = () => getPool();
@@ -889,7 +893,7 @@ async function scheduleSpotRetry(opts: {
   });
 }
 
-function shouldUseCloudflareTunnel(row: any): boolean {
+function managesCloudflareTunnel(row: any): boolean {
   const machine = row?.metadata?.machine ?? {};
   if (machine?.cloud === "self-host") {
     return machine?.metadata?.self_host_mode === "cloudflare";
@@ -902,14 +906,47 @@ function resolveInternalUrlForHost(row: any): string | undefined {
   if (providerId === "gcp") {
     return resolveGcpManagedHostInternalUrl({
       runtime: row?.metadata?.runtime,
-      tunnelEnabled: shouldUseCloudflareTunnel(row),
+      // Managed GCP hosts retain their private HTTP listener even when their
+      // public browser route uses a proxied A record.
+      tunnelEnabled: managesCloudflareTunnel(row),
     });
   }
   return undefined;
 }
 
 async function ensureDnsForHost(row: any) {
-  if (!shouldUseCloudflareTunnel(row)) {
+  if (!managesCloudflareTunnel(row)) {
+    return;
+  }
+  if (hostPublicRouteMigrationInProgress(row)) {
+    return;
+  }
+  if (activeHostPublicRouteMode(row) === "cloudflare-proxy") {
+    if (!row?.metadata?.runtime?.public_ip) return;
+    if (!(await hasDns())) return;
+    try {
+      const dns = await ensureHostDns({
+        host_id: row.id,
+        ipAddress: row.metadata.runtime.public_ip,
+        record_id:
+          row.metadata?.dns?.record_id ??
+          row.metadata?.cloudflare_tunnel?.record_id,
+      });
+      row.metadata = { ...row.metadata, dns };
+      await updateHostRow(row.id, {
+        metadata: row.metadata,
+        public_url: `https://${dns.name}`,
+        internal_url:
+          resolveInternalUrlForHost({ ...row, metadata: row.metadata }) ??
+          row.internal_url ??
+          `https://${dns.name}`,
+      });
+    } catch (err) {
+      logger.warn("direct project-host DNS update failed", {
+        host_id: row.id,
+        err,
+      });
+    }
     return;
   }
   if (await hasCloudflareTunnel()) {
@@ -2378,12 +2415,18 @@ async function handleDelete(row: any) {
     });
     await entry.provider.deleteHost(runtime, creds);
   }
-  if (shouldUseCloudflareTunnel(row) && (await hasCloudflareTunnel())) {
+  if (row.metadata?.cloudflare_tunnel && (await hasCloudflareTunnel())) {
     await deleteCloudflareTunnel({
       host_id: row.id,
       tunnel: row.metadata?.cloudflare_tunnel,
     });
-  } else if (await hasDns()) {
+  }
+  if (
+    row.metadata?.dns?.record_id &&
+    row.metadata?.dns?.record_id !==
+      row.metadata?.cloudflare_tunnel?.record_id &&
+    (await hasDns())
+  ) {
     await deleteHostDns({
       record_id: row.metadata?.dns?.record_id,
       name: row.metadata?.dns?.name,

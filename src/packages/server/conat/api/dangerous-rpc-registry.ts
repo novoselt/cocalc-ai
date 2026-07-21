@@ -187,6 +187,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "internal-auth-only",
     reason: INTERNAL_AUTH_ONLY,
   },
+  "hosts.setHostPublicRouteMode": {
+    decision: "fresh-auth-required",
+    reason: "changes public project-host ingress and DNS routing",
+  },
   "hosts.recordAcpAdmissionDenial": {
     decision: "fresh-auth-not-required",
     reason: TELEMETRY_ONLY,
@@ -286,6 +290,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "hosts.rolloutHostManagedComponentsInternal": {
     decision: "internal-auth-only",
     reason: INTERNAL_AUTH_ONLY,
+  },
+  "hosts.rolloutHostRuntimeFleet": {
+    decision: "fresh-auth-required",
+    reason: "restarts project-host control daemons across a fleet cohort",
   },
   "hosts.setHostAccess": {
     decision: "fresh-auth-required",
