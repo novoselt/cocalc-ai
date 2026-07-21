@@ -18,7 +18,7 @@ import useNotebookFrameActions from "@cocalc/frontend/frame-editors/jupyter-edit
 import { FileContext, useFileContext } from "@cocalc/frontend/lib/file-context";
 import { AITools } from "@cocalc/jupyter/types";
 import { CellType } from "@cocalc/util/jupyter/types";
-import { filename_extension, startswith } from "@cocalc/util/misc";
+import { attachmentTransform } from "./attachment-transform";
 import { JupyterActions } from "./browser-actions";
 import { CellButtonBar } from "./cell-buttonbar";
 import { CellHiddenPart } from "./cell-hidden-part";
@@ -48,27 +48,6 @@ function notifyHoverChange(id: string | null) {
 function subscribeToHover(listener: HoverListener) {
   hoverListeners.add(listener);
   return () => hoverListeners.delete(listener);
-}
-
-function attachmentTransform(
-  cell: Map<string, any>,
-  href?: string,
-): string | undefined {
-  if (!href || !startswith(href, "attachment:")) {
-    return;
-  }
-  const name = href.slice("attachment:".length);
-  const data = cell.getIn(["attachments", name]) as any;
-  let ext = filename_extension(name);
-  switch (data?.get("type")) {
-    case "base64":
-      if (ext === "jpg") {
-        ext = "jpeg";
-      }
-      return `data:image/${ext};base64,${data.get("value")}`;
-    default:
-      return "";
-  }
 }
 
 export interface CellInputProps {

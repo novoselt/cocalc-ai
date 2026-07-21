@@ -9,7 +9,8 @@ Top-level react component, which ties everything together
 
 import { Button } from "antd";
 import * as immutable from "immutable";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import useResizeObserver from "use-resize-observer";
 
 import { React, redux, useRedux } from "@cocalc/frontend/app-framework";
 import { useRef } from "react";
@@ -41,7 +42,9 @@ import KernelWarning from "./kernel-warning";
 import { KeyboardShortcuts } from "./keyboard-shortcuts";
 import * as toolComponents from "./ai";
 import { NBConvert } from "./nbconvert";
+import useNotebookFrameActions from "@cocalc/frontend/frame-editors/jupyter-editor/cell-notebook/hook";
 import { Kernel } from "./status";
+import type { MinimalLayout } from "./minimal/types";
 
 const JUPYTER_TEST_SET_KERNEL_ERROR_EVENT =
   "cocalc:jupyter:set-kernel-error-for-test";
@@ -82,6 +85,9 @@ interface Props {
 
   scrollTop?: number;
   hook_offset?: number;
+  cellViewMode?: "default" | "minimal";
+  minimalLayout?: MinimalLayout;
+  zenMode?: boolean;
 }
 
 export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
@@ -101,6 +107,9 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
     scroll_seq,
     scrollTop,
     hook_offset,
+    cellViewMode,
+    minimalLayout = "comfortable",
+    zenMode = false,
   } = props;
   // status of tab completion
   const complete: undefined | immutable.Map<any, any> = useRedux([
@@ -306,6 +315,35 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
 
   const { usage, expected_cell_runtime } = useKernelUsage(name);
 
+  const frameActions = useNotebookFrameActions();
+  const handleLayoutChange = useCallback((layout: MinimalLayout) => {
+    frameActions.current?.setState({ minimalLayout: layout });
+  }, []);
+  const handleZenModeChange = useCallback((zen: boolean) => {
+    frameActions.current?.setState({ zenMode: zen });
+  }, []);
+
+  // Responsive layout: force wider layouts when frame is narrow
+  const {
+    ref: containerRef,
+    width: containerWidth,
+    height: containerHeight,
+  } = useResizeObserver<HTMLDivElement>();
+  const effectiveLayout = useMemo(() => {
+    if (cellViewMode !== "minimal") return minimalLayout;
+    const w = containerWidth ?? 9999;
+    if (w < 500) return "wide";
+    if (w < 800 && minimalLayout === "narrow") return "comfortable";
+    return minimalLayout;
+  }, [cellViewMode, minimalLayout, containerWidth]);
+  // Which options are available at the current width
+  const availableLayouts = useMemo(() => {
+    const w = containerWidth ?? 9999;
+    if (w < 500) return ["wide"] as const;
+    if (w < 800) return ["wide", "comfortable"] as const;
+    return ["wide", "comfortable", "narrow"] as const;
+  }, [containerWidth]);
+
   const jupyterClassic = useRedux([
     "account",
     "editor_settings",
@@ -384,6 +422,10 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
         aiTools={aiTools}
         pendingCells={pendingCells}
         runCellOverlays={runCellOverlays}
+        cellViewMode={cellViewMode}
+        minimalLayout={effectiveLayout as MinimalLayout}
+        zenMode={zenMode}
+        frameHeight={containerHeight}
       />
     );
   }
@@ -476,6 +518,7 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
   return (
     <JupyterContext.Provider value={jupyterContext}>
       <div
+        ref={containerRef}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -489,8 +532,30 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
           <Kernel
             is_fullscreen={is_fullscreen}
             actions={actions}
-            usage={usage}
-            expected_cell_runtime={expected_cell_runtime}
+            usage={
+              cellViewMode === "minimal" && (containerWidth ?? 9999) < 800
+                ? undefined
+                : usage
+            }
+            expected_cell_runtime={
+              cellViewMode === "minimal" && (containerWidth ?? 9999) < 800
+                ? undefined
+                : expected_cell_runtime
+            }
+            compact={cellViewMode === "minimal"}
+            minimalLayout={
+              cellViewMode === "minimal" ? effectiveLayout : undefined
+            }
+            zenMode={cellViewMode === "minimal" ? zenMode : undefined}
+            onLayoutChange={
+              cellViewMode === "minimal" ? handleLayoutChange : undefined
+            }
+            onZenModeChange={
+              cellViewMode === "minimal" ? handleZenModeChange : undefined
+            }
+            availableLayouts={
+              cellViewMode === "minimal" ? availableLayouts : undefined
+            }
           />
         )}
         {cell_toolbar === "create_assignment" && (

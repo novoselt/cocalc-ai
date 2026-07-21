@@ -27,6 +27,8 @@ import { CellInput } from "./cell-input";
 import { CellOutput } from "./cell-output";
 import { InsertCell } from "./insert-cell";
 import { Position } from "./insert-cell/types";
+import { MinimalCell } from "./minimal/minimal-cell";
+import type { MinimalLayout } from "./minimal/types";
 import { NBGraderMetadata } from "./nbgrader/cell-metadata";
 import { INPUT_PROMPT_COLOR } from "./prompt/base";
 
@@ -64,6 +66,23 @@ interface Props {
   isPending?: boolean;
   name?: string;
   runOverlay?: Map<string, any>;
+  cellViewMode?: "default" | "minimal";
+  blockInfo?: {
+    blockIndex: number;
+    positionInBlock: number;
+    blockSize: number;
+  };
+  blockCellIds?: string[];
+  headingLevel?: number;
+  isLastBlock?: boolean;
+  sectionCollapsed?: boolean;
+  onToggleSection?: () => void;
+  sectionTitle?: string;
+  blockHighlighted?: boolean;
+  onHoverBlock?: (hover: boolean) => void;
+  minimalLayout?: MinimalLayout;
+  zenMode?: boolean;
+  frameHeight?: number;
 }
 
 function shouldLogRenderAudit(): boolean {
@@ -118,6 +137,21 @@ function getRenderChangeReasons(props: Props, nextProps: Props): string[] {
   if (nextProps.isDragging !== props.isDragging) reasons.push("isDragging");
   if (nextProps.isPending !== props.isPending) reasons.push("isPending");
   if (nextProps.runOverlay !== props.runOverlay) reasons.push("runOverlay");
+  if (nextProps.cellViewMode !== props.cellViewMode) {
+    reasons.push("cellViewMode");
+  }
+  if (nextProps.blockInfo !== props.blockInfo) reasons.push("blockInfo");
+  if (nextProps.sectionCollapsed !== props.sectionCollapsed) {
+    reasons.push("sectionCollapsed");
+  }
+  if (nextProps.blockHighlighted !== props.blockHighlighted) {
+    reasons.push("blockHighlighted");
+  }
+  if (nextProps.minimalLayout !== props.minimalLayout) {
+    reasons.push("minimalLayout");
+  }
+  if (nextProps.zenMode !== props.zenMode) reasons.push("zenMode");
+  if (nextProps.frameHeight !== props.frameHeight) reasons.push("frameHeight");
   return reasons;
 }
 
@@ -150,7 +184,14 @@ function areEqual(props: Props, nextProps: Props): boolean {
     nextProps.read_only !== props.read_only ||
     nextProps.isDragging !== props.isDragging ||
     nextProps.isPending !== props.isPending ||
-    nextProps.runOverlay !== props.runOverlay;
+    nextProps.runOverlay !== props.runOverlay ||
+    nextProps.cellViewMode !== props.cellViewMode ||
+    nextProps.blockInfo !== props.blockInfo ||
+    nextProps.sectionCollapsed !== props.sectionCollapsed ||
+    nextProps.blockHighlighted !== props.blockHighlighted ||
+    nextProps.minimalLayout !== props.minimalLayout ||
+    nextProps.zenMode !== props.zenMode ||
+    nextProps.frameHeight !== props.frameHeight;
 
   if (changed && shouldLogRenderAudit()) {
     const id = nextProps.id ?? nextProps.cell?.get?.("id") ?? "unknown";
@@ -171,6 +212,57 @@ export const Cell: React.FC<Props> = React.memo((props: Props) => {
 
   if (!render) {
     return <></>;
+  }
+
+  if (props.cellViewMode === "minimal") {
+    const blockInfo = props.blockInfo ?? {
+      blockIndex: 0,
+      positionInBlock: 0,
+      blockSize: 1,
+    };
+    return (
+      <MinimalCell
+        id={id}
+        index={props.index ?? 0}
+        cell={props.cell}
+        stdin={props.stdin}
+        runOverlay={props.runOverlay}
+        isDragging={props.isDragging}
+        cm_options={props.cm_options}
+        actions={props.actions}
+        name={props.name}
+        font_size={props.font_size}
+        project_id={props.project_id}
+        directory={props.directory}
+        mode={props.mode}
+        is_current={props.is_current}
+        is_selected={props.is_selected}
+        is_markdown_edit={props.is_markdown_edit}
+        is_focused={props.is_focused}
+        is_visible={props.is_visible}
+        more_output={props.more_output}
+        trust={props.trust}
+        complete={props.complete}
+        aiTools={props.aiTools}
+        read_only={props.read_only}
+        cell_toolbar={props.cell_toolbar}
+        positionInBlock={blockInfo.positionInBlock}
+        blockSize={blockInfo.blockSize}
+        headingLevel={props.headingLevel ?? 0}
+        blockCellIds={props.blockCellIds}
+        isFirst={props.isFirst}
+        isLast={props.isLast}
+        isLastBlock={props.isLastBlock}
+        sectionCollapsed={props.sectionCollapsed}
+        onToggleSection={props.onToggleSection}
+        sectionTitle={props.sectionTitle}
+        blockHighlighted={props.blockHighlighted}
+        onHoverBlock={props.onHoverBlock}
+        minimalLayout={props.minimalLayout}
+        zenMode={props.zenMode}
+        frameHeight={props.frameHeight}
+      />
+    );
   }
 
   function is_deletable(): boolean {

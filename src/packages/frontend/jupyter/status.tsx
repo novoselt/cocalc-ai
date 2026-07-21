@@ -43,6 +43,9 @@ import ProgressEstimate from "../components/progress-estimate";
 import { labels } from "../i18n";
 import { JupyterActions } from "./browser-actions";
 import Logo from "./logo";
+import { SwitchToMinimalButton } from "./minimal/frame-type-toggle";
+import { MinimalControls } from "./minimal/minimal-controls";
+import type { MinimalLayout } from "./minimal/types";
 import { KernelSelector } from "./select-kernel";
 import { ALERT_COLS } from "./usage";
 
@@ -138,6 +141,12 @@ interface KernelProps {
   is_fullscreen?: boolean;
   hideHeader?: boolean;
   compact?: boolean;
+  /** Minimal notebook layout controls */
+  minimalLayout?: MinimalLayout;
+  zenMode?: boolean;
+  onLayoutChange?: (layout: MinimalLayout) => void;
+  onZenModeChange?: (zen: boolean) => void;
+  availableLayouts?: readonly MinimalLayout[];
 }
 
 export function Kernel({
@@ -148,6 +157,11 @@ export function Kernel({
   is_fullscreen,
   hideHeader,
   compact,
+  minimalLayout,
+  zenMode,
+  onLayoutChange,
+  onZenModeChange,
+  availableLayouts,
 }: KernelProps) {
   const intl = useIntl();
   const name = actions.name;
@@ -411,6 +425,8 @@ export function Kernel({
   }
 
   function render_trust() {
+    // Keep compact embedded headers (e.g. whiteboard code elements and the
+    // minimal notebook status bar) free of the trust indicator.
     if (compact) return;
     if (IS_MOBILE) return;
     if (trust) {
@@ -419,8 +435,8 @@ export function Kernel({
           style={{
             display: "flex",
             color: COLORS.GRAY_M,
-            paddingLeft: "5px",
-            borderLeft: "1px solid gray",
+            paddingLeft: compact ? 0 : "5px",
+            borderLeft: compact ? "none" : "1px solid gray",
           }}
         >
           Trusted
@@ -430,8 +446,8 @@ export function Kernel({
       return (
         <div
           style={{
-            paddingRight: "5px",
-            borderRight: "1px solid gray",
+            paddingRight: compact ? 0 : "5px",
+            borderRight: compact ? "none" : "1px solid gray",
           }}
         >
           <Tooltip
@@ -741,32 +757,22 @@ export function Kernel({
   // or if the memory usage is eating up almost all of the reminining (shared) memory.
 
   function renderUsage() {
-    if (compact) return;
     if (kernel == null) return;
 
-    const style: CSS = {
-      display: "flex",
-      borderLeft: `1px solid ${COLORS.GRAY}`,
-      cursor: "pointer",
-    };
-    const pstyle: CSS = {
-      margin: "2px",
-      width: "100%",
-      position: "relative",
-      top: "-1px",
-    };
-    const usage_style: CSS = KERNEL_USAGE_STYLE;
-
     if (isSpwarning) {
+      const usage_style: CSS = KERNEL_USAGE_STYLE;
+      const pstyle: CSS = {
+        margin: "2px",
+        width: compact ? "80px" : "175px",
+        position: "relative",
+        top: "-3px",
+      };
       // we massively overestimate: 15s for python and co, and 30s for sage and julia
       const s =
         kernel.startsWith("sage") || kernel.startsWith("julia") ? 30 : 15;
       return (
         <div style={{ ...usage_style, display: "flex" }}>
-          <ProgressEstimate
-            style={{ ...pstyle, width: "175px", top: "-3px" }}
-            seconds={s}
-          />
+          <ProgressEstimate style={pstyle} seconds={s} />
         </div>
       );
     }
@@ -787,6 +793,32 @@ export function Kernel({
       100 * (usage.cpu_runtime / expected_cell_runtime),
     );
 
+    const style: CSS = {
+      display: "flex",
+      width: compact ? "300px" : undefined,
+      flex: compact ? undefined : 1,
+      borderLeft: `1px solid ${COLORS.GRAY}`,
+      cursor: "pointer",
+      alignItems: compact ? "center" : undefined,
+    };
+    const pstyle: CSS = {
+      margin: compact ? "0 2px" : "2px",
+      width: "100%",
+      position: "relative",
+      top: compact ? 0 : "-1px",
+    };
+    const railColor = compact ? COLORS.GRAY_LL : "white";
+    const showLabel = is_fullscreen || compact;
+    const usage_style: CSS = compact
+      ? {
+          ...KERNEL_USAGE_STYLE,
+          borderRight: "none",
+          margin: "0 4px",
+          paddingRight: 0,
+          alignItems: "center",
+        }
+      : KERNEL_USAGE_STYLE;
+
     return (
       <div style={style}>
         {runProgress != null && (
@@ -799,8 +831,10 @@ export function Kernel({
             }
           >
             <div style={usage_style}>
-              {is_fullscreen ? (
-                <span style={{ marginRight: "5px" }}>Code</span>
+              {showLabel ? (
+                <span style={{ marginRight: "5px", color: COLORS.GRAY_M }}>
+                  Code
+                </span>
               ) : (
                 ""
               )}
@@ -809,30 +843,42 @@ export function Kernel({
                 showInfo={false}
                 percent={runProgress}
                 size="small"
-                trailColor="white"
+                railColor={railColor}
               />
             </div>
           </Tooltip>
         )}
         <div style={usage_style}>
-          {is_fullscreen ? <span style={{ marginRight: "5px" }}>CPU</span> : ""}
+          {showLabel ? (
+            <span style={{ marginRight: "5px", color: COLORS.GRAY_M }}>
+              CPU
+            </span>
+          ) : (
+            ""
+          )}
           <Progress
             style={pstyle}
             showInfo={false}
             percent={cpu_val}
             size="small"
-            trailColor="white"
+            railColor={railColor}
             strokeColor={ALERT_COLS[usage.time_alert]}
           />
         </div>
         <div style={usage_style}>
-          {is_fullscreen ? <span style={{ marginRight: "5px" }}>RAM</span> : ""}
+          {showLabel ? (
+            <span style={{ marginRight: "5px", color: COLORS.GRAY_M }}>
+              RAM
+            </span>
+          ) : (
+            ""
+          )}
           <Progress
             style={pstyle}
             showInfo={false}
             percent={usage.mem_pct}
             size="small"
-            trailColor="white"
+            railColor={railColor}
             strokeColor={ALERT_COLS[usage.mem_alert]}
           />
         </div>
@@ -953,19 +999,46 @@ export function Kernel({
             ...style,
           }}
         >
-          <div>{renderLogo()}</div>
+          {/* Left: logo + kernel + state */}
           <div
             style={{
-              flex: 1,
-              minWidth: 0,
               display: "flex",
               alignItems: "center",
               gap: "6px",
+              flex: "0 0 auto",
             }}
           >
+            <div>{renderLogo()}</div>
             {body}
             {renderKernelState()}
           </div>
+          <div style={{ flex: 1 }} />
+          {/* Right: bars + controls */}
+          {onLayoutChange && (
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              {!IS_MOBILE && (
+                <div
+                  style={{ cursor: "pointer", flex: "0 0 auto" }}
+                  onClick={openKernelDrawer}
+                >
+                  {renderUsage()}
+                </div>
+              )}
+              <MinimalControls
+                minimalLayout={minimalLayout}
+                availableLayouts={availableLayouts}
+                onLayoutChange={onLayoutChange}
+                zenMode={zenMode}
+                onZenModeChange={onZenModeChange}
+              />
+            </div>
+          )}
         </div>
       )}
       {!hideHeader && !compact && (
@@ -1002,6 +1075,11 @@ export function Kernel({
               </div>
             )}
           </div>
+          {!IS_MOBILE && (
+            <div style={{ flex: "0 0 auto", marginRight: "10px" }}>
+              <SwitchToMinimalButton />
+            </div>
+          )}
         </div>
       )}
       {kernel_undecided ? (

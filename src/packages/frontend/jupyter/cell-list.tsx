@@ -29,8 +29,30 @@ import { JupyterActions } from "./browser-actions";
 import { Cell } from "./cell";
 import HeadingTagComponent from "./heading-tag";
 import { useNotebookMinimap } from "./minimap";
+import { MinimalMinimap } from "./minimal/minimal-minimap";
+import {
+  computeSectionBlocks,
+  buildBlockLookup,
+  sectionBlocksEqual,
+} from "./minimal/section-blocks";
+import { StickyMiniTOC } from "./minimal/sticky-mini-toc";
+import type { MinimalLayout, SectionBlock } from "./minimal/types";
 import { INPUT_PROMPT_COLOR, OUTPUT_STYLE } from "./prompt/base";
 import { getDisplayedCellExecCount } from "./run-cell-overlay";
+
+/** Extract the section title from a section block's heading cell. */
+function getSectionTitle(
+  block: SectionBlock | undefined,
+  cells: immutable.Map<string, any>,
+): string {
+  if (!block || block.headingLevel === 0) return "";
+  const startCell = cells.get(block.startCellId);
+  const input = startCell?.get("input") ?? "";
+  const firstLine = input
+    .split("\n")
+    .find((l: string) => /^#{1,4}\s/.test(l.trimStart()));
+  return firstLine?.replace(/^#+\s*/, "").trim() ?? "";
+}
 
 const LAZY_RENDER_INITIAL_CELLS = 24;
 const LAZY_RENDER_PLACEHOLDER_MIN_HEIGHT = 96;
@@ -107,6 +129,10 @@ interface CellListProps {
   read_only?: boolean;
   pendingCells?: immutable.Set<string>;
   runCellOverlays?: immutable.Map<string, immutable.Map<string, any>>;
+  cellViewMode?: "default" | "minimal";
+  minimalLayout?: MinimalLayout;
+  zenMode?: boolean;
+  frameHeight?: number;
 }
 
 function renderLoading() {
@@ -166,6 +192,10 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     read_only,
     pendingCells,
     runCellOverlays,
+    cellViewMode = "default",
+    minimalLayout,
+    zenMode,
+    frameHeight,
   } = props;
 
   const cellListDivRef = useRef<any>(null);
@@ -224,6 +254,17 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     cellListDivRef.current = node;
     frameActions.current?.set_cell_list_div(node);
   }, []);
+
+  // Toggle native scrollbar visibility reactively when cellViewMode changes
+  useEffect(() => {
+    const node = cellListDivRef.current;
+    if (!node) return;
+    if (cellViewMode === "minimal") {
+      node.classList.add("minimap-hide-scrollbar");
+    } else {
+      node.classList.remove("minimap-hide-scrollbar");
+    }
+  }, [cellViewMode]);
 
   const lazyRenderEnabled = true;
   const lazyHydratedIdsRef = useRef<Set<string>>(new Set());
@@ -292,6 +333,94 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
   const cellListResize = useResizeObserver({ ref: cellListDivRef });
 
   const fileContext = useFileContext();
+
+  // Keep the blocks array referentially stable across unrelated cell changes
+  // (edits, execution results): recompute, but reuse the previous array when
+  // the section structure is unchanged, so blockLookup/blockInfo/blockCellIds
+  // stay stable and memoized cells don't all rerender.
+  const prevSectionBlocksRef = useRef<SectionBlock[] | null>(null);
+  const sectionBlocks = useMemo(() => {
+    if (cellViewMode !== "minimal" || cell_list == null || cells == null) {
+      prevSectionBlocksRef.current = null;
+      return null;
+    }
+    const next = computeSectionBlocks(cell_list, cells);
+    const prev = prevSectionBlocksRef.current;
+    if (prev != null && sectionBlocksEqual(prev, next)) {
+      return prev;
+    }
+    prevSectionBlocksRef.current = next;
+    return next;
+  }, [cellViewMode, cell_list, cells]);
+
+  const blockLookup = useMemo(() => {
+    if (sectionBlocks == null) return null;
+    return buildBlockLookup(sectionBlocks);
+  }, [sectionBlocks]);
+
+  // Track which sections are collapsed by their heading cell ID (stable across edits)
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
+    new Set(),
+  );
+  const [hoveredBlockIndex, setHoveredBlockIndex] = useState<number | null>(
+    null,
+  );
+  // Current block index for mini TOC — always set when sections exist
+  const [currentBlockIndex, setCurrentBlockIndex] = useState<number>(0);
+  const toggleSection = useCallback((startCellId: string) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(startCellId)) {
+        next.delete(startCellId);
+      } else {
+        next.add(startCellId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Update current block index on scroll (for mini TOC)
+  useEffect(() => {
+    if (cellViewMode !== "minimal" || !sectionBlocks || !blockLookup) return;
+    const el = cellListDivRef.current;
+    if (!el) return;
+    const update = () => {
+      // Find the first visible cell by checking DOM elements
+      const items = el.querySelectorAll("[data-jupyter-lazy-cell-id]");
+      let topId: string | null = null;
+      const elRect = el.getBoundingClientRect();
+      for (const item of items) {
+        const rect = (item as HTMLElement).getBoundingClientRect();
+        if (rect.bottom > elRect.top + 2) {
+          topId = (item as HTMLElement).getAttribute(
+            "data-jupyter-lazy-cell-id",
+          );
+          break;
+        }
+      }
+      if (!topId) return;
+      const info = blockLookup.get(topId);
+      if (!info) return;
+      setCurrentBlockIndex(info.blockIndex);
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    return () => el.removeEventListener("scroll", update);
+  }, [cellViewMode, sectionBlocks, blockLookup, cellListDivRef.current]);
+
+  // MinimalMinimap expects cell heights keyed by index; our lazy-render
+  // bookkeeping is keyed by cell id, so adapt via a derived ref.
+  const minimalCellHeightsRef = useRef<{ [index: number]: number }>({});
+  if (cellViewMode === "minimal") {
+    const byIndex: { [index: number]: number } = {};
+    cell_list.forEach((id: string, i: number) => {
+      const h = lazyHeightsRef.current[id];
+      if (h != null) {
+        byIndex[i] = h;
+      }
+    });
+    minimalCellHeightsRef.current = byIndex;
+  }
 
   async function restore_scroll(): Promise<void> {
     const targetScrollTop = Number(scrollTop);
@@ -464,6 +593,63 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
           isDragging={isDragging}
           isPending={pendingCells?.has(id)}
           runOverlay={runCellOverlays?.get(id)}
+          cellViewMode={cellViewMode}
+          blockInfo={blockLookup?.get(id)}
+          blockCellIds={
+            sectionBlocks && blockLookup?.has(id)
+              ? sectionBlocks[blockLookup.get(id)!.blockIndex]?.cellIds
+              : undefined
+          }
+          headingLevel={
+            sectionBlocks && blockLookup?.has(id)
+              ? (sectionBlocks[blockLookup.get(id)!.blockIndex]?.headingLevel ??
+                0)
+              : 0
+          }
+          isLastBlock={
+            sectionBlocks && blockLookup?.has(id)
+              ? blockLookup.get(id)!.blockIndex === sectionBlocks.length - 1
+              : false
+          }
+          sectionCollapsed={
+            sectionBlocks != null && blockLookup?.has(id)
+              ? collapsedSections.has(
+                  sectionBlocks[blockLookup.get(id)!.blockIndex]?.startCellId,
+                )
+              : false
+          }
+          onToggleSection={
+            sectionBlocks != null && blockLookup?.has(id)
+              ? () =>
+                  toggleSection(
+                    sectionBlocks[blockLookup.get(id)!.blockIndex]?.startCellId,
+                  )
+              : undefined
+          }
+          sectionTitle={
+            sectionBlocks && blockLookup?.has(id)
+              ? getSectionTitle(
+                  sectionBlocks[blockLookup.get(id)!.blockIndex],
+                  cells,
+                )
+              : undefined
+          }
+          blockHighlighted={
+            blockLookup?.has(id)
+              ? hoveredBlockIndex === blockLookup.get(id)!.blockIndex
+              : false
+          }
+          onHoverBlock={
+            blockLookup?.has(id)
+              ? (hover: boolean) =>
+                  setHoveredBlockIndex(
+                    hover ? blockLookup.get(id)!.blockIndex : null,
+                  )
+              : undefined
+          }
+          minimalLayout={minimalLayout}
+          zenMode={zenMode}
+          frameHeight={frameHeight}
         />
       </div>
     );
@@ -781,28 +967,66 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
       }}
     >
       <div
-        key="cells"
-        className="smc-vfill"
         style={{
-          fontSize: `${font_size}px`,
-          paddingLeft: "5px",
+          display: "flex",
+          flexDirection: "column",
           flex: 1,
           minWidth: 0,
-          overflowY: "auto",
-          overflowX: "hidden",
-        }}
-        ref={handleCellListRef}
-        onClick={actions != null && complete != null ? on_click : undefined}
-        onScroll={() => {
-          cancelScrollRestoreIfUserScrolled();
-          hydrateVisibleCells();
-          minimap.onNotebookScroll();
-          saveScrollDebounce();
+          position: "relative",
         }}
       >
-        {v}
+        <div
+          key="cells"
+          className={`smc-vfill${
+            cellViewMode === "minimal" ? " minimap-hide-scrollbar" : ""
+          }`}
+          style={{
+            fontSize: `${font_size}px`,
+            paddingLeft: "5px",
+            flex: 1,
+            minWidth: 0,
+            overflowY: "auto",
+            overflowX: "hidden",
+          }}
+          ref={handleCellListRef}
+          onClick={actions != null && complete != null ? on_click : undefined}
+          onScroll={() => {
+            cancelScrollRestoreIfUserScrolled();
+            hydrateVisibleCells();
+            minimap.onNotebookScroll();
+            saveScrollDebounce();
+          }}
+        >
+          {v}
+        </div>
+        {cellViewMode === "minimal" &&
+          !zenMode &&
+          minimalLayout !== "wide" &&
+          sectionBlocks != null && (
+            <StickyMiniTOC
+              sectionBlocks={sectionBlocks}
+              currentBlockIndex={currentBlockIndex}
+              cells={cells}
+              minimalLayout={minimalLayout}
+              fontSize={font_size}
+              actions={!read_only ? actions : undefined}
+            />
+          )}
       </div>
-      {minimap.minimapNode}
+      {cellViewMode === "minimal"
+        ? frameHeight != null && (
+            <MinimalMinimap
+              cellList={cell_list}
+              cells={cells}
+              collapsedSections={collapsedSections}
+              scrollerRef={cellListDivRef}
+              cellHeights={minimalCellHeightsRef}
+              height={frameHeight}
+              curId={cur_id}
+              selIds={sel_ids}
+            />
+          )
+        : minimap.minimapNode}
     </div>
   );
 
