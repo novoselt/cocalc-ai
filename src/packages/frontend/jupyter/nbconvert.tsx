@@ -189,7 +189,11 @@ export const NBConvert: React.FC<NBConvertProps> = React.memo(
       } else {
         ext = info.ext;
       }
-      const targetPath = misc.change_filename_extension(path, ext);
+      const reportedOutput = nbconvert.get("output");
+      const targetPath =
+        typeof reportedOutput === "string" && reportedOutput
+          ? reportedOutput
+          : misc.change_filename_extension(path, ext);
       const store = redux.getProjectStore(actions.project_id);
       const url = store.fileURL(targetPath);
       return { targetPath, url, info };

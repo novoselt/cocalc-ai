@@ -733,6 +733,9 @@ test("rootfs recipe ls lists bundled examples and modules", () => {
   assert.ok(result.examples.some((recipe) => recipe.name === "code-server"));
   assert.ok(result.examples.some((recipe) => recipe.name === "ml-pytorch-gpu"));
   assert.ok(result.examples.some((recipe) => recipe.name === "sagemath-full"));
+  assert.ok(
+    result.examples.some((recipe) => recipe.name === "sagemath-develop"),
+  );
   assert.ok(result.examples.some((recipe) => recipe.name === "webdev"));
   assert.ok(
     result.modules.some((module) => module.id === "cocalc/code-server"),
@@ -744,6 +747,9 @@ test("rootfs recipe ls lists bundled examples and modules", () => {
   assert.ok(
     result.modules.some((module) => module.id === "cocalc/sagemath-full"),
   );
+  assert.ok(
+    result.modules.some((module) => module.id === "cocalc/sagemath-develop"),
+  );
   assert.ok(result.modules.some((module) => module.id === "cocalc/webdev"));
   assert.ok(result.modules.some((module) => module.id === "cocalc/apt"));
 });
@@ -753,6 +759,9 @@ test("rootfs recipe ls parses embedded bundled examples", () => {
   assert.ok(result.examples.some((recipe) => recipe.name === "cocalc-base"));
   assert.ok(result.examples.some((recipe) => recipe.name === "webdev"));
   assert.ok(result.examples.some((recipe) => recipe.name === "sagemath-full"));
+  assert.ok(
+    result.examples.some((recipe) => recipe.name === "sagemath-develop"),
+  );
   assert.ok(
     result.examples.some((recipe) => recipe.name === "cocalc-cambridge"),
   );
@@ -905,6 +914,32 @@ test("rootfs recipe explain parses bundled sagemath-full recipe", async () => {
     ["normaliz", "pynormaliz"],
   );
   assert.equal(harness.captured.publish.slug, "sagemath-full");
+});
+
+test("rootfs recipe explain parses bundled sagemath-develop recipe", async () => {
+  const harness = rootfsDeps();
+  const program = new Command();
+  registerRootfsCommand(program, harness.deps as any);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "rootfs",
+    "recipe",
+    "explain",
+    "sagemath-develop",
+  ]);
+
+  assert.equal(harness.captured.recipe, "sagemath-develop");
+  assert.equal(harness.captured.steps[0].uses, "cocalc/sagemath-develop");
+  assert.equal(harness.captured.steps[0].inputs.version, "develop");
+  assert.equal(harness.captured.steps[0].inputs.clone_depth, "full");
+  assert.equal(
+    harness.captured.steps[0].inputs.preserve_build_artifacts,
+    "true",
+  );
+  assert.equal(harness.captured.publish.slug, "sagemath-develop");
+  assert.equal(harness.captured.publish.channel, "preview");
 });
 
 test("rootfs recipe explain treats bundled sagemath-full module as a one-step recipe", async () => {

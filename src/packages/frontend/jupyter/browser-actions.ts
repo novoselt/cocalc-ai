@@ -1968,11 +1968,31 @@ export class JupyterActions extends JupyterActions0 {
       return;
     }
 
-    this.set_runtime_nbconvert({
+    const request = {
       args,
       state: "start",
       error: null,
-    });
+    };
+    // Show feedback immediately, but do not publish the request until the
+    // project-side notebook controller exists to consume it.
+    this.setState({ nbconvert: fromJS(request) });
+    void this.initBackend().then(
+      () => {
+        if (!this.is_closed()) {
+          this.set_runtime_nbconvert(request);
+        }
+      },
+      (err) => {
+        if (!this.is_closed()) {
+          this.set_runtime_nbconvert({
+            ...request,
+            state: "done",
+            error: `Unable to initialize Jupyter for export: ${err}`,
+            time: Date.now(),
+          });
+        }
+      },
+    );
   }
 
   public show_about(): void {

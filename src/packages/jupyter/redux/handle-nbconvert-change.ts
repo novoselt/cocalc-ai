@@ -66,7 +66,9 @@ export default async function handleChange(
 
   log.debug("tell client that we started running");
   let error: any = null;
+  let output: string | undefined;
   actions.set_runtime_nbconvert({
+    args,
     state: "run",
     start: new Date().getTime(),
     error,
@@ -86,15 +88,18 @@ export default async function handleChange(
       throw Error("no kernel, so can't run nbconvert");
     }
 
-    await actions.jupyter_kernel.nbconvert(args);
+    const result = await actions.jupyter_kernel.nbconvert(args);
+    output = result?.output;
     log.debug("success");
   } catch (err) {
     error = trunc(`${err}`, MAX_ERROR_LENGTH);
     log.debug("error", error);
   }
   actions.set_runtime_nbconvert({
+    args,
     state: "done",
     error,
+    output,
     time: new Date().getTime(),
   });
 }

@@ -21,6 +21,8 @@ prefix="${PREFIX:-/usr/local/sage}"
 build_dir="${BUILD_DIR:-/tmp/cocalc-sagemath-build}"
 jobs="${JOBS:-auto}"
 clean_build_dir="${CLEAN_BUILD_DIR:-true}"
+clone_depth="${CLONE_DEPTH:-1}"
+preserve_build_artifacts="${PRESERVE_BUILD_ARTIFACTS:-false}"
 install_recommended_apt_packages="${INSTALL_RECOMMENDED_APT_PACKAGES:-true}"
 install_sagetex="${INSTALL_SAGETEX:-true}"
 priority_optional_packages="${PRIORITY_OPTIONAL_PACKAGES:-}"
@@ -398,6 +400,7 @@ install_micromamba_sage() {
 }
 
 install_source_sage() {
+  local -a clone_args
   local make_jobs
   local sage_bin
   local sage_python
@@ -454,7 +457,12 @@ install_source_sage() {
   log "Fetching SageMath ${version} from ${source_url}"
   $SUDO rm -rf "$build_dir"
   mkdir -p "$build_dir"
-  git clone --depth 1 --branch "$version" "$source_url" "$build_dir/sage"
+  clone_args=(--branch "$version")
+  case "$clone_depth" in
+    "" | 0 | full | none) ;;
+    *) clone_args+=(--depth "$clone_depth") ;;
+  esac
+  git clone "${clone_args[@]}" "$source_url" "$build_dir/sage"
 
   log "Moving source tree into ${prefix}"
   $SUDO rm -rf "$prefix"
@@ -541,23 +549,27 @@ PY
 
   install_sage_optionals "$sage_bin" "$make_jobs"
 
-  log "Cleaning SageMath build artifacts"
-  rm -rf \
-    "$prefix/.git" \
-    "$prefix/src/doc/output/doctrees" \
-    "$prefix/upstream"
-  find "$prefix" -type d -name __pycache__ -prune -exec rm -rf {} + || true
-  find "$prefix/local/lib" "$prefix/local/bin" -type f ! -name '*.a' -exec strip '{}' ';' 2>&1 \
-    | grep -v "File format not recognized" \
-    | grep -v "File truncated" || true
-  find "$prefix/local/lib" -type f -name '*.a' -exec ranlib '{}' ';' 2>/dev/null || true
+  if [ "$preserve_build_artifacts" = "true" ]; then
+    log "Preserving full Git history, source archives, caches, and build artifacts"
+  else
+    log "Cleaning SageMath build artifacts"
+    rm -rf \
+      "$prefix/.git" \
+      "$prefix/src/doc/output/doctrees" \
+      "$prefix/upstream"
+    find "$prefix" -type d -name __pycache__ -prune -exec rm -rf {} + || true
+    find "$prefix/local/lib" "$prefix/local/bin" -type f ! -name '*.a' -exec strip '{}' ';' 2>&1 \
+      | grep -v "File format not recognized" \
+      | grep -v "File truncated" || true
+    find "$prefix/local/lib" -type f -name '*.a' -exec ranlib '{}' ';' 2>/dev/null || true
 
-  if [ "$clean_build_dir" = "true" ]; then
-    rm -rf "$build_dir"
+    if [ "$clean_build_dir" = "true" ]; then
+      rm -rf "$build_dir"
+    fi
+    rm -rf "$HOME/.cache/pip" /tmp/pip-* /tmp/tmp.* || true
+    $SUDO rm -rf /root/.cache 2>/dev/null || true
+    $SUDO rm -rf /var/lib/apt/lists/*
   fi
-  rm -rf "$HOME/.cache/pip" /tmp/pip-* /tmp/tmp.* || true
-  $SUDO rm -rf /root/.cache 2>/dev/null || true
-  $SUDO rm -rf /var/lib/apt/lists/*
   $SUDO chown -R "$owner_uid:$owner_gid" "$prefix"
   $SUDO chmod -R u+rwX,go+rX "$prefix"
   if has_optional_packages; then

@@ -28,6 +28,7 @@ export interface JupyterRuntimeNbconvert {
   start?: number;
   time?: number;
   error?: string | null;
+  output?: string;
 }
 
 export interface JupyterRuntimeLimits {

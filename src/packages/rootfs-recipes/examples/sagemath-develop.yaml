@@ -1,0 +1,50 @@
+version: 1
+name: sagemath-develop
+
+builder:
+  run_quota:
+    disk_quota: 100000
+
+steps:
+  - uses: cocalc/sagemath-develop
+    with:
+      version: develop
+      prefix: /opt/sage
+      jobs: auto
+      clone_depth: full
+      preserve_build_artifacts: "true"
+    timeout: 172800
+
+verify:
+  - test -d /opt/sage/.git
+  - test -d /opt/sage/upstream
+  - test "$(sudo -H -u "#2001" -- git -C /opt/sage rev-parse --is-shallow-repository)" = false
+  - test "$(sudo -H -u "#2001" -- git -C /opt/sage branch --show-current)" = develop
+  - test "$(sudo -H -u "#2001" -- git -C /opt/sage rev-parse HEAD)" = "$(sudo -H -u "#2001" -- git -C /opt/sage rev-parse refs/remotes/origin/develop)"
+  - test "$(stat -c %u /opt/sage)" = 2001
+  - sudo -H -u "#2001" -- test -w /opt/sage
+  - command -v sage
+  - command -v python
+  - command -v pip
+  - command -v jupyter
+  - sage --version
+  - sage -c 'from sage.all import ZZ; assert ZZ(2) + ZZ(2) == 4'
+  - python -c 'import sys; from sage.all import ZZ; assert ZZ(19).is_prime(); assert sys.executable.startswith("/opt/sage/")'
+  - jupyter kernelspec list | grep -qi sagemath
+  - jupyter kernelspec list | grep -q python3
+
+publish:
+  label: SageMath Develop
+  slug: sagemath-develop
+  description: The latest SageMath develop branch, fully built in a writable /opt/sage checkout with full Git history, retained build artifacts, and Sage/Python Jupyter kernels.
+  family: sagemath-develop
+  version: develop
+  channel: preview
+  default_jupyter_kernel: sagemath
+  visibility: public
+  tags:
+    - sagemath
+    - development
+    - source
+    - git
+    - jupyter
