@@ -3703,7 +3703,7 @@ escape_overlay_path() {
 
 case "$cmd" in
   prepare-project-cgroup)
-    if [ "$#" -ne 12 ]; then
+    if [ "$#" -ne 11 ] && [ "$#" -ne 12 ]; then
       echo "usage: cocalc-runtime-storage prepare-project-cgroup <project-id> <launcher-pid> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight> <io-class>" >&2
       exit 2
     fi
@@ -3718,7 +3718,9 @@ case "$cmd" in
     cpu_period="$9"
     cpu_weight="${10}"
     io_weight="${11}"
-    io_class="${12}"
+    # Bootstrap helpers may converge before the project-host artifact. Keep
+    # the old caller safe during that window by selecting the lowest class.
+    io_class="${12:-standard}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
@@ -3759,7 +3761,7 @@ case "$cmd" in
     verify_project_pid_in_pool "$1" "$2"
     ;;
   attach-project-cgroup)
-    if [ "$#" -ne 12 ]; then
+    if [ "$#" -ne 11 ] && [ "$#" -ne 12 ]; then
       echo "usage: cocalc-runtime-storage attach-project-cgroup <project-id> <podman-netns-path|-> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight> <io-class>" >&2
       exit 2
     fi
@@ -3774,7 +3776,7 @@ case "$cmd" in
     cpu_period="$9"
     cpu_weight="${10}"
     io_weight="${11}"
-    io_class="${12}"
+    io_class="${12:-standard}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
