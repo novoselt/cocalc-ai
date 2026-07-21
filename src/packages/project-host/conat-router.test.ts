@@ -14,6 +14,7 @@ import {
   isProjectHostManagedLocalConatRouter,
   resolveProjectHostConatRouterClusterName,
   resolveProjectHostConatRouterUrl,
+  resolveProjectHostDirectHttpsConfig,
   rewriteProjectHostConatProxyUrl,
 } from "./conat-router";
 
@@ -51,6 +52,10 @@ describe("project-host conat router helpers", () => {
     delete process.env.COCALC_PROJECT_HOST_CONAT_ROUTER_PORT;
     delete process.env.COCALC_PROJECT_HOST_CONAT_ROUTER_HOST;
     delete process.env.COCALC_PROJECT_HOST_CONAT_CLUSTER_NAME;
+    delete process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOST;
+    delete process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT;
+    delete process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME;
+    delete process.env.PROJECT_HOST_PUBLIC_URL;
   });
 
   afterAll(() => {
@@ -115,6 +120,35 @@ describe("project-host conat router helpers", () => {
     ).toBe("explicit-cluster");
   });
 
+  it("binds configured direct HTTPS ingress publicly by default", () => {
+    process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT = "443";
+    process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME =
+      "host-123.example.com";
+    expect(resolveProjectHostDirectHttpsConfig()).toEqual({
+      host: "0.0.0.0",
+      port: 443,
+      hostname: "host-123.example.com",
+    });
+
+    process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOST = "127.0.0.1";
+    expect(resolveProjectHostDirectHttpsConfig()?.host).toBe("127.0.0.1");
+  });
+
+  it("derives the direct HTTPS certificate hostname from the public URL", () => {
+    process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT = "443";
+    process.env.PROJECT_HOST_PUBLIC_URL = "https://host-123.example.com/base";
+    expect(resolveProjectHostDirectHttpsConfig()?.hostname).toBe(
+      "host-123.example.com",
+    );
+  });
+
+  it("rejects invalid direct HTTPS ports", () => {
+    process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT = "65536";
+    expect(() => resolveProjectHostDirectHttpsConfig()).toThrow(
+      /1 through 65535/,
+    );
+  });
+
   it("rewrites proxied conat urls down to the router path", () => {
     expect(rewriteProjectHostConatProxyUrl("/conat/?EIO=4")).toBe(
       "/conat/?EIO=4",
@@ -132,6 +166,18 @@ describe("project-host conat router helpers", () => {
     const app = express();
     const servers = [http.createServer(app), http.createServer(app)];
     attachProjectHostConatRouterProxy({
+      app,
+      httpServers: servers,
+      target: "http://127.0.0.1:9999",
+    });
+    expect(servers[0].listenerCount("upgrade")).toBe(1);
+    expect(servers[1].listenerCount("upgrade")).toBe(1);
+  });
+
+  it("attaches fallback upgrades to every ingress listener", () => {
+    const app = express();
+    const servers = [http.createServer(app), http.createServer(app)];
+    attachProjectHostHttpFallbackProxy({
       app,
       httpServers: servers,
       target: "http://127.0.0.1:9999",

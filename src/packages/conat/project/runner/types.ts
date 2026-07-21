@@ -49,6 +49,9 @@ export interface Configuration {
   secrets_generation?: number;
   // cpu priority: 1, 2 or 3, with 3 being highest
   cpu?: number;
+  // Authoritative storage service class resolved by the owning bay. Unknown
+  // or missing values are treated as the safest normal shared-host class.
+  io_class?: "standard" | "member" | "premium";
   // memory limit in BYTES
   memory?: number;
   // swap -- enabled or not.  The actual amount is a function of

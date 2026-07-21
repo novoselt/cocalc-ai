@@ -514,18 +514,6 @@ async function listTunnelsByName(
   );
 }
 
-async function deleteTunnel(
-  accountId: string,
-  token: string,
-  tunnelId: string,
-): Promise<void> {
-  await cloudflareRequest(
-    token,
-    "DELETE",
-    `accounts/${accountId}/cfd_tunnel/${tunnelId}`,
-  );
-}
-
 async function getTunnelToken(
   accountId: string,
   token: string,
@@ -544,6 +532,7 @@ async function getTunnelToken(
 export async function ensureCloudflareTunnelForHost(opts: {
   host_id: string;
   existing?: CloudflareTunnel;
+  publish_browser_dns?: boolean;
 }): Promise<CloudflareTunnel | undefined> {
   const config = await getConfig();
   if (!config) return opts.existing;
@@ -563,6 +552,7 @@ export async function ensureCloudflareTunnelForHost(opts: {
     ssh_hostname: sshHostname,
     name: `${prefix}host-${opts.host_id}`,
     existing: opts.existing,
+    publish_browser_dns: opts.publish_browser_dns,
     logContext: { host_id: opts.host_id },
   });
 }
@@ -598,6 +588,7 @@ async function ensureCloudflareTunnel(opts: {
   ssh_hostname?: string;
   name: string;
   existing?: CloudflareTunnel;
+  publish_browser_dns?: boolean;
   logContext?: Record<string, unknown>;
 }): Promise<CloudflareTunnel> {
   let tunnelId = opts.existing?.id;
@@ -625,7 +616,7 @@ async function ensureCloudflareTunnel(opts: {
     }
   }
 
-  if (!tunnelId || !tunnelSecret) {
+  if (!tunnelId) {
     const generatedSecret = crypto.randomBytes(32).toString("base64");
     try {
       created = await createTunnel(
@@ -643,36 +634,36 @@ async function ensureCloudflareTunnel(opts: {
         opts.token,
         tunnelName || opts.name,
       );
-      for (const tunnel of existing) {
-        if (!tunnel.id) continue;
-        try {
-          await deleteTunnel(opts.accountId, opts.token, tunnel.id);
-        } catch (deleteErr) {
-          if (!isNotFoundError(deleteErr)) {
-            throw deleteErr;
-          }
-        }
-      }
-      created = await createTunnel(
-        opts.accountId,
-        opts.token,
-        tunnelName || opts.name,
-        generatedSecret,
+      const reusable = existing.find(
+        (tunnel) => !!tunnel.id && !tunnel.deleted_at,
       );
+      if (!reusable?.id) {
+        throw err;
+      }
+      tunnelId = reusable.id;
+      tunnelName = reusable.name ?? tunnelName ?? opts.name;
+      logger.info("cloudflare tunnel adopted by name", {
+        tunnel_id: tunnelId,
+        ...opts.logContext,
+      });
     }
-    if (!created?.id || !created?.tunnel_secret) {
-      if (!created?.id) {
+    if (created) {
+      if (!created.id) {
         throw new Error("cloudflare tunnel create returned no id");
       }
+      tunnelId = created.id;
+      tunnelName = created.name ?? tunnelName ?? opts.name;
+      tunnelSecret = created.tunnel_secret ?? generatedSecret;
+      logger.info("cloudflare tunnel created", {
+        tunnel_id: tunnelId,
+        ...opts.logContext,
+      });
     }
-    tunnelId = created.id;
-    tunnelName = created.name ?? tunnelName ?? opts.name;
-    tunnelSecret = created.tunnel_secret ?? generatedSecret;
-    logger.info("cloudflare tunnel created", {
-      tunnel_id: tunnelId,
-      ...opts.logContext,
-    });
   }
+  if (!tunnelId) {
+    throw new Error("cloudflare tunnel has no id after reconciliation");
+  }
+  const activeTunnelId = tunnelId;
 
   let zoneIdValue: string;
   try {
@@ -683,20 +674,25 @@ async function ensureCloudflareTunnel(opts: {
     }
     zoneIdValue = await getZoneIdForHostname(opts.token, opts.hostname);
   }
-  const record_id = await ensureTunnelDns({
-    token: opts.token,
-    zoneId: zoneIdValue,
-    hostname: opts.hostname,
-    target: `${tunnelId}.cfargotunnel.com`,
-    record_id: opts.existing?.record_id,
-  });
+  // Direct project-host ingress still keeps a ready tunnel for rollback and
+  // SSH, but its browser hostname must remain a proxied A record.
+  const record_id =
+    opts.publish_browser_dns === false
+      ? opts.existing?.record_id
+      : await ensureTunnelDns({
+          token: opts.token,
+          zoneId: zoneIdValue,
+          hostname: opts.hostname,
+          target: `${activeTunnelId}.cfargotunnel.com`,
+          record_id: opts.existing?.record_id,
+        });
   let ssh_record_id: string | undefined;
   if (opts.ssh_hostname) {
     ssh_record_id = await ensureTunnelDns({
       token: opts.token,
       zoneId: zoneIdValue,
       hostname: opts.ssh_hostname,
-      target: `${tunnelId}.cfargotunnel.com`,
+      target: `${activeTunnelId}.cfargotunnel.com`,
       record_id: opts.existing?.ssh_record_id,
     });
   }
@@ -705,7 +701,7 @@ async function ensureCloudflareTunnel(opts: {
     undefined;
   if (!token) {
     try {
-      token = await getTunnelToken(opts.accountId, opts.token, tunnelId);
+      token = await getTunnelToken(opts.accountId, opts.token, activeTunnelId);
     } catch (err) {
       logger.warn("cloudflare tunnel token fetch failed", {
         err,
@@ -713,12 +709,17 @@ async function ensureCloudflareTunnel(opts: {
       });
     }
   }
+  if (!token && !tunnelSecret) {
+    throw new Error(
+      `cloudflare tunnel ${activeTunnelId} has neither a connector token nor local credentials`,
+    );
+  }
 
   return {
-    id: tunnelId,
+    id: activeTunnelId,
     name: tunnelName ?? opts.name,
     hostname: opts.hostname,
-    tunnel_secret: tunnelSecret,
+    tunnel_secret: tunnelSecret ?? "",
     account_id: opts.accountId,
     record_id,
     ssh_hostname: opts.ssh_hostname,
@@ -761,7 +762,15 @@ export async function deleteCloudflareTunnel(opts: {
     (opts.host_id && config.hostSuffix
       ? `host-${opts.host_id}${config.hostSuffix}`
       : undefined);
-  const sshHostname = opts.tunnel?.ssh_hostname;
+  const sshHostname =
+    opts.tunnel?.ssh_hostname ??
+    (opts.host_id && config.hostSuffix
+      ? `ssh-host-${opts.host_id}${config.hostSuffix}`
+      : undefined);
+  const prefix = config.prefix ? `${config.prefix}-` : "";
+  const tunnelName = opts.host_id
+    ? `${prefix}host-${opts.host_id}`
+    : opts.tunnel?.name;
   let zoneIdValue: string | undefined;
   try {
     zoneIdValue = await getZoneIdForHostname(
@@ -787,9 +796,16 @@ export async function deleteCloudflareTunnel(opts: {
         logger.warn("cloudflare tunnel dns delete failed", { err });
       }
     }
-  } else if (zoneIdValue && hostname) {
+  }
+  if (zoneIdValue && hostname) {
     try {
-      const records = await listDnsRecords(config.token, zoneIdValue, hostname);
+      // Bootstrap can recreate a record after the stored id was captured.
+      // Always remove any exact-name remainder after the best-effort id delete.
+      const records = await listDnsRecordsByName(
+        config.token,
+        zoneIdValue,
+        hostname,
+      );
       for (const record of records) {
         if (!record.id) continue;
         try {
@@ -820,7 +836,8 @@ export async function deleteCloudflareTunnel(opts: {
         logger.warn("cloudflare tunnel ssh dns delete failed", { err });
       }
     }
-  } else if (zoneIdValue && sshHostname) {
+  }
+  if (zoneIdValue && sshHostname) {
     try {
       const records = await listDnsRecordsByName(
         config.token,
@@ -846,16 +863,58 @@ export async function deleteCloudflareTunnel(opts: {
     }
   }
 
+  const tunnelIds = new Set<string>();
   if (opts.tunnel?.id) {
+    tunnelIds.add(opts.tunnel.id);
+  }
+  if (tunnelName) {
+    try {
+      const tunnels = await listTunnelsByName(
+        config.accountId,
+        config.token,
+        tunnelName,
+      );
+      for (const tunnel of tunnels) {
+        if (tunnel.id && !tunnel.deleted_at) {
+          tunnelIds.add(tunnel.id);
+        }
+      }
+    } catch (err) {
+      logger.warn("cloudflare tunnel lookup during delete failed", {
+        err,
+        tunnel_name: tunnelName,
+      });
+    }
+  }
+  for (const tunnelId of tunnelIds) {
+    try {
+      // Cloudflare can retain disconnected connectors for several minutes.
+      // Remove those tracked connections before deleting the host tunnel.
+      await cloudflareRequest(
+        config.token,
+        "DELETE",
+        `accounts/${config.accountId}/cfd_tunnel/${tunnelId}/connections`,
+      );
+    } catch (err) {
+      if (!isNotFoundError(err)) {
+        logger.warn("cloudflare tunnel connection cleanup failed", {
+          err,
+          tunnel_id: tunnelId,
+        });
+      }
+    }
     try {
       await cloudflareRequest(
         config.token,
         "DELETE",
-        `accounts/${config.accountId}/cfd_tunnel/${opts.tunnel.id}`,
+        `accounts/${config.accountId}/cfd_tunnel/${tunnelId}`,
       );
     } catch (err) {
       if (!isNotFoundError(err)) {
-        logger.warn("cloudflare tunnel delete failed", { err });
+        logger.warn("cloudflare tunnel delete failed", {
+          err,
+          tunnel_id: tunnelId,
+        });
       }
     }
   }

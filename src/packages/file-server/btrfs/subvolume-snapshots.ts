@@ -2,7 +2,8 @@ import { type Subvolume } from "./subvolume";
 import { btrfs } from "./util";
 import getLogger from "@cocalc/backend/logger";
 import { join } from "path";
-import { realpath, rm } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { type SnapshotCounts, updateRollingSnapshots } from "./snapshots";
 import { ConatError } from "@cocalc/conat/core/client";
 import { type SnapshotUsage } from "@cocalc/conat/files/file-server";
@@ -19,6 +20,47 @@ import {
 const logger = getLogger("file-server:btrfs:subvolume-snapshots");
 
 const DEFAULT_CLEANUP_QUOTA_RELIEF_BYTES = 1024 ** 3;
+const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
+
+async function removeSnapshotPathInProjectCgroup({
+  projectRoot,
+  relativePath,
+}: {
+  projectRoot: string;
+  relativePath: string;
+}): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      "sudo",
+      [
+        "-n",
+        STORAGE_WRAPPER,
+        "sandbox-rm",
+        projectRoot,
+        relativePath,
+        "--recursive",
+        "--force",
+      ],
+      { cwd: "/", stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < 16_384) stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(
+          new Error(
+            `snapshot prune worker failed code=${code ?? "none"} signal=${signal ?? "none"}: ${stderr.trim()}`,
+          ),
+        );
+      }
+    });
+  });
+}
 
 function cleanupQuotaReliefBytes(): number {
   const value = Number.parseInt(
@@ -325,10 +367,13 @@ export class SubvolumeSnapshots {
       operation: "prune-snapshot-path",
       run: async () => {
         for (const name of names) {
-          const target = await this.safePruneTargetPath(name, path);
+          await this.safePruneTargetPath(name, path);
           await this.setReadOnly(name, false);
           try {
-            await rm(target, { recursive: true, force: true });
+            await removeSnapshotPathInProjectCgroup({
+              projectRoot: this.subvolume.path,
+              relativePath: join(SNAPSHOTS, name, path),
+            });
           } finally {
             await this.setReadOnly(name, true);
           }
@@ -408,6 +453,8 @@ export class SubvolumeSnapshots {
     return Promise.all(snaps.map(this.usage));
   };
 }
+
+export const __test__ = { removeSnapshotPathInProjectCgroup };
 
 export async function getGeneration(
   path: string,

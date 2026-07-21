@@ -52,6 +52,21 @@ describe("bootstrapCloudflareConfiguration", () => {
             scopes: ["com.cloudflare.api.account.zone"],
           },
           {
+            id: "config-rules-write",
+            name: "Config Rules Write",
+            scopes: ["com.cloudflare.api.account.zone"],
+          },
+          {
+            id: "config-settings-write",
+            name: "Config Settings Write",
+            scopes: ["com.cloudflare.api.account.zone"],
+          },
+          {
+            id: "select-configuration-write",
+            name: "Select Configuration Write",
+            scopes: ["com.cloudflare.api.account.zone"],
+          },
+          {
             id: "managed-headers-write",
             name: "Managed headers Write",
             scopes: ["com.cloudflare.api.account.zone"],
@@ -111,8 +126,17 @@ describe("bootstrapCloudflareConfiguration", () => {
       "https://api.cloudflare.com/client/v4/user/tokens",
       expect.objectContaining({
         method: "POST",
-        body: expect.stringContaining("account-analytics-read"),
+        body: expect.stringMatching(
+          /account-analytics-read[\s\S]*config-settings-write|config-settings-write[\s\S]*account-analytics-read/,
+        ),
       }),
+    );
+    const createTokenCall = fetchMock.mock.calls.find(([url, init]) => {
+      return String(url).endsWith("/user/tokens") && init?.method === "POST";
+    });
+    expect(createTokenCall?.[1]?.body).not.toContain("config-rules-write");
+    expect(createTokenCall?.[1]?.body).not.toContain(
+      "select-configuration-write",
     );
     expect(fetchMock).toHaveBeenLastCalledWith(
       "https://api.cloudflare.com/client/v4/user/tokens/bootstrap-id",

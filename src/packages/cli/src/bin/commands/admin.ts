@@ -1569,6 +1569,46 @@ export function registerAdminCommand(
       });
     });
 
+  adminSettings
+    .command("set <name>")
+    .description(
+      "set one site setting from a file without exposing its value in process arguments or output (admin fresh-auth)",
+    )
+    .option("--value-file <path>", "read the setting value from this file")
+    .option("--clear", "clear the setting")
+    .action(async (name: string, options, command: Command) => {
+      await withContext(command, "admin settings set", async (ctx) => {
+        if (!!options.valueFile === !!options.clear) {
+          throw new Error("specify exactly one of --value-file or --clear");
+        }
+        const value = options.clear
+          ? ""
+          : (await readFile(options.valueFile, "utf8")).replace(/\r?\n$/, "");
+        const result = await ctx.hub.system.setSiteSettings({
+          settings: [{ name: `${name}`.trim(), value }],
+        });
+        const failed = result?.bays?.filter(
+          ({ status }) => status === "failed",
+        );
+        if (failed?.length) {
+          throw new Error(
+            failed
+              .map(
+                ({ bay_id, error }) => `${bay_id}: ${error ?? "sync failed"}`,
+              )
+              .join("; "),
+          );
+        }
+        return {
+          name: `${name}`.trim(),
+          configured: value !== "",
+          scope: result?.scope ?? "",
+          version: result?.version ?? "",
+          bays: result?.bays?.length ?? 0,
+        };
+      });
+    });
+
   adminDbCommonOptions(
     adminDb
       .command("query")

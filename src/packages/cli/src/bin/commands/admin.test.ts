@@ -821,6 +821,49 @@ test("admin entitlement-override schema documents usable override payloads", asy
   );
 });
 
+test("admin settings set reads a secret from a file without returning it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cocalc-admin-settings-"));
+  const path = join(dir, "token");
+  await writeFile(path, "secret-token\n");
+  let captured: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        setSiteSettings: async (opts: any) => {
+          captured = opts;
+          return {
+            scope: "server_settings",
+            version: 7,
+            bays: [{ bay_id: "bay-0", status: "local" }],
+          };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "settings",
+    "set",
+    "project_hosts_cloudflare_tunnel_api_token",
+    "--value-file",
+    path,
+  ]);
+
+  assert.deepEqual(captured, {
+    settings: [
+      {
+        name: "project_hosts_cloudflare_tunnel_api_token",
+        value: "secret-token",
+      },
+    ],
+  });
+});
+
 test("admin acp-denials forwards filters to the hub report endpoint", async () => {
   let captured: any;
   const program = new Command();

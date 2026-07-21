@@ -217,6 +217,7 @@ describe("cloud host start failures", () => {
       status: "deprovisioning",
       public_url: "https://host.example.test",
       internal_url: "http://10.0.0.2:9002",
+      ssh_server: "136.109.220.184:2222",
       metadata: {
         owner: "acct-owner",
         machine: {
@@ -267,10 +268,11 @@ describe("cloud host start failures", () => {
     expect(deployments).toEqual([]);
 
     const { rows } = await getPool().query(
-      "SELECT status, metadata FROM project_hosts WHERE id=$1",
+      "SELECT status, ssh_server, metadata FROM project_hosts WHERE id=$1",
       [hostId],
     );
     expect(rows[0].status).toBe("deprovisioned");
+    expect(rows[0].ssh_server).toBeNull();
     expect(rows[0].metadata.runtime_deployments).toBeUndefined();
     expect(removeHostSshKnownHostAliasMock).toHaveBeenCalledWith({
       host_id: hostId,
@@ -500,6 +502,75 @@ describe("cloud host start failures", () => {
     expect(hostRows.rows[0].metadata.runtime.provider_status).toBe(
       "TERMINATED",
     );
+  });
+
+  it("refreshes the GCP ssh endpoint when the public address changes", async () => {
+    const hostId = "e8d2ca6f-563d-473d-a01d-2b4a7e8bdd90";
+    const getInstance = jest.fn(async () => ({
+      instance_id: `cocalc-host-${hostId}`,
+      name: `cocalc-host-${hostId}`,
+      status: "RUNNING",
+      public_ip: "34.106.236.180",
+      private_ip: "10.180.0.24",
+      internal_hostname: `cocalc-host-${hostId}.internal`,
+    }));
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        provider: {
+          getInstance,
+          mapStatus: () => "running",
+        },
+      },
+      creds: {},
+    });
+
+    await upsertProjectHost({
+      id: hostId,
+      name: "Rotated address host",
+      region: "us-west3",
+      status: "running",
+      public_url: "https://host.example.test",
+      internal_url: "http://cocalc-host.internal:9002",
+      ssh_server: "34.106.236.179:2222",
+      metadata: {
+        owner: "acct-owner",
+        public_route: {
+          desired_mode: "cloudflare-proxy",
+          active_mode: "cloudflare-proxy",
+          status: "active",
+        },
+        machine: {
+          cloud: "gcp",
+          zone: "us-west3-b",
+          machine_type: "t2d-standard-4",
+          disk_gb: 50,
+          disk_type: "balanced",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "gcp",
+          zone: "us-west3-b",
+          instance_id: `cocalc-host-${hostId}`,
+          public_ip: "34.106.236.179",
+          private_ip: "10.180.0.23",
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.refresh_runtime({
+      id: "work-refresh-ip-rotation",
+      vm_id: hostId,
+      action: "refresh_runtime",
+      payload: { provider: "gcp", force: true, attempt: 0 },
+    } as any);
+
+    const { rows } = await getPool().query(
+      "SELECT ssh_server, metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(rows[0].metadata.runtime.public_ip).toBe("34.106.236.180");
+    expect(rows[0].ssh_server).toBe("34.106.236.180:2222");
   });
 
   it("reschedules verify_host_ready while the current check is in progress", async () => {

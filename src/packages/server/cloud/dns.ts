@@ -42,7 +42,7 @@ type ZoneResponse = {
 
 type CloudflareResponse<T> = {
   success?: boolean;
-  errors?: Array<{ message?: string }>;
+  errors?: Array<{ code?: number; message?: string }>;
   result?: T;
 };
 
@@ -53,12 +53,30 @@ type DnsRecord = {
   type?: string;
 };
 
+export type CloudflareZoneSslMode = {
+  value?: string;
+  editable?: boolean;
+  modified_on?: string;
+};
+
+export type CloudflareProjectHostSslRule = {
+  ruleset_id: string;
+  rule_id: string;
+  ref: string;
+  expression: string;
+  ssl: "full";
+};
+
+const PROJECT_HOST_SSL_RULE_REF = "cocalc_project_host_direct_tls";
+const PROJECT_HOST_SSL_RULE_DESCRIPTION =
+  "CoCalc project-host direct ingress uses encrypted Cloudflare origin traffic";
+
 const CNAME_CONFLICT_RECORD_TYPES = new Set(["A", "AAAA"]);
 const ADDRESS_ROUTE_RECORD_TYPES = new Set(["A", "AAAA", "CNAME"]);
 
 async function cloudflareRequest<T>(
   token: string,
-  method: "GET" | "POST" | "PUT" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: Record<string, any>,
 ): Promise<T> {
@@ -70,19 +88,30 @@ async function cloudflareRequest<T>(
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!response.ok) {
-    throw new Error(
-      `cloudflare api failed: ${response.status} ${response.statusText}`,
-    );
+  let data: CloudflareResponse<T> | undefined;
+  try {
+    data = (await response.json()) as CloudflareResponse<T>;
+  } catch {
+    data = undefined;
   }
-  const data = (await response.json()) as CloudflareResponse<T>;
-  if (!data?.success) {
+  if (!response.ok || !data?.success) {
     const details =
       data?.errors
-        ?.map((err) => err.message)
+        ?.map((err) =>
+          [err.code != null ? `code=${err.code}` : undefined, err.message]
+            .filter(Boolean)
+            .join(" "),
+        )
         .filter(Boolean)
-        .join(", ") || "unknown error";
-    throw new Error(`cloudflare api failed: ${details}`);
+        .join(", ") || "no Cloudflare error details";
+    const statusText = response.statusText ? ` ${response.statusText}` : "";
+    const permissionHint =
+      response.status === 403 && path.includes("/rulesets")
+        ? "; token requires Select Configuration Write for this zone"
+        : "";
+    throw new Error(
+      `cloudflare api ${method} /${path} failed: HTTP ${response.status}${statusText}: ${details}${permissionHint}`,
+    );
   }
   if (data.result === undefined) {
     throw new Error("cloudflare api returned no result");
@@ -376,6 +405,150 @@ export async function getCloudflareIpv4Cidrs(): Promise<string[]> {
     throw new Error("cloudflare returned no IPv4 ranges");
   }
   return cidrs;
+}
+
+export async function getCloudflareZoneSslMode(
+  hostname: string,
+): Promise<CloudflareZoneSslMode> {
+  const { token, zoneId } = await getZoneClientForHostname(hostname);
+  const setting = await cloudflareRequest<{
+    value?: string;
+    editable?: boolean;
+    modified_on?: string;
+  }>(token, "GET", `zones/${zoneId}/settings/ssl`);
+  return {
+    value: `${setting?.value ?? ""}` || undefined,
+    editable: setting?.editable == null ? undefined : Boolean(setting.editable),
+    modified_on: `${setting?.modified_on ?? ""}` || undefined,
+  };
+}
+
+function directSslRuleExpression(opts: {
+  hostname: string;
+  hostId: string;
+}): string {
+  const hostname = `${opts.hostname ?? ""}`.trim().toLowerCase();
+  const hostId = `${opts.hostId ?? ""}`.trim().toLowerCase();
+  const idOffset = hostname.indexOf(hostId);
+  const labels = hostname.split(".").filter(Boolean);
+  if (!hostname || !hostId || idOffset <= 0 || labels.length < 2) {
+    throw new Error(
+      "cannot derive project-host Cloudflare SSL rule expression",
+    );
+  }
+  const stablePrefix = hostname.slice(0, idOffset);
+  const stableSuffix = hostname.slice(idOffset + hostId.length);
+  const zoneSuffix = `.${labels.slice(1).join(".")}`;
+  return [
+    "(",
+    `(starts_with(http.host, ${JSON.stringify(stablePrefix)}) and ends_with(http.host, ${JSON.stringify(stableSuffix)}))`,
+    " or ",
+    `(starts_with(http.host, "direct-check-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
+    ")",
+  ].join("");
+}
+
+export async function ensureCloudflareProjectHostSslRule(opts: {
+  hostname: string;
+  host_id: string;
+}): Promise<CloudflareProjectHostSslRule> {
+  const { token, zoneId } = await getZoneClientForHostname(opts.hostname);
+  const expression = directSslRuleExpression({
+    hostname: opts.hostname,
+    hostId: opts.host_id,
+  });
+  type Rule = {
+    id?: string;
+    ref?: string;
+    description?: string;
+  };
+  type Ruleset = {
+    id?: string;
+    kind?: string;
+    phase?: string;
+    rules?: Rule[];
+  };
+  const rulePayload = {
+    ref: PROJECT_HOST_SSL_RULE_REF,
+    description: PROJECT_HOST_SSL_RULE_DESCRIPTION,
+    expression,
+    action: "set_config",
+    action_parameters: { ssl: "full" },
+    enabled: true,
+  } as const;
+  const rulesets = await cloudflareRequest<Ruleset[]>(
+    token,
+    "GET",
+    `zones/${zoneId}/rulesets`,
+  );
+  let ruleset = rulesets.find(
+    (candidate) =>
+      candidate.kind === "zone" && candidate.phase === "http_config_settings",
+  );
+  if (!ruleset?.id) {
+    ruleset = await cloudflareRequest<Ruleset>(
+      token,
+      "POST",
+      `zones/${zoneId}/rulesets`,
+      {
+        name: "CoCalc project-host configuration",
+        description:
+          "Configuration overrides required by direct CoCalc project-host ingress",
+        kind: "zone",
+        phase: "http_config_settings",
+        rules: [rulePayload],
+      },
+    );
+  } else {
+    ruleset = await cloudflareRequest<Ruleset>(
+      token,
+      "GET",
+      `zones/${zoneId}/rulesets/${ruleset.id}`,
+    );
+    const existingRule = ruleset.rules?.find(
+      (rule) =>
+        rule.ref === PROJECT_HOST_SSL_RULE_REF ||
+        rule.description === PROJECT_HOST_SSL_RULE_DESCRIPTION,
+    );
+    if (existingRule?.id) {
+      await cloudflareRequest<Rule>(
+        token,
+        "PATCH",
+        `zones/${zoneId}/rulesets/${ruleset.id}/rules/${existingRule.id}`,
+        rulePayload,
+      );
+    } else {
+      await cloudflareRequest<Rule>(
+        token,
+        "POST",
+        `zones/${zoneId}/rulesets/${ruleset.id}/rules`,
+        rulePayload,
+      );
+    }
+  }
+  if (!ruleset?.id) {
+    throw new Error("cloudflare did not return configuration ruleset id");
+  }
+  const verified = await cloudflareRequest<Ruleset>(
+    token,
+    "GET",
+    `zones/${zoneId}/rulesets/${ruleset.id}`,
+  );
+  const verifiedRule = verified.rules?.find(
+    (rule) =>
+      rule.ref === PROJECT_HOST_SSL_RULE_REF ||
+      rule.description === PROJECT_HOST_SSL_RULE_DESCRIPTION,
+  );
+  if (!verifiedRule?.id) {
+    throw new Error("cloudflare project-host SSL rule verification failed");
+  }
+  return {
+    ruleset_id: ruleset.id,
+    rule_id: verifiedRule.id,
+    ref: PROJECT_HOST_SSL_RULE_REF,
+    expression,
+    ssl: "full",
+  };
 }
 
 export async function deleteHostDns(opts: {
