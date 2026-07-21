@@ -256,9 +256,17 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
     const label = isBusy ? "Stop" : "Run";
     const tooltip = isBusy ? "Interrupt execution" : runTooltip;
     const onClick = isBusy ? handleStop : handleRun;
+    // height "auto": CODE_BAR_BTN_STYLE's fixed 24px would top-align the
+    // label inside the 24px button and misalign it with the caret button
+    // (same treatment as the split button in cell-buttonbar.tsx).
     const btnStyle = isBusy
-      ? { ...CODE_BAR_BTN_STYLE, color: COLORS.ANTD_RED, ...extraStyle }
-      : { ...CODE_BAR_BTN_STYLE, ...extraStyle };
+      ? {
+          ...CODE_BAR_BTN_STYLE,
+          height: "auto",
+          color: COLORS.ANTD_RED,
+          ...extraStyle,
+        }
+      : { ...CODE_BAR_BTN_STYLE, height: "auto", ...extraStyle };
 
     const sectionIdx = blockCellIds?.indexOf(id) ?? -1;
     const hasSection = blockCellIds != null && blockCellIds.length > 1;
@@ -298,7 +306,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
     );
 
     return (
-      <div>
+      <div style={{ display: "flex", alignItems: "center" }}>
         <Space.Compact size="small">
           <Button size="small" type="text" onClick={onClick}>
             <Tooltip placement="top" title={tooltip}>
@@ -311,7 +319,15 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
             <Button
               size="small"
               type="text"
-              icon={<Icon name="angle-down" />}
+              icon={
+                <Icon
+                  name="angle-down"
+                  style={{
+                    lineHeight: 1,
+                    transform: "translateY(-1px)",
+                  }}
+                />
+              }
             />
           </Dropdown>
         </Space.Compact>
