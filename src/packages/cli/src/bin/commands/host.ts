@@ -2869,6 +2869,68 @@ Examples:
     );
 
   host
+    .command("public-route <host> <mode>")
+    .description(
+      "migrate a managed host between Cloudflare Tunnel and proxied public-IP routing",
+    )
+    .option("--wait", "wait for migration and verification")
+    .action(
+      async (
+        hostIdentifier: string,
+        modeRaw: string,
+        opts: { wait?: boolean },
+        command: Command,
+      ) => {
+        await withContext(command, "host public-route", async (ctx) => {
+          const mode = `${modeRaw ?? ""}`.trim().toLowerCase();
+          if (mode !== "cloudflare-tunnel" && mode !== "cloudflare-proxy") {
+            throw new Error(
+              "mode must be cloudflare-tunnel or cloudflare-proxy",
+            );
+          }
+          const hostRow = await resolveHost(ctx, hostIdentifier);
+          const op = await ctx.hub.hosts.setHostPublicRouteMode({
+            id: hostRow.id,
+            mode,
+          });
+          if (!opts.wait) {
+            return {
+              host_id: hostRow.id,
+              name: hostRow.name,
+              mode,
+              op_id: op.op_id,
+              status: "queued",
+            };
+          }
+          const summary = await waitForLro(ctx, op.op_id, {
+            timeoutMs: ctx.timeoutMs,
+            pollMs: ctx.pollMs,
+            onUpdate: createHostLroProgressReporter(ctx, {
+              host_id: hostRow.id,
+              name: hostRow.name,
+              op_id: op.op_id,
+            }),
+          });
+          if (summary.timedOut || summary.status !== "succeeded") {
+            throw new Error(
+              summary.timedOut
+                ? `${hostRow.name ?? hostRow.id}: route migration timed out (op=${op.op_id}, last_status=${summary.status})`
+                : `${hostRow.name ?? hostRow.id}: route migration failed: ${summary.error ?? "unknown error"}`,
+            );
+          }
+          return {
+            host_id: hostRow.id,
+            name: hostRow.name,
+            mode,
+            op_id: op.op_id,
+            status: summary.status,
+            result: summary.result,
+          };
+        });
+      },
+    );
+
+  host
     .command("rollout <host>")
     .description(
       "restart or drain managed host components using the software already installed on the host",

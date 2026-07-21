@@ -52,6 +52,7 @@ import {
   beginPlannedProjectHostRuntimeTransition,
   endPlannedProjectHostRuntimeTransition,
 } from "./runtime-transition";
+import { migrateHostPublicRouteInternal } from "@cocalc/server/cloud/public-route";
 
 const logger = getLogger("server:hosts:ops-worker");
 
@@ -83,6 +84,7 @@ const HOST_OP_KINDS = [
   "host-rollback-runtime-deployments",
   "host-upgrade-software",
   "host-rollout-managed-components",
+  "host-public-route",
   "host-deprovision",
   "host-delete",
   "host-force-deprovision",
@@ -2140,6 +2142,40 @@ async function handleOp(op: LroSummary): Promise<void> {
       await progressStep("done", "reconcile complete", {
         host_id,
       });
+      return;
+    }
+
+    if (kind === "host-public-route") {
+      await progressStep("waiting", "preparing public route migration", {
+        host_id,
+        mode: input?.mode,
+      });
+      const result = await migrateHostPublicRouteInternal({
+        id: host_id,
+        mode: input?.mode,
+        onProgress: async (update) => {
+          await progressStep(
+            update.phase,
+            update.message,
+            { host_id, mode: input?.mode, ...(update.detail ?? {}) },
+            update.progress,
+          );
+        },
+      });
+      const updated = await updateLro({
+        op_id,
+        status: "succeeded",
+        progress_summary: {
+          phase: "done",
+          host_id,
+          mode: input?.mode,
+        },
+        result,
+        error: null,
+      });
+      if (updated) {
+        await publishSummary(updated);
+      }
       return;
     }
 

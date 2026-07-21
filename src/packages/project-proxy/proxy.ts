@@ -397,6 +397,7 @@ export function createProxyHandlers({
 // Express-friendly wrapper used by project-host.
 export function attachProjectProxy({
   httpServer,
+  httpServers,
   app,
   resolveTarget = defaultResolveTarget,
   onUpgradeAuthorized,
@@ -404,7 +405,8 @@ export function attachProjectProxy({
   noteUpstreamHttpBytes,
   noteUpstreamWsBytes,
 }: {
-  httpServer: http.Server;
+  httpServer?: http.Server;
+  httpServers?: readonly http.Server[];
   app: express.Application;
   resolveTarget?: ResolveFn;
   onUpgradeAuthorized?: (
@@ -415,6 +417,10 @@ export function attachProjectProxy({
   noteUpstreamHttpBytes?: NoteProxyBoundaryBytesFn;
   noteUpstreamWsBytes?: NoteProxyBoundaryBytesFn;
 }) {
+  const ingressServers = httpServers ?? (httpServer ? [httpServer] : []);
+  if (ingressServers.length === 0) {
+    throw new Error("attachProjectProxy requires at least one HTTP server");
+  }
   const proxy = httpProxy.createProxyServer({
     xfwd: true,
     ws: true,
@@ -495,33 +501,35 @@ export function attachProjectProxy({
     }
   });
 
-  httpServer.prependListener("upgrade", async (req, socket, head) => {
-    await rewriteRequest?.(req);
-    // Only proxy project-scoped websocket upgrades.
-    if (!parseProjectId(req.url)) return;
-    try {
-      const { target, handled } = await resolveTarget(req);
-      if (!handled || !target) {
-        return;
+  for (const ingressServer of ingressServers) {
+    ingressServer.prependListener("upgrade", async (req, socket, head) => {
+      await rewriteRequest?.(req);
+      // Only proxy project-scoped websocket upgrades.
+      if (!parseProjectId(req.url)) return;
+      try {
+        const { target, handled } = await resolveTarget(req);
+        if (!handled || !target) {
+          return;
+        }
+        onUpgradeAuthorized?.(req, socket);
+        proxy.ws(req, socket, head, { target, prependPath: false });
+      } catch (err: any) {
+        const statusCode = Number.isInteger(err?.statusCode)
+          ? err.statusCode
+          : 502;
+        const statusText =
+          statusCode === 401
+            ? "Unauthorized"
+            : statusCode === 403
+              ? "Forbidden"
+              : statusCode === 429
+                ? "Too Many Requests"
+                : "Bad Gateway";
+        socket.write(
+          `HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`,
+        );
+        socket.destroy();
       }
-      onUpgradeAuthorized?.(req, socket);
-      proxy.ws(req, socket, head, { target, prependPath: false });
-    } catch (err: any) {
-      const statusCode = Number.isInteger(err?.statusCode)
-        ? err.statusCode
-        : 502;
-      const statusText =
-        statusCode === 401
-          ? "Unauthorized"
-          : statusCode === 403
-            ? "Forbidden"
-            : statusCode === 429
-              ? "Too Many Requests"
-              : "Bad Gateway";
-      socket.write(
-        `HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`,
-      );
-      socket.destroy();
-    }
-  });
+    });
+  }
 }

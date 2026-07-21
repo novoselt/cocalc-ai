@@ -60,6 +60,11 @@ export type RemoteInstance = {
   metadata?: Record<string, any>;
 };
 
+export type PublicIngressSpec = {
+  ports: number[];
+  source_ranges: string[];
+};
+
 export interface CloudProvider {
   createHost(spec: HostSpec, creds: any): Promise<HostRuntime>;
   startHost(runtime: HostRuntime, creds: any): Promise<void>;
@@ -82,6 +87,11 @@ export interface CloudProvider {
   restartHost?(runtime: HostRuntime, creds: any): Promise<void>;
   hardRestartHost?(runtime: HostRuntime, creds: any): Promise<void>;
   ensureSshAccess?(runtime: HostRuntime, creds: any): Promise<void>;
+  ensurePublicIngress?(
+    runtime: HostRuntime,
+    spec: PublicIngressSpec,
+    creds: any,
+  ): Promise<void>;
   deleteHost(
     runtime: HostRuntime,
     creds: any,

@@ -5455,6 +5455,48 @@ def install_node(cfg: BootstrapConfig) -> None:
     run_cmd(cfg, ["bash", "-lc", install_cmd], "install node", as_user=cfg.ssh_user)
 
 
+def configure_node_bind_service_capability(cfg: BootstrapConfig) -> None:
+    direct_port = next(
+        (
+            line.split("=", 1)[1].strip()
+            for line in cfg.env_lines
+            if line.startswith("COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT=")
+        ),
+        "",
+    )
+    if not direct_port:
+        return
+    if shutil.which("setcap") is None:
+        raise RuntimeError(
+            "setcap is required for the unprivileged project-host HTTPS listener"
+        )
+    nvm_dir = Path(runtime_home(cfg)) / ".nvm"
+    result = run_cmd(
+        cfg,
+        [
+            "bash",
+            "-lc",
+            f'export NVM_DIR="{nvm_dir}"; . "$NVM_DIR/nvm.sh"; nvm which default',
+        ],
+        "resolve project-host node binary",
+        as_user=cfg.ssh_user,
+    )
+    output_lines = [line.strip() for line in (result.stdout or "").splitlines()]
+    node_path = Path(output_lines[-1]).resolve() if output_lines else None
+    versions_root = (nvm_dir / "versions" / "node").resolve()
+    if (
+        node_path is None
+        or not node_path.is_file()
+        or not node_path.is_relative_to(versions_root)
+    ):
+        raise RuntimeError("unable to resolve the project-host nvm node binary")
+    run_cmd(
+        cfg,
+        ["setcap", "cap_net_bind_service=+ep", str(node_path)],
+        "allow project-host node to bind HTTPS port 443",
+    )
+
+
 def write_wrapper(cfg: BootstrapConfig) -> None:
     host_dir = project_host_runtime_root(cfg)
     bin_dir = host_dir / "bin"
@@ -7438,6 +7480,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         extract_bundle(cfg, cfg.tools_bundle)
         report_bootstrap_status(cfg, "running", "Installing runtime tools")
         install_node(cfg)
+        configure_node_bind_service_capability(cfg)
         write_wrapper(cfg)
         write_helpers(cfg)
         configure_runtime_sudoers(cfg)
