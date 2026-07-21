@@ -68,6 +68,7 @@ import {
   RootfsScanStatus,
   useRootfsScanEnabled,
 } from "@cocalc/frontend/rootfs/scan-status";
+import RootfsImageSearch from "@cocalc/frontend/rootfs/image-search";
 import {
   ROOTFS_PROJECT_PRESET_LABELS,
   ROOTFS_PROJECT_PRESET_TAGS,
@@ -289,15 +290,6 @@ export default function RootFilesystemImage({
     limit: 200,
     imageIds: pinnedCatalogImageIds,
   });
-  const {
-    images: pickerCatalogRootfsImages,
-    loading: rootfsLoading,
-    error: rootfsError,
-  } = useRootfsImages([managedRootfsCatalogUrl(catalogRefresh)], {
-    query: rootfsSearch,
-    limit: 200,
-    imageIds: pinnedCatalogImageIds,
-  });
   const catalogSelectableRootfsImages = useMemo(
     () =>
       canUseCustomRootfs
@@ -308,11 +300,9 @@ export default function RootFilesystemImage({
   const selectableRootfsImages = useMemo(
     () =>
       canUseCustomRootfs
-        ? pickerCatalogRootfsImages
-        : pickerCatalogRootfsImages.filter((entry) =>
-            rootfsEntryIsManaged(entry),
-          ),
-    [canUseCustomRootfs, pickerCatalogRootfsImages],
+        ? catalogRootfsImages
+        : catalogRootfsImages.filter((entry) => rootfsEntryIsManaged(entry)),
+    [canUseCustomRootfs, catalogRootfsImages],
   );
 
   const selectedRootfsEntry = useMemo(() => {
@@ -1835,11 +1825,9 @@ export default function RootFilesystemImage({
                     gridTemplateColumns: "minmax(0, 1fr) auto",
                   }}
                 >
-                  <Input.Search
-                    allowClear
-                    disabled={rootfsLoading}
-                    onChange={(e) => setRootfsSearch(e.target.value)}
-                    placeholder="Search by name, image, publisher, tag, or version"
+                  <RootfsImageSearch
+                    loading={catalogRootfsLoading}
+                    onChange={setRootfsSearch}
                     value={rootfsSearch}
                   />
                   <Space wrap size="small">
@@ -1869,7 +1857,7 @@ export default function RootFilesystemImage({
                     padding: 10,
                   }}
                 >
-                  {rootfsLoading ? (
+                  {catalogRootfsLoading ? (
                     <div style={{ padding: 28, textAlign: "center" }}>
                       <Spin />
                     </div>
@@ -2005,9 +1993,9 @@ export default function RootFilesystemImage({
                 description="Choose a managed catalog image instead."
               />
             )}
-            {rootfsError && (
+            {catalogRootfsError && (
               <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                Catalog load issue: {rootfsError}
+                Catalog load issue: {catalogRootfsError}
               </Paragraph>
             )}
           </Space>
