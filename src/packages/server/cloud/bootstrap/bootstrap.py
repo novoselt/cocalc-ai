@@ -5556,11 +5556,8 @@ bin="$RUNTIME_ROOT/bin/project-host"
 pid_file="/mnt/cocalc/data/daemon.pid"
 rootctl="__ROOTCTL__"
 case "${cmd}" in
-  start|ensure|restart)
+  start|ensure|restart|stop)
     exec sudo -n "${rootctl}" "${cmd}" "$@"
-    ;;
-  stop)
-    "${bin}" daemon stop "$@"
     ;;
   status)
     pid=""
@@ -5791,6 +5788,8 @@ PID_FILE="/mnt/cocalc/data/daemon.pid"
 HOST_AGENT_PID_FILE="/mnt/cocalc/data/host-agent.pid"
 CONAT_ROUTER_PID_FILE="/mnt/cocalc/data/conat-router.pid"
 CONAT_PERSIST_PID_FILE="/mnt/cocalc/data/conat-persist.pid"
+DAEMON_CONTROL_LOCK="/mnt/cocalc/data/tmp/project-host-daemon-control.lock"
+DAEMON_CONTROL_LOCK_WAIT_SECONDS="${COCALC_PROJECT_HOST_CONTROL_LOCK_WAIT_SECONDS:-30}"
 FORENSICS_ROOT="/var/lib/cocalc-project-host-forensics"
 MAX_FORENSICS_DURATION_SECONDS="30"
 MAX_FORENSICS_FILE_BLOCKS="65536"
@@ -5827,6 +5826,15 @@ deny() {
 run_daemon() {
   cd /
   sudo -n -u "${RUNTIME_USER}" -H "${RUNTIME_BIN}" daemon "$@"
+}
+
+acquire_daemon_control_lock() {
+  install -d -o "${RUNTIME_USER}" -g "${RUNTIME_USER}" -m 0700 "$(dirname "${DAEMON_CONTROL_LOCK}")"
+  exec 8>"${DAEMON_CONTROL_LOCK}"
+  if ! flock -x -w "${DAEMON_CONTROL_LOCK_WAIT_SECONDS}" 8; then
+    echo "timed out waiting for project-host daemon control lock" >&2
+    exit 1
+  fi
 }
 
 apply_project_host_sysctls() {
@@ -6576,6 +6584,12 @@ doctor() {
   printf 'podman ps: ok\n'
   return "${status}"
 }
+
+case "${cmd}" in
+  start|ensure|restart|stop|protect)
+    acquire_daemon_control_lock
+    ;;
+esac
 
 case "${cmd}" in
   start|ensure)
