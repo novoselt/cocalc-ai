@@ -24,6 +24,10 @@ import {
 } from "./dns";
 import { getProviderContext } from "./provider-context";
 import { reconcileCloudHostBootstrapOverSsh } from "@cocalc/server/conat/api/hosts-bootstrap-reconcile";
+import {
+  probeProjectHostPublicRoute,
+  type ProjectHostPublicRouteProbeResult,
+} from "@cocalc/server/hosts/public-route-probe";
 
 const logger = getLogger("server:cloud:public-route");
 const PROBE_TIMEOUT_MS = 10_000;
@@ -124,29 +128,16 @@ async function probeCloudflareRoute({
   hostname: string;
   origin: string;
   deadlineMs?: number;
-}): Promise<{ status: number; allow_origin?: string }> {
+}): Promise<ProjectHostPublicRouteProbeResult> {
   const deadline = Date.now() + deadlineMs;
   let lastError = "route probe did not run";
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(
-        `https://${hostname}/.cocalc/project-host/session`,
-        {
-          method: "OPTIONS",
-          headers: {
-            Origin: origin,
-            "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "content-type",
-          },
-          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-        },
-      );
-      const allowOrigin =
-        response.headers.get("access-control-allow-origin") ?? undefined;
-      if (response.status === 204 && allowOrigin === origin) {
-        return { status: response.status, allow_origin: allowOrigin };
-      }
-      lastError = `HTTP ${response.status}, allow-origin=${allowOrigin ?? "missing"}`;
+      return await probeProjectHostPublicRoute({
+        public_url: `https://${hostname}`,
+        origin,
+        timeout_ms: PROBE_TIMEOUT_MS,
+      });
     } catch (err) {
       lastError = `${err}`;
     }

@@ -13,6 +13,7 @@ const deleteHostDnsMock = jest.fn();
 const getCloudflareIpv4CidrsMock = jest.fn();
 const ensurePublicIngressMock = jest.fn();
 const reconcileBootstrapMock = jest.fn();
+const probePublicRouteMock = jest.fn();
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -52,6 +53,11 @@ jest.mock("./provider-context", () => ({
 jest.mock("@cocalc/server/conat/api/hosts-bootstrap-reconcile", () => ({
   reconcileCloudHostBootstrapOverSsh: (...args: any[]) =>
     reconcileBootstrapMock(...args),
+}));
+
+jest.mock("@cocalc/server/hosts/public-route-probe", () => ({
+  probeProjectHostPublicRoute: (...args: any[]) =>
+    probePublicRouteMock(...args),
 }));
 
 describe("project-host public route migration", () => {
@@ -109,15 +115,16 @@ describe("project-host public route migration", () => {
     ensureTunnelMock.mockResolvedValue(row.metadata.cloudflare_tunnel);
     ensurePublicIngressMock.mockResolvedValue(undefined);
     reconcileBootstrapMock.mockResolvedValue(undefined);
-    global.fetch = jest.fn(async (_url, opts: RequestInit) => ({
-      status: 204,
-      headers: {
-        get: (name: string) =>
-          name.toLowerCase() === "access-control-allow-origin"
-            ? (opts.headers as Record<string, string>).Origin
-            : null,
-      },
-    })) as any;
+    probePublicRouteMock.mockResolvedValue({
+      health_status: 200,
+      preflight_status: 204,
+      session_status: 401,
+      websocket_status: 101,
+      websocket_attempts: 8,
+      websocket_successes: 8,
+      websocket_failures: 0,
+      websocket_samples: [],
+    });
   });
 
   it("prepares, probes, and activates a proxied public-IP route", async () => {
@@ -152,6 +159,13 @@ describe("project-host public route migration", () => {
       ipAddress: "203.0.113.20",
       record_id: "stable-record",
     });
+    expect(probePublicRouteMock).toHaveBeenCalledTimes(2);
+    expect(probePublicRouteMock).toHaveBeenLastCalledWith({
+      public_url:
+        "https://host-37782b66-190d-41c3-a7e5-f5662e34cd4a-staging.example.com",
+      origin: "https://staging.example.com",
+      timeout_ms: 10_000,
+    });
     expect(row.metadata.public_route).toMatchObject({
       desired_mode: "cloudflare-proxy",
       active_mode: "cloudflare-proxy",
@@ -177,6 +191,7 @@ describe("project-host public route migration", () => {
       host_id: row.id,
       existing: row.metadata.cloudflare_tunnel,
     });
+    expect(probePublicRouteMock).toHaveBeenCalledTimes(1);
     expect(row.metadata.public_route).toMatchObject({
       desired_mode: "cloudflare-proxy",
       active_mode: "cloudflare-tunnel",
