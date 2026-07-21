@@ -551,6 +551,13 @@ describe("project-host runtime maintenance policy", () => {
       action: "restart",
     });
 
+    row.metadata.public_route = { active_mode: "cloudflare-proxy" };
+    expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
+      action: "wait",
+      reason: "direct public route does not use Cloudflare Tunnel",
+    });
+    delete row.metadata.public_route;
+
     probe.failure_impact_suppressed = true;
     expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
       action: "wait",
