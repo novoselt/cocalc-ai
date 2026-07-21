@@ -2831,9 +2831,13 @@ apply_existing_project_io_policy() {
   local rbps wbps riops wiops weight _class
   if [ -r "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}" ]; then
     io_class="$(cat "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}")"
+    case "$io_class" in
+      standard|member|premium) ;;
+      *) io_class="standard" ;;
+    esac
   fi
   fields="$(project_io_policy_fields "$io_class")" || deny "project-io-policy-invalid" "$io_class"
-  IFS=$'\t' read -r mode mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops weight _class <<< "$fields"
+  IFS=$'\t' read -r mode mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops weight _class _policy_version _policy_profile _capacity_source <<< "$fields"
   if [ -w "$cgroup/io.weight" ]; then
     printf 'default %s\n' "$weight" > "$cgroup/io.weight"
   fi
@@ -2923,7 +2927,7 @@ configure_project_cgroup() {
     deny "project-cgroup-io-weight-invalid" "$io_weight"
   fi
   fields="$(project_io_policy_fields "$io_class")" || deny "project-io-policy-invalid" "$io_class"
-  IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops policy_weight io_class <<< "$fields"
+  IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops policy_weight io_class _policy_version _policy_profile _capacity_source <<< "$fields"
   if [ "$io_mode" = "enforce" ]; then
     io_weight="$policy_weight"
   fi
@@ -3830,7 +3834,7 @@ case "$cmd" in
       exit 2
     fi
     fields="$(project_io_policy_fields "$2")" || deny "project-io-policy-invalid" "$2"
-    IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops _weight _class <<< "$fields"
+    IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops _weight _class _policy_version _policy_profile _capacity_source <<< "$fields"
     if [ "$io_mode" = "enforce" ]; then
       verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$_pool_rbps" "$_pool_wbps" "$_pool_riops" "$_pool_wiops"
       verify_io_max "$(project_cgroup "$1")" "$io_mountpoint" "$rbps" "$wbps" "$riops" "$wiops"

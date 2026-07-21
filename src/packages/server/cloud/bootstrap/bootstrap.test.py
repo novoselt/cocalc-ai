@@ -1473,6 +1473,11 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('"policy_profile": policy_profile', script)
             self.assertIn('"capacity_source": capacity_source', script)
             self.assertIn('"pool_io_weight": io_weight.strip()', script)
+            self.assertIn(
+                "io_class _policy_version _policy_profile _capacity_source",
+                script,
+            )
+            self.assertIn('*) io_class="standard" ;;', script)
             self.assertIn('io_class="${12:-standard}"', script)
             self.assertIn("reconcile-project-io-policy)", script)
             self.assertIn(
