@@ -3097,6 +3097,7 @@ apply_project_network_process_limits() {
 
 reconcile_project_network_limits() {
   local attempt snapshot rules
+  configure_project_pool_hierarchy
   configure_project_network_table
   for attempt in $(seq 1 "$PROJECT_NETWORK_RECONCILE_ATTEMPTS"); do
     snapshot="$(run_project_network_nft -a list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN")"

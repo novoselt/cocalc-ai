@@ -1543,6 +1543,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 reconcile_body,
             )
             self.assertLess(
+                reconcile_body.index("configure_project_pool_hierarchy"),
+                reconcile_body.index("configure_project_network_table"),
+            )
+            self.assertLess(
                 reconcile_body.index(
                     'snapshot="$(run_project_network_nft -a list chain'
                 ),
