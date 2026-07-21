@@ -514,18 +514,6 @@ async function listTunnelsByName(
   );
 }
 
-async function deleteTunnel(
-  accountId: string,
-  token: string,
-  tunnelId: string,
-): Promise<void> {
-  await cloudflareRequest(
-    token,
-    "DELETE",
-    `accounts/${accountId}/cfd_tunnel/${tunnelId}`,
-  );
-}
-
 async function getTunnelToken(
   accountId: string,
   token: string,
@@ -628,7 +616,7 @@ async function ensureCloudflareTunnel(opts: {
     }
   }
 
-  if (!tunnelId || !tunnelSecret) {
+  if (!tunnelId) {
     const generatedSecret = crypto.randomBytes(32).toString("base64");
     try {
       created = await createTunnel(
@@ -646,36 +634,36 @@ async function ensureCloudflareTunnel(opts: {
         opts.token,
         tunnelName || opts.name,
       );
-      for (const tunnel of existing) {
-        if (!tunnel.id) continue;
-        try {
-          await deleteTunnel(opts.accountId, opts.token, tunnel.id);
-        } catch (deleteErr) {
-          if (!isNotFoundError(deleteErr)) {
-            throw deleteErr;
-          }
-        }
-      }
-      created = await createTunnel(
-        opts.accountId,
-        opts.token,
-        tunnelName || opts.name,
-        generatedSecret,
+      const reusable = existing.find(
+        (tunnel) => !!tunnel.id && !tunnel.deleted_at,
       );
+      if (!reusable?.id) {
+        throw err;
+      }
+      tunnelId = reusable.id;
+      tunnelName = reusable.name ?? tunnelName ?? opts.name;
+      logger.info("cloudflare tunnel adopted by name", {
+        tunnel_id: tunnelId,
+        ...opts.logContext,
+      });
     }
-    if (!created?.id || !created?.tunnel_secret) {
-      if (!created?.id) {
+    if (created) {
+      if (!created.id) {
         throw new Error("cloudflare tunnel create returned no id");
       }
+      tunnelId = created.id;
+      tunnelName = created.name ?? tunnelName ?? opts.name;
+      tunnelSecret = created.tunnel_secret ?? generatedSecret;
+      logger.info("cloudflare tunnel created", {
+        tunnel_id: tunnelId,
+        ...opts.logContext,
+      });
     }
-    tunnelId = created.id;
-    tunnelName = created.name ?? tunnelName ?? opts.name;
-    tunnelSecret = created.tunnel_secret ?? generatedSecret;
-    logger.info("cloudflare tunnel created", {
-      tunnel_id: tunnelId,
-      ...opts.logContext,
-    });
   }
+  if (!tunnelId) {
+    throw new Error("cloudflare tunnel has no id after reconciliation");
+  }
+  const activeTunnelId = tunnelId;
 
   let zoneIdValue: string;
   try {
@@ -695,7 +683,7 @@ async function ensureCloudflareTunnel(opts: {
           token: opts.token,
           zoneId: zoneIdValue,
           hostname: opts.hostname,
-          target: `${tunnelId}.cfargotunnel.com`,
+          target: `${activeTunnelId}.cfargotunnel.com`,
           record_id: opts.existing?.record_id,
         });
   let ssh_record_id: string | undefined;
@@ -704,7 +692,7 @@ async function ensureCloudflareTunnel(opts: {
       token: opts.token,
       zoneId: zoneIdValue,
       hostname: opts.ssh_hostname,
-      target: `${tunnelId}.cfargotunnel.com`,
+      target: `${activeTunnelId}.cfargotunnel.com`,
       record_id: opts.existing?.ssh_record_id,
     });
   }
@@ -713,7 +701,7 @@ async function ensureCloudflareTunnel(opts: {
     undefined;
   if (!token) {
     try {
-      token = await getTunnelToken(opts.accountId, opts.token, tunnelId);
+      token = await getTunnelToken(opts.accountId, opts.token, activeTunnelId);
     } catch (err) {
       logger.warn("cloudflare tunnel token fetch failed", {
         err,
@@ -721,12 +709,17 @@ async function ensureCloudflareTunnel(opts: {
       });
     }
   }
+  if (!token && !tunnelSecret) {
+    throw new Error(
+      `cloudflare tunnel ${activeTunnelId} has neither a connector token nor local credentials`,
+    );
+  }
 
   return {
-    id: tunnelId,
+    id: activeTunnelId,
     name: tunnelName ?? opts.name,
     hostname: opts.hostname,
-    tunnel_secret: tunnelSecret,
+    tunnel_secret: tunnelSecret ?? "",
     account_id: opts.accountId,
     record_id,
     ssh_hostname: opts.ssh_hostname,
