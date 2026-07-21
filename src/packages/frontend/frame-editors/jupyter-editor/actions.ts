@@ -9,6 +9,7 @@ Jupyter Frame Editor Actions
 
 import { delay } from "awaiting";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
+import { isJupyterNotebookFrameType } from "./util";
 import { markdown_to_slate } from "@cocalc/frontend/editors/slate/markdown-to-slate";
 import { JupyterActions } from "@cocalc/frontend/jupyter/browser-actions";
 import { toFragmentId } from "@cocalc/frontend/jupyter/heading-tag";
@@ -39,16 +40,6 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
   private syncConsoleTimer?: ReturnType<typeof setTimeout>;
   private syncConsoleInFlight = false;
 
-  private static NOTEBOOK_FRAME_TYPES = new Set<string>([
-    // Frame-tree node types are editor-spec keys (not EditorDescription.type).
-    "jupyter_cell_notebook",
-    "jupyter",
-  ]);
-
-  private isNotebookFrameType = (type?: string): boolean => {
-    return type != null && JupyterEditorActions.NOTEBOOK_FRAME_TYPES.has(type);
-  };
-
   _raw_default_frame_tree(): FrameTree {
     return { type: "jupyter_cell_notebook" };
   }
@@ -64,22 +55,38 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
     this.init_new_frame();
     this.init_changes_state();
 
-    this.store.on("close-frame", async ({ id, closingFile }) => {
+    this.store.on("close-frame", async ({ id, type: oldType, closingFile }) => {
+      // Capture the specific instance so that a rapid frame-type toggle
+      // (which emits close-frame twice in quick succession) can't end up
+      // closing a freshly-created replacement instance after the delay.
+      const actions = this.frame_actions[id];
+      if (actions == null) return;
       const closeFrameActions = () => {
-        const actions = this.frame_actions[id];
-        if (actions == null) return;
         actions.close();
-        delete this.frame_actions[id];
-      };
-
-      if (this.frame_actions[id] != null) {
-        if (closingFile) {
-          closeFrameActions();
-          return;
+        if (this.frame_actions[id] === actions) {
+          delete this.frame_actions[id];
         }
-        await delay(1);
+      };
+      if (closingFile) {
         closeFrameActions();
+        return;
       }
+      await delay(1);
+      // Toggling between jupyter_cell_notebook and jupyter_minimal uses
+      // the same CellNotebook component and the same NotebookFrameActions
+      // works for both types.  Closing and recreating on toggle just wipes
+      // this.jupyter_actions/this.store on the instance that still-mounted
+      // cell components hold via useNotebookFrameActions refs, so the next
+      // cell click crashes with "Cannot read properties of undefined
+      // (reading 'store')".  Keep the existing instance in that case.
+      const newType = this._get_frame_type(id);
+      if (
+        isJupyterNotebookFrameType(oldType) &&
+        isJupyterNotebookFrameType(newType)
+      ) {
+        return;
+      }
+      closeFrameActions();
     });
   }
 
@@ -107,7 +114,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
 
   private init_new_frame(): void {
     this.store.on("new-frame", ({ id, type }) => {
-      if (!this.isNotebookFrameType(type)) {
+      if (!isJupyterNotebookFrameType(type)) {
         return;
       }
       // important to do this *before* the frame is rendered,
@@ -119,7 +126,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
       const node = this._get_frame_node(id);
       if (node == null) return;
       const type = node.get("type");
-      if (this.isNotebookFrameType(type)) {
+      if (isJupyterNotebookFrameType(type)) {
         this.get_frame_actions(id);
       }
     }
@@ -344,7 +351,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
       throw Error(`no frame ${id}`);
     }
     const type = node.get("type");
-    if (this.isNotebookFrameType(type)) {
+    if (isJupyterNotebookFrameType(type)) {
       return (this.frame_actions[id] = new NotebookFrameActions(this, id));
     } else {
       return;
@@ -508,8 +515,14 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
     align: "center" | "top" = "center",
   ): Promise<void> {
     // Open or focus a notebook viewer and scroll to the given cell.
+    // Prefer an existing minimal frame over creating a new standard one.
     if (this._state === "closed") return;
-    const id = this.show_focused_frame_of_type("jupyter_cell_notebook");
+    const existingMinimal =
+      this._get_most_recent_active_frame_id_of_type("jupyter_minimal");
+    const frameType = existingMinimal
+      ? "jupyter_minimal"
+      : "jupyter_cell_notebook";
+    const id = this.show_focused_frame_of_type(frameType);
     const actions = this.get_frame_actions(id);
     if (actions == null) return;
     actions.set_cur_id(cell_id);
@@ -549,8 +562,15 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
       // deal with side chat in base class
       await super.gotoFragment(fragmentId);
     }
+    // Prefer an existing notebook frame (minimal or default) rather than
+    // always creating a jupyter_cell_notebook which overrides the saved layout.
+    const existingMinimal =
+      this._get_most_recent_active_frame_id_of_type("jupyter_minimal");
+    const frameType = existingMinimal
+      ? "jupyter_minimal"
+      : "jupyter_cell_notebook";
     const frameId = await this.waitUntilFrameReady({
-      type: "jupyter_cell_notebook",
+      type: frameType,
       syncdoc: this.jupyter_actions.syncdb,
     });
     if (!frameId) return;
