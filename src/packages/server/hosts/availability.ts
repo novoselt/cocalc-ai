@@ -26,6 +26,7 @@ const MAX_WINDOW_DAYS = 370;
 // false outage bars. Placement, recovery, and start/upgrade decisions use the
 // stricter 2 minute operational heartbeat window in hosts-normalization.ts.
 const HOST_AVAILABILITY_HEARTBEAT_GRACE_MS = 10 * 60 * 1000;
+const RUNTIME_FAILURES_BEFORE_DEGRADED = 2;
 const HOST_RUNNING_STALE_ALERT_MS = Math.max(
   60_000,
   Number(process.env.COCALC_HOST_RUNNING_STALE_ALERT_MS ?? 5 * 60_000),
@@ -430,6 +431,12 @@ export function classifyHostAvailabilitySnapshot(
   const syntheticProbe = metadata.runtime_synthetic_probe ?? {};
   const publicRouteProbe = metadata.public_route_probe ?? {};
   const runtimeStatus = `${runtimeHealth.status ?? ""}`.trim();
+  const transientRuntimeFailure =
+    runtimeStatus === "degraded" &&
+    runtimeHealth.ready === false &&
+    Number(runtimeHealth.consecutive_failures) > 0 &&
+    Number(runtimeHealth.consecutive_failures) <
+      RUNTIME_FAILURES_BEFORE_DEGRADED;
   const status = `${row.status ?? ""}`.trim();
   const lastSeen = normalizeDate(row.last_seen);
   const heartbeatFresh =
@@ -485,6 +492,7 @@ export function classifyHostAvailabilitySnapshot(
     status === "running" &&
     heartbeatFresh &&
     runtimeStatus &&
+    !transientRuntimeFailure &&
     (runtimeStatus !== "ready" || runtimeHealth.ready !== true)
   ) {
     return {
