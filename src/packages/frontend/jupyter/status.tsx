@@ -1076,7 +1076,16 @@ export function Kernel({
             )}
           </div>
           {!IS_MOBILE && (
-            <div style={{ flex: "0 0 auto", marginRight: "10px" }}>
+            <div
+              style={{
+                // flex wrapper so the inline-block button doesn't add
+                // baseline descender space and grow the status bar height
+                display: "flex",
+                alignItems: "center",
+                flex: "0 0 auto",
+                marginRight: "10px",
+              }}
+            >
               <SwitchToMinimalButton />
             </div>
           )}
