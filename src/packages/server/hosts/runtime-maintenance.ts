@@ -246,7 +246,20 @@ type PublicRouteFleetContext = {
   failed_hosts: number;
   failed_host_ids: string[];
   failure_classes: Record<string, number>;
+  healthy_origin_failures: number;
   correlated_failure: boolean;
+  shared_ingress_failure: boolean;
+};
+
+type PublicRouteProbeExecution = {
+  row: RuntimeHostRow;
+  claim: PublicRouteProbeClaim;
+  started_at: number;
+  result?:
+    | ProjectHostPublicRouteProbeResult
+    | ProjectHostPublicRouteProbeDiagnostic;
+  error?: unknown;
+  origin_health?: PublicRouteOriginAssessment;
 };
 
 type PublicRouteAutoRepairDecision =
@@ -409,7 +422,11 @@ function publicRouteProbeDue(row: RuntimeHostRow, nowMs = Date.now()): boolean {
   if (status === "running") {
     return nowMs - checkedAt >= PUBLIC_ROUTE_PROBE_CLAIM_TIMEOUT_MS;
   }
-  if (status === "failed" || status === "recovering") {
+  if (
+    status === "failed" ||
+    status === "fleet-failed" ||
+    status === "recovering"
+  ) {
     return nowMs - checkedAt >= PUBLIC_ROUTE_PROBE_FAILURE_RETRY_MS;
   }
   return nowMs - checkedAt >= PUBLIC_ROUTE_PROBE_SUCCESS_INTERVAL_MS;
@@ -423,6 +440,9 @@ function publicRouteProbeOutcome({
   result,
   error,
   alerted_at,
+  fleet,
+  origin_health,
+  suppress_failure_impact = false,
 }: {
   row: RuntimeHostRow;
   claim: PublicRouteProbeClaim;
@@ -433,13 +453,26 @@ function publicRouteProbeOutcome({
     | ProjectHostPublicRouteProbeDiagnostic;
   error?: unknown;
   alerted_at?: string;
+  fleet?: PublicRouteFleetContext;
+  origin_health?: PublicRouteOriginAssessment;
+  suppress_failure_impact?: boolean;
 }): Record<string, any> {
   const failed = error != null;
-  const consecutiveFailures = failed ? claim.previous_failures + 1 : 0;
-  const consecutiveSuccesses = failed ? 0 : claim.previous_successes + 1;
+  const consecutiveFailures = failed
+    ? suppress_failure_impact
+      ? claim.previous_failures
+      : claim.previous_failures + 1
+    : 0;
+  const consecutiveSuccesses = failed
+    ? suppress_failure_impact
+      ? claim.previous_successes
+      : 0
+    : claim.previous_successes + 1;
   const quarantined = failed
-    ? claim.was_quarantined ||
-      consecutiveFailures >= PUBLIC_ROUTE_PROBE_FAILURES_TO_QUARANTINE
+    ? suppress_failure_impact
+      ? claim.was_quarantined
+      : claim.was_quarantined ||
+        consecutiveFailures >= PUBLIC_ROUTE_PROBE_FAILURES_TO_QUARANTINE
     : claim.was_quarantined &&
       consecutiveSuccesses < PUBLIC_ROUTE_PROBE_SUCCESSES_TO_RECOVER;
   const incidentStartedAt = failed
@@ -448,7 +481,13 @@ function publicRouteProbeOutcome({
       ? claim.incident_started_at
       : undefined;
   return {
-    status: failed ? "failed" : quarantined ? "recovering" : "passed",
+    status: failed
+      ? suppress_failure_impact
+        ? "fleet-failed"
+        : "failed"
+      : quarantined
+        ? "recovering"
+        : "passed",
     claim_id: claim.claim_id,
     checked_at: checkedAt,
     host_boot_id: row.metadata?.host_boot_id,
@@ -459,6 +498,9 @@ function publicRouteProbeOutcome({
     quarantined,
     error: failed ? errorText(error) : undefined,
     result,
+    fleet,
+    origin_health,
+    failure_impact_suppressed: suppress_failure_impact || undefined,
     incident_started_at: incidentStartedAt,
     alerted_at: failed
       ? (alerted_at ?? claim.alerted_at)
@@ -504,6 +546,12 @@ function publicRouteAutoRepairDecision(
     return {
       action: "wait",
       reason: "host does not advertise tunnel restart support",
+    };
+  }
+  if (probe.failure_impact_suppressed === true) {
+    return {
+      action: "wait",
+      reason: "shared ingress failure suppresses per-host tunnel repair",
     };
   }
   if (probe.quarantined !== true) {
@@ -998,6 +1046,9 @@ async function finishPublicRouteProbe({
   result,
   error,
   alerted_at,
+  fleet,
+  origin_health,
+  suppress_failure_impact,
 }: {
   row: RuntimeHostRow;
   claim: PublicRouteProbeClaim;
@@ -1007,6 +1058,9 @@ async function finishPublicRouteProbe({
     | ProjectHostPublicRouteProbeDiagnostic;
   error?: unknown;
   alerted_at?: string;
+  fleet?: PublicRouteFleetContext;
+  origin_health?: PublicRouteOriginAssessment;
+  suppress_failure_impact?: boolean;
 }): Promise<Record<string, any>> {
   const probe = publicRouteProbeOutcome({
     row,
@@ -1016,6 +1070,9 @@ async function finishPublicRouteProbe({
     result,
     error,
     alerted_at,
+    fleet,
+    origin_health,
+    suppress_failure_impact,
   });
   await pool().query(
     `
@@ -1042,12 +1099,7 @@ async function executePublicRouteProbe({
   row: RuntimeHostRow;
   claim: PublicRouteProbeClaim;
   origin: string;
-}): Promise<{
-  passed: boolean;
-  quarantined: boolean;
-  recovered_alerted: boolean;
-  failure?: PublicRouteFailure;
-}> {
+}): Promise<PublicRouteProbeExecution> {
   const startedAt = Date.now();
   try {
     const result = await probeProjectHostPublicRoute({
@@ -1056,12 +1108,50 @@ async function executePublicRouteProbe({
       timeout_ms: PUBLIC_ROUTE_PROBE_REQUEST_TIMEOUT_MS,
       websocket_attempts: PUBLIC_ROUTE_PROBE_WEBSOCKET_ATTEMPTS,
     });
-    const probe = await finishPublicRouteProbe({
+    return { row, claim, started_at: startedAt, result };
+  } catch (err) {
+    return {
       row,
       claim,
-      startedAt,
-      result,
-    });
+      started_at: startedAt,
+      result: projectHostPublicRouteProbeDiagnostic(err),
+      error: err,
+    };
+  }
+}
+
+async function finalizePublicRouteProbe({
+  execution,
+  fleet,
+}: {
+  execution: PublicRouteProbeExecution;
+  fleet: PublicRouteFleetContext;
+}): Promise<{
+  passed: boolean;
+  quarantined: boolean;
+  recovered_alerted: boolean;
+  failure?: PublicRouteFailure;
+}> {
+  const {
+    row,
+    claim,
+    started_at: startedAt,
+    result,
+    error,
+    origin_health,
+  } = execution;
+  const probe = await finishPublicRouteProbe({
+    row,
+    claim,
+    startedAt,
+    result,
+    error,
+    fleet: error == null ? undefined : fleet,
+    origin_health,
+    suppress_failure_impact:
+      error != null && fleet.shared_ingress_failure === true,
+  });
+  if (error == null) {
     logger.info("project-host public route probe passed", {
       host_id: row.id,
       host_name: hostName(row),
@@ -1074,35 +1164,30 @@ async function executePublicRouteProbe({
       quarantined: probe.quarantined === true,
       recovered_alerted: publicRouteEscalationRecovered(claim, probe),
     };
-  } catch (err) {
-    const probe = await finishPublicRouteProbe({
-      row,
-      claim,
-      startedAt,
-      result: projectHostPublicRouteProbeDiagnostic(err),
-      error: err,
-    });
-    logger.warn("project-host public route probe failed", {
-      host_id: row.id,
-      host_name: hostName(row),
-      duration_ms: Date.now() - startedAt,
-      consecutive_failures: probe.consecutive_failures,
-      quarantined: probe.quarantined,
-      err: errorText(err),
-    });
-    const failure: PublicRouteFailure = {
-      row,
-      error: errorText(err),
-      consecutive_failures: probe.consecutive_failures,
-      probe,
-    };
-    return {
-      passed: false,
-      quarantined: probe.quarantined === true,
-      recovered_alerted: false,
-      failure,
-    };
   }
+  logger.warn("project-host public route probe failed", {
+    host_id: row.id,
+    host_name: hostName(row),
+    duration_ms: Date.now() - startedAt,
+    consecutive_failures: probe.consecutive_failures,
+    quarantined: probe.quarantined,
+    failure_impact_suppressed: probe.failure_impact_suppressed === true,
+    err: errorText(error),
+  });
+  const failure: PublicRouteFailure = {
+    row,
+    error: errorText(error),
+    consecutive_failures: probe.consecutive_failures,
+    probe,
+    fleet,
+    origin_health,
+  };
+  return {
+    passed: false,
+    quarantined: probe.quarantined === true,
+    recovered_alerted: false,
+    failure,
+  };
 }
 
 function publicRouteFailureClass(error: string): string {
@@ -1129,55 +1214,39 @@ function publicRouteFleetContext({
     const key = publicRouteFailureClass(failure.error);
     failureClasses[key] = (failureClasses[key] ?? 0) + 1;
   }
+  const healthyOriginFailures = failures.filter(
+    ({ origin_health }) => origin_health?.status === "healthy",
+  ).length;
+  const ingressFailures =
+    (failureClasses.timeout ?? 0) + (failureClasses.cloudflare_52x ?? 0);
+  const sharedIngressFailure =
+    checked_hosts >= 3 &&
+    failures.length >= 2 &&
+    failures.length / checked_hosts >= 0.5 &&
+    healthyOriginFailures === failures.length &&
+    ingressFailures === failures.length;
   return {
     checked_hosts,
     passed_hosts: checked_hosts - failures.length,
     failed_hosts: failures.length,
     failed_host_ids: failures.map(({ row }) => row.id).slice(0, 32),
     failure_classes: failureClasses,
+    healthy_origin_failures: healthyOriginFailures,
     correlated_failure: failures.length >= 2,
+    shared_ingress_failure: sharedIngressFailure,
   };
 }
 
-async function attachPublicRouteFleetContext({
-  failures,
-  fleet,
-}: {
-  failures: PublicRouteFailure[];
-  fleet: PublicRouteFleetContext;
-}): Promise<void> {
-  await Promise.all(
-    failures.map(async (failure) => {
-      failure.fleet = fleet;
-      failure.probe.fleet = fleet;
-      await pool().query(
-        `
-          UPDATE project_hosts
-          SET metadata=jsonb_set(
-            COALESCE(metadata, '{}'::jsonb),
-            '{public_route_probe,fleet}',
-            $3::jsonb,
-            true
-          ), updated=NOW()
-          WHERE id=$1
-            AND metadata -> 'public_route_probe' ->> 'claim_id'=$2
-        `,
-        [failure.row.id, failure.probe.claim_id, JSON.stringify(fleet)],
-      );
-    }),
-  );
-}
-
 async function assessPublicRouteOrigin(
-  failure: PublicRouteFailure,
+  execution: PublicRouteProbeExecution,
 ): Promise<void> {
   const startedAt = Date.now();
   let assessment: PublicRouteOriginAssessment;
   try {
     const client = createHostControlClient({
-      host_id: failure.row.id,
+      host_id: execution.row.id,
       client: await getExplicitHostControlClient({
-        host_id: failure.row.id,
+        host_id: execution.row.id,
         fresh: true,
       }),
       timeout: PUBLIC_ROUTE_ORIGIN_PROBE_TIMEOUT_MS,
@@ -1197,22 +1266,7 @@ async function assessPublicRouteOrigin(
       error: errorText(err),
     };
   }
-  failure.origin_health = assessment;
-  failure.probe.origin_health = assessment;
-  await pool().query(
-    `
-      UPDATE project_hosts
-      SET metadata=jsonb_set(
-        COALESCE(metadata, '{}'::jsonb),
-        '{public_route_probe,origin_health}',
-        $3::jsonb,
-        true
-      ), updated=NOW()
-      WHERE id=$1
-        AND metadata -> 'public_route_probe' ->> 'claim_id'=$2
-    `,
-    [failure.row.id, failure.probe.claim_id, JSON.stringify(assessment)],
-  );
+  execution.origin_health = assessment;
 }
 
 async function alertPublicRouteFailures({
@@ -1232,8 +1286,12 @@ async function alertPublicRouteFailures({
       `${failures.length} public project-host browser route${failures.length === 1 ? " requires" : "s require"} operator attention after automatic monitoring and recovery.`,
       `site=${sites}`,
       `origin=${origin}`,
-      "Affected hosts that crossed the repeated-failure threshold are quarantined from placement because browser CORS/session traffic may not reach them.",
-      "Cloudflared is restarted only when an independent host-local origin probe succeeds; an unhealthy or unknown origin is preserved for investigation instead.",
+      failures[0]?.fleet?.shared_ingress_failure
+        ? "The failures were classified as a shared ingress incident because at least half of the fleet failed with timeout/Cloudflare 52x errors while every checked host-local origin remained healthy. Individual failure counters, placement quarantine, and per-host tunnel restarts were suppressed."
+        : "Affected hosts that crossed the repeated-failure threshold are quarantined from placement because browser CORS/session traffic may not reach them.",
+      failures[0]?.fleet?.shared_ingress_failure
+        ? "Investigate the shared DNS, Cloudflare, firewall, or probe path before changing individual hosts."
+        : "Cloudflared is restarted only when an independent host-local origin probe succeeds; an unhealthy or unknown origin is preserved for investigation instead.",
       `fleet=${JSON.stringify(failures[0]?.fleet ?? {})}`,
       "",
       ...failures.map(({ row, error, consecutive_failures, origin_health }) =>
@@ -1335,6 +1393,11 @@ async function claimPublicRouteAutoRepair(
           NOW() - ($5::double precision * INTERVAL '1 millisecond')
         AND target.metadata ->> 'cloudflared_restart_supported'='true'
         AND target.metadata -> 'public_route_probe' ->> 'claim_id'=$4
+        AND COALESCE(
+          target.metadata -> 'public_route_probe'
+            ->> 'failure_impact_suppressed',
+          'false'
+        ) <> 'true'
         AND target.metadata -> 'public_route_probe' ->> 'quarantined'='true'
         AND target.metadata -> 'public_route_probe' -> 'origin_health'
           ->> 'status'='healthy'
@@ -1636,20 +1699,36 @@ export async function runProjectHostPublicRouteProbes(): Promise<{
       claim: PublicRouteProbeClaim;
     } => entry.claim != null,
   );
-  const results = await Promise.all(
+  const executions = await Promise.all(
     claimed.map(({ row, claim }) =>
       executePublicRouteProbe({ row, claim, origin }),
+    ),
+  );
+  const failedExecutions = executions.filter(
+    (execution) => execution.error != null,
+  );
+  await Promise.all(failedExecutions.map(assessPublicRouteOrigin));
+  const pendingFailures: PublicRouteFailure[] = failedExecutions.map(
+    ({ row, error, origin_health }) => ({
+      row,
+      error: errorText(error),
+      consecutive_failures: 0,
+      probe: {},
+      origin_health,
+    }),
+  );
+  const fleet = publicRouteFleetContext({
+    checked_hosts: executions.length,
+    failures: pendingFailures,
+  });
+  const results = await Promise.all(
+    executions.map((execution) =>
+      finalizePublicRouteProbe({ execution, fleet }),
     ),
   );
   const allFailures = results
     .map(({ failure }) => failure)
     .filter((failure): failure is PublicRouteFailure => failure != null);
-  await Promise.all(allFailures.map(assessPublicRouteOrigin));
-  const fleet = publicRouteFleetContext({
-    checked_hosts: results.length,
-    failures: allFailures,
-  });
-  await attachPublicRouteFleetContext({ failures: allFailures, fleet });
   const failures = (
     await Promise.all(
       allFailures

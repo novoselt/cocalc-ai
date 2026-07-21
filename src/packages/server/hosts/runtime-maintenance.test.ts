@@ -425,6 +425,67 @@ describe("project-host runtime maintenance policy", () => {
     expect(secondSuccess.alerted_at).toBeUndefined();
   });
 
+  it("classifies majority ingress failures with healthy origins as shared", () => {
+    const failures: any[] = [
+      "public route timed out",
+      "HTTP 522 from Cloudflare",
+      "TimeoutError: operation aborted",
+    ].map((error, index) => ({
+      row: degradedCloudHost({ name: `host-${index}` }),
+      error,
+      consecutive_failures: 0,
+      probe: {},
+      origin_health: {
+        status: "healthy",
+        checked_at: new Date(NOW).toISOString(),
+        duration_ms: 2,
+      },
+    }));
+
+    expect(
+      _test.publicRouteFleetContext({ checked_hosts: 4, failures }),
+    ).toMatchObject({
+      checked_hosts: 4,
+      failed_hosts: 3,
+      healthy_origin_failures: 3,
+      failure_classes: { timeout: 2, cloudflare_52x: 1 },
+      correlated_failure: true,
+      shared_ingress_failure: true,
+    });
+
+    failures[0].origin_health.status = "unknown";
+    expect(
+      _test.publicRouteFleetContext({ checked_hosts: 4, failures }),
+    ).toMatchObject({
+      healthy_origin_failures: 2,
+      shared_ingress_failure: false,
+    });
+  });
+
+  it("preserves host failure state during a shared ingress incident", () => {
+    const outcome = _test.publicRouteProbeOutcome({
+      row: degradedCloudHost(),
+      claim: {
+        claim_id: "shared-incident-claim",
+        previous_failures: 1,
+        previous_successes: 1,
+        was_quarantined: false,
+      },
+      checkedAt: new Date(NOW).toISOString(),
+      duration_ms: 10_000,
+      error: new Error("public route timed out"),
+      suppress_failure_impact: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "fleet-failed",
+      consecutive_failures: 1,
+      consecutive_successes: 1,
+      quarantined: false,
+      failure_impact_suppressed: true,
+    });
+  });
+
   it("escalates persistent or correlated public-route incidents once", () => {
     const row = degradedCloudHost();
     const failure = {
@@ -441,7 +502,9 @@ describe("project-host runtime maintenance policy", () => {
         failed_hosts: 1,
         failed_host_ids: [row.id],
         failure_classes: { timeout: 1 },
+        healthy_origin_failures: 1,
         correlated_failure: false,
+        shared_ingress_failure: false,
       },
     };
     expect(_test.publicRouteFailureEscalationDue(failure, NOW)).toBe(false);
@@ -473,7 +536,7 @@ describe("project-host runtime maintenance policy", () => {
   });
 
   it("only repairs quarantined capable hosts outside the cooldown", () => {
-    const probe = {
+    const probe: Record<string, any> = {
       status: "failed",
       claim_id: "probe-claim",
       quarantined: true,
@@ -487,6 +550,13 @@ describe("project-host runtime maintenance policy", () => {
     expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
       action: "restart",
     });
+
+    probe.failure_impact_suppressed = true;
+    expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
+      action: "wait",
+      reason: "shared ingress failure suppresses per-host tunnel repair",
+    });
+    delete probe.failure_impact_suppressed;
 
     row.metadata.cloudflared_restart_supported = false;
     expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({

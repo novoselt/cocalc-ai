@@ -15,6 +15,9 @@ const ensurePublicIngressMock = jest.fn();
 const reconcileBootstrapMock = jest.fn();
 const probePublicRouteMock = jest.fn();
 
+process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_CONFIRMATION_MS = "0";
+process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_SUCCESS_INTERVAL_MS = "0";
+
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
   default: () => ({ query: queryMock }),
@@ -159,7 +162,7 @@ describe("project-host public route migration", () => {
       ipAddress: "203.0.113.20",
       record_id: "stable-record",
     });
-    expect(probePublicRouteMock).toHaveBeenCalledTimes(2);
+    expect(probePublicRouteMock).toHaveBeenCalledTimes(4);
     expect(probePublicRouteMock).toHaveBeenLastCalledWith({
       public_url:
         "https://host-37782b66-190d-41c3-a7e5-f5662e34cd4a-staging.example.com",
