@@ -68,6 +68,7 @@ import {
   RootfsScanStatus,
   useRootfsScanEnabled,
 } from "@cocalc/frontend/rootfs/scan-status";
+import RootfsImageSearch from "@cocalc/frontend/rootfs/image-search";
 import {
   ROOTFS_PROJECT_PRESET_LABELS,
   ROOTFS_PROJECT_PRESET_TAGS,
@@ -1835,11 +1836,9 @@ export default function RootFilesystemImage({
                     gridTemplateColumns: "minmax(0, 1fr) auto",
                   }}
                 >
-                  <Input.Search
-                    allowClear
-                    disabled={rootfsLoading}
-                    onChange={(e) => setRootfsSearch(e.target.value)}
-                    placeholder="Search by name, image, publisher, tag, or version"
+                  <RootfsImageSearch
+                    loading={rootfsLoading}
+                    onChange={setRootfsSearch}
                     value={rootfsSearch}
                   />
                   <Space wrap size="small">
