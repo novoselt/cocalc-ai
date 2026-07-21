@@ -5455,6 +5455,48 @@ def install_node(cfg: BootstrapConfig) -> None:
     run_cmd(cfg, ["bash", "-lc", install_cmd], "install node", as_user=cfg.ssh_user)
 
 
+def configure_node_bind_service_capability(cfg: BootstrapConfig) -> None:
+    direct_port = next(
+        (
+            line.split("=", 1)[1].strip()
+            for line in cfg.env_lines
+            if line.startswith("COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT=")
+        ),
+        "",
+    )
+    if not direct_port:
+        return
+    if shutil.which("setcap") is None:
+        raise RuntimeError(
+            "setcap is required for the unprivileged project-host HTTPS listener"
+        )
+    nvm_dir = Path(runtime_home(cfg)) / ".nvm"
+    result = run_cmd(
+        cfg,
+        [
+            "bash",
+            "-lc",
+            f'export NVM_DIR="{nvm_dir}"; . "$NVM_DIR/nvm.sh"; nvm which default',
+        ],
+        "resolve project-host node binary",
+        as_user=cfg.ssh_user,
+    )
+    output_lines = [line.strip() for line in (result.stdout or "").splitlines()]
+    node_path = Path(output_lines[-1]).resolve() if output_lines else None
+    versions_root = (nvm_dir / "versions" / "node").resolve()
+    if (
+        node_path is None
+        or not node_path.is_file()
+        or not node_path.is_relative_to(versions_root)
+    ):
+        raise RuntimeError("unable to resolve the project-host nvm node binary")
+    run_cmd(
+        cfg,
+        ["setcap", "cap_net_bind_service=+ep", str(node_path)],
+        "allow project-host node to bind HTTPS port 443",
+    )
+
+
 def write_wrapper(cfg: BootstrapConfig) -> None:
     host_dir = project_host_runtime_root(cfg)
     bin_dir = host_dir / "bin"
@@ -7024,8 +7066,25 @@ def configure_cloudflared_with_options(
     if not cfg.cloudflared.enabled:
         return
     cloudflared_missing = shutil.which("cloudflared") is None
-    service_changed = install_package or cloudflared_missing
-    if install_package or cloudflared_missing:
+    should_install = install_package or cloudflared_missing
+    if not should_install:
+        installed = run_cmd(
+            cfg,
+            ["/usr/bin/cloudflared", "--version"],
+            "inspect cloudflared version",
+            check=False,
+            timeout=15,
+        )
+        match = re.search(r"cloudflared version\s+([^\s(]+)", installed.stdout or "")
+        installed_version = match.group(1) if match else "unknown"
+        should_install = installed_version != CLOUDFLARED_VERSION
+        if should_install:
+            log_line(
+                cfg,
+                f"bootstrap: upgrading cloudflared version drift installed={installed_version} expected={CLOUDFLARED_VERSION}",
+            )
+    service_changed = should_install
+    if should_install:
         log_line(cfg, f"bootstrap: installing cloudflared {CLOUDFLARED_VERSION}")
         arch = cfg.expected_arch
         expected_sha256 = CLOUDFLARED_DEB_SHA256.get(arch)
@@ -7042,20 +7101,6 @@ def configure_cloudflared_with_options(
         run_cmd(cfg, ["dpkg", "-i", "/tmp/cloudflared.deb"], "install cloudflared")
     else:
         log_line(cfg, "bootstrap: reconciling cloudflared config")
-        installed = run_cmd(
-            cfg,
-            ["/usr/bin/cloudflared", "--version"],
-            "inspect cloudflared version",
-            check=False,
-            timeout=15,
-        )
-        match = re.search(r"cloudflared version\s+([^\s(]+)", installed.stdout or "")
-        installed_version = match.group(1) if match else "unknown"
-        if installed_version != CLOUDFLARED_VERSION:
-            log_line(
-                cfg,
-                f"bootstrap: cloudflared version drift installed={installed_version} expected={CLOUDFLARED_VERSION}; leaving existing install unchanged",
-            )
     cloudflared_dir = Path("/etc/cloudflared")
     cloudflared_dir.mkdir(parents=True, exist_ok=True)
     credentials_path = cloudflared_dir / f"{cfg.cloudflared.tunnel_id}.json"
@@ -7435,6 +7480,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         extract_bundle(cfg, cfg.tools_bundle)
         report_bootstrap_status(cfg, "running", "Installing runtime tools")
         install_node(cfg)
+        configure_node_bind_service_capability(cfg)
         write_wrapper(cfg)
         write_helpers(cfg)
         configure_runtime_sudoers(cfg)
@@ -7464,6 +7510,7 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
         configure_runtime_sudoers(cfg)
         verify_runtime_sudoers(cfg)
         reconcile_project_network_limits(cfg)
+        configure_cloudflared_with_options(cfg, install_package=False)
         record_operation_success(cfg, "reconcile")
         report_bootstrap_status(cfg, "done", "Privileged host helpers reconciled")
         log_line(cfg, "bootstrap: helper-only reconcile completed successfully")

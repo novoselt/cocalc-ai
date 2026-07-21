@@ -1,5 +1,7 @@
 import {
   DisksClient,
+  FirewallsClient,
+  GlobalOperationsClient,
   ImagesClient,
   InstancesClient,
   ZoneOperationsClient,
@@ -11,8 +13,12 @@ import type {
   CloudProvider,
   HostRuntime,
   HostSpec,
+  PublicIngressSpec,
   RemoteInstance,
 } from "./types";
+
+const PROJECT_HOST_PUBLIC_HTTPS_FIREWALL = "cocalc-project-host-public-https";
+const PROJECT_HOST_PUBLIC_HTTPS_TAG = "cocalc-project-host-public-https";
 
 type GcpCredentials = {
   service_account_json?: string;
@@ -396,6 +402,37 @@ async function waitUntilOperationComplete({
       .filter(Boolean)
       .join("; ");
     throw new Error(summary || "gcp operation failed");
+  }
+}
+
+async function waitUntilGlobalOperationComplete({
+  response,
+  credentials,
+}: {
+  response: any;
+  credentials: any;
+}) {
+  let operation = response?.latestResponse ?? response;
+  if (!operation?.name) return;
+  const operationsClient = new GlobalOperationsClient(credentials);
+  while (operation.status !== "DONE") {
+    const [nextOperation] = await operationsClient.wait({
+      operation: operation.name,
+      project: credentials.projectId,
+    });
+    operation = nextOperation;
+  }
+  const errors = Array.isArray(operation?.error?.errors)
+    ? operation.error.errors
+    : [];
+  if (errors.length > 0) {
+    const summary = errors
+      .map((err: { code?: string; message?: string }) =>
+        [err?.code, err?.message].filter(Boolean).join(": "),
+      )
+      .filter(Boolean)
+      .join("; ");
+    throw new Error(summary || "gcp global operation failed");
   }
 }
 
@@ -876,6 +913,124 @@ export class GcpProvider implements CloudProvider {
     }
     const client = new InstancesClient(credentials);
     await ensureSshMetadata(runtime, credentials, client);
+  }
+
+  async ensurePublicIngress(
+    runtime: HostRuntime,
+    spec: PublicIngressSpec,
+    creds: any,
+  ): Promise<void> {
+    if (!runtime.zone) {
+      throw new Error("gcp.ensurePublicIngress requires zone");
+    }
+    const ports = Array.from(
+      new Set(
+        (spec.ports ?? [])
+          .map(Number)
+          .filter(
+            (port) => Number.isInteger(port) && port > 0 && port <= 65_535,
+          ),
+      ),
+    ).sort((a, b) => a - b);
+    const sourceRanges = Array.from(
+      new Set(
+        (spec.source_ranges ?? [])
+          .map((range) => `${range ?? ""}`.trim())
+          .filter(Boolean),
+      ),
+    ).sort();
+    if (ports.length === 0) {
+      throw new Error("gcp.ensurePublicIngress requires at least one port");
+    }
+    if (sourceRanges.length === 0) {
+      throw new Error(
+        "gcp.ensurePublicIngress requires at least one source range",
+      );
+    }
+
+    const credentials = parseCredentials(creds ?? {});
+    const firewalls = new FirewallsClient(credentials);
+    const firewallResource = {
+      name: PROJECT_HOST_PUBLIC_HTTPS_FIREWALL,
+      description:
+        "CoCalc project-host HTTPS ingress from Cloudflare proxy edges",
+      network: `projects/${credentials.projectId}/global/networks/default`,
+      direction: "INGRESS",
+      priority: 1000,
+      disabled: false,
+      allowed: [
+        {
+          IPProtocol: "tcp",
+          ports: ports.map(String),
+        },
+      ],
+      sourceRanges,
+      targetTags: [PROJECT_HOST_PUBLIC_HTTPS_TAG],
+    };
+
+    let firewallResponse: any;
+    try {
+      await firewalls.get({
+        project: credentials.projectId,
+        firewall: PROJECT_HOST_PUBLIC_HTTPS_FIREWALL,
+      });
+      [firewallResponse] = await firewalls.patch({
+        project: credentials.projectId,
+        firewall: PROJECT_HOST_PUBLIC_HTTPS_FIREWALL,
+        firewallResource,
+      });
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+      try {
+        [firewallResponse] = await firewalls.insert({
+          project: credentials.projectId,
+          firewallResource,
+        });
+      } catch (insertErr) {
+        if (!isAlreadyExistsError(insertErr)) throw insertErr;
+        [firewallResponse] = await firewalls.patch({
+          project: credentials.projectId,
+          firewall: PROJECT_HOST_PUBLIC_HTTPS_FIREWALL,
+          firewallResource,
+        });
+      }
+    }
+    await waitUntilGlobalOperationComplete({
+      response: firewallResponse,
+      credentials,
+    });
+
+    const instances = new InstancesClient(credentials);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const [instance] = await instances.get({
+        project: credentials.projectId,
+        zone: runtime.zone,
+        instance: runtime.instance_id,
+      });
+      const existingTags = Array.isArray(instance?.tags?.items)
+        ? instance.tags.items.map((tag) => `${tag}`)
+        : [];
+      if (existingTags.includes(PROJECT_HOST_PUBLIC_HTTPS_TAG)) return;
+      try {
+        const [response] = await instances.setTags({
+          project: credentials.projectId,
+          zone: runtime.zone,
+          instance: runtime.instance_id,
+          tagsResource: {
+            fingerprint: instance?.tags?.fingerprint,
+            items: [...existingTags, PROJECT_HOST_PUBLIC_HTTPS_TAG],
+          },
+        });
+        await waitUntilOperationComplete({
+          response,
+          zone: runtime.zone,
+          credentials,
+        });
+        return;
+      } catch (err) {
+        if (!isFingerprintConflictError(err) || attempt === 3) throw err;
+      }
+    }
   }
 
   async stopHost(runtime: HostRuntime, creds: any): Promise<void> {

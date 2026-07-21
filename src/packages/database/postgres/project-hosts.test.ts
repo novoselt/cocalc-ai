@@ -22,7 +22,7 @@ describe("upsertProjectHost", () => {
     await getPool().query("DELETE FROM project_hosts WHERE id=$1", [HOST_ID]);
   });
 
-  it("preserves hub-owned runtime deployment metadata across observations", async () => {
+  it("preserves hub-owned metadata across observations", async () => {
     await upsertProjectHost({
       id: HOST_ID,
       status: "running",
@@ -31,6 +31,9 @@ describe("upsertProjectHost", () => {
         runtime_deployments: {
           planned_project_host_transition: { operation_id: "untrusted" },
         },
+        public_route: { active_mode: "cloudflare-tunnel" },
+        dns: { record_id: "untrusted-record" },
+        cloudflare_tunnel: { id: "untrusted-tunnel" },
       },
     });
 
@@ -53,6 +56,19 @@ describe("upsertProjectHost", () => {
         }),
       ],
     );
+    await getPool().query(
+      `UPDATE project_hosts
+       SET metadata=metadata || $2::jsonb
+       WHERE id=$1`,
+      [
+        HOST_ID,
+        JSON.stringify({
+          public_route: { active_mode: "cloudflare-proxy" },
+          dns: { record_id: "control-plane-record" },
+          cloudflare_tunnel: { id: "control-plane-tunnel" },
+        }),
+      ],
+    );
 
     await upsertProjectHost({
       id: HOST_ID,
@@ -62,6 +78,9 @@ describe("upsertProjectHost", () => {
         runtime_deployments: {
           planned_project_host_transition: { operation_id: "stale-host" },
         },
+        public_route: { active_mode: "cloudflare-tunnel" },
+        dns: { record_id: "stale-host-record" },
+        cloudflare_tunnel: { id: "stale-host-tunnel" },
       },
     });
 
@@ -77,6 +96,9 @@ describe("upsertProjectHost", () => {
         },
         pending_automatic_convergence_retry: { runtime: true },
       },
+      public_route: { active_mode: "cloudflare-proxy" },
+      dns: { record_id: "control-plane-record" },
+      cloudflare_tunnel: { id: "control-plane-tunnel" },
     });
   });
 });

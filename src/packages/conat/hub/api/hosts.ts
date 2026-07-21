@@ -188,6 +188,7 @@ export const HOST_LRO_KINDS = [
   "host-upgrade-software",
   "host-runtime-fleet-rollout",
   "host-rollout-managed-components",
+  "host-public-route",
   "host-deprovision",
   "host-delete",
   "host-force-deprovision",
@@ -827,6 +828,8 @@ export interface HostPublicRouteProbe {
   cf_ray?: string;
 }
 
+export type HostPublicRouteMode = "cloudflare-tunnel" | "cloudflare-proxy";
+
 export interface HostBeesStatus {
   enabled: boolean;
   running: boolean;
@@ -1415,6 +1418,7 @@ export const hosts = {
   deleteHost: authFirstRequireAccount,
   upgradeHostSoftware: authFirstRequireAccount,
   reconcileHostSoftware: authFirstRequireAccount,
+  setHostPublicRouteMode: authFirstRequireAccount,
   listHostRuntimeDeployments: authFirstRequireAccount,
   getHostRuntimeDeploymentStatus: authFirstRequireAccount,
   setHostRuntimeDeployments: authFirstRequireAccount,
@@ -2011,6 +2015,11 @@ export interface Hosts {
     id: string;
     force_bootstrap?: boolean;
     bootstrap_scope?: HostBootstrapReconcileScope;
+  }) => Promise<HostLroResponse>;
+  setHostPublicRouteMode: (opts: {
+    account_id?: string;
+    id: string;
+    mode: HostPublicRouteMode;
   }) => Promise<HostLroResponse>;
   getHostManagedComponentStatus: (opts: {
     account_id?: string;

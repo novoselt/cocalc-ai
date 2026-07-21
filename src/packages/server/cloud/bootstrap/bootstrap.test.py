@@ -2681,6 +2681,92 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 )
             )
 
+    def test_reconcile_cloudflared_upgrades_version_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = replace(
+                make_cfg(tmpdir),
+                cloudflared=bootstrap.CloudflaredSpec(
+                    True,
+                    hostname="host.example.test",
+                    port=9002,
+                    token="token",
+                ),
+            )
+            recorded = []
+            downloads = []
+
+            original_run_cmd = bootstrap.run_cmd
+            original_download_file = bootstrap.download_file
+            original_verify_sha256 = bootstrap.verify_sha256
+            original_which = bootstrap.shutil.which
+            original_mkdir = Path.mkdir
+            original_write_text = Path.write_text
+            original_chmod = bootstrap.os.chmod
+            try:
+                def record_run(_cfg, args, desc, **kwargs):
+                    recorded.append((args, desc, kwargs))
+                    stdout = (
+                        "cloudflared version 2026.6.0 (built 2026-06-01)"
+                        if desc == "inspect cloudflared version"
+                        else ""
+                    )
+                    return bootstrap.subprocess.CompletedProcess(
+                        args, 0, stdout=stdout
+                    )
+
+                bootstrap.run_cmd = record_run
+                bootstrap.download_file = (
+                    lambda _cfg, url, dest, **kwargs: downloads.append(
+                        (url, dest, kwargs)
+                    )
+                )
+                bootstrap.verify_sha256 = lambda _cfg, path, expected: recorded.append(
+                    (["verify", path, expected], "verify cloudflared", {})
+                )
+                bootstrap.shutil.which = lambda name: (
+                    "/usr/bin/cloudflared"
+                    if name == "cloudflared"
+                    else original_which(name)
+                )
+                Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
+                Path.write_text = lambda self, _text, encoding="utf-8": 0  # type: ignore[method-assign]
+                bootstrap.os.chmod = lambda *_args, **_kwargs: None
+                bootstrap.configure_cloudflared_with_options(
+                    cfg, install_package=False
+                )
+            finally:
+                bootstrap.run_cmd = original_run_cmd
+                bootstrap.download_file = original_download_file
+                bootstrap.verify_sha256 = original_verify_sha256
+                bootstrap.shutil.which = original_which
+                Path.mkdir = original_mkdir  # type: ignore[method-assign]
+                Path.write_text = original_write_text  # type: ignore[method-assign]
+                bootstrap.os.chmod = original_chmod
+
+            self.assertEqual(
+                downloads,
+                [
+                    (
+                        "https://github.com/cloudflare/cloudflared/releases/download/2026.7.2/cloudflared-linux-amd64.deb",
+                        "/tmp/cloudflared.deb",
+                        {"attempts": 6},
+                    )
+                ],
+            )
+            self.assertTrue(
+                any(
+                    args == ["dpkg", "-i", "/tmp/cloudflared.deb"]
+                    and desc == "install cloudflared"
+                    for args, desc, _kwargs in recorded
+                )
+            )
+            self.assertTrue(
+                any(
+                    args == ["systemctl", "restart", "cocalc-cloudflared"]
+                    for args, _desc, _kwargs in recorded
+                )
+            )
+
     def test_configure_cloudflared_prefers_credentials_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = replace(
@@ -2703,7 +2789,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_exists = Path.exists
             original_chmod = bootstrap.os.chmod
             try:
-                bootstrap.run_cmd = lambda _cfg, args, _desc, **_kwargs: bootstrap.subprocess.CompletedProcess(args, 0)
+                bootstrap.run_cmd = lambda _cfg, args, desc, **_kwargs: bootstrap.subprocess.CompletedProcess(
+                    args,
+                    0,
+                    stdout=(
+                        f"cloudflared version {bootstrap.CLOUDFLARED_VERSION}"
+                        if desc == "inspect cloudflared version"
+                        else ""
+                    ),
+                )
                 bootstrap.shutil.which = lambda name: "/usr/bin/cloudflared"
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
                 Path.write_text = lambda self, text, encoding="utf-8": writes.append(  # type: ignore[method-assign]
@@ -2759,7 +2853,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             original_exists = Path.exists
             original_chmod = bootstrap.os.chmod
             try:
-                bootstrap.run_cmd = lambda _cfg, args, _desc, **_kwargs: bootstrap.subprocess.CompletedProcess(args, 0)
+                bootstrap.run_cmd = lambda _cfg, args, desc, **_kwargs: bootstrap.subprocess.CompletedProcess(
+                    args,
+                    0,
+                    stdout=(
+                        f"cloudflared version {bootstrap.CLOUDFLARED_VERSION}"
+                        if desc == "inspect cloudflared version"
+                        else ""
+                    ),
+                )
                 bootstrap.shutil.which = lambda name: "/usr/bin/cloudflared"
                 Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
                 Path.write_text = lambda self, text, encoding="utf-8": writes.append(  # type: ignore[method-assign]
@@ -2814,7 +2916,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             try:
                 def record_run(_cfg, args, desc, **kwargs):
                     commands.append((args, desc, kwargs))
-                    return bootstrap.subprocess.CompletedProcess(args, 0)
+                    return bootstrap.subprocess.CompletedProcess(
+                        args,
+                        0,
+                        stdout=(
+                            f"cloudflared version {bootstrap.CLOUDFLARED_VERSION}"
+                            if desc == "inspect cloudflared version"
+                            else ""
+                        ),
+                    )
 
                 def read_stored(self, encoding="utf-8"):
                     try:
@@ -2969,6 +3079,12 @@ class BootstrapModesTest(unittest.TestCase):
             ):
                 patch(name, lambda _cfg, name=name: events.append(name))
             patch(
+                "configure_cloudflared_with_options",
+                lambda _cfg, *, install_package: events.append(
+                    f"configure_cloudflared:{install_package}"
+                ),
+            )
+            patch(
                 "start_project_host",
                 lambda _cfg: self.fail("helper reconcile restarted project-host"),
             )
@@ -3005,6 +3121,7 @@ class BootstrapModesTest(unittest.TestCase):
                     "configure_runtime_sudoers",
                     "verify_runtime_sudoers",
                     "reconcile_project_network_limits",
+                    "configure_cloudflared:False",
                     "success:reconcile",
                 ],
             )

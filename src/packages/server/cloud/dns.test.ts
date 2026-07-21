@@ -140,6 +140,67 @@ describe("cloud dns", () => {
     expect(payload.proxied).toBe(true);
   });
 
+  it("atomically converts an existing tunnel CNAME into an A record", async () => {
+    fetchMock.mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/zones?")) {
+        return zoneResponse;
+      }
+      if (init?.method === "GET" && url.includes("/dns_records?")) {
+        return responseWith([
+          {
+            id: "tunnel-record",
+            name: "host-abc-dev.example.com",
+            type: "CNAME",
+            content: "tunnel.cfargotunnel.com",
+          },
+        ]);
+      }
+      if (
+        init?.method === "PUT" &&
+        url.includes("/dns_records/tunnel-record")
+      ) {
+        return responseWith({ id: "tunnel-record" });
+      }
+      return responseWith({});
+    });
+
+    const { ensureHostDns } = await import("./dns");
+    const result = await ensureHostDns({
+      host_id: "abc",
+      ipAddress: "203.0.113.9",
+    });
+
+    expect(result.record_id).toBe("tunnel-record");
+    const updateCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url).includes("/dns_records/tunnel-record") &&
+        init?.method === "PUT",
+    );
+    expect(JSON.parse(updateCall?.[1]?.body as string)).toMatchObject({
+      type: "A",
+      content: "203.0.113.9",
+      proxied: true,
+    });
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "POST"),
+    ).toBe(false);
+  });
+
+  it("loads Cloudflare IPv4 edge ranges", async () => {
+    fetchMock.mockResolvedValueOnce(
+      responseWith({
+        ipv4_cidrs: ["173.245.48.0/20", "103.21.244.0/22"],
+      }),
+    );
+
+    const { getCloudflareIpv4Cidrs } = await import("./dns");
+    await expect(getCloudflareIpv4Cidrs()).resolves.toEqual([
+      "103.21.244.0/22",
+      "173.245.48.0/20",
+    ]);
+  });
+
   it("dedupes existing A records for the same name", async () => {
     fetchMock.mockImplementation(async (input: any, init?: RequestInit) => {
       const url = String(input);
@@ -148,8 +209,16 @@ describe("cloud dns", () => {
       }
       if (init?.method === "GET" && url.includes("/dns_records?")) {
         return responseWith([
-          { id: "record-a", name: "host-abc-dev.example.com" },
-          { id: "record-b", name: "host-abc-dev.example.com" },
+          {
+            id: "record-a",
+            name: "host-abc-dev.example.com",
+            type: "A",
+          },
+          {
+            id: "record-b",
+            name: "host-abc-dev.example.com",
+            type: "A",
+          },
         ]);
       }
       if (init?.method === "PUT" && url.includes("/dns_records/record-a")) {

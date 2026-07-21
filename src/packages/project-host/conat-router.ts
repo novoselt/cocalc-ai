@@ -379,12 +379,20 @@ export function rewriteProjectHostConatProxyUrl(
 export function attachProjectHostConatRouterProxy({
   app,
   httpServer,
+  httpServers,
   target,
 }: {
   app: Application;
-  httpServer: HttpServer;
+  httpServer?: HttpServer;
+  httpServers?: readonly HttpServer[];
   target: string;
 }): void {
+  const ingressServers = httpServers ?? (httpServer ? [httpServer] : []);
+  if (ingressServers.length === 0) {
+    throw new Error(
+      "attachProjectHostConatRouterProxy requires at least one HTTP server",
+    );
+  }
   const proxyTarget = parseProxyTarget(target);
   const rewriteRequest = (req: IncomingMessage) => {
     const rewritten = rewriteProjectHostConatProxyUrl(req.url);
@@ -408,12 +416,14 @@ export function attachProjectHostConatRouterProxy({
     }
     void handleRequest(req, res);
   });
-  httpServer.prependListener("upgrade", (req, socket, head) => {
-    if (!rewriteProjectHostConatProxyUrl(req.url)) {
-      return;
-    }
-    void handleUpgrade(req, socket as any, head);
-  });
+  for (const ingressServer of ingressServers) {
+    ingressServer.prependListener("upgrade", (req, socket, head) => {
+      if (!rewriteProjectHostConatProxyUrl(req.url)) {
+        return;
+      }
+      void handleUpgrade(req, socket as any, head);
+    });
+  }
 }
 
 export function attachProjectHostHttpFallbackProxy({

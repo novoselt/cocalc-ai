@@ -9,6 +9,7 @@ import http from "node:http";
 import express from "express";
 import {
   attachProjectHostHttpFallbackProxy,
+  attachProjectHostConatRouterProxy,
   isProjectHostExternalConatRouterEnabled,
   isProjectHostManagedLocalConatRouter,
   resolveProjectHostConatRouterClusterName,
@@ -125,6 +126,18 @@ describe("project-host conat router helpers", () => {
     expect(
       rewriteProjectHostConatProxyUrl("/host/base/conat/socket"),
     ).toBeUndefined();
+  });
+
+  it("attaches conat upgrades to every ingress listener", () => {
+    const app = express();
+    const servers = [http.createServer(app), http.createServer(app)];
+    attachProjectHostConatRouterProxy({
+      app,
+      httpServers: servers,
+      target: "http://127.0.0.1:9999",
+    });
+    expect(servers[0].listenerCount("upgrade")).toBe(1);
+    expect(servers[1].listenerCount("upgrade")).toBe(1);
   });
 
   it("proxies non-conat ingress traffic to the project-host app upstream", async () => {

@@ -24,6 +24,7 @@ import type {
   HostRuntimeDeploymentUpsert,
   HostLroResponse,
   HostLroKind,
+  HostPublicRouteMode,
   HostRuntimeFleetRolloutRequest,
   HostRuntimeFleetRolloutResponse,
   HostProjectRow,
@@ -612,6 +613,7 @@ const HOST_UPGRADE_LRO_KIND = "host-upgrade-software";
 const HOST_RUNTIME_FLEET_ROLLOUT_LRO_KIND = "host-runtime-fleet-rollout";
 const HOST_ROLLOUT_MANAGED_COMPONENTS_LRO_KIND =
   "host-rollout-managed-components";
+const HOST_PUBLIC_ROUTE_LRO_KIND = "host-public-route";
 const HOST_DEPROVISION_LRO_KIND = "host-deprovision";
 const HOST_DELETE_LRO_KIND = "host-delete";
 const HOST_FORCE_DEPROVISION_LRO_KIND = "host-force-deprovision";
@@ -7477,6 +7479,37 @@ export async function reconcileHostSoftware({
         ? `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap:helpers`
         : `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap`
       : `${HOST_RECONCILE_LRO_KIND}:${row.id}`,
+  });
+}
+
+export async function setHostPublicRouteMode({
+  account_id,
+  id,
+  mode,
+}: {
+  account_id?: string;
+  id: string;
+  mode: HostPublicRouteMode;
+}): Promise<HostLroResponse> {
+  if (mode !== "cloudflare-tunnel" && mode !== "cloudflare-proxy") {
+    throw new Error(
+      "public route mode must be cloudflare-tunnel or cloudflare-proxy",
+    );
+  }
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .setHostPublicRouteMode({ account_id, id, mode });
+  }
+  const row = await loadHostForRootfsManagement(id, account_id);
+  assertHostRunningForUpgrade(row);
+  return await createHostLro({
+    kind: HOST_PUBLIC_ROUTE_LRO_KIND,
+    row,
+    account_id,
+    input: { id: row.id, account_id, mode },
+    dedupe_key: `${HOST_PUBLIC_ROUTE_LRO_KIND}:${row.id}`,
   });
 }
 
