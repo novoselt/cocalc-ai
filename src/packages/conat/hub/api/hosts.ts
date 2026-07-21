@@ -740,6 +740,7 @@ export interface HostIoContainmentMetrics {
   capability_reason?: string;
   pool_cgroup: string;
   pool_io_max?: string;
+  pool_io_weight?: string;
   pressure_some_percent?: number;
   pressure_full_percent?: number;
   pressure_some_total?: number;

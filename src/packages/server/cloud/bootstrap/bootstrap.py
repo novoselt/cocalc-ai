@@ -2721,7 +2721,22 @@ leaf_values = [integer(leaf, key, positive=require) for key in ("rbps", "wbps", 
 weight = integer(leaf, "weight", positive=True)
 if weight > 10000:
     raise ValueError("I/O weight exceeds 10000")
-print("\t".join(map(str, [mode, mountpoint, *pool_values, *leaf_values, weight, io_class])))
+profile = str(policy.get("profile") or "unconfigured")
+capacity_source = str(policy.get("capacitySource") or "unconfigured")
+for name, value in (("profile", profile), ("capacitySource", capacity_source)):
+    if "\\t" in value or "\\n" in value:
+        raise ValueError(f"invalid {name}")
+print("\\t".join(map(str, [
+    mode,
+    mountpoint,
+    *pool_values,
+    *leaf_values,
+    weight,
+    io_class,
+    policy["version"],
+    profile,
+    capacity_source,
+])))
 PY
 }
 
@@ -3827,7 +3842,7 @@ case "$cmd" in
       exit 2
     fi
     fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
-    IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _rest <<< "$fields"
+    IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _leaf_rbps _leaf_wbps _leaf_riops _leaf_wiops _weight _class policy_version policy_profile capacity_source <<< "$fields"
     if [ "$io_mode" = "enforce" ]; then
       verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$pool_rbps" "$pool_wbps" "$pool_riops" "$pool_wiops"
     fi
@@ -3847,13 +3862,17 @@ case "$cmd" in
     pool_io_max="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.max" 2>/dev/null || true)"
     pool_pressure="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.pressure" 2>/dev/null || true)"
     legacy_processes="$(cat "$(project_legacy_cgroup)/cgroup.procs" 2>/dev/null || true)"
-    /usr/bin/python3 - "$fields" "$device_rows" "$pool_io_max" "$pool_pressure" "$legacy_processes" <<'PY'
+    pool_io_weight="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)"
+    /usr/bin/python3 - "$fields" "$device_rows" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" <<'PY'
 import json
 import sys
 
-fields, rows, io_max, pressure, legacy = sys.argv[1:]
+fields, rows, io_max, io_weight, pressure, legacy = sys.argv[1:]
 parts = fields.split("\t")
 mode, mountpoint = parts[:2]
+policy_version = int(parts[12])
+policy_profile = parts[13]
+capacity_source = parts[14]
 devices = []
 for row in rows.splitlines():
     device, major_minor, scheduler = (row.split("\t") + [""])[:3]
@@ -3876,11 +3895,15 @@ for row in pressure.splitlines():
 
 print(json.dumps({
     "policy_mode": mode,
+    "policy_version": policy_version,
+    "policy_profile": policy_profile,
+    "capacity_source": capacity_source,
     "mountpoint": mountpoint,
     "filesystem": "btrfs",
-    "capability": "enabled" if mode == "enforce" else "available",
+    "capability": "validated" if mode == "enforce" else "available",
     "pool_cgroup": "/sys/fs/cgroup/cocalc-project-pool",
     "pool_io_max": io_max.strip(),
+    "pool_io_weight": io_weight.strip(),
     "devices": devices,
     "legacy_process_count": len(legacy.split()),
     **pressure_values,
