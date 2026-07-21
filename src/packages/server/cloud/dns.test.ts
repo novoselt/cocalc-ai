@@ -121,6 +121,31 @@ describe("cloud dns", () => {
     expect(record.proxied).toBe(true);
   });
 
+  it("reads the Cloudflare zone SSL mode without exposing credentials", async () => {
+    fetchMock.mockImplementation(async (input: any) => {
+      const url = String(input);
+      if (url.includes("/zones?")) return zoneResponse;
+      if (url.includes("/settings/ssl")) {
+        return responseWith({
+          value: "full",
+          editable: true,
+          modified_on: "2026-07-21T00:00:00Z",
+        });
+      }
+      return responseWith({});
+    });
+    (global as any).fetch = fetchMock;
+
+    const { getCloudflareZoneSslMode } = await import("./dns");
+    await expect(
+      getCloudflareZoneSslMode("host-abc-dev.example.com"),
+    ).resolves.toEqual({
+      value: "full",
+      editable: true,
+      modified_on: "2026-07-21T00:00:00Z",
+    });
+  });
+
   it("updates an existing record when record_id is provided", async () => {
     const { ensureHostDns } = await import("./dns");
     await ensureHostDns({

@@ -3,6 +3,7 @@ import type { HostSpec } from "../types";
 
 const insertMock = jest.fn();
 const getMock = jest.fn();
+const getEffectiveFirewallsMock = jest.fn();
 const diskGetMock = jest.fn();
 const diskInsertMock = jest.fn();
 const diskResizeMock = jest.fn();
@@ -40,6 +41,7 @@ jest.mock("@google-cloud/compute", () => {
   class InstancesClient {
     insert = insertMock;
     get = getMock;
+    getEffectiveFirewalls = getEffectiveFirewallsMock;
     attachDisk = attachDiskMock;
     detachDisk = detachDiskMock;
     setDiskAutoDelete = setDiskAutoDeleteMock;
@@ -97,6 +99,7 @@ describe("GcpProvider", () => {
   beforeEach(() => {
     insertMock.mockReset();
     getMock.mockReset();
+    getEffectiveFirewallsMock.mockReset();
     diskGetMock.mockReset();
     diskInsertMock.mockReset();
     diskResizeMock.mockReset();
@@ -146,6 +149,14 @@ describe("GcpProvider", () => {
     ]);
     getMock.mockResolvedValueOnce([
       {
+        networkInterfaces: [
+          {
+            name: "nic0",
+            network: "projects/proj-1/global/networks/default",
+            networkIP: "10.0.0.2",
+            accessConfigs: [{ natIP: "203.0.113.20" }],
+          },
+        ],
         tags: {
           fingerprint: "tag-fingerprint",
           items: ["existing-tag"],
@@ -154,6 +165,39 @@ describe("GcpProvider", () => {
     ]);
     setTagsMock.mockResolvedValueOnce([
       { latestResponse: { name: "tags-op", status: "DONE" } },
+    ]);
+    getEffectiveFirewallsMock.mockResolvedValueOnce([
+      {
+        firewalls: [
+          {
+            name: "cocalc-project-host-public-https",
+            priority: 1000,
+            direction: "INGRESS",
+            sourceRanges: ["103.21.244.0/22"],
+            targetTags: ["cocalc-project-host-public-https"],
+            allowed: [{ IPProtocol: "tcp", ports: ["443"] }],
+          },
+        ],
+        firewallPolicys: [
+          {
+            name: "organizations/1/firewallPolicies/2",
+            shortName: "org-policy",
+            type: "HIERARCHY",
+            rules: [
+              {
+                action: "goto_next",
+                direction: "INGRESS",
+                priority: 100,
+                ruleName: "delegate-ingress",
+                match: {
+                  srcIpRanges: ["0.0.0.0/0"],
+                  layer4Configs: [{ ipProtocol: "all" }],
+                },
+              },
+            ],
+          },
+        ],
+      },
     ]);
 
     const provider = new GcpProvider();
@@ -194,6 +238,13 @@ describe("GcpProvider", () => {
       }),
     );
     expect(result).toEqual({
+      instance: {
+        network: "projects/proj-1/global/networks/default",
+        network_interface: "nic0",
+        public_ip: "203.0.113.20",
+        private_ip: "10.0.0.2",
+        tags: ["existing-tag", "cocalc-project-host-public-https"],
+      },
       rule: {
         name: "cocalc-project-host-public-https",
         priority: 1000,
@@ -210,6 +261,41 @@ describe("GcpProvider", () => {
           denied: [{ IPProtocol: "tcp" }],
         },
       ],
+      effective_firewalls: {
+        firewalls: [
+          {
+            name: "cocalc-project-host-public-https",
+            priority: 1000,
+            direction: "INGRESS",
+            source_ranges: ["103.21.244.0/22"],
+            target_tags: ["cocalc-project-host-public-https"],
+            allowed: [{ IPProtocol: "tcp", ports: ["443"] }],
+            denied: [],
+          },
+        ],
+        policies: [
+          {
+            name: "organizations/1/firewallPolicies/2",
+            short_name: "org-policy",
+            type: "HIERARCHY",
+            priority: undefined,
+            rules: [
+              {
+                action: "goto_next",
+                direction: "INGRESS",
+                disabled: undefined,
+                priority: 100,
+                rule_name: "delegate-ingress",
+                source_ranges: ["0.0.0.0/0"],
+                destination_ranges: [],
+                layer4_configs: [{ ipProtocol: "all" }],
+                target_resources: [],
+                target_service_accounts: [],
+              },
+            ],
+          },
+        ],
+      },
     });
   });
 

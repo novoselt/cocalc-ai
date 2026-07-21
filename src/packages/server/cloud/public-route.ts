@@ -21,6 +21,7 @@ import {
   ensureHostDns,
   ensureProxiedAddressDns,
   getCloudflareIpv4Cidrs,
+  getCloudflareZoneSslMode,
 } from "./dns";
 import { getProviderContext } from "./provider-context";
 import { reconcileCloudHostBootstrapOverSsh } from "@cocalc/server/conat/api/hosts-bootstrap-reconcile";
@@ -193,6 +194,13 @@ async function prepareDirectRoute({
     throw new Error("GCP provider cannot reconcile public HTTPS ingress");
   }
 
+  let cloudflareOrigin: Record<string, any>;
+  try {
+    cloudflareOrigin = await getCloudflareZoneSslMode(stableHostname);
+  } catch (err) {
+    cloudflareOrigin = { error: `${err}` };
+  }
+
   await onProgress?.({
     phase: "firewall",
     message: "restricting direct HTTPS ingress to Cloudflare edges",
@@ -207,7 +215,10 @@ async function prepareDirectRoute({
   await onProgress?.({
     phase: "firewall",
     message: "direct HTTPS ingress is reconciled",
-    detail: { public_ingress: publicIngress ?? null },
+    detail: {
+      public_ingress: publicIngress ?? null,
+      cloudflare_origin: cloudflareOrigin,
+    },
     progress: 20,
   });
 
@@ -241,7 +252,7 @@ async function prepareDirectRoute({
       await probeCloudflareRoute({ hostname: probeHostname, origin });
     } catch (err) {
       throw new Error(
-        `${err}; provider ingress diagnostics: ${JSON.stringify(publicIngress ?? null)}`,
+        `${err}; provider ingress diagnostics: ${JSON.stringify(publicIngress ?? null)}; Cloudflare origin diagnostics: ${JSON.stringify(cloudflareOrigin)}`,
       );
     }
   } finally {

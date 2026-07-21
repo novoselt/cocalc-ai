@@ -11,6 +11,7 @@ const ensureHostDnsMock = jest.fn();
 const ensureAddressDnsMock = jest.fn();
 const deleteHostDnsMock = jest.fn();
 const getCloudflareIpv4CidrsMock = jest.fn();
+const getCloudflareZoneSslModeMock = jest.fn();
 const ensurePublicIngressMock = jest.fn();
 const reconcileBootstrapMock = jest.fn();
 const probePublicRouteMock = jest.fn();
@@ -39,6 +40,8 @@ jest.mock("./dns", () => ({
   ensureProxiedAddressDns: (...args: any[]) => ensureAddressDnsMock(...args),
   getCloudflareIpv4Cidrs: (...args: any[]) =>
     getCloudflareIpv4CidrsMock(...args),
+  getCloudflareZoneSslMode: (...args: any[]) =>
+    getCloudflareZoneSslModeMock(...args),
 }));
 
 jest.mock("./provider-context", () => ({
@@ -103,6 +106,7 @@ describe("project-host public route migration", () => {
     });
     siteUrlMock.mockResolvedValue("https://staging.example.com/");
     getCloudflareIpv4CidrsMock.mockResolvedValue(["173.245.48.0/20"]);
+    getCloudflareZoneSslModeMock.mockResolvedValue({ value: "full" });
     ensureAddressDnsMock.mockResolvedValue({
       name: "direct-check.example.com",
       record_id: "probe-record",

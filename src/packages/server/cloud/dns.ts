@@ -53,6 +53,12 @@ type DnsRecord = {
   type?: string;
 };
 
+export type CloudflareZoneSslMode = {
+  value?: string;
+  editable?: boolean;
+  modified_on?: string;
+};
+
 const CNAME_CONFLICT_RECORD_TYPES = new Set(["A", "AAAA"]);
 const ADDRESS_ROUTE_RECORD_TYPES = new Set(["A", "AAAA", "CNAME"]);
 
@@ -376,6 +382,22 @@ export async function getCloudflareIpv4Cidrs(): Promise<string[]> {
     throw new Error("cloudflare returned no IPv4 ranges");
   }
   return cidrs;
+}
+
+export async function getCloudflareZoneSslMode(
+  hostname: string,
+): Promise<CloudflareZoneSslMode> {
+  const { token, zoneId } = await getZoneClientForHostname(hostname);
+  const setting = await cloudflareRequest<{
+    value?: string;
+    editable?: boolean;
+    modified_on?: string;
+  }>(token, "GET", `zones/${zoneId}/settings/ssl`);
+  return {
+    value: `${setting?.value ?? ""}` || undefined,
+    editable: setting?.editable == null ? undefined : Boolean(setting.editable),
+    modified_on: `${setting?.modified_on ?? ""}` || undefined,
+  };
 }
 
 export async function deleteHostDns(opts: {
