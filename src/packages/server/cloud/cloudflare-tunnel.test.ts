@@ -119,6 +119,84 @@ describe("ensureCloudflareTunnelForHost", () => {
     expect(recordNames).not.toContain("host-abc-lite2b");
   });
 
+  it("retains the tunnel and ssh dns without replacing direct browser dns", async () => {
+    getServerSettingsMock = jest.fn(async () => ({
+      cloudflare_mode: "self",
+      dns: "staging.example.test",
+      project_hosts_cloudflare_tunnel_account_id: "account-id",
+      project_hosts_cloudflare_tunnel_api_token: "token",
+      project_hosts_cloudflare_tunnel_host_suffix: "staging.example.test",
+    }));
+    const fetchMock = jest.fn(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/zones?")) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            result: [{ name: "example.test", id: "zone-id" }],
+          }),
+        };
+      }
+      if (init?.method === "POST" && url.includes("/cfd_tunnel")) {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            result: {
+              id: "tunnel-id",
+              name: "tunnel-name",
+              tunnel_secret: "tunnel-secret",
+            },
+          }),
+        };
+      }
+      if (init?.method === "GET" && url.includes("/dns_records?")) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, result: [] }),
+        };
+      }
+      if (init?.method === "POST" && url.includes("/dns_records")) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, result: { id: "ssh-record" } }),
+        };
+      }
+      if (init?.method === "GET" && url.includes("/token")) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, result: "connector-token" }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ success: true, result: {} }),
+      };
+    });
+    (global as any).fetch = fetchMock;
+
+    const { ensureCloudflareTunnelForHost } =
+      await import("./cloudflare-tunnel");
+    const result = await ensureCloudflareTunnelForHost({
+      host_id: "abc",
+      publish_browser_dns: false,
+    });
+
+    const recordNames = fetchMock.mock.calls
+      .map(([, init]) => init?.body)
+      .filter(Boolean)
+      .map((body) => JSON.parse(String(body)).name)
+      .filter(Boolean);
+    expect(recordNames).not.toContain("host-abc-staging.example.test");
+    expect(recordNames).toContain("ssh-host-abc-staging.example.test");
+    expect(result).toMatchObject({
+      id: "tunnel-id",
+      record_id: undefined,
+      ssh_record_id: "ssh-record",
+    });
+  });
+
   it("preserves apex non-address records when creating the hub tunnel cname", async () => {
     getServerSettingsMock = jest.fn(async () => ({
       cloudflare_mode: "self",

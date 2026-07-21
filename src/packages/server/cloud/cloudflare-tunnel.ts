@@ -544,6 +544,7 @@ async function getTunnelToken(
 export async function ensureCloudflareTunnelForHost(opts: {
   host_id: string;
   existing?: CloudflareTunnel;
+  publish_browser_dns?: boolean;
 }): Promise<CloudflareTunnel | undefined> {
   const config = await getConfig();
   if (!config) return opts.existing;
@@ -563,6 +564,7 @@ export async function ensureCloudflareTunnelForHost(opts: {
     ssh_hostname: sshHostname,
     name: `${prefix}host-${opts.host_id}`,
     existing: opts.existing,
+    publish_browser_dns: opts.publish_browser_dns,
     logContext: { host_id: opts.host_id },
   });
 }
@@ -598,6 +600,7 @@ async function ensureCloudflareTunnel(opts: {
   ssh_hostname?: string;
   name: string;
   existing?: CloudflareTunnel;
+  publish_browser_dns?: boolean;
   logContext?: Record<string, unknown>;
 }): Promise<CloudflareTunnel> {
   let tunnelId = opts.existing?.id;
@@ -683,13 +686,18 @@ async function ensureCloudflareTunnel(opts: {
     }
     zoneIdValue = await getZoneIdForHostname(opts.token, opts.hostname);
   }
-  const record_id = await ensureTunnelDns({
-    token: opts.token,
-    zoneId: zoneIdValue,
-    hostname: opts.hostname,
-    target: `${tunnelId}.cfargotunnel.com`,
-    record_id: opts.existing?.record_id,
-  });
+  // Direct project-host ingress still keeps a ready tunnel for rollback and
+  // SSH, but its browser hostname must remain a proxied A record.
+  const record_id =
+    opts.publish_browser_dns === false
+      ? opts.existing?.record_id
+      : await ensureTunnelDns({
+          token: opts.token,
+          zoneId: zoneIdValue,
+          hostname: opts.hostname,
+          target: `${tunnelId}.cfargotunnel.com`,
+          record_id: opts.existing?.record_id,
+        });
   let ssh_record_id: string | undefined;
   if (opts.ssh_hostname) {
     ssh_record_id = await ensureTunnelDns({
