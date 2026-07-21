@@ -1468,6 +1468,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("verify-project-network-limits)", script)
             self.assertIn("verify-project-io-limits)", script)
             self.assertIn("verify-project-io-policy)", script)
+            self.assertIn("project-io-status)", script)
             self.assertIn("reconcile-project-io-policy)", script)
             self.assertIn(
                 'PROJECT_IO_CLASS_STATE_DIR="/var/lib/cocalc/project-io-classes"',

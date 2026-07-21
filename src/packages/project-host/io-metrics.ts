@@ -1,17 +1,15 @@
 import type {
   HostIoContainmentMetrics,
-  HostIoDeviceMetrics,
   HostIoProjectMetrics,
 } from "@cocalc/conat/hub/api/hosts";
 import { execFile } from "node:child_process";
-import { readFile, readdir, realpath } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const POLICY_PATH = "/etc/cocalc/project-io-policy.json";
-const POLICY_OVERRIDE_PATH = "/etc/cocalc/project-io-policy.override.json";
 const PROJECT_POOL = "/sys/fs/cgroup/cocalc-project-pool";
+const RUNTIME_STORAGE = "/usr/local/sbin/cocalc-runtime-storage";
 const MAX_LEAVES_PER_SAMPLE = 32;
 const TOP_PROJECTS = 10;
 
@@ -96,61 +94,23 @@ function rates(
   };
 }
 
-function merge(left: any, right: any): any {
-  if (!right || typeof right !== "object" || Array.isArray(right)) return left;
-  const output = { ...(left ?? {}) };
-  for (const [key, value] of Object.entries(right)) {
-    output[key] =
-      value && typeof value === "object" && !Array.isArray(value)
-        ? merge(output[key], value)
-        : value;
-  }
-  return output;
-}
-
-async function readJson(path: string): Promise<any> {
-  try {
-    return JSON.parse(await readFile(path, "utf8"));
-  } catch (err: any) {
-    if (err?.code === "ENOENT") return {};
-    throw err;
-  }
-}
-
-async function readPolicy(): Promise<any> {
-  return merge(
-    await readJson(POLICY_PATH),
-    await readJson(POLICY_OVERRIDE_PATH),
-  );
-}
-
-async function discoverDevices(
-  mountpoint: string,
-): Promise<HostIoDeviceMetrics[]> {
+async function readPrivilegedStatus(): Promise<
+  Omit<
+    HostIoContainmentMetrics,
+    | "collected_at"
+    | "top_projects"
+    | "sampled_project_count"
+    | "total_project_count"
+    | "stale_project_count"
+    | "truncated"
+  >
+> {
   const { stdout } = await execFileAsync(
-    "/usr/bin/btrfs",
-    ["filesystem", "show", "--raw", mountpoint],
+    "/usr/bin/sudo",
+    ["-n", RUNTIME_STORAGE, "project-io-status"],
     { timeout: 5000, maxBuffer: 1024 * 1024 },
   );
-  const paths = [...stdout.matchAll(/\bpath\s+(\S+)$/gmu)].map(
-    (match) => match[1],
-  );
-  return await Promise.all(
-    paths.map(async (device) => {
-      const resolved = await realpath(device);
-      const sysBlock = join("/sys/class/block", basename(resolved));
-      const [major_minor, schedulerRaw] = await Promise.all([
-        readFile(join(sysBlock, "dev"), "utf8"),
-        readFile(join(sysBlock, "queue/scheduler"), "utf8").catch(() => ""),
-      ]);
-      const scheduler = /\[([^\]]+)\]/u.exec(schedulerRaw)?.[1];
-      return {
-        device,
-        major_minor: major_minor.trim(),
-        ...(scheduler ? { scheduler } : {}),
-      };
-    }),
-  );
+  return JSON.parse(stdout);
 }
 
 async function sampleLeaves(now: number): Promise<{
@@ -206,60 +166,25 @@ async function sampleLeaves(now: number): Promise<{
 
 export async function readIoContainmentMetrics(): Promise<HostIoContainmentMetrics> {
   const now = Date.now();
-  let policy: any = {};
-  let policyError: string | undefined;
   try {
-    policy = await readPolicy();
-  } catch (err) {
-    policyError = `${err}`;
-  }
-  const mountpoint = `${policy.mountpoint ?? "/mnt/cocalc"}`;
-  const mode = ["disabled", "observe", "enforce"].includes(policy.mode)
-    ? policy.mode
-    : "invalid";
-  try {
-    const [devices, ioMax, pressureRaw, leaves, legacy] = await Promise.all([
-      discoverDevices(mountpoint),
-      readFile(join(PROJECT_POOL, "io.max"), "utf8"),
-      readFile(join(PROJECT_POOL, "io.pressure"), "utf8"),
+    const [status, leaves] = await Promise.all([
+      readPrivilegedStatus(),
       sampleLeaves(now),
-      readFile(join(PROJECT_POOL, "legacy/cgroup.procs"), "utf8").catch(
-        () => "",
-      ),
     ]);
-    const pressure = parseIoPressure(pressureRaw);
     return {
+      ...status,
       collected_at: new Date(now).toISOString(),
-      policy_mode: mode,
-      policy_version: finite(policy.version),
-      policy_profile: policy.profile,
-      capacity_source: policy.capacitySource,
-      mountpoint,
-      filesystem: "btrfs",
-      capability: mode === "enforce" ? "enabled" : "available",
-      pool_cgroup: PROJECT_POOL,
-      pool_io_max: ioMax.trim(),
-      pressure_some_percent: pressure.somePercent,
-      pressure_full_percent: pressure.fullPercent,
-      pressure_some_total: pressure.someTotal,
-      pressure_full_total: pressure.fullTotal,
-      devices,
       top_projects: leaves.projects,
       sampled_project_count: leaves.sampled,
       total_project_count: leaves.total,
       stale_project_count: Math.max(0, leaves.total - leaves.sampled),
       truncated: leaves.total > leaves.sampled,
-      legacy_process_count: legacy.split(/\s+/u).filter(Boolean).length,
-      ...(policyError ? { last_reconcile_error: policyError } : {}),
     };
   } catch (err) {
     return {
       collected_at: new Date(now).toISOString(),
-      policy_mode: mode,
-      policy_version: finite(policy.version),
-      policy_profile: policy.profile,
-      capacity_source: policy.capacitySource,
-      mountpoint,
+      policy_mode: "invalid",
+      mountpoint: "/mnt/cocalc",
       capability: "unsupported",
       capability_reason: `${err}`,
       pool_cgroup: PROJECT_POOL,
@@ -269,7 +194,7 @@ export async function readIoContainmentMetrics(): Promise<HostIoContainmentMetri
       total_project_count: 0,
       stale_project_count: 0,
       truncated: false,
-      ...(policyError ? { last_reconcile_error: policyError } : {}),
+      last_reconcile_error: `${err}`,
     };
   }
 }

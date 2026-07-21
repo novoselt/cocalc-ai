@@ -2726,13 +2726,23 @@ PY
 }
 
 project_io_devices() {
-  local mountpoint="$1" device major_hex minor_hex major minor
+  project_io_device_rows "$1" | cut -f2
+}
+
+project_io_device_rows() {
+  local mountpoint="$1" device resolved name scheduler major_hex minor_hex major minor
   while IFS= read -r device; do
     [ -b "$device" ] || continue
     read -r major_hex minor_hex < <(stat -Lc '%t %T' "$device")
     major="$((16#$major_hex))"
     minor="$((16#$minor_hex))"
-    printf '%s:%s\n' "$major" "$minor"
+    resolved="$(readlink -f "$device")"
+    name="$(basename "$resolved")"
+    scheduler=""
+    if [ -r "/sys/class/block/${name}/queue/scheduler" ]; then
+      scheduler="$(sed -n 's/.*\\[\\([^]]*\\)\\].*/\\1/p' "/sys/class/block/${name}/queue/scheduler")"
+    fi
+    printf '%s\t%s:%s\t%s\n' "$device" "$major" "$minor" "$scheduler"
   done < <(/usr/bin/btrfs filesystem show --raw "$mountpoint" 2>/dev/null | awk '$1 == "devid" {print $NF}')
 }
 
@@ -3819,6 +3829,61 @@ case "$cmd" in
     if [ "$io_mode" = "enforce" ]; then
       verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$pool_rbps" "$pool_wbps" "$pool_riops" "$pool_wiops"
     fi
+    ;;
+  project-io-status)
+    if [ "$#" -ne 0 ]; then
+      echo "usage: cocalc-runtime-storage project-io-status" >&2
+      exit 2
+    fi
+    fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "status"
+    IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _rest <<< "$fields"
+    if [ "$io_mode" = "enforce" ]; then
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$pool_rbps" "$pool_wbps" "$pool_riops" "$pool_wiops"
+    fi
+    device_rows="$(project_io_device_rows "$io_mountpoint")"
+    [ -n "$device_rows" ] || deny "project-io-device-unavailable" "$io_mountpoint"
+    pool_io_max="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.max" 2>/dev/null || true)"
+    pool_pressure="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.pressure" 2>/dev/null || true)"
+    legacy_processes="$(cat "$(project_legacy_cgroup)/cgroup.procs" 2>/dev/null || true)"
+    /usr/bin/python3 - "$fields" "$device_rows" "$pool_io_max" "$pool_pressure" "$legacy_processes" <<'PY'
+import json
+import sys
+
+fields, rows, io_max, pressure, legacy = sys.argv[1:]
+parts = fields.split("\t")
+mode, mountpoint = parts[:2]
+devices = []
+for row in rows.splitlines():
+    device, major_minor, scheduler = (row.split("\t") + [""])[:3]
+    item = {"device": device, "major_minor": major_minor}
+    if scheduler:
+        item["scheduler"] = scheduler
+    devices.append(item)
+
+pressure_values = {}
+for row in pressure.splitlines():
+    columns = row.split()
+    if not columns:
+        continue
+    kind = columns[0]
+    values = dict(column.split("=", 1) for column in columns[1:] if "=" in column)
+    if "avg10" in values:
+        pressure_values[f"pressure_{kind}_percent"] = float(values["avg10"])
+    if "total" in values:
+        pressure_values[f"pressure_{kind}_total"] = int(values["total"])
+
+print(json.dumps({
+    "policy_mode": mode,
+    "mountpoint": mountpoint,
+    "filesystem": "btrfs",
+    "capability": "enabled" if mode == "enforce" else "available",
+    "pool_cgroup": "/sys/fs/cgroup/cocalc-project-pool",
+    "pool_io_max": io_max.strip(),
+    "devices": devices,
+    "legacy_process_count": len(legacy.split()),
+    **pressure_values,
+}, separators=(",", ":")))
+PY
     ;;
   reconcile-project-io-policy)
     if [ "$#" -ne 0 ]; then
