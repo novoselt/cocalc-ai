@@ -53,6 +53,7 @@ import { enqueueRootfsPrepullForHost } from "./rootfs-prepull";
 import { removeHostSshKnownHostAlias } from "./host-ssh-known-hosts";
 import {
   activeHostPublicRouteMode,
+  ensureDirectCloudflareIngressForHost,
   hostPublicRouteMigrationInProgress,
 } from "./public-route";
 
@@ -934,6 +935,7 @@ async function ensureDnsForHost(row: any) {
     if (!row?.metadata?.runtime?.public_ip) return;
     if (!(await hasDns())) return;
     try {
+      await ensureDirectCloudflareIngressForHost(row);
       const dns = await ensureHostDns({
         host_id: row.id,
         ipAddress: row.metadata.runtime.public_ip,
@@ -951,7 +953,7 @@ async function ensureDnsForHost(row: any) {
           `https://${dns.name}`,
       });
     } catch (err) {
-      logger.warn("direct project-host DNS update failed", {
+      logger.warn("direct project-host ingress/DNS update failed", {
         host_id: row.id,
         err,
       });

@@ -167,17 +167,11 @@ async function ensureTunnelRoute({
   return tunnel;
 }
 
-async function prepareDirectRoute({
-  row,
-  stableHostname,
-  origin,
-  onProgress,
-}: {
-  row: HostRow;
-  stableHostname: string;
-  origin: string;
-  onProgress?: RouteProgress;
-}): Promise<{ name: string; record_id: string }> {
+export async function ensureDirectCloudflareIngressForHost(row: {
+  id: string;
+  region?: string;
+  metadata?: Record<string, any>;
+}) {
   const providerId = normalizeProviderId(row.metadata?.machine?.cloud);
   if (providerId !== "gcp") {
     throw new Error(
@@ -193,6 +187,29 @@ async function prepareDirectRoute({
   });
   if (!entry.provider.ensurePublicIngress) {
     throw new Error("GCP provider cannot reconcile public HTTPS ingress");
+  }
+  const sourceRanges = await getCloudflareIpv4Cidrs();
+  return await entry.provider.ensurePublicIngress(
+    runtime,
+    { ports: [443], source_ranges: sourceRanges },
+    creds,
+  );
+}
+
+async function prepareDirectRoute({
+  row,
+  stableHostname,
+  origin,
+  onProgress,
+}: {
+  row: HostRow;
+  stableHostname: string;
+  origin: string;
+  onProgress?: RouteProgress;
+}): Promise<{ name: string; record_id: string }> {
+  const runtime = row.metadata?.runtime;
+  if (!runtime?.instance_id || !runtime?.zone || !runtime?.public_ip) {
+    throw new Error("host runtime does not have a public GCP address");
   }
 
   const sslRule = await ensureCloudflareProjectHostSslRule({
@@ -215,12 +232,7 @@ async function prepareDirectRoute({
     message: "restricting direct HTTPS ingress to Cloudflare edges",
     progress: 15,
   });
-  const sourceRanges = await getCloudflareIpv4Cidrs();
-  const publicIngress = await entry.provider.ensurePublicIngress(
-    runtime,
-    { ports: [443], source_ranges: sourceRanges },
-    creds,
-  );
+  const publicIngress = await ensureDirectCloudflareIngressForHost(row);
   await onProgress?.({
     phase: "firewall",
     message: "direct HTTPS ingress is reconciled",
