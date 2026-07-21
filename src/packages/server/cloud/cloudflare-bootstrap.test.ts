@@ -57,6 +57,11 @@ describe("bootstrapCloudflareConfiguration", () => {
             scopes: ["com.cloudflare.api.account.zone"],
           },
           {
+            id: "select-configuration-write",
+            name: "Select Configuration Write",
+            scopes: ["com.cloudflare.api.account.zone"],
+          },
+          {
             id: "managed-headers-write",
             name: "Managed headers Write",
             scopes: ["com.cloudflare.api.account.zone"],
@@ -116,9 +121,15 @@ describe("bootstrapCloudflareConfiguration", () => {
       "https://api.cloudflare.com/client/v4/user/tokens",
       expect.objectContaining({
         method: "POST",
-        body: expect.stringContaining("account-analytics-read"),
+        body: expect.stringMatching(
+          /account-analytics-read[\s\S]*select-configuration-write|select-configuration-write[\s\S]*account-analytics-read/,
+        ),
       }),
     );
+    const createTokenCall = fetchMock.mock.calls.find(([url, init]) => {
+      return String(url).endsWith("/user/tokens") && init?.method === "POST";
+    });
+    expect(createTokenCall?.[1]?.body).not.toContain("config-rules-write");
     expect(fetchMock).toHaveBeenLastCalledWith(
       "https://api.cloudflare.com/client/v4/user/tokens/bootstrap-id",
       expect.objectContaining({ method: "DELETE" }),

@@ -5,7 +5,7 @@
 
 type CloudflareResponse<T> = {
   success?: boolean;
-  errors?: Array<{ message?: string }>;
+  errors?: Array<{ code?: number; message?: string }>;
   result?: T;
 };
 
@@ -153,12 +153,15 @@ function findPermissionGroup(
   names: string[],
   scope: string,
 ): PermissionGroup | undefined {
-  const wanted = names.map((name) => name.toLowerCase());
-  return groups.find((group) => {
-    const name = group.name?.toLowerCase();
-    if (!name || !wanted.includes(name)) return false;
-    return group.scopes?.includes(scope);
-  });
+  for (const wanted of names) {
+    const match = groups.find(
+      (group) =>
+        group.name?.toLowerCase() === wanted.toLowerCase() &&
+        group.scopes?.includes(scope),
+    );
+    if (match) return match;
+  }
+  return undefined;
 }
 
 function requirePermissionGroup(
@@ -201,10 +204,10 @@ async function createDurableTunnelToken(opts: {
     requirePermissionGroup(
       groups,
       [
+        "Select Configuration Write",
+        "Config Settings Write",
         "Config Rules Write",
         "Config Rules Edit",
-        "Config Settings Write",
-        "Select Configuration Write",
       ],
       zoneScope,
     ),

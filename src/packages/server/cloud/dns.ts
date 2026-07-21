@@ -42,7 +42,7 @@ type ZoneResponse = {
 
 type CloudflareResponse<T> = {
   success?: boolean;
-  errors?: Array<{ message?: string }>;
+  errors?: Array<{ code?: number; message?: string }>;
   result?: T;
 };
 
@@ -88,19 +88,30 @@ async function cloudflareRequest<T>(
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!response.ok) {
-    throw new Error(
-      `cloudflare api failed: ${response.status} ${response.statusText}`,
-    );
+  let data: CloudflareResponse<T> | undefined;
+  try {
+    data = (await response.json()) as CloudflareResponse<T>;
+  } catch {
+    data = undefined;
   }
-  const data = (await response.json()) as CloudflareResponse<T>;
-  if (!data?.success) {
+  if (!response.ok || !data?.success) {
     const details =
       data?.errors
-        ?.map((err) => err.message)
+        ?.map((err) =>
+          [err.code != null ? `code=${err.code}` : undefined, err.message]
+            .filter(Boolean)
+            .join(" "),
+        )
         .filter(Boolean)
-        .join(", ") || "unknown error";
-    throw new Error(`cloudflare api failed: ${details}`);
+        .join(", ") || "no Cloudflare error details";
+    const statusText = response.statusText ? ` ${response.statusText}` : "";
+    const permissionHint =
+      response.status === 403 && path.includes("/rulesets")
+        ? "; token requires Select Configuration Write for this zone"
+        : "";
+    throw new Error(
+      `cloudflare api ${method} /${path} failed: HTTP ${response.status}${statusText}: ${details}${permissionHint}`,
+    );
   }
   if (data.result === undefined) {
     throw new Error("cloudflare api returned no result");
