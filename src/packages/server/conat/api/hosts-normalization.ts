@@ -72,6 +72,7 @@ import {
 // operator UI uses its own display grace so false stale dashboards do not delay
 // real host repair or spot replacement.
 const HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS = 2 * 60 * 1000;
+const RUNTIME_FAILURES_BEFORE_DEGRADED = 2;
 const HOST_RUNNING_STATUSES = new Set(["running", "active"]);
 const HOST_BILLING_ENFORCEMENT_STATES = new Set<HostBillingEnforcementState>([
   "ok",
@@ -450,6 +451,12 @@ export function computeHostOperationalAvailability(
 
   const runtimeHealth = row?.metadata?.runtime_health;
   const runtimeStatus = `${runtimeHealth?.status ?? ""}`.trim();
+  const transientRuntimeFailure =
+    runtimeStatus === "degraded" &&
+    runtimeHealth?.ready === false &&
+    Number(runtimeHealth?.consecutive_failures) > 0 &&
+    Number(runtimeHealth?.consecutive_failures) <
+      RUNTIME_FAILURES_BEFORE_DEGRADED;
   const syntheticOnlyRuntimeDegradation =
     !includeSyntheticProbe &&
     runtimeStatus === "degraded" &&
@@ -470,6 +477,7 @@ export function computeHostOperationalAvailability(
   }
   if (
     !syntheticOnlyRuntimeDegradation &&
+    !transientRuntimeFailure &&
     (runtimeStatus !== "ready" || runtimeHealth?.ready !== true)
   ) {
     if (suppressPlannedTransitionBanner) {

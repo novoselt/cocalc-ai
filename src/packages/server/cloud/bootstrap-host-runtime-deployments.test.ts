@@ -273,6 +273,129 @@ describe("bootstrap-host promoted artifact defaults", () => {
     expect(scripts.cloudflaredConfig.enabled).toBe(true);
   });
 
+  it("does not let bootstrap replace an active direct route with a tunnel cname", async () => {
+    getServerSettingsMock.mockResolvedValue({
+      project_hosts_software_base_url: softwareBaseUrl,
+      project_hosts_bootstrap_channel: "latest",
+      project_hosts_bootstrap_version: "",
+      dns: "https://staging.example.com",
+      project_hosts_cloudflare_tunnel_host_suffix: "staging",
+    });
+    ensureCloudflareTunnelForHostMock.mockResolvedValue({
+      id: "tunnel-id",
+      hostname: "host-host-123-staging.example.com",
+      ssh_hostname: "ssh-host-123-staging.example.com",
+    });
+    const { buildBootstrapScripts } = await loadBootstrapHost();
+    const scripts = await buildBootstrapScripts({
+      id: "host-123",
+      name: "gcp-host",
+      region: "us-central1",
+      ssh_server: "203.0.113.10:2222",
+      metadata: {
+        public_route: {
+          desired_mode: "cloudflare-proxy",
+          active_mode: "cloudflare-proxy",
+          status: "active",
+        },
+        machine: { cloud: "gcp", zone: "us-central1-a" },
+        runtime: {
+          provider: "gcp",
+          instance_id: "gcp-host",
+          public_ip: "203.0.113.20",
+          private_ip: "10.0.0.20",
+          ssh_user: "ubuntu",
+          zone: "us-central1-a",
+        },
+      },
+    } as any);
+
+    expect(ensureCloudflareTunnelForHostMock).toHaveBeenCalledWith({
+      host_id: "host-123",
+      existing: undefined,
+      publish_browser_dns: false,
+    });
+    expect(scripts.sshServer).toBe("203.0.113.20:2222");
+    expect(scripts.cloudflaredConfig.enabled).toBe(true);
+  });
+
+  it("does not republish tunnel browser dns while preparing direct cutover", async () => {
+    getServerSettingsMock.mockResolvedValue({
+      project_hosts_software_base_url: softwareBaseUrl,
+      project_hosts_bootstrap_channel: "latest",
+      project_hosts_bootstrap_version: "",
+      dns: "https://staging.example.com",
+      project_hosts_cloudflare_tunnel_host_suffix: "staging",
+    });
+    ensureCloudflareTunnelForHostMock.mockResolvedValue({
+      id: "tunnel-id",
+      hostname: "host-host-123-staging.example.com",
+    });
+    const { buildBootstrapScripts } = await loadBootstrapHost();
+    await buildBootstrapScripts({
+      id: "host-123",
+      name: "gcp-host",
+      region: "us-central1",
+      metadata: {
+        public_route: {
+          desired_mode: "cloudflare-proxy",
+          active_mode: "cloudflare-tunnel",
+          status: "preparing",
+        },
+        machine: { cloud: "gcp", zone: "us-central1-a" },
+        runtime: {
+          provider: "gcp",
+          instance_id: "gcp-host",
+          public_ip: "203.0.113.20",
+          private_ip: "10.0.0.20",
+          zone: "us-central1-a",
+        },
+      },
+    } as any);
+
+    expect(ensureCloudflareTunnelForHostMock).toHaveBeenCalledWith({
+      host_id: "host-123",
+      existing: undefined,
+      publish_browser_dns: false,
+    });
+  });
+
+  it("keeps tunnel browser dns while direct-route preparation has not begun", async () => {
+    getServerSettingsMock.mockResolvedValue({
+      project_hosts_software_base_url: softwareBaseUrl,
+      project_hosts_bootstrap_channel: "latest",
+      project_hosts_bootstrap_version: "",
+      dns: "https://staging.example.com",
+      project_hosts_cloudflare_tunnel_host_suffix: "staging",
+    });
+    ensureCloudflareTunnelForHostMock.mockResolvedValue({
+      id: "tunnel-id",
+      hostname: "host-host-123-staging.example.com",
+    });
+    const { buildBootstrapScripts } = await loadBootstrapHost();
+    await buildBootstrapScripts({
+      id: "host-123",
+      name: "gcp-host",
+      region: "us-central1",
+      metadata: {
+        machine: { cloud: "gcp", zone: "us-central1-a" },
+        runtime: {
+          provider: "gcp",
+          instance_id: "gcp-host",
+          public_ip: "203.0.113.20",
+          private_ip: "10.0.0.20",
+          zone: "us-central1-a",
+        },
+      },
+    } as any);
+
+    expect(ensureCloudflareTunnelForHostMock).toHaveBeenCalledWith({
+      host_id: "host-123",
+      existing: undefined,
+      publish_browser_dns: true,
+    });
+  });
+
   it("prefers a newer observed installed artifact version over stale desired runtime deployments", async () => {
     loadEffectiveProjectHostRuntimeDeploymentsMock.mockResolvedValue([
       {

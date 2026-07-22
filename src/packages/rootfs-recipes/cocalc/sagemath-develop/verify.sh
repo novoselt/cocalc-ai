@@ -4,25 +4,23 @@ prefix="${PREFIX:-/opt/sage}"
 expected_ref="${VERSION:-develop}"
 owner_uid="${OWNER_UID:-2001}"
 owner_gid="${OWNER_GID:-2001}"
+owner_home="${OWNER_HOME:-${COCALC_RUNTIME_HOME:-/home/user}}"
 jobs="${JOBS:-auto}"
+python_change_max_seconds="${PYTHON_CHANGE_MAX_SECONDS:-60}"
 incremental_build_max_seconds="${INCREMENTAL_BUILD_MAX_SECONDS:-1800}"
-source_file="$prefix/src/sage/rings/integer.pyx"
-probe_name="_cocalc_rootfs_incremental_build_probe"
-probe_value="cocalc-sagemath-develop-incremental-build-ok"
+python_source="$prefix/src/sage/all.py"
+cython_source="$prefix/src/sage/rings/integer.pyx"
+python_probe_value="cocalc-sagemath-develop-python-source-ok"
+python_command_value="cocalc-sagemath-develop-python-command-ok"
+cython_probe_name="_cocalc_rootfs_incremental_build_probe"
+cython_probe_value="cocalc-sagemath-develop-incremental-build-ok"
 git_sage=(git -C "$prefix")
-verify_home=""
 
 as_owner() {
   if [ "$(id -u)" = "$owner_uid" ]; then
-    if [ -n "$verify_home" ]; then
-      env HOME="$verify_home" "$@"
-    else
-      "$@"
-    fi
-  elif [ -n "$verify_home" ]; then
-    sudo -u "#$owner_uid" -- env HOME="$verify_home" "$@"
+    env HOME="$owner_home" "$@"
   else
-    sudo -H -u "#$owner_uid" -- "$@"
+    sudo -u "#$owner_uid" -- env HOME="$owner_home" "$@"
   fi
 }
 
@@ -39,18 +37,26 @@ else
   make_jobs="$jobs"
 fi
 
-command -v sage
-command -v python
-command -v pip
-command -v jupyter
+for executable in \
+  sage python pip jupyter \
+  ccache gdb git-lfs htop jq less lsof nano rg strace tmux tree unzip vim zip; do
+  command -v "$executable"
+done
 test "$(command -v sage)" = /usr/local/bin/sage
 test -x "$prefix/sage"
 test -d "$prefix/.git"
+test -d "$prefix/build/sage-distro"
 test -d "$prefix/upstream"
-test -f "$source_file"
+test -f "$python_source"
+test -f "$cython_source"
 test "$(stat -c %u "$prefix")" = "$owner_uid"
 test "$(stat -c %g "$prefix")" = "$owner_gid"
 as_owner test -w "$prefix"
+for runtime_dir in .sage .ipython .jupyter .local/share/jupyter; do
+  test "$(stat -c %u "$owner_home/$runtime_dir")" = "$owner_uid"
+  test "$(stat -c %g "$owner_home/$runtime_dir")" = "$owner_gid"
+  as_owner test -w "$owner_home/$runtime_dir"
+done
 
 test "$(as_owner "${git_sage[@]}" rev-parse --is-shallow-repository)" = false
 test "$(as_owner "${git_sage[@]}" branch --show-current)" = "$expected_ref"
@@ -58,12 +64,6 @@ test "$(as_owner "${git_sage[@]}" rev-parse HEAD)" = \
   "$(as_owner "${git_sage[@]}" rev-parse "refs/remotes/origin/$expected_ref")"
 as_owner "${git_sage[@]}" remote get-url origin
 as_owner "${git_sage[@]}" log -1 --format='SageMath commit: %H %cI %s'
-
-verify_home="$(as_owner mktemp -d)"
-cleanup_verify_home() {
-  as_owner rm -rf "$verify_home"
-}
-trap cleanup_verify_home EXIT
 
 as_owner sage --version
 as_owner sage -c 'from sage.all import ZZ; assert ZZ(2) + ZZ(2) == 4'
@@ -92,37 +92,79 @@ assert kernel["argv"][1:3] == ["-m", "sage.repl.ipython_kernel"], kernel
 assert shutil.which(kernel["argv"][0]), kernel
 PY
 
-backup="$(as_owner mktemp)"
+python_backup="$(as_owner mktemp)"
+cython_backup="$(as_owner mktemp)"
 incremental_log="$(as_owner mktemp)"
 restore_log="$(as_owner mktemp)"
-as_owner cp "$source_file" "$backup"
-restored=false
+as_owner cp "$python_source" "$python_backup"
+as_owner cp "$cython_source" "$cython_backup"
+python_modified=false
+cython_modified=false
 
-restore_source() {
-  if [ "$restored" = true ]; then
+restore_python_source() {
+  if [ "$python_modified" = false ]; then
     return
   fi
-  echo "Restoring $source_file and rebuilding the original Sage module"
-  as_owner cp "$backup" "$source_file"
-  as_owner touch "$source_file"
+  echo "Restoring $python_source"
+  as_owner cp "$python_backup" "$python_source"
+  python_modified=false
+}
+
+restore_cython_source() {
+  if [ "$cython_modified" = false ]; then
+    return
+  fi
+  echo "Restoring $cython_source and rebuilding the original Sage module"
+  as_owner cp "$cython_backup" "$cython_source"
+  as_owner touch "$cython_source"
   if ! as_owner_make "$restore_log"; then
     as_owner tail -n 200 "$restore_log" >&2 || true
     return 1
   fi
-  restored=true
+  cython_modified=false
 }
 
 cleanup() {
-  restore_source
-  as_owner rm -rf "$backup" "$incremental_log" "$restore_log" "$verify_home"
+  restore_python_source || true
+  restore_cython_source || true
+  as_owner rm -f \
+    "$python_backup" "$cython_backup" "$incremental_log" "$restore_log" || true
 }
 trap cleanup EXIT
 
-as_owner tee -a "$source_file" >/dev/null <<PYX
+as_owner tee -a "$python_source" >/dev/null <<PY
 
-def $probe_name():
-    return "$probe_value"
+print("$python_probe_value")
+PY
+python_modified=true
+
+echo "Running SageMath after changing sage.all"
+start_seconds="$SECONDS"
+python_output="$(
+  as_owner "$prefix/sage" -c "print('$python_command_value')"
+)"
+python_seconds="$((SECONDS - start_seconds))"
+printf '%s\n' "$python_output"
+echo "Modified Python source loaded in ${python_seconds} seconds"
+grep -qFx "$python_probe_value" <<<"$python_output"
+grep -qFx "$python_command_value" <<<"$python_output"
+if [ "$python_seconds" -gt "$python_change_max_seconds" ]; then
+  echo "Loading modified Python source exceeded ${python_change_max_seconds} seconds" >&2
+  exit 1
+fi
+
+restore_python_source
+if grep -qF "$python_probe_value" "$python_source"; then
+  echo "Python source probe remained after restoring $python_source" >&2
+  exit 1
+fi
+
+as_owner tee -a "$cython_source" >/dev/null <<PYX
+
+def $cython_probe_name():
+    return "$cython_probe_value"
 PYX
+cython_modified=true
 
 echo "Running incremental SageMath build after changing sage.rings.integer"
 start_seconds="$SECONDS"
@@ -138,14 +180,19 @@ if [ "$incremental_seconds" -gt "$incremental_build_max_seconds" ]; then
 fi
 
 as_owner "$prefix/sage" -c \
-  "from sage.rings.integer import $probe_name; assert $probe_name() == '$probe_value'; print($probe_name())"
+  "from sage.rings.integer import $cython_probe_name; assert $cython_probe_name() == '$cython_probe_value'; print($cython_probe_name())"
 
-restore_source
-if as_owner "$prefix/sage" -c "from sage.rings.integer import $probe_name" >/dev/null 2>&1; then
+restore_cython_source
+if as_owner "$prefix/sage" -c "from sage.rings.integer import $cython_probe_name" >/dev/null 2>&1; then
   echo "Incremental build probe remained importable after restoring the source" >&2
   exit 1
 fi
 
 test -z "$(as_owner "${git_sage[@]}" status --porcelain --untracked-files=no)"
+test -z "$(find "$prefix" -xdev ! -uid "$owner_uid" -print -quit)"
+for runtime_dir in .sage .ipython .jupyter .local/share/jupyter; do
+  test -z "$(find "$owner_home/$runtime_dir" -xdev ! -uid "$owner_uid" -print -quit)"
+done
 trap - EXIT
-as_owner rm -rf "$backup" "$incremental_log" "$restore_log" "$verify_home"
+as_owner rm -f \
+  "$python_backup" "$cython_backup" "$incremental_log" "$restore_log"

@@ -4,6 +4,8 @@ import {
   type HostProjectStopOverride,
   type HostProjectStopPolicyRow,
 } from "@cocalc/conat/project-host/api";
+
+const RUNTIME_FAILURES_BEFORE_DEGRADED = 2;
 import {
   upsertProjectHost,
   type ProjectHostRecord,
@@ -129,13 +131,24 @@ function getHostBootId(metadata: any): string | undefined {
 function getHostRuntimeHealth(metadata: any): {
   status?: string;
   ready: boolean;
+  consecutive_failures: number;
   error?: string;
 } {
   const runtime = metadata?.runtime_health;
   const status = `${runtime?.status ?? ""}`.trim() || undefined;
+  const consecutiveFailures = Math.max(
+    0,
+    Math.floor(Number(runtime?.consecutive_failures) || 0),
+  );
+  const transientFailure =
+    status === "degraded" &&
+    runtime?.ready === false &&
+    consecutiveFailures > 0 &&
+    consecutiveFailures < RUNTIME_FAILURES_BEFORE_DEGRADED;
   return {
     status,
-    ready: status === "ready" && runtime?.ready === true,
+    ready: (status === "ready" && runtime?.ready === true) || transientFailure,
+    consecutive_failures: consecutiveFailures,
     error: `${runtime?.error ?? ""}`.trim() || undefined,
   };
 }

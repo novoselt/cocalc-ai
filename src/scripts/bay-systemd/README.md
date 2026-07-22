@@ -172,6 +172,64 @@ Set `INCLUDE_FIREWALL_ADMIN=0` to skip the custom role. If custom-role creation
 is blocked by organization policy, manually grant `roles/compute.securityAdmin`
 to the service account as the broader fallback.
 
+## Direct GCP Bay Ingress
+
+`gcp-reconcile-bay-public-ingress.sh` provisions a regional external HTTPS
+Application Load Balancer for a GCP bay. This keeps Cloudflare's normal proxied
+DNS, CDN, and WAF path, but removes Cloudflare Tunnel from the request path:
+
+```text
+browser -> Cloudflare proxy -> regional GCP HTTPS LB -> bay frontdoor -> hub worker
+```
+
+The regional load balancer uses Standard Network Tier. Its frontend has a fixed
+regional IP and a regional Google-managed certificate. Cloud Armor permits only
+Cloudflare edge source ranges, while VPC firewall rules permit the backend port
+only from the regional proxy-only subnet and Google health checks.
+
+The command is plan-only unless `--apply` is passed, and defaults to refusing
+any hostname that does not start with `staging.` or any VM without a
+`site=staging` label. A staging plan looks like this:
+
+```sh
+./src/scripts/bay-systemd/gcp-reconcile-bay-public-ingress.sh \
+  --gcp-project projecthosts \
+  --zone us-south1-a \
+  --instance staging-bay-0 \
+  --hostname staging.cocalc.ai \
+  --resource-prefix cocalc-staging-hub \
+  --proxy-subnet-range 10.100.0.0/23 \
+  --cloudflare-token-file /run/secrets/cocalc/cloudflare-token.txt
+```
+
+The safe two-pass provisioning and cutover order is:
+
+1. Apply the GCP plan without changing the public hostname. Supply a
+   Cloudflare token with `Zone > Config Rules > Edit`; the script creates and
+   reads back an exact-host `ssl=full` rule but does not change DNS. On this
+   first pass it creates the DNS authorization and reserves the frontend IP,
+   but deliberately does not create a certificate yet.
+2. Add the printed Certificate Manager CNAME authorization to DNS, verify it is
+   public, and apply the reconciler again. The second pass creates the regional
+   certificate and HTTPS proxy. Wait for the certificate to become `ACTIVE`.
+3. Deploy the frontdoor change, set `COCALC_BAY_FRONTDOOR_HOST=0.0.0.0`, and
+   leave `COCALC_BAY_PUBLIC_INGRESS_MODE=cloudflare-tunnel` during validation.
+4. Add a temporary `--test-source-cidr`, then test the load-balancer IP with
+   `curl --resolve` and a browser-style WebSocket handshake.
+5. Set `COCALC_BAY_PUBLIC_INGRESS_MODE=cloudflare-proxy` and temporarily set
+   `COCALC_BAY_CLOUDFLARED_ENABLED=1`. Restart the frontdoor and hub workers,
+   then verify the still-active, restartable tunnel route.
+6. Replace only the bay hostname's Cloudflare record with a proxied A record for
+   the reserved IP. Verify HTTP and WebSocket traffic through normal DNS before
+   stopping `cocalc-bay-cloudflared.service` and removing the temporary
+   `COCALC_BAY_CLOUDFLARED_ENABLED` override. Remove `--test-source-cidr` and
+   reapply the reconciler.
+
+Rollback reverses the last two steps: restore the saved tunnel CNAME, set the
+ingress mode to `cloudflare-tunnel`, and start the cloudflared service. Do not
+delete the load-balancer resources during an incident; they are inert when DNS
+does not reference them and remain useful for diagnosis.
+
 For frontend/static-only changes, build a smaller artifact locally:
 
 ```sh
@@ -235,6 +293,8 @@ sudo ./src/scripts/bay-systemd/install-scaffold.sh --overlay current-cocalc --da
    - `/etc/cocalc/bay-workers.env`
    - `/etc/cocalc/bay-topology.env`
    - `/etc/cocalc/bay-secrets.env`
+   - `/etc/cocalc/bay-local.env` for operator-owned settings that must survive
+     release bootstrap and generated-overlay replacement
    - optionally `/etc/cocalc/bay-overlay.env`
 3. Install `/etc/cocalc/site-master-key` with mode `0600`.
 4. Enable whichever worker instances you actually want.
@@ -312,6 +372,7 @@ topology and preserve existing secrets.
   - `/etc/cocalc/bay-workers.env`
   - `/etc/cocalc/bay-topology.env`
   - `/etc/cocalc/bay-secrets.env`
+  - `/etc/cocalc/bay-local.env` (loaded last and never regenerated)
   - optionally `/etc/cocalc/bay-overlay.env`
 - Production bay services set `COCALC_REQUIRE_SITE_MASTER_KEY=1` and load
   `/etc/cocalc/site-master-key` as a systemd credential. Missing keys fail

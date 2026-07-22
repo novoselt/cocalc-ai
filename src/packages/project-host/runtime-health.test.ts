@@ -39,14 +39,42 @@ describe("project-host runtime health", () => {
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
-  it("marks the runtime degraded and rejects control after a failed probe", async () => {
+  it("requires two failures after a successful probe before degrading", async () => {
     const probe = jest
       .fn<Promise<void>, []>()
+      .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("podman ps timed out"))
-      .mockResolvedValueOnce(undefined);
+      .mockRejectedValueOnce(new Error("podman ps timed out"));
     const monitor = createProjectHostRuntimeHealthMonitor({
       isApplicationReady: () => true,
       probe,
+    });
+
+    await expect(monitor.assertReady()).resolves.toBeUndefined();
+    await expect(monitor.assertReady()).resolves.toBeUndefined();
+    expect(monitor.getSnapshot()).toMatchObject({
+      status: "ready",
+      ready: true,
+      consecutive_failures: 1,
+      error: "Error: podman ps timed out",
+    });
+
+    await expect(monitor.assertReady()).rejects.toThrow(
+      "project host runtime is degraded",
+    );
+    expect(monitor.getSnapshot()).toMatchObject({
+      status: "degraded",
+      ready: false,
+      consecutive_failures: 2,
+    });
+  });
+
+  it("rejects control after the first probe fails during startup", async () => {
+    const monitor = createProjectHostRuntimeHealthMonitor({
+      isApplicationReady: () => true,
+      probe: jest.fn(async () => {
+        throw new Error("podman is unavailable");
+      }),
     });
 
     await expect(monitor.assertReady()).rejects.toThrow(
@@ -56,14 +84,6 @@ describe("project-host runtime health", () => {
       status: "degraded",
       ready: false,
       consecutive_failures: 1,
-      error: "Error: podman ps timed out",
-    });
-
-    await expect(monitor.assertReady()).resolves.toBeUndefined();
-    expect(monitor.getSnapshot()).toMatchObject({
-      status: "ready",
-      ready: true,
-      consecutive_failures: 0,
     });
   });
 
@@ -85,6 +105,33 @@ describe("project-host runtime health", () => {
     expect(probe).toHaveBeenCalledTimes(1);
     resolveProbe();
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
+  it("defers health probes while a runtime diagnostic is active", async () => {
+    let resolveDiagnostic!: () => void;
+    const probe = jest.fn(async () => undefined);
+    const monitor = createProjectHostRuntimeHealthMonitor({
+      isApplicationReady: () => true,
+      probe,
+    });
+    await monitor.refresh();
+
+    const diagnostic = monitor.runRuntimeDiagnostic(
+      async () =>
+        await new Promise<void>((resolve) => {
+          resolveDiagnostic = resolve;
+        }),
+    );
+    await Promise.resolve();
+    expect(await monitor.refresh()).toMatchObject({
+      status: "ready",
+      ready: true,
+    });
+    expect(probe).toHaveBeenCalledTimes(1);
+    resolveDiagnostic();
+    await diagnostic;
+    await monitor.refresh();
+    expect(probe).toHaveBeenCalledTimes(2);
   });
 
   it("captures diagnostics after two consecutive failures", async () => {

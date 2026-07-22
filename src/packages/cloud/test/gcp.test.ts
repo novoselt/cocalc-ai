@@ -3,6 +3,7 @@ import type { HostSpec } from "../types";
 
 const insertMock = jest.fn();
 const getMock = jest.fn();
+const getEffectiveFirewallsMock = jest.fn();
 const diskGetMock = jest.fn();
 const diskInsertMock = jest.fn();
 const diskResizeMock = jest.fn();
@@ -17,6 +18,7 @@ const setSchedulingMock = jest.fn();
 const setMachineTypeMock = jest.fn();
 const setTagsMock = jest.fn();
 const firewallGetMock = jest.fn();
+const firewallListMock = jest.fn();
 const firewallInsertMock = jest.fn();
 const firewallPatchMock = jest.fn();
 const authRequestMock = jest.fn();
@@ -39,6 +41,7 @@ jest.mock("@google-cloud/compute", () => {
   class InstancesClient {
     insert = insertMock;
     get = getMock;
+    getEffectiveFirewalls = getEffectiveFirewallsMock;
     attachDisk = attachDiskMock;
     detachDisk = detachDiskMock;
     setDiskAutoDelete = setDiskAutoDeleteMock;
@@ -65,6 +68,7 @@ jest.mock("@google-cloud/compute", () => {
   }
   class FirewallsClient {
     get = firewallGetMock;
+    list = firewallListMock;
     insert = firewallInsertMock;
     patch = firewallPatchMock;
     constructor(_opts?: any) {}
@@ -95,6 +99,7 @@ describe("GcpProvider", () => {
   beforeEach(() => {
     insertMock.mockReset();
     getMock.mockReset();
+    getEffectiveFirewallsMock.mockReset();
     diskGetMock.mockReset();
     diskInsertMock.mockReset();
     diskResizeMock.mockReset();
@@ -109,6 +114,7 @@ describe("GcpProvider", () => {
     setMachineTypeMock.mockReset();
     setTagsMock.mockReset();
     firewallGetMock.mockReset();
+    firewallListMock.mockReset();
     firewallInsertMock.mockReset();
     firewallPatchMock.mockReset();
     authRequestMock.mockReset();
@@ -117,12 +123,40 @@ describe("GcpProvider", () => {
   });
 
   it("restricts public ingress to the supplied ranges and preserves VM tags", async () => {
-    firewallGetMock.mockRejectedValueOnce({ code: 404 });
+    firewallGetMock.mockRejectedValueOnce({ code: 404 }).mockResolvedValueOnce([
+      {
+        name: "cocalc-project-host-public-https",
+        priority: 1000,
+        sourceRanges: ["103.21.244.0/22", "173.245.48.0/20"],
+        targetTags: ["cocalc-project-host-public-https"],
+        allowed: [{ IPProtocol: "tcp", ports: ["443"] }],
+      },
+    ]);
+    firewallListMock.mockResolvedValueOnce([
+      [
+        {
+          name: "deny-project-host-ingress",
+          priority: 900,
+          direction: "INGRESS",
+          sourceRanges: ["0.0.0.0/0"],
+          targetTags: ["cocalc-project-host-public-https"],
+          denied: [{ IPProtocol: "tcp" }],
+        },
+      ],
+    ]);
     firewallInsertMock.mockResolvedValueOnce([
       { latestResponse: { name: "firewall-op", status: "DONE" } },
     ]);
     getMock.mockResolvedValueOnce([
       {
+        networkInterfaces: [
+          {
+            name: "nic0",
+            network: "projects/proj-1/global/networks/default",
+            networkIP: "10.0.0.2",
+            accessConfigs: [{ natIP: "203.0.113.20" }],
+          },
+        ],
         tags: {
           fingerprint: "tag-fingerprint",
           items: ["existing-tag"],
@@ -132,9 +166,42 @@ describe("GcpProvider", () => {
     setTagsMock.mockResolvedValueOnce([
       { latestResponse: { name: "tags-op", status: "DONE" } },
     ]);
+    getEffectiveFirewallsMock.mockResolvedValueOnce([
+      {
+        firewalls: [
+          {
+            name: "cocalc-project-host-public-https",
+            priority: 1000,
+            direction: "INGRESS",
+            sourceRanges: ["103.21.244.0/22"],
+            targetTags: ["cocalc-project-host-public-https"],
+            allowed: [{ IPProtocol: "tcp", ports: ["443"] }],
+          },
+        ],
+        firewallPolicys: [
+          {
+            name: "organizations/1/firewallPolicies/2",
+            shortName: "org-policy",
+            type: "HIERARCHY",
+            rules: [
+              {
+                action: "goto_next",
+                direction: "INGRESS",
+                priority: 100,
+                ruleName: "delegate-ingress",
+                match: {
+                  srcIpRanges: ["0.0.0.0/0"],
+                  layer4Configs: [{ ipProtocol: "all" }],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ]);
 
     const provider = new GcpProvider();
-    await provider.ensurePublicIngress(
+    const result = await provider.ensurePublicIngress(
       {
         provider: "gcp",
         instance_id: "ph-test",
@@ -170,6 +237,66 @@ describe("GcpProvider", () => {
         },
       }),
     );
+    expect(result).toEqual({
+      instance: {
+        network: "projects/proj-1/global/networks/default",
+        network_interface: "nic0",
+        public_ip: "203.0.113.20",
+        private_ip: "10.0.0.2",
+        tags: ["existing-tag", "cocalc-project-host-public-https"],
+      },
+      rule: {
+        name: "cocalc-project-host-public-https",
+        priority: 1000,
+        source_ranges: ["103.21.244.0/22", "173.245.48.0/20"],
+        target_tags: ["cocalc-project-host-public-https"],
+        allowed: [{ IPProtocol: "tcp", ports: ["443"] }],
+      },
+      potential_conflicts: [
+        {
+          name: "deny-project-host-ingress",
+          priority: 900,
+          source_ranges: ["0.0.0.0/0"],
+          target_tags: ["cocalc-project-host-public-https"],
+          denied: [{ IPProtocol: "tcp" }],
+        },
+      ],
+      effective_firewalls: {
+        firewalls: [
+          {
+            name: "cocalc-project-host-public-https",
+            priority: 1000,
+            direction: "INGRESS",
+            source_ranges: ["103.21.244.0/22"],
+            target_tags: ["cocalc-project-host-public-https"],
+            allowed: [{ IPProtocol: "tcp", ports: ["443"] }],
+            denied: [],
+          },
+        ],
+        policies: [
+          {
+            name: "organizations/1/firewallPolicies/2",
+            short_name: "org-policy",
+            type: "HIERARCHY",
+            priority: undefined,
+            rules: [
+              {
+                action: "goto_next",
+                direction: "INGRESS",
+                disabled: undefined,
+                priority: 100,
+                rule_name: "delegate-ingress",
+                source_ranges: ["0.0.0.0/0"],
+                destination_ranges: [],
+                layer4_configs: [{ ipProtocol: "all" }],
+                target_resources: [],
+                target_service_accounts: [],
+              },
+            ],
+          },
+        ],
+      },
+    });
   });
 
   it("creates a host with boot + data disks and startup script", async () => {

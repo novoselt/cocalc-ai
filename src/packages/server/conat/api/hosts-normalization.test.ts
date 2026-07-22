@@ -610,6 +610,45 @@ describe("computeHostOperationalAvailability", () => {
     ).toMatchObject({ operational: true, online: true });
   });
 
+  it("keeps a host operational after one transient Podman failure", () => {
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: new Date(),
+        metadata: {
+          runtime_health: {
+            status: "degraded",
+            ready: false,
+            consecutive_failures: 1,
+            error: "podman ps timed out",
+          },
+        },
+      }),
+    ).toMatchObject({ operational: true, online: true });
+  });
+
+  it("degrades a host after two consecutive Podman failures", () => {
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: new Date(),
+        metadata: {
+          runtime_health: {
+            status: "degraded",
+            ready: false,
+            consecutive_failures: 2,
+            error: "podman ps timed out",
+          },
+        },
+      }),
+    ).toMatchObject({
+      operational: false,
+      online: true,
+      reason_unavailable:
+        "Host project runtime is degraded: podman ps timed out",
+    });
+  });
+
   it("does not quarantine a host after only one synthetic failure", () => {
     expect(
       computeHostOperationalAvailability({

@@ -8,7 +8,8 @@ load_bay_env() {
     "${COCALC_BAY_WORKERS_ENV_FILE:-/etc/cocalc/bay-workers.env}" \
     "${COCALC_BAY_OVERLAY_ENV_FILE:-/etc/cocalc/bay-overlay.env}" \
     "${COCALC_BAY_TOPOLOGY_ENV_FILE:-/etc/cocalc/bay-topology.env}" \
-    "${COCALC_BAY_SECRETS_ENV_FILE:-/etc/cocalc/bay-secrets.env}"; do
+    "${COCALC_BAY_SECRETS_ENV_FILE:-/etc/cocalc/bay-secrets.env}" \
+    "${COCALC_BAY_LOCAL_ENV_FILE:-/etc/cocalc/bay-local.env}"; do
     if [[ -r "$env_file" ]]; then
       # shellcheck disable=SC1090
       set -a

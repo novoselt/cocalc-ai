@@ -29,6 +29,7 @@ const logger = getLogger("project-host:runtime-conformance");
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 const REQUIRED_PROJECT_CGROUP_COMMANDS = [
   "enter-project-cgroup",
+  "verify-project-io-limits",
   "verify-project-network-limits",
 ] as const;
 
@@ -216,6 +217,32 @@ async function checkProjectCgroupHelperContract(): Promise<CheckResult> {
   };
 }
 
+async function checkProjectIoPolicy(): Promise<CheckResult> {
+  const probe = await run("sudo", [
+    "-n",
+    STORAGE_WRAPPER,
+    "verify-project-io-policy",
+  ]);
+  return {
+    name: "project-io-policy",
+    ok: probe.exitCode === 0,
+    level: "error",
+    message:
+      probe.exitCode === 0
+        ? "project I/O policy conforms"
+        : "project I/O policy does not conform",
+    ...(probe.exitCode === 0
+      ? {}
+      : {
+          details: {
+            exitCode: probe.exitCode,
+            stderr: probe.stderr.trim(),
+            stdout: probe.stdout.trim(),
+          },
+        }),
+  };
+}
+
 async function checkSudoPolicyListsWrapper(): Promise<CheckResult> {
   const probe = await run("sudo", ["-n", "-l"]);
   if (probe.exitCode !== 0) {
@@ -304,6 +331,7 @@ const STARTUP_CHECK_FACTORIES: CheckFactory[] = [
     id: "project-cgroup-helper-contract",
     run: checkProjectCgroupHelperContract,
   },
+  { id: "project-io-policy", run: checkProjectIoPolicy },
   { id: "sudo-direct-deny", run: checkSudoWhitelistDeniesDirectRoot },
   {
     id: "sudo-generic-mount-deny",
@@ -321,6 +349,7 @@ const PERIODIC_CHECK_FACTORIES: CheckFactory[] = [
     id: "project-cgroup-helper-contract",
     run: checkProjectCgroupHelperContract,
   },
+  { id: "project-io-policy", run: checkProjectIoPolicy },
   { id: "sudo-wrapper-allow", run: checkSudoWhitelistAllowsWrapper },
 ];
 
@@ -388,6 +417,7 @@ export const __test__ = {
   commandTimeoutMs,
   helperCommandSupported,
   periodicCheckIds: () => PERIODIC_CHECK_FACTORIES.map(({ id }) => id),
+  requiredProjectCgroupCommands: () => [...REQUIRED_PROJECT_CGROUP_COMMANDS],
   run,
   startupCheckIds: () => STARTUP_CHECK_FACTORIES.map(({ id }) => id),
 };

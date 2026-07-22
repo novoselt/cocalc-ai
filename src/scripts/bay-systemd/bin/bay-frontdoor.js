@@ -18,6 +18,15 @@ function intEnv(name, fallback) {
 
 const bindHost = env("COCALC_BAY_FRONTDOOR_HOST", "127.0.0.1");
 const bindPort = intEnv("COCALC_BAY_FRONTDOOR_PORT", 9400);
+const publicIngressMode = env(
+  "COCALC_BAY_PUBLIC_INGRESS_MODE",
+  "cloudflare-tunnel",
+);
+if (!["cloudflare-tunnel", "cloudflare-proxy"].includes(publicIngressMode)) {
+  throw new Error(
+    `invalid COCALC_BAY_PUBLIC_INGRESS_MODE: ${publicIngressMode}`,
+  );
+}
 const healthPath = env(
   "COCALC_BAY_FRONTDOOR_HEALTH_PATH",
   "/_cocalc/frontdoor/healthz",
@@ -362,6 +371,54 @@ function addAffinityCookie(headers, worker, changed) {
   return nextHeaders;
 }
 
+function firstHeaderValue(value) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function normalizeRemoteAddress(req) {
+  const address = `${req.socket?.remoteAddress ?? ""}`.trim();
+  return address.startsWith("::ffff:") ? address.slice(7) : address;
+}
+
+function proxyRequestHeaders(req, worker) {
+  const headers = { ...req.headers };
+  headers["x-forwarded-host"] = req.headers.host ?? "";
+  headers["x-cocalc-bay-frontdoor-worker"] = `${worker.id}`;
+
+  if (publicIngressMode === "cloudflare-proxy") {
+    // Cloud Armor limits the external load balancer to Cloudflare source
+    // ranges. Replace, rather than append to, user-controlled forwarding
+    // headers before the loopback frontdoor passes them to Express.
+    const connectingIp = `${
+      firstHeaderValue(req.headers["cf-connecting-ip"]) ?? ""
+    }`.trim();
+    headers["x-forwarded-for"] = net.isIP(connectingIp)
+      ? connectingIp
+      : normalizeRemoteAddress(req);
+    headers["x-forwarded-proto"] = "https";
+    delete headers.forwarded;
+    delete headers["x-real-ip"];
+  } else {
+    headers["x-forwarded-proto"] = req.headers["cf-visitor"] ? "https" : "http";
+  }
+
+  return headers;
+}
+
+function serializeProxyRequest(req, headers) {
+  const requestLine = `${req.method} ${req.url} HTTP/${req.httpVersion}`;
+  const lines = [requestLine];
+  for (const [name, value] of Object.entries(headers)) {
+    if (value == null) {
+      continue;
+    }
+    for (const item of Array.isArray(value) ? value : [value]) {
+      lines.push(`${name}: ${item}`);
+    }
+  }
+  return `${lines.join("\r\n")}\r\n\r\n`;
+}
+
 function writeHealth(res) {
   const healthy = healthyWorkers();
   const drained = drainedWorkerIds();
@@ -410,10 +467,7 @@ function proxyHttp(req, res) {
   }
   const { worker, changed } = selected;
 
-  const headers = { ...req.headers };
-  headers["x-forwarded-host"] = req.headers.host ?? "";
-  headers["x-forwarded-proto"] = req.headers["cf-visitor"] ? "https" : "http";
-  headers["x-cocalc-bay-frontdoor-worker"] = `${worker.id}`;
+  const headers = proxyRequestHeaders(req, worker);
 
   const upstream = http.request(
     {
@@ -480,14 +534,9 @@ function proxyUpgrade(req, socket, head) {
     // longer than the HTTP upstream timeout.
     upstream.setTimeout(0);
     socket.setTimeout(0);
-    const requestLine = `${req.method} ${req.url} HTTP/${req.httpVersion}`;
-    const rawHeaders = [...req.rawHeaders];
-    rawHeaders.push("X-CoCalc-Bay-Frontdoor-Worker", `${worker.id}`);
-    const lines = [requestLine];
-    for (let i = 0; i < rawHeaders.length; i += 2) {
-      lines.push(`${rawHeaders[i]}: ${rawHeaders[i + 1]}`);
-    }
-    upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
+    upstream.write(
+      serializeProxyRequest(req, proxyRequestHeaders(req, worker)),
+    );
     if (head.length > 0) {
       upstream.write(head);
     }
@@ -518,6 +567,7 @@ function start() {
       healthPath,
       workerHealthPath,
       unhealthyThreshold,
+      publicIngressMode,
     });
     await scheduleHealthRefresh();
   });
@@ -532,5 +582,7 @@ if (require.main === module) {
 module.exports = {
   evictWorkerUpgrades,
   formatHealthError,
+  proxyRequestHeaders,
   recordWorkerHealth,
+  serializeProxyRequest,
 };

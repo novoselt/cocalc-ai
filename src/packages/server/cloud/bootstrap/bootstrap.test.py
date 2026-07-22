@@ -1402,6 +1402,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
+            policy_parser = script.split(
+                "<<'PY'\n", 1
+            )[1].split("\nPY\n", 1)[0]
+            compile(policy_parser, "embedded-project-io-policy.py", "exec")
             self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
             self.assertIn("project-rustic-backup)", script)
             self.assertIn("project-rustic-restore)", script)
@@ -1410,6 +1414,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertEqual(script.count('backup_status="$?"'), 1)
+            self.assertIn("backup_status=0", script)
+            self.assertIn('if [ "$backup_status" -eq 0 ]; then', script)
             self.assertIn(
                 'if ! "${rustic_cmd[@]}" repoinfo >/dev/null 2>&1; then',
                 script,
@@ -1419,7 +1425,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn(
-                'if "${rustic_cmd[@]}" backup -x --json --no-scan --host "$host_name" "${tag_args[@]}" "${parent_args[@]}" --glob "!.snapshots" --glob "!.snapshots/**" .; then',
+                '"${rustic_cmd[@]}" backup -x --json --no-scan --host "$host_name" "${tag_args[@]}" "${parent_args[@]}" --glob "!.snapshots" --glob "!.snapshots/**" . || backup_status="$?"',
                 script,
             )
             self.assertIn("parent_args=()", script)
@@ -1462,12 +1468,42 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("verify-project-pool)", script)
             self.assertIn("attach-project-cgroup)", script)
             self.assertIn("verify-project-network-limits)", script)
+            self.assertIn("verify-project-io-limits)", script)
+            self.assertIn("verify-project-io-policy)", script)
+            self.assertIn("project-io-status)", script)
+            self.assertIn('"capability": "validated"', script)
+            self.assertIn('"policy_profile": policy_profile', script)
+            self.assertIn('"capacity_source": capacity_source', script)
+            self.assertIn('"pool_io_weight": io_weight.strip()', script)
+            self.assertIn(
+                "io_class _policy_version _policy_profile _capacity_source",
+                script,
+            )
+            self.assertIn('*) io_class="standard" ;;', script)
+            self.assertIn(
+                '"$io_class" > "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}"',
+                script,
+            )
+            self.assertIn('io_class="${12:-standard}"', script)
+            self.assertIn("reconcile-project-io-policy)", script)
+            self.assertIn("normalize_project_io_class_state", script)
+            self.assertIn(
+                'PROJECT_IO_CLASS_STATE_DIR="/var/lib/cocalc/project-io-classes"',
+                script,
+            )
+            self.assertNotIn(
+                'PROJECT_IO_CLASS_STATE_DIR="/run/cocalc-project-io-classes"',
+                script,
+            )
             self.assertIn("reconcile-project-network-limits)", script)
             self.assertIn('PROJECT_PASTA_NOFILE_LIMIT="4096"', script)
             self.assertIn('PROJECT_TCP_NEW_RATE="50"', script)
             self.assertIn('PROJECT_UDP_NEW_RATE="100"', script)
             self.assertIn('PROJECT_METADATA_IPV4="169.254.169.254"', script)
             self.assertIn('PROJECT_METADATA_IPV6="fd20:ce::254"', script)
+            self.assertIn(
+                'PROJECT_METADATA_TCP_PORTS="{ 80, 443 }"', script
+            )
             self.assertIn("socket cgroupv2 level", script)
             self.assertIn("apply_pasta_resource_limits", script)
             self.assertIn("ensure_project_network_rule", script)
@@ -1478,6 +1514,13 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )[1].split("\n}\n\nemit_project_network_rules()", 1)[0]
             self.assertIn('comment "%s-ipv4"', emit_metadata_body)
             self.assertIn('comment "%s-ipv6"', emit_metadata_body)
+            self.assertEqual(emit_metadata_body.count("tcp dport %s"), 2)
+            self.assertNotIn(
+                'ip daddr %s counter drop', emit_metadata_body
+            )
+            self.assertNotIn(
+                'ip6 daddr %s counter drop', emit_metadata_body
+            )
             self.assertIn(
                 'marker="cocalc-project-network-metadata"', emit_metadata_body
             )
@@ -1519,8 +1562,17 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
             self.assertIn('PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"', script)
+            self.assertIn(
+                'PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"', script
+            )
+            self.assertIn(
+                'PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"', script
+            )
             self.assertIn('PROJECT_NETWORK_NFT_TIMEOUT_SECONDS="30"', script)
             self.assertIn("project-cgroup-lock-timeout", script)
+            self.assertIn("attach_storage_worker_to_project", script)
+            self.assertIn('"$$" > "$target/cgroup.procs"', script)
+            self.assertIn("PROJECT_STORAGE_WORKER_MEMORY_MAX", script)
             self.assertNotIn("project-network-lock-timeout", script)
             self.assertNotIn("acquire_project_network_lock", script)
             self.assertIn("--kill-after=2s", script)
@@ -1541,6 +1593,20 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertNotIn(
                 'ensure_project_network_rule "$project_id"',
                 reconcile_body,
+            )
+            self.assertLess(
+                reconcile_body.index(
+                    'for attempt in $(seq 1 "$PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS")'
+                ),
+                reconcile_body.index("configure_project_pool_hierarchy"),
+            )
+            self.assertIn(
+                'sleep "$PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS"',
+                reconcile_body,
+            )
+            self.assertLess(
+                reconcile_body.index("configure_project_pool_hierarchy"),
+                reconcile_body.index("configure_project_network_table"),
             )
             self.assertLess(
                 reconcile_body.index(
@@ -1857,10 +1923,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertTrue(rootctl.exists())
             self.assertTrue(core_handler.exists())
-            self.assertIn(str(rootctl), (runtime_bin / "ctl").read_text(encoding="utf-8"))
+            ctl_text = (runtime_bin / "ctl").read_text(encoding="utf-8")
+            rootctl_text = rootctl.read_text(encoding="utf-8")
+            self.assertIn(str(rootctl), ctl_text)
+            self.assertIn("start|ensure|restart|stop)", ctl_text)
+            self.assertIn(
+                'DAEMON_CONTROL_LOCK="/mnt/cocalc/data/tmp/project-host-daemon-control.lock"',
+                rootctl_text,
+            )
+            self.assertIn(
+                'flock -x -w "${DAEMON_CONTROL_LOCK_WAIT_SECONDS}" 8',
+                rootctl_text,
+            )
+            self.assertIn("start|ensure|restart|stop|protect)", rootctl_text)
             self.assertIn(
                 'COCALC_PROJECT_HOST_OOM_SCORE_ADJ:--900',
-                rootctl.read_text(encoding="utf-8"),
+                rootctl_text,
             )
             self.assertIn(
                 f'PROJECT_POOL_CGROUP_DEFAULT="{bootstrap.DEFAULT_PROJECT_POOL_CGROUP}"',

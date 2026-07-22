@@ -142,6 +142,9 @@ if [[ ! -e "${TARGET_ENV_DIR}/bay-topology.env" ]]; then
   install -m 0644 "${SCRIPT_DIR}/env/bay-topology.env.example" \
     "${TARGET_ENV_DIR}/bay-topology.env"
 fi
+if [[ ! -e "${TARGET_ENV_DIR}/bay-local.env" ]]; then
+  install -m 0644 /dev/null "${TARGET_ENV_DIR}/bay-local.env"
+fi
 
 if [[ "$OVERLAY_MODE" == "current-cocalc" ]]; then
   install -m 0644 "${SCRIPT_DIR}/env/bay-current-cocalc-overlay.env.example" \
@@ -187,13 +190,14 @@ Next steps:
   2. Edit ${TARGET_ENV_DIR}/bay-workers.env
   3. Edit ${TARGET_ENV_DIR}/bay-secrets.env
   4. Edit ${TARGET_ENV_DIR}/bay-topology.env for multibay clusters
-  5. Install the shared site master key:
+  5. Put persistent operator overrides in ${TARGET_ENV_DIR}/bay-local.env
+  6. Install the shared site master key:
      install -o root -g root -m 0600 /path/to/site-master-key ${TARGET_ENV_DIR}/site-master-key
 EOF
 
 if [[ "$OVERLAY_MODE" != "none" ]]; then
   cat <<EOF
-  6. Review ${TARGET_ENV_DIR}/bay-overlay.env
+  7. Review ${TARGET_ENV_DIR}/bay-overlay.env
 EOF
 fi
 

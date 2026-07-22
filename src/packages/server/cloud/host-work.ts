@@ -53,6 +53,7 @@ import { enqueueRootfsPrepullForHost } from "./rootfs-prepull";
 import { removeHostSshKnownHostAlias } from "./host-ssh-known-hosts";
 import {
   activeHostPublicRouteMode,
+  ensureDirectCloudflareIngressForHost,
   hostPublicRouteMigrationInProgress,
 } from "./public-route";
 
@@ -584,6 +585,15 @@ async function updateHostRow(id: string, updates: Record<string, any>) {
   );
 }
 
+function runtimeSshServer(row: any, runtime: any): string | null | undefined {
+  const providerId = normalizeProviderId(row?.metadata?.machine?.cloud);
+  const publicIp = `${runtime?.public_ip ?? ""}`.trim();
+  if (providerId === "gcp" && publicIp) {
+    return `${publicIp}:2222`;
+  }
+  return row?.ssh_server;
+}
+
 function setRuntimeObservedAt(metadata: any, at: Date): any {
   if (!metadata?.runtime) return metadata;
   return {
@@ -925,6 +935,7 @@ async function ensureDnsForHost(row: any) {
     if (!row?.metadata?.runtime?.public_ip) return;
     if (!(await hasDns())) return;
     try {
+      await ensureDirectCloudflareIngressForHost(row);
       const dns = await ensureHostDns({
         host_id: row.id,
         ipAddress: row.metadata.runtime.public_ip,
@@ -942,7 +953,7 @@ async function ensureDnsForHost(row: any) {
           `https://${dns.name}`,
       });
     } catch (err) {
-      logger.warn("direct project-host DNS update failed", {
+      logger.warn("direct project-host ingress/DNS update failed", {
         host_id: row.id,
         err,
       });
@@ -1299,6 +1310,7 @@ async function handleProvision(row: any) {
     status: statusForRecord,
     public_url: publicUrl,
     internal_url: internalUrl,
+    ssh_server: runtimeSshServer(provisioned, runtime),
   });
   await ensureDnsForHost({
     ...provisioned,
@@ -2415,7 +2427,7 @@ async function handleDelete(row: any) {
     });
     await entry.provider.deleteHost(runtime, creds);
   }
-  if (row.metadata?.cloudflare_tunnel && (await hasCloudflareTunnel())) {
+  if (await hasCloudflareTunnel()) {
     await deleteCloudflareTunnel({
       host_id: row.id,
       tunnel: row.metadata?.cloudflare_tunnel,
@@ -2459,6 +2471,7 @@ async function handleDelete(row: any) {
     status: "deprovisioned",
     public_url: null,
     internal_url: null,
+    ssh_server: null,
     last_seen: null,
   });
 }
@@ -2620,6 +2633,7 @@ async function handleRefreshRuntime(row: any) {
     metadata: nextMetadata,
     public_url: publicUrl,
     internal_url: internalUrl,
+    ssh_server: runtimeSshServer(host, nextMetadata.runtime),
     status: nextStatus,
   });
   const nextHost = {
@@ -2628,6 +2642,7 @@ async function handleRefreshRuntime(row: any) {
     metadata: nextMetadata,
     public_url: publicUrl,
     internal_url: internalUrl,
+    ssh_server: runtimeSshServer(host, nextMetadata.runtime),
   };
   await ensureDnsForHost(nextHost);
   await logCloudVmEvent({

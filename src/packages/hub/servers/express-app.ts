@@ -38,6 +38,7 @@ import { getDatabase } from "./database";
 import initHttpServer from "./http";
 import initRobots from "./robots";
 import initSitemap from "./sitemap";
+import { applyBaselineSecurityHeaders } from "./security-headers";
 import getServerSettings from "./server-settings";
 import basePath from "@cocalc/backend/base-path";
 import { initConatServer } from "@cocalc/server/conat/socketio";
@@ -93,6 +94,15 @@ function cloudflareTunnelEnabled(settings: Record<string, any>): boolean {
   return tunnelEnabled;
 }
 
+function cloudflareProxyHeadersEnabled(settings: Record<string, any>): boolean {
+  const bayIngressMode = `${process.env.COCALC_BAY_PUBLIC_INGRESS_MODE ?? ""}`
+    .trim()
+    .toLowerCase();
+  return (
+    bayIngressMode === "cloudflare-proxy" || cloudflareTunnelEnabled(settings)
+  );
+}
+
 function normalizeIp(ip?: string): string {
   let v = `${ip ?? ""}`.trim();
   if (!v) return "";
@@ -122,24 +132,6 @@ interface Options {
 }
 
 const staticCompression = compression({ threshold: 0 });
-
-function applyBaselineSecurityHeaders(_req, res, next): void {
-  // Conservative defaults that improve security without imposing CSP or frame
-  // restrictions that could break existing integrations.
-  if (!res.hasHeader("X-Content-Type-Options")) {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-  }
-  if (!res.hasHeader("X-DNS-Prefetch-Control")) {
-    res.setHeader("X-DNS-Prefetch-Control", "off");
-  }
-  if (!res.hasHeader("X-Permitted-Cross-Domain-Policies")) {
-    res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
-  }
-  if (!res.hasHeader("Referrer-Policy")) {
-    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  }
-  next();
-}
 
 export default async function init(opts: Options): Promise<{
   httpServer;
@@ -184,16 +176,17 @@ export default async function init(opts: Options): Promise<{
   // supposed to be keyed by client IP.
   //
   // Therefore:
-  //   - strict-cloudflare mode: trust forwarded headers only from local tunnel
-  //     proxy peers (loopback).
+  //   - strict-cloudflare mode: trust forwarded headers only from the local
+  //     frontdoor/tunnel proxy peer (loopback).
   //   - off mode: ignore forwarded headers and use direct socket address.
   //
-  // In launchpad self-host mode we only enable strict-cloudflare when tunnel mode
-  // is explicitly enabled in settings.
+  // In launchpad self-host mode we enable strict-cloudflare when either tunnel
+  // mode is configured or the bay frontdoor explicitly normalizes headers from
+  // a Cloudflare-proxied direct ingress.
   const settings = await getServerSettings();
   let strictCloudflareProxy = false;
   const applyTrustProxy = () => {
-    const nextStrict = cloudflareTunnelEnabled(
+    const nextStrict = cloudflareProxyHeadersEnabled(
       settings.all as Record<string, any>,
     );
     strictCloudflareProxy = nextStrict;

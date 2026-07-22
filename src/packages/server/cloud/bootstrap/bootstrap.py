@@ -2561,6 +2561,13 @@ BEES_CGROUP_MEMORY_HIGH_MIN="$((1 * 1024 * 1024 * 1024))"
 BEES_CGROUP_MEMORY_MAX_MIN="$((2 * 1024 * 1024 * 1024))"
 BEES_CGROUP_PIDS_MAX="64"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
+PROJECT_IO_POLICY_DEFAULT="/etc/cocalc/project-io-policy.json"
+PROJECT_IO_POLICY_OVERRIDE_DEFAULT="/etc/cocalc/project-io-policy.override.json"
+# This state is needed when cgroups are reconstructed at boot, before each
+# project has necessarily restarted and reported its authoritative class.
+PROJECT_IO_CLASS_STATE_DIR="/var/lib/cocalc/project-io-classes"
+PROJECT_STORAGE_WORKER_MEMORY_MAX="$((2 * 1024 * 1024 * 1024))"
+PROJECT_STORAGE_WORKER_MEMORY_HIGH="$((1 * 1024 * 1024 * 1024))"
 PROJECT_PROCESS_OOM_SCORE_ADJ="500"
 RUNTIME_USER="__RUNTIME_USER__"
 PROJECT_LEAF_POOL_HEADROOM_BYTES="$((2 * 1024 * 1024 * 1024))"
@@ -2570,15 +2577,19 @@ PROJECT_TCP_NEW_RATE="50"
 PROJECT_TCP_NEW_BURST="200"
 PROJECT_UDP_NEW_RATE="100"
 PROJECT_UDP_NEW_BURST="400"
-# Block exact cloud metadata endpoints without blocking pasta's other
-# link-local DNS and host aliases.
+# Cloud providers can multiplex metadata, DNS, and NTP on these addresses.
+# Block metadata HTTP(S) without breaking the DNS service projects inherit
+# from the host (notably GCP's 169.254.169.254:53 resolver).
 PROJECT_METADATA_IPV4="169.254.169.254"
 PROJECT_METADATA_IPV6="fd20:ce::254"
+PROJECT_METADATA_TCP_PORTS="{ 80, 443 }"
 PROJECT_NETWORK_NFT="/usr/sbin/nft"
 PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
 PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
 PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"
+PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"
+PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"
 # Full-chain reads are only used by background reconciliation and can take
 # over ten seconds on a busy host with hundreds of cgroup/socket rules.
 # Foreground project creation uses an append-only write and does not pay this
@@ -2643,6 +2654,221 @@ project_cgroup_relative_path() {
   printf '%s/project-%s\n' "$(project_pool_relative_path)" "$1"
 }
 
+project_io_policy_fields() {
+  local io_class="${1:-standard}"
+  case "$io_class" in
+    standard|member|premium) ;;
+    *) io_class="standard" ;;
+  esac
+  /usr/bin/python3 - "$PROJECT_IO_POLICY_DEFAULT" "$PROJECT_IO_POLICY_OVERRIDE_DEFAULT" "$io_class" <<'PY'
+import json
+import os
+import sys
+
+base_path, override_path, io_class = sys.argv[1:]
+defaults = {
+    "version": 1,
+    "mode": "disabled",
+    "mountpoint": "/mnt/cocalc",
+    "pool": {"rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
+    "leafClasses": {
+        "standard": {"weight": 100, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
+        "member": {"weight": 200, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
+        "premium": {"weight": 400, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
+    },
+}
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+        if not isinstance(value, dict):
+            raise ValueError("root must be an object")
+        return value
+    except FileNotFoundError:
+        return {}
+
+def merge(left, right):
+    result = dict(left)
+    for key, value in right.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+policy = merge(merge(defaults, load(base_path)), load(override_path))
+if policy.get("version") != 1:
+    raise ValueError("project I/O policy version must be 1")
+mode = policy.get("mode")
+if mode not in ("disabled", "observe", "enforce"):
+    raise ValueError("invalid project I/O policy mode")
+mountpoint = str(policy.get("mountpoint") or "/mnt/cocalc")
+if not mountpoint.startswith("/") or "\\t" in mountpoint or "\\n" in mountpoint:
+    raise ValueError("invalid project I/O mountpoint")
+pool = policy.get("pool") or {}
+leaf = (policy.get("leafClasses") or {}).get(io_class) or {}
+
+def integer(row, key, *, positive=False):
+    value = row.get(key, 0)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"invalid {key}")
+    if positive and value <= 0:
+        raise ValueError(f"missing enforced {key}")
+    return value
+
+require = mode == "enforce"
+pool_values = [integer(pool, key, positive=require) for key in ("rbps", "wbps", "riops", "wiops")]
+leaf_values = [integer(leaf, key, positive=require) for key in ("rbps", "wbps", "riops", "wiops")]
+weight = integer(leaf, "weight", positive=True)
+if weight > 10000:
+    raise ValueError("I/O weight exceeds 10000")
+profile = str(policy.get("profile") or "unconfigured")
+capacity_source = str(policy.get("capacitySource") or "unconfigured")
+for name, value in (("profile", profile), ("capacitySource", capacity_source)):
+    if "\\t" in value or "\\n" in value:
+        raise ValueError(f"invalid {name}")
+print("\\t".join(map(str, [
+    mode,
+    mountpoint,
+    *pool_values,
+    *leaf_values,
+    weight,
+    io_class,
+    policy["version"],
+    profile,
+    capacity_source,
+])))
+PY
+}
+
+project_io_devices() {
+  project_io_device_rows "$1" | cut -f2
+}
+
+project_io_device_rows() {
+  local mountpoint="$1" device resolved name scheduler major_hex minor_hex major minor
+  while IFS= read -r device; do
+    [ -b "$device" ] || continue
+    read -r major_hex minor_hex < <(stat -Lc '%t %T' "$device")
+    major="$((16#$major_hex))"
+    minor="$((16#$minor_hex))"
+    resolved="$(readlink -f "$device")"
+    name="$(basename "$resolved")"
+    scheduler=""
+    if [ -r "/sys/class/block/${name}/queue/scheduler" ]; then
+      scheduler="$(sed -n 's/.*\\[\\([^]]*\\)\\].*/\\1/p' "/sys/class/block/${name}/queue/scheduler")"
+    fi
+    printf '%s\t%s:%s\t%s\n' "$device" "$major" "$minor" "$scheduler"
+  done < <(/usr/bin/btrfs filesystem show --raw "$mountpoint" 2>/dev/null | awk '$1 == "devid" {print $NF}')
+}
+
+clear_stale_io_max() {
+  local cgroup="$1" current_devices="$2" device snapshot
+  [ -w "$cgroup/io.max" ] || return 0
+  snapshot="$(cat "$cgroup/io.max")"
+  while read -r device _rest; do
+    [ -n "$device" ] || continue
+    if ! grep -Fqx "$device" <<< "$current_devices"; then
+      printf '%s rbps=max wbps=max riops=max wiops=max\n' "$device" > "$cgroup/io.max"
+    fi
+  done <<< "$snapshot"
+}
+
+apply_io_max() {
+  local cgroup="$1" mountpoint="$2" rbps="$3" wbps="$4" riops="$5" wiops="$6"
+  local mode="$7" devices device line
+  if [ "$mode" = "observe" ]; then
+    return 0
+  fi
+  if [ ! -w "$cgroup/io.max" ]; then
+    [ "$mode" = "enforce" ] && deny "project-io-max-unavailable" "$cgroup"
+    return 0
+  fi
+  devices="$(project_io_devices "$mountpoint")"
+  if [ -z "$devices" ]; then
+    [ "$mode" = "enforce" ] && deny "project-io-device-unavailable" "$mountpoint"
+    return 0
+  fi
+  clear_stale_io_max "$cgroup" "$devices"
+  while IFS= read -r device; do
+    [ -n "$device" ] || continue
+    if [ "$mode" = "disabled" ]; then
+      line="$device rbps=max wbps=max riops=max wiops=max"
+    else
+      line="$device rbps=$rbps wbps=$wbps riops=$riops wiops=$wiops"
+    fi
+    printf '%s\n' "$line" > "$cgroup/io.max"
+  done <<< "$devices"
+}
+
+verify_io_max() {
+  local cgroup="$1" mountpoint="$2" rbps="$3" wbps="$4" riops="$5" wiops="$6"
+  local devices device line
+  [ -r "$cgroup/io.max" ] || deny "project-io-max-unavailable" "$cgroup"
+  devices="$(project_io_devices "$mountpoint")"
+  [ -n "$devices" ] || deny "project-io-device-unavailable" "$mountpoint"
+  while IFS= read -r device; do
+    [ -n "$device" ] || continue
+    line="$(awk -v device="$device" '$1 == device {print; exit}' "$cgroup/io.max")"
+    for expected in "rbps=$rbps" "wbps=$wbps" "riops=$riops" "wiops=$wiops"; do
+      grep -qw "$expected" <<< "$line" || deny "project-io-limit-mismatch" "cgroup=$cgroup,device=$device,expected=$expected,actual=${line:-missing}"
+    done
+  done <<< "$devices"
+}
+
+apply_project_pool_io_policy() {
+  local fields mode mountpoint rbps wbps riops wiops
+  fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
+  IFS=$'\t' read -r mode mountpoint rbps wbps riops wiops _rest <<< "$fields"
+  apply_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$mountpoint" "$rbps" "$wbps" "$riops" "$wiops" "$mode"
+  if [ "$mode" = "enforce" ]; then
+    verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$mountpoint" "$rbps" "$wbps" "$riops" "$wiops"
+  fi
+}
+
+apply_existing_project_io_policy() {
+  local cgroup="$1" project_id="$2" io_class="standard" fields
+  local mode mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops
+  local rbps wbps riops wiops weight _class
+  if [ -r "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}" ]; then
+    io_class="$(cat "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}")"
+    case "$io_class" in
+      standard|member|premium) ;;
+      *) io_class="standard" ;;
+    esac
+    printf '%s\n' "$io_class" > "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}"
+  fi
+  fields="$(project_io_policy_fields "$io_class")" || deny "project-io-policy-invalid" "$io_class"
+  IFS=$'\t' read -r mode mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops weight _class _policy_version _policy_profile _capacity_source <<< "$fields"
+  if [ -w "$cgroup/io.weight" ]; then
+    printf 'default %s\n' "$weight" > "$cgroup/io.weight"
+  fi
+  apply_io_max "$cgroup" "$mountpoint" "$rbps" "$wbps" "$riops" "$wiops" "$mode"
+  if [ "$mode" = "enforce" ]; then
+    verify_io_max "$cgroup" "$mountpoint" "$rbps" "$wbps" "$riops" "$wiops"
+  fi
+}
+
+normalize_project_io_class_state() {
+  local state_file project_id io_class
+  mkdir -p "$PROJECT_IO_CLASS_STATE_DIR"
+  for state_file in "${PROJECT_IO_CLASS_STATE_DIR}"/*; do
+    [ -f "$state_file" ] || continue
+    project_id="${state_file##*/}"
+    if ! is_project_uuid "$project_id"; then
+      rm -f -- "$state_file"
+      continue
+    fi
+    io_class="$(cat "$state_file")"
+    case "$io_class" in
+      standard|member|premium) ;;
+      *) io_class="standard" ;;
+    esac
+    printf '%s\n' "$io_class" > "$state_file"
+  done
+}
+
 enable_cgroup_controllers() {
   local parent="$1" controller
   [ -w "${parent}/cgroup.subtree_control" ] || return 0
@@ -2672,6 +2898,7 @@ configure_project_pool_hierarchy() {
     deny "project-pool-internal-processes-remain" "$remaining"
   fi
   enable_cgroup_controllers "$PROJECT_POOL_CGROUP_DEFAULT"
+  apply_project_pool_io_policy
 }
 
 require_finite_project_pool_memory_max() {
@@ -2708,7 +2935,9 @@ effective_project_memory_max() {
 configure_project_cgroup() {
   local cgroup="$1" memory_max="$2" memory_high="$3" memory_low="$4"
   local memory_swap_max="$5" pids_max="$6" cpu_quota="$7"
-  local cpu_period="$8" cpu_weight="$9" io_weight="${10}" value requested_memory_max
+  local cpu_period="$8" cpu_weight="$9" io_weight="${10}" io_class="${11:-standard}"
+  local value requested_memory_max fields io_mode io_mountpoint
+  local _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops policy_weight
   for value in "$memory_max" "$memory_high" "$memory_low" "$memory_swap_max" "$pids_max" "$cpu_quota"; do
     valid_cgroup_limit "$value" || deny "project-cgroup-limit-invalid" "$value"
   done
@@ -2718,6 +2947,11 @@ configure_project_cgroup() {
   fi
   if ! valid_positive_cgroup_limit "$io_weight" || [ "$io_weight" -gt 10000 ]; then
     deny "project-cgroup-io-weight-invalid" "$io_weight"
+  fi
+  fields="$(project_io_policy_fields "$io_class")" || deny "project-io-policy-invalid" "$io_class"
+  IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops policy_weight io_class _policy_version _policy_profile _capacity_source <<< "$fields"
+  if [ "$io_mode" = "enforce" ]; then
+    io_weight="$policy_weight"
   fi
   requested_memory_max="$memory_max"
   memory_max="$(effective_project_memory_max "$memory_max")"
@@ -2741,6 +2975,13 @@ configure_project_cgroup() {
   if [ -w "$cgroup/io.weight" ]; then
     printf 'default %s\n' "$io_weight" > "$cgroup/io.weight"
   fi
+  apply_io_max "$cgroup" "$io_mountpoint" "$rbps" "$wbps" "$riops" "$wiops" "$io_mode"
+  if [ "$io_mode" = "enforce" ]; then
+    verify_io_max "$cgroup" "$io_mountpoint" "$rbps" "$wbps" "$riops" "$wiops"
+  fi
+  mkdir -p "$PROJECT_IO_CLASS_STATE_DIR"
+  chmod 0755 "$PROJECT_IO_CLASS_STATE_DIR"
+  printf '%s\n' "$io_class" > "${PROJECT_IO_CLASS_STATE_DIR}/$(basename "$cgroup" | sed 's/^project-//')"
   # Keep the hard project cap, but let the kernel kill the process that caused
   # the OOM instead of terminating every terminal, kernel, and project daemon.
   printf '0\n' > "$cgroup/memory.oom.group"
@@ -2989,12 +3230,12 @@ emit_project_metadata_rules() {
   local path level marker="cocalc-project-network-metadata"
   path="$(project_network_pool_cgroup_path)"
   level="$(awk -F/ '{print NF}' <<< "$path")"
-  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip daddr %s counter drop comment "%s-ipv4"\\n' \
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip daddr %s tcp dport %s counter drop comment "%s-ipv4"\\n' \
     "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
-    "$PROJECT_METADATA_IPV4" "$marker"
-  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip6 daddr %s counter drop comment "%s-ipv6"\\n' \
+    "$PROJECT_METADATA_IPV4" "$PROJECT_METADATA_TCP_PORTS" "$marker"
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip6 daddr %s tcp dport %s counter drop comment "%s-ipv6"\\n' \
     "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
-    "$PROJECT_METADATA_IPV6" "$marker"
+    "$PROJECT_METADATA_IPV6" "$PROJECT_METADATA_TCP_PORTS" "$marker"
 }
 
 emit_project_network_rules() {
@@ -3097,17 +3338,22 @@ apply_project_network_process_limits() {
 
 reconcile_project_network_limits() {
   local attempt snapshot rules
-  configure_project_network_table
-  for attempt in $(seq 1 "$PROJECT_NETWORK_RECONCILE_ATTEMPTS"); do
+  # During early boot, systemd may still be settling the cgroup v2 tree. nft
+  # resolves socket cgroup paths while parsing the batch and rejects rules
+  # whose paths are not visible yet. Recreate the hierarchy on every attempt
+  # and give it time to become stable instead of aborting host bootstrap.
+  for attempt in $(seq 1 "$PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS"); do
+    configure_project_pool_hierarchy
+    configure_project_network_table
     snapshot="$(run_project_network_nft -a list chain inet "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN")"
     rules="$(render_project_network_rules "$snapshot")"
     if printf '%s\\n' "$rules" | run_project_network_nft -f -; then
       apply_project_network_process_limits
       return 0
     fi
-    sleep 0.1
+    sleep "$PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS"
   done
-  echo "project network nftables reconciliation failed after ${PROJECT_NETWORK_RECONCILE_ATTEMPTS} attempts" >&2
+  echo "project network nftables reconciliation failed after ${PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS} attempts" >&2
   return 1
 }
 
@@ -3398,6 +3644,37 @@ allow_privileged_delete_root() {
   echo "$path" | grep -Eq '^/mnt/cocalc/project-[0-9a-fA-F-]{32,64}(-scratch)?$'
 }
 
+project_id_from_delete_root() {
+  local root="${1//\\\\:/:}" base project_id
+  allow_privileged_delete_root "$root" || return 1
+  base="$(basename "$root")"
+  project_id="${base#project-}"
+  project_id="${project_id%-scratch}"
+  is_project_uuid "$project_id" || return 1
+  printf '%s\n' "$project_id"
+}
+
+attach_storage_worker_to_project() {
+  local root="$1" project_id target io_class="standard"
+  project_id="$(project_id_from_delete_root "$root")" || deny "storage-worker-project-invalid" "$root"
+  acquire_project_cgroup_lock
+  configure_project_pool_hierarchy
+  require_finite_project_pool_memory_max
+  target="$(project_cgroup "$project_id")"
+  if [ ! -d "$target" ]; then
+    if [ -r "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}" ]; then
+      io_class="$(cat "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}")"
+    fi
+    configure_project_cgroup \
+      "$target" "$PROJECT_STORAGE_WORKER_MEMORY_MAX" "$PROJECT_STORAGE_WORKER_MEMORY_HIGH" 0 0 64 \
+      100000 100000 50 100 "$io_class"
+  fi
+  [ -d "$target" ] || deny "storage-worker-cgroup-missing" "$target"
+  printf '%s\n' "$$" > "$target/cgroup.procs"
+  verify_project_pid_in_pool "$project_id" "$$" || deny "storage-worker-cgroup-mismatch" "$project_id"
+  release_project_lock
+}
+
 check_relative_delete_path() {
   local rel="$1"
   if [ -z "$rel" ]; then
@@ -3467,8 +3744,8 @@ escape_overlay_path() {
 
 case "$cmd" in
   prepare-project-cgroup)
-    if [ "$#" -ne 11 ]; then
-      echo "usage: cocalc-runtime-storage prepare-project-cgroup <project-id> <launcher-pid> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight>" >&2
+    if [ "$#" -ne 11 ] && [ "$#" -ne 12 ]; then
+      echo "usage: cocalc-runtime-storage prepare-project-cgroup <project-id> <launcher-pid> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight> <io-class>" >&2
       exit 2
     fi
     project_id="$1"
@@ -3482,6 +3759,9 @@ case "$cmd" in
     cpu_period="$9"
     cpu_weight="${10}"
     io_weight="${11}"
+    # Bootstrap helpers may converge before the project-host artifact. Keep
+    # the old caller safe during that window by selecting the lowest class.
+    io_class="${12:-standard}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
@@ -3493,7 +3773,7 @@ case "$cmd" in
     configure_project_cgroup \
       "$pool" "$memory_max" "$memory_high" "$memory_low" \
       "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
-      "$cpu_weight" "$io_weight"
+      "$cpu_weight" "$io_weight" "$io_class"
     printf '%s\n' "$launcher_pid" > "$pool/cgroup.procs"
     printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
     verify_project_pid_in_pool "$project_id" "$launcher_pid"
@@ -3522,8 +3802,8 @@ case "$cmd" in
     verify_project_pid_in_pool "$1" "$2"
     ;;
   attach-project-cgroup)
-    if [ "$#" -ne 11 ]; then
-      echo "usage: cocalc-runtime-storage attach-project-cgroup <project-id> <podman-netns-path|-> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight>" >&2
+    if [ "$#" -ne 11 ] && [ "$#" -ne 12 ]; then
+      echo "usage: cocalc-runtime-storage attach-project-cgroup <project-id> <podman-netns-path|-> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight> <io-class>" >&2
       exit 2
     fi
     project_id="$1"
@@ -3537,6 +3817,7 @@ case "$cmd" in
     cpu_period="$9"
     cpu_weight="${10}"
     io_weight="${11}"
+    io_class="${12:-standard}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
@@ -3553,7 +3834,7 @@ case "$cmd" in
     configure_project_cgroup \
       "$pool" "$memory_max" "$memory_high" "$memory_low" \
       "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
-      "$cpu_weight" "$io_weight"
+      "$cpu_weight" "$io_weight" "$io_class"
     release_project_lock
     # Process discovery and migration can be slow for a project with a very
     # large process tree. The cgroup now exists with its final limits, so keep
@@ -3568,6 +3849,108 @@ case "$cmd" in
         apply_pasta_resource_limits "$pasta_pid"
       done < <(find_pasta_pids_for_netns "$netns_path")
     fi
+    ;;
+  verify-project-io-limits)
+    if [ "$#" -ne 2 ] || ! is_project_uuid "$1"; then
+      echo "usage: cocalc-runtime-storage verify-project-io-limits <project-id> <io-class>" >&2
+      exit 2
+    fi
+    fields="$(project_io_policy_fields "$2")" || deny "project-io-policy-invalid" "$2"
+    IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops _weight _class _policy_version _policy_profile _capacity_source <<< "$fields"
+    if [ "$io_mode" = "enforce" ]; then
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$_pool_rbps" "$_pool_wbps" "$_pool_riops" "$_pool_wiops"
+      verify_io_max "$(project_cgroup "$1")" "$io_mountpoint" "$rbps" "$wbps" "$riops" "$wiops"
+    fi
+    ;;
+  verify-project-io-policy)
+    if [ "$#" -ne 0 ]; then
+      echo "usage: cocalc-runtime-storage verify-project-io-policy" >&2
+      exit 2
+    fi
+    fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
+    IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _leaf_rbps _leaf_wbps _leaf_riops _leaf_wiops _weight _class policy_version policy_profile capacity_source <<< "$fields"
+    if [ "$io_mode" = "enforce" ]; then
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$pool_rbps" "$pool_wbps" "$pool_riops" "$pool_wiops"
+    fi
+    ;;
+  project-io-status)
+    if [ "$#" -ne 0 ]; then
+      echo "usage: cocalc-runtime-storage project-io-status" >&2
+      exit 2
+    fi
+    fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "status"
+    IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _rest <<< "$fields"
+    if [ "$io_mode" = "enforce" ]; then
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$pool_rbps" "$pool_wbps" "$pool_riops" "$pool_wiops"
+    fi
+    device_rows="$(project_io_device_rows "$io_mountpoint")"
+    [ -n "$device_rows" ] || deny "project-io-device-unavailable" "$io_mountpoint"
+    pool_io_max="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.max" 2>/dev/null || true)"
+    pool_pressure="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.pressure" 2>/dev/null || true)"
+    legacy_processes="$(cat "$(project_legacy_cgroup)/cgroup.procs" 2>/dev/null || true)"
+    pool_io_weight="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)"
+    /usr/bin/python3 - "$fields" "$device_rows" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" <<'PY'
+import json
+import sys
+
+fields, rows, io_max, io_weight, pressure, legacy = sys.argv[1:]
+parts = fields.split("\t")
+mode, mountpoint = parts[:2]
+policy_version = int(parts[12])
+policy_profile = parts[13]
+capacity_source = parts[14]
+devices = []
+for row in rows.splitlines():
+    device, major_minor, scheduler = (row.split("\t") + [""])[:3]
+    item = {"device": device, "major_minor": major_minor}
+    if scheduler:
+        item["scheduler"] = scheduler
+    devices.append(item)
+
+pressure_values = {}
+for row in pressure.splitlines():
+    columns = row.split()
+    if not columns:
+        continue
+    kind = columns[0]
+    values = dict(column.split("=", 1) for column in columns[1:] if "=" in column)
+    if "avg10" in values:
+        pressure_values[f"pressure_{kind}_percent"] = float(values["avg10"])
+    if "total" in values:
+        pressure_values[f"pressure_{kind}_total"] = int(values["total"])
+
+print(json.dumps({
+    "policy_mode": mode,
+    "policy_version": policy_version,
+    "policy_profile": policy_profile,
+    "capacity_source": capacity_source,
+    "mountpoint": mountpoint,
+    "filesystem": "btrfs",
+    "capability": "validated" if mode == "enforce" else "available",
+    "pool_cgroup": "/sys/fs/cgroup/cocalc-project-pool",
+    "pool_io_max": io_max.strip(),
+    "pool_io_weight": io_weight.strip(),
+    "devices": devices,
+    "legacy_process_count": len(legacy.split()),
+    **pressure_values,
+}, separators=(",", ":")))
+PY
+    ;;
+  reconcile-project-io-policy)
+    if [ "$#" -ne 0 ]; then
+      echo "usage: cocalc-runtime-storage reconcile-project-io-policy" >&2
+      exit 2
+    fi
+    acquire_project_cgroup_lock
+    normalize_project_io_class_state
+    configure_project_pool_hierarchy
+    for pool in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
+      [ -d "$pool" ] || continue
+      project_id="${pool##*/project-}"
+      is_project_uuid "$project_id" || continue
+      apply_existing_project_io_policy "$pool" "$project_id"
+    done
+    release_project_lock
     ;;
   verify-project-network-limits)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then
@@ -3847,6 +4230,7 @@ case "$cmd" in
     if ! check_relative_delete_path "$rel"; then
       deny "sandbox-delete-path-invalid" "$rel"
     fi
+    attach_storage_worker_to_project "$root"
     project_rel="${root#/mnt/cocalc/}"
     helper=(/usr/local/libexec/cocalc-runtime-storage-path-helper rm --root /mnt/cocalc --path "${project_rel}/${rel}")
     while [ "$#" -gt 0 ]; do
@@ -3877,6 +4261,7 @@ case "$cmd" in
     if ! check_relative_delete_path "$rel"; then
       deny "sandbox-delete-path-invalid" "$rel"
     fi
+    attach_storage_worker_to_project "$root"
     project_rel="${root#/mnt/cocalc/}"
     helper=(/usr/local/libexec/cocalc-runtime-storage-path-helper rmdir --root /mnt/cocalc --path "${project_rel}/${rel}")
     while [ "$#" -gt 0 ]; do
@@ -4349,10 +4734,11 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     fi
     rustic_cmd=("$(rustic_binary)" -P "$repo_profile")
     cd "$src"
-    if "${rustic_cmd[@]}" backup -x --json --no-scan --host "$host_name" "${tag_args[@]}" "${parent_args[@]}" --glob "!.snapshots" --glob "!.snapshots/**" .; then
+    backup_status=0
+    "${rustic_cmd[@]}" backup -x --json --no-scan --host "$host_name" "${tag_args[@]}" "${parent_args[@]}" --glob "!.snapshots" --glob "!.snapshots/**" . || backup_status="$?"
+    if [ "$backup_status" -eq 0 ]; then
       exit 0
     fi
-    backup_status="$?"
     if "${rustic_cmd[@]}" repoinfo >/dev/null 2>&1; then
       exit "$backup_status"
     fi
@@ -4826,6 +5212,35 @@ esac
         text_write_atomic(p, content, default_mode=0o755)
         os.chown(p, 0, 0)
         p.chmod(0o755)
+
+    policy_path = Path("/etc/cocalc/project-io-policy.json")
+    if not policy_path.exists():
+        policy = {
+            "version": 1,
+            "mode": "disabled",
+            "mountpoint": "/mnt/cocalc",
+            "profile": "unconfigured",
+            "capacitySource": "unconfigured",
+            "pool": {"rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
+            "leafClasses": {
+                "standard": {"weight": 100, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
+                "member": {"weight": 200, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
+                "premium": {"weight": 400, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
+            },
+            "adaptive": {"enabled": False, "sampleMs": 5000, "enterSamples": 6, "recoverSamples": 24},
+            "ioCost": {"mode": "disabled"},
+        }
+        text_write_atomic(
+            policy_path,
+            json.dumps(policy, indent=2, sort_keys=True) + "\n",
+            default_mode=0o644,
+        )
+    os.chown(policy_path, 0, 0)
+    policy_path.chmod(0o644)
+    override_path = Path("/etc/cocalc/project-io-policy.override.json")
+    if override_path.exists():
+        os.chown(override_path, 0, 0)
+        override_path.chmod(0o600)
 
 
 def reconcile_bees_runtime_policy(cfg: BootstrapConfig) -> None:
@@ -5556,11 +5971,8 @@ bin="$RUNTIME_ROOT/bin/project-host"
 pid_file="/mnt/cocalc/data/daemon.pid"
 rootctl="__ROOTCTL__"
 case "${cmd}" in
-  start|ensure|restart)
+  start|ensure|restart|stop)
     exec sudo -n "${rootctl}" "${cmd}" "$@"
-    ;;
-  stop)
-    "${bin}" daemon stop "$@"
     ;;
   status)
     pid=""
@@ -5791,6 +6203,8 @@ PID_FILE="/mnt/cocalc/data/daemon.pid"
 HOST_AGENT_PID_FILE="/mnt/cocalc/data/host-agent.pid"
 CONAT_ROUTER_PID_FILE="/mnt/cocalc/data/conat-router.pid"
 CONAT_PERSIST_PID_FILE="/mnt/cocalc/data/conat-persist.pid"
+DAEMON_CONTROL_LOCK="/mnt/cocalc/data/tmp/project-host-daemon-control.lock"
+DAEMON_CONTROL_LOCK_WAIT_SECONDS="${COCALC_PROJECT_HOST_CONTROL_LOCK_WAIT_SECONDS:-30}"
 FORENSICS_ROOT="/var/lib/cocalc-project-host-forensics"
 MAX_FORENSICS_DURATION_SECONDS="30"
 MAX_FORENSICS_FILE_BLOCKS="65536"
@@ -5827,6 +6241,15 @@ deny() {
 run_daemon() {
   cd /
   sudo -n -u "${RUNTIME_USER}" -H "${RUNTIME_BIN}" daemon "$@"
+}
+
+acquire_daemon_control_lock() {
+  install -d -o "${RUNTIME_USER}" -g "${RUNTIME_USER}" -m 0700 "$(dirname "${DAEMON_CONTROL_LOCK}")"
+  exec 8>"${DAEMON_CONTROL_LOCK}"
+  if ! flock -x -w "${DAEMON_CONTROL_LOCK_WAIT_SECONDS}" 8; then
+    echo "timed out waiting for project-host daemon control lock" >&2
+    exit 1
+  fi
 }
 
 apply_project_host_sysctls() {
@@ -6576,6 +6999,12 @@ doctor() {
   printf 'podman ps: ok\n'
   return "${status}"
 }
+
+case "${cmd}" in
+  start|ensure|restart|stop|protect)
+    acquire_daemon_control_lock
+    ;;
+esac
 
 case "${cmd}" in
   start|ensure)
