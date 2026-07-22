@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { restoreNotebookScroll } from "./cell-list";
+import { canShowCellDragHandle, restoreNotebookScroll } from "./cell-list";
 
 function makeScroller({
   scrollTop,
@@ -63,5 +63,19 @@ describe("restoreNotebookScroll", () => {
     });
 
     expect(scroller.scrollTop).toBe(180);
+  });
+});
+
+describe("canShowCellDragHandle", () => {
+  it("fails closed while notebook actions have no store", () => {
+    expect(canShowCellDragHandle({} as any, "cell-1")).toBe(false);
+  });
+
+  it("uses the notebook store's editability decision", () => {
+    const is_cell_editable = jest.fn(() => true);
+    const actions = { store: { is_cell_editable } } as any;
+
+    expect(canShowCellDragHandle(actions, "cell-1")).toBe(true);
+    expect(is_cell_editable).toHaveBeenCalledWith("cell-1");
   });
 });
