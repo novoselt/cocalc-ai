@@ -358,6 +358,16 @@ export async function processSubscriptionRenewal({
     if (metadata?.type != "membership") {
       throw Error("subscription must be for a membership");
     }
+    if (renewal_attempt_id && !attempt) {
+      logger.debug("ignoring callback for missing renewal attempt", {
+        renewal_attempt_id,
+        subscription_id: subscriptionId,
+      });
+      if (useTransaction) {
+        await transaction.query("COMMIT");
+      }
+      return;
+    }
     if (attempt) {
       if (
         attempt.account_id !== account_id ||
@@ -623,6 +633,14 @@ export async function processSubscriptionRenewalFailure({
           forUpdate: true,
         })
       : undefined;
+    if (renewal_attempt_id && !attempt) {
+      logger.debug("ignoring failure for missing renewal attempt", {
+        renewal_attempt_id,
+        subscription_id: id,
+      });
+      await client.query("COMMIT");
+      return;
+    }
     if (attempt) {
       if (attempt.account_id !== account_id || attempt.subscription_id !== id) {
         throw Error("renewal attempt does not belong to this subscription");

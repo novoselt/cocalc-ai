@@ -24,24 +24,21 @@ PROCESS PAYMENT:
     "this is for renewal of this subscription". Then create a
     "subscription-payment" service line item taking that money back.
   - Extend the subscription period and save the payment intent id with the subscription.
-  - The frontend UI clearly surfaces this payment state, e.g., the
-    displayed membership, the subscription, and the payment display in the frontend
-    UI should all reflect this status.  In particular, the UI should clearly show
-    the grace period status to avoid confusion.
+  - The frontend UI clearly surfaces this payment state and blocks membership
+    changes until it reaches a terminal outcome.
   - Users have an account setting to apply any balance on their account
     first toward subscriptions.
 
 
 PAYMENT FOLLOW-UP:
 
-  - If the payment intent is not actually paid, then the subscription isn't renewed
-    and membership benefits stop at the period end. This doesn't require anybody doing
-    anything and it just happens. There is no danger of abuse due to edits or refunds
-    involving a subscription. At this point, when processing the canceled payment
-    intent we *do* also cancel the subscription, thus putting it in the right state
-    to be resumed with a new renewal period, and avoiding any further automated
-    attempts to collect money. If the user wants to resume membership, they just click
-    a button to resume it and they are back to work.
+  - While CoCalc has not reached a terminal payment outcome, the subscription
+    stays active and membership benefits continue. A delayed attempt is an
+    operational failure, not customer nonpayment, and is surfaced to admins by
+    the aggregate renewal health alert.
+
+  - A terminal automatic payment failure cancels the subscription and stops
+    membership benefits. The user can resume it later with a new renewal period.
 
   - In particular, if a user doesn't pay their monthly subscription for 90 days (say),
     then their membership benefits would have not worked during the last 90 days and we didn't
@@ -52,12 +49,8 @@ PAYMENT FOLLOW-UP:
 
 MANUAL PAYMENTS:
 
-- User can manually pay for the next period of a subscription at
-  any point in time by clicking a button.  This will make developing the above
-  functionality easier, but also give users more clarity into what to
-  expect and make it easier for them to plan.  This is also closely related to what
-  is linked to in the reminder emails.     This button will also allow paying
-  for the next period of a subscription manually using positive balance.
+- The legacy manual payment route uses the same durable attempt and cannot
+  collect payment before the exact paid-through boundary.
 
 */
 

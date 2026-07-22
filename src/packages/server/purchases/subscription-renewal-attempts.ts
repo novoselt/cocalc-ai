@@ -168,6 +168,8 @@ export async function claimSubscriptionRenewalAttempt({
         AND account_id=$2
         AND subscription_id=$3
         AND state IN ('scheduled','processing')
+        AND not_before <= NOW()
+        AND next_attempt_at <= NOW()
         AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
       RETURNING *`,
     [attempt_id, account_id, subscription_id, RENEWAL_ATTEMPT_LEASE_MS],
