@@ -48,7 +48,10 @@ describe("cancelSubscription", () => {
   });
 
   it("does not send a cancellation notification when the account does not own the subscription", async () => {
-    mockPoolQuery.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    mockPoolQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
 
     await expect(
       cancelSubscription({
@@ -57,7 +60,7 @@ describe("cancelSubscription", () => {
       }),
     ).rejects.toThrow("You do not have a subscription with id 7.");
 
-    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(4);
     expect(mockPoolQuery).toHaveBeenLastCalledWith("ROLLBACK");
     expect(mockSend).not.toHaveBeenCalled();
     expect(mockAdminAlert).not.toHaveBeenCalled();
@@ -65,6 +68,8 @@ describe("cancelSubscription", () => {
 
   it("sends a cancellation notification after canceling the owned subscription", async () => {
     mockPoolQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [] })
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({
@@ -84,7 +89,7 @@ describe("cancelSubscription", () => {
       reason: "user request",
     });
 
-    expect(mockPoolQuery).toHaveBeenCalledTimes(3);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(5);
     expect(mockSend).toHaveBeenCalledWith(
       expect.objectContaining({
         to_ids: ["owner-account"],
@@ -99,6 +104,8 @@ describe("cancelSubscription", () => {
       now: new Date("2026-07-01T12:34:56.789Z"),
     });
     mockPoolQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rowCount: 1,
         rows: [
@@ -147,5 +154,23 @@ describe("cancelSubscription", () => {
         trial_status: "canceled",
       }),
     );
+  });
+
+  it("rejects cancellation while a membership renewal is due", async () => {
+    mockPoolQuery.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({
+      rows: [{ subscription_id: 10 }],
+    });
+
+    await expect(
+      cancelSubscription({
+        account_id: "owner-account",
+        subscription_id: 10,
+        reason: "user request",
+      }),
+    ).rejects.toThrow(/is renewing/);
+
+    expect(mockPoolQuery).toHaveBeenCalledTimes(3);
+    expect(mockPoolQuery).toHaveBeenLastCalledWith("ROLLBACK");
+    expect(mockSend).not.toHaveBeenCalled();
   });
 });
