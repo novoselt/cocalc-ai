@@ -1194,6 +1194,7 @@ export interface AdminRetentionOverview {
 
 export interface AdminRetentionOverviewQuery {
   account_id?: string;
+  timeout?: number;
   start?: string | Date;
   end?: string | Date;
   unit?: AdminRetentionCohortUnit;
@@ -1221,6 +1222,7 @@ export interface AdminActiveUsersOverview {
 
 export interface AdminActiveUsersOverviewQuery {
   account_id?: string;
+  timeout?: number;
   start?: string | Date;
   end?: string | Date;
   bucket?: AdminActiveUsersBucket;
