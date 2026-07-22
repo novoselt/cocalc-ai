@@ -4,6 +4,7 @@
  */
 
 import type { PoolClient } from "@cocalc/database/pool";
+import type { Status } from "@cocalc/util/db-schema/subscriptions";
 
 type Queryable = Pick<PoolClient, "query">;
 
@@ -65,12 +66,13 @@ export async function getRenewableMembershipSubscriptions({
   account_id: string;
   client: Queryable;
   forUpdate?: boolean;
-}): Promise<{ id: number; current_period_end: Date }[]> {
+}): Promise<{ id: number; current_period_end: Date; status: Status }[]> {
   const { rows } = await client.query<{
     id: number;
     current_period_end: Date;
+    status: Status;
   }>(
-    `SELECT id, current_period_end
+    `SELECT id, current_period_end, status
        FROM subscriptions
       WHERE account_id=$1
         AND metadata->>'type'='membership'

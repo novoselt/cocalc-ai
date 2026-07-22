@@ -81,7 +81,7 @@ export async function applyMembershipChange({
       });
     }
     if (
-      renewable[0] != null &&
+      renewable[0]?.status === "active" &&
       new Date(renewable[0].current_period_end) < new Date()
     ) {
       throw new MembershipSubscriptionConflictError({
