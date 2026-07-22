@@ -7,6 +7,10 @@ import adminAlert from "@cocalc/server/messages/admin-alert";
 import { moneyToCurrency } from "@cocalc/util/money";
 import { recordMembershipAnalyticsEvent } from "@cocalc/server/membership/analytics";
 import { cancelOpenSubscriptionRenewalAttempts } from "./subscription-renewal-attempts";
+import {
+  assertNoDueMembershipRenewal,
+  lockMembershipSubscriptionAccount,
+} from "./membership-subscription-guard";
 
 interface Options {
   account_id: string;
@@ -25,6 +29,8 @@ export default async function cancelSubscription({
   const useTransaction = client == null;
   const now = new Date();
   try {
+    await lockMembershipSubscriptionAccount({ account_id, client: pool });
+    await assertNoDueMembershipRenewal({ account_id, client: pool });
     const update = await pool.query(
       `UPDATE subscriptions
         SET status='canceled', canceled_at=$1, canceled_reason=$2
