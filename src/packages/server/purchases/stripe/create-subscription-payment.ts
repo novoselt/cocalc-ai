@@ -35,6 +35,7 @@ import {
   scheduleSubscriptionRenewalAttempt as scheduleNextRenewalAttempt,
   setSubscriptionPaymentFromAttempt,
 } from "../subscription-renewal-attempts";
+import { lockMembershipSubscriptionAccount } from "../membership-subscription-guard";
 
 // nothing should ever be this small, but just in case:
 const MIN_SUBSCRIPTION_AMOUNT = 1;
@@ -118,32 +119,11 @@ export default async function createSubscriptionPayment({
 }): Promise<{ payment_intent_id?: string }> {
   logger.debug("createSubscriptionPayment", { account_id, subscription_id });
 
-  let attempt: SubscriptionRenewalAttempt | undefined;
-  if (renewal_attempt_id) {
-    attempt = await getSubscriptionRenewalAttempt({
-      attempt_id: renewal_attempt_id,
-    });
-  } else {
-    renewal_attempt_id = await scheduleSubscriptionRenewalAttempt({
-      account_id,
-      subscription_id,
-    });
-    if (renewal_attempt_id) {
-      attempt = await claimSubscriptionRenewalAttempt({
-        attempt_id: renewal_attempt_id,
-        account_id,
-        subscription_id,
-      });
-    }
-  }
-  if (
-    !attempt ||
-    attempt.account_id !== account_id ||
-    attempt.subscription_id !== subscription_id ||
-    !["scheduled", "processing"].includes(attempt.state)
-  ) {
-    throw Error("subscription does not have an active renewal attempt");
-  }
+  const attempt = await prepareSubscriptionRenewalAttempt({
+    account_id,
+    subscription_id,
+    renewal_attempt_id,
+  });
   if (attempt.payment_intent_id) {
     return { payment_intent_id: attempt.payment_intent_id };
   }
@@ -298,6 +278,58 @@ ${site_name} has started renewing your ${moneyToCurrency(amountValue)}/${interva
 ${await support()}`,
   });
   return { payment_intent_id };
+}
+
+async function prepareSubscriptionRenewalAttempt({
+  account_id,
+  subscription_id,
+  renewal_attempt_id,
+}: {
+  account_id: string;
+  subscription_id: number;
+  renewal_attempt_id?: string;
+}): Promise<SubscriptionRenewalAttempt> {
+  const client = await getTransactionClient();
+  try {
+    await lockMembershipSubscriptionAccount({ account_id, client });
+    let attempt: SubscriptionRenewalAttempt | undefined;
+    if (renewal_attempt_id) {
+      attempt = await getSubscriptionRenewalAttempt({
+        attempt_id: renewal_attempt_id,
+        client,
+        forUpdate: true,
+      });
+    } else {
+      renewal_attempt_id = await scheduleSubscriptionRenewalAttempt({
+        account_id,
+        subscription_id,
+        client,
+      });
+      if (renewal_attempt_id) {
+        attempt = await claimSubscriptionRenewalAttempt({
+          attempt_id: renewal_attempt_id,
+          account_id,
+          subscription_id,
+          client,
+        });
+      }
+    }
+    if (
+      !attempt ||
+      attempt.account_id !== account_id ||
+      attempt.subscription_id !== subscription_id ||
+      !["scheduled", "processing"].includes(attempt.state)
+    ) {
+      throw Error("subscription does not have an active renewal attempt");
+    }
+    await client.query("COMMIT");
+    return attempt;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function processSubscriptionRenewal({

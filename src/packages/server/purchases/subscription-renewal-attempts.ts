@@ -152,12 +152,14 @@ export async function claimSubscriptionRenewalAttempt({
   attempt_id,
   account_id,
   subscription_id,
+  client,
 }: {
   attempt_id: string;
   account_id: string;
   subscription_id: number;
+  client?: Queryable;
 }): Promise<SubscriptionRenewalAttempt> {
-  const { rows } = await getPool().query<SubscriptionRenewalAttempt>(
+  const { rows } = await queryable(client).query<SubscriptionRenewalAttempt>(
     `UPDATE subscription_renewal_attempts
         SET state='processing',
             lease_expires_at=NOW() + ($4 * INTERVAL '1 millisecond'),
