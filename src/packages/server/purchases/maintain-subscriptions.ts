@@ -73,6 +73,7 @@ import {
   formatRenewalDate,
   getRenewalPaymentNotice,
 } from "./subscription-renewal-notice";
+import { alertDelayedSubscriptionRenewals } from "./subscription-renewal-health";
 
 const logger = getLogger("purchases:maintain-subscriptions");
 
@@ -94,6 +95,17 @@ export default async function maintainSubscriptions() {
     adminAlert({
       subject: `nonfatal ERROR in createPayments`,
       body: err,
+    });
+  }
+  try {
+    await alertDelayedSubscriptionRenewals();
+  } catch (err) {
+    logger.debug("nonfatal ERROR in renewal health check - ", err);
+    adminAlert({
+      subject: "ERROR checking personal membership renewal health",
+      body: err,
+      dedupBySubject: true,
+      dedupMinutes: 24 * 60,
     });
   }
 }

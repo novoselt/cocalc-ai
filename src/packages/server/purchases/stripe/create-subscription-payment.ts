@@ -15,7 +15,6 @@ import type { Subscription } from "@cocalc/util/db-schema/subscriptions";
 import createPaymentIntent from "./create-payment-intent";
 import getBalance from "@cocalc/server/purchases/get-balance";
 import send, { support, url } from "@cocalc/server/messages/send";
-import adminAlert from "@cocalc/server/messages/admin-alert";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { sendCancelNotification } from "../cancel-subscription";
 import getConn from "@cocalc/server/stripe/connection";
@@ -250,10 +249,6 @@ export default async function createSubscriptionPayment({
     } catch (err) {
       logger.debug("error renewing subscription", err);
       await client.query("ROLLBACK");
-      adminAlert({
-        subject: `${site_name} Subscription Renewal: Id ${subscription_id}`,
-        body: `Something that should not happen has gone wrong renewing subscription id=${subscription_id} for account account_id=${account_id}.  CoCalc tried to pay for the subscription renewal entirely out of the user's balance, but something crashed.  Please look into this ASAP, so their service is not inerrupted. \n\n${err}`,
-      });
       throw err;
     } finally {
       client.release();
