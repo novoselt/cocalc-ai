@@ -1,5 +1,4 @@
 import getLogger from "@cocalc/backend/logger";
-import { getStripeCustomerId } from "./util";
 import getPool, {
   getTransactionClient,
   type PoolClient,
@@ -128,13 +127,6 @@ export default async function createSubscriptionPayment({
   if (attempt.payment_intent_id) {
     return { payment_intent_id: attempt.payment_intent_id };
   }
-
-  const customer = await getStripeCustomerId({ account_id, create: true });
-  if (!customer) {
-    throw Error("Unable to get stripe customer id");
-  }
-
-  logger.debug("createSubscriptionPayment -- ", { customer });
   const pool = getPool();
   const { rows: subscriptions } = await pool.query(
     "SELECT payment, cost, metadata, interval, current_period_end, latest_purchase_id, status FROM subscriptions WHERE account_id=$1 AND id=$2",
