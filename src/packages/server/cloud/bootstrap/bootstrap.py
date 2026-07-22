@@ -2577,10 +2577,12 @@ PROJECT_TCP_NEW_RATE="50"
 PROJECT_TCP_NEW_BURST="200"
 PROJECT_UDP_NEW_RATE="100"
 PROJECT_UDP_NEW_BURST="400"
-# Block exact cloud metadata endpoints without blocking pasta's other
-# link-local DNS and host aliases.
+# Cloud providers can multiplex metadata, DNS, and NTP on these addresses.
+# Block metadata HTTP(S) without breaking the DNS service projects inherit
+# from the host (notably GCP's 169.254.169.254:53 resolver).
 PROJECT_METADATA_IPV4="169.254.169.254"
 PROJECT_METADATA_IPV6="fd20:ce::254"
+PROJECT_METADATA_TCP_PORTS="{ 80, 443 }"
 PROJECT_NETWORK_NFT="/usr/sbin/nft"
 PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
@@ -3228,12 +3230,12 @@ emit_project_metadata_rules() {
   local path level marker="cocalc-project-network-metadata"
   path="$(project_network_pool_cgroup_path)"
   level="$(awk -F/ '{print NF}' <<< "$path")"
-  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip daddr %s counter drop comment "%s-ipv4"\\n' \
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip daddr %s tcp dport %s counter drop comment "%s-ipv4"\\n' \
     "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
-    "$PROJECT_METADATA_IPV4" "$marker"
-  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip6 daddr %s counter drop comment "%s-ipv6"\\n' \
+    "$PROJECT_METADATA_IPV4" "$PROJECT_METADATA_TCP_PORTS" "$marker"
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ip6 daddr %s tcp dport %s counter drop comment "%s-ipv6"\\n' \
     "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
-    "$PROJECT_METADATA_IPV6" "$marker"
+    "$PROJECT_METADATA_IPV6" "$PROJECT_METADATA_TCP_PORTS" "$marker"
 }
 
 emit_project_network_rules() {
