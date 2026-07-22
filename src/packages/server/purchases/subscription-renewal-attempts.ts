@@ -148,6 +148,36 @@ export async function claimDueSubscriptionRenewalAttempts({
   return rows;
 }
 
+export async function claimSubscriptionRenewalAttempt({
+  attempt_id,
+  account_id,
+  subscription_id,
+}: {
+  attempt_id: string;
+  account_id: string;
+  subscription_id: number;
+}): Promise<SubscriptionRenewalAttempt> {
+  const { rows } = await getPool().query<SubscriptionRenewalAttempt>(
+    `UPDATE subscription_renewal_attempts
+        SET state='processing',
+            lease_expires_at=NOW() + ($4 * INTERVAL '1 millisecond'),
+            last_attempt_at=NOW(),
+            attempt_count=attempt_count + 1,
+            updated_at=NOW()
+      WHERE id=$1
+        AND account_id=$2
+        AND subscription_id=$3
+        AND state IN ('scheduled','processing')
+        AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
+      RETURNING *`,
+    [attempt_id, account_id, subscription_id, RENEWAL_ATTEMPT_LEASE_MS],
+  );
+  if (!rows[0]) {
+    throw Error(`renewal attempt ${attempt_id} is not available`);
+  }
+  return rows[0];
+}
+
 export async function bindSubscriptionRenewalPaymentIntent({
   attempt_id,
   account_id,

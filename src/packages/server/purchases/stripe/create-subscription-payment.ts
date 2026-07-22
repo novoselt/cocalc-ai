@@ -26,6 +26,16 @@ import {
   recordMembershipPurchaseCompleted,
 } from "@cocalc/server/membership/analytics";
 import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
+import { getMembershipTierById } from "@cocalc/server/membership/tiers";
+import type { SubscriptionRenewalAttempt } from "@cocalc/util/db-schema/subscription-renewal-attempts";
+import {
+  claimSubscriptionRenewalAttempt,
+  completeSubscriptionRenewalAttempt,
+  getSubscriptionRenewalAttempt,
+  scheduleSubscriptionRenewalAttempt,
+  scheduleSubscriptionRenewalAttempt as scheduleNextRenewalAttempt,
+  setSubscriptionPaymentFromAttempt,
+} from "../subscription-renewal-attempts";
 
 // nothing should ever be this small, but just in case:
 const MIN_SUBSCRIPTION_AMOUNT = 1;
@@ -80,16 +90,64 @@ function renewalMembershipTerms({
   };
 }
 
+async function membershipRenewalDescription({
+  membershipClass,
+  interval,
+  client,
+}: {
+  membershipClass: string;
+  interval: "month" | "year";
+  client?: PoolClient;
+}): Promise<string> {
+  const tier = await getMembershipTierById({ id: membershipClass, client });
+  const label = cleanString(tier?.label) ?? membershipClass;
+  return `${label} membership renewal, ${
+    interval == "month" ? "monthly" : "annual"
+  }`;
+}
+
 export default async function createSubscriptionPayment({
   account_id,
   subscription_id,
+  renewal_attempt_id,
   return_url,
 }: {
   account_id: string;
   subscription_id: number;
+  renewal_attempt_id?: string;
   return_url?;
-}) {
+}): Promise<{ payment_intent_id?: string }> {
   logger.debug("createSubscriptionPayment", { account_id, subscription_id });
+
+  let attempt: SubscriptionRenewalAttempt | undefined;
+  if (renewal_attempt_id) {
+    attempt = await getSubscriptionRenewalAttempt({
+      attempt_id: renewal_attempt_id,
+    });
+  } else {
+    renewal_attempt_id = await scheduleSubscriptionRenewalAttempt({
+      account_id,
+      subscription_id,
+    });
+    if (renewal_attempt_id) {
+      attempt = await claimSubscriptionRenewalAttempt({
+        attempt_id: renewal_attempt_id,
+        account_id,
+        subscription_id,
+      });
+    }
+  }
+  if (
+    !attempt ||
+    attempt.account_id !== account_id ||
+    attempt.subscription_id !== subscription_id ||
+    !["scheduled", "processing"].includes(attempt.state)
+  ) {
+    throw Error("subscription does not have an active renewal attempt");
+  }
+  if (attempt.payment_intent_id) {
+    return { payment_intent_id: attempt.payment_intent_id };
+  }
 
   const customer = await getStripeCustomerId({ account_id, create: true });
   if (!customer) {
@@ -99,7 +157,7 @@ export default async function createSubscriptionPayment({
   logger.debug("createSubscriptionPayment -- ", { customer });
   const pool = getPool();
   const { rows: subscriptions } = await pool.query(
-    "SELECT payment, cost, metadata, interval, current_period_end, latest_purchase_id FROM subscriptions WHERE account_id=$1 AND id=$2",
+    "SELECT payment, cost, metadata, interval, current_period_end, latest_purchase_id, status FROM subscriptions WHERE account_id=$1 AND id=$2",
     [account_id, subscription_id],
   );
   if (subscriptions.length == 0) {
@@ -111,9 +169,14 @@ export default async function createSubscriptionPayment({
     metadata,
     interval,
     current_period_end,
+    status,
   } = subscriptions[0] as Subscription;
-  const amountValue = toDecimal(amountRaw ?? 0);
-  if (payment != null && payment.status == "active") {
+  const amountValue = toDecimal(attempt.amount ?? amountRaw ?? 0);
+  if (
+    payment != null &&
+    payment.status == "active" &&
+    payment.renewal_attempt_id !== attempt.id
+  ) {
     throw Error(
       "There is a current outstanding active payment -- either cancel it or pay it",
     );
@@ -122,16 +185,25 @@ export default async function createSubscriptionPayment({
   if (metadata?.type != "membership") {
     throw Error("subscription must be for a membership");
   }
-  const now = new Date();
-  let start = new Date(current_period_end);
-  if (start < now) {
-    start = now;
+  if (status != "active") {
+    throw Error("subscription is not active");
   }
-  const new_expires_ms = addInterval(start, interval).valueOf();
+  if (
+    new Date(current_period_end).valueOf() !==
+    new Date(attempt.period_end).valueOf()
+  ) {
+    throw Error("renewal attempt does not match the current billing period");
+  }
+  const new_expires_ms = new Date(attempt.target_period_end).valueOf();
+  const renewalTerms = renewalMembershipTerms({ metadata, interval });
+  const renewalDescription = await membershipRenewalDescription({
+    membershipClass: renewalTerms.membershipClass,
+    interval: renewalTerms.interval,
+  });
 
   const lineItems = [
     {
-      description: `Renew subscription Id=${subscription_id}`,
+      description: `${renewalDescription} (subscription Id=${subscription_id})`,
       amount: amountValue.toNumber(),
     },
   ];
@@ -157,23 +229,18 @@ export default async function createSubscriptionPayment({
     // that in order to make future purchases.
     // completely pay with credit -- we just process the renewal assuming money is there already.
 
-    const payment = {
-      subscription_id,
-      amount: amountValue.toNumber(),
-      created: Date.now(),
-      status: "active",
-      new_expires_ms,
-    };
     // we use one transaction so if anything goes awry, it is ALL rolled back.
     const client = await getTransactionClient();
     try {
-      await client.query("UPDATE subscriptions SET payment=$1 WHERE id=$2", [
-        payment,
-        subscription_id,
-      ]);
+      await setSubscriptionPaymentFromAttempt({ attempt, client });
       await processSubscriptionRenewal({
         account_id,
-        paymentIntent: { metadata: { subscription_id } },
+        paymentIntent: {
+          metadata: {
+            subscription_id,
+            renewal_attempt_id: attempt.id,
+          },
+        },
         amount: amountValue.toNumber(),
         client,
       });
@@ -199,36 +266,25 @@ export default async function createSubscriptionPayment({
         moneyRound2Down(toDecimal(await getBalance({ account_id }))),
       )}`,
     });
-    return;
+    return {};
   }
 
   const { payment_intent: payment_intent_id, hosted_invoice_url } =
     await createPaymentIntent({
       account_id,
       purpose: SUBSCRIPTION_RENEWAL,
-      description: "Renew a subscription",
+      description: renewalDescription,
       lineItems,
       return_url,
       metadata: {
         subscription_id: `${subscription_id}`,
+        renewal_attempt_id: attempt.id,
       },
       force: true,
       processImmediately: false,
+      idempotencyKeyPrefix: `subscription-renewal:${attempt.id}`,
+      allowedPaymentMethodTypes: ["card"],
     });
-
-  const payment1 = {
-    payment_intent_id,
-    subscription_id,
-    amount: amountValue.toNumber(),
-    created: Date.now(),
-    status: "active",
-    new_expires_ms,
-  };
-
-  await pool.query("UPDATE subscriptions SET payment=$1 WHERE id=$2", [
-    payment1,
-    subscription_id,
-  ]);
   await send({
     to_ids: [account_id],
     subject: `${site_name} Subscription Renewal: Id ${subscription_id}`,
@@ -246,6 +302,7 @@ ${site_name} has started renewing your ${moneyToCurrency(amountValue)}/${interva
 
 ${await support()}`,
   });
+  return { payment_intent_id };
 }
 
 export async function processSubscriptionRenewal({
@@ -255,11 +312,17 @@ export async function processSubscriptionRenewal({
   client,
 }: {
   account_id: string;
-  paymentIntent: { metadata: { subscription_id: number | string } };
+  paymentIntent: {
+    id?: string;
+    metadata: {
+      subscription_id: number | string;
+      renewal_attempt_id?: string;
+    };
+  };
   amount: number;
   client?: PoolClient;
 }) {
-  const { subscription_id } = paymentIntent?.metadata ?? {};
+  const { subscription_id, renewal_attempt_id } = paymentIntent?.metadata ?? {};
   logger.debug("processSubscriptionRenewal", {
     account_id,
     amount,
@@ -284,6 +347,13 @@ export async function processSubscriptionRenewal({
     const costValue = toDecimal(cost);
     const renewalTerms = renewalMembershipTerms({ metadata, interval });
     let { payment } = subscriptions[0];
+    const attempt = renewal_attempt_id
+      ? await getSubscriptionRenewalAttempt({
+          attempt_id: renewal_attempt_id,
+          client: transaction,
+          forUpdate: true,
+        })
+      : undefined;
     logger.debug("processSubscriptionRenewal", {
       payment,
       cost,
@@ -293,13 +363,82 @@ export async function processSubscriptionRenewal({
     if (metadata?.type != "membership") {
       throw Error("subscription must be for a membership");
     }
+    if (attempt) {
+      if (
+        attempt.account_id !== account_id ||
+        attempt.subscription_id !== subscriptionId
+      ) {
+        throw Error("renewal attempt does not belong to this subscription");
+      }
+      if (attempt.state === "succeeded") {
+        if (useTransaction) {
+          await transaction.query("COMMIT");
+        }
+        return;
+      }
+      if (attempt.state === "failed" || attempt.state === "canceled") {
+        logger.debug("ignoring callback for terminal renewal attempt", {
+          renewal_attempt_id,
+          state: attempt.state,
+        });
+        if (useTransaction) {
+          await transaction.query("COMMIT");
+        }
+        return;
+      }
+      if (
+        paymentIntent.id &&
+        attempt.payment_intent_id &&
+        paymentIntent.id !== attempt.payment_intent_id
+      ) {
+        logger.debug("ignoring superseded renewal callback", {
+          renewal_attempt_id,
+          payment_intent_id: paymentIntent.id,
+          expected_payment_intent_id: attempt.payment_intent_id,
+        });
+        if (useTransaction) {
+          await transaction.query("COMMIT");
+        }
+        return;
+      }
+      if (!payment) {
+        await setSubscriptionPaymentFromAttempt({
+          attempt,
+          payment_intent_id: paymentIntent.id,
+          client: transaction,
+        });
+        payment = {
+          renewal_attempt_id: attempt.id,
+          payment_intent_id:
+            paymentIntent.id ?? attempt.payment_intent_id ?? undefined,
+          status: "active",
+          new_expires_ms: new Date(attempt.target_period_end).valueOf(),
+        };
+      }
+    }
+    if (
+      paymentIntent.id &&
+      payment?.payment_intent_id &&
+      paymentIntent.id !== payment.payment_intent_id
+    ) {
+      logger.debug("ignoring callback that does not own the renewal payment", {
+        subscription_id: subscriptionId,
+        payment_intent_id: paymentIntent.id,
+        expected_payment_intent_id: payment.payment_intent_id,
+      });
+      if (useTransaction) {
+        await transaction.query("COMMIT");
+      }
+      return;
+    }
     if (payment?.status == "paid") {
       if (useTransaction) {
         await transaction.query("COMMIT");
       }
       return;
     }
-    if (amountValue.add(SUBSCRIPTION_PAYMENT_SLACK).lt(costValue)) {
+    const expectedAmount = attempt ? toDecimal(attempt.amount) : costValue;
+    if (amountValue.add(SUBSCRIPTION_PAYMENT_SLACK).lt(expectedAmount)) {
       logger.debug("processSubscriptionRenewal: SUSPICIOUS! -- not doing it.");
       throw Error(
         `subscription costs a lot more than payment -- contact support.`,
@@ -318,7 +457,9 @@ export async function processSubscriptionRenewal({
       payment = { new_expires_ms };
     }
 
-    const end = new Date(payment.new_expires_ms);
+    const end = attempt
+      ? new Date(attempt.target_period_end)
+      : new Date(payment.new_expires_ms);
 
     const purchase_id = await createPurchase({
       account_id,
@@ -330,7 +471,7 @@ export async function processSubscriptionRenewal({
         interval: renewalTerms.interval,
       },
       client: transaction,
-      cost: costValue,
+      cost: expectedAmount,
       period_start: subtractInterval(end, renewalTerms.interval),
       period_end: end,
     });
@@ -367,6 +508,18 @@ export async function processSubscriptionRenewal({
     if (update.rowCount != 1) {
       throw Error(`You do not have a subscription with id ${subscription_id}.`);
     }
+    if (attempt) {
+      await completeSubscriptionRenewalAttempt({
+        attempt_id: attempt.id,
+        state: "succeeded",
+        client: transaction,
+      });
+      await scheduleNextRenewalAttempt({
+        account_id,
+        subscription_id: subscriptionId,
+        client: transaction,
+      });
+    }
     const isTrialConversion =
       metadata.trial === true && latest_purchase_id == null;
     await recordMembershipAnalyticsEvent({
@@ -378,7 +531,7 @@ export async function processSubscriptionRenewal({
       interval: renewalTerms.interval,
       subscription_id: subscriptionId,
       purchase_id,
-      amount: costValue,
+      amount: expectedAmount,
       period_start: subtractInterval(end, renewalTerms.interval),
       period_end: end,
       trial_status: isTrialConversion ? "converted" : "none",
@@ -390,7 +543,7 @@ export async function processSubscriptionRenewal({
       purchase_id,
       membership_class: renewalTerms.membershipClass,
       interval: renewalTerms.interval,
-      amount: costValue,
+      amount: expectedAmount,
       period_start: subtractInterval(end, renewalTerms.interval),
       period_end: end,
       trial_status: isTrialConversion ? "converted" : "none",
@@ -455,7 +608,7 @@ export async function processSubscriptionRenewalFailure({
   account_id: string;
   paymentIntent;
 }) {
-  const { subscription_id } = paymentIntent?.metadata ?? {};
+  const { subscription_id, renewal_attempt_id } = paymentIntent?.metadata ?? {};
   if (!subscription_id) {
     throw Error(
       `invalid paymentIntent ${paymentIntent?.id} -- metadata must contain subscription_id`,
@@ -465,15 +618,97 @@ export async function processSubscriptionRenewalFailure({
     typeof subscription_id != "number"
       ? parseInt(subscription_id)
       : subscription_id;
-  const pool = getPool();
-  const result = await pool.query(
-    `UPDATE subscriptions SET payment = jsonb_set(payment, '{status}', '"canceled"'), status='canceled', canceled_at=NOW(), canceled_reason='The payment was canceled instead of being paid.' WHERE id=$1 AND account_id=$2`,
-    [id, account_id],
-  );
-  if (result.rowCount != 1) {
-    throw Error(`You do not have a subscription with id ${subscription_id}.`);
+  const client = await getTransactionClient();
+  let changed = false;
+  try {
+    const attempt = renewal_attempt_id
+      ? await getSubscriptionRenewalAttempt({
+          attempt_id: renewal_attempt_id,
+          client,
+          forUpdate: true,
+        })
+      : undefined;
+    if (attempt) {
+      if (attempt.account_id !== account_id || attempt.subscription_id !== id) {
+        throw Error("renewal attempt does not belong to this subscription");
+      }
+      if (attempt.state === "succeeded") {
+        await client.query("COMMIT");
+        return;
+      }
+      if (attempt.state === "failed" || attempt.state === "canceled") {
+        await client.query("COMMIT");
+        return;
+      }
+      if (
+        paymentIntent.id &&
+        attempt.payment_intent_id &&
+        paymentIntent.id !== attempt.payment_intent_id
+      ) {
+        logger.debug("ignoring superseded renewal failure", {
+          renewal_attempt_id,
+          payment_intent_id: paymentIntent.id,
+          expected_payment_intent_id: attempt.payment_intent_id,
+        });
+        await client.query("COMMIT");
+        return;
+      }
+    }
+    const result = await client.query(
+      `UPDATE subscriptions
+          SET payment=jsonb_set(
+                COALESCE(payment, '{}'::jsonb),
+                '{status}',
+                '"canceled"'
+              ),
+              status='canceled',
+              canceled_at=NOW(),
+              canceled_reason='The renewal payment failed.'
+        WHERE id=$1
+          AND account_id=$2
+          AND (
+            $3::text IS NULL OR
+            payment#>>'{payment_intent_id}' IS NULL OR
+            payment#>>'{payment_intent_id}'=$3
+          )`,
+      [id, account_id, cleanString(paymentIntent?.id) ?? null],
+    );
+    if (result.rowCount != 1) {
+      const owner = await client.query(
+        "SELECT 1 FROM subscriptions WHERE id=$1 AND account_id=$2",
+        [id, account_id],
+      );
+      if (owner.rowCount != 1) {
+        throw Error(
+          `You do not have a subscription with id ${subscription_id}.`,
+        );
+      }
+      logger.debug("ignoring superseded renewal failure payment", {
+        subscription_id: id,
+        payment_intent_id: paymentIntent?.id,
+      });
+      await client.query("COMMIT");
+      return;
+    }
+    if (attempt) {
+      await completeSubscriptionRenewalAttempt({
+        attempt_id: attempt.id,
+        state: "failed",
+        error: `Stripe payment ${paymentIntent?.status ?? "failed"}`,
+        client,
+      });
+    }
+    await client.query("COMMIT");
+    changed = true;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
   }
-  await sendCancelNotification({ subscription_id });
+  if (changed) {
+    await sendCancelNotification({ subscription_id: id });
+  }
 }
 
 export async function processResumeSubscriptionFailure({

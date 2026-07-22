@@ -61,7 +61,7 @@ MANUAL PAYMENTS:
 
 */
 
-import createSubscriptionPayment from "./stripe/create-subscription-payment";
+import maintainSubscriptionRenewals from "./subscription-renewal-worker";
 import send, { url } from "@cocalc/server/messages/send";
 import adminAlert from "@cocalc/server/messages/admin-alert";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
@@ -186,39 +186,5 @@ async function describeSubscription(metadata): Promise<string> {
 // CREATE PAYMENTS (see above)
 
 export async function createPayments() {
-  logger.debug(
-    "createPayments -- checking for subscriptions with payment due now...",
-  );
-  // Do a query for each subscription that:
-  //    - has status not 'canceled', and
-  //    - current_period_end is due, and
-  //    - there isn't already an outstanding payment for this subscription
-  const pool = getPool();
-  const { rows } = await pool.query(
-    `
-  SELECT id as subscription_id, account_id FROM subscriptions WHERE
-      status != 'canceled' AND
-      current_period_end <= NOW() AND
-      coalesce(payment#>>'{status}','') != 'active'
-  `,
-  );
-  logger.debug(
-    `createPayments -- got ${rows.length} unbilled subscriptions due now`,
-  );
-  for (const { subscription_id, account_id } of rows) {
-    try {
-      await createSubscriptionPayment({ subscription_id, account_id });
-      logger.debug(
-        `createPayments -- successfully billed subscription id ${subscription_id}`,
-      );
-    } catch (err) {
-      adminAlert({
-        subject: `ERROR billing subscription id ${subscription_id}`,
-        body: err,
-      });
-      logger.debug(
-        `createPayments -- ERROR billing subscription id ${subscription_id} -- ${err}`,
-      );
-    }
-  }
+  await maintainSubscriptionRenewals();
 }
