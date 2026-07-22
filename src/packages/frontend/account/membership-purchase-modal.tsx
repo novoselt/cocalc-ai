@@ -192,6 +192,8 @@ function MembershipPurchaseModalInner({
   const [tiers, setTiers] = useState<MembershipTier[]>([]);
   const [interval, setInterval] = useState<BillingInterval>("year");
   const [loading, setLoading] = useState<boolean>(false);
+  const [initialLoadComplete, setInitialLoadComplete] =
+    useState<boolean>(false);
   const [error, setError] = useState<string>("");
   const [renewalInProgress, setRenewalInProgress] = useState<boolean>(false);
   const [selectedTierId, setSelectedTierId] = useState<string | null>(null);
@@ -234,6 +236,7 @@ function MembershipPurchaseModalInner({
     } finally {
       if (showLoading) {
         setLoading(false);
+        setInitialLoadComplete(true);
       }
     }
   };
@@ -252,7 +255,11 @@ function MembershipPurchaseModalInner({
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setInitialLoadComplete(false);
+      return;
+    }
+    setInitialLoadComplete(false);
     setSelectedTierId(initialTargetClass ?? null);
     setQuote(null);
     setQuoteError("");
@@ -286,7 +293,16 @@ function MembershipPurchaseModalInner({
   }, [availableTiers]);
 
   useEffect(() => {
-    if (!open || !selectedTierId || place !== "checkout") return;
+    if (
+      !open ||
+      !initialLoadComplete ||
+      renewalInProgress ||
+      error ||
+      !selectedTierId ||
+      place !== "checkout"
+    ) {
+      return;
+    }
     const loadQuote = async () => {
       setQuote(null);
       setQuoteError("");
@@ -305,7 +321,16 @@ function MembershipPurchaseModalInner({
       }
     };
     loadQuote();
-  }, [open, selectedTierId, interval, place, quoteRefreshKey]);
+  }, [
+    error,
+    initialLoadComplete,
+    interval,
+    open,
+    place,
+    quoteRefreshKey,
+    renewalInProgress,
+    selectedTierId,
+  ]);
 
   const currentPersonalClass =
     currentClassOverride ??
