@@ -29,6 +29,7 @@ interface MembershipChangeOptions {
   storeVisibleOnly?: boolean;
   requireNoPayment?: boolean;
   paymentAmount?: MoneyValue;
+  creditId?: number;
   client?: PoolClient;
   tierMap?: Record<string, MembershipTierRecord>;
 }
@@ -41,6 +42,7 @@ export async function applyMembershipChange({
   storeVisibleOnly = false,
   requireNoPayment = false,
   paymentAmount,
+  creditId,
   client,
   tierMap,
 }: MembershipChangeOptions): Promise<
@@ -193,6 +195,7 @@ export async function applyMembershipChange({
           description: {
             type: "membership",
             subscription_id,
+            ...(creditId != null ? { credit_id: creditId } : {}),
             class: targetClass,
             interval,
             ...(isTrial ? { trial_days: trialDays } : {}),

@@ -1068,6 +1068,7 @@ ${await support()}`;
         allowDowngrade: paymentIntent.metadata.allow_downgrade === "true",
         storeVisibleOnly: true,
         paymentAmount: amount,
+        creditId: credit_id,
       });
     } else if (paymentIntent.metadata.purpose == MEMBERSHIP_PACKAGE_PURCHASE) {
       const products = getMembershipPackageProductsFromMetadata(
