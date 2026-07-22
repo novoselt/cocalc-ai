@@ -255,7 +255,12 @@ export async function processSubscriptionRenewal({
   client,
 }: {
   account_id: string;
-  paymentIntent: { metadata: { subscription_id: number | string } };
+  paymentIntent: {
+    metadata: {
+      subscription_id: number | string;
+      credit_id?: number | string;
+    };
+  };
   amount: number;
   client?: PoolClient;
 }) {
@@ -319,6 +324,7 @@ export async function processSubscriptionRenewal({
     }
 
     const end = new Date(payment.new_expires_ms);
+    const creditId = positiveInteger(paymentIntent.metadata.credit_id);
 
     const purchase_id = await createPurchase({
       account_id,
@@ -326,6 +332,7 @@ export async function processSubscriptionRenewal({
       description: {
         type: "membership",
         subscription_id: subscriptionId,
+        ...(creditId != null ? { credit_id: creditId } : {}),
         class: renewalTerms.membershipClass,
         interval: renewalTerms.interval,
       },
@@ -427,6 +434,11 @@ export async function processSubscriptionRenewal({
       transaction.release();
     }
   }
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 // add the interval to the date.  The day of the month (and time) should be unchanged

@@ -73,6 +73,9 @@ export type Service = ComputeService;
 export interface Membership {
   type: "membership";
   subscription_id?: number | null;
+  // Credit purchase created from the external payment that funded this
+  // membership purchase. Undefined when it was paid from account balance.
+  credit_id?: number;
   class: MembershipClass;
   interval: "month" | "year";
   admin_assigned?: boolean;
@@ -146,8 +149,10 @@ export interface AutoCredit {
 
 export interface Refund {
   type: "refund";
-  purchase_id: number; // id of entry in purchases table of the credit that this is refunding back from
+  purchase_id: number; // id of the purchase transaction this reverses
   refund_id?: string; // stripe Refund object id for the refund
+  funding_purchase_id?: number;
+  funding_refund_purchase_id?: number;
   reason: Reason;
   notes: string;
 }
