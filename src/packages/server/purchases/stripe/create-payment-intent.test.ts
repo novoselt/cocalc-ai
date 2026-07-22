@@ -14,6 +14,7 @@ const mockCurrentStripeSite = jest.fn();
 const mockIsReadyToProcess = jest.fn();
 const mockProcessPaymentIntent = jest.fn();
 const mockAlertUncreditedSucceededPayment = jest.fn();
+const mockBindSubscriptionRenewalPaymentIntent = jest.fn();
 const mockDelay = jest.fn();
 
 jest.mock("@cocalc/server/launch/kill-switches", () => ({
@@ -53,6 +54,11 @@ jest.mock("@cocalc/server/messages/send", () => ({
 
 jest.mock("awaiting", () => ({
   delay: (...args: any[]) => mockDelay(...args),
+}));
+
+jest.mock("../subscription-renewal-attempts", () => ({
+  bindSubscriptionRenewalPaymentIntent: (...args: any[]) =>
+    mockBindSubscriptionRenewalPaymentIntent(...args),
 }));
 
 import createPaymentIntent, {
@@ -356,9 +362,20 @@ describe("createPaymentIntent", () => {
       purpose: "subscription-renewal",
       description: "Renew a subscription",
       lineItems,
+      metadata: {
+        renewal_attempt_id: "attempt-1",
+        subscription_id: "123",
+      },
       processImmediately: false,
     });
 
+    expect(mockBindSubscriptionRenewalPaymentIntent).toHaveBeenCalledWith({
+      account_id: "acct-1",
+      attempt_id: "attempt-1",
+      payment_intent_id: "pi_123",
+      stripe_invoice_id: "in_123",
+      subscription_id: 123,
+    });
     expect(stripe.paymentIntents.retrieve).not.toHaveBeenCalled();
     expect(mockIsReadyToProcess).not.toHaveBeenCalled();
     expect(mockProcessPaymentIntent).not.toHaveBeenCalled();
@@ -424,5 +441,67 @@ describe("createPaymentIntent", () => {
     ).rejects.toThrow("Name and address are required");
 
     expect(stripe.invoices.update).not.toHaveBeenCalled();
+  });
+
+  it("uses stable Stripe keys and only tries allowed instant methods", async () => {
+    stripe.invoices.finalizeInvoice.mockResolvedValue({
+      id: "in_123",
+      hosted_invoice_url: "https://stripe.example/invoice",
+      payments: {
+        data: [
+          {
+            is_default: true,
+            payment: {
+              type: "payment_intent",
+              payment_intent: "pi_123",
+            },
+          },
+        ],
+      },
+    });
+    stripe.customers.retrieve.mockResolvedValue({
+      invoice_settings: { default_payment_method: "pm_bank" },
+    });
+    stripe.customers.listPaymentMethods.mockResolvedValue({
+      data: [
+        { id: "pm_bank", type: "us_bank_account" },
+        { id: "pm_card", type: "card" },
+      ],
+    });
+
+    await createPaymentIntent({
+      account_id: "acct-1",
+      purpose: "subscription-renewal",
+      description: "Standard membership renewal, monthly",
+      lineItems,
+      metadata: {
+        renewal_attempt_id: "attempt-1",
+        subscription_id: "123",
+      },
+      processImmediately: false,
+      idempotencyKeyPrefix: "subscription-renewal:attempt-1",
+      allowedPaymentMethodTypes: ["card"],
+    });
+
+    expect(stripe.invoices.create).toHaveBeenCalledWith(expect.any(Object), {
+      idempotencyKey: "subscription-renewal:attempt-1:invoice",
+    });
+    expect(stripe.invoiceItems.create).toHaveBeenCalledWith(
+      expect.any(Object),
+      { idempotencyKey: "subscription-renewal:attempt-1:item:0" },
+    );
+    expect(stripe.invoices.pay).toHaveBeenCalledTimes(1);
+    expect(stripe.invoices.pay).toHaveBeenCalledWith(
+      "in_123",
+      {},
+      {
+        idempotencyKey: "subscription-renewal:attempt-1:pay:pm_card",
+      },
+    );
+    expect(stripe.invoices.update).toHaveBeenCalledWith(
+      "in_123",
+      { default_payment_method: "pm_card" },
+      { idempotencyKey: "subscription-renewal:attempt-1:method:pm_card" },
+    );
   });
 });

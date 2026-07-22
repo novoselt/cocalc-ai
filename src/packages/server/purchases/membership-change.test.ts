@@ -385,4 +385,46 @@ describe("membership change payment enforcement", () => {
     expect(result.purchase_id).toBeUndefined();
     expect(result.trial_available).toBe(true);
   });
+
+  it("blocks a membership change while an expired period is renewing", async () => {
+    const renewingAccount = uuid();
+    const currentTier = `renewing-${uuid().slice(0, 8)}` as any;
+    const nextTier = `next-${uuid().slice(0, 8)}` as any;
+    await createTestAccount(renewingAccount);
+    await createTestMembershipTier({
+      id: currentTier,
+      price_monthly: 24,
+      price_yearly: 216,
+      priority: 20,
+    });
+    await createTestMembershipTier({
+      id: nextTier,
+      price_monthly: 50,
+      price_yearly: 500,
+      priority: 30,
+    });
+    await createTestMembershipSubscription(renewingAccount, {
+      class: currentTier,
+      cost: 24,
+      start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      end: new Date(Date.now() - 60_000),
+    });
+
+    await expect(
+      applyTestMembershipChange({
+        account_id: renewingAccount,
+        targetClass: nextTier,
+        interval: "month",
+        paymentAmount: 50,
+      }),
+    ).rejects.toThrow(/is renewing/);
+
+    const { rows } = await getPool().query(
+      `SELECT metadata->>'class' AS class, status
+         FROM subscriptions
+        WHERE account_id=$1`,
+      [renewingAccount],
+    );
+    expect(rows).toEqual([{ class: currentTier, status: "active" }]);
+  });
 });

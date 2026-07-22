@@ -7,10 +7,15 @@ const mockPoolQuery = jest.fn();
 const mockSend = jest.fn();
 const mockAdminAlert = jest.fn();
 const mockRecordMembershipAnalyticsEvent = jest.fn();
+const mockClient = {
+  query: (...args: any[]) => mockPoolQuery(...args),
+  release: jest.fn(),
+};
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
-  default: () => ({ query: (...args: any[]) => mockPoolQuery(...args) }),
+  default: () => mockClient,
+  getTransactionClient: jest.fn(async () => mockClient),
 }));
 
 jest.mock("@cocalc/server/messages/send", () => ({
@@ -39,6 +44,7 @@ describe("cancelSubscription", () => {
     mockSend.mockReset().mockResolvedValue(undefined);
     mockAdminAlert.mockReset().mockResolvedValue(undefined);
     mockRecordMembershipAnalyticsEvent.mockReset().mockResolvedValue(true);
+    mockClient.release.mockReset();
   });
 
   it("does not send a cancellation notification when the account does not own the subscription", async () => {
@@ -51,7 +57,8 @@ describe("cancelSubscription", () => {
       }),
     ).rejects.toThrow("You do not have a subscription with id 7.");
 
-    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+    expect(mockPoolQuery).toHaveBeenLastCalledWith("ROLLBACK");
     expect(mockSend).not.toHaveBeenCalled();
     expect(mockAdminAlert).not.toHaveBeenCalled();
   });
@@ -59,6 +66,7 @@ describe("cancelSubscription", () => {
   it("sends a cancellation notification after canceling the owned subscription", async () => {
     mockPoolQuery
       .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({
         rows: [
           {
@@ -76,7 +84,7 @@ describe("cancelSubscription", () => {
       reason: "user request",
     });
 
-    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(3);
     expect(mockSend).toHaveBeenCalledWith(
       expect.objectContaining({
         to_ids: ["owner-account"],
@@ -106,6 +114,8 @@ describe("cancelSubscription", () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({
         rows: [
           {

@@ -105,10 +105,51 @@ describe("test maintainSubscriptions", () => {
     const { createPayments } = await import("./maintain-subscriptions");
     await createPayments();
 
-    expect(mockCreateSubscriptionPayment).toHaveBeenCalledWith({
+    expect(mockCreateSubscriptionPayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id,
+        renewal_attempt_id: expect.any(String),
+        subscription_id,
+      }),
+    );
+  });
+
+  it("keeps an internal renewal error pending for retry", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
       account_id,
-      subscription_id,
-    });
+      {
+        start: dayjs().subtract(1, "month").toDate(),
+        end: dayjs().subtract(1, "minute").toDate(),
+      },
+    );
+    mockCreateSubscriptionPayment.mockRejectedValueOnce(
+      new Error("Stripe is temporarily unavailable"),
+    );
+
+    const { createPayments } = await import("./maintain-subscriptions");
+    await createPayments();
+
+    const { rows } = await getPool().query(
+      `SELECT s.status, a.state, a.lease_expires_at,
+              a.next_attempt_at > NOW() AS retry_later, a.last_error
+         FROM subscriptions s
+         JOIN subscription_renewal_attempts a ON a.subscription_id=s.id
+        WHERE s.id=$1`,
+      [subscription_id],
+    );
+    expect(rows).toEqual([
+      expect.objectContaining({
+        last_error: expect.stringContaining(
+          "Stripe is temporarily unavailable",
+        ),
+        lease_expires_at: null,
+        retry_later: true,
+        state: "processing",
+        status: "active",
+      }),
+    ]);
   });
 
   it("sends renewal reminders with renewal and payment action dates", async () => {

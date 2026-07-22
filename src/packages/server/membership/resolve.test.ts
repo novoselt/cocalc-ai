@@ -141,6 +141,54 @@ describe("resolveMembershipForAccount", () => {
     expect(result.subscription_interval).toBe("year");
   });
 
+  it("keeps an expired membership effective while renewal is pending", async () => {
+    const account_id = uuid();
+    const end = new Date(Date.now() - 60_000);
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        class: lowTier,
+        start: new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000),
+        end,
+      },
+    );
+
+    const result = await resolveMembershipForAccount(account_id);
+
+    expect(result.class).toBe(lowTier);
+    expect(result.source).toBe("subscription");
+    expect(result.subscription_id).toBe(subscription_id);
+    expect(result.subscription_renewal_state).toBe("scheduled");
+    expect(new Date(result.subscription_renewal_started_at!).getTime()).toBe(
+      end.getTime(),
+    );
+  });
+
+  it("stops extending entitlement after an attempt becomes terminal", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        class: lowTier,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end: new Date(Date.now() - 60_000),
+      },
+    );
+    await getPool().query(
+      `UPDATE subscription_renewal_attempts
+          SET state='failed', completed_at=NOW()
+        WHERE subscription_id=$1`,
+      [subscription_id],
+    );
+
+    const result = await resolveMembershipForAccount(account_id);
+
+    expect(result.class).toBe("free");
+    expect(result.source).toBe("free");
+  });
+
   it("keeps a canceled paid-through subscription active until its period ends", async () => {
     const account_id = uuid();
     await createTestAccount(account_id);
@@ -182,20 +230,16 @@ describe("resolveMembershipForAccount", () => {
       class: highTier,
       status: "past_due",
     });
-    await createTestMembershipSubscription(account_id, {
-      class: lowTier,
-      status: "active",
-    });
 
     const details = await resolveMembershipDetailsForAccount(account_id);
 
-    expect(details.selected.class).toBe(lowTier);
-    expect(details.selected.source).toBe("subscription");
+    expect(details.selected.class).toBe("free");
+    expect(details.selected.source).toBe("free");
     expect(
       details.candidates
         .filter((candidate) => candidate.source === "subscription")
         .map((candidate) => candidate.class),
-    ).toEqual([lowTier]);
+    ).toEqual([]);
   });
 
   it("keeps the higher paid-through subscription effective for a deferred downgrade", async () => {
