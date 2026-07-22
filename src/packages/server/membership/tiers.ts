@@ -12,6 +12,7 @@ import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { getMembershipTrialCandidate } from "./trials";
+import { assertNoDueMembershipRenewal } from "@cocalc/server/purchases/membership-subscription-guard";
 
 export interface MembershipTierPricing {
   price_monthly?: number;
@@ -261,10 +262,21 @@ export async function getActiveMembershipSubscription({
          ON p.id=s.latest_purchase_id
         AND p.account_id=s.account_id
         AND p.service='membership'
+       LEFT JOIN LATERAL (
+         SELECT state, not_before
+           FROM subscription_renewal_attempts
+          WHERE subscription_id=s.id
+            AND state IN ('scheduled','processing')
+          ORDER BY period_end DESC
+          LIMIT 1
+       ) a ON TRUE
        WHERE s.account_id=$1
          AND s.metadata->>'type'='membership'
          AND s.status IN ('active','canceled')
-         AND s.current_period_end >= NOW()
+         AND (
+           s.current_period_end >= NOW() OR
+           (s.status='active' AND a.not_before <= NOW())
+         )
        ORDER BY s.current_period_end DESC, s.id DESC`,
     [account_id],
   );
@@ -379,6 +391,10 @@ export async function computeMembershipPricing({
   client?: PoolClient;
   tierMap?: Record<string, MembershipTierRecord>;
 }): Promise<MembershipPricingResult> {
+  await assertNoDueMembershipRenewal({
+    account_id,
+    client: client ?? getPool("medium"),
+  });
   const tiers =
     tierMap ??
     (await getMembershipTierMap({
@@ -461,6 +477,10 @@ export async function computeMembershipChange({
   client?: PoolClient;
   tierMap?: Record<string, MembershipTierRecord>;
 }): Promise<MembershipChangeResult> {
+  await assertNoDueMembershipRenewal({
+    account_id,
+    client: client ?? getPool("medium"),
+  });
   const tiers =
     tierMap ??
     (await getMembershipTierMap({

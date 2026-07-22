@@ -193,6 +193,7 @@ function MembershipPurchaseModalInner({
   const [interval, setInterval] = useState<BillingInterval>("year");
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
+  const [renewalInProgress, setRenewalInProgress] = useState<boolean>(false);
   const [selectedTierId, setSelectedTierId] = useState<string | null>(null);
   const [quote, setQuote] = useState<MembershipChangeQuote | null>(null);
   const [quoteLoading, setQuoteLoading] = useState<boolean>(false);
@@ -213,12 +214,20 @@ function MembershipPurchaseModalInner({
     }
     setError("");
     try {
-      const [membershipResult, tiersResult] = await Promise.all([
+      const [membershipResult, tiersResult, detailsResult] = await Promise.all([
         api("purchases/get-membership"),
         api("purchases/get-membership-tiers"),
+        webapp_client.conat_client.hub.purchases.getMembershipDetails(),
       ]);
       setMembership(membershipResult as MembershipResolution);
       setTiers((tiersResult as MembershipTiersResponse)?.tiers ?? []);
+      setRenewalInProgress(
+        ((detailsResult as MembershipDetails)?.candidates ?? []).some(
+          (candidate) =>
+            candidate.source === "subscription" &&
+            candidate.subscription_renewal_state != null,
+        ),
+      );
       return membershipResult as MembershipResolution;
     } catch (err) {
       setError(`${err}`);
@@ -251,6 +260,7 @@ function MembershipPurchaseModalInner({
     setBillingSetupOpen(false);
     setQuoteRefreshKey(0);
     setPaymentSubmitting(false);
+    setRenewalInProgress(false);
     setPlace(initialTargetClass ? "checkout" : "choose");
     load();
   }, [open, initialTargetClass, initialTargetInterval]);
@@ -738,6 +748,21 @@ function MembershipPurchaseModalInner({
     }
     if (error) {
       return <Alert type="error" title={error} />;
+    }
+    if (renewalInProgress) {
+      return (
+        <Space align="center" vertical size="middle" style={{ width: "100%" }}>
+          <Alert
+            showIcon
+            type="info"
+            message="Membership renewal in progress"
+            description="Membership changes are temporarily unavailable while the current renewal is being processed."
+          />
+          <Button type="primary" onClick={onClose}>
+            Close
+          </Button>
+        </Space>
+      );
     }
     if (place === "choose") {
       return renderChooseStep();
