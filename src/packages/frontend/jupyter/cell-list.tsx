@@ -1021,7 +1021,10 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
               collapsedSections={collapsedSections}
               scrollerRef={cellListDivRef}
               cellHeights={minimalCellHeightsRef}
-              height={frameHeight}
+              // use the actual scroller height (the minimap's flex row), not
+              // frameHeight, which includes the status bar above and would
+              // make the minimap overflow the bottom of the frame
+              height={cellListResize.height ?? frameHeight}
               curId={cur_id}
               selIds={sel_ids}
             />
