@@ -1499,6 +1499,9 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn('PROJECT_UDP_NEW_RATE="100"', script)
             self.assertIn('PROJECT_METADATA_IPV4="169.254.169.254"', script)
             self.assertIn('PROJECT_METADATA_IPV6="fd20:ce::254"', script)
+            self.assertIn(
+                'PROJECT_METADATA_TCP_PORTS="{ 80, 443 }"', script
+            )
             self.assertIn("socket cgroupv2 level", script)
             self.assertIn("apply_pasta_resource_limits", script)
             self.assertIn("ensure_project_network_rule", script)
@@ -1509,6 +1512,13 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )[1].split("\n}\n\nemit_project_network_rules()", 1)[0]
             self.assertIn('comment "%s-ipv4"', emit_metadata_body)
             self.assertIn('comment "%s-ipv6"', emit_metadata_body)
+            self.assertEqual(emit_metadata_body.count("tcp dport %s"), 2)
+            self.assertNotIn(
+                'ip daddr %s counter drop', emit_metadata_body
+            )
+            self.assertNotIn(
+                'ip6 daddr %s counter drop', emit_metadata_body
+            )
             self.assertIn(
                 'marker="cocalc-project-network-metadata"', emit_metadata_body
             )
