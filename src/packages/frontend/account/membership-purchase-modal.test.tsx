@@ -26,16 +26,19 @@ let mockStripeEnabled = true;
 jest.mock("antd", () => {
   const Box = ({
     children,
+    description,
     message,
     title,
   }: {
     children?: ReactNode;
+    description?: ReactNode;
     message?: ReactNode;
     title?: ReactNode;
   }) => (
     <section>
-      {title}
-      {message}
+      {title ? <div>{title}</div> : null}
+      {message ? <div>{message}</div> : null}
+      {description ? <div>{description}</div> : null}
       {children}
     </section>
   );
@@ -229,6 +232,44 @@ describe("MembershipPurchaseModal", () => {
     ).toBeTruthy();
     expect(screen.queryByText("billing selector")).toBeNull();
     expect(api).not.toHaveBeenCalled();
+  });
+
+  it("blocks every membership change entry point while renewal is pending", async () => {
+    mockGetMembershipDetails.mockResolvedValueOnce({
+      candidates: [
+        {
+          class: "standard",
+          source: "subscription",
+          subscription_interval: "month",
+          subscription_renewal_state: "processing",
+          subscription_status: "active",
+        },
+      ],
+      selected: {
+        class: "standard",
+        source: "subscription",
+      },
+    });
+
+    render(
+      <MembershipPurchaseModal
+        initialTargetClass="standard"
+        initialTargetInterval="month"
+        open
+        onClose={jest.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Membership renewal in progress"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Membership changes are temporarily unavailable while the current renewal is being processed.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("billing selector")).toBeNull();
+    expect(getMembershipChangeQuote).not.toHaveBeenCalled();
   });
 
   it("opens billing setup in place for trial memberships that need a payment method", async () => {
