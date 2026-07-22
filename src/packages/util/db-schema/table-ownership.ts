@@ -83,6 +83,7 @@ export const TABLE_OWNERSHIP = {
       "password_reset",
       "password_reset_attempts",
       "remember_me",
+      "subscription_renewal_attempts",
       "subscriptions",
       "team_licenses",
       "team_license_seat_lines",

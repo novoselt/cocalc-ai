@@ -137,6 +137,14 @@ Table({
     desc: "Subscriptions",
     primary_key: "id",
     pg_indexes: ["account_id"],
+    pg_custom_indexes: [
+      {
+        name: "subscriptions_one_renewable_personal_membership_idx",
+        query:
+          "(account_id) WHERE metadata->>'type'='membership' AND status != 'canceled'",
+        unique: true,
+      },
+    ],
     user_query: {
       get: {
         pg_where: [{ "account_id = $::UUID": "account_id" }],
