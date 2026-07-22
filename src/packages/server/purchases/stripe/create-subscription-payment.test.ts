@@ -330,6 +330,13 @@ describe("createSubscriptionPayment", () => {
       [subscription_id],
     );
     expect(rows).toEqual([{ state: "failed", status: "canceled" }]);
+    expect(mockSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject: `Subscription Id=${subscription_id} Canceled`,
+        to_ids: [account_id],
+      }),
+    );
+    expect(mockAdminAlert).not.toHaveBeenCalled();
   });
 
   it("does not duplicate renewal purchases when a payment intent is retried", async () => {
