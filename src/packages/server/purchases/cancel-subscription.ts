@@ -1,8 +1,12 @@
-import getPool, { type PoolClient } from "@cocalc/database/pool";
+import getPool, {
+  getTransactionClient,
+  type PoolClient,
+} from "@cocalc/database/pool";
 import send, { support, url, name } from "@cocalc/server/messages/send";
 import adminAlert from "@cocalc/server/messages/admin-alert";
 import { moneyToCurrency } from "@cocalc/util/money";
 import { recordMembershipAnalyticsEvent } from "@cocalc/server/membership/analytics";
+import { cancelOpenSubscriptionRenewalAttempts } from "./subscription-renewal-attempts";
 
 interface Options {
   account_id: string;
@@ -17,35 +21,55 @@ export default async function cancelSubscription({
   reason = "no reason specified",
   client,
 }: Options) {
-  const pool = client ?? getPool();
+  const pool = client ?? (await getTransactionClient());
+  const useTransaction = client == null;
   const now = new Date();
-
-  const update = await pool.query(
-    `UPDATE subscriptions
+  try {
+    const update = await pool.query(
+      `UPDATE subscriptions
         SET status='canceled', canceled_at=$1, canceled_reason=$2
       WHERE id=$3 AND account_id=$4
       RETURNING metadata, interval, current_period_start, current_period_end`,
-    [now, reason, subscription_id, account_id],
-  );
-  if (update.rowCount != 1) {
-    throw Error(`You do not have a subscription with id ${subscription_id}.`);
-  }
-  const row = update.rows[0];
-  if (row?.metadata?.type === "membership") {
-    await recordMembershipAnalyticsEvent({
-      event_key: `subscription:${subscription_id}:canceled:${now.toISOString()}`,
-      event_type: "membership_canceled",
-      event_time: now,
-      account_id,
-      membership_class: row.metadata.class,
-      source: "subscription",
-      interval: row.interval,
-      subscription_id,
-      period_start: row.current_period_start,
-      period_end: row.current_period_end,
-      trial_status: row.metadata.trial === true ? "canceled" : "none",
-      client,
-    });
+      [now, reason, subscription_id, account_id],
+    );
+    if (update.rowCount != 1) {
+      throw Error(`You do not have a subscription with id ${subscription_id}.`);
+    }
+    const row = update.rows[0];
+    if (row?.metadata?.type === "membership") {
+      await cancelOpenSubscriptionRenewalAttempts({
+        subscription_id,
+        account_id,
+        reason,
+        client: pool,
+      });
+      await recordMembershipAnalyticsEvent({
+        event_key: `subscription:${subscription_id}:canceled:${now.toISOString()}`,
+        event_type: "membership_canceled",
+        event_time: now,
+        account_id,
+        membership_class: row.metadata.class,
+        source: "subscription",
+        interval: row.interval,
+        subscription_id,
+        period_start: row.current_period_start,
+        period_end: row.current_period_end,
+        trial_status: row.metadata.trial === true ? "canceled" : "none",
+        client: pool,
+      });
+    }
+    if (useTransaction) {
+      await pool.query("COMMIT");
+    }
+  } catch (err) {
+    if (useTransaction) {
+      await pool.query("ROLLBACK");
+    }
+    throw err;
+  } finally {
+    if (useTransaction) {
+      pool.release();
+    }
   }
   await sendCancelNotification({ subscription_id, client });
 }

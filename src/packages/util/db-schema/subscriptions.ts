@@ -23,8 +23,10 @@ export interface MembershipMetadata {
 export type Metadata = MembershipMetadata;
 
 export interface SubscriptionPayment {
+  // durable renewal attempt that owns this payment
+  renewal_attempt_id?: string;
   // id of the payment intent in stripe
-  payment_intent_id: string;
+  payment_intent_id?: string;
   // the cost of the subscription renewal; this is usually the same as the cost of the subscription,
   // but could be different, e.g,. if part of the renewal is paid from the user's balance.
   amount: MoneyValue;

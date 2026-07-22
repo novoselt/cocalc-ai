@@ -20,6 +20,16 @@ import {
   recordMembershipPurchaseCompleted,
 } from "@cocalc/server/membership/analytics";
 import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
+import {
+  assertNoDueMembershipRenewal,
+  getRenewableMembershipSubscriptions,
+  lockMembershipSubscriptionAccount,
+  MembershipSubscriptionConflictError,
+} from "./membership-subscription-guard";
+import {
+  cancelOpenSubscriptionRenewalAttempts,
+  scheduleSubscriptionRenewalAttempt,
+} from "./subscription-renewal-attempts";
 
 interface MembershipChangeOptions {
   account_id: string;
@@ -54,6 +64,31 @@ export async function applyMembershipChange({
   const transaction = client ?? (await getTransactionClient());
   const useTransaction = client == null;
   try {
+    await lockMembershipSubscriptionAccount({
+      account_id,
+      client: transaction,
+    });
+    await assertNoDueMembershipRenewal({ account_id, client: transaction });
+    const renewable = await getRenewableMembershipSubscriptions({
+      account_id,
+      client: transaction,
+      forUpdate: true,
+    });
+    if (renewable.length > 1) {
+      throw new MembershipSubscriptionConflictError({
+        account_id,
+        competingIds: renewable.map(({ id }) => id),
+      });
+    }
+    if (
+      renewable[0] != null &&
+      new Date(renewable[0].current_period_end) < new Date()
+    ) {
+      throw new MembershipSubscriptionConflictError({
+        account_id,
+        competingIds: [renewable[0].id],
+      });
+    }
     const change = await computeMembershipChange({
       account_id,
       targetClass,
@@ -117,6 +152,17 @@ export async function applyMembershipChange({
         cost: change.price,
         client: transaction,
       });
+      await cancelOpenSubscriptionRenewalAttempts({
+        account_id,
+        subscription_id: change.existing_subscription_id,
+        reason: "Legacy migration membership renewal was reconfigured",
+        client: transaction,
+      });
+      await scheduleSubscriptionRenewalAttempt({
+        account_id,
+        subscription_id: change.existing_subscription_id,
+        client: transaction,
+      });
       await recordMembershipAnalyticsEvent({
         event_key: `subscription:${change.existing_subscription_id}:legacy-renewal-configured:${targetClass}:${interval}`,
         event_type: "membership_changed",
@@ -151,9 +197,10 @@ export async function applyMembershipChange({
           ? dayjs(start).add(1, "month").toDate()
           : dayjs(start).add(1, "year").toDate();
 
-    await cancelRenewableMembershipSubscriptions({
+    await cancelRenewableMembershipSubscription({
       account_id,
       targetClass,
+      subscription_id: renewable[0]?.id,
       client: transaction,
     });
 
@@ -343,24 +390,38 @@ async function configureLegacyMigrationGrantRenewal({
   }
 }
 
-async function cancelRenewableMembershipSubscriptions({
+async function cancelRenewableMembershipSubscription({
   account_id,
   targetClass,
+  subscription_id,
   client,
 }: {
   account_id: string;
   targetClass: MembershipClass;
+  subscription_id?: number;
   client: PoolClient;
 }): Promise<void> {
-  await client.query(
+  if (subscription_id == null) {
+    return;
+  }
+  const result = await client.query(
     `UPDATE subscriptions
         SET status='canceled',
             canceled_at=COALESCE(canceled_at, NOW()),
             canceled_reason=$2
-      WHERE account_id=$1
+      WHERE id=$3
+        AND account_id=$1
         AND metadata->>'type'='membership'
-        AND status != 'canceled'
-        AND current_period_end >= NOW()`,
-    [account_id, `Changed membership to ${targetClass}`],
+        AND status != 'canceled'`,
+    [account_id, `Changed membership to ${targetClass}`, subscription_id],
   );
+  if (result.rowCount != 1) {
+    throw Error(`membership subscription ${subscription_id} changed`);
+  }
+  await cancelOpenSubscriptionRenewalAttempts({
+    account_id,
+    subscription_id,
+    reason: `Changed membership to ${targetClass}`,
+    client,
+  });
 }
