@@ -29,6 +29,9 @@ jest.mock("@cocalc/frontend/feature", () => ({
 
 jest.mock("../../components/progress-estimate", () => () => <div />);
 jest.mock("../logo", () => () => <div />);
+jest.mock("../minimal/minimal-controls", () => ({
+  MinimalControls: () => <div />,
+}));
 jest.mock("../select-kernel", () => ({
   KernelSelector: () => <div />,
 }));
@@ -139,6 +142,62 @@ describe("Kernel", () => {
     expect(screen.getByText("Idle")).toBeTruthy();
     expect(screen.queryByText("Trusted")).toBeNull();
     expect(screen.queryByText(/\(halt/i)).toBeNull();
+  });
+
+  it("shows the trust indicator in the minimal notebook status bar", () => {
+    const actions = {
+      name: "jupyter-test",
+      project_id: "project-1",
+      show_select_kernel: jest.fn(),
+      hide_select_kernel: jest.fn(),
+      kernel_dont_ask_again: jest.fn(),
+      set_kernel: jest.fn(),
+    } as any;
+
+    useRedux.mockImplementation(([name, key]) => {
+      if (name !== "jupyter-test") {
+        return;
+      }
+      switch (key) {
+        case "trust":
+          return true;
+        case "read_only":
+          return false;
+        case "kernel":
+          return "python3";
+        case "kernels":
+          return immutable.List();
+        case "runProgress":
+          return 0;
+        case "project_id":
+          return "project-1";
+        case "kernel_info":
+          return immutable.fromJS({ display_name: "Python 3 (ipykernel)" });
+        case "show_kernel_selector":
+          return false;
+        case "backend_state":
+          return "running";
+        case "kernel_state":
+          return "idle";
+      }
+    });
+
+    getProjectActions.mockReturnValue({ project_id: "project-1" });
+
+    // the minimal notebook status bar is the compact header with layout
+    // controls; unlike other compact embeds it does show the trust state
+    render(
+      <IntlProvider locale="en" messages={{}}>
+        <Kernel
+          actions={actions}
+          compact
+          minimalLayout="comfortable"
+          onLayoutChange={jest.fn()}
+        />
+      </IntlProvider>,
+    );
+
+    expect(screen.getByText("Trusted")).toBeTruthy();
   });
 
   it("keeps the kernel header visible while kernel selection is undecided", () => {

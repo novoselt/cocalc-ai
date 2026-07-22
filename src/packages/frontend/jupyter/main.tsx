@@ -96,7 +96,6 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
     editor_actions,
     name,
     is_focused,
-    is_fullscreen,
     is_visible,
     font_size,
     mode,
@@ -523,14 +522,15 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
           display: "flex",
           flexDirection: "column",
           height: "100%",
-          overflowY: "hidden",
+          // both axes: overflowY hidden alone computes overflow-x to auto,
+          // so any 1px-wide child spawns a horizontal scrollbar
+          overflow: "hidden",
         }}
       >
         {!read_only && <KernelWarning name={name} actions={actions} />}
         {render_modals()}
         {!read_only && (
           <Kernel
-            is_fullscreen={is_fullscreen}
             actions={actions}
             usage={
               cellViewMode === "minimal" && (containerWidth ?? 9999) < 800

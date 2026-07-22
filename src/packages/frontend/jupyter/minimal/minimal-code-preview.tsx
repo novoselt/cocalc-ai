@@ -23,10 +23,21 @@ interface MinimalCodePreviewProps {
   highlighted?: boolean;
   /** Max height in px — content fades out at the bottom when clipped */
   maxHeight?: number;
+  /** Protected cell (metadata.editable=false): blocked cursor; clicking
+   *  still opens the editor, but read-only. */
+  blocked?: boolean;
 }
 
 export const MinimalCodePreview: React.FC<MinimalCodePreviewProps> = React.memo(
-  ({ value, cmOptions, fontSize, onActivate, highlighted, maxHeight }) => {
+  ({
+    value,
+    cmOptions,
+    fontSize,
+    onActivate,
+    highlighted,
+    maxHeight,
+    blocked,
+  }) => {
     const [hovered, setHovered] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const [isClipped, setIsClipped] = useState(false);
@@ -46,12 +57,14 @@ export const MinimalCodePreview: React.FC<MinimalCodePreviewProps> = React.memo(
           opacity:
             hovered || highlighted ? CODE_OPACITY_HOVER : CODE_OPACITY_DEFAULT,
           transition: "opacity 150ms ease",
-          cursor: "text",
+          cursor: blocked ? "not-allowed" : "text",
           position: "relative",
           overflow: "hidden",
           padding: "4px",
           minHeight: `${MIN_HEIGHT}px`,
-          maxHeight: maxHeight ? `${Math.max(MIN_HEIGHT, maxHeight)}px` : undefined,
+          maxHeight: maxHeight
+            ? `${Math.max(MIN_HEIGHT, maxHeight)}px`
+            : undefined,
         }}
         onClick={onActivate}
         onMouseEnter={() => setHovered(true)}

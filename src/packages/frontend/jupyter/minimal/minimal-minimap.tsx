@@ -69,7 +69,9 @@ const STATUS_COLORS: Record<CellStatus, string> = {
   markdown: COLORS.GRAY_L0,
 };
 
-const DEFAULT_CELL_HEIGHT = 60;
+// Estimate for cells that were never rendered/measured: the lazy-render
+// placeholder box is min-height 96 plus padding and margin.
+const DEFAULT_CELL_HEIGHT = 120;
 
 export interface MinimalMinimapEntry {
   id: string;
@@ -79,6 +81,14 @@ export interface MinimalMinimapEntry {
   isCurrent: boolean;
   isSelected: boolean;
 }
+
+// Priority for surfacing hidden-cell activity on a collapsed-section entry;
+// anything not listed never overrides the section's default "markdown".
+const COLLAPSED_STATUS_RANK: Partial<Record<CellStatus, number>> = {
+  error: 1,
+  queued: 2,
+  running: 3,
+};
 
 export function buildMinimalMinimapEntries({
   cellList,
@@ -100,6 +110,7 @@ export function buildMinimalMinimapEntries({
   const entries: MinimalMinimapEntry[] = [];
   let inCollapsed = false;
   let collapsedLevel = 0;
+  let collapsedEntryIdx: number | null = null;
 
   cellList.forEach((id: string) => {
     const cell = cells.get(id);
@@ -117,6 +128,7 @@ export function buildMinimalMinimapEntries({
       if (collapsedSections.has(id)) {
         inCollapsed = true;
         collapsedLevel = headingLevel;
+        collapsedEntryIdx = entries.length;
         entries.push({
           id,
           pixelHeight: 24,
@@ -128,10 +140,25 @@ export function buildMinimalMinimapEntries({
         return;
       } else if (inCollapsed && headingLevel <= collapsedLevel) {
         inCollapsed = false;
+        collapsedEntryIdx = null;
       }
     }
 
-    if (inCollapsed) return;
+    if (inCollapsed) {
+      // Surface running/queued/error activity of hidden cells on the
+      // collapsed section's single minimap entry, so a folded section still
+      // shows execution feedback.
+      if (collapsedEntryIdx != null && cellType === "code") {
+        const status = getCellStatus(cell, lastExecInputHash);
+        const rank = COLLAPSED_STATUS_RANK[status] ?? 0;
+        const current =
+          COLLAPSED_STATUS_RANK[entries[collapsedEntryIdx].status] ?? 0;
+        if (rank > current) {
+          entries[collapsedEntryIdx].status = status;
+        }
+      }
+      return;
+    }
 
     entries.push({
       id,
@@ -144,6 +171,76 @@ export function buildMinimalMinimapEntries({
   });
 
   return entries;
+}
+
+export interface MinimapBarSegment {
+  entry: MinimalMinimapEntry;
+  top: number;
+  height: number;
+}
+
+/**
+ * Lay the entries out over exactly `height` pixels: proportional to their
+ * document pixel heights, with a small gap and a minimum bar height.  The
+ * clamps would make the stack overflow the minimap for notebooks with many
+ * cells (and undershoot for few), so the result is renormalized to always
+ * span the full height — otherwise bar positions drift against the viewport
+ * rectangle.
+ */
+export function computeMinimapLayout(
+  entries: MinimalMinimapEntry[],
+  height: number,
+): MinimapBarSegment[] {
+  if (entries.length === 0 || height <= 0) return [];
+  const totalPixels = entries.reduce((s, e) => s + e.pixelHeight, 0) || 1;
+  const scale = height / totalPixels;
+  const raw = entries.map((e) =>
+    Math.max(MIN_CELL_HEIGHT, e.pixelHeight * scale - CELL_GAP),
+  );
+  const rawTotal = raw.reduce((s, h) => s + h + CELL_GAP, 0);
+  const factor = height / rawTotal;
+  const segments: MinimapBarSegment[] = [];
+  let y = 0;
+  entries.forEach((entry, i) => {
+    // no extra floor here: raw is already clamped, and flooring again after
+    // scaling would break the normalization for notebooks with many cells
+    const h = raw[i] * factor;
+    segments.push({ entry, top: y, height: h });
+    y += h + CELL_GAP * factor;
+  });
+  return segments;
+}
+
+/** First/last cell visible in the scroller, with the fraction of each. */
+export interface MinimapVisibleRange {
+  firstId: string;
+  firstFrac: number; // fraction of the first cell hidden above the top edge
+  lastId: string;
+  lastFrac: number; // fraction of the last cell above the bottom edge
+}
+
+/**
+ * Map the visible cell range into minimap bar coordinates.  Computing the
+ * viewport from the actually visible cells (instead of scrollTop ratios)
+ * keeps the rectangle aligned with the bars even when per-cell height
+ * estimates are off.
+ */
+export function viewportFromSegments(
+  segments: MinimapBarSegment[],
+  range: MinimapVisibleRange | null,
+): { top: number; bottom: number } | null {
+  if (range == null) return null;
+  let first: MinimapBarSegment | undefined;
+  let last: MinimapBarSegment | undefined;
+  for (const seg of segments) {
+    if (seg.entry.id === range.firstId) first = seg;
+    if (seg.entry.id === range.lastId) last = seg;
+  }
+  if (first == null || last == null) return null;
+  const top = first.top + range.firstFrac * first.height;
+  const bottom = last.top + range.lastFrac * last.height;
+  if (bottom <= top) return null;
+  return { top, bottom };
 }
 
 interface MinimalMinimapProps {
@@ -170,7 +267,10 @@ export const MinimalMinimap: React.FC<MinimalMinimapProps> = React.memo(
   }) => {
     const [scrollRatio, setScrollRatio] = useState(0);
     const [viewportRatio, setViewportRatio] = useState(1);
+    const [visibleRange, setVisibleRange] =
+      useState<MinimapVisibleRange | null>(null);
     const minimapRef = useRef<HTMLDivElement>(null);
+    const segmentsRef = useRef<MinimapBarSegment[]>([]);
     const draggingRef = useRef(false);
     const [dragging, setDragging] = useState(false);
     // Persistent height cache: cellId → last known pixel height
@@ -193,6 +293,41 @@ export const MinimalMinimap: React.FC<MinimalMinimapProps> = React.memo(
           setScrollRatio(el.scrollTop / maxScroll);
           setViewportRatio(Math.min(1, el.clientHeight / el.scrollHeight));
         }
+        // Determine the first/last visible cell (plus fraction) so the
+        // viewport rectangle can be drawn in bar coordinates.  Cells are
+        // wrapped in [data-jupyter-lazy-cell-id] whether hydrated or not.
+        const elRect = el.getBoundingClientRect();
+        let first: { id: string; frac: number } | null = null;
+        let last: { id: string; frac: number } | null = null;
+        for (const node of el.querySelectorAll<HTMLElement>(
+          "[data-jupyter-lazy-cell-id]",
+        )) {
+          const r = node.getBoundingClientRect();
+          if (r.height <= 0 || r.bottom <= elRect.top) continue;
+          if (r.top >= elRect.bottom) break;
+          const id = node.getAttribute("data-jupyter-lazy-cell-id");
+          if (id == null) continue;
+          if (first == null) {
+            first = {
+              id,
+              frac: Math.max(0, Math.min(1, (elRect.top - r.top) / r.height)),
+            };
+          }
+          last = {
+            id,
+            frac: Math.max(0, Math.min(1, (elRect.bottom - r.top) / r.height)),
+          };
+        }
+        setVisibleRange(
+          first != null && last != null
+            ? {
+                firstId: first.id,
+                firstFrac: first.frac,
+                lastId: last.id,
+                lastFrac: last.frac,
+              }
+            : null,
+        );
       };
       update();
       el.addEventListener("scroll", update, { passive: true });
@@ -202,7 +337,7 @@ export const MinimalMinimap: React.FC<MinimalMinimapProps> = React.memo(
         el.removeEventListener("scroll", update);
         observer.disconnect();
       };
-    }, [scrollerRef.current]);
+    }, [scrollerRef.current, cellList, collapsedSections]);
 
     // Scroll — hooks must be called unconditionally (before any early return)
     const scrollTo = useCallback(
@@ -211,10 +346,34 @@ export const MinimalMinimap: React.FC<MinimalMinimapProps> = React.memo(
         const map = minimapRef.current;
         if (!el || !map) return;
         const rect = map.getBoundingClientRect();
-        const ratio = Math.max(
-          0,
-          Math.min(1, (clientY - rect.top) / rect.height),
-        );
+        const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
+        // Map the clicked bar position to a cell + fraction and center the
+        // scroller on the corresponding document position — the inverse of
+        // how the viewport rectangle is drawn, so clicking inside the
+        // rectangle doesn't jump.
+        const segments = segmentsRef.current;
+        const seg =
+          segments.find((s) => y <= s.top + s.height) ??
+          segments[segments.length - 1];
+        if (seg != null) {
+          const frac =
+            seg.height > 0
+              ? Math.max(0, Math.min(1, (y - seg.top) / seg.height))
+              : 0;
+          const node = el.querySelector<HTMLElement>(
+            `[data-jupyter-lazy-cell-id="${seg.entry.id}"]`,
+          );
+          if (node != null) {
+            const nodeRect = node.getBoundingClientRect();
+            const elRect = el.getBoundingClientRect();
+            const cellTop = nodeRect.top - elRect.top + el.scrollTop;
+            el.scrollTop =
+              cellTop + frac * nodeRect.height - el.clientHeight / 2;
+            return;
+          }
+        }
+        // Fallback: linear ratio mapping.
+        const ratio = rect.height > 0 ? y / rect.height : 0;
         const vpHalf = viewportRatio / 2;
         const targetRatio = Math.max(
           0,
@@ -303,14 +462,26 @@ export const MinimalMinimap: React.FC<MinimalMinimapProps> = React.memo(
       selIds,
     });
 
-    const totalPixels = entries.reduce((s, e) => s + e.pixelHeight, 0) || 1;
-    const scale = minimapHeight / totalPixels;
+    const segments = computeMinimapLayout(entries, minimapHeight);
+    segmentsRef.current = segments;
 
-    const vpTop = scrollRatio * (1 - viewportRatio) * minimapHeight;
-    const vpHeight = Math.max(
-      VIEWPORT_MIN_HEIGHT,
-      viewportRatio * minimapHeight,
-    );
+    // Viewport rectangle: anchored to the visible cell range when known,
+    // otherwise fall back to plain scroll ratios.
+    const rangeVp = viewportFromSegments(segments, visibleRange);
+    let vpTop: number;
+    let vpHeight: number;
+    if (rangeVp != null) {
+      vpTop = rangeVp.top;
+      vpHeight = rangeVp.bottom - rangeVp.top;
+    } else {
+      vpTop = scrollRatio * (1 - viewportRatio) * minimapHeight;
+      vpHeight = viewportRatio * minimapHeight;
+    }
+    if (vpHeight < VIEWPORT_MIN_HEIGHT) {
+      vpTop -= (VIEWPORT_MIN_HEIGHT - vpHeight) / 2;
+      vpHeight = VIEWPORT_MIN_HEIGHT;
+    }
+    vpTop = Math.max(0, Math.min(minimapHeight - vpHeight, vpTop));
 
     return (
       <div
@@ -334,64 +505,53 @@ export const MinimalMinimap: React.FC<MinimalMinimapProps> = React.memo(
         }}
       >
         {/* Cell bars */}
-        {(() => {
-          let yOffset = 0;
-          return entries.map(
-            ({ id, pixelHeight, status, isCode, isCurrent, isSelected }) => {
-              const h = Math.max(
-                MIN_CELL_HEIGHT,
-                pixelHeight * scale - CELL_GAP,
-              );
-              const top = yOffset;
-              yOffset += h + CELL_GAP;
+        {segments.map(({ entry, top, height: h }) => {
+          const { id, status, isCode, isCurrent, isSelected } = entry;
+          const color = STATUS_COLORS[status];
+          const isEval = status === "running" || status === "queued";
 
-              const color = STATUS_COLORS[status];
-              const isEval = status === "running" || status === "queued";
+          // Running/queued takes precedence over selection highlight
+          // so users can see execution progress sweep through
+          if (!isEval && (isCurrent || isSelected)) {
+            return (
+              <div
+                key={id}
+                style={{
+                  position: "absolute",
+                  top,
+                  left: 4,
+                  right: 4,
+                  height: h,
+                  backgroundColor: CURRENT_COLOR,
+                  opacity: isCurrent ? 0.8 : 0.5,
+                  borderRadius: "1px",
+                }}
+              />
+            );
+          }
 
-              // Running/queued takes precedence over selection highlight
-              // so users can see execution progress sweep through
-              if (!isEval && (isCurrent || isSelected)) {
-                return (
-                  <div
-                    key={id}
-                    style={{
-                      position: "absolute",
-                      top,
-                      left: 4,
-                      right: 4,
-                      height: h,
-                      backgroundColor: CURRENT_COLOR,
-                      opacity: isCurrent ? 0.8 : 0.5,
-                      borderRadius: "1px",
-                    }}
-                  />
-                );
+          // Markdown cells: narrower, fainter bars
+          // Code cells: wider bars with status color
+          // Running cell blinks
+          return (
+            <div
+              key={id}
+              className={
+                status === "running" ? "minimap-cell-running" : undefined
               }
-
-              // Markdown cells: narrower, fainter bars
-              // Code cells: wider bars with status color
-              // Running cell blinks
-              return (
-                <div
-                  key={id}
-                  className={
-                    status === "running" ? "minimap-cell-running" : undefined
-                  }
-                  style={{
-                    position: "absolute",
-                    top,
-                    left: 4,
-                    right: 4,
-                    height: h,
-                    backgroundColor: color,
-                    opacity: isCode ? 0.8 : 0.5,
-                    borderRadius: "1px",
-                  }}
-                />
-              );
-            },
+              style={{
+                position: "absolute",
+                top,
+                left: 4,
+                right: 4,
+                height: h,
+                backgroundColor: color,
+                opacity: isCode ? 0.8 : 0.5,
+                borderRadius: "1px",
+              }}
+            />
           );
-        })()}
+        })}
 
         {/* Viewport rectangle */}
         <div

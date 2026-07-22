@@ -98,17 +98,9 @@ export function MinimalControls({
       )}
       <Divider />
       <MinimalNotebookHelp />
-      <div
-        style={{
-          // flex wrapper so the inline-block button doesn't add baseline
-          // descender space and grow the status bar height
-          display: "flex",
-          alignItems: "center",
-          marginRight: "8px",
-        }}
-      >
-        <SwitchToRegularButton />
-      </div>
+      {/* direct flex child: blockified, so no baseline descender space; the
+          header's own padding provides the gap to the frame edge */}
+      <SwitchToRegularButton />
     </>
   );
 }

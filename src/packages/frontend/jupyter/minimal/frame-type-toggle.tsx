@@ -9,7 +9,7 @@
 
 import { Button } from "antd";
 
-import { Tooltip } from "@cocalc/frontend/components";
+import { Icon, Tooltip } from "@cocalc/frontend/components";
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
 
 function hasFrameOfType(actions: any, type: string): boolean {
@@ -40,7 +40,7 @@ export function SwitchToMinimalButton() {
         size="small"
         onClick={() => actions.set_frame_type(id, "jupyter_minimal")}
       >
-        Minimal
+        <Icon name="swap" /> Minimal
       </Button>
     </Tooltip>
   );
@@ -63,7 +63,7 @@ export function SwitchToRegularButton() {
         size="small"
         onClick={() => actions.set_frame_type(id, "jupyter_cell_notebook")}
       >
-        Regular
+        <Icon name="swap" /> Regular
       </Button>
     </Tooltip>
   );

@@ -32,6 +32,7 @@ import { useNotebookMinimap } from "./minimap";
 import { MinimalMinimap } from "./minimal/minimal-minimap";
 import {
   computeSectionBlocks,
+  computeSectionRunState,
   buildBlockLookup,
   sectionBlocksEqual,
 } from "./minimal/section-blocks";
@@ -455,6 +456,14 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     // if click in the cell list, focus the cell list; otherwise, blur it.
     const cellListElement = cellListDivRef.current;
     if (cellListElement == null) return;
+    // If the clicked element was unmounted by React before this window-level
+    // handler ran (e.g. clicking the minimal code preview replaces it with
+    // the editor), it can't be located in the DOM anymore.  Treating that as
+    // "outside" would blur and disable the keyboard handler right after the
+    // editor opened, silently killing Shift+Enter.  Do nothing instead.
+    if (event?.target != null && event.target.isConnected === false) {
+      return;
+    }
     if (isInsideKeyboardBoundary(event)) {
       frameActions.current?.blur();
       return;
@@ -617,6 +626,19 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
                   sectionBlocks[blockLookup.get(id)!.blockIndex]?.startCellId,
                 )
               : false
+          }
+          collapsedRunState={
+            sectionBlocks != null &&
+            blockLookup?.has(id) &&
+            blockLookup.get(id)!.positionInBlock === 0 &&
+            collapsedSections.has(
+              sectionBlocks[blockLookup.get(id)!.blockIndex]?.startCellId,
+            )
+              ? computeSectionRunState(
+                  sectionBlocks[blockLookup.get(id)!.blockIndex]!.cellIds,
+                  cells,
+                )
+              : undefined
           }
           onToggleSection={
             sectionBlocks != null && blockLookup?.has(id)
