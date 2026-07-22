@@ -4,12 +4,15 @@
  */
 
 import { uuid } from "@cocalc/util/misc";
+import dayjs from "dayjs";
 import { before, after, getPool } from "@cocalc/server/test";
 import { SUBSCRIPTION_RENEWAL } from "@cocalc/util/db-schema/purchases";
 import {
   createTestAccount,
   createTestMembershipSubscription,
 } from "@cocalc/server/purchases/test-data";
+import createCredit from "@cocalc/server/purchases/create-credit";
+import getBalance from "@cocalc/server/purchases/get-balance";
 import { bindSubscriptionRenewalPaymentIntent } from "../subscription-renewal-attempts";
 
 const mockCreatePaymentIntent = jest.fn();
@@ -129,6 +132,69 @@ describe("createSubscriptionPayment", () => {
       status: "active",
       subscription_id,
     });
+  });
+
+  it("renews entirely from balance without accessing Stripe", async () => {
+    const account_id = uuid();
+    const end = new Date(Date.now() - 60_000);
+    await createTestAccount(account_id);
+    await createCredit({ account_id, amount: 100 });
+    const { cost, subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end,
+      },
+    );
+    mockUseBalanceTowardSubscriptions.mockResolvedValue(true);
+
+    await expect(
+      createSubscriptionPayment({ account_id, subscription_id }),
+    ).resolves.toEqual({});
+
+    expect(mockGetStripeCustomerId).not.toHaveBeenCalled();
+    expect(mockCreatePaymentIntent).not.toHaveBeenCalled();
+    expect(Number(await getBalance({ account_id }))).toBe(100 - cost);
+
+    const { rows: subscriptions } = await getPool().query(
+      `SELECT current_period_end, payment
+         FROM subscriptions
+        WHERE id=$1`,
+      [subscription_id],
+    );
+    expect(new Date(subscriptions[0].current_period_end).getTime()).toBe(
+      dayjs(end).add(1, "month").valueOf(),
+    );
+    expect(subscriptions[0].payment).toMatchObject({
+      amount: cost,
+      status: "paid",
+      subscription_id,
+    });
+    expect(subscriptions[0].payment.payment_intent_id).toBeNull();
+
+    const { rows: purchases } = await getPool().query(
+      `SELECT cost
+         FROM purchases
+        WHERE account_id=$1
+          AND service='membership'
+          AND (description->>'subscription_id')::int=$2`,
+      [account_id, subscription_id],
+    );
+    expect(purchases).toHaveLength(1);
+    expect(Number(purchases[0].cost)).toBe(cost);
+
+    const { rows: attempts } = await getPool().query(
+      `SELECT payment_intent_id, state
+         FROM subscription_renewal_attempts
+        WHERE subscription_id=$1
+        ORDER BY period_end`,
+      [subscription_id],
+    );
+    expect(attempts).toEqual([
+      { payment_intent_id: null, state: "succeeded" },
+      { payment_intent_id: null, state: "scheduled" },
+    ]);
   });
 
   it("does not let the legacy payment route collect before period end", async () => {
