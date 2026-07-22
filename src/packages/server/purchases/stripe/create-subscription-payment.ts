@@ -28,6 +28,7 @@ import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purcha
 import { getMembershipTierById } from "@cocalc/server/membership/tiers";
 import type { SubscriptionRenewalAttempt } from "@cocalc/util/db-schema/subscription-renewal-attempts";
 import {
+  cancelOpenSubscriptionRenewalAttempts,
   claimSubscriptionRenewalAttempt,
   completeSubscriptionRenewalAttempt,
   getSubscriptionRenewalAttempt,
@@ -290,6 +291,7 @@ async function prepareSubscriptionRenewalAttempt({
   renewal_attempt_id?: string;
 }): Promise<SubscriptionRenewalAttempt> {
   const client = await getTransactionClient();
+  let committed = false;
   try {
     await lockMembershipSubscriptionAccount({ account_id, client });
     let attempt: SubscriptionRenewalAttempt | undefined;
@@ -322,10 +324,41 @@ async function prepareSubscriptionRenewalAttempt({
     ) {
       throw Error("subscription does not have an active renewal attempt");
     }
+    const { rows: subscriptions } = await client.query<{
+      current_period_end: Date;
+      status: string;
+    }>(
+      `SELECT current_period_end, status
+         FROM subscriptions
+        WHERE id=$1
+          AND account_id=$2
+          AND metadata->>'type'='membership'
+        FOR UPDATE`,
+      [subscription_id, account_id],
+    );
+    const subscription = subscriptions[0];
+    if (
+      subscription?.status !== "active" ||
+      new Date(subscription.current_period_end).valueOf() !==
+        new Date(attempt.period_end).valueOf()
+    ) {
+      await cancelOpenSubscriptionRenewalAttempts({
+        account_id,
+        subscription_id,
+        reason: "Subscription is no longer active for this renewal period",
+        client,
+      });
+      await client.query("COMMIT");
+      committed = true;
+      throw Error("subscription does not match the active renewal attempt");
+    }
     await client.query("COMMIT");
+    committed = true;
     return attempt;
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (!committed) {
+      await client.query("ROLLBACK");
+    }
     throw err;
   } finally {
     client.release();

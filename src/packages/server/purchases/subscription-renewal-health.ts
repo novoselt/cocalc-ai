@@ -82,20 +82,26 @@ export async function alertDelayedSubscriptionRenewals(): Promise<number> {
   const { warningMinutes, criticalMinutes } =
     getSubscriptionRenewalHealthThresholds(maintenance);
   const { rows } = await getPool().query<DelayedRenewalRow>(
-    `SELECT id AS attempt_id,
-            subscription_id,
-            account_id,
-            state,
-            not_before,
-            EXTRACT(EPOCH FROM (NOW() - not_before)) / 60 AS age_minutes,
-            attempt_count,
-            payment_intent_id,
-            stripe_invoice_id,
-            last_error
-       FROM subscription_renewal_attempts
-      WHERE state IN ('scheduled','processing')
-        AND not_before <= NOW() - ($1 * INTERVAL '1 minute')
-      ORDER BY not_before, subscription_id`,
+    `SELECT a.id AS attempt_id,
+            a.subscription_id,
+            a.account_id,
+            a.state,
+            a.not_before,
+            EXTRACT(EPOCH FROM (NOW() - a.not_before)) / 60 AS age_minutes,
+            a.attempt_count,
+            a.payment_intent_id,
+            a.stripe_invoice_id,
+            a.last_error
+       FROM subscription_renewal_attempts a
+       JOIN subscriptions s
+         ON s.id=a.subscription_id
+        AND s.account_id=a.account_id
+        AND s.metadata->>'type'='membership'
+        AND s.status='active'
+        AND s.current_period_end=a.period_end
+      WHERE a.state IN ('scheduled','processing')
+        AND a.not_before <= NOW() - ($1 * INTERVAL '1 minute')
+      ORDER BY a.not_before, a.subscription_id`,
     [warningMinutes],
   );
   if (rows.length === 0) {

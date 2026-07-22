@@ -69,6 +69,7 @@ export async function scheduleSubscriptionRenewalAttempt({
 }
 
 export async function scheduleMissingSubscriptionRenewalAttempts(): Promise<number> {
+  await cancelStaleSubscriptionRenewalAttempts();
   const { rowCount } = await getPool().query(
     `INSERT INTO subscription_renewal_attempts
        (id, subscription_id, account_id, period_end, target_period_end,
@@ -87,6 +88,28 @@ export async function scheduleMissingSubscriptionRenewalAttempts(): Promise<numb
       WHERE s.metadata->>'type'='membership'
         AND s.status='active'
      ON CONFLICT DO NOTHING`,
+  );
+  return rowCount ?? 0;
+}
+
+export async function cancelStaleSubscriptionRenewalAttempts(): Promise<number> {
+  const { rowCount } = await getPool().query(
+    `UPDATE subscription_renewal_attempts a
+        SET state='canceled',
+            lease_expires_at=NULL,
+            last_error='Subscription is no longer active for this period',
+            completed_at=NOW(),
+            updated_at=NOW()
+      WHERE a.state IN ('scheduled','processing')
+        AND NOT EXISTS (
+          SELECT 1
+            FROM subscriptions s
+           WHERE s.id=a.subscription_id
+             AND s.account_id=a.account_id
+             AND s.metadata->>'type'='membership'
+             AND s.status='active'
+             AND s.current_period_end=a.period_end
+        )`,
   );
   return rowCount ?? 0;
 }
@@ -124,15 +147,21 @@ export async function claimDueSubscriptionRenewalAttempts({
 }): Promise<SubscriptionRenewalAttempt[]> {
   const { rows } = await getPool().query<SubscriptionRenewalAttempt>(
     `WITH candidates AS (
-       SELECT id
-         FROM subscription_renewal_attempts
-        WHERE state IN ('scheduled','processing')
-          AND not_before <= NOW()
-          AND next_attempt_at <= NOW()
-          AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
-        ORDER BY not_before, subscription_id
+       SELECT a.id
+         FROM subscription_renewal_attempts a
+         JOIN subscriptions s
+           ON s.id=a.subscription_id
+          AND s.account_id=a.account_id
+          AND s.metadata->>'type'='membership'
+          AND s.status='active'
+          AND s.current_period_end=a.period_end
+        WHERE a.state IN ('scheduled','processing')
+          AND a.not_before <= NOW()
+          AND a.next_attempt_at <= NOW()
+          AND (a.lease_expires_at IS NULL OR a.lease_expires_at <= NOW())
+        ORDER BY a.not_before, a.subscription_id
         LIMIT $1
-        FOR UPDATE SKIP LOCKED
+        FOR UPDATE OF a SKIP LOCKED
      )
      UPDATE subscription_renewal_attempts a
         SET state='processing',
