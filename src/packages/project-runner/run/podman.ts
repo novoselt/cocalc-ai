@@ -110,6 +110,7 @@ const START_RUNNING_CHECK_INTERVAL_MS = 250;
 const START_FAILURE_LOG_LINES = 80;
 const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
 const VERIFY_PROJECT_POOL_TIMEOUT_S = 10;
+const VERIFY_PROJECT_IO_TIMEOUT_S = 10;
 const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
 const RECONCILE_PROJECT_NETWORK_TIMEOUT_S = 30;
 const DEFAULT_PROJECT_POOL_CGROUP = "/sys/fs/cgroup/cocalc-project-pool";
@@ -120,8 +121,8 @@ sudo -n /usr/local/sbin/cocalc-runtime-storage enter-project-cgroup "$1" "$$"
 shift
 exec podman "$@"`;
 const PROJECT_CGROUP_LAUNCHER_SCRIPT = `set -euo pipefail
-sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}"
-shift 10
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}" "\${11}"
+shift 11
 exec podman "$@"`;
 const DEFAULT_PROJECT_SCRIPT = join(
   COCALC_SRC,
@@ -797,6 +798,7 @@ function projectCgroupPodmanLauncher(
       limits.cpu_max_period,
       limits.cpu_weight,
       limits.io_weight,
+      limits.io_class,
     ],
   };
 }
@@ -1086,6 +1088,7 @@ async function attachProjectToCgroup({
       limits.cpu_max_period,
       limits.cpu_weight,
       limits.io_weight,
+      limits.io_class,
     ],
     timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
     err_on_exit: false,
@@ -1192,6 +1195,19 @@ async function projectCgroupConforms({
       // The io controller is optional; the privileged helper also skips it
       // when the kernel does not expose io.weight for this hierarchy.
     }
+    const ioPolicy = await executeCode({
+      command: "sudo",
+      args: [
+        "-n",
+        "/usr/local/sbin/cocalc-runtime-storage",
+        "verify-project-io-limits",
+        project_id,
+        effective.io_class,
+      ],
+      timeout: VERIFY_PROJECT_IO_TIMEOUT_S,
+      err_on_exit: false,
+    });
+    const ioLimitsConform = ioPolicy.exit_code === 0;
     return {
       conforms:
         memoryMax === effective.memory_max &&
@@ -1202,6 +1218,7 @@ async function projectCgroupConforms({
         cpuMax === `${effective.cpu_max_quota} ${effective.cpu_max_period}` &&
         cpuWeight === effective.cpu_weight &&
         ioWeightConforms &&
+        ioLimitsConform &&
         memoryOomGroup === "0" &&
         cgroupProcs.length > 0,
       effective,
@@ -1236,6 +1253,7 @@ export async function reconcileProjectCgroup({
     }
     const requested = projectCgroupLimitsFromPodmanArgs(
       await podmanLimits(config),
+      config?.io_class,
     );
     const conformance = await projectCgroupConforms({
       project_id,
@@ -2288,7 +2306,10 @@ async function startUnlocked({
     }
 
     const limitArgs = await podmanLimits(config);
-    const projectCgroupLimits = projectCgroupLimitsFromPodmanArgs(limitArgs);
+    const projectCgroupLimits = projectCgroupLimitsFromPodmanArgs(
+      limitArgs,
+      config?.io_class,
+    );
     // The root helper applies controller-backed limits to the project leaf.
     // Podman remains cgroup-disabled so it cannot move the runtime elsewhere.
     args.push(...withoutPodmanCgroupLimits(limitArgs));

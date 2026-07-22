@@ -9,6 +9,7 @@ import {
   type IncomingMessage,
   type Server as HttpServer,
 } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { availableParallelism } from "node:os";
 import express from "express";
 import type { Application } from "express";
@@ -30,6 +31,7 @@ import {
 } from "@cocalc/conat/auth/project-host-http";
 import { PROJECT_HOST_BROWSER_SESSION_COOKIE_NAME } from "@cocalc/conat/auth/project-host-browser-session";
 import { createProxyHandlers } from "@cocalc/project-proxy/proxy";
+import { getOrCreateSelfSigned } from "@cocalc/lite/tls";
 import { createProjectHostConatAuth } from "./conat-auth";
 
 const logger = getLogger("project-host:conat-router");
@@ -185,6 +187,37 @@ function resolveProjectHostConatRouterUpstreamUrl(): string | undefined {
   return explicit;
 }
 
+export function resolveProjectHostDirectHttpsConfig():
+  | { host: string; port: number; hostname: string }
+  | undefined {
+  const rawPort =
+    `${process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT ?? ""}`.trim();
+  if (!rawPort) return;
+  const port = parsePositiveInteger(
+    rawPort,
+    "COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT",
+  );
+  if (port == null || port > 65_535) {
+    throw new Error(
+      "COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT must be an integer from 1 through 65535",
+    );
+  }
+  const host =
+    `${process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOST ?? ""}`.trim() ||
+    "0.0.0.0";
+  let hostname =
+    `${process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME ?? ""}`.trim();
+  if (!hostname) {
+    try {
+      hostname = new URL(`${process.env.PROJECT_HOST_PUBLIC_URL ?? ""}`)
+        .hostname;
+    } catch {
+      // The certificate hostname is diagnostic only behind Cloudflare TLS.
+    }
+  }
+  return { host, port, hostname: hostname || "localhost" };
+}
+
 export function resolveProjectHostConatRouterLocalClusterSize(): number {
   const explicit = parsePositiveInteger(
     process.env.COCALC_PROJECT_HOST_CONAT_ROUTER_LOCAL_CLUSTER_SIZE,
@@ -277,8 +310,11 @@ export async function startStandaloneProjectHostConatRouter({
   httpServer: HttpServer;
   conatServer: ConatServer;
   ingressHttpServer?: HttpServer;
+  directHttpsServer?: ReturnType<typeof createHttpsServer>;
   ingressHost?: string;
   ingressPort?: number;
+  directHttpsHost?: string;
+  directHttpsPort?: number;
 }> {
   const bindHost =
     host ??
@@ -319,36 +355,76 @@ export async function startStandaloneProjectHostConatRouter({
   const ingressHost = resolveProjectHostConatRouterIngressHost();
   const ingressPort = resolveProjectHostConatRouterIngressPort();
   const upstreamUrl = resolveProjectHostConatRouterUpstreamUrl();
+  const directHttps = resolveProjectHostDirectHttpsConfig();
   let ingressHttpServer: HttpServer | undefined;
-  if (ingressHost && ingressPort != null && upstreamUrl) {
-    assertLocalBindOrInsecure({
-      bindHost: ingressHost,
-      serviceName: "project-host conat router ingress listener",
-    });
+  let directHttpsServer: ReturnType<typeof createHttpsServer> | undefined;
+  if (upstreamUrl && ((ingressHost && ingressPort != null) || directHttps)) {
     const ingressApp = express();
     ingressApp.get("/healthz", (_req, res) => {
       res.json({ ok: true, ready: true });
     });
-    ingressHttpServer = createHttpServer(ingressApp);
-    configureLongLivedHttpServer(ingressHttpServer);
+    const ingressServers: HttpServer[] = [];
+    if (ingressHost && ingressPort != null) {
+      assertLocalBindOrInsecure({
+        bindHost: ingressHost,
+        serviceName: "project-host conat router ingress listener",
+      });
+      ingressHttpServer = createHttpServer(ingressApp);
+      configureLongLivedHttpServer(ingressHttpServer);
+      ingressServers.push(ingressHttpServer);
+    }
+    if (directHttps) {
+      if (
+        ingressHost === directHttps.host &&
+        ingressPort === directHttps.port
+      ) {
+        throw new Error(
+          "direct HTTPS ingress must not duplicate the HTTP ingress address",
+        );
+      }
+      const { key, cert, keyPath, certPath } = getOrCreateSelfSigned(
+        directHttps.hostname,
+      );
+      directHttpsServer = createHttpsServer({ key, cert }, ingressApp);
+      configureLongLivedHttpServer(directHttpsServer);
+      ingressServers.push(directHttpsServer);
+      logger.info("project-host direct HTTPS certificate ready", {
+        hostname: directHttps.hostname,
+        keyPath,
+        certPath,
+      });
+    }
     attachProjectHostConatRouterProxy({
       app: ingressApp,
-      httpServer: ingressHttpServer,
+      httpServers: ingressServers,
       target: `http://${normalizeLoopbackHost(bindHost)}:${bindPort}`,
     });
     attachProjectHostHttpFallbackProxy({
       app: ingressApp,
-      httpServer: ingressHttpServer,
+      httpServers: ingressServers,
       target: upstreamUrl,
     });
-    ingressHttpServer.listen(ingressPort, ingressHost);
-    await once(ingressHttpServer, "listening");
-    logger.info("project-host conat router ingress ready", {
-      ingressHost,
-      ingressPort,
-      upstreamUrl,
-      conatTarget: `http://${normalizeLoopbackHost(bindHost)}:${bindPort}`,
-    });
+    if (ingressHttpServer && ingressHost && ingressPort != null) {
+      ingressHttpServer.listen(ingressPort, ingressHost);
+      await once(ingressHttpServer, "listening");
+      logger.info("project-host conat router ingress ready", {
+        ingressHost,
+        ingressPort,
+        upstreamUrl,
+        conatTarget: `http://${normalizeLoopbackHost(bindHost)}:${bindPort}`,
+      });
+    }
+    if (directHttpsServer && directHttps) {
+      directHttpsServer.listen(directHttps.port, directHttps.host);
+      await once(directHttpsServer, "listening");
+      logger.info("project-host direct HTTPS ingress ready", {
+        host: directHttps.host,
+        port: directHttps.port,
+        hostname: directHttps.hostname,
+        upstreamUrl,
+        conatTarget: `http://${normalizeLoopbackHost(bindHost)}:${bindPort}`,
+      });
+    }
   }
   conatReady = true;
   return {
@@ -358,8 +434,11 @@ export async function startStandaloneProjectHostConatRouter({
     httpServer,
     conatServer,
     ingressHttpServer,
+    directHttpsServer,
     ingressHost,
     ingressPort,
+    directHttpsHost: directHttps?.host,
+    directHttpsPort: directHttps?.port,
   };
 }
 
@@ -429,12 +508,20 @@ export function attachProjectHostConatRouterProxy({
 export function attachProjectHostHttpFallbackProxy({
   app,
   httpServer,
+  httpServers,
   target,
 }: {
   app: Application;
-  httpServer: HttpServer;
+  httpServer?: HttpServer;
+  httpServers?: readonly HttpServer[];
   target: string;
 }): void {
+  const ingressServers = httpServers ?? (httpServer ? [httpServer] : []);
+  if (ingressServers.length === 0) {
+    throw new Error(
+      "attachProjectHostHttpFallbackProxy requires at least one HTTP server",
+    );
+  }
   const proxyTarget = parseProxyTarget(target);
   const { handleRequest, handleUpgrade } = createProxyHandlers({
     resolveTarget: () => ({ handled: true, target: proxyTarget }),
@@ -451,10 +538,12 @@ export function attachProjectHostHttpFallbackProxy({
   app.use((req, res) => {
     void handleRequest(req, res);
   });
-  httpServer.on("upgrade", (req, socket, head) => {
-    if (rewriteProjectHostConatProxyUrl(req.url)) {
-      return;
-    }
-    void handleUpgrade(req, socket as any, head);
-  });
+  for (const ingressServer of ingressServers) {
+    ingressServer.on("upgrade", (req, socket, head) => {
+      if (rewriteProjectHostConatProxyUrl(req.url)) {
+        return;
+      }
+      void handleUpgrade(req, socket as any, head);
+    });
+  }
 }

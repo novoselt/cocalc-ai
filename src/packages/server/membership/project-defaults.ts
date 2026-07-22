@@ -5,6 +5,16 @@ const SETTINGS_FIELDS = ["memory", "memory_request", "disk_quota"] as const;
 
 type SettingsField = (typeof SETTINGS_FIELDS)[number];
 export type MembershipProjectDefaults = Partial<Record<SettingsField, number>>;
+export type MembershipIoClass = "standard" | "member" | "premium";
+
+export function ioClassFromSharedComputePriority(
+  priority: unknown,
+): MembershipIoClass {
+  const value = Number(priority);
+  if (!Number.isFinite(value) || value <= 0) return "standard";
+  if (value >= 4) return "premium";
+  return "member";
+}
 
 function coerceNumber(value: unknown): number | undefined {
   if (typeof value == "number" && Number.isFinite(value)) {
@@ -53,6 +63,17 @@ export async function getMembershipProjectDefaultsForAccount(
   const resolution = await resolveMembershipForAccount(account_id);
   return normalizeMembershipProjectDefaults(
     resolution.entitlements?.project_defaults,
+  );
+}
+
+export async function getMembershipIoClassForAccount(
+  account_id?: string,
+): Promise<MembershipIoClass> {
+  if (!account_id) return "standard";
+  const resolution = await resolveMembershipForAccount(account_id);
+  return ioClassFromSharedComputePriority(
+    resolution.effective_limits?.shared_compute_priority ??
+      resolution.entitlements?.usage_limits?.shared_compute_priority,
   );
 }
 

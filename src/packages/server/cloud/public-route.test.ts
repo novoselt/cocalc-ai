@@ -9,11 +9,16 @@ const siteUrlMock = jest.fn();
 const ensureTunnelMock = jest.fn();
 const ensureHostDnsMock = jest.fn();
 const ensureAddressDnsMock = jest.fn();
+const ensureCloudflareProjectHostSslRuleMock = jest.fn();
 const deleteHostDnsMock = jest.fn();
 const getCloudflareIpv4CidrsMock = jest.fn();
+const getCloudflareZoneSslModeMock = jest.fn();
 const ensurePublicIngressMock = jest.fn();
 const reconcileBootstrapMock = jest.fn();
 const probePublicRouteMock = jest.fn();
+
+process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_CONFIRMATION_MS = "0";
+process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_SUCCESS_INTERVAL_MS = "0";
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -35,10 +40,14 @@ jest.mock("./cloudflare-tunnel", () => ({
 
 jest.mock("./dns", () => ({
   deleteHostDns: (...args: any[]) => deleteHostDnsMock(...args),
+  ensureCloudflareProjectHostSslRule: (...args: any[]) =>
+    ensureCloudflareProjectHostSslRuleMock(...args),
   ensureHostDns: (...args: any[]) => ensureHostDnsMock(...args),
   ensureProxiedAddressDns: (...args: any[]) => ensureAddressDnsMock(...args),
   getCloudflareIpv4Cidrs: (...args: any[]) =>
     getCloudflareIpv4CidrsMock(...args),
+  getCloudflareZoneSslMode: (...args: any[]) =>
+    getCloudflareZoneSslModeMock(...args),
 }));
 
 jest.mock("./provider-context", () => ({
@@ -103,6 +112,12 @@ describe("project-host public route migration", () => {
     });
     siteUrlMock.mockResolvedValue("https://staging.example.com/");
     getCloudflareIpv4CidrsMock.mockResolvedValue(["173.245.48.0/20"]);
+    ensureCloudflareProjectHostSslRuleMock.mockResolvedValue({
+      ruleset_id: "ruleset-1",
+      rule_id: "rule-1",
+      ssl: "full",
+    });
+    getCloudflareZoneSslModeMock.mockResolvedValue({ value: "full" });
     ensureAddressDnsMock.mockResolvedValue({
       name: "direct-check.example.com",
       record_id: "probe-record",
@@ -159,7 +174,7 @@ describe("project-host public route migration", () => {
       ipAddress: "203.0.113.20",
       record_id: "stable-record",
     });
-    expect(probePublicRouteMock).toHaveBeenCalledTimes(2);
+    expect(probePublicRouteMock).toHaveBeenCalledTimes(4);
     expect(probePublicRouteMock).toHaveBeenLastCalledWith({
       public_url:
         "https://host-37782b66-190d-41c3-a7e5-f5662e34cd4a-staging.example.com",

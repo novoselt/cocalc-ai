@@ -3,7 +3,10 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { normalizeMembershipProjectDefaults } from "./project-defaults";
+import {
+  ioClassFromSharedComputePriority,
+  normalizeMembershipProjectDefaults,
+} from "./project-defaults";
 
 describe("normalizeMembershipProjectDefaults", () => {
   it("keeps cocalc-ai project resource defaults and filters legacy knobs", () => {
@@ -26,5 +29,18 @@ describe("normalizeMembershipProjectDefaults", () => {
       memory_request: 500,
       disk_quota: 1,
     });
+  });
+});
+
+describe("membership project I/O class", () => {
+  it.each([
+    [undefined, "standard"],
+    [0, "standard"],
+    [1, "member"],
+    [2, "member"],
+    [4, "premium"],
+    [99, "premium"],
+  ])("maps shared compute priority %p to %s", (priority, expected) => {
+    expect(ioClassFromSharedComputePriority(priority)).toBe(expected);
   });
 });

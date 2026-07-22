@@ -1,4 +1,18 @@
 import { SNAPSHOTS } from "@cocalc/util/consts/snapshots";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+
+const spawnMock = jest.fn(() => {
+  const child = new EventEmitter() as EventEmitter & { stderr: PassThrough };
+  child.stderr = new PassThrough();
+  process.nextTick(() => child.emit("close", 0, null));
+  return child;
+});
+
+jest.mock("node:child_process", () => ({
+  ...jest.requireActual("node:child_process"),
+  spawn: (...args: any[]) => spawnMock(...args),
+}));
 
 const btrfsMock = jest.fn(async (_opts?: any) => ({ stdout: "", stderr: "" }));
 
@@ -49,6 +63,7 @@ function createSubvolumeWithSnapshots(snapshotNames: string[]) {
 describe("SubvolumeSnapshots simple-quota snapshot policy", () => {
   beforeEach(() => {
     btrfsMock.mockClear();
+    spawnMock.mockClear();
     process.env.COCALC_BTRFS_SNAPSHOT_CLEANUP_QUOTA_RELIEF_BYTES = "50";
   });
 
@@ -120,6 +135,20 @@ describe("SubvolumeSnapshots simple-quota snapshot policy", () => {
 
     expect(subvolume.quota.set).toHaveBeenNthCalledWith(1, 150);
     expect(subvolume.quota.set).toHaveBeenNthCalledWith(2, 100);
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      1,
+      "sudo",
+      [
+        "-n",
+        "/usr/local/sbin/cocalc-runtime-storage",
+        "sandbox-rm",
+        "/mnt/test/project-1",
+        ".snapshots/snap1/large/data",
+        "--recursive",
+        "--force",
+      ],
+      { cwd: "/", stdio: ["ignore", "ignore", "pipe"] },
+    );
     expect(btrfsMock).toHaveBeenCalledWith({
       args: [
         "property",

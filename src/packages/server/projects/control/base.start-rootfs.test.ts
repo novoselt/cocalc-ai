@@ -79,6 +79,7 @@ jest.mock("@cocalc/server/projects/rootfs-state", () => ({
 jest.mock("@cocalc/server/membership/project-defaults", () => ({
   __esModule: true,
   getMembershipProjectDefaultsForAccount: jest.fn(async () => ({})),
+  getMembershipIoClassForAccount: jest.fn(async () => "standard"),
 }));
 
 jest.mock("@cocalc/server/membership/project-entitlement-overrides", () => ({
@@ -425,6 +426,7 @@ describe("BaseProject.start RootFS sealing", () => {
       run_quota: {
         memory_limit: 4000,
         disk_quota: 5000,
+        io_class: "standard",
         network: true,
         member_host: true,
       },

@@ -18,9 +18,11 @@ import {
 import { deriveProjectHostHostname } from "./derived-domains";
 import {
   deleteHostDns,
+  ensureCloudflareProjectHostSslRule,
   ensureHostDns,
   ensureProxiedAddressDns,
   getCloudflareIpv4Cidrs,
+  getCloudflareZoneSslMode,
 } from "./dns";
 import { getProviderContext } from "./provider-context";
 import { reconcileCloudHostBootstrapOverSsh } from "@cocalc/server/conat/api/hosts-bootstrap-reconcile";
@@ -31,8 +33,26 @@ import {
 
 const logger = getLogger("server:cloud:public-route");
 const PROBE_TIMEOUT_MS = 10_000;
-const PROBE_DEADLINE_MS = 2 * 60_000;
+const PROBE_DEADLINE_MS = Math.max(
+  2 * 60_000,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_VERIFY_DEADLINE_MS ?? 10 * 60_000,
+  ),
+);
 const PROBE_RETRY_MS = 2_000;
+const STABLE_ROUTE_CONFIRMATION_MS = Math.max(
+  0,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_CONFIRMATION_MS ?? 5 * 60_000,
+  ),
+);
+const STABLE_ROUTE_SUCCESS_INTERVAL_MS = Math.max(
+  0,
+  Number(
+    process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_SUCCESS_INTERVAL_MS ?? 30_000,
+  ),
+);
+const STABLE_ROUTE_REQUIRED_SUCCESSES = 3;
 
 type HostRow = {
   id: string;
@@ -124,22 +144,41 @@ async function probeCloudflareRoute({
   hostname,
   origin,
   deadlineMs = PROBE_DEADLINE_MS,
+  requiredSuccesses = 1,
+  confirmationMs = 0,
 }: {
   hostname: string;
   origin: string;
   deadlineMs?: number;
+  requiredSuccesses?: number;
+  confirmationMs?: number;
 }): Promise<ProjectHostPublicRouteProbeResult> {
   const deadline = Date.now() + deadlineMs;
   let lastError = "route probe did not run";
+  let consecutiveSuccesses = 0;
+  let firstSuccessAt: number | undefined;
   while (Date.now() < deadline) {
     try {
-      return await probeProjectHostPublicRoute({
+      const result = await probeProjectHostPublicRoute({
         public_url: `https://${hostname}`,
         origin,
         timeout_ms: PROBE_TIMEOUT_MS,
       });
+      const now = Date.now();
+      firstSuccessAt ??= now;
+      consecutiveSuccesses += 1;
+      if (
+        consecutiveSuccesses >= requiredSuccesses &&
+        now - firstSuccessAt >= confirmationMs
+      ) {
+        return result;
+      }
+      await delay(STABLE_ROUTE_SUCCESS_INTERVAL_MS);
+      continue;
     } catch (err) {
       lastError = `${err}`;
+      consecutiveSuccesses = 0;
+      firstSuccessAt = undefined;
     }
     await delay(PROBE_RETRY_MS);
   }
@@ -165,17 +204,11 @@ async function ensureTunnelRoute({
   return tunnel;
 }
 
-async function prepareDirectRoute({
-  row,
-  stableHostname,
-  origin,
-  onProgress,
-}: {
-  row: HostRow;
-  stableHostname: string;
-  origin: string;
-  onProgress?: RouteProgress;
-}): Promise<{ name: string; record_id: string }> {
+export async function ensureDirectCloudflareIngressForHost(row: {
+  id: string;
+  region?: string;
+  metadata?: Record<string, any>;
+}) {
   const providerId = normalizeProviderId(row.metadata?.machine?.cloud);
   if (providerId !== "gcp") {
     throw new Error(
@@ -192,18 +225,60 @@ async function prepareDirectRoute({
   if (!entry.provider.ensurePublicIngress) {
     throw new Error("GCP provider cannot reconcile public HTTPS ingress");
   }
+  const sourceRanges = await getCloudflareIpv4Cidrs();
+  return await entry.provider.ensurePublicIngress(
+    runtime,
+    { ports: [443], source_ranges: sourceRanges },
+    creds,
+  );
+}
+
+async function prepareDirectRoute({
+  row,
+  stableHostname,
+  origin,
+  onProgress,
+}: {
+  row: HostRow;
+  stableHostname: string;
+  origin: string;
+  onProgress?: RouteProgress;
+}): Promise<{ name: string; record_id: string }> {
+  const runtime = row.metadata?.runtime;
+  if (!runtime?.instance_id || !runtime?.zone || !runtime?.public_ip) {
+    throw new Error("host runtime does not have a public GCP address");
+  }
+
+  const sslRule = await ensureCloudflareProjectHostSslRule({
+    hostname: stableHostname,
+    host_id: row.id,
+  });
+  let zoneSslMode: Record<string, any>;
+  try {
+    zoneSslMode = await getCloudflareZoneSslMode(stableHostname);
+  } catch (err) {
+    zoneSslMode = { error: `${err}` };
+  }
+  const cloudflareOrigin = {
+    project_host_ssl_rule: sslRule,
+    zone_ssl_mode: zoneSslMode,
+  };
 
   await onProgress?.({
     phase: "firewall",
     message: "restricting direct HTTPS ingress to Cloudflare edges",
     progress: 15,
   });
-  const sourceRanges = await getCloudflareIpv4Cidrs();
-  await entry.provider.ensurePublicIngress(
-    runtime,
-    { ports: [443], source_ranges: sourceRanges },
-    creds,
-  );
+  const publicIngress = await ensureDirectCloudflareIngressForHost(row);
+  await onProgress?.({
+    phase: "firewall",
+    message: "direct HTTPS ingress is reconciled",
+    detail: {
+      public_ingress: publicIngress ?? null,
+      cloudflare_origin: cloudflareOrigin,
+    },
+    progress: 20,
+  });
 
   await onProgress?.({
     phase: "bootstrap",
@@ -231,7 +306,13 @@ async function prepareDirectRoute({
       ipAddress: runtime.public_ip,
     });
     probeRecordId = probeDns.record_id;
-    await probeCloudflareRoute({ hostname: probeHostname, origin });
+    try {
+      await probeCloudflareRoute({ hostname: probeHostname, origin });
+    } catch (err) {
+      throw new Error(
+        `${err}; provider ingress diagnostics: ${JSON.stringify(publicIngress ?? null)}; Cloudflare origin diagnostics: ${JSON.stringify(cloudflareOrigin)}`,
+      );
+    }
   } finally {
     if (probeRecordId) {
       await deleteHostDns({
@@ -260,7 +341,12 @@ async function prepareDirectRoute({
       row.metadata?.cloudflare_tunnel?.record_id,
   });
   await setMetadataField(row.id, "dns", dns);
-  await probeCloudflareRoute({ hostname: stableHostname, origin });
+  await probeCloudflareRoute({
+    hostname: stableHostname,
+    origin,
+    requiredSuccesses: STABLE_ROUTE_REQUIRED_SUCCESSES,
+    confirmationMs: STABLE_ROUTE_CONFIRMATION_MS,
+  });
   return dns;
 }
 

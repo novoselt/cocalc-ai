@@ -2249,6 +2249,21 @@ export class SandboxedFilesystem {
       options.force
     );
     const f = async (inputPath: string, absPath: string) => {
+      if (
+        recursive &&
+        /^\/mnt\/cocalc\/project-[0-9a-f-]{36}(?:-scratch)?$/u.test(this.path)
+      ) {
+        const target = await this.getPrivilegedDeleteTarget(inputPath);
+        await runPrivilegedDelete(
+          privilegedRemoveTarget({
+            root: target.root,
+            rel: target.rel,
+            options,
+          }),
+        );
+        void this.notifySyncFsLocalDelete(inputPath);
+        return;
+      }
       const openAt2Target = await this.getOpenAt2PathTarget(inputPath);
       if (
         recursive &&

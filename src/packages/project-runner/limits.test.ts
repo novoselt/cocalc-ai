@@ -122,6 +122,7 @@ describe("podmanLimits memory pressure controls", () => {
       cpu_max_period: "100000",
       cpu_weight: "39",
       io_weight: "100",
+      io_class: "standard",
     });
     expect(withoutPodmanCgroupLimits(args)).toEqual([
       "--ulimit=nofile=8192:8192",

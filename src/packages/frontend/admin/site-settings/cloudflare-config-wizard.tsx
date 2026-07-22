@@ -190,6 +190,8 @@ export default function CloudflareConfigWizard({
   isSet,
   onApply,
 }: WizardProps) {
+  const [savedData, setSavedData] = useState<Record<string, string>>(data);
+  const [savedIsSet, setSavedIsSet] = useState<Record<string, boolean>>(isSet);
   const [accountId, setAccountId] = useState("");
   const [apiToken, setApiToken] = useState("");
   const [externalDomain, setExternalDomain] = useState("");
@@ -211,6 +213,7 @@ export default function CloudflareConfigWizard({
   const [locationHeadersResult, setLocationHeadersResult] =
     useState<VisitorLocationHeaderTestResult | null>(null);
   const [notice, setNotice] = useState("");
+  const [applyError, setApplyError] = useState("");
   const [applying, setApplying] = useState(false);
 
   useEffect(() => {
@@ -232,10 +235,13 @@ export default function CloudflareConfigWizard({
       setLocationHeadersTestError("");
       setLocationHeadersResult(null);
       setNotice("");
+      setApplyError("");
       setApplying(false);
       return;
     }
     setAccountId(trimOrEmpty(data.project_hosts_cloudflare_tunnel_account_id));
+    setSavedData(data);
+    setSavedIsSet(isSet);
     setApiToken(trimOrEmpty(data.project_hosts_cloudflare_tunnel_api_token));
     setExternalDomain(trimOrEmpty(data.dns));
     setHostSuffix(
@@ -259,7 +265,7 @@ export default function CloudflareConfigWizard({
     setLocationHeadersTestError("");
     setLocationHeadersResult(null);
     setApplying(false);
-  }, [open, data]);
+  }, [open, data, isSet]);
 
   const showSelfConfig = mode === "self";
   const r2TokenUrl = accountId
@@ -275,7 +281,7 @@ export default function CloudflareConfigWizard({
       : "https://dash.cloudflare.com/<account_id>/<zone>/rules/settings/managed-transforms";
   const defaultHostSuffix = `-${normalizedDomain(externalDomain) || "<external domain name>"}`;
   const hasPendingRuntimeDraft = hasPendingCloudflareRuntimeDraft({
-    data,
+    data: savedData,
     mode,
     externalDomain,
     accountId,
@@ -287,10 +293,10 @@ export default function CloudflareConfigWizard({
     hasPendingRuntimeDraft ||
     (mode === "self" &&
       (!!normalizedDraftValue(r2ApiToken) ||
-        normalizedDraftValue(data.r2_access_key_id) !==
+        normalizedDraftValue(savedData.r2_access_key_id) !==
           normalizedDraftValue(r2AccessKey) ||
         !!normalizedDraftValue(r2SecretKey) ||
-        normalizedDraftValue(data.r2_bucket_prefix) !==
+        normalizedDraftValue(savedData.r2_bucket_prefix) !==
           normalizedDraftValue(r2BucketPrefix)));
   const buttonDisabledReason = hasUnsavedDraft
     ? undefined
@@ -301,11 +307,11 @@ export default function CloudflareConfigWizard({
     if (!externalDomain) return "External Domain Name";
     if (!accountId) return "Cloudflare Account ID";
     if (invalidAccountId) return "Valid Cloudflare Account ID";
-    if (!apiToken && !isSet?.project_hosts_cloudflare_tunnel_api_token)
+    if (!apiToken && !savedIsSet.project_hosts_cloudflare_tunnel_api_token)
       return "Cloudflare API Token";
-    if (!r2ApiToken && !isSet?.r2_api_token) return "R2 API Token";
+    if (!r2ApiToken && !savedIsSet.r2_api_token) return "R2 API Token";
     if (!r2AccessKey) return "R2 Access Key ID";
-    if (!r2SecretKey && !isSet?.r2_secret_access_key)
+    if (!r2SecretKey && !savedIsSet.r2_secret_access_key)
       return "R2 Secret Access Key";
     if (!r2BucketPrefix) return "R2 bucket prefix";
     return null;
@@ -316,6 +322,8 @@ export default function CloudflareConfigWizard({
 
   async function applySettings() {
     setApplying(true);
+    setApplyError("");
+    setNotice("");
     const updates: Record<string, string> = {};
     try {
       updates.cloudflare_mode = mode;
@@ -342,7 +350,30 @@ export default function CloudflareConfigWizard({
         updates.project_hosts_cloudflare_tunnel_api_token = "";
       }
       await onApply(updates);
+      setSavedData((current) => {
+        const next = { ...current, ...updates };
+        next.project_hosts_cloudflare_tunnel_api_token = "";
+        next.r2_api_token = "";
+        next.r2_secret_access_key = "";
+        return next;
+      });
+      setSavedIsSet((current) => ({
+        ...current,
+        ...(updates.project_hosts_cloudflare_tunnel_api_token != null
+          ? {
+              project_hosts_cloudflare_tunnel_api_token:
+                updates.project_hosts_cloudflare_tunnel_api_token !== "",
+            }
+          : {}),
+        ...(updates.r2_api_token ? { r2_api_token: true } : {}),
+        ...(updates.r2_secret_access_key ? { r2_secret_access_key: true } : {}),
+      }));
+      setApiToken("");
+      setR2ApiToken("");
+      setR2SecretKey("");
       setNotice("Settings applied and saved. You can now run diagnostics.");
+    } catch (err) {
+      setApplyError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setApplying(false);
     }
@@ -497,6 +528,11 @@ export default function CloudflareConfigWizard({
                   below.
                   <br />
                   Use your Cloudflare zone instead of cocalc.ai.
+                  <br />
+                  The zone permissions must include Zone Read, DNS Edit, Config
+                  Rules Edit, and Managed Headers Edit. The account permissions
+                  must include Cloudflare Tunnel Edit. Config Rules Edit is
+                  required for encrypted direct project-host routing.
                   <br />
                   Paste the token into the input box here.
                 </Paragraph>
@@ -771,6 +807,14 @@ export default function CloudflareConfigWizard({
             />
           ) : null}
           {notice ? <Alert type="success" showIcon title={notice} /> : null}
+          {applyError ? (
+            <Alert
+              type="error"
+              showIcon
+              title="Cloudflare settings were not saved"
+              description={applyError}
+            />
+          ) : null}
         </Space>
       </Form>
     </Modal>

@@ -77,11 +77,17 @@ export async function main(): Promise<ProjectHostConatRouterDaemonContext> {
   const systemAccountPassword = getOrCreateProjectHostConatPassword();
   setConatPassword(systemAccountPassword);
   const masterClient = connectMasterClient({ hostId });
-  const { host, port, httpServer, conatServer, ingressHttpServer } =
-    await startStandaloneProjectHostConatRouter({
-      hostId,
-      systemAccountPassword,
-    });
+  const {
+    host,
+    port,
+    httpServer,
+    conatServer,
+    ingressHttpServer,
+    directHttpsServer,
+  } = await startStandaloneProjectHostConatRouter({
+    hostId,
+    systemAccountPassword,
+  });
   const localSystemClient = conatServer.client({
     systemAccountPassword,
   });
@@ -124,6 +130,11 @@ export async function main(): Promise<ProjectHostConatRouterDaemonContext> {
       if (ingressHttpServer) {
         await new Promise<void>((resolve) => {
           ingressHttpServer.close(() => resolve());
+        });
+      }
+      if (directHttpsServer) {
+        await new Promise<void>((resolve) => {
+          directHttpsServer.close(() => resolve());
         });
       }
       await new Promise<void>((resolve) => {

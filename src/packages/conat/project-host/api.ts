@@ -97,6 +97,9 @@ export interface HostPodmanSnapshotRequest {
 
 export interface HostPodmanSnapshotResponse {
   limit: number;
+  captured_at?: string;
+  cache_age_ms?: number;
+  cached?: boolean;
   info: HostDiagnosticCommandOutput;
   containers: HostDiagnosticCommandOutput;
   system_df?: HostDiagnosticCommandOutput;

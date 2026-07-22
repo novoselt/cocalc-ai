@@ -2,7 +2,10 @@ import { execFile } from "node:child_process";
 import type { RemoveDirOptions, RemoveOptions } from "@cocalc/conat/files/fs";
 
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
-const TIMEOUT_MS = 60_000;
+// Multi-million-entry trees can legitimately take hours under the project's
+// I/O ceiling. The child is independently killable and bounded by its cgroup;
+// an RPC timeout must not kill cleanup midway through filesystem traversal.
+const TIMEOUT_MS = 0;
 const MAX_BUFFER = 4 * 1024 * 1024;
 
 export type PrivilegedDeleteCommand = "sandbox-rm" | "sandbox-rmdir";

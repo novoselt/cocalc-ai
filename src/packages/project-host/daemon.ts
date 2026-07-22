@@ -2886,6 +2886,15 @@ export function ensureHostAgent(index = 0): void {
     ? Number(fs.readFileSync(agentPidPath, "utf8"))
     : undefined;
   if (pid && isRunning(pid)) {
+    const strayPids = matchingHostAgentPids(dataDir).filter(
+      (candidate) => candidate !== pid,
+    );
+    const cleaned = terminatePids(strayPids, "stray project-host host-agent");
+    if (cleaned.length > 0) {
+      console.warn(
+        `Stopped ${cleaned.length} stray project-host host-agent process(es) while preserving pid ${pid}.`,
+      );
+    }
     const selectedVersion = selectedVersionFromLink(
       projectHostCurrentLinkPath(env),
     );

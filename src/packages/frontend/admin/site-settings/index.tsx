@@ -610,15 +610,27 @@ export default function SiteSettings({ close }) {
     for (const [name, value] of Object.entries(values)) {
       onChangeEntry(name, value);
     }
-    if (editedRef.current == null || savedRef.current == null) return;
+    if (editedRef.current == null || savedRef.current == null) {
+      throw new Error("Site settings are not ready to save");
+    }
     setState("save");
+    let completed: boolean;
     try {
-      await store();
-      setState("edit");
-      await load();
+      completed = await runFreshAuthAction(async () => {
+        await store();
+        setState("edit");
+        await load();
+      });
     } catch (err) {
       setState("error");
       setError(err);
+      throw err;
+    }
+    if (!completed) {
+      setState("edit");
+      throw new Error(
+        "Fresh authentication was canceled; settings were not saved",
+      );
     }
   }
 

@@ -90,6 +90,7 @@ interface QuotaBase {
 
 // additional fields of the quota result, which are used for onprem (cocalc-onprem) applications
 interface QuotaOnPrem {
+  io_class?: "standard" | "member" | "premium";
   ext_rw?: boolean;
   patch?: { [key: string]: string | object }[];
   gpu?: GPU | boolean;

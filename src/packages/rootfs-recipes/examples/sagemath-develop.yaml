@@ -13,6 +13,7 @@ steps:
       jobs: auto
       clone_depth: full
       preserve_build_artifacts: "true"
+      install_development_tools: "true"
     timeout: 172800
 
 verify:

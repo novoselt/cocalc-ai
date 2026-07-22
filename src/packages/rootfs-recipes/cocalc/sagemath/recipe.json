@@ -1,6 +1,6 @@
 {
   "id": "cocalc/sagemath",
-  "version": 1,
+  "version": 2,
   "description": "Build SageMath from source, install Sage/Python Jupyter kernels, and expose Sage's Python as the default Python.",
   "timeout": 28800,
   "inputs": {
@@ -16,6 +16,7 @@
     "clone_depth": { "type": "string", "default": "1" },
     "preserve_build_artifacts": { "type": "string", "default": "false" },
     "install_recommended_apt_packages": { "type": "string", "default": "true" },
+    "install_development_tools": { "type": "string", "default": "false" },
     "install_sagetex": { "type": "string", "default": "true" },
     "priority_optional_packages": { "type": "array", "default": [] },
     "optional_packages": { "type": "array", "default": [] },
@@ -36,7 +37,8 @@
     "micromamba_prefix": { "type": "string", "default": "/opt/micromamba" },
     "conda_packages": { "type": "array", "default": ["sage"] },
     "owner_uid": { "type": "string", "default": "2001" },
-    "owner_gid": { "type": "string", "default": "2001" }
+    "owner_gid": { "type": "string", "default": "2001" },
+    "owner_home": { "type": "string", "default": "/home/user" }
   },
   "run": { "shell": "bash", "script": "install.sh" },
   "verify": { "shell": "bash", "script": "verify.sh" },

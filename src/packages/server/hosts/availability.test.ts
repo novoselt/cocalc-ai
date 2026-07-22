@@ -153,6 +153,24 @@ describe("classifyHostAvailabilitySnapshot", () => {
     expect(observation.summary).toContain("podman ps timed out");
   });
 
+  it("keeps a host online after one transient runtime failure", () => {
+    const observation = classifyHostAvailabilitySnapshot({
+      id: "7b1fa6e1-032d-4e90-bd20-00568c67d5d0",
+      status: "running",
+      last_seen: new Date().toISOString(),
+      metadata: {
+        runtime_health: {
+          status: "degraded",
+          ready: false,
+          consecutive_failures: 1,
+          error: "podman ps timed out",
+        },
+      },
+    });
+
+    expect(observation.state).toBe("online");
+  });
+
   it("treats a fresh heartbeat with a starting runtime as recovering", () => {
     const observation = classifyHostAvailabilitySnapshot({
       id: "7b1fa6e1-032d-4e90-bd20-00568c67d5d0",
