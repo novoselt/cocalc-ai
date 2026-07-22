@@ -10,8 +10,10 @@
 
 import { Button, Divider, Popover, Tag, Typography } from "antd";
 import React, { useState } from "react";
+import { useIntl } from "react-intl";
 
 import { Icon, type IconName } from "@cocalc/frontend/components/icon";
+import { labels } from "@cocalc/frontend/i18n";
 import { COLORS } from "@cocalc/util/theme";
 
 const { Text } = Typography;
@@ -69,10 +71,11 @@ function HelpContent() {
         markdown. Great for presentations or reading through results.
       </Section>
 
-      <Section title="AI Assistant" icon="robot">
-        The side-chat AI assistant works with this notebook. Use it to ask
-        questions about your code, generate cells, or debug errors. Deeper
-        integration is coming soon.
+      <Section title="Agent" icon="robot">
+        The <strong>Agent</strong> button in the title bar opens an AI agent
+        that works on this notebook: ask questions, generate or fix cells, and
+        debug errors. Hovering over a code cell also offers a per-cell agent
+        action scoped to just that cell.
       </Section>
 
       <Section title="Mini Table of Contents" icon="list-ul" tag="New">
@@ -110,6 +113,7 @@ function HelpContent() {
 }
 
 export default function MinimalNotebookHelp() {
+  const intl = useIntl();
   const [open, setOpen] = useState(false);
 
   return (
@@ -134,7 +138,7 @@ export default function MinimalNotebookHelp() {
       content={<HelpContent />}
     >
       <Button type="text" size="small" style={{ color: COLORS.ANTD_LINK_BLUE }}>
-        <Icon name="question-circle" /> Help
+        <Icon name="question-circle" /> {intl.formatMessage(labels.help)}
       </Button>
     </Popover>
   );

@@ -102,6 +102,40 @@ export function sectionBlocksEqual(
   return true;
 }
 
+/**
+ * Aggregate execution state of the code cells in a (collapsed) section:
+ * "running" if any cell is executing or queued, otherwise "error" if any
+ * cell's output contains a traceback, else null.  Used to surface activity
+ * of folded sections on the section header and the minimap.
+ */
+export function computeSectionRunState(
+  cellIds: string[],
+  cells: Map<string, any>,
+): "running" | "error" | null {
+  let error = false;
+  for (const id of cellIds) {
+    const cell = cells.get(id);
+    if (cell == null) continue;
+    if ((cell.get("cell_type") || "code") !== "code") continue;
+    const state = cell.get("state");
+    if (state === "busy" || state === "run" || state === "start") {
+      return "running";
+    }
+    if (!error) {
+      const output = cell.get("output");
+      if (output != null) {
+        for (const [, msg] of output) {
+          if (msg?.get?.("traceback")) {
+            error = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+  return error ? "error" : null;
+}
+
 export interface BlockInfo {
   blockIndex: number;
   positionInBlock: number;

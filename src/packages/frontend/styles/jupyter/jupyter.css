@@ -185,3 +185,18 @@ cocalc-lumino-adapter {
 .minimal-status-segmented .ant-segmented-item {
   margin-bottom: 0 !important;
 }
+
+/* Folded section with running/queued cells inside: pulse the divider bar
+   green (CSS animations override the inline hover background). */
+@keyframes minimal-section-run-blink {
+  0%,
+  100% {
+    background-color: #f6ffed;
+  }
+  50% {
+    background-color: #b7eb8f;
+  }
+}
+.minimal-section-running {
+  animation: minimal-section-run-blink 1.2s ease-in-out infinite;
+}

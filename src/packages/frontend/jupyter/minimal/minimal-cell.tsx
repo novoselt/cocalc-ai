@@ -36,6 +36,7 @@ import {
   CODE_BAR_BTN_STYLE,
   RUN_ALL_CELLS_ABOVE_ICON,
   RUN_ALL_CELLS_BELOW_ICON,
+  SPLIT_CELL_ICON,
 } from "@cocalc/frontend/jupyter/consts";
 import {
   MinimalGutter,
@@ -89,6 +90,8 @@ interface MinimalCellProps {
   isLast?: boolean;
   isLastBlock?: boolean;
   sectionCollapsed?: boolean;
+  // aggregate execution state of the folded section (block-start cell only)
+  collapsedRunState?: "running" | "error" | null;
   onToggleSection?: () => void;
   sectionTitle?: string;
   blockHighlighted?: boolean;
@@ -128,6 +131,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
     isLast,
     isLastBlock,
     sectionCollapsed,
+    collapsedRunState,
     onToggleSection,
     sectionTitle,
     minimalLayout = "comfortable",
@@ -140,6 +144,14 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
   const fileContext = useFileContext();
   const [mdHovered, setMdHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Protected (metadata.editable=false) cell whose editor is open read-only
+  // for inspection; the notebook itself stays in escape mode for these.
+  const [viewProtected, setViewProtected] = useState(false);
+  useEffect(() => {
+    if (!is_current && viewProtected) {
+      setViewProtected(false);
+    }
+  }, [is_current, viewProtected]);
   const [rowHovered, setRowHovered] = useState(false);
   const outputRef = useRef<HTMLDivElement>(null);
   const [outputHeight, setOutputHeight] = useState<number>(0);
@@ -337,13 +349,20 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
 
   const handleActivateCode = useCallback(() => {
     if (read_only) return;
+    if (isNotEditable) {
+      // Protected cell: activate_cell downgrades "edit" to "escape", so the
+      // notebook never enters edit mode.  Still open this cell's editor
+      // read-only so the code can be inspected and copied.
+      setViewProtected(true);
+    }
     frameActions.current?.activate_cell(id, {
       mode: "edit",
       clearSelection: true,
     });
-  }, [id, read_only]);
+  }, [id, read_only, isNotEditable]);
 
   const handleCloseEditor = useCallback(() => {
+    setViewProtected(false);
     frameActions.current?.activate_cell(id, {
       mode: "escape",
       clearSelection: true,
@@ -367,6 +386,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
   );
 
   const handleRunAndClose = useCallback(() => {
+    setViewProtected(false);
     frameActions.current?.run_cell(id);
     frameActions.current?.activate_cell(id, {
       mode: "escape",
@@ -375,7 +395,9 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
   }, [id]);
 
   const handleToggleMdEdit = useCallback(() => {
-    if (read_only) return;
+    // protected markdown (metadata.editable=false) is rendered read-only;
+    // its content is already fully visible, so there is nothing to open
+    if (read_only || isNotEditable) return;
     if (is_markdown_edit) {
       frameActions.current?.set_md_cell_not_editing(id);
     } else {
@@ -436,17 +458,20 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
     return null;
   }
 
-  // Cell is being edited when it's the current cell in edit mode
+  // Cell is being edited when it's the current cell in edit mode.  This is
+  // possible in zen mode too (via double-click on the output or the pencil
+  // button): the cell temporarily reveals its code column just for editing.
   const isActiveEditing =
-    !zenMode && is_current && props.mode === "edit" && isCode;
+    is_current && (props.mode === "edit" || viewProtected) && isCode;
 
   const outputFlex = isActiveEditing
     ? OUTPUT_FLEX_EDITING
     : OUTPUT_FLEX_DEFAULT;
   const codeFlex = isActiveEditing ? CODE_FLEX_EDITING : CODE_FLEX_DEFAULT;
-  const showCode = !zenMode;
-  // In zen + wide, don't render the empty code column — output goes full width
-  const showCodeColumn = !zenMode || minimalLayout !== "wide";
+  const showCode = !zenMode || isActiveEditing;
+  // In zen + wide, don't render the empty code column — output goes full
+  // width — except while this cell is being edited.
+  const showCodeColumn = showCode || minimalLayout !== "wide";
 
   // Layout spacers: to center the output, left spacer must offset the code column
   const margin = minimalLayout === "narrow" ? 2 : 0;
@@ -507,10 +532,11 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
     <SectionDividerRow
       isFirst={isFirst}
       sectionCollapsed={sectionCollapsed}
+      runState={sectionCollapsed ? collapsedRunState : undefined}
       sectionTitle={sectionTitle}
       onToggle={onToggleSection}
       onRunSection={sectionRunButton}
-      showCode={showCode}
+      showCode={!zenMode}
       codeFlex={CODE_FLEX_DEFAULT}
       outputFlex={OUTPUT_FLEX_DEFAULT}
       zenMode={zenMode}
@@ -625,10 +651,19 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                 padding: "4px 8px",
                 position: "relative",
               }}
+              onDoubleClick={
+                // Zen mode hides the code column; double-clicking the output
+                // opens the code editor for just this cell (same gesture as
+                // markdown cells).
+                zenMode && isCode && !read_only && !isActiveEditing
+                  ? handleActivateCode
+                  : undefined
+              }
             >
               <div ref={outputContentRef}>
-                {/* Zen mode: floating toolbar inside output area */}
-                {zenMode && (
+                {/* Zen mode: floating toolbar inside output area (hidden
+                    while editing — the editor brings its own buttons) */}
+                {zenMode && !isActiveEditing && (
                   <div
                     style={{
                       position: "absolute",
@@ -645,6 +680,16 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                     }}
                     onClick={(e) => e.stopPropagation()}
                   >
+                    {isCode && !read_only && (
+                      <Tooltip title="Edit this code cell" placement="top">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<Icon name="pencil" />}
+                          onClick={handleActivateCode}
+                        />
+                      </Tooltip>
+                    )}
                     {isCode && !read_only && renderRunDropdownButton()}
                     {isCode && !read_only && aiTools && actions && (
                       <AgentCellTool
@@ -660,6 +705,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                       id={id}
                       cell={cell}
                       onOpenChange={setMenuOpen}
+                      hideSplitCell
                     />
                   </div>
                 )}
@@ -688,16 +734,25 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                   !input.trim() &&
                   !read_only &&
                   !zenMode && (
+                    // The whole empty area is a click target that opens the
+                    // code editor -- aiming for the tiny links is bad UX.
+                    // Only the "text" link diverges (converts to markdown).
                     <div
                       style={{
                         color: COLORS.GRAY_L,
                         padding: "8px 4px",
                         fontSize: "13px",
+                        minHeight: "36px",
+                        cursor: "text",
                       }}
+                      onClick={handleActivateCode}
                     >
                       {"Write "}
                       <a
-                        onClick={handleActivateCode}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleActivateCode();
+                        }}
                         style={{ color: COLORS.GRAY_L }}
                       >
                         code
@@ -705,7 +760,8 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                       {", "}
                       <a
                         style={{ color: COLORS.GRAY_L }}
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           frameActions.current?.set_selected_cell_type(
                             "markdown",
                           );
@@ -734,7 +790,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                           <MostlyStaticMarkdown
                             value={renderMarkdownValue()}
                             onChange={
-                              read_only
+                              read_only || isNotEditable
                                 ? undefined
                                 : (value) =>
                                     actions?.set_cell_input(id, value, true)
@@ -755,22 +811,27 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                         empty markdown
                       </div>
                     )}
-                    {(mdHovered || !input.trim()) && !read_only && (
-                      <Tooltip title="Edit this markdown cell" placement="top">
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<Icon name="pencil" />}
-                          onClick={handleToggleMdEdit}
-                          style={{
-                            position: "absolute",
-                            top: "2px",
-                            right: "2px",
-                            opacity: 0.7,
-                          }}
-                        />
-                      </Tooltip>
-                    )}
+                    {(mdHovered || !input.trim()) &&
+                      !read_only &&
+                      !isNotEditable && (
+                        <Tooltip
+                          title="Edit this markdown cell"
+                          placement="top"
+                        >
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<Icon name="pencil" />}
+                            onClick={handleToggleMdEdit}
+                            style={{
+                              position: "absolute",
+                              top: "2px",
+                              right: "2px",
+                              opacity: 0.7,
+                            }}
+                          />
+                        </Tooltip>
+                      )}
                   </div>
                 )}
                 {isMarkdown && is_markdown_edit && (
@@ -896,6 +957,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                           id={id}
                           cell={cell}
                           onOpenChange={setMenuOpen}
+                          hideSplitCell
                         />
                       </div>
                     )}
@@ -907,6 +969,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                         onActivate={handleActivateCode}
                         highlighted={rowHovered}
                         maxHeight={codePreviewMaxHeight}
+                        blocked={isNotEditable}
                       />
                     )}
                     {isCode && !isActiveEditing && sourceHidden && (
@@ -986,6 +1049,8 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                             padding: "1px",
                           }}
                         >
+                          {/* labeled Run first, so the small icon-only
+                              buttons next to it aren't clicked by accident */}
                           <Tooltip
                             title="Run cell and close editor"
                             placement="top"
@@ -995,8 +1060,30 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                               size="small"
                               icon={<Icon name="play" />}
                               onClick={handleRunAndClose}
-                            />
+                            >
+                              Run
+                            </Button>
                           </Tooltip>
+                          {/* splitting would modify a protected cell, so
+                              hide it in the read-only view */}
+                          {!isNotEditable && (
+                            <Tooltip
+                              title="Split cell at cursor"
+                              placement="top"
+                            >
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<Icon name={SPLIT_CELL_ICON} />}
+                                onClick={() => {
+                                  // needs the live editor for the cursor
+                                  // position, so it only exists here and not
+                                  // in the (closed-editor) dropdown menu
+                                  frameActions.current?.split_current_cell();
+                                }}
+                              />
+                            </Tooltip>
+                          )}
                           <Tooltip title="Close editor" placement="top">
                             <Button
                               type="text"
@@ -1028,6 +1115,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                           id={id}
                           cell={cell}
                           onOpenChange={setMenuOpen}
+                          hideSplitCell
                         />
                       </div>
                     )}
@@ -1110,6 +1198,7 @@ function ScrollToBottomOutput({
 function SectionDividerRow({
   isFirst,
   sectionCollapsed,
+  runState,
   sectionTitle,
   onToggle,
   onRunSection,
@@ -1121,6 +1210,9 @@ function SectionDividerRow({
 }: {
   isFirst?: boolean;
   sectionCollapsed?: boolean;
+  // execution feedback for a folded section: pulse green while running,
+  // tint red when a hidden cell errored
+  runState?: "running" | "error" | null;
   sectionTitle?: string;
   onToggle?: () => void;
   onRunSection?: () => void;
@@ -1131,9 +1223,16 @@ function SectionDividerRow({
   minimalLayout?: string;
 }) {
   const [hovered, setHovered] = useState(false);
-  const bg = hovered ? COLORS.GRAY_LL : COLORS.GRAY_LLL;
+  const bg =
+    runState === "error"
+      ? COLORS.ANTD_BG_RED_L
+      : hovered
+        ? COLORS.GRAY_LL
+        : COLORS.GRAY_LLL;
   const borderTop = isFirst ? undefined : `1px solid ${COLORS.GRAY_LL}`;
   const borderBottom = `1px solid ${COLORS.GRAY_LL}`;
+  const segmentClass =
+    runState === "running" ? "minimal-section-running" : undefined;
   const segmentStyle: React.CSSProperties = {
     backgroundColor: bg,
     borderTop,
@@ -1150,6 +1249,7 @@ function SectionDividerRow({
     >
       {/* Output column side */}
       <div
+        className={segmentClass}
         style={{
           flex: `${outputFlex} 1 0`,
           display: "flex",
@@ -1218,6 +1318,7 @@ function SectionDividerRow({
       {/* Code column side */}
       {showCode && (
         <div
+          className={segmentClass}
           style={{
             flex: `${codeFlex} 1 0`,
             display: "flex",

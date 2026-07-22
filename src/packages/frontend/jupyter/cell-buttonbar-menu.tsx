@@ -75,6 +75,7 @@ export function CodeBarDropdownMenu({
   id,
   cell,
   onOpenChange,
+  hideSplitCell,
 }: {
   actions;
   frameActions;
@@ -83,6 +84,11 @@ export function CodeBarDropdownMenu({
   // called with the dropdown's open state, e.g. so the parent button bar can
   // stay mounted while the menu is open even when the cell is not hovered.
   onOpenChange?: (open: boolean) => void;
+  // hide the "Split Cell at Cursor" entry.  Used by the minimal notebook,
+  // where this menu is only reachable while the cell's code editor is
+  // closed — there is no cursor to split at (the open editor has its own
+  // split button instead).
+  hideSplitCell?: boolean;
 }) {
   const intl = useIntl();
   const [open, setOpen] = useState<boolean>(false);
@@ -404,19 +410,21 @@ export function CodeBarDropdownMenu({
         icon: <Icon name="arrow-down" />,
         onClick: () => move_cell(1),
       },
-    ].map(({ key, label, icon, onClick, children }) => {
-      return {
-        key,
-        label: withShortcut(label, key as string, allCommands),
-        onClick,
-        icon: <span style={{ width: "24px" }}>{icon}</span>,
-        children: children?.map((child: any) => ({
-          ...child,
-          label: withShortcut(child.label, child.key as string, allCommands),
-        })),
-      };
-    });
-  }, [actions, cell, frameActions, id, intl, open]);
+    ]
+      .filter(({ key }) => !(hideSplitCell && key === "split-cell"))
+      .map(({ key, label, icon, onClick, children }) => {
+        return {
+          key,
+          label: withShortcut(label, key as string, allCommands),
+          onClick,
+          icon: <span style={{ width: "24px" }}>{icon}</span>,
+          children: children?.map((child: any) => ({
+            ...child,
+            label: withShortcut(child.label, child.key as string, allCommands),
+          })),
+        };
+      });
+  }, [actions, cell, frameActions, id, intl, open, hideSplitCell]);
 
   if (actions == null) return null;
 

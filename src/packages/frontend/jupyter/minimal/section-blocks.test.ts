@@ -8,6 +8,7 @@ import { fromJS, List } from "immutable";
 import {
   buildBlockLookup,
   computeSectionBlocks,
+  computeSectionRunState,
   sectionBlocksEqual,
 } from "./section-blocks";
 
@@ -139,5 +140,48 @@ describe("sectionBlocksEqual", () => {
         computeSectionBlocks(three.cellList, three.cells),
       ),
     ).toBe(false);
+  });
+});
+
+describe("computeSectionRunState", () => {
+  const cells = (over: any = {}) =>
+    fromJS({
+      h: { id: "h", cell_type: "markdown", input: "# H" },
+      x: { id: "x", cell_type: "code", input: "1", ...over.x },
+      y: { id: "y", cell_type: "code", input: "2", ...over.y },
+    });
+
+  it("is null when all cells are idle", () => {
+    expect(computeSectionRunState(["h", "x", "y"], cells())).toBeNull();
+  });
+
+  it("is running while any cell executes or is queued", () => {
+    expect(
+      computeSectionRunState(["h", "x", "y"], cells({ y: { state: "busy" } })),
+    ).toBe("running");
+    expect(
+      computeSectionRunState(["h", "x", "y"], cells({ x: { state: "run" } })),
+    ).toBe("running");
+  });
+
+  it("is error when a cell has a traceback and nothing runs", () => {
+    expect(
+      computeSectionRunState(
+        ["h", "x", "y"],
+        cells({ y: { output: { 0: { traceback: ["boom"] } } } }),
+      ),
+    ).toBe("error");
+  });
+
+  it("running takes precedence over error", () => {
+    expect(
+      computeSectionRunState(
+        ["h", "x", "y"],
+        cells({
+          x: { output: { 0: { traceback: ["boom"] } } },
+          y: { state: "busy" },
+        }),
+      ),
+    ).toBe("running");
   });
 });

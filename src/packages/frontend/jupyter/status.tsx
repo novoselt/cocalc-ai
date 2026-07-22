@@ -139,7 +139,6 @@ interface KernelProps {
   usage?: Usage;
   expected_cell_runtime?: number;
   style?: CSS;
-  is_fullscreen?: boolean;
   hideHeader?: boolean;
   compact?: boolean;
   /** Minimal notebook layout controls */
@@ -155,7 +154,6 @@ export function Kernel({
   expected_cell_runtime,
   style,
   usage,
-  is_fullscreen,
   hideHeader,
   compact,
   minimalLayout,
@@ -426,18 +424,21 @@ export function Kernel({
   }
 
   function render_trust() {
-    // Keep compact embedded headers (e.g. whiteboard code elements and the
-    // minimal notebook status bar) free of the trust indicator.
-    if (compact) return;
+    // Keep non-notebook compact embeds (e.g. whiteboard code elements) free
+    // of the trust indicator; the minimal notebook status bar (compact with
+    // layout controls) shows it just like the regular status bar.
+    if (compact && onLayoutChange == null) return;
     if (IS_MOBILE) return;
     if (trust) {
       return (
         <div
           style={{
             display: "flex",
+            alignItems: "center",
             color: COLORS.GRAY_M,
-            paddingLeft: compact ? 0 : "5px",
-            borderLeft: compact ? "none" : "1px solid gray",
+            paddingLeft: "6px",
+            borderLeft: `1px solid ${COLORS.GRAY_L}`,
+            whiteSpace: "nowrap",
           }}
         >
           Trusted
@@ -447,8 +448,11 @@ export function Kernel({
       return (
         <div
           style={{
-            paddingRight: compact ? 0 : "5px",
-            borderRight: compact ? "none" : "1px solid gray",
+            display: "flex",
+            alignItems: "center",
+            paddingLeft: "6px",
+            borderLeft: `1px solid ${COLORS.GRAY_L}`,
+            whiteSpace: "nowrap",
           }}
         >
           <Tooltip
@@ -459,9 +463,14 @@ export function Kernel({
             })}
           >
             <Button
-              style={{ marginTop: "-2.5px" }}
+              style={{ marginTop: compact ? 0 : "-2.5px" }}
               danger
-              onClick={() => actions.trust_notebook()}
+              onClick={(e) => {
+                // don't let the click bubble to the surrounding kernel-info
+                // area, which would also open the kernel drawer
+                e.stopPropagation();
+                actions.trust_notebook();
+              }}
               size="small"
             >
               {intl.formatMessage({
@@ -617,18 +626,18 @@ export function Kernel({
 
   function renderKernelState() {
     if (!backend_state) return <div></div>;
-    const value = compact ? kernelStateCompact() : kernelState();
+    // Display the plain state word in both the regular and the minimal
+    // status bar; interrupt/halt are separate borderless buttons next to it.
+    const value = kernelStateCompact();
     return (
       <Tooltip title={kernelState()} placement="bottom">
         <div
           style={{
-            flex: compact ? "0 0 auto" : 1,
+            flex: "0 0 auto",
             color: COLORS.GRAY_M,
-            textAlign: "center",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            marginTop: compact ? 0 : "2.5px",
             fontSize: IS_MOBILE ? "10pt" : undefined,
           }}
         >
@@ -636,6 +645,68 @@ export function Kernel({
         </div>
       </Tooltip>
     );
+  }
+
+  // Borderless action button next to the kernel state: interrupt while
+  // busy, halt (with confirmation) while idle.
+  function renderKernelStateAction(): ReactNode {
+    if (read_only || backend_state !== "running") return null;
+    const buttonStyle: CSS = {
+      color: COLORS.GRAY_M,
+      padding: "0 6px",
+    };
+    switch (displayKernelStateValue) {
+      case "busy":
+        return (
+          <Tooltip
+            title={intl.formatMessage({
+              id: "jupyter.status.interrupt_tooltip",
+              defaultMessage: "Interrupt the running computation",
+            })}
+          >
+            <Button
+              size="small"
+              type="text"
+              style={buttonStyle}
+              onClick={(e) => {
+                e.stopPropagation();
+                // using actions rather than frame actions, since this should
+                // work in places other than Jupyter notebooks.
+                actions.signal("SIGINT");
+              }}
+            >
+              {/* intentionally untranslated (i18n style guide: short
+                  Jupyter actions like Run stay English; the tooltip above
+                  is translated) */}
+              Interrupt
+            </Button>
+          </Tooltip>
+        );
+      case "idle":
+        return (
+          <Popconfirm
+            title={haltTooltip}
+            onConfirm={() => {
+              actions.shutdown();
+            }}
+            okText={intl.formatMessage(labels.halt)}
+            cancelText={intl.formatMessage(labels.cancel)}
+          >
+            <Tooltip title={haltTooltip}>
+              <Button
+                size="small"
+                type="text"
+                style={buttonStyle}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* trailing dots: the button opens a confirmation dialog */}
+                {intl.formatMessage(labels.halt)}...
+              </Button>
+            </Tooltip>
+          </Popconfirm>
+        );
+    }
+    return null;
   }
 
   // detailed kernel information displayed in the kernel drawer.
@@ -794,29 +865,27 @@ export function Kernel({
       100 * (usage.cpu_runtime / expected_cell_runtime),
     );
 
+    // same appearance in the regular and the minimal status bar
     const style: CSS = {
       display: "flex",
-      width: compact ? "300px" : undefined,
-      flex: compact ? undefined : 1,
+      width: "300px",
       borderLeft: `1px solid ${COLORS.GRAY}`,
       cursor: "pointer",
       alignItems: "center",
     };
     const pstyle: CSS = {
-      margin: compact ? "0 2px" : "2px",
+      margin: "0 2px",
       width: "100%",
     };
-    const railColor = compact ? COLORS.GRAY_LL : "white";
-    const showLabel = is_fullscreen || compact;
-    const usage_style: CSS = compact
-      ? {
-          ...KERNEL_USAGE_STYLE,
-          borderRight: "none",
-          margin: "0 4px",
-          paddingRight: 0,
-          alignItems: "center",
-        }
-      : KERNEL_USAGE_STYLE;
+    const railColor = COLORS.GRAY_LL;
+    const showLabel = true;
+    const usage_style: CSS = {
+      ...KERNEL_USAGE_STYLE,
+      borderRight: "none",
+      margin: "0 4px",
+      paddingRight: 0,
+      alignItems: "center",
+    };
 
     return (
       <div style={style}>
@@ -966,7 +1035,6 @@ export function Kernel({
     >
       {render_name()}
       {render_backend_state_icon()}
-      {render_trust()}
     </div>
   );
 
@@ -989,6 +1057,9 @@ export function Kernel({
           style={{
             overflow: "hidden",
             width: "100%",
+            // without border-box, 100% + padding overflows the frame and
+            // spawns a horizontal scrollbar at the bottom of the notebook
+            boxSizing: "border-box",
             padding: "4px 6px",
             backgroundColor: COLORS.GRAY_LLL,
             display: "flex",
@@ -998,7 +1069,7 @@ export function Kernel({
             ...style,
           }}
         >
-          {/* Left: logo + kernel + state */}
+          {/* Left: logo + kernel + trust */}
           <div
             style={{
               display: "flex",
@@ -1007,11 +1078,29 @@ export function Kernel({
               flex: "0 0 auto",
             }}
           >
-            <div>{renderLogo()}</div>
+            {/* flex wrapper: a plain div adds baseline descender space below
+                the inline logo, which pushes the logo visually too high */}
+            <div style={{ display: "flex", alignItems: "center" }}>
+              {renderLogo()}
+            </div>
             {body}
-            {renderKernelState()}
+            {render_trust()}
           </div>
-          <div style={{ flex: 1 }} />
+          {/* Middle: kernel state centered between the fixed side groups,
+              so the left group doesn't shift when the state text changes */}
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+            }}
+          >
+            {renderKernelState()}
+            {renderKernelStateAction()}
+          </div>
           {/* Right: bars + controls */}
           {onLayoutChange && (
             <div
@@ -1045,49 +1134,73 @@ export function Kernel({
           style={{
             overflow: "hidden",
             width: "100%",
+            // see compact header: avoid 100%+padding horizontal overflow
+            boxSizing: "border-box",
             padding: "5px",
             backgroundColor: COLORS.GRAY_LLL,
             display: "flex",
+            alignItems: "center",
+            gap: "6px",
             borderBottom: "1px solid #ccc",
             ...style,
           }}
         >
-          <div style={{ flex: 1, display: "flex", maxWidth: "100%" }}>
-            <div>{renderLogo()}</div>
+          {/* Left: logo + kernel + trust, like the minimal status bar */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              flex: "0 0 auto",
+            }}
+          >
+            {/* flex wrapper: see compact header — avoids baseline gap below
+                the inline logo */}
+            <div style={{ display: "flex", alignItems: "center" }}>
+              {renderLogo()}
+            </div>
+            {body}
+            {render_trust()}
+          </div>
+          {/* Middle: kernel state centered, see compact header */}
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+            }}
+          >
+            {renderKernelState()}
+            {renderKernelStateAction()}
+          </div>
+          {/* Right: usage bars + switch button */}
+          {!IS_MOBILE && (
             <div
               style={{
-                flex: 1,
-                fontSize: "10pt",
-                textAlign: "center",
-                marginTop: "3.5px",
+                display: "flex",
+                alignItems: "center",
+                cursor: "pointer",
+                flex: "0 0 auto",
               }}
+              onClick={openKernelDrawer}
             >
-              {body}
+              {renderUsage()}
             </div>
-            {renderKernelState()}
-            {!IS_MOBILE && (
-              <div
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  cursor: "pointer",
-                }}
-                onClick={openKernelDrawer}
-              >
-                {renderUsage()}
-              </div>
-            )}
-          </div>
+          )}
           {!IS_MOBILE && (
             <div
               style={{
                 // flex wrapper so the inline-block button doesn't add
-                // baseline descender space and grow the status bar height
+                // baseline descender space and grow the status bar height;
+                // small margin only — the header padding (now border-box)
+                // provides the rest of the gap to the frame edge
                 display: "flex",
                 alignItems: "center",
                 flex: "0 0 auto",
-                marginRight: "10px",
+                marginRight: "3px",
               }}
             >
               <SwitchToMinimalButton />

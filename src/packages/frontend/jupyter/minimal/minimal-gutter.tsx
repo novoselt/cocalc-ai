@@ -221,14 +221,28 @@ export const MinimalGutter: React.FC<MinimalGutterProps> = React.memo(
           {/* Lock / protected indicators */}
           {isNotEditable && (
             <Tooltip title="Protected from modifications" placement="left">
-              <span style={{ color: COLORS.GRAY_M, fontSize: "12px", zIndex: 2, marginTop: "2px" }}>
+              <span
+                style={{
+                  color: COLORS.GRAY_M,
+                  fontSize: "12px",
+                  zIndex: 2,
+                  marginTop: "2px",
+                }}
+              >
                 <Icon name="lock" />
               </span>
             </Tooltip>
           )}
           {isNotDeletable && (
             <Tooltip title="Protected from deletion" placement="left">
-              <span style={{ color: COLORS.GRAY_M, fontSize: "12px", zIndex: 2, marginTop: "2px" }}>
+              <span
+                style={{
+                  color: COLORS.GRAY_M,
+                  fontSize: "12px",
+                  zIndex: 2,
+                  marginTop: "2px",
+                }}
+              >
                 <Icon name="ban" />
               </span>
             </Tooltip>
@@ -289,7 +303,7 @@ export const MinimalGutter: React.FC<MinimalGutterProps> = React.memo(
 
           {/* [+] insert cell below — visible on hover for every cell */}
           {!read_only && onInsertCell && (
-            <Tooltip title="Insert cell below" placement="right">
+            <Tooltip title="Insert cell below" placement="left">
               <Button
                 type="text"
                 size="small"

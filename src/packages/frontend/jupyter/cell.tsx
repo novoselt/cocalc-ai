@@ -76,6 +76,9 @@ interface Props {
   headingLevel?: number;
   isLastBlock?: boolean;
   sectionCollapsed?: boolean;
+  // aggregate execution state of a *collapsed* section; only set for the
+  // block-start cell while its section is folded
+  collapsedRunState?: "running" | "error" | null;
   onToggleSection?: () => void;
   sectionTitle?: string;
   blockHighlighted?: boolean;
@@ -144,6 +147,9 @@ function getRenderChangeReasons(props: Props, nextProps: Props): string[] {
   if (nextProps.sectionCollapsed !== props.sectionCollapsed) {
     reasons.push("sectionCollapsed");
   }
+  if (nextProps.collapsedRunState !== props.collapsedRunState) {
+    reasons.push("collapsedRunState");
+  }
   if (nextProps.blockHighlighted !== props.blockHighlighted) {
     reasons.push("blockHighlighted");
   }
@@ -188,6 +194,7 @@ function areEqual(props: Props, nextProps: Props): boolean {
     nextProps.cellViewMode !== props.cellViewMode ||
     nextProps.blockInfo !== props.blockInfo ||
     nextProps.sectionCollapsed !== props.sectionCollapsed ||
+    nextProps.collapsedRunState !== props.collapsedRunState ||
     nextProps.blockHighlighted !== props.blockHighlighted ||
     nextProps.minimalLayout !== props.minimalLayout ||
     nextProps.zenMode !== props.zenMode ||
@@ -254,6 +261,7 @@ export const Cell: React.FC<Props> = React.memo((props: Props) => {
         isLast={props.isLast}
         isLastBlock={props.isLastBlock}
         sectionCollapsed={props.sectionCollapsed}
+        collapsedRunState={props.collapsedRunState}
         onToggleSection={props.onToggleSection}
         sectionTitle={props.sectionTitle}
         blockHighlighted={props.blockHighlighted}

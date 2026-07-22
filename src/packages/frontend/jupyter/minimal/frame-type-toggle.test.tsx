@@ -10,6 +10,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 let frameContext: any;
 
 jest.mock("@cocalc/frontend/components", () => ({
+  Icon: () => null,
   Tooltip: ({ children }) => <>{children}</>,
 }));
 
