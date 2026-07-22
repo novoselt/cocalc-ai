@@ -78,7 +78,6 @@ import {
   getProjectLifecycleView,
   hostLabel,
 } from "@cocalc/frontend/projects/host-operational";
-import MoveProject from "@cocalc/frontend/project/settings/move-project";
 import FileOperationLros from "@cocalc/frontend/project/explorer/file-operation-lros";
 import {
   isHostRoutingUnavailableError,
@@ -1045,16 +1044,8 @@ export function FilesFlyout({
           description={
             <>
               This project is assigned to {assignedHostLabel}, which is
-              unavailable ({hostUnavailableReason}). You can wait, or move this
-              project to an available host.
-              <div style={{ marginTop: "8px" }}>
-                <MoveProject
-                  project_id={project_id}
-                  size="small"
-                  label="Move Project"
-                  showHostName={false}
-                />
-              </div>
+              unavailable ({hostUnavailableReason}). Wait for this host to come
+              online, then try again.
             </>
           }
         />

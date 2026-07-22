@@ -74,7 +74,6 @@ import {
   hostLabel,
   normalizeProjectStateForDisplay,
 } from "@cocalc/frontend/projects/host-operational";
-import MoveProject from "@cocalc/frontend/project/settings/move-project";
 import { isHostRoutingUnavailableError } from "@cocalc/frontend/projects/host-routing-error";
 import { shouldSuppressTransientRoutingError } from "@cocalc/frontend/projects/host-routing-error";
 import type { MoveLroState } from "@cocalc/frontend/project/move-ops";
@@ -868,23 +867,13 @@ export function Explorer({ isVisible = true }: { isVisible?: boolean }) {
           message={`${projectLabel} host is not available`}
           error={`This ${projectLabelLower} is assigned to ${assignedHostLabel}, which is unavailable (${hostUnavailableReason}).
 
-You can either wait for this host to become available again, or move this ${projectLabelLower} to another host.`}
+Wait for this host to become available again, then refresh.`}
           style={{ textAlign: "left" }}
         />
         <br />
-        <Space.Compact>
-          <Button size="large" style={{ margin: "auto" }} onClick={refresh}>
-            <Icon name="refresh" /> Wait / Refresh
-          </Button>
-          {canUseProjectRuntime && (
-            <MoveProject
-              project_id={project_id}
-              size="large"
-              label="Move Project"
-              showHostName={false}
-            />
-          )}
-        </Space.Compact>
+        <Button size="large" style={{ margin: "auto" }} onClick={refresh}>
+          <Icon name="refresh" /> Wait / Refresh
+        </Button>
       </div>
     );
   }
