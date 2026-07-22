@@ -96,18 +96,18 @@ export default function AdminRefund({
 
   return (
     <>
-      <Button danger onClick={showModal}>
+      <Button onClick={showModal}>
         <Icon name="reply" /> Admin Refund
       </Button>
       <Modal
         title=<>
           <Icon name="reply" style={{ marginRight: "8px" }} /> Admin Refund
         </>
-        visible={isModalVisible}
+        open={isModalVisible}
         onOk={handleOk}
         onCancel={handleCancel}
         okText="Refund"
-        okButtonProps={{ danger: true, loading: refunding }}
+        okButtonProps={{ loading: refunding }}
       >
         {(service == "credit" || service == "auto-credit") && (
           <>

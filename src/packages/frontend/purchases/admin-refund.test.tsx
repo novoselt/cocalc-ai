@@ -39,8 +39,8 @@ jest.mock("antd", () => {
     Divider: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
     Form,
     Input: { TextArea: () => <textarea /> },
-    Modal: ({ children, onCancel, onOk, okText, title, visible }: any) =>
-      visible ? (
+    Modal: ({ children, onCancel, onOk, okText, open, title }: any) =>
+      open ? (
         <section>
           <h2>{title}</h2>
           {children}
