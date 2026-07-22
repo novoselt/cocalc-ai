@@ -151,8 +151,6 @@ export interface Refund {
   type: "refund";
   purchase_id: number; // id of the purchase transaction this reverses
   refund_id?: string; // stripe Refund object id for the refund
-  funding_purchase_id?: number;
-  funding_refund_purchase_id?: number;
   reason: Reason;
   notes: string;
 }
