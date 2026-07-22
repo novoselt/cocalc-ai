@@ -15,6 +15,7 @@ import {
 import {
   cancelOpenSubscriptionRenewalAttempts,
   claimDueSubscriptionRenewalAttempts,
+  scheduleMissingSubscriptionRenewalAttempts,
   scheduleSubscriptionRenewalAttempt,
 } from "./subscription-renewal-attempts";
 
@@ -121,6 +122,36 @@ describe("durable subscription renewal attempts", () => {
     expect(rows).toEqual([
       { subscription_id: first.subscription_id, state: "canceled" },
       { subscription_id: second.subscription_id, state: "scheduled" },
+    ]);
+  });
+
+  it("cancels an attempt whose subscription period changed concurrently", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const { subscription_id } =
+      await createTestMembershipSubscription(account_id);
+    await getPool().query(
+      `UPDATE subscriptions
+          SET current_period_end=current_period_end + INTERVAL '1 day'
+        WHERE id=$1`,
+      [subscription_id],
+    );
+
+    await scheduleMissingSubscriptionRenewalAttempts();
+
+    const { rows } = await getPool().query(
+      `SELECT state, last_error
+         FROM subscription_renewal_attempts
+        WHERE subscription_id=$1
+        ORDER BY period_end`,
+      [subscription_id],
+    );
+    expect(rows).toEqual([
+      {
+        last_error: "Subscription is no longer active for this period",
+        state: "canceled",
+      },
+      { last_error: null, state: "scheduled" },
     ]);
   });
 });

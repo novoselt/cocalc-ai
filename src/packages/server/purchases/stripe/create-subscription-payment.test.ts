@@ -148,6 +148,46 @@ describe("createSubscriptionPayment", () => {
     expect(mockCreatePaymentIntent).not.toHaveBeenCalled();
   });
 
+  it("cancels a stale attempt before creating Stripe state", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end: new Date(Date.now() - 60_000),
+      },
+    );
+    const { rows: attempts } = await getPool().query(
+      `SELECT id
+         FROM subscription_renewal_attempts
+        WHERE subscription_id=$1`,
+      [subscription_id],
+    );
+    await getPool().query(
+      "UPDATE subscriptions SET status='canceled' WHERE id=$1",
+      [subscription_id],
+    );
+
+    await expect(
+      createSubscriptionPayment({
+        account_id,
+        subscription_id,
+        renewal_attempt_id: attempts[0].id,
+      }),
+    ).rejects.toThrow(/does not match/);
+
+    expect(mockCreatePaymentIntent).not.toHaveBeenCalled();
+    const { rows } = await getPool().query(
+      `SELECT state
+         FROM subscription_renewal_attempts
+        WHERE id=$1`,
+      [attempts[0].id],
+    );
+    expect(rows).toEqual([{ state: "canceled" }]);
+  });
+
   it("fulfills one durable attempt once and schedules the next period", async () => {
     const account_id = uuid();
     await createTestAccount(account_id);
