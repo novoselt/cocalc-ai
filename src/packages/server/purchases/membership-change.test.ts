@@ -99,15 +99,22 @@ describe("membership change payment enforcement", () => {
   });
 
   it("allows externally paid membership changes when the payment covers the server-computed cost", async () => {
+    const creditId = 123;
     const result = await applyTestMembershipChange({
       account_id,
       targetClass,
       interval: "month",
       paymentAmount: 100,
+      creditId,
     });
 
     expect(result.subscription_id).toBeGreaterThan(0);
     expect(result.purchase_id).toBeGreaterThan(0);
+    const { rows } = await getPool().query(
+      "SELECT description FROM purchases WHERE id=$1",
+      [result.purchase_id],
+    );
+    expect(rows[0]?.description).toMatchObject({ credit_id: creditId });
   });
 
   it("does not create a purchase row for zero-cost deferred downgrades", async () => {

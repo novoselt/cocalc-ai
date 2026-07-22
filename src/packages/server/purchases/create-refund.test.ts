@@ -4,6 +4,7 @@
  */
 
 const mockUserIsInGroup = jest.fn();
+const mockGetPool = jest.fn();
 const mockGetTransactionClient = jest.fn();
 const mockCreatePurchase = jest.fn();
 const mockGetConn = jest.fn();
@@ -15,6 +16,8 @@ jest.mock("@cocalc/server/accounts/is-in-group", () => ({
 }));
 
 jest.mock("@cocalc/database/pool", () => ({
+  __esModule: true,
+  default: (...args: any[]) => mockGetPool(...args),
   getTransactionClient: (...args: any[]) => mockGetTransactionClient(...args),
 }));
 
@@ -48,6 +51,7 @@ function makeStripe() {
   return {
     charges: {
       list: jest.fn().mockResolvedValue({ data: [{ id: "ch_123" }] }),
+      retrieve: jest.fn().mockResolvedValue(undefined),
     },
     invoicePayments: {
       list: jest.fn().mockResolvedValue({ data: [] }),
@@ -61,6 +65,7 @@ function makeStripe() {
     },
     refunds: {
       create: jest.fn().mockResolvedValue({ id: "re_123" }),
+      list: jest.fn().mockResolvedValue({ data: [] }),
     },
   };
 }
@@ -68,6 +73,9 @@ function makeStripe() {
 describe("createRefund", () => {
   beforeEach(() => {
     mockUserIsInGroup.mockReset().mockResolvedValue(true);
+    mockGetPool.mockReset().mockReturnValue({
+      query: jest.fn().mockResolvedValue({ rows: [{ service: "credit" }] }),
+    });
     mockGetTransactionClient.mockReset();
     mockCreatePurchase.mockReset().mockResolvedValue(55);
     mockGetConn.mockReset();
@@ -287,5 +295,55 @@ describe("createRefund", () => {
       expect.objectContaining({ charge: "ch_from_invoice" }),
       { idempotencyKey: "cocalc-refund-purchase-10" },
     );
+  });
+
+  it("records a refund that was already completed directly in Stripe", async () => {
+    const client = makeClient();
+    client.query
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 10,
+            account_id: "user-1",
+            invoice_id: "in_123",
+            service: "credit",
+            cost: -25,
+            description: { type: "credit" },
+          },
+        ],
+      })
+      .mockResolvedValue({ rows: [] });
+    const stripe = makeStripe();
+    stripe.charges.retrieve.mockResolvedValue({
+      id: "ch_123",
+      amount: 2500,
+      amount_refunded: 2500,
+      refunded: true,
+      refunds: { data: [{ id: "re_manual", status: "succeeded" }] },
+    });
+    mockGetTransactionClient.mockResolvedValue(client);
+    mockGetConn.mockResolvedValue(stripe);
+
+    await expect(
+      createRefund({
+        account_id: "admin-1",
+        purchase_id: 10,
+        reason: "duplicate",
+        notes: "Refunded in Stripe before reconciliation",
+      }),
+    ).resolves.toBe(55);
+
+    expect(stripe.refunds.create).not.toHaveBeenCalled();
+    expect(client.query).toHaveBeenCalledWith(
+      "UPDATE purchases SET description=$2 WHERE id=$1",
+      [
+        55,
+        expect.objectContaining({
+          purchase_id: 10,
+          refund_id: "re_manual",
+        }),
+      ],
+    );
+    expect(client.query).toHaveBeenLastCalledWith("COMMIT");
   });
 });
