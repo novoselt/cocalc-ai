@@ -26,11 +26,11 @@ import { currency } from "@cocalc/util/misc";
 
 const DEFAULT_REASON = "requested_by_customer";
 
-export function isRefundable(service, invoice_id) {
-  if (service == "credit" || service == "auto-credit") {
-    return !!invoice_id;
-  }
-  return false;
+export function isRefundable(
+  service: Service,
+  cost: number | null | undefined,
+) {
+  return service !== "refund" && cost != null && Number.isFinite(Number(cost));
 }
 
 const labelStyle = { width: "60px" } as const;
@@ -39,11 +39,13 @@ export default function AdminRefund({
   purchase_id,
   service,
   cost,
+  subscription_id,
   refresh,
 }: {
   purchase_id: number;
   service: Service;
   cost: number;
+  subscription_id?: number | string | null;
   refresh?;
 }) {
   const [error, setError] = useState<string>("");
@@ -58,13 +60,18 @@ export default function AdminRefund({
   };
 
   const handleOk = async () => {
-    const values = { ...form.getFieldsValue(), reason: DEFAULT_REASON }; // Get the form data
     try {
+      const values = await form.validateFields();
       await runFreshAuthAction(async () => {
         setRefunding(true);
         try {
-          await adminCreateRefund({ purchase_id, ...values });
+          await adminCreateRefund({
+            purchase_id,
+            reason: values.reason ?? DEFAULT_REASON,
+            notes: values.notes,
+          });
           setIsModalVisible(false);
+          form.resetFields();
           refresh?.();
         } finally {
           setRefunding(false);
@@ -78,13 +85,20 @@ export default function AdminRefund({
   const handleCancel = () => {
     setError("");
     setIsModalVisible(false);
+    form.resetFields();
   };
 
   const amount = Math.abs(cost);
+  const personalMembership =
+    service == "membership" &&
+    Number.isInteger(Number(subscription_id)) &&
+    Number(subscription_id) > 0;
 
   return (
     <>
-      <Button onClick={showModal}>Admin Refund</Button>
+      <Button danger onClick={showModal}>
+        <Icon name="reply" /> Admin Refund
+      </Button>
       <Modal
         title=<>
           <Icon name="reply" style={{ marginRight: "8px" }} /> Admin Refund
@@ -93,30 +107,46 @@ export default function AdminRefund({
         onOk={handleOk}
         onCancel={handleCancel}
         okText="Refund"
-        okButtonProps={{ disabled: refunding }}
+        okButtonProps={{ danger: true, loading: refunding }}
       >
         {(service == "credit" || service == "auto-credit") && (
           <>
-            The corresponding payment intent will be fully refunded and the
-            amount {currency(amount, 2)} of this credit will be deducted from
-            the account and listed as a new refund transaction "Refund
-            Transaction {purchase_id}".
+            The amount {currency(amount, 2)} of this credit will be deducted
+            from the account and listed as a new refund transaction "Refund
+            Transaction {purchase_id}". Any corresponding Stripe payment will be
+            fully refunded.
           </>
         )}
+        {personalMembership && (
+          <>
+            This membership purchase will be reversed. The exact subscription
+            will be canceled and expire immediately. Any related credit
+            transaction and Stripe payment will not be changed; refund that
+            credit transaction separately when appropriate.
+          </>
+        )}
+        {service != "credit" &&
+          service != "auto-credit" &&
+          !personalMembership && (
+            <>
+              The amount {currency(amount, 2)} will be reversed in the CoCalc
+              account. This does not undo resources that have already been
+              consumed.
+            </>
+          )}
         <Divider />
-        <Form form={form}>
-          <Form.Item name="reason" label={<div style={labelStyle}>Reason</div>}>
-            <Select
-              style={{ width: "100%" }}
-              placeholder="Select Reason..."
-              defaultValue={DEFAULT_REASON}
-            >
+        <Form form={form} initialValues={{ reason: DEFAULT_REASON }}>
+          <Form.Item
+            name="reason"
+            label={<div style={labelStyle}>Reason</div>}
+            rules={[{ required: true, message: "Select a refund reason." }]}
+          >
+            <Select style={{ width: "100%" }} placeholder="Select Reason...">
               <Select.Option value="duplicate">Duplicate</Select.Option>
               <Select.Option value="fraudulent">Fraudulent</Select.Option>
               <Select.Option value="requested_by_customer">
                 Requested by Customer
               </Select.Option>
-              <Select.Option value="other">Other</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="notes" label={<div style={labelStyle}>Notes</div>}>
@@ -124,20 +154,20 @@ export default function AdminRefund({
           </Form.Item>
           <div style={{ color: "#666" }}>
             <Divider>What Happens: more details</Divider>
-            The above information will be visible to the user.
+            The above information will be visible to the user. Their CoCalc
+            transactions log and statement will include a new "Refund" entry
+            immediately, and they will be sent a message.
             {(service == "credit" || service == "auto-credit") && (
               <>
-                When you click OK, their money will be refunded in 5-10 days,
-                and their CoCalc transactions log and statement will include a
-                new "Refund" entry immediately (click Refresh to confirm). They
-                will also be sent a message. Stripe's fees for the original
-                payment won't be returned, but there are no additional fees for
-                the refund. This refund will use the latest Stripe-provided
-                exchange rate, which may differ from the original rate. (Partial
-                refunds are not implemented.)
+                {" "}
+                If a Stripe payment is associated with the credit, the money
+                should appear on their card or bank statement in 5-10 days.
+                Stripe's fees for the original payment won't be returned, but
+                there are no additional fees for the refund. Stripe will use its
+                latest exchange rate, which may differ from the original rate.
+                Partial refunds are not implemented.
               </>
             )}
-            {!(service == "credit" || service == "auto-credit") && <></>}
           </div>
         </Form>
         {refunding && <BigSpin />}
