@@ -807,11 +807,12 @@ function PurchaseDescription({
         {admin &&
           description?.refund_purchase_id == null &&
           id != null &&
-          isRefundable(service, invoice_id) && (
+          isRefundable(service, cost) && (
             <AdminRefund
               purchase_id={id}
               service={service}
               cost={cost}
+              subscription_id={description?.subscription_id}
               refresh={refresh}
             />
           )}
