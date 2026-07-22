@@ -9,6 +9,7 @@ interface Options {
   subscription_id: number;
   reason?: string;
   client?: PoolClient;
+  notify?: boolean;
 }
 
 export default async function cancelSubscription({
@@ -16,6 +17,7 @@ export default async function cancelSubscription({
   subscription_id,
   reason = "no reason specified",
   client,
+  notify = true,
 }: Options) {
   const pool = client ?? getPool();
   const now = new Date();
@@ -47,7 +49,9 @@ export default async function cancelSubscription({
       client,
     });
   }
-  await sendCancelNotification({ subscription_id, client });
+  if (notify) {
+    await sendCancelNotification({ subscription_id, client });
+  }
 }
 
 export async function sendCancelNotification({
