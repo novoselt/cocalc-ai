@@ -9,6 +9,7 @@ import { getConfiguredBayId } from "../bay-config";
 import {
   computePlacementPermission,
   getUserHostTier,
+  hostIoPlacementConformant,
   normalizeHostTier,
 } from "./placement";
 import { maybeAutoGrowHostDiskForReservationFailure } from "./auto-grow";
@@ -94,6 +95,7 @@ function hostToRegistryRow(host: Host): HostRegistryRow {
       owner: host.owner,
       machine: host.machine,
       pressure: host.pressure,
+      metrics: host.metrics,
       billing: {
         enforcement: host.billing_enforcement,
       },
@@ -164,6 +166,7 @@ export function choosePlacementHostRow<T extends HostRegistryRow>(
   const eligibleRows = rows.filter(
     (row) =>
       !hostPlacementQuarantined(row) &&
+      hostIoPlacementConformant(row) &&
       (project_region == null ||
         mapCloudRegionToR2Region(row.region ?? "") === project_region),
   );
@@ -549,6 +552,7 @@ export async function selectActiveHost({
       "last_seen > NOW() - interval '2 minutes'",
       "metadata #>> '{runtime_synthetic_probe,quarantined}' IS DISTINCT FROM 'true'",
       "metadata #>> '{public_route_probe,quarantined}' IS DISTINCT FROM 'true'",
+      "(metadata #>> '{metrics,current,io_containment,policy_mode}' IS DISTINCT FROM 'enforce' OR (metadata #>> '{metrics,current,io_containment,capability}' = 'validated' AND COALESCE(metadata #>> '{metrics,current,io_containment,last_reconcile_error}', '') = ''))",
       "COALESCE(metadata #>> '{billing,enforcement,state}', 'ok') NOT IN ('at_risk', 'draining', 'stopped_billing_blocked', 'deprovision_pending', 'deprovisioned_recoverable')",
     ];
     if (exclude_host_id) {

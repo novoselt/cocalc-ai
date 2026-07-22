@@ -37,4 +37,34 @@ describe("I/O containment metrics", () => {
       write_iops: 0,
     });
   });
+
+  it("preserves explicit enforcement after a privileged status failure", () => {
+    expect(
+      __test__.privilegedStatusFailure(
+        {
+          policy_mode: "enforce",
+          mountpoint: "/mnt/cocalc",
+          capability: "validated",
+          pool_cgroup: "/sys/fs/cgroup/cocalc-project-pool",
+          devices: [],
+        },
+        new Error("io.max drifted"),
+      ),
+    ).toMatchObject({
+      policy_mode: "enforce",
+      capability: "unsupported",
+      capability_reason: "Error: io.max drifted",
+      last_reconcile_error: "Error: io.max drifted",
+    });
+  });
+
+  it("keeps old helpers placement-compatible when no status was verified", () => {
+    expect(
+      __test__.privilegedStatusFailure(undefined, new Error("unknown command")),
+    ).toMatchObject({
+      policy_mode: "invalid",
+      capability: "unsupported",
+      last_reconcile_error: "Error: unknown command",
+    });
+  });
 });

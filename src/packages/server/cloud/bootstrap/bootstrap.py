@@ -2698,13 +2698,14 @@ def merge(left, right):
     return result
 
 policy = merge(merge(defaults, load(base_path)), load(override_path))
-if policy.get("version") != 1:
+version = policy.get("version")
+if isinstance(version, bool) or version != 1:
     raise ValueError("project I/O policy version must be 1")
 mode = policy.get("mode")
 if mode not in ("disabled", "observe", "enforce"):
     raise ValueError("invalid project I/O policy mode")
-mountpoint = str(policy.get("mountpoint") or "/mnt/cocalc")
-if not mountpoint.startswith("/") or "\\t" in mountpoint or "\\n" in mountpoint:
+mountpoint = str(policy.get("mountpoint") or "").strip() or "/mnt/cocalc"
+if not mountpoint.startswith("/") or "\\t" in mountpoint or "\\n" in mountpoint or "\\0" in mountpoint:
     raise ValueError("invalid project I/O mountpoint")
 pool = policy.get("pool") or {}
 leaf = (policy.get("leafClasses") or {}).get(io_class) or {}
@@ -2720,13 +2721,19 @@ def integer(row, key, *, positive=False):
 require = mode == "enforce"
 pool_values = [integer(pool, key, positive=require) for key in ("rbps", "wbps", "riops", "wiops")]
 leaf_values = [integer(leaf, key, positive=require) for key in ("rbps", "wbps", "riops", "wiops")]
+if require:
+    for key, leaf_value, pool_value in zip(
+        ("rbps", "wbps", "riops", "wiops"), leaf_values, pool_values
+    ):
+        if leaf_value > pool_value:
+            raise ValueError(f"leaf {key} exceeds pool {key}")
 weight = integer(leaf, "weight", positive=True)
 if weight > 10000:
     raise ValueError("I/O weight exceeds 10000")
-profile = str(policy.get("profile") or "unconfigured")
-capacity_source = str(policy.get("capacitySource") or "unconfigured")
+profile = str(policy.get("profile") or "").strip() or "unconfigured"
+capacity_source = str(policy.get("capacitySource") or "").strip() or "unconfigured"
 for name, value in (("profile", profile), ("capacitySource", capacity_source)):
-    if "\\t" in value or "\\n" in value:
+    if "\\t" in value or "\\n" in value or "\\0" in value:
         raise ValueError(f"invalid {name}")
 print("\\t".join(map(str, [
     mode,
@@ -2778,9 +2785,6 @@ clear_stale_io_max() {
 apply_io_max() {
   local cgroup="$1" mountpoint="$2" rbps="$3" wbps="$4" riops="$5" wiops="$6"
   local mode="$7" devices device line
-  if [ "$mode" = "observe" ]; then
-    return 0
-  fi
   if [ ! -w "$cgroup/io.max" ]; then
     [ "$mode" = "enforce" ] && deny "project-io-max-unavailable" "$cgroup"
     return 0
@@ -2793,7 +2797,9 @@ apply_io_max() {
   clear_stale_io_max "$cgroup" "$devices"
   while IFS= read -r device; do
     [ -n "$device" ] || continue
-    if [ "$mode" = "disabled" ]; then
+    # Observe calculates and reports policy without enforcing it. It must also
+    # remove limits left by an earlier enforce policy, just like disabled mode.
+    if [ "$mode" != "enforce" ]; then
       line="$device rbps=max wbps=max riops=max wiops=max"
     else
       line="$device rbps=$rbps wbps=$wbps riops=$riops wiops=$wiops"
@@ -3884,16 +3890,25 @@ case "$cmd" in
       verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$pool_rbps" "$pool_wbps" "$pool_riops" "$pool_wiops"
     fi
     device_rows="$(project_io_device_rows "$io_mountpoint")"
-    [ -n "$device_rows" ] || deny "project-io-device-unavailable" "$io_mountpoint"
+    io_filesystem="$(findmnt -n -o FSTYPE -T "$io_mountpoint" 2>/dev/null || true)"
+    io_filesystem="${io_filesystem:-unknown}"
+    io_capability="available"
+    io_capability_reason=""
+    if [ -z "$device_rows" ]; then
+      io_capability="unsupported"
+      io_capability_reason="no Btrfs backing block devices discovered"
+    elif [ "$io_mode" = "enforce" ]; then
+      io_capability="validated"
+    fi
     pool_io_max="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.max" 2>/dev/null || true)"
     pool_pressure="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.pressure" 2>/dev/null || true)"
     legacy_processes="$(cat "$(project_legacy_cgroup)/cgroup.procs" 2>/dev/null || true)"
     pool_io_weight="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)"
-    /usr/bin/python3 - "$fields" "$device_rows" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" <<'PY'
+    /usr/bin/python3 - "$fields" "$device_rows" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" "$io_filesystem" "$io_capability" "$io_capability_reason" <<'PY'
 import json
 import sys
 
-fields, rows, io_max, io_weight, pressure, legacy = sys.argv[1:]
+fields, rows, io_max, io_weight, pressure, legacy, filesystem, capability, capability_reason = sys.argv[1:]
 parts = fields.split("\t")
 mode, mountpoint = parts[:2]
 policy_version = int(parts[12])
@@ -3919,21 +3934,24 @@ for row in pressure.splitlines():
     if "total" in values:
         pressure_values[f"pressure_{kind}_total"] = int(values["total"])
 
-print(json.dumps({
+result = {
     "policy_mode": mode,
     "policy_version": policy_version,
     "policy_profile": policy_profile,
     "capacity_source": capacity_source,
     "mountpoint": mountpoint,
-    "filesystem": "btrfs",
-    "capability": "validated" if mode == "enforce" else "available",
+    "filesystem": filesystem,
+    "capability": capability,
     "pool_cgroup": "/sys/fs/cgroup/cocalc-project-pool",
     "pool_io_max": io_max.strip(),
     "pool_io_weight": io_weight.strip(),
     "devices": devices,
     "legacy_process_count": len(legacy.split()),
     **pressure_values,
-}, separators=(",", ":")))
+}
+if capability_reason:
+    result["capability_reason"] = capability_reason
+print(json.dumps(result, separators=(",", ":")))
 PY
     ;;
   reconcile-project-io-policy)

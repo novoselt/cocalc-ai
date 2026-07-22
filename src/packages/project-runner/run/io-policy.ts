@@ -75,19 +75,25 @@ function object(value: unknown): Record<string, any> {
 }
 
 function positiveInteger(value: unknown, name: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer`);
   }
-  return parsed;
+  return value;
 }
 
 function nonNegativeInteger(value: unknown, name: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${name} must be a non-negative integer`);
   }
-  return parsed;
+  return value;
+}
+
+function policyText(value: unknown, fallback: string, name: string): string {
+  const text = `${value ?? ""}`.trim() || fallback;
+  if (text.includes("\t") || text.includes("\n") || text.includes("\0")) {
+    throw new Error(`${name} contains invalid control characters`);
+  }
+  return text;
 }
 
 function parseLimits(
@@ -140,7 +146,7 @@ function mergePolicyObjects(
 
 export function parseProjectIoPolicy(value: unknown): ProjectIoPolicy {
   const row = object(value);
-  if (Number(row.version) !== 1) {
+  if (row.version !== 1) {
     throw new Error("project I/O policy version must be 1");
   }
   const mode = parseMode(row.mode);
@@ -173,9 +179,13 @@ export function parseProjectIoPolicy(value: unknown): ProjectIoPolicy {
   const policy: ProjectIoPolicy = {
     version: 1,
     mode,
-    mountpoint: `${row.mountpoint ?? ""}`.trim() || "/mnt/cocalc",
-    profile: `${row.profile ?? ""}`.trim() || "unconfigured",
-    capacitySource: `${row.capacitySource ?? ""}`.trim() || "unconfigured",
+    mountpoint: policyText(row.mountpoint, "/mnt/cocalc", "mountpoint"),
+    profile: policyText(row.profile, "unconfigured", "profile"),
+    capacitySource: policyText(
+      row.capacitySource,
+      "unconfigured",
+      "capacitySource",
+    ),
     pool,
     leafClasses,
     adaptive: {
@@ -195,6 +205,9 @@ export function parseProjectIoPolicy(value: unknown): ProjectIoPolicy {
     },
     ioCost: { mode: ioCostMode as ProjectIoPolicy["ioCost"]["mode"] },
   };
+  if (!policy.mountpoint.startsWith("/")) {
+    throw new Error("mountpoint must be absolute");
+  }
   if (mode === "enforce") {
     for (const [scope, limits] of [
       ["pool", policy.pool],
@@ -204,6 +217,15 @@ export function parseProjectIoPolicy(value: unknown): ProjectIoPolicy {
         if (key === "weight") continue;
         if (!(limit > 0)) {
           throw new Error(`${scope}.${key} must be configured in enforce mode`);
+        }
+      }
+    }
+    for (const [name, limits] of Object.entries(policy.leafClasses)) {
+      for (const key of ["rbps", "wbps", "riops", "wiops"] as const) {
+        if (limits[key] > policy.pool[key]) {
+          throw new Error(
+            `leafClasses.${name}.${key} must not exceed pool.${key}`,
+          );
         }
       }
     }

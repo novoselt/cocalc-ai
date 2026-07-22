@@ -751,6 +751,7 @@ export interface HostIoContainmentMetrics {
   total_project_count: number;
   stale_project_count: number;
   truncated: boolean;
+  sampling_error?: string;
   legacy_process_count?: number;
   last_reconcile_error?: string;
 }
