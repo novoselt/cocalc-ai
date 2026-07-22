@@ -720,7 +720,10 @@ export async function processSubscriptionRenewalFailure({
     client.release();
   }
   if (changed) {
-    await sendCancelNotification({ subscription_id: id });
+    await sendCancelNotification({
+      subscription_id: id,
+      alertAdmin: false,
+    });
   }
 }
 

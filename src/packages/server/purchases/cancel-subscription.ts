@@ -83,9 +83,11 @@ export default async function cancelSubscription({
 export async function sendCancelNotification({
   subscription_id,
   client,
+  alertAdmin = true,
 }: {
   subscription_id: number;
   client?: PoolClient;
+  alertAdmin?: boolean;
 }) {
   const pool = client ?? getPool();
   const { rows } = await pool.query(
@@ -115,9 +117,10 @@ ${await support()}
     body,
   });
 
-  adminAlert({
-    subject: `Alert -- User Subscription for ${moneyToCurrency(cost)}/${interval} Id=${subscription_id} was Canceled`,
-    body: `
+  if (alertAdmin) {
+    adminAlert({
+      subject: `Alert -- User Subscription for ${moneyToCurrency(cost)}/${interval} Id=${subscription_id} was Canceled`,
+      body: `
 - User: ${await name(account_id)}, account_id=${account_id}
 
 - User provided reason: "${JSON.stringify(canceled_reason)}"
@@ -127,5 +130,6 @@ ${await support()}
 - subscription_id=${subscription_id}
 
 `,
-  });
+    });
+  }
 }
