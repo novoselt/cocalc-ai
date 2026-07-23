@@ -46,4 +46,56 @@ describe("project I/O policy", () => {
     expect(policy.mode).toBe("enforce");
     expect(policy.leafClasses.premium.wiops).toBe(1000);
   });
+
+  it.each([
+    ["numeric strings", { rbps: "64" }],
+    ["boolean values", { rbps: true }],
+  ])(
+    "rejects %s instead of diverging from the privileged parser",
+    (_, pool) => {
+      expect(() =>
+        parseProjectIoPolicy({
+          ...DEFAULT_PROJECT_IO_POLICY,
+          pool: { ...DEFAULT_PROJECT_IO_POLICY.pool, ...pool },
+        }),
+      ).toThrow("pool.rbps must be a non-negative integer");
+    },
+  );
+
+  it.each(["1", true])("rejects non-numeric policy version %p", (version) => {
+    expect(() =>
+      parseProjectIoPolicy({ ...DEFAULT_PROJECT_IO_POLICY, version }),
+    ).toThrow("project I/O policy version must be 1");
+  });
+
+  it("rejects relative mountpoints and control characters", () => {
+    expect(() =>
+      parseProjectIoPolicy({
+        ...DEFAULT_PROJECT_IO_POLICY,
+        mountpoint: "mnt/cocalc",
+      }),
+    ).toThrow("mountpoint must be absolute");
+    expect(() =>
+      parseProjectIoPolicy({
+        ...DEFAULT_PROJECT_IO_POLICY,
+        profile: "unsafe\nprofile",
+      }),
+    ).toThrow("profile contains invalid control characters");
+  });
+
+  it("rejects a leaf limit above the aggregate pool envelope", () => {
+    const pool = { rbps: 64, wbps: 32, riops: 2000, wiops: 1000 };
+    expect(() =>
+      parseProjectIoPolicy({
+        ...DEFAULT_PROJECT_IO_POLICY,
+        mode: "enforce",
+        pool,
+        leafClasses: {
+          standard: { ...pool, rbps: 65, weight: 100 },
+          member: { ...pool, weight: 200 },
+          premium: { ...pool, weight: 400 },
+        },
+      }),
+    ).toThrow("leafClasses.standard.rbps must not exceed pool.rbps");
+  });
 });

@@ -3,6 +3,7 @@ import {
   hostPlacementPressureRank,
   shouldSkipStartForSnapshot,
 } from "./control";
+import { hostIoPlacementConformant } from "./placement";
 
 describe("shouldSkipStartForSnapshot", () => {
   const nowMs = Date.UTC(2026, 2, 19, 12, 0, 0);
@@ -89,6 +90,55 @@ describe("shouldSkipStartForSnapshot", () => {
 });
 
 describe("host placement pressure helpers", () => {
+  it("only requires validated I/O containment after enforcement is explicit", () => {
+    expect(hostIoPlacementConformant({ id: "old-host" })).toBe(true);
+    expect(
+      hostIoPlacementConformant({
+        id: "observe-host",
+        metadata: {
+          metrics: {
+            current: {
+              io_containment: {
+                policy_mode: "observe",
+                capability: "unsupported",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      hostIoPlacementConformant({
+        id: "broken-enforce-host",
+        metadata: {
+          metrics: {
+            current: {
+              io_containment: {
+                policy_mode: "enforce",
+                capability: "unsupported",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hostIoPlacementConformant({
+        id: "validated-enforce-host",
+        metadata: {
+          metrics: {
+            current: {
+              io_containment: {
+                policy_mode: "enforce",
+                capability: "validated",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("ranks calmer pressure zones ahead of stressed ones", () => {
     expect(hostPlacementPressureRank("normal")).toBeLessThan(
       hostPlacementPressureRank("observe"),
@@ -168,6 +218,32 @@ describe("host placement pressure helpers", () => {
       () => 0,
     );
     expect(selected?.id).toBe("healthy");
+  });
+
+  it("never chooses a host with unvalidated explicit I/O enforcement", () => {
+    const selected = choosePlacementHostRow(
+      [
+        {
+          id: "broken-enforce-host",
+          metadata: {
+            metrics: {
+              current: {
+                io_containment: {
+                  policy_mode: "enforce",
+                  capability: "unsupported",
+                },
+              },
+            },
+          },
+        },
+        {
+          id: "healthy-host",
+          metadata: { pressure: { zone: "observe" } },
+        },
+      ],
+      () => 0,
+    );
+    expect(selected?.id).toBe("healthy-host");
   });
 
   it("returns no placement when every candidate is quarantined", () => {

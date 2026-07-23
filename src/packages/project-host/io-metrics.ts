@@ -22,7 +22,18 @@ type IoCounters = {
 
 type TimedCounters = IoCounters & { at: number };
 
+type PrivilegedStatus = Omit<
+  HostIoContainmentMetrics,
+  | "collected_at"
+  | "top_projects"
+  | "sampled_project_count"
+  | "total_project_count"
+  | "stale_project_count"
+  | "truncated"
+>;
+
 const previousLeaves = new Map<string, TimedCounters>();
+let previousPrivilegedStatus: PrivilegedStatus | undefined;
 let leafCursor = 0;
 
 function finite(value: unknown): number | undefined {
@@ -94,23 +105,37 @@ function rates(
   };
 }
 
-async function readPrivilegedStatus(): Promise<
-  Omit<
-    HostIoContainmentMetrics,
-    | "collected_at"
-    | "top_projects"
-    | "sampled_project_count"
-    | "total_project_count"
-    | "stale_project_count"
-    | "truncated"
-  >
-> {
+async function readPrivilegedStatus(): Promise<PrivilegedStatus> {
   const { stdout } = await execFileAsync(
     "/usr/bin/sudo",
     ["-n", RUNTIME_STORAGE, "project-io-status"],
     { timeout: 5000, maxBuffer: 1024 * 1024 },
   );
   return JSON.parse(stdout);
+}
+
+function privilegedStatusFailure(
+  previous: PrivilegedStatus | undefined,
+  error: unknown,
+): PrivilegedStatus {
+  const message = `${error}`;
+  if (previous) {
+    return {
+      ...previous,
+      capability: "unsupported",
+      capability_reason: message,
+      last_reconcile_error: message,
+    };
+  }
+  return {
+    policy_mode: "invalid",
+    mountpoint: "/mnt/cocalc",
+    capability: "unsupported",
+    capability_reason: message,
+    pool_cgroup: PROJECT_POOL,
+    devices: [],
+    last_reconcile_error: message,
+  };
 }
 
 async function sampleLeaves(now: number): Promise<{
@@ -122,6 +147,12 @@ async function sampleLeaves(now: number): Promise<{
     (entry) =>
       entry.isDirectory() && /^project-[0-9a-f-]{36}$/u.test(entry.name),
   );
+  const currentProjectIds = new Set(
+    entries.map((entry) => entry.name.slice("project-".length)),
+  );
+  for (const projectId of previousLeaves.keys()) {
+    if (!currentProjectIds.has(projectId)) previousLeaves.delete(projectId);
+  }
   if (entries.length === 0) return { projects: [], sampled: 0, total: 0 };
   const count = Math.min(MAX_LEAVES_PER_SAMPLE, entries.length);
   const selected = Array.from(
@@ -166,11 +197,24 @@ async function sampleLeaves(now: number): Promise<{
 
 export async function readIoContainmentMetrics(): Promise<HostIoContainmentMetrics> {
   const now = Date.now();
+  let status: Awaited<ReturnType<typeof readPrivilegedStatus>>;
   try {
-    const [status, leaves] = await Promise.all([
-      readPrivilegedStatus(),
-      sampleLeaves(now),
-    ]);
+    status = await readPrivilegedStatus();
+    previousPrivilegedStatus = status;
+  } catch (err) {
+    status = privilegedStatusFailure(previousPrivilegedStatus, err);
+    return {
+      ...status,
+      collected_at: new Date(now).toISOString(),
+      top_projects: [],
+      sampled_project_count: 0,
+      total_project_count: 0,
+      stale_project_count: 0,
+      truncated: false,
+    };
+  }
+  try {
+    const leaves = await sampleLeaves(now);
     return {
       ...status,
       collected_at: new Date(now).toISOString(),
@@ -182,21 +226,21 @@ export async function readIoContainmentMetrics(): Promise<HostIoContainmentMetri
     };
   } catch (err) {
     return {
+      ...status,
       collected_at: new Date(now).toISOString(),
-      policy_mode: "invalid",
-      mountpoint: "/mnt/cocalc",
-      capability: "unsupported",
-      capability_reason: `${err}`,
-      pool_cgroup: PROJECT_POOL,
-      devices: [],
       top_projects: [],
       sampled_project_count: 0,
       total_project_count: 0,
       stale_project_count: 0,
-      truncated: false,
-      last_reconcile_error: `${err}`,
+      truncated: true,
+      sampling_error: `${err}`,
     };
   }
 }
 
-export const __test__ = { parseIoPressure, parseIoStat, rates };
+export const __test__ = {
+  parseIoPressure,
+  parseIoStat,
+  privilegedStatusFailure,
+  rates,
+};

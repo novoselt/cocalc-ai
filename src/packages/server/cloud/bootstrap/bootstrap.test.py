@@ -1406,6 +1406,56 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 "<<'PY'\n", 1
             )[1].split("\nPY\n", 1)[0]
             compile(policy_parser, "embedded-project-io-policy.py", "exec")
+            policy_path = Path(tmpdir) / "io-policy.json"
+            override_path = Path(tmpdir) / "io-policy-override.json"
+            override_path.write_text("{}\n", encoding="utf-8")
+            complete_limits = {
+                "rbps": 64,
+                "wbps": 32,
+                "riops": 2000,
+                "wiops": 1000,
+            }
+            policy = {
+                "version": 1,
+                "mode": "enforce",
+                "mountpoint": "/mnt/cocalc",
+                "pool": complete_limits,
+                "leafClasses": {
+                    "standard": {**complete_limits, "weight": 100},
+                    "member": {**complete_limits, "weight": 200},
+                    "premium": {**complete_limits, "weight": 400},
+                },
+            }
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            parser_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-",
+                    str(policy_path),
+                    str(override_path),
+                    "standard",
+                ],
+                input=policy_parser,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(parser_result.returncode, 0, parser_result.stderr)
+            policy["leafClasses"]["standard"]["rbps"] = 65
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            parser_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-",
+                    str(policy_path),
+                    str(override_path),
+                    "standard",
+                ],
+                input=policy_parser,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(parser_result.returncode, 0)
+            self.assertIn("leaf rbps exceeds pool rbps", parser_result.stderr)
             self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
             self.assertIn("project-rustic-backup)", script)
             self.assertIn("project-rustic-restore)", script)
@@ -1471,7 +1521,13 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("verify-project-io-limits)", script)
             self.assertIn("verify-project-io-policy)", script)
             self.assertIn("project-io-status)", script)
-            self.assertIn('"capability": "validated"', script)
+            self.assertIn('io_capability="validated"', script)
+            self.assertIn(
+                'io_capability_reason="no Btrfs backing block devices discovered"',
+                script,
+            )
+            self.assertIn('if [ "$mode" != "enforce" ]; then', script)
+            self.assertNotIn('if [ "$mode" = "observe" ]; then', script)
             self.assertIn('"policy_profile": policy_profile', script)
             self.assertIn('"capacity_source": capacity_source', script)
             self.assertIn('"pool_io_weight": io_weight.strip()', script)
