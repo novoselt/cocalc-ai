@@ -215,7 +215,7 @@ function register(
       }
 
       if (actions != null) {
-        actions.close();
+        actions.close?.();
         redux.removeActions(name);
         // Remove TimeTravel actions for this path, which would have been
         // created if we opened a TimeTravel frame.  However, we *don't* do this
@@ -229,7 +229,7 @@ function register(
               .getProjectStore(project_id)
               ?.getIn(["open_files", actions.timeTravelActions.path])
           ) {
-            actions.timeTravelActions.close();
+            actions.timeTravelActions.close?.();
             redux.removeActions(actions.timeTravelActions.name);
             redux.removeStore(actions.timeTravelActions.name);
           }
