@@ -45,6 +45,8 @@ import { startHostAvailabilityMaintenance } from "@cocalc/server/hosts/availabil
 import { startGlobalConfigMirrorRepairMaintenance } from "@cocalc/server/global-config-mirror-maintenance";
 import { startAiSessionReconciliationMaintenance } from "@cocalc/server/ai/acp-sessions";
 import startPurchasesMaintenanceLoop from "@cocalc/server/purchases/maintenance";
+import { startLroExpirationMaintenance } from "@cocalc/server/lro/expiration-maintenance";
+import { startUsageRetentionMaintenance } from "@cocalc/server/membership/usage-retention-maintenance";
 
 export { loadConatConfiguration };
 
@@ -123,6 +125,8 @@ export async function initConatApi() {
   }
   startHostLroWorker();
   if (isPrimaryBayWorker()) {
+    startLroExpirationMaintenance();
+    startUsageRetentionMaintenance();
     startHostRuntimeFleetRolloutWorker();
   }
   startAccountProjectIndexProjectionMaintenance();

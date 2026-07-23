@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import getPool from "@cocalc/database/pool";
+import getPool, { type PoolClient } from "@cocalc/database/pool";
 import getLogger from "@cocalc/backend/logger";
 import LRU from "lru-cache";
 import type {
@@ -24,7 +24,14 @@ import { getAdminAccountMembershipStatusMap } from "./admin-account-status";
 import {
   ensureAccountUsageWindowsForEvent,
   getActiveAccountUsageWindows,
+  type AccountUsageWindow,
 } from "./usage-windows";
+import {
+  ensureAccountUsageCountersInitialized,
+  getAccountUsageCounterValues,
+  recordAccountUsageCounterDelta,
+  type AccountUsageWindows,
+} from "./usage-counters";
 
 export {
   getProjectOwnerAccountId,
@@ -36,6 +43,7 @@ const ROLLUP_TABLE = "account_managed_egress_rollups";
 const NO_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
 const ROLLUP_FLUSH_INTERVAL_MS = 60_000;
 const ROLLUP_FLUSH_MAX_PENDING = 1000;
+const USAGE_COUNTER_METRIC = "managed-egress-bytes";
 const QUOTA_EXCLUDED_CATEGORIES = new Set<ManagedProjectEgressCategory>([
   "interactive-conat",
   "control-plane-conat",
@@ -82,6 +90,7 @@ const logger = getLogger("server:membership:managed-egress");
 
 let ensuredSchema: Promise<void> | undefined;
 let adminTimeIndexReady: Promise<void> | undefined;
+let policyIndexReady: Promise<void> | undefined;
 let rollupFlushTimer: ReturnType<typeof setTimeout> | undefined;
 let rollupFlushPromise: Promise<void> | undefined;
 
@@ -164,6 +173,18 @@ function ensureAdminTimeIndexBestEffort(): void {
     `,
   });
   adminTimeIndexReady.catch(() => undefined);
+}
+
+function ensurePolicyIndexBestEffort(): void {
+  policyIndexReady ??= createIndexConcurrentlyBestEffort({
+    name: `${ROLLUP_TABLE}_account_category_time_cover_idx`,
+    sql: `
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS ${ROLLUP_TABLE}_account_category_time_cover_idx
+      ON ${ROLLUP_TABLE}(account_id, category, bucket_start DESC)
+      INCLUDE (bytes)
+    `,
+  });
+  policyIndexReady.catch(() => undefined);
 }
 
 function rollupProjectIdSql(alias = "events"): string {
@@ -310,6 +331,7 @@ async function ensureSchema(): Promise<void> {
         `CREATE INDEX IF NOT EXISTS ${ROLLUP_TABLE}_time_idx ON ${ROLLUP_TABLE}(bucket_start DESC)`,
       );
       ensureAdminTimeIndexBestEffort();
+      ensurePolicyIndexBestEffort();
     })();
   }
   await ensuredSchema;
@@ -348,6 +370,84 @@ async function recordManagedProjectEgressRollup({
   } else {
     scheduleManagedEgressRollupFlush();
   }
+}
+
+async function loadManagedEgressCounterBaseline({
+  client,
+  windows,
+  cutoff,
+  account_id,
+}: {
+  client: PoolClient;
+  windows: AccountUsageWindow[];
+  cutoff: Date;
+  account_id: string;
+}) {
+  const { rows } = await client.query<{
+    usage_window_id: string;
+    category: string;
+    amount: string | number;
+  }>(
+    `
+      WITH windows AS (
+        SELECT *
+        FROM jsonb_to_recordset($1::jsonb) AS entry(
+          usage_window_id uuid,
+          starts_at timestamptz,
+          resets_at timestamptz
+        )
+      )
+      SELECT
+        windows.usage_window_id,
+        events.category,
+        COALESCE(SUM(events.bytes), 0) AS amount
+      FROM windows
+      JOIN ${ROLLUP_TABLE} AS events
+        ON events.account_id = $2
+       AND events.bucket_start >= windows.starts_at
+       AND events.bucket_start < LEAST(windows.resets_at, $3::timestamptz)
+      WHERE events.category <> ALL($4::text[])
+      GROUP BY windows.usage_window_id, events.category
+    `,
+    [
+      JSON.stringify(
+        windows.map(({ id, starts_at, resets_at }) => ({
+          usage_window_id: id,
+          starts_at: starts_at.toISOString(),
+          resets_at: resets_at.toISOString(),
+        })),
+      ),
+      account_id,
+      cutoff,
+      [...QUOTA_EXCLUDED_CATEGORIES],
+    ],
+  );
+  return rows.map(({ usage_window_id, category, amount }) => ({
+    usage_window_id,
+    category,
+    amount: Math.max(0, Number(amount) || 0),
+  }));
+}
+
+async function initializeManagedEgressCounters({
+  account_id,
+  windows,
+}: {
+  account_id: string;
+  windows: AccountUsageWindows;
+}): Promise<void> {
+  await ensureAccountUsageCountersInitialized({
+    account_id,
+    metric: USAGE_COUNTER_METRIC,
+    windows,
+    loadBaseline: async ({ client, windows: missing, cutoff }) =>
+      await loadManagedEgressCounterBaseline({
+        client,
+        windows: missing,
+        cutoff,
+        account_id,
+      }),
+  });
 }
 
 async function flushManagedEgressRollupBatch(
@@ -440,9 +540,16 @@ export async function recordManagedProjectEgress(opts: {
     return { recorded: false };
   }
   if (!QUOTA_EXCLUDED_CATEGORIES.has(opts.category)) {
-    await ensureAccountUsageWindowsForEvent({
+    const windows = await ensureAccountUsageWindowsForEvent({
       account_id,
       occurred_at: opts.occurred_at,
+    });
+    await initializeManagedEgressCounters({ account_id, windows });
+    recordAccountUsageCounterDelta({
+      metric: USAGE_COUNTER_METRIC,
+      windows,
+      category: opts.category,
+      amount: bytes,
     });
   }
   await recordManagedProjectEgressRollup({
@@ -467,68 +574,28 @@ export async function getManagedEgressUsageForAccount(opts: {
   });
   const window5h = windows["5h"];
   const window7d = windows["7d"];
-  const { rows } = await getPool("medium").query<{
-    category: string;
-    bytes_5h: string | number;
-    bytes_7d: string | number;
-  }>(
-    `
-      SELECT
-        category,
-        COALESCE(
-          SUM(
-            CASE
-              WHEN $2::timestamptz IS NOT NULL
-               AND bucket_start >= $2::timestamptz
-               AND bucket_start < $3::timestamptz THEN bytes
-              ELSE 0
-            END
-          ),
-          0
-        ) AS bytes_5h,
-        COALESCE(
-          SUM(
-            CASE
-              WHEN $4::timestamptz IS NOT NULL
-               AND bucket_start >= $4::timestamptz
-               AND bucket_start < $5::timestamptz THEN bytes
-              ELSE 0
-            END
-          ),
-          0
-        ) AS bytes_7d
-      FROM ${ROLLUP_TABLE}
-      WHERE account_id = $1
-        AND category <> ALL($6::text[])
-        AND (
-          ($2::timestamptz IS NOT NULL AND bucket_start >= $2::timestamptz AND bucket_start < $3::timestamptz)
-          OR ($4::timestamptz IS NOT NULL AND bucket_start >= $4::timestamptz AND bucket_start < $5::timestamptz)
-        )
-      GROUP BY category
-      ORDER BY category
-    `,
-    [
-      opts.account_id,
-      window5h?.starts_at ?? null,
-      window5h?.resets_at ?? null,
-      window7d?.starts_at ?? null,
-      window7d?.resets_at ?? null,
-      [...QUOTA_EXCLUDED_CATEGORIES],
-    ],
-  );
+  const values =
+    Object.keys(windows).length > 0
+      ? await (async () => {
+          await initializeManagedEgressCounters({
+            account_id: opts.account_id,
+            windows,
+          });
+          return await getAccountUsageCounterValues({
+            metric: USAGE_COUNTER_METRIC,
+            windows,
+          });
+        })()
+      : { "5h": {}, "7d": {} };
 
-  const managed_egress_categories_5h_bytes: Record<string, number> = {};
-  const managed_egress_categories_7d_bytes: Record<string, number> = {};
-  let managed_egress_5h_bytes = 0;
-  let managed_egress_7d_bytes = 0;
-  for (const row of rows) {
-    const bytes5h = Math.max(0, Number(row.bytes_5h) || 0);
-    const bytes7d = Math.max(0, Number(row.bytes_7d) || 0);
-    managed_egress_categories_5h_bytes[row.category] = bytes5h;
-    managed_egress_categories_7d_bytes[row.category] = bytes7d;
-    managed_egress_5h_bytes += bytes5h;
-    managed_egress_7d_bytes += bytes7d;
-  }
+  const managed_egress_categories_5h_bytes = values["5h"];
+  const managed_egress_categories_7d_bytes = values["7d"];
+  const managed_egress_5h_bytes = Object.values(
+    managed_egress_categories_5h_bytes,
+  ).reduce((sum, bytes) => sum + bytes, 0);
+  const managed_egress_7d_bytes = Object.values(
+    managed_egress_categories_7d_bytes,
+  ).reduce((sum, bytes) => sum + bytes, 0);
 
   const managed_egress_5h_reset_at = window5h?.resets_at;
   const managed_egress_7d_reset_at = window7d?.resets_at;

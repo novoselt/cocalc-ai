@@ -9,7 +9,6 @@ import { getParallelOpsWorkerRegistration } from "@cocalc/server/lro/worker-regi
 import { getProjectHostDefaultParallelLimits } from "@cocalc/server/lro/project-host-defaults";
 import {
   ensureLroSchema,
-  expireDueLros,
   getLro,
   touchLro,
   updateLro,
@@ -474,13 +473,6 @@ async function claimBackupLroOps({
     }
     claimLockHeld = true;
 
-    const expired = await expireDueLros({ kind: BACKUP_LRO_KIND });
-    if (expired.length > 0) {
-      logger.info("expired stale backup LROs before claim", {
-        count: expired.length,
-        op_ids: expired.map(({ op_id }) => op_id),
-      });
-    }
     const hostStatuses = await listHostLocalBackupStatuses();
     const freshRunningCounts = await listFreshRunningBackupCountsByHost({
       lease_ms,
