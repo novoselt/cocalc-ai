@@ -183,6 +183,9 @@ function useSideChatActions(
 ): { chatActions: ChatActions | undefined; chatVersion: number } {
   const [chatActions, setChatActions] = useState<ChatActions | undefined>();
   const [chatVersion, setChatVersion] = useState(0);
+  // Bumped when the chat syncdb closes; re-runs the acquisition effect
+  // below, which owns the retry logic.
+  const [acquireToken, setAcquireToken] = useState(0);
 
   useEffect(() => {
     if (!project_id || !path || isChatPath(path)) {
@@ -212,10 +215,11 @@ function useSideChatActions(
         clearTimeout(retryTimer);
       }
     };
-  }, [project_id, path]);
+  }, [project_id, path, acquireToken]);
 
   // If the chat syncdb closes (e.g. the file is closed then reopened),
-  // re-acquire fresh actions rather than staying bound to a dead one.
+  // re-run the acquisition effect (which retries on failure) rather
+  // than staying bound to a dead actions object.
   useEffect(() => {
     if (!chatActions || !project_id || !path || isChatPath(path)) {
       return;
@@ -224,11 +228,7 @@ function useSideChatActions(
     let cancelled = false;
     const reconnect = () => {
       if (cancelled) return;
-      try {
-        setChatActions(ensureSideChatActions(project_id, path));
-      } catch {
-        setChatActions(undefined);
-      }
+      setAcquireToken((token) => token + 1);
     };
     if (syncdb?.get_state?.() === "closed") {
       reconnect();

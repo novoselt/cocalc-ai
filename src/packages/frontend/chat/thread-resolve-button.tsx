@@ -82,8 +82,8 @@ export function ResolvedThreadNotice({
     <div
       style={{
         padding: "8px 12px",
-        borderTop: "1px solid #e5e5e5",
-        background: "#f7fff2",
+        borderTop: `1px solid ${COLORS.GRAY_LL}`,
+        background: COLORS.BS_GREEN_LL,
         color: COLORS.GRAY_D,
         fontSize: "12.5px",
         display: "flex",

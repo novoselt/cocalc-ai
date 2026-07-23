@@ -1790,14 +1790,18 @@ export class ChatActions extends Actions<ChatState> {
     }
     const pick = (candidates: { key: string; time: number }[]) =>
       candidates.sort((a, b) => b.time - a.time)[0].key;
-    if (live.length > 0) {
-      const unarchived = live.filter((t) => !t.archived);
-      const newest = pick(unarchived.length > 0 ? unarchived : live);
+    // Manually archived threads are hidden from badges/menus, so the
+    // button must not silently reopen them: when every live match is
+    // archived, fall through and create a fresh thread instead (the
+    // archived ones stay reachable via the sidebar's archive list).
+    const unarchived = live.filter((t) => !t.archived);
+    if (unarchived.length > 0) {
+      const newest = pick(unarchived);
       this.clearAllFilters();
       this.setSelectedThread(newest);
       return newest;
     }
-    if (resolved.length > 0) {
+    if (live.length === 0 && resolved.length > 0) {
       const newest = pick(resolved);
       this.clearAllFilters();
       this.setSelectedThread(newest);

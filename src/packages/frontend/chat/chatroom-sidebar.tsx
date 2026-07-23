@@ -11,6 +11,7 @@ import {
   Menu,
   Popconfirm,
   Space,
+  Tag,
   message as antdMessage,
 } from "antd";
 import { React } from "@cocalc/frontend/app-framework";
@@ -609,22 +610,32 @@ export function ChatRoomSidebarContent({
                     {label}
                   </div>
                   <Space size={6}>
-                    <Button
-                      size="small"
-                      onClick={() => {
-                        const ok = actions.setThreadArchived?.(
-                          thread.key,
-                          false,
-                        );
-                        if (ok) {
-                          antdMessage.success("Chat unarchived.");
-                        } else {
-                          antdMessage.error("Unable to unarchive chat.");
-                        }
-                      }}
-                    >
-                      Unarchive
-                    </Button>
+                    {actions.getThreadMetadata?.(thread.key, {
+                      threadId: thread.key,
+                    })?.resolved != null ? (
+                      // Resolved threads are permanent archival records:
+                      // no unarchive back into the normal sections.
+                      <Tag color="green" style={{ marginRight: 0 }}>
+                        resolved
+                      </Tag>
+                    ) : (
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          const ok = actions.setThreadArchived?.(
+                            thread.key,
+                            false,
+                          );
+                          if (ok) {
+                            antdMessage.success("Chat unarchived.");
+                          } else {
+                            antdMessage.error("Unable to unarchive chat.");
+                          }
+                        }}
+                      >
+                        Unarchive
+                      </Button>
+                    )}
                     <Button
                       size="small"
                       danger
