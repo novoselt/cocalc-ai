@@ -113,6 +113,27 @@ test("createHubApiForContext exposes the adminSupport hub group", async () => {
   ]);
 });
 
+test("createHubApiForContext exposes the adminCrashes hub group", async () => {
+  const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
+  const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
+    calls.push({ name, args, timeout });
+    return { audit_id: "audit-crash-1", groups: [] } as T;
+  });
+
+  await hub.adminCrashes.triage({
+    since_minutes: 60,
+    reason: "investigate browser crashes",
+  });
+
+  assert.deepEqual(calls, [
+    {
+      name: "adminCrashes.triage",
+      args: [{ since_minutes: 60, reason: "investigate browser crashes" }],
+      timeout: undefined,
+    },
+  ]);
+});
+
 test("createHubApiForContext forwards explicit per-call timeout", async () => {
   const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
   const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {

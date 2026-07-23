@@ -5186,7 +5186,7 @@ describe("hosts.rollbackProjectHostOverSshInternal", () => {
                 },
                 bootstrap_lifecycle: {
                   summary_status: "in_sync",
-                  current_operation: "reconcile",
+                  current_operation: "idle",
                   last_reconcile_started_at: "2026-04-15T00:00:30.000Z",
                   last_reconcile_finished_at: "2026-04-15T00:01:00.000Z",
                 },

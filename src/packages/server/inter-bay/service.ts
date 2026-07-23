@@ -148,6 +148,10 @@ import {
   getMembershipAnalyticsOverviewLocal,
 } from "@cocalc/server/membership/analytics";
 import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
+import {
+  readWebappCrashesLocal,
+  setWebappCrashResolutionLocal,
+} from "@cocalc/server/webapp-crashes";
 import { createImpersonationGrantLocal } from "@cocalc/server/auth/impersonation";
 import { getAccountIdFromRememberMe as getLocalAccountIdFromRememberMe } from "@cocalc/server/auth/get-account";
 import { verifyFreshAuthCredentials } from "@cocalc/server/auth/two-factor";
@@ -602,6 +606,9 @@ async function startBayOpsService(): Promise<void> {
       await backfillMembershipAnalyticsPurchaseEvents({
         limit: opts.limit,
       }),
+    getWebappCrashes: async (opts) => await readWebappCrashesLocal(opts),
+    setWebappCrashResolution: async (opts) =>
+      await setWebappCrashResolutionLocal(opts),
     setServerSetting: async (opts) => {
       await callback2(db().set_server_setting, opts);
     },
