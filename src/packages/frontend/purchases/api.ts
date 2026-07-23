@@ -43,6 +43,7 @@ import type {
 } from "@cocalc/util/stripe/types";
 import throttle from "@cocalc/util/api/throttle";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
+import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
 
 async function api(endpoint: string, args?: object, noThrottle?: boolean) {
   if (!noThrottle) {
@@ -374,6 +375,18 @@ export async function getMembershipPackageQuote(opts: {
   metadata?: Record<string, unknown> | null;
 }): Promise<MembershipPackageQuote> {
   return await (await getPurchasesHubRpc()).getMembershipPackageQuote(opts);
+}
+
+export async function setAutoBalance(
+  auto_balance: AutoBalanceConfig,
+): Promise<AutoBalanceConfig> {
+  const { webapp_client } = await import("@cocalc/frontend/webapp-client");
+  return await (
+    await getPurchasesHubRpc()
+  ).setAutoBalance({
+    auto_balance,
+    browser_id: webapp_client.browser_id,
+  });
 }
 
 export async function purchaseMembershipPackage(opts: {

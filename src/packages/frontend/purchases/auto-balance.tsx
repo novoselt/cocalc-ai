@@ -16,15 +16,20 @@ import { useEffect, useState } from "react";
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
 import { Tooltip } from "@cocalc/frontend/components";
 import { currency } from "@cocalc/util/misc";
-import { webapp_client } from "@cocalc/frontend/webapp-client";
 import ShowError from "@cocalc/frontend/components/error";
 import { Icon } from "@cocalc/frontend/components/icon";
 import { TimeAgo } from "@cocalc/frontend/components/time-ago";
 import {
+  FreshAuthModal,
+  useFreshAuthAction,
+} from "@cocalc/frontend/auth/fresh-auth";
+import {
   AUTOBALANCE_RANGES,
   AUTOBALANCE_DEFAULTS,
   ensureAutoBalanceValid,
+  type AutoBalanceConfig,
 } from "@cocalc/util/db-schema/accounts";
+import { setAutoBalance } from "@cocalc/frontend/purchases/api";
 
 interface Props {
   style?;
@@ -71,16 +76,9 @@ export function AutoBalanceModal({ onClose }) {
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
   const autoBalance = useTypedRedux("account", "auto_balance")?.toJS();
-  const [value, setValue] = useState<{
-    trigger: number;
-    amount: number;
-    max_day: number;
-    max_week: number;
-    max_month: number;
-    period: "day" | "week" | "month";
-    enabled: boolean;
-  } | null>(null);
+  const [value, setValue] = useState<AutoBalanceConfig | null>(null);
   const [form] = Form.useForm();
+  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   useEffect(() => {
     setValue({
@@ -111,18 +109,23 @@ export function AutoBalanceModal({ onClose }) {
     autoBalance?.period != value?.period ||
     !!autoBalance?.enabled != value?.enabled;
 
-  const save = async () => {
+  const save = async (): Promise<boolean> => {
     if (!changed) {
-      return;
+      return true;
+    }
+    if (value == null) {
+      return false;
     }
     try {
       ensureAutoBalanceValid(value);
       setSaving(true);
-      await webapp_client.async_query({
-        query: { accounts: { auto_balance: value } },
+      setError("");
+      return await runFreshAuthAction(async () => {
+        await setAutoBalance(value);
       });
     } catch (err) {
       setError(`${err}`);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -144,11 +147,13 @@ export function AutoBalanceModal({ onClose }) {
           ) : undefined}
         </>
       }
-      onOk={() => {
-        save();
-        onClose();
+      onOk={async () => {
+        if (await save()) {
+          onClose();
+        }
       }}
       onCancel={onClose}
+      confirmLoading={saving}
     >
       If you are using pay as you go features of CoCalc, you should configure
       your account so that money is deposited when your balance goes below a
@@ -311,6 +316,7 @@ export function AutoBalanceModal({ onClose }) {
       </div>
       <ShowError error={error} setError={setError} />
       <Status autoBalance={autoBalance} style={{ marginTop: "15px" }} />
+      <FreshAuthModal {...freshAuthModalProps} />
     </Modal>
   );
 }

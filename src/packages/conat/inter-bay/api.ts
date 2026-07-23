@@ -61,6 +61,7 @@ import type {
   TeamLicenseOverview,
   TeamLicenseQuote,
 } from "@cocalc/conat/hub/api/purchases";
+import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
 import type {
   AuthorizePublicDirectoryShareReadOptions,
   AuthorizePublicDirectoryShareReadResponse,
@@ -1180,6 +1181,11 @@ export interface AccountLocalQuarantineBillingResourcesResult {
   errors: string[];
 }
 
+export interface AccountLocalSetAutoBalanceRequest {
+  account_id: string;
+  auto_balance: AutoBalanceConfig;
+}
+
 export interface AccountLocalRecentPasswordResetAttemptsRequest {
   email_address: string;
   ip_address: string;
@@ -2199,6 +2205,7 @@ export type AccountLocalMethod =
   | "admin-revoke-admin-role"
   | "set-ban"
   | "quarantine-billing-resources"
+  | "set-auto-balance"
   | "set-password-from-reset"
   | "assert-product-access-trust"
   | "reconcile-dedicated-host-purchase-session"
@@ -3471,6 +3478,9 @@ export interface InterBayAccountLocalApi {
   quarantineBillingResources: (
     opts: AccountLocalQuarantineBillingResourcesRequest,
   ) => Promise<AccountLocalQuarantineBillingResourcesResult>;
+  setAutoBalance: (
+    opts: AccountLocalSetAutoBalanceRequest,
+  ) => Promise<AutoBalanceConfig>;
   setPasswordFromReset: (
     opts: AccountLocalSetPasswordFromResetRequest,
   ) => Promise<void>;
@@ -5688,6 +5698,15 @@ export function createInterBayAccountLocalClient({
       method: "quarantine-billing-resources",
     }),
   });
+  const setAutoBalanceClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "setAutoBalance">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "set-auto-balance",
+    }),
+  });
   const setPasswordFromResetClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "setPasswordFromReset">
   >({
@@ -6632,6 +6651,8 @@ export function createInterBayAccountLocalClient({
     setBan: async (opts) => await setBanClient.setBan(opts),
     quarantineBillingResources: async (opts) =>
       await quarantineBillingResourcesClient.quarantineBillingResources(opts),
+    setAutoBalance: async (opts) =>
+      await setAutoBalanceClient.setAutoBalance(opts),
     setPasswordFromReset: async (opts) =>
       await setPasswordFromResetClient.setPasswordFromReset(opts),
     assertProductAccessTrust: async (opts) =>
@@ -7206,6 +7227,17 @@ export function createInterBayAccountLocalHandler({
       impl: {
         quarantineBillingResources: async (opts) =>
           await impl.quarantineBillingResources(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayAccountLocalApi, "setAutoBalance">>({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "set-auto-balance",
+      }),
+      impl: {
+        setAutoBalance: async (opts) => await impl.setAutoBalance(opts),
       },
     }),
     createServiceHandler<Pick<InterBayAccountLocalApi, "setPasswordFromReset">>(
