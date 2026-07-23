@@ -168,8 +168,8 @@ export async function createFile({
           await import("@cocalc/frontend/jupyter/new-notebook")
         ).createInitialIpynbContent(projectId, await getPreferredKernel())
       : getFileTemplate(ext);
-  await ensureContainingDirectoryExists(path);
   try {
+    await ensureContainingDirectoryExists(path);
     await fs().writeFile(path, content);
   } catch (err) {
     setFileCreationError(`${err}`);

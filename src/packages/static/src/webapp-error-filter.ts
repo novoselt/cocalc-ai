@@ -10,6 +10,40 @@ export function isIgnorableBrowserError(message: unknown): boolean {
   );
 }
 
+function rejectionMessage(reason: unknown): string {
+  if (typeof reason === "string") {
+    return reason.trim().toLowerCase();
+  }
+  if (reason != null && typeof reason === "object") {
+    const message = (reason as { message?: unknown }).message;
+    if (typeof message === "string") {
+      return message.trim().toLowerCase();
+    }
+  }
+  return "";
+}
+
+export function isIgnorableUnhandledRejection(reason: unknown): boolean {
+  const message = rejectionMessage(reason);
+  if (!message) {
+    return false;
+  }
+  const rootfsUnavailable =
+    message.includes("rootfs is not mounted") &&
+    message.includes("start the project and try again");
+  const routingUnavailable =
+    message.includes("unable to route") &&
+    message.includes("'projectactions.fs'") &&
+    message.includes("project-host") &&
+    message.includes("host routing info unavailable");
+  const conatInfoBootstrapTimeout =
+    message.includes("once: timeout") &&
+    (message.includes('waiting for "info"') ||
+      message.includes("waiting for 'info'") ||
+      message.includes("waiting for info"));
+  return rootfsUnavailable || routingUnavailable || conatInfoBootstrapTimeout;
+}
+
 export function isOpaqueCrossOriginScriptError({
   message,
   error,

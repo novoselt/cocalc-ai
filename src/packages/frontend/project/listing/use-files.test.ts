@@ -28,6 +28,13 @@ describe("isRetryableListingError", () => {
         new Error('once: timeout of 4000ms waiting for "info"'),
       ),
     ).toBe(true);
+    expect(
+      isRetryableListingError(
+        new Error(
+          "rootfs is not mounted; cannot access absolute path '/home'. Start the project and try again.",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("does not retry ordinary listing failures", () => {
