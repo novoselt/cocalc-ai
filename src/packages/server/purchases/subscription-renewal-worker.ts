@@ -24,6 +24,8 @@ const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 20;
 const MAX_ATTEMPTS_PER_RUN = 1000;
 
+export type SubscriptionRenewalMode = "disabled" | "schedule-only" | "active";
+
 function positiveInteger(value: unknown): number | undefined {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -32,12 +34,25 @@ function positiveInteger(value: unknown): number | undefined {
   return parsed;
 }
 
-async function renewalConcurrency(): Promise<number> {
+function parseRenewalMode(value: unknown): SubscriptionRenewalMode {
+  if (value === "schedule-only" || value === "active") {
+    return value;
+  }
+  return "disabled";
+}
+
+async function renewalConfiguration(): Promise<{
+  mode: SubscriptionRenewalMode;
+  concurrency: number;
+}> {
   const { subscription_maintenance: maintenance } = await getServerSettings();
-  return Math.min(
-    MAX_CONCURRENCY,
-    positiveInteger(maintenance?.renewal_concurrency) ?? DEFAULT_CONCURRENCY,
-  );
+  return {
+    mode: parseRenewalMode(maintenance?.renewal_mode),
+    concurrency: Math.min(
+      MAX_CONCURRENCY,
+      positiveInteger(maintenance?.renewal_concurrency) ?? DEFAULT_CONCURRENCY,
+    ),
+  };
 }
 
 function isTerminalAutomaticFailure(status: string): boolean {
@@ -125,8 +140,19 @@ async function processClaimedRenewalAttempt(
 }
 
 export default async function maintainSubscriptionRenewals(): Promise<void> {
+  const { mode, concurrency } = await renewalConfiguration();
+  if (mode === "disabled") {
+    logger.debug("subscription renewal maintenance is disabled");
+    return;
+  }
   const scheduled = await scheduleMissingSubscriptionRenewalAttempts();
-  const concurrency = await renewalConcurrency();
+  if (mode === "schedule-only") {
+    logger.debug("subscription renewal maintenance scheduled attempts", {
+      mode,
+      scheduled,
+    });
+    return;
+  }
   let processed = 0;
   while (processed < MAX_ATTEMPTS_PER_RUN) {
     const attempts = await claimDueSubscriptionRenewalAttempts({
@@ -145,3 +171,7 @@ export default async function maintainSubscriptionRenewals(): Promise<void> {
     capped: processed >= MAX_ATTEMPTS_PER_RUN,
   });
 }
+
+export const __test__ = {
+  parseRenewalMode,
+};

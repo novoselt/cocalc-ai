@@ -60,6 +60,7 @@ describe("test maintainSubscriptions", () => {
     mockGetServerSettings.mockReset().mockResolvedValue({
       site_name: "CoCalc",
       support_account_id: uuid(),
+      subscription_maintenance: { renewal_mode: "active" },
     });
     mockGetTotalBalance.mockReset().mockResolvedValue(0);
     mockSend.mockReset().mockResolvedValue(undefined);
@@ -78,6 +79,15 @@ describe("test maintainSubscriptions", () => {
     }
   });
 
+  it("fails closed for missing or invalid renewal modes", async () => {
+    const { __test__ } = await import("./subscription-renewal-worker");
+
+    expect(__test__.parseRenewalMode(undefined)).toBe("disabled");
+    expect(__test__.parseRenewalMode("unexpected")).toBe("disabled");
+    expect(__test__.parseRenewalMode("schedule-only")).toBe("schedule-only");
+    expect(__test__.parseRenewalMode("active")).toBe("active");
+  });
+
   it("does not create renewal payments before the subscription period ends", async () => {
     const account_id = uuid();
     await createTestAccount(account_id);
@@ -89,6 +99,64 @@ describe("test maintainSubscriptions", () => {
     await createPayments();
 
     expect(mockCreateSubscriptionPayment).not.toHaveBeenCalled();
+  });
+
+  it("does not schedule or process renewals while disabled", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        start: dayjs().subtract(1, "month").toDate(),
+        end: dayjs().subtract(1, "minute").toDate(),
+      },
+    );
+    await getPool().query(
+      "DELETE FROM subscription_renewal_attempts WHERE subscription_id=$1",
+      [subscription_id],
+    );
+    mockGetServerSettings.mockResolvedValue({ subscription_maintenance: {} });
+
+    const { createPayments } = await import("./maintain-subscriptions");
+    await createPayments();
+
+    expect(mockCreateSubscriptionPayment).not.toHaveBeenCalled();
+    const { rows } = await getPool().query(
+      "SELECT id FROM subscription_renewal_attempts WHERE subscription_id=$1",
+      [subscription_id],
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("schedules but does not process renewals in schedule-only mode", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        start: dayjs().subtract(1, "month").toDate(),
+        end: dayjs().subtract(1, "minute").toDate(),
+      },
+    );
+    await getPool().query(
+      "DELETE FROM subscription_renewal_attempts WHERE subscription_id=$1",
+      [subscription_id],
+    );
+    mockGetServerSettings.mockResolvedValue({
+      subscription_maintenance: { renewal_mode: "schedule-only" },
+    });
+
+    const { createPayments } = await import("./maintain-subscriptions");
+    await createPayments();
+
+    expect(mockCreateSubscriptionPayment).not.toHaveBeenCalled();
+    const { rows } = await getPool().query(
+      `SELECT state
+         FROM subscription_renewal_attempts
+        WHERE subscription_id=$1`,
+      [subscription_id],
+    );
+    expect(rows).toEqual([{ state: "scheduled" }]);
   });
 
   it("creates renewal payments when the subscription period has ended", async () => {
