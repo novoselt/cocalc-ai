@@ -125,6 +125,58 @@ describe("durable subscription renewal attempts", () => {
     ]);
   });
 
+  it("reschedules a canceled same-period attempt with current terms", async () => {
+    const account_id = uuid();
+    const end = dayjs().add(20, "minute").toDate();
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      { cost: 10, end, interval: "month" },
+    );
+    const { rows: original } = await getPool().query(
+      `SELECT id
+         FROM subscription_renewal_attempts
+        WHERE subscription_id=$1`,
+      [subscription_id],
+    );
+
+    await cancelOpenSubscriptionRenewalAttempts({
+      account_id,
+      subscription_id,
+      reason: "membership changed",
+    });
+    await getPool().query(
+      `UPDATE subscriptions
+          SET cost=120,
+              interval='year',
+              metadata=jsonb_set(metadata, '{renewal_interval}', '"year"')
+        WHERE id=$1`,
+      [subscription_id],
+    );
+    const rescheduled = await scheduleSubscriptionRenewalAttempt({
+      account_id,
+      subscription_id,
+    });
+
+    const { rows } = await getPool().query(
+      `SELECT id, state, amount, attempt_count, last_error,
+              target_period_end
+         FROM subscription_renewal_attempts
+        WHERE subscription_id=$1`,
+      [subscription_id],
+    );
+    expect(rescheduled).toBe(original[0].id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: original[0].id,
+      state: "scheduled",
+      amount: "120.0000000000",
+      attempt_count: 0,
+      last_error: null,
+    });
+    expect(dayjs(rows[0].target_period_end).diff(dayjs(end), "month")).toBe(12);
+  });
+
   it("cancels an attempt whose subscription period changed concurrently", async () => {
     const account_id = uuid();
     await createTestAccount(account_id);

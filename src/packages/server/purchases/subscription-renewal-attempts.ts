@@ -43,11 +43,26 @@ export async function scheduleSubscriptionRenewalAttempt({
             s.cost, 'scheduled', s.current_period_end,
             s.current_period_end, 0, NOW(), NOW()
        FROM subscriptions s
-      WHERE s.id=$1
+     WHERE s.id=$1
         AND s.account_id=$2
         AND s.metadata->>'type'='membership'
         AND s.status='active'
-     ON CONFLICT DO NOTHING
+     ON CONFLICT (subscription_id, period_end)
+     DO UPDATE SET
+       target_period_end=EXCLUDED.target_period_end,
+       amount=EXCLUDED.amount,
+       state='scheduled',
+       not_before=EXCLUDED.not_before,
+       next_attempt_at=EXCLUDED.next_attempt_at,
+       lease_expires_at=NULL,
+       last_attempt_at=NULL,
+       attempt_count=0,
+       last_error=NULL,
+       completed_at=NULL,
+       updated_at=NOW()
+     WHERE subscription_renewal_attempts.state='canceled'
+       AND subscription_renewal_attempts.stripe_invoice_id IS NULL
+       AND subscription_renewal_attempts.payment_intent_id IS NULL
      RETURNING id`,
     [subscription_id, account_id],
   );
