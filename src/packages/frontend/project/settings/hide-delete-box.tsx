@@ -57,7 +57,9 @@ export function HideDeleteBox(props: Readonly<Props>) {
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   function toggle_hide_project(): void {
-    actions.toggle_hide_project(project_id);
+    void actions.toggle_hide_project(project_id).catch(() => {
+      // The action restores optimistic state and presents the error.
+    });
   }
 
   async function setDeletionProtection(enabled: boolean): Promise<void> {

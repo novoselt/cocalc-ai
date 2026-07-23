@@ -81,6 +81,7 @@ import {
   recordUxLatencyEvent,
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
+import { getLogger } from "@cocalc/frontend/logger";
 
 import type {
   CourseInfo,
@@ -91,6 +92,7 @@ import type {
 export type { Datastore, EnvVars, EnvVarsRecord };
 
 const PROJECTION_ONLY_FIELD = "__projection_only";
+const logger = getLogger("frontend:projects:actions");
 const PROJECTED_PROJECT_BOOTSTRAP_LIMIT = 2000;
 const PROJECT_RESTART_REQUEST_VISIBLE_MS = 8_000;
 type ProjectListWindowDirtyReason =
@@ -111,6 +113,13 @@ function preferredProjectRegionFromCustomize(): R2Region {
 function isProjectionConvergenceError(err: unknown, name: string): boolean {
   const message = err instanceof Error ? err.message : `${err}`;
   return message === `${name} projection did not converge`;
+}
+
+function isProjectAlreadyAssignedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : `${err}`;
+  return message.includes(
+    "project is already assigned to a host; use move instead",
+  );
 }
 
 function dateOrNull(value: unknown): Date | null {
@@ -3645,7 +3654,18 @@ export class ProjectsActions extends Actions<ProjectsState> {
   }
 
   public async project_log(project_id: string, entry): Promise<void> {
-    await this.redux.getProjectActions(project_id).log(entry);
+    try {
+      await this.redux.getProjectActions(project_id)?.log?.(entry);
+    } catch (err) {
+      // Project logs are audit/UX telemetry. A project may disappear while a
+      // foreground lifecycle action is completing, which must not fail the
+      // user action or escape from a fire-and-forget call.
+      logger.debug("unable to record best-effort project log", {
+        project_id,
+        event: entry?.event,
+        error: `${err}`,
+      });
+    }
   }
 
   private classifyProjectStartUxSegment({
@@ -4921,6 +4941,26 @@ export class ProjectsActions extends Actions<ProjectsState> {
         }
         await this.ensure_host_info(dest_host_id, true);
       } catch (err) {
+        if (isProjectAlreadyAssignedError(err)) {
+          await this.repairProjectProjection({
+            kind: "project-ids",
+            project_ids: [project_id],
+            reason: "project-move",
+          });
+          const authoritative_host_id = store.getIn([
+            "project_map",
+            project_id,
+            "host_id",
+          ]);
+          if (typeof authoritative_host_id === "string") {
+            actions?.setState({ control_error: "" });
+            if (authoritative_host_id === dest_host_id) {
+              await this.ensure_host_info(dest_host_id, true);
+              return true;
+            }
+            return await this.move_project_to_host(project_id, dest_host_id);
+          }
+        }
         const error = `Error assign project host -- ${err}`;
         actions?.setState({ control_error: error });
         throw err;

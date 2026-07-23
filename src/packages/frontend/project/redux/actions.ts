@@ -188,6 +188,7 @@ import {
 } from "./file-creation";
 import {
   isVirtualListingPath,
+  resolveRoutePathIsDirectory,
   toAbsoluteCurrentPath,
   toAuxTabPath,
   toUrlPath,
@@ -3345,7 +3346,10 @@ export class ProjectActions extends Actions<ProjectStoreState> {
             change_history: false,
           });
         }
-        const isDir = await this.isDir(route.path);
+        const isDir = await resolveRoutePathIsDirectory({
+          path: route.path,
+          isDir: (path) => this.isDir(path),
+        });
         if (isDir) {
           await this.open_directory(
             route.path,

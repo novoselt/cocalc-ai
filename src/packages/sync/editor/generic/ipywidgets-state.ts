@@ -171,7 +171,9 @@ export class IpywidgetsState extends EventEmitter {
   getSerializedModelState = (
     model_id: string,
   ): SerializedModelState | undefined => {
-    this.assert_state("ready");
+    if (this.state !== "ready") {
+      return undefined;
+    }
     const state = this.get(model_id, "state");
     if (state == null) {
       return undefined;

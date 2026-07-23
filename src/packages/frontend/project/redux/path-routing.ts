@@ -18,6 +18,39 @@ import { normalize } from "@cocalc/frontend/project/utils";
 
 export type AuxTabName = "new" | "search";
 
+export function isMissingProjectPathError(err: unknown): boolean {
+  const code = `${(err as { code?: unknown } | undefined)?.code ?? ""}`
+    .trim()
+    .toUpperCase();
+  if (code === "ENOENT" || code === "404") {
+    return true;
+  }
+  const message =
+    `${(err as { message?: unknown } | undefined)?.message ?? err ?? ""}`
+      .trim()
+      .toLowerCase();
+  return (
+    message.includes("enoent") || message.includes("no such file or directory")
+  );
+}
+
+export async function resolveRoutePathIsDirectory({
+  path,
+  isDir,
+}: {
+  path: string;
+  isDir: (path: string) => Promise<boolean>;
+}): Promise<boolean> {
+  try {
+    return await isDir(path);
+  } catch (err) {
+    if (isMissingProjectPathError(err)) {
+      return false;
+    }
+    throw err;
+  }
+}
+
 export function getSnapshotHomeDirectoryForPaths(
   homeDirectory: string,
 ): string {

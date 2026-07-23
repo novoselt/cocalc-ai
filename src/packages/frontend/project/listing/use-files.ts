@@ -16,6 +16,7 @@ import { dirname, join } from "path";
 import {
   getErrorMessage,
   isConatInfoBootstrapTimeout,
+  isProjectRootfsUnavailable,
 } from "./project-host-errors";
 
 export interface FileData {
@@ -445,7 +446,8 @@ export function isRetryableListingError(err: unknown): boolean {
     message.includes("no subscribers matching") ||
     message.includes("unable to route") ||
     message.includes("unable to connect routed project-host client") ||
-    message.includes("project actions unavailable")
+    message.includes("project actions unavailable") ||
+    isProjectRootfsUnavailable(err)
   );
 }
 

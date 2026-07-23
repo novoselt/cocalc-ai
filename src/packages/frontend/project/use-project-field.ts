@@ -35,6 +35,9 @@ import {
   useRef,
   useState,
 } from "@cocalc/frontend/app-framework";
+import { getLogger } from "@cocalc/frontend/logger";
+
+const logger = getLogger("frontend:project:field");
 
 export interface ProjectFieldState<T> {
   field: string;
@@ -377,12 +380,23 @@ export function useProjectField<T>({
         return;
       }
       const requestId = ++requestSeq.current;
-      await ensureProjectFieldValue({
-        state,
-        project_id,
-        fetch,
-        force: counter !== 0,
-      });
+      try {
+        await ensureProjectFieldValue({
+          state,
+          project_id,
+          fetch,
+          force: counter !== 0,
+        });
+      } catch (err) {
+        // Detail fields are supplemental UI data. Keep the cached/default
+        // value and allow a later invalidation or explicit refresh to retry.
+        logger.debug("unable to fetch project field", {
+          field: state.field,
+          project_id,
+          error: `${err}`,
+        });
+        return;
+      }
       if (!isMounted() || requestId !== requestSeq.current) {
         return;
       }

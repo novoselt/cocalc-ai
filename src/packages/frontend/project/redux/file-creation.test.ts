@@ -99,6 +99,37 @@ describe("project redux file creation", () => {
     });
   });
 
+  it("surfaces parent-directory failures without rejecting the UI callback", async () => {
+    const error = new Error(
+      "rootfs is not mounted; cannot access absolute path '/home'. Start the project and try again.",
+    );
+    const ensureContainingDirectoryExists = jest.fn().mockRejectedValue(error);
+    const writeFile = jest.fn();
+    const setFileCreationError = jest.fn();
+
+    await expect(
+      createFile({
+        name: "notes",
+        ext: "md",
+        currentPath: "/home/user",
+        projectId: "project-id",
+        fs: () => ({ writeFile }) as any,
+        toAbsoluteCurrentPath: (path) => path,
+        setFileCreationError,
+        createFolder: jest.fn(),
+        newFileFromWeb: jest.fn(),
+        ensureContainingDirectoryExists,
+        log: jest.fn(),
+        getPreferredKernel: jest.fn(),
+        addCreatedTag: jest.fn(),
+        openFile: jest.fn(),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(setFileCreationError).toHaveBeenLastCalledWith(`${error}`);
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
   it("awaits the preferred kernel when creating notebooks", async () => {
     const writeFile = jest.fn().mockResolvedValue(undefined);
     const preferredKernel = jest.fn(async () => "sagemath");

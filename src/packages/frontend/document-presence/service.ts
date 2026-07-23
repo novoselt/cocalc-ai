@@ -131,9 +131,7 @@ class ProjectPresenceChannel extends EventEmitter {
       return;
     }
     void this.connect()
-      .then(() => {
-        this.sub?.set(message);
-      })
+      .then(() => this.sub?.set(message))
       .catch((err) => {
         console.warn("WARNING: document presence publish error -- ", err);
       });

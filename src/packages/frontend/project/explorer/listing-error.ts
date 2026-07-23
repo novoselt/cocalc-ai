@@ -6,7 +6,7 @@
 import { parseRetryInAboutSeconds } from "@cocalc/conat/auth/retry-window";
 import {
   getErrorMessage,
-  isConatInfoBootstrapTimeout,
+  isProjectHostTemporarilyUnavailable,
 } from "@cocalc/frontend/project/listing/project-host-errors";
 
 export function shouldShowWrongAccountListingError(error: unknown): boolean {
@@ -37,7 +37,7 @@ function isTransientProjectHostListingError(error: unknown): boolean {
     return false;
   }
   return (
-    isConatInfoBootstrapTimeout(error) ||
+    isProjectHostTemporarilyUnavailable(error) ||
     parseRetryInAboutSeconds(message) != null ||
     message === "closed" ||
     message === "error: closed" ||
