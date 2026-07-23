@@ -130,7 +130,10 @@ describe("createSubscriptionPayment", () => {
     ]);
 
     const paymentIntent = {
-      metadata: { subscription_id: `${subscription_id}` },
+      metadata: {
+        subscription_id: `${subscription_id}`,
+        credit_id: "987",
+      },
     };
     await processSubscriptionRenewal({
       account_id,
@@ -144,7 +147,7 @@ describe("createSubscriptionPayment", () => {
     });
 
     const { rows: purchases } = await getPool().query(
-      `SELECT id
+      `SELECT id, description
          FROM purchases
         WHERE account_id=$1
           AND service='membership'
@@ -153,6 +156,7 @@ describe("createSubscriptionPayment", () => {
       [account_id, subscription_id],
     );
     expect(purchases).toHaveLength(1);
+    expect(purchases[0].description).toMatchObject({ credit_id: 987 });
 
     const { rows: subscriptions } = await getPool().query(
       "SELECT latest_purchase_id, payment FROM subscriptions WHERE id=$1",
