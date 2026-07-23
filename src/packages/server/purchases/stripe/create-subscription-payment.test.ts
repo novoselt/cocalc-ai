@@ -23,6 +23,8 @@ const mockSupport = jest.fn();
 const mockUrl = jest.fn();
 const mockUseBalanceTowardSubscriptions = jest.fn();
 const mockAdminAlert = jest.fn();
+const mockRetrievePaymentIntent = jest.fn();
+const mockUpdatePaymentIntent = jest.fn();
 
 jest.mock("./create-payment-intent", () => ({
   __esModule: true,
@@ -48,6 +50,16 @@ jest.mock("@cocalc/server/messages/send", () => ({
 jest.mock("@cocalc/server/messages/admin-alert", () => ({
   __esModule: true,
   default: (...args: any[]) => mockAdminAlert(...args),
+}));
+
+jest.mock("@cocalc/server/stripe/connection", () => ({
+  __esModule: true,
+  default: jest.fn(async () => ({
+    paymentIntents: {
+      retrieve: (...args: any[]) => mockRetrievePaymentIntent(...args),
+      update: (...args: any[]) => mockUpdatePaymentIntent(...args),
+    },
+  })),
 }));
 
 jest.mock("../subscription-renewal-notice", () => ({
@@ -90,6 +102,8 @@ describe("createSubscriptionPayment", () => {
     mockUrl.mockReset().mockImplementation(async (path) => path);
     mockUseBalanceTowardSubscriptions.mockReset().mockResolvedValue(false);
     mockAdminAlert.mockReset().mockResolvedValue(undefined);
+    mockRetrievePaymentIntent.mockReset();
+    mockUpdatePaymentIntent.mockReset().mockResolvedValue(undefined);
   });
 
   it("does not process immediately before the renewal payment state is recorded", async () => {
@@ -132,6 +146,115 @@ describe("createSubscriptionPayment", () => {
       status: "active",
       subscription_id,
     });
+  });
+
+  it("adopts a matching legacy renewal payment intent", async () => {
+    const account_id = uuid();
+    const end = new Date(Date.now() - 60_000);
+    await createTestAccount(account_id);
+    const { cost, subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end,
+      },
+    );
+    const targetPeriodEnd = dayjs(end).add(1, "month").valueOf();
+    await getPool().query("UPDATE subscriptions SET payment=$2 WHERE id=$1", [
+      subscription_id,
+      {
+        amount: cost,
+        new_expires_ms: targetPeriodEnd,
+        payment_intent_id: "pi_legacy_renewal",
+        status: "active",
+        subscription_id,
+      },
+    ]);
+    mockRetrievePaymentIntent.mockResolvedValue({
+      id: "pi_legacy_renewal",
+      metadata: {
+        account_id,
+        invoice_id: "in_legacy_renewal",
+        purpose: SUBSCRIPTION_RENEWAL,
+        subscription_id: `${subscription_id}`,
+        total_excluding_tax_usd: `${cost}`,
+      },
+      status: "requires_payment_method",
+    });
+
+    await expect(
+      createSubscriptionPayment({ account_id, subscription_id }),
+    ).resolves.toEqual({ payment_intent_id: "pi_legacy_renewal" });
+
+    expect(mockCreatePaymentIntent).not.toHaveBeenCalled();
+    const { rows } = await getPool().query(
+      `SELECT a.id, a.payment_intent_id, a.stripe_invoice_id, s.payment
+         FROM subscription_renewal_attempts a
+         JOIN subscriptions s ON s.id=a.subscription_id
+        WHERE a.subscription_id=$1`,
+      [subscription_id],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      payment_intent_id: "pi_legacy_renewal",
+      stripe_invoice_id: "in_legacy_renewal",
+      payment: {
+        amount: cost,
+        payment_intent_id: "pi_legacy_renewal",
+        renewal_attempt_id: rows[0].id,
+        status: "active",
+        subscription_id,
+      },
+    });
+    expect(mockUpdatePaymentIntent).toHaveBeenCalledWith(
+      "pi_legacy_renewal",
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          renewal_attempt_id: rows[0].id,
+        }),
+      }),
+    );
+  });
+
+  it("does not adopt a legacy renewal intent owned by another account", async () => {
+    const account_id = uuid();
+    const end = new Date(Date.now() - 60_000);
+    await createTestAccount(account_id);
+    const { cost, subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end,
+      },
+    );
+    await getPool().query("UPDATE subscriptions SET payment=$2 WHERE id=$1", [
+      subscription_id,
+      {
+        amount: cost,
+        new_expires_ms: dayjs(end).add(1, "month").valueOf(),
+        payment_intent_id: "pi_wrong_owner",
+        status: "active",
+        subscription_id,
+      },
+    ]);
+    mockRetrievePaymentIntent.mockResolvedValue({
+      id: "pi_wrong_owner",
+      metadata: {
+        account_id: uuid(),
+        purpose: SUBSCRIPTION_RENEWAL,
+        subscription_id: `${subscription_id}`,
+        total_excluding_tax_usd: `${cost}`,
+      },
+      status: "requires_payment_method",
+    });
+
+    await expect(
+      createSubscriptionPayment({ account_id, subscription_id }),
+    ).rejects.toThrow(/does not match the durable renewal attempt/);
+    expect(mockCreatePaymentIntent).not.toHaveBeenCalled();
+    expect(mockUpdatePaymentIntent).not.toHaveBeenCalled();
   });
 
   it("renews entirely from balance without accessing Stripe", async () => {
