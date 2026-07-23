@@ -1,5 +1,6 @@
 import { authFirst } from "./util";
 import type { MoneyValue } from "@cocalc/util/money";
+import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
 export type MembershipClass = string;
 export type MembershipPackageKind = "course" | "team" | "site";
 
@@ -1389,6 +1390,12 @@ export interface AccountUsageOverview {
 export interface Purchases {
   getBalance: (opts?: { account_id?: string }) => Promise<MoneyValue>;
   getMinBalance: (opts?: { account_id?: string }) => Promise<MoneyValue>;
+  setAutoBalance: (opts?: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string | null;
+    auto_balance?: AutoBalanceConfig;
+  }) => Promise<AutoBalanceConfig>;
   getMembership: (opts?: {
     account_id?: string;
   }) => Promise<MembershipResolution>;
@@ -1768,6 +1775,7 @@ export interface Purchases {
 export const purchases = {
   getBalance: authFirst,
   getMinBalance: authFirst,
+  setAutoBalance: authFirst,
   getMembership: authFirst,
   getMembershipDetails: authFirst,
   getMembershipTierAdminOverview: authFirst,
