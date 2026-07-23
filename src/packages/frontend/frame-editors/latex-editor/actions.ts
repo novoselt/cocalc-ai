@@ -2000,11 +2000,13 @@ export class Actions extends BaseActions<LatexEditorState> {
     this.setState({ contents });
   }
 
-  // Append chat markers and bookmarks scanned from *included* files
-  // (the master's are already overlaid by parseTableOfContents).  We
-  // can't interleave across files by line number, so sub-file entries
-  // go at the end, labeled with their file, deduped against the master
-  // (same hash / bookmark text).
+  // Append TOC content from *included* files: their section headings,
+  // chat markers, and bookmarks (the master's are already overlaid by
+  // parseTableOfContents).  We can't interleave across files by line
+  // number, so each open sub-file contributes a group at the end,
+  // introduced by a clickable file entry.  Markers/bookmarks are deduped
+  // against the master (same hash / bookmark text).  Only files the
+  // chat-marker scanner watches (i.e. open sub-files) are included.
   private _appendSubfileTocEntries(entries: TableOfContentsEntry[]): void {
     const chatMarkers = this.store.get("chat_markers");
     const chatBookmarks = this.store.get("chat_bookmarks");
@@ -2028,16 +2030,42 @@ export class Actions extends BaseActions<LatexEditorState> {
     subPaths.delete(this.path);
     for (const path of [...subPaths].sort()) {
       const tail = path_split(path).tail;
+      const group: TableOfContentsEntry[] = [];
+
+      // Section headings from the sub-file's live syncstring.
+      const subActions: any = this.redux.getEditorActions(
+        this.project_id,
+        path,
+      );
+      let subText: string | undefined;
+      try {
+        subText = subActions?._syncstring?.to_str();
+      } catch {
+        // not ready yet; headings will appear on a later rescan
+      }
+      if (subText) {
+        for (const h of parseTableOfContents(subText)) {
+          group.push({
+            id: `sub:${path}:${h.id}-heading`,
+            value: h.value,
+            level: h.level,
+            extra: { kind: "line", path, line: parseInt(h.id) - 1 },
+          });
+        }
+      }
+
       const markers = (chatMarkers?.get(path)?.toJS() ??
         []) as unknown as ChatMarker[];
       for (const m of markers) {
         if (seenHashes.has(m.hash)) continue;
         seenHashes.add(m.hash);
-        entries.push({
+        group.push({
           id: `sub:${path}:${m.line + 1}-chat-${m.hash}`,
-          value: `Chat ${m.hash} (${tail}:${m.line + 1})`,
+          value: `Chat ${m.hash} (line ${m.line + 1})`,
           icon: "comment",
-          extra: { kind: "chat", hash: m.hash },
+          // line is only used for in-group ordering; jumping goes via
+          // the hash (jumpToAnchor) so it survives marker moves.
+          extra: { kind: "chat", hash: m.hash, line: m.line },
         });
       }
       const bookmarks = (chatBookmarks?.get(path)?.toJS() ??
@@ -2045,13 +2073,28 @@ export class Actions extends BaseActions<LatexEditorState> {
       for (const b of bookmarks) {
         if (seenBookmarks.has(b.text)) continue;
         seenBookmarks.add(b.text);
-        entries.push({
+        group.push({
           id: `sub:${path}:${b.line + 1}-bookmark-${b.text}`,
-          value: `${b.text} (${tail}:${b.line + 1})`,
+          value: b.text,
           icon: "tag-outlined",
-          extra: { kind: "bookmark", path, line: b.line },
+          extra: { kind: "line", path, line: b.line },
         });
       }
+
+      if (group.length === 0) continue;
+      // Keep each file's entries in document order.
+      group.sort(
+        (a, b) =>
+          (((a as any).extra?.line ?? 0) as number) -
+          (((b as any).extra?.line ?? 0) as number),
+      );
+      entries.push({
+        id: `sub:${path}:0-file`,
+        value: `**${tail}**`,
+        icon: "tex-file",
+        extra: { kind: "line", path, line: 0 },
+      });
+      entries.push(...group);
     }
   }
 
@@ -2063,8 +2106,9 @@ export class Actions extends BaseActions<LatexEditorState> {
       await this.jumpToAnchor(extra.hash);
       return;
     }
-    // Bookmarks in included files carry their own path + line.
-    if (extra?.kind === "bookmark" && typeof extra.path === "string") {
+    // Entries from included files (file header, headings, bookmarks)
+    // carry their own path + line.
+    if (extra?.kind === "line" && typeof extra.path === "string") {
       const frameId = await this.switch_to_file(extra.path);
       this.programmatically_goto_line(
         (extra.line ?? 0) + 1,
