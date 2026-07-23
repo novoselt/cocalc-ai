@@ -73,6 +73,11 @@ jest.mock("@cocalc/frontend/jupyter/cell-input", () => ({
   CellInput: () => null,
 }));
 
+jest.mock("@cocalc/frontend/jupyter/cell-chat-button", () => ({
+  CellChatButton: () => null,
+  CellChatUnreadBadge: () => null,
+}));
+
 jest.mock("@cocalc/frontend/jupyter/ai", () => ({
   AgentCellTool: () => null,
 }));
