@@ -3,12 +3,20 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Alert, Button, Modal, Space, Tag, Table, Typography } from "antd";
+import {
+  Alert,
+  Button,
+  Modal,
+  Space,
+  Tag,
+  Table,
+  Typography,
+} from "antd";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { defineMessage } from "react-intl";
 
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
-import { Loading } from "@cocalc/frontend/components";
+import { Loading, Tooltip } from "@cocalc/frontend/components";
 import { TimeAgo } from "@cocalc/frontend/components/time-ago";
 import { labels } from "@cocalc/frontend/i18n";
 import {
@@ -158,6 +166,8 @@ function MembershipSettingsContent() {
   const personalMembership = details?.candidates.find(
     (candidate) => candidate.source === "subscription",
   );
+  const personalMembershipRenewing =
+    personalMembership?.subscription_renewal_state != null;
   const refreshMembership = () => {
     window.dispatchEvent(new Event("cocalc:membership-changed"));
     refresh();
@@ -182,6 +192,7 @@ function MembershipSettingsContent() {
     setSiteLicenseManageOpen(true);
   };
   const openPersonalMembershipManage = () => {
+    if (personalMembershipRenewing) return;
     const currentPersonalRow = candidateRows.find(
       (row) =>
         row.sourceKind === "subscription" &&
@@ -271,7 +282,8 @@ function MembershipSettingsContent() {
             membership={personalMembership}
             showBalanceControl={
               stripeEnabled &&
-              personalMembership.subscription_status !== "canceled"
+              personalMembership.subscription_status !== "canceled" &&
+              !personalMembershipRenewing
             }
             tier={tierById[personalMembership.class]}
           />
@@ -316,6 +328,15 @@ function MembershipSettingsContent() {
                   key: "action",
                   render: (_, row) => {
                     if (row.action === "personal") {
+                      if (row.subscriptionRenewalState) {
+                        return (
+                          <Tooltip title="Your membership renewal is being processed. Membership changes will be available when it finishes.">
+                            <span>
+                              <Button disabled>Manage</Button>
+                            </span>
+                          </Tooltip>
+                        );
+                      }
                       return (
                         <Button onClick={openPersonalMembershipManage}>
                           Manage
@@ -486,12 +507,15 @@ function PersonalMembershipDetails({
   const price = personalMembershipPriceLabel(membership);
   const charge = personalMembershipChargeLabel(membership);
   const canceled = membership.subscription_status === "canceled";
+  const renewing = membership.subscription_renewal_state != null;
   const endDate = formatOptionalLongDate(membership.expires);
 
   return (
     <Space vertical style={{ width: "100%" }}>
       <Text>{price ? `${name}: ${price}.` : name}</Text>
-      {canceled ? (
+      {renewing ? (
+        <Text>Renewal payment is being processed.</Text>
+      ) : canceled ? (
         <Text>
           {endDate
             ? `Ends ${endDate}. Renewal is canceled.`
@@ -674,6 +698,8 @@ function membershipStateColor(state: string) {
     case "Pending":
     case "Pending approval":
       return "gold";
+    case "Renewing":
+      return "blue";
     case "Renewal canceled":
       return "orange";
   }

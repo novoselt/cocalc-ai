@@ -54,11 +54,14 @@ describe("expireDueLros", () => {
     );
     expect(expireCall).toBeDefined();
     expect(expireCall?.[0]).toContain("expires_at <= now()");
-    expect(expireCall?.[0]).toContain("status <> ALL($1::text[])");
+    expect(expireCall?.[0]).toContain("status = ANY($1::text[])");
+    expect(expireCall?.[0]).toContain("FOR UPDATE SKIP LOCKED");
+    expect(expireCall?.[0]).toContain("LIMIT $3");
     expect(expireCall?.[0]).toContain("kind=$2");
     expect(expireCall?.[1]).toEqual([
-      ["succeeded", "failed", "canceled", "expired"],
+      ["queued", "running"],
       "project-move",
+      1000,
     ]);
   });
 
@@ -72,9 +75,7 @@ describe("expireDueLros", () => {
     );
     expect(expireCall).toBeDefined();
     expect(expireCall?.[0]).not.toContain("kind=$2");
-    expect(expireCall?.[1]).toEqual([
-      ["succeeded", "failed", "canceled", "expired"],
-    ]);
+    expect(expireCall?.[1]).toEqual([["queued", "running"], 1000]);
   });
 });
 
@@ -201,6 +202,11 @@ describe("claimLroOps", () => {
       "11111111-1111-4111-8111-111111111111",
       "run_at",
     ]);
+    expect(
+      queryMock.mock.calls.some(([sql]) =>
+        `${sql}`.includes("WITH candidates AS"),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -243,11 +249,11 @@ describe("ensureLroSchema", () => {
 
   it("migrates child LRO parent tracking into existing tables", async () => {
     connectQueryMock = jest.fn(async (sql: string) => {
-      if (sql.includes("pg_try_advisory_lock")) {
-        return { rows: [{ acquired: true }] };
-      }
       if (sql.includes("information_schema.columns")) {
         return { rows: [{ exists: false }] };
+      }
+      if (sql.includes("pg_try_advisory_lock")) {
+        return { rows: [{ locked: true }] };
       }
       return { rows: [] };
     });
@@ -256,11 +262,19 @@ describe("ensureLroSchema", () => {
     await ensureLroSchema();
 
     const sql = connectQueryMock.mock.calls.map(([sql]) => `${sql}`);
-    expect(sql.some((x) => x.includes("pg_try_advisory_lock"))).toBe(true);
+    expect(sql.some((x) => x.includes("pg_advisory_lock"))).toBe(true);
     expect(sql.some((x) => x.includes("pg_advisory_unlock"))).toBe(true);
     expect(
       sql.some((x) => x.includes("ADD COLUMN IF NOT EXISTS parent_id UUID")),
     ).toBe(true);
     expect(sql.some((x) => x.includes("lro_parent_idx"))).toBe(true);
+    expect(sql.some((x) => x.includes("lro_expiry_idx"))).toBe(true);
+
+    await ensureLroSchema();
+    expect(
+      connectQueryMock.mock.calls.filter(([statement]) =>
+        `${statement}`.includes("pg_advisory_lock"),
+      ),
+    ).toHaveLength(1);
   });
 });

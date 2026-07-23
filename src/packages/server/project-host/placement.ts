@@ -2,9 +2,32 @@ import type { MembershipEntitlements } from "@cocalc/conat/hub/api/purchases";
 import type {
   Host,
   HostEffectiveAccessRole,
+  HostIoContainmentMetrics,
 } from "@cocalc/conat/hub/api/hosts";
 
 export type UserHostTier = number;
+
+type HostIoMetadata = {
+  metadata?: {
+    metrics?: {
+      current?: {
+        io_containment?: HostIoContainmentMetrics;
+      };
+    };
+  };
+};
+
+export function hostIoPlacementConformant(row: HostIoMetadata): boolean {
+  const containment = row.metadata?.metrics?.current?.io_containment;
+  // Missing telemetry and non-enforcing policies preserve compatibility with
+  // older hosts. Once a host explicitly declares enforcement, new placement
+  // requires proof that the aggregate policy is effective.
+  if (!containment || containment.policy_mode !== "enforce") return true;
+  return (
+    containment.capability === "validated" &&
+    !`${containment.last_reconcile_error ?? ""}`.trim()
+  );
+}
 
 export function normalizeHostTier(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {

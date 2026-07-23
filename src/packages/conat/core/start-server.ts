@@ -4,6 +4,21 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 const children: ChildProcess[] = [];
+let lifecycleHandlersInstalled = false;
+
+function installLifecycleHandlers() {
+  if (lifecycleHandlersInstalled) {
+    return;
+  }
+  lifecycleHandlersInstalled = true;
+
+  process.once("exit", close);
+  ["SIGTERM", "SIGQUIT"].forEach((sig) => {
+    process.once(sig, () => {
+      children.map((child) => child.kill(sig as NodeJS.Signals));
+    });
+  });
+}
 
 function resolveClusterNodeEntrypoint(): string {
   const explicit =
@@ -37,19 +52,16 @@ export function forkedConatServer(opts: Options) {
     },
   });
   children.push(child);
+  child.once("exit", () => {
+    const index = children.indexOf(child);
+    if (index !== -1) {
+      children.splice(index, 1);
+    }
+  });
+  installLifecycleHandlers();
   child.send(opts);
 }
 
 function close() {
   children.map((child) => child.kill("SIGKILL"));
 }
-
-process.once("exit", () => {
-  close();
-});
-
-["SIGTERM", "SIGQUIT"].forEach((sig) => {
-  process.once(sig, () => {
-    children.map((child) => child.kill(sig as any));
-  });
-});

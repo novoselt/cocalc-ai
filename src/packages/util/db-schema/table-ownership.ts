@@ -83,6 +83,7 @@ export const TABLE_OWNERSHIP = {
       "password_reset",
       "password_reset_attempts",
       "remember_me",
+      "subscription_renewal_attempts",
       "subscriptions",
       "team_licenses",
       "team_license_seat_lines",
@@ -379,6 +380,7 @@ export const TABLE_OWNERSHIP = {
       "instance_actions_log",
       "membership_side_effects_outbox",
       "notification_events",
+      "webapp_error_resolutions",
       "webapp_errors",
     ],
     {
@@ -484,6 +486,16 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
         "Account-scoped durable operational state created outside util/db-schema. Reads/writes must route to the account home bay; rehome is unsafe until explicitly audited.",
     },
   ),
+
+  ...adHocEntries(["account_usage_counters", "account_usage_counter_states"], {
+    ownership: "account-home",
+    authority: "account_id",
+    portability: "unsupported",
+    source: "server usage counter schema bootstrap",
+    migrate_to_schema: true,
+    notes:
+      "Account-scoped usage counter state keyed by account_usage_windows. Authority is inherited from the referenced window's account_id; these rows must move or be removed with that account's usage windows.",
+  }),
 
   ...adHocEntries(["ai_sessions"], {
     ownership: "account-home",

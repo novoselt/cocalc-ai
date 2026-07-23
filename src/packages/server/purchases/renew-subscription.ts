@@ -19,6 +19,11 @@ import {
   recordMembershipPurchaseCompleted,
 } from "@cocalc/server/membership/analytics";
 import { refreshAccountBalanceAndPublishBestEffort } from "./refresh-balance";
+import {
+  assertNoCompetingMembershipSubscription,
+  lockMembershipSubscriptionAccount,
+} from "./membership-subscription-guard";
+import { scheduleSubscriptionRenewalAttempt } from "./subscription-renewal-attempts";
 
 const logger = getLogger("purchases:renew-subscription");
 
@@ -36,6 +41,7 @@ export default async function renewSubscription({
   // Use a transaction so we either record the renewal and update subscription or do nothing.
   const client = await getTransactionClient();
   try {
+    await lockMembershipSubscriptionAccount({ account_id, client });
     const subscription = await getSubscription(subscription_id, client, true);
     if (subscription.account_id != account_id) {
       throw Error("you must be signed in as the owner of the subscription");
@@ -60,6 +66,11 @@ export default async function renewSubscription({
     if (status != "unpaid" && status != "past_due") {
       throw Error(`subscription is not due for renewal; status is "${status}"`);
     }
+    await assertNoCompetingMembershipSubscription({
+      account_id,
+      subscription_id,
+      client,
+    });
 
     const end = addInterval(current_period_end, interval);
     if (toDecimal(cost).gt(0)) {
@@ -99,6 +110,11 @@ export default async function renewSubscription({
     if (update.rowCount != 1) {
       throw Error("subscription is no longer due for renewal");
     }
+    await scheduleSubscriptionRenewalAttempt({
+      account_id,
+      subscription_id,
+      client,
+    });
     const isTrialConversion =
       metadata.trial === true && latest_purchase_id == null;
     await recordMembershipAnalyticsEvent({

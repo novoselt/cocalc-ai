@@ -23,6 +23,10 @@ import {
   type AdminSupportTicketStatus,
 } from "@cocalc/conat/hub/api/admin-support";
 import {
+  ADMIN_CRASH_STATUSES,
+  type AdminCrashStatus,
+} from "@cocalc/conat/hub/api/admin-crashes";
+import {
   HOST_RUNTIME_LOG_SOURCES,
   type HostRuntimeLogSource,
 } from "@cocalc/conat/project-host/api";
@@ -139,6 +143,16 @@ function parseAdminSupportStatuses(value: string): AdminSupportTicketStatus[] {
     }
   }
   return statuses as AdminSupportTicketStatus[];
+}
+
+function parseAdminCrashStatus(value: string | undefined): AdminCrashStatus {
+  const status = `${value ?? "open"}`.trim().toLowerCase();
+  if (!(ADMIN_CRASH_STATUSES as readonly string[]).includes(status)) {
+    throw new Error(
+      `--status must be one of: ${ADMIN_CRASH_STATUSES.join(", ")}`,
+    );
+  }
+  return status as AdminCrashStatus;
 }
 
 async function readAdminDataJson(path: string): Promise<unknown> {
@@ -1013,6 +1027,9 @@ export function registerAdminCommand(
   const adminSupport = admin
     .command("support")
     .description("audited redacted support ticket diagnostics");
+  const adminCrashes = admin
+    .command("crashes")
+    .description("audited frontend crash report diagnostics and triage");
   const adminSettings = admin
     .command("settings")
     .description("admin site settings inspection");
@@ -1077,6 +1094,49 @@ export function registerAdminCommand(
         fallback: 256 * 1024,
         max: 1024 * 1024,
       }),
+      reason: opts.reason,
+    };
+  }
+
+  function adminCrashListOptions(command: Command): Command {
+    return command
+      .option("--since-minutes <n>", "crash report lookback", "1440")
+      .option("--limit <n>", "maximum report count", "200")
+      .option("--max-bytes <n>", "maximum response bytes", "524288")
+      .option("--bay <bay-id>", "query only this bay; defaults to all bays")
+      .option("--status <status>", "open, solved, or all", "open")
+      .requiredOption("--reason <reason>", "human-readable audit reason");
+  }
+
+  function adminCrashListRequest(opts: {
+    sinceMinutes?: string;
+    limit?: string;
+    maxBytes?: string;
+    bay?: string;
+    status?: string;
+    reason?: string;
+  }) {
+    return {
+      since_minutes: parsePositiveIntegerOption({
+        name: "--since-minutes",
+        value: opts.sinceMinutes,
+        fallback: 24 * 60,
+        max: 30 * 24 * 60,
+      }),
+      limit: parsePositiveIntegerOption({
+        name: "--limit",
+        value: opts.limit,
+        fallback: 200,
+        max: 2000,
+      }),
+      max_bytes: parsePositiveIntegerOption({
+        name: "--max-bytes",
+        value: opts.maxBytes,
+        fallback: 512 * 1024,
+        max: 4 * 1024 * 1024,
+      }),
+      bay_id: opts.bay?.trim() || undefined,
+      status: parseAdminCrashStatus(opts.status),
       reason: opts.reason,
     };
   }
@@ -1290,6 +1350,88 @@ export function registerAdminCommand(
         return await ctx.hub.adminSupport.triage(adminSupportListRequest(opts));
       });
     });
+
+  adminCrashListOptions(adminCrashes.command("list"))
+    .description("list recent redacted frontend crash reports")
+    .action(async (opts, command: Command) => {
+      await withContext(command, "admin crashes list", async (ctx) => {
+        return await ctx.hub.adminCrashes.list(adminCrashListRequest(opts));
+      });
+    });
+
+  adminCrashListOptions(adminCrashes.command("triage"))
+    .description("group frontend crashes by signature and frontend build")
+    .action(async (opts, command: Command) => {
+      await withContext(command, "admin crashes triage", async (ctx) => {
+        return await ctx.hub.adminCrashes.triage(adminCrashListRequest(opts));
+      });
+    });
+
+  adminCrashes
+    .command("show <report-id>")
+    .description("show one redacted frontend crash report")
+    .option("--bay <bay-id>", "known report bay; otherwise search all bays")
+    .option("--max-bytes <n>", "maximum response bytes", "524288")
+    .requiredOption("--reason <reason>", "human-readable audit reason")
+    .action(
+      async (
+        reportId: string,
+        opts: { bay?: string; maxBytes?: string; reason?: string },
+        command: Command,
+      ) => {
+        if (!isValidUUID(reportId)) throw new Error("report-id must be a UUID");
+        await withContext(command, "admin crashes show", async (ctx) => {
+          return await ctx.hub.adminCrashes.show({
+            report_id: reportId,
+            bay_id: opts.bay?.trim() || undefined,
+            max_bytes: parsePositiveIntegerOption({
+              name: "--max-bytes",
+              value: opts.maxBytes,
+              fallback: 512 * 1024,
+              max: 4 * 1024 * 1024,
+            }),
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  function addCrashResolutionCommand(name: "resolve" | "reopen") {
+    adminCrashes
+      .command(`${name} <report-id>`)
+      .description(
+        name === "resolve"
+          ? "mark this crash signature solved for its frontend build"
+          : "reopen this crash signature for its frontend build",
+      )
+      .requiredOption(
+        "--bay <bay-id>",
+        "bay containing the representative report",
+      )
+      .option("--note <note>", "operator resolution note")
+      .requiredOption("--reason <reason>", "human-readable audit reason")
+      .action(
+        async (
+          reportId: string,
+          opts: { bay?: string; note?: string; reason?: string },
+          command: Command,
+        ) => {
+          if (!isValidUUID(reportId))
+            throw new Error("report-id must be a UUID");
+          await withContext(command, `admin crashes ${name}`, async (ctx) => {
+            return await ctx.hub.adminCrashes[name]({
+              report_id: reportId,
+              bay_id: `${opts.bay ?? ""}`.trim(),
+              note: opts.note,
+              reason: opts.reason,
+            });
+          });
+        },
+      );
+  }
+
+  addCrashResolutionCommand("resolve");
+  addCrashResolutionCommand("reopen");
 
   adminHost
     .command("describe <host>")

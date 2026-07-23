@@ -56,6 +56,23 @@ describe("account usage fixed windows", () => {
           ],
         };
       }
+      if (sql.includes('SELECT DISTINCT ON ("window")')) {
+        const [account_id, family, epoch5h, epoch7d, at] = params;
+        const active = windows.filter(
+          (row) =>
+            row.account_id === account_id &&
+            row.family === family &&
+            ((row.window === "5h" && row.epoch === epoch5h) ||
+              (row.window === "7d" && row.epoch === epoch7d)) &&
+            row.starts_at <= at &&
+            row.resets_at > at,
+        );
+        return {
+          rows: ["5h", "7d"]
+            .map((window) => active.find((row) => row.window === window))
+            .filter(Boolean),
+        };
+      }
       if (
         sql.includes('SELECT id, account_id, family, "window" AS window, epoch')
       ) {
@@ -179,5 +196,23 @@ describe("account usage fixed windows", () => {
       "22222222-2222-4222-8222-222222222222",
       "bad tier configuration",
     ]);
+  });
+
+  it("caches epochs and reads both active windows in one query", async () => {
+    const { getActiveAccountUsageWindows } = await import("./usage-windows");
+    const account_id = "11111111-1111-4111-8111-111111111111";
+    await getActiveAccountUsageWindows({ account_id });
+    await getActiveAccountUsageWindows({ account_id });
+
+    expect(
+      queryMock.mock.calls.filter(([sql]) =>
+        `${sql}`.includes("INSERT INTO account_usage_epochs"),
+      ),
+    ).toHaveLength(2);
+    expect(
+      queryMock.mock.calls.filter(([sql]) =>
+        `${sql}`.includes('SELECT DISTINCT ON ("window")'),
+      ),
+    ).toHaveLength(2);
   });
 });

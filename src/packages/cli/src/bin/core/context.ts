@@ -104,6 +104,7 @@ const HUB_API_GROUPS: HubGroupName[] = [
   "adminDb",
   "adminHost",
   "adminSupport",
+  "adminCrashes",
   "agent",
   "aiSessions",
   "lro",

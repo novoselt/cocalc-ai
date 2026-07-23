@@ -19,6 +19,14 @@ import createProject, {
 } from "@cocalc/server/projects/create";
 import createCredit from "@cocalc/server/purchases/create-credit";
 import createSubscription from "@cocalc/server/purchases/create-subscription";
+import {
+  assertNoDueMembershipRenewal,
+  lockMembershipSubscriptionAccount,
+} from "@cocalc/server/purchases/membership-subscription-guard";
+import {
+  cancelOpenSubscriptionRenewalAttempts,
+  scheduleSubscriptionRenewalAttempt,
+} from "@cocalc/server/purchases/subscription-renewal-attempts";
 import { getSeedMembershipTierMap } from "@cocalc/server/membership/tiers";
 import type { MembershipTierRecord } from "@cocalc/server/membership/tiers";
 import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
@@ -3152,6 +3160,8 @@ export async function configureFinancialMembershipRenewalHomeBay({
 
   const client = await getTransactionClient();
   try {
+    await lockMembershipSubscriptionAccount({ account_id, client });
+    await assertNoDueMembershipRenewal({ account_id, client });
     const accountCheck = await client.query(
       `
       SELECT 1
@@ -3198,6 +3208,24 @@ export async function configureFinancialMembershipRenewalHomeBay({
         metadata,
       ],
     );
+    await cancelOpenSubscriptionRenewalAttempts({
+      account_id,
+      subscription_id: grant.id,
+      reason: "Legacy migration membership renewal was reconfigured",
+      client,
+    });
+    if (selectedClass != null) {
+      const attemptId = await scheduleSubscriptionRenewalAttempt({
+        account_id,
+        subscription_id: grant.id,
+        client,
+      });
+      if (!attemptId) {
+        throw new Error(
+          "failed to schedule the legacy migration membership renewal",
+        );
+      }
+    }
     await client.query("COMMIT");
     return {
       subscription_id: grant.id,

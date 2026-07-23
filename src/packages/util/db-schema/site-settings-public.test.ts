@@ -1,6 +1,14 @@
 import { buildPublicSiteSettings } from "./site-settings-public";
 
 describe("buildPublicSiteSettings", () => {
+  it("exposes the configured public status page URL", () => {
+    expect(
+      buildPublicSiteSettings({
+        status_page_url: "https://status.example.com",
+      }).configuration.status_page_url,
+    ).toBe("https://status.example.com");
+  });
+
   it("derives a public zendesk flag from private zendesk settings", () => {
     expect(
       buildPublicSiteSettings({

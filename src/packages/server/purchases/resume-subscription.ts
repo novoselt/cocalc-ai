@@ -21,6 +21,11 @@ import {
   recordMembershipPurchaseCompleted,
 } from "@cocalc/server/membership/analytics";
 import { refreshAccountBalanceAndPublishBestEffort } from "./refresh-balance";
+import {
+  assertNoCompetingMembershipSubscription,
+  lockMembershipSubscriptionAccount,
+} from "./membership-subscription-guard";
+import { scheduleSubscriptionRenewalAttempt } from "./subscription-renewal-attempts";
 
 interface Options {
   account_id: string;
@@ -41,6 +46,7 @@ export default async function resumeSubscription({
   let subscriptionType = "membership";
   let renewalEnd = new Date();
   try {
+    await lockMembershipSubscriptionAccount({ account_id, client });
     const renewalData = await getSubscriptionRenewalData({
       account_id,
       subscription_id,
@@ -56,6 +62,11 @@ export default async function resumeSubscription({
       interval,
       latest_purchase_id,
     } = renewalData;
+    await assertNoCompetingMembershipSubscription({
+      account_id,
+      subscription_id,
+      client,
+    });
     subscriptionType = metadata.type;
     renewalEnd = end;
     if (current_period_end <= new Date()) {
@@ -125,6 +136,11 @@ export default async function resumeSubscription({
       : isUnconvertedTrial
         ? "started"
         : "none";
+    await scheduleSubscriptionRenewalAttempt({
+      account_id,
+      subscription_id,
+      client,
+    });
     await recordMembershipAnalyticsEvent({
       event_key: `subscription:${subscription_id}:resumed:${purchase_id ?? "no-purchase"}`,
       event_type: "membership_resumed",

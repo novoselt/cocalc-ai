@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import getPool from "@cocalc/database/pool";
+import getPool, { type PoolClient } from "@cocalc/database/pool";
 import getLogger from "@cocalc/backend/logger";
 import LRU from "lru-cache";
 import type {
@@ -21,7 +21,14 @@ import { listActiveAbuseReviewAnnotations } from "./abuse-review-annotations";
 import {
   ensureAccountUsageWindowsForEvent,
   getActiveAccountUsageWindows,
+  type AccountUsageWindow,
 } from "./usage-windows";
+import {
+  ensureAccountUsageCountersInitialized,
+  getAccountUsageCounterValues,
+  recordAccountUsageCounterDelta,
+  type AccountUsageWindows,
+} from "./usage-counters";
 import {
   getManagedCpuAccountingClassificationForHost,
   type ManagedCpuAccountingScope,
@@ -34,6 +41,7 @@ const DEFAULT_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const MAX_HISTORY_WINDOW_MS = 31 * 24 * 60 * 60 * 1000;
 const MAX_HISTORY_BUCKETS = 2000;
 const ADMIN_OVERVIEW_CACHE_TTL_MS = 60_000;
+const USAGE_COUNTER_METRIC = "managed-cpu-seconds";
 
 const logger = getLogger("server:membership:managed-cpu");
 
@@ -61,6 +69,7 @@ type ManagedCpuAdminOverviewBase = {
 
 let ensuredSchema: Promise<void> | undefined;
 let adminTimeIndexReady: Promise<void> | undefined;
+let policyIndexReady: Promise<void> | undefined;
 
 const adminOverviewCache = new LRU<
   string,
@@ -121,6 +130,19 @@ function ensureAdminTimeIndexBestEffort(): void {
   adminTimeIndexReady.catch(() => undefined);
 }
 
+function ensurePolicyIndexBestEffort(): void {
+  policyIndexReady ??= createIndexConcurrentlyBestEffort({
+    name: `${TABLE}_budget_account_time_cover_idx`,
+    sql: `
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS ${TABLE}_budget_account_time_cover_idx
+      ON ${TABLE}(account_id, sample_ended_at DESC)
+      INCLUDE (cpu_seconds)
+      WHERE counts_toward_managed_cpu_budget = TRUE
+    `,
+  });
+  policyIndexReady.catch(() => undefined);
+}
+
 async function ensureSchema(): Promise<void> {
   if (!ensuredSchema) {
     ensuredSchema = (async () => {
@@ -169,48 +191,7 @@ async function ensureSchema(): Promise<void> {
         `CREATE INDEX IF NOT EXISTS ${TABLE}_scope_time_idx ON ${TABLE}(cpu_accounting_scope, sample_ended_at DESC)`,
       );
       ensureAdminTimeIndexBestEffort();
-      await getPool().query(`
-        UPDATE ${TABLE} AS events
-        SET
-          host_funding_mode_snapshot =
-            project_hosts.metadata #>> '{billing,funding_mode}',
-          host_tier_snapshot = project_hosts.tier,
-          cpu_accounting_scope = CASE
-            WHEN project_hosts.metadata #>> '{billing,funding_mode}'
-              IN ('account-prepaid', 'account-postpaid')
-              THEN 'account_funded_dedicated'
-            WHEN project_hosts.metadata #>> '{billing,funding_mode}' = 'site-funded'
-              THEN 'site_funded_dedicated'
-            WHEN project_hosts.tier IS NOT NULL
-              THEN 'shared_managed'
-            ELSE events.cpu_accounting_scope
-          END,
-          counts_toward_managed_cpu_budget = CASE
-            WHEN project_hosts.metadata #>> '{billing,funding_mode}'
-              IN ('account-prepaid', 'account-postpaid')
-              THEN FALSE
-            ELSE events.counts_toward_managed_cpu_budget
-          END,
-          host_kind_snapshot = CASE
-            WHEN project_hosts.metadata #>> '{billing,funding_mode}'
-              IN ('account-prepaid', 'account-postpaid')
-              THEN 'account-funded-dedicated'
-            WHEN project_hosts.metadata #>> '{billing,funding_mode}' = 'site-funded'
-              THEN 'site-funded-dedicated'
-            WHEN project_hosts.tier IS NOT NULL
-              THEN 'shared-tiered-host'
-            ELSE events.host_kind_snapshot
-          END
-        FROM project_hosts
-        WHERE events.host_id = project_hosts.id
-          AND events.cpu_accounting_scope = 'shared_managed'
-          AND (
-            events.host_funding_mode_snapshot IS NULL
-            OR events.host_kind_snapshot IS NULL
-            OR project_hosts.metadata #>> '{billing,funding_mode}'
-              IN ('account-prepaid', 'account-postpaid', 'site-funded')
-          )
-      `);
+      ensurePolicyIndexBestEffort();
     })();
   }
   await ensuredSchema;
@@ -219,6 +200,81 @@ async function ensureSchema(): Promise<void> {
 function normalizeCpuSeconds(value: unknown): number {
   const cpuSeconds = Number(value);
   return Number.isFinite(cpuSeconds) && cpuSeconds > 0 ? cpuSeconds : 0;
+}
+
+async function loadManagedCpuCounterBaseline({
+  client,
+  windows,
+  cutoff,
+  account_id,
+}: {
+  client: PoolClient;
+  windows: AccountUsageWindow[];
+  cutoff: Date;
+  account_id: string;
+}) {
+  const { rows } = await client.query<{
+    usage_window_id: string;
+    amount: string | number;
+  }>(
+    `
+      WITH windows AS (
+        SELECT *
+        FROM jsonb_to_recordset($1::jsonb) AS entry(
+          usage_window_id uuid,
+          starts_at timestamptz,
+          resets_at timestamptz
+        )
+      )
+      SELECT
+        windows.usage_window_id,
+        COALESCE(SUM(events.cpu_seconds), 0) AS amount
+      FROM windows
+      JOIN ${TABLE} AS events
+        ON events.account_id = $2
+       AND events.counts_toward_managed_cpu_budget = TRUE
+       AND events.sample_ended_at >= windows.starts_at
+       AND events.sample_ended_at < LEAST(windows.resets_at, $3::timestamptz)
+      GROUP BY windows.usage_window_id
+    `,
+    [
+      JSON.stringify(
+        windows.map(({ id, starts_at, resets_at }) => ({
+          usage_window_id: id,
+          starts_at: starts_at.toISOString(),
+          resets_at: resets_at.toISOString(),
+        })),
+      ),
+      account_id,
+      cutoff,
+    ],
+  );
+  return rows.map(({ usage_window_id, amount }) => ({
+    usage_window_id,
+    category: "",
+    amount: normalizeCpuSeconds(amount),
+  }));
+}
+
+async function initializeManagedCpuCounters({
+  account_id,
+  windows,
+}: {
+  account_id: string;
+  windows: AccountUsageWindows;
+}): Promise<void> {
+  await ensureAccountUsageCountersInitialized({
+    account_id,
+    metric: USAGE_COUNTER_METRIC,
+    windows,
+    loadBaseline: async ({ client, windows: missing, cutoff }) =>
+      await loadManagedCpuCounterBaseline({
+        client,
+        windows: missing,
+        cutoff,
+        account_id,
+      }),
+  });
 }
 
 export async function recordManagedProjectCpuUsage(opts: {
@@ -248,10 +304,15 @@ export async function recordManagedProjectCpuUsage(opts: {
     host_id,
     project_id,
   });
+  let usageWindows: AccountUsageWindows | undefined;
   if (classification.counts_toward_managed_cpu_budget) {
-    await ensureAccountUsageWindowsForEvent({
+    usageWindows = await ensureAccountUsageWindowsForEvent({
       account_id,
       occurred_at: opts.sample_ended_at,
+    });
+    await initializeManagedCpuCounters({
+      account_id,
+      windows: usageWindows,
     });
   }
   await getPool("medium").query(
@@ -307,6 +368,13 @@ export async function recordManagedProjectCpuUsage(opts: {
       opts.metadata ?? null,
     ],
   );
+  if (usageWindows) {
+    recordAccountUsageCounterDelta({
+      metric: USAGE_COUNTER_METRIC,
+      windows: usageWindows,
+      amount: cpuSeconds,
+    });
+  }
   return { recorded: true, account_id };
 }
 
@@ -322,6 +390,31 @@ export async function getManagedCpuUsageForAccount(opts: {
   });
   const window5h = windows["5h"];
   const window7d = windows["7d"];
+  if (opts.budget_only !== false) {
+    const values =
+      Object.keys(windows).length > 0
+        ? await (async () => {
+            await initializeManagedCpuCounters({
+              account_id: opts.account_id,
+              windows,
+            });
+            return await getAccountUsageCounterValues({
+              metric: USAGE_COUNTER_METRIC,
+              windows,
+            });
+          })()
+        : { "5h": {}, "7d": {} };
+    const managed_cpu_5h_seconds = normalizeCpuSeconds(values["5h"][""]);
+    const managed_cpu_7d_seconds = normalizeCpuSeconds(values["7d"][""]);
+    return buildManagedCpuUsage({
+      managed_cpu_5h_seconds,
+      managed_cpu_7d_seconds,
+      window5h,
+      window7d,
+      limit5h: opts.limit5h,
+      limit7d: opts.limit7d,
+    });
+  }
   const { rows } = await getPool("medium").query<{
     seconds_5h: string | number;
     seconds_7d: string | number;
@@ -352,11 +445,6 @@ export async function getManagedCpuUsageForAccount(opts: {
         ) AS seconds_7d
       FROM ${TABLE} AS events
       WHERE events.account_id = $1
-        ${
-          opts.budget_only === false
-            ? ""
-            : "AND events.counts_toward_managed_cpu_budget = TRUE"
-        }
         AND (
           ($2::timestamptz IS NOT NULL AND sample_ended_at >= $2::timestamptz AND sample_ended_at < $3::timestamptz)
           OR ($4::timestamptz IS NOT NULL AND sample_ended_at >= $4::timestamptz AND sample_ended_at < $5::timestamptz)
@@ -372,6 +460,31 @@ export async function getManagedCpuUsageForAccount(opts: {
   );
   const managed_cpu_5h_seconds = normalizeCpuSeconds(rows[0]?.seconds_5h);
   const managed_cpu_7d_seconds = normalizeCpuSeconds(rows[0]?.seconds_7d);
+  return buildManagedCpuUsage({
+    managed_cpu_5h_seconds,
+    managed_cpu_7d_seconds,
+    window5h,
+    window7d,
+    limit5h: opts.limit5h,
+    limit7d: opts.limit7d,
+  });
+}
+
+function buildManagedCpuUsage({
+  managed_cpu_5h_seconds,
+  managed_cpu_7d_seconds,
+  window5h,
+  window7d,
+  limit5h,
+  limit7d,
+}: {
+  managed_cpu_5h_seconds: number;
+  managed_cpu_7d_seconds: number;
+  window5h?: AccountUsageWindow;
+  window7d?: AccountUsageWindow;
+  limit5h?: number;
+  limit7d?: number;
+}): ManagedCpuUsage {
   const managed_cpu_5h_reset_at = window5h?.resets_at;
   const managed_cpu_7d_reset_at = window7d?.resets_at;
 
@@ -379,12 +492,12 @@ export async function getManagedCpuUsageForAccount(opts: {
     managed_cpu_5h_seconds,
     managed_cpu_7d_seconds,
     managed_cpu_5h_remaining_seconds:
-      typeof opts.limit5h === "number" && Number.isFinite(opts.limit5h)
-        ? opts.limit5h - managed_cpu_5h_seconds
+      typeof limit5h === "number" && Number.isFinite(limit5h)
+        ? limit5h - managed_cpu_5h_seconds
         : undefined,
     managed_cpu_7d_remaining_seconds:
-      typeof opts.limit7d === "number" && Number.isFinite(opts.limit7d)
-        ? opts.limit7d - managed_cpu_7d_seconds
+      typeof limit7d === "number" && Number.isFinite(limit7d)
+        ? limit7d - managed_cpu_7d_seconds
         : undefined,
     managed_cpu_5h_starts_at: window5h?.starts_at,
     managed_cpu_7d_starts_at: window7d?.starts_at,
@@ -403,12 +516,12 @@ export async function getManagedCpuUsageForAccount(opts: {
           ) || undefined
         : undefined,
     over_managed_cpu_5h:
-      typeof opts.limit5h === "number" && Number.isFinite(opts.limit5h)
-        ? managed_cpu_5h_seconds > opts.limit5h
+      typeof limit5h === "number" && Number.isFinite(limit5h)
+        ? managed_cpu_5h_seconds > limit5h
         : undefined,
     over_managed_cpu_7d:
-      typeof opts.limit7d === "number" && Number.isFinite(opts.limit7d)
-        ? managed_cpu_7d_seconds > opts.limit7d
+      typeof limit7d === "number" && Number.isFinite(limit7d)
+        ? managed_cpu_7d_seconds > limit7d
         : undefined,
   };
 }

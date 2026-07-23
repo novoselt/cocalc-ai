@@ -99,15 +99,22 @@ describe("membership change payment enforcement", () => {
   });
 
   it("allows externally paid membership changes when the payment covers the server-computed cost", async () => {
+    const creditId = 123;
     const result = await applyTestMembershipChange({
       account_id,
       targetClass,
       interval: "month",
       paymentAmount: 100,
+      creditId,
     });
 
     expect(result.subscription_id).toBeGreaterThan(0);
     expect(result.purchase_id).toBeGreaterThan(0);
+    const { rows } = await getPool().query(
+      "SELECT description FROM purchases WHERE id=$1",
+      [result.purchase_id],
+    );
+    expect(rows[0]?.description).toMatchObject({ credit_id: creditId });
   });
 
   it("does not create a purchase row for zero-cost deferred downgrades", async () => {
@@ -384,5 +391,108 @@ describe("membership change payment enforcement", () => {
     expect(result.subscription_id).toBeGreaterThan(0);
     expect(result.purchase_id).toBeUndefined();
     expect(result.trial_available).toBe(true);
+  });
+
+  it.each(["unpaid", "past_due"] as const)(
+    "explicitly replaces an expired %s membership",
+    async (status) => {
+      const replacementAccount = uuid();
+      const oldTier = `old-${uuid().slice(0, 8)}` as any;
+      const newTier = `new-${uuid().slice(0, 8)}` as any;
+      await createTestAccount(replacementAccount);
+      await createTestMembershipTier({
+        id: oldTier,
+        price_monthly: 24,
+        price_yearly: 216,
+        priority: 20,
+      });
+      await createTestMembershipTier({
+        id: newTier,
+        price_monthly: 50,
+        price_yearly: 500,
+        priority: 30,
+      });
+      const { subscription_id: oldSubscriptionId } =
+        await createTestMembershipSubscription(replacementAccount, {
+          class: oldTier,
+          cost: 24,
+          start: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000),
+          end: new Date(Date.now() - 24 * 60 * 60 * 1000),
+          status,
+        });
+
+      const result = await applyTestMembershipChange({
+        account_id: replacementAccount,
+        targetClass: newTier,
+        interval: "month",
+        paymentAmount: 50,
+      });
+
+      expect(result.subscription_id).toBeGreaterThan(0);
+      expect(result.subscription_id).not.toBe(oldSubscriptionId);
+      const { rows } = await getPool().query(
+        `SELECT id, metadata->>'class' AS class, status, canceled_reason
+           FROM subscriptions
+          WHERE account_id=$1
+          ORDER BY id`,
+        [replacementAccount],
+      );
+      expect(rows).toEqual([
+        {
+          id: oldSubscriptionId,
+          class: oldTier,
+          status: "canceled",
+          canceled_reason: `Changed membership to ${newTier}`,
+        },
+        {
+          id: result.subscription_id,
+          class: newTier,
+          status: "active",
+          canceled_reason: null,
+        },
+      ]);
+    },
+  );
+
+  it("blocks a membership change while an expired period is renewing", async () => {
+    const renewingAccount = uuid();
+    const currentTier = `renewing-${uuid().slice(0, 8)}` as any;
+    const nextTier = `next-${uuid().slice(0, 8)}` as any;
+    await createTestAccount(renewingAccount);
+    await createTestMembershipTier({
+      id: currentTier,
+      price_monthly: 24,
+      price_yearly: 216,
+      priority: 20,
+    });
+    await createTestMembershipTier({
+      id: nextTier,
+      price_monthly: 50,
+      price_yearly: 500,
+      priority: 30,
+    });
+    await createTestMembershipSubscription(renewingAccount, {
+      class: currentTier,
+      cost: 24,
+      start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      end: new Date(Date.now() - 60_000),
+    });
+
+    await expect(
+      applyTestMembershipChange({
+        account_id: renewingAccount,
+        targetClass: nextTier,
+        interval: "month",
+        paymentAmount: 50,
+      }),
+    ).rejects.toThrow(/is renewing/);
+
+    const { rows } = await getPool().query(
+      `SELECT metadata->>'class' AS class, status
+         FROM subscriptions
+        WHERE account_id=$1`,
+      [renewingAccount],
+    );
+    expect(rows).toEqual([{ class: currentTier, status: "active" }]);
   });
 });

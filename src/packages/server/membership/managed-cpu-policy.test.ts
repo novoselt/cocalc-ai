@@ -24,6 +24,7 @@ jest.mock("./resolve", () => ({
 
 describe("getManagedProjectCpuPolicy", () => {
   beforeEach(() => {
+    jest.resetModules();
     jest.clearAllMocks();
   });
 
@@ -135,5 +136,33 @@ describe("getManagedProjectCpuPolicy", () => {
         membership_source: "grant",
       }),
     ).toBe(false);
+  });
+
+  it("coalesces and briefly caches identical account policy checks", async () => {
+    resolveMembershipForAccountMock.mockResolvedValue({
+      class: "standard",
+      source: "subscription",
+      effective_limits: {
+        cpu_5h_seconds: 10_000,
+        cpu_7d_seconds: 20_000,
+      },
+    });
+    getManagedCpuUsageForAccountMock.mockResolvedValue({
+      managed_cpu_5h_seconds: 100,
+      managed_cpu_7d_seconds: 200,
+      over_managed_cpu_5h: false,
+      over_managed_cpu_7d: false,
+    });
+    const { getManagedProjectCpuPolicy } = await import("./managed-cpu-policy");
+    const options = { account_id: "account-3" };
+
+    const [first, second] = await Promise.all([
+      getManagedProjectCpuPolicy(options),
+      getManagedProjectCpuPolicy(options),
+    ]);
+    expect(second).toEqual(first);
+    await expect(getManagedProjectCpuPolicy(options)).resolves.toEqual(first);
+    expect(resolveMembershipForAccountMock).toHaveBeenCalledTimes(1);
+    expect(getManagedCpuUsageForAccountMock).toHaveBeenCalledTimes(1);
   });
 });

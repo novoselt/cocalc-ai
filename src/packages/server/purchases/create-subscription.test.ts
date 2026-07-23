@@ -58,4 +58,24 @@ describe("createSubscription membership metadata validation", () => {
     );
     expect(typeof id).toBe("number");
   });
+
+  it("rejects another renewable membership for the same account", async () => {
+    await expect(
+      createSubscription(
+        {
+          account_id,
+          cost: 10,
+          interval: "month",
+          current_period_start: dayjs().toDate(),
+          current_period_end: dayjs().add(1, "month").toDate(),
+          status: "active",
+          metadata: { type: "membership", class: "member" },
+          latest_purchase_id: 0,
+        },
+        null,
+      ),
+    ).rejects.toMatchObject({
+      code: "membership_subscription_conflict",
+    });
+  });
 });
