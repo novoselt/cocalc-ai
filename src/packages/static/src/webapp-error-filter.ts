@@ -47,11 +47,13 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
       message.includes("waiting for 'info'") ||
       message.includes("waiting for info"));
   const socketIoTransportClosed = message === "socket has been disconnected";
+  const filesystemServerStarting = message === "file server not initialized";
   return (
     rootfsUnavailable ||
     routingUnavailable ||
     conatInfoBootstrapTimeout ||
-    socketIoTransportClosed
+    socketIoTransportClosed ||
+    filesystemServerStarting
   );
 }
 
