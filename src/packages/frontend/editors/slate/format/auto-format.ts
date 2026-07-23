@@ -918,7 +918,7 @@ export function insertPlainTextInCodeBlock(
 // what is right before the cursor in the current text node.
 // Returns true if autoformat actually happens.
 export function markdownAutoformat(editor: SlateEditor): boolean {
-  if (isSelectionInCodeBlock(editor)) return false;
+  if (isSelectionInCodeBlock(editor) || isSelectionInMath(editor)) return false;
   const { selection } = editor;
   if (!selection) return false;
   const markAutoformat = (applied: boolean): boolean => {
@@ -1022,6 +1022,18 @@ function isSelectionInCodeBlock(editor: SlateEditor): boolean {
   const entry = Editor.above(editor, {
     at: selection.focus,
     match: (node) => Element.isElement(node) && isCodeLikeBlockType(node.type),
+  });
+  return !!entry;
+}
+
+function isSelectionInMath(editor: SlateEditor): boolean {
+  const selection = editor.selection ?? editor.lastSelection;
+  if (!selection) return false;
+  const entry = Editor.above(editor, {
+    at: selection.focus,
+    match: (node) =>
+      Element.isElement(node) &&
+      (node.type === "math_inline" || node.type === "math_block"),
   });
   return !!entry;
 }
