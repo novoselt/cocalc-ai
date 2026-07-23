@@ -128,6 +128,14 @@ type LoadedCellListProps = CellListProps & {
   cell_list: immutable.List<string>;
 };
 
+export function canShowCellDragHandle(
+  actions: JupyterActions | undefined,
+  id: string,
+): boolean {
+  // Closing actions deletes their store before React necessarily unmounts.
+  return actions?.store?.is_cell_editable?.(id) === true;
+}
+
 export const CellList: React.FC<CellListProps> = (props: CellListProps) => {
   if (props.cell_list == null) {
     return renderLoading();
@@ -459,7 +467,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
           aiTools={aiTools}
           isFirst={isFirst}
           isLast={isLast}
-          showDragHandle={!!actions?.store.is_cell_editable(id)}
+          showDragHandle={canShowCellDragHandle(actions, id)}
           read_only={read_only}
           isDragging={isDragging}
           isPending={pendingCells?.has(id)}
