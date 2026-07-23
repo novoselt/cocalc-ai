@@ -23,6 +23,11 @@ describe("isIgnorableBrowserError", () => {
 });
 
 describe("isIgnorableUnhandledRejection", () => {
+  const metaMaskError = new Error("Failed to connect to MetaMask");
+  metaMaskError.stack =
+    "Error: Failed to connect to MetaMask\n" +
+    "    at Object.connect (chrome-extension://extension-id/scripts/inpage.js:7:84179)";
+
   test.each([
     new Error(
       "rootfs is not mounted; cannot access absolute path '/home'. Start the project and try again.",
@@ -36,6 +41,7 @@ describe("isIgnorableUnhandledRejection", () => {
     new Error(
       "account 'account-id' is not a collaborator on project 'project-id'",
     ),
+    metaMaskError,
     new Error(
       'COCALC_RUNTIME_SPONSOR_DENIAL:{"code":"runtime_sponsor_slots_exhausted","sponsor_account_id":"00000000-0000-4000-8000-000000000001","limit":1,"current":1,"active_projects":[]}',
     ),
@@ -50,6 +56,7 @@ describe("isIgnorableUnhandledRejection", () => {
     new Error("socket has been disconnected while saving a document"),
     new Error("file server failed to initialize"),
     new Error("account is not a collaborator"),
+    new Error("Failed to connect to MetaMask"),
     new Error("COCALC_RUNTIME_SPONSOR_DENIAL:not-json"),
     "rootfs is not mounted",
     undefined,

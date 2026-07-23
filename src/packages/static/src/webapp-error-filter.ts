@@ -25,6 +25,14 @@ function rejectionMessage(reason: unknown): string {
   return "";
 }
 
+function rejectionStack(reason: unknown): string {
+  if (reason == null || typeof reason !== "object") {
+    return "";
+  }
+  const stack = (reason as { stack?: unknown }).stack;
+  return typeof stack === "string" ? stack : "";
+}
+
 export function isIgnorableUnhandledRejection(reason: unknown): boolean {
   if (extractRuntimeSponsorDenial(reason) != null) {
     return true;
@@ -51,13 +59,17 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
   const staleCollaboratorAccess =
     message.includes("account '") &&
     message.includes("' is not a collaborator on project '");
+  const injectedMetaMaskFailure =
+    message === "failed to connect to metamask" &&
+    /(?:chrome|moz)-extension:\/\//i.test(rejectionStack(reason));
   return (
     rootfsUnavailable ||
     routingUnavailable ||
     conatInfoBootstrapTimeout ||
     socketIoTransportClosed ||
     filesystemServerStarting ||
-    staleCollaboratorAccess
+    staleCollaboratorAccess ||
+    injectedMetaMaskFailure
   );
 }
 
