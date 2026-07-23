@@ -31,7 +31,10 @@ describe("isIgnorableUnhandledRejection", () => {
       "unable to route 'ProjectActions.fs' to project-host for project 00000000-0000-4000-8000-000000000000; host routing info unavailable",
     ),
     new Error('once: timeout of 4000ms waiting for "info"'),
-  ])("ignores an expected project-host availability rejection", (reason) => {
+    new Error(
+      'COCALC_RUNTIME_SPONSOR_DENIAL:{"code":"runtime_sponsor_slots_exhausted","sponsor_account_id":"00000000-0000-4000-8000-000000000001","limit":1,"current":1,"active_projects":[]}',
+    ),
+  ])("ignores an expected non-actionable rejection", (reason) => {
     expect(isIgnorableUnhandledRejection(reason)).toBe(true);
   });
 
@@ -39,6 +42,7 @@ describe("isIgnorableUnhandledRejection", () => {
     new Error("permission denied"),
     new Error("unable to route billing request"),
     new Error('once: timeout of 4000ms waiting for "ready"'),
+    new Error("COCALC_RUNTIME_SPONSOR_DENIAL:not-json"),
     "rootfs is not mounted",
     undefined,
   ])("preserves an actionable rejection %p", (reason) => {

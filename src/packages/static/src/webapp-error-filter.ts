@@ -1,3 +1,5 @@
+import { extractRuntimeSponsorDenial } from "@cocalc/util/runtime-sponsor-denial";
+
 const IGNORED_BROWSER_ERROR_MESSAGES = new Set([
   "ResizeObserver loop completed with undelivered notifications.",
   "ResizeObserver loop limit exceeded",
@@ -24,6 +26,9 @@ function rejectionMessage(reason: unknown): string {
 }
 
 export function isIgnorableUnhandledRejection(reason: unknown): boolean {
+  if (extractRuntimeSponsorDenial(reason) != null) {
+    return true;
+  }
   const message = rejectionMessage(reason);
   if (!message) {
     return false;
