@@ -34,6 +34,9 @@ describe("isIgnorableUnhandledRejection", () => {
     new Error("socket has been disconnected"),
     new Error("file server not initialized"),
     new Error(
+      "account 'account-id' is not a collaborator on project 'project-id'",
+    ),
+    new Error(
       'COCALC_RUNTIME_SPONSOR_DENIAL:{"code":"runtime_sponsor_slots_exhausted","sponsor_account_id":"00000000-0000-4000-8000-000000000001","limit":1,"current":1,"active_projects":[]}',
     ),
   ])("ignores an expected non-actionable rejection", (reason) => {
@@ -46,6 +49,7 @@ describe("isIgnorableUnhandledRejection", () => {
     new Error('once: timeout of 4000ms waiting for "ready"'),
     new Error("socket has been disconnected while saving a document"),
     new Error("file server failed to initialize"),
+    new Error("account is not a collaborator"),
     new Error("COCALC_RUNTIME_SPONSOR_DENIAL:not-json"),
     "rootfs is not mounted",
     undefined,

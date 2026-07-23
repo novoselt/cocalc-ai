@@ -48,12 +48,16 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
       message.includes("waiting for info"));
   const socketIoTransportClosed = message === "socket has been disconnected";
   const filesystemServerStarting = message === "file server not initialized";
+  const staleCollaboratorAccess =
+    message.includes("account '") &&
+    message.includes("' is not a collaborator on project '");
   return (
     rootfsUnavailable ||
     routingUnavailable ||
     conatInfoBootstrapTimeout ||
     socketIoTransportClosed ||
-    filesystemServerStarting
+    filesystemServerStarting ||
+    staleCollaboratorAccess
   );
 }
 

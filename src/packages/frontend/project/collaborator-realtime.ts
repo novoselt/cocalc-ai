@@ -14,6 +14,8 @@ export function isCollaboratorRealtimeAccessError(err: unknown): boolean {
   const text = errorText(err);
   return (
     text.includes("user must be a collaborator on project") ||
+    (text.includes("account '") &&
+      text.includes("' is not a collaborator on project '")) ||
     text.includes("permission denied subscribing to 'project.") ||
     text.includes('permission denied subscribing to "project.')
   );
