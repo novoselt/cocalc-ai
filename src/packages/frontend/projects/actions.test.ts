@@ -63,17 +63,18 @@ describe("ProjectsActions project metadata updates", () => {
 
   function makeActions() {
     const async_log = jest.fn(async () => undefined);
+    const log = jest.fn(async () => undefined);
     const redux = {
       getStore: jest.fn((name) =>
         name === "account" ? { get: jest.fn(() => "acct-1") } : {},
       ),
       _set_state: jest.fn(),
       removeActions: jest.fn(),
-      getProjectActions: jest.fn(() => ({ async_log })),
+      getProjectActions: jest.fn(() => ({ async_log, log })),
     } as any;
     const actions = new ProjectsActions("projects", redux) as any;
     actions.have_project = jest.fn(async () => true);
-    return { actions, async_log, redux };
+    return { actions, async_log, log, redux };
   }
 
   function mockProjectedProjectMetadata(row: Record<string, any>) {
@@ -126,6 +127,16 @@ describe("ProjectsActions project metadata updates", () => {
   afterEach(() => {
     jest.clearAllMocks();
     window.sessionStorage.clear();
+  });
+
+  it("contains project logging failures after a project disappears", async () => {
+    const { actions, log } = makeActions();
+    log.mockRejectedValueOnce(new Error("project not found"));
+
+    await expect(
+      actions.project_log(project_id, { event: "project_started" }),
+    ).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith({ event: "project_started" });
   });
 
   it.each([

@@ -81,6 +81,7 @@ import {
   recordUxLatencyEvent,
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
+import { getLogger } from "@cocalc/frontend/logger";
 
 import type {
   CourseInfo,
@@ -91,6 +92,7 @@ import type {
 export type { Datastore, EnvVars, EnvVarsRecord };
 
 const PROJECTION_ONLY_FIELD = "__projection_only";
+const logger = getLogger("frontend:projects:actions");
 const PROJECTED_PROJECT_BOOTSTRAP_LIMIT = 2000;
 const PROJECT_RESTART_REQUEST_VISIBLE_MS = 8_000;
 type ProjectListWindowDirtyReason =
@@ -3645,7 +3647,18 @@ export class ProjectsActions extends Actions<ProjectsState> {
   }
 
   public async project_log(project_id: string, entry): Promise<void> {
-    await this.redux.getProjectActions(project_id).log(entry);
+    try {
+      await this.redux.getProjectActions(project_id)?.log?.(entry);
+    } catch (err) {
+      // Project logs are audit/UX telemetry. A project may disappear while a
+      // foreground lifecycle action is completing, which must not fail the
+      // user action or escape from a fire-and-forget call.
+      logger.debug("unable to record best-effort project log", {
+        project_id,
+        event: entry?.event,
+        error: `${err}`,
+      });
+    }
   }
 
   private classifyProjectStartUxSegment({
