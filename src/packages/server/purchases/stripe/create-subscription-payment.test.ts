@@ -179,7 +179,7 @@ describe("createSubscriptionPayment", () => {
         invoice_id: "in_legacy_renewal",
         purpose: SUBSCRIPTION_RENEWAL,
         subscription_id: `${subscription_id}`,
-        total_excluding_tax_usd: `${cost}`,
+        total_excluding_tax_usd: `${cost * 100}`,
       },
       status: "requires_payment_method",
     });
@@ -246,7 +246,7 @@ describe("createSubscriptionPayment", () => {
         account_id: uuid(),
         purpose: SUBSCRIPTION_RENEWAL,
         subscription_id: `${subscription_id}`,
-        total_excluding_tax_usd: `${cost}`,
+        total_excluding_tax_usd: `${cost * 100}`,
       },
       status: "requires_payment_method",
     });

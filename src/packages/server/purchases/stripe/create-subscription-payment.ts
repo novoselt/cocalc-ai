@@ -26,6 +26,7 @@ import {
 import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
 import { getMembershipTierById } from "@cocalc/server/membership/tiers";
 import type { SubscriptionRenewalAttempt } from "@cocalc/util/db-schema/subscription-renewal-attempts";
+import { stripeToDecimal } from "@cocalc/util/stripe/calc";
 import {
   bindSubscriptionRenewalPaymentIntent,
   cancelOpenSubscriptionRenewalAttempts,
@@ -161,9 +162,9 @@ async function adoptLegacyRenewalPaymentIntent({
   const existingAttemptId = cleanString(metadata.renewal_attempt_id);
   let stripeAmountMatches = false;
   try {
-    stripeAmountMatches = toDecimal(metadata.total_excluding_tax_usd).eq(
-      toDecimal(attempt.amount),
-    );
+    stripeAmountMatches = toDecimal(
+      stripeToDecimal(metadata.total_excluding_tax_usd),
+    ).eq(toDecimal(attempt.amount));
   } catch {
     // Missing or malformed Stripe metadata must fail closed.
   }
