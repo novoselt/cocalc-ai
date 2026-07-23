@@ -116,6 +116,7 @@ describe("AdminRefund", () => {
     );
 
     fireEvent.click(screen.getByText("Admin Refund"));
+    expect(screen.getByText("Other")).toBeTruthy();
     expect(
       screen.getByText(/exact subscription will be canceled and expire/i),
     ).toBeTruthy();

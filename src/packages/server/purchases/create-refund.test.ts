@@ -122,7 +122,7 @@ describe("createRefund", () => {
     expect(client.release).toHaveBeenCalled();
   });
 
-  it("creates Stripe refunds with a deterministic idempotency key", async () => {
+  it("omits Stripe's reason for a CoCalc 'other' refund", async () => {
     const client = makeClient();
     client.query
       .mockResolvedValueOnce({
@@ -148,7 +148,7 @@ describe("createRefund", () => {
       createRefund({
         account_id: "admin-1",
         purchase_id: 10,
-        reason: "requested_by_customer",
+        reason: "other",
         notes: "support case 1",
       }),
     ).resolves.toBe(55);
@@ -161,7 +161,7 @@ describe("createRefund", () => {
         type: "refund",
         purchase_id: 10,
         notes: "support case 1",
-        reason: "requested_by_customer",
+        reason: "other",
       },
       client,
     });
@@ -169,7 +169,6 @@ describe("createRefund", () => {
       {
         charge: "ch_123",
         metadata: { account_id: "admin-1", purchase_id: 10 },
-        reason: "requested_by_customer",
       },
       { idempotencyKey: "cocalc-refund-purchase-10" },
     );
