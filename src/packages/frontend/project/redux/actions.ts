@@ -188,6 +188,7 @@ import {
 } from "./file-creation";
 import {
   isVirtualListingPath,
+  resolveProjectPathIsDirectory,
   resolveRoutePathIsDirectory,
   toAbsoluteCurrentPath,
   toAuxTabPath,
@@ -3026,8 +3027,7 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     }
   };
 
-  // return true if exists and is a directory
-  // error if doesn't exist or can't find out.
+  // Missing paths are not directories. Preserve other lookup failures.
   // Use isDirViaCache for more of a fast hint.
   isDir = async (path: string): Promise<boolean> => {
     if (
@@ -3038,8 +3038,10 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     ) {
       return true; // easy special case
     }
-    const stats = await this.fs().stat(path);
-    return stats.isDirectory();
+    return await resolveProjectPathIsDirectory({
+      path,
+      isDir: async (path) => (await this.fs().stat(path)).isDirectory(),
+    });
   };
 
   moveFiles = async ({

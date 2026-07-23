@@ -31,10 +31,8 @@ describe("create a blank minimal string SyncDoc and call public methods on it", 
     expect(syncstring.get_state()).toBe("ready");
   });
 
-  it("call set_cursor_locs, an error since cursors aren't enabled", () => {
-    expect(async () => {
-      await syncstring.set_cursor_locs([]);
-    }).rejects.toThrow("cursors are not enabled");
+  it("ignores cursor updates when cursors aren't enabled", async () => {
+    await expect(syncstring.set_cursor_locs([])).resolves.toBeUndefined();
   });
 
   it("calls each public get method", () => {

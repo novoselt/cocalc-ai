@@ -567,7 +567,10 @@ export class SyncDoc extends EventEmitter {
     side_effect: boolean = false,
   ) => {
     if (!this.cursors) {
-      throw Error("cursors are not enabled");
+      // Cursor updates are transient presence hints. Editors may still emit a
+      // final throttled update while a document is opening or closing without
+      // cursor support, so there is nothing useful to fail here.
+      return;
     }
     if (!this.isReady()) {
       return;

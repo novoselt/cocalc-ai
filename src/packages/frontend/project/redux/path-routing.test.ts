@@ -12,7 +12,7 @@ import {
   getSnapshotHomeDirectoryForPaths,
   getSnapshotsRouteRelativePath,
   isVirtualListingPath,
-  resolveRoutePathIsDirectory,
+  resolveProjectPathIsDirectory,
   toAbsoluteCurrentPath,
   toAuxTabPath,
   toUrlPath,
@@ -100,7 +100,7 @@ describe("project redux path routing", () => {
     new Error("ENOENT: no such file or directory, stat 'missing.term'"),
   ])("classifies a missing direct route as a file", async (err) => {
     await expect(
-      resolveRoutePathIsDirectory({
+      resolveProjectPathIsDirectory({
         path: "missing.term",
         isDir: async () => {
           throw err;
@@ -111,7 +111,7 @@ describe("project redux path routing", () => {
 
   it("preserves actionable route lookup failures", async () => {
     await expect(
-      resolveRoutePathIsDirectory({
+      resolveProjectPathIsDirectory({
         path: "work",
         isDir: async () => {
           throw new Error("permission denied");

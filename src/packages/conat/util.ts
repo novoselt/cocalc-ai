@@ -16,14 +16,32 @@ export class ConatError extends Error {
   }
 }
 
+function conatErrorMessage(value: unknown): string {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  try {
+    const message = (value as any)?.message;
+    if (typeof message === "string" && message.trim()) {
+      return message.trim();
+    }
+  } catch {
+    // Malformed proxy objects should still produce a usable protocol error.
+  }
+  return "Conat request failed";
+}
+
 export function headerToError(headers): ConatError {
-  const err = Error(headers.error);
-  if (headers.error_attrs) {
-    for (const field in headers.error_attrs) {
+  const err = new ConatError(conatErrorMessage(headers?.error));
+  if (headers?.error_attrs) {
+    for (const field of Object.keys(headers.error_attrs)) {
       err[field] = headers.error_attrs[field];
     }
   }
-  if (err["code"] === undefined && headers.code) {
+  if (!err.message?.trim()) {
+    err.message = conatErrorMessage(headers?.error);
+  }
+  if (err["code"] === undefined && headers?.code != null) {
     err["code"] = headers.code;
   }
   return err;

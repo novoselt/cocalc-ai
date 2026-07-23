@@ -4,6 +4,7 @@
  */
 
 import { isRecoverableFilesystemClientError } from "./filesystem-client";
+import { isFilesystemServerStartingError } from "./filesystem-client";
 
 describe("isRecoverableFilesystemClientError", () => {
   it("treats project-host info bootstrap timeouts as recoverable", () => {
@@ -18,5 +19,16 @@ describe("isRecoverableFilesystemClientError", () => {
     expect(
       isRecoverableFilesystemClientError(new TypeError("Failed to fetch")),
     ).toBe(true);
+  });
+
+  it("recognizes only the filesystem server startup error", () => {
+    expect(
+      isFilesystemServerStartingError(new Error("file server not initialized")),
+    ).toBe(true);
+    expect(
+      isFilesystemServerStartingError(
+        new Error("file server failed to initialize"),
+      ),
+    ).toBe(false);
   });
 });

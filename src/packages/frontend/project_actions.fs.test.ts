@@ -66,4 +66,32 @@ describe("ProjectActions.fs recovery", () => {
     expect(clearClient).not.toHaveBeenCalled();
     expect(stat).toHaveBeenCalledTimes(1);
   });
+
+  it("waits for a filesystem server that is still initializing", async () => {
+    const startingStat = jest
+      .fn()
+      .mockRejectedValue(new Error("file server not initialized"));
+    const liveStat = jest.fn().mockResolvedValue({ size: 13 });
+    const getClient = jest
+      .fn()
+      .mockResolvedValueOnce({ stat: startingStat })
+      .mockResolvedValueOnce({ stat: startingStat })
+      .mockResolvedValueOnce({ stat: liveStat });
+    const clearClient = jest.fn();
+    const wait = jest.fn(async () => {});
+
+    await expect(
+      callFilesystemClientWithRecovery({
+        getClient,
+        clearClient,
+        prop: "stat",
+        args: ["/tmp/starting"],
+        wait,
+      }),
+    ).resolves.toEqual({ size: 13 });
+    expect(wait).toHaveBeenNthCalledWith(1, 100);
+    expect(wait).toHaveBeenNthCalledWith(2, 250);
+    expect(clearClient).toHaveBeenCalledTimes(2);
+    expect(getClient).toHaveBeenCalledTimes(3);
+  });
 });
