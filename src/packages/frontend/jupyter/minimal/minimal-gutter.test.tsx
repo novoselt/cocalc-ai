@@ -21,7 +21,7 @@ jest.mock("@cocalc/frontend/components", () => ({
 }));
 
 jest.mock("@cocalc/frontend/components/sortable-list", () => ({
-  DragHandle: ({ children }) => <div>{children}</div>,
+  DragHandle: ({ children }) => <div data-testid="drag-handle">{children}</div>,
 }));
 
 import { MinimalGutter } from "./minimal-gutter";
@@ -71,5 +71,16 @@ describe("MinimalGutter", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("lock")).toBeInTheDocument();
     expect(screen.getByText("ban")).toBeInTheDocument();
+  });
+
+  it("installs a drag handle only for movable cells", () => {
+    // same rule as canShowCellDragHandle in the regular notebook view
+    renderGutter();
+    expect(screen.getByTestId("drag-handle")).toBeInTheDocument();
+  });
+
+  it("does not install a drag handle for protected or read-only cells", () => {
+    renderGutter({ isNotEditable: true });
+    expect(screen.queryByTestId("drag-handle")).toBeNull();
   });
 });

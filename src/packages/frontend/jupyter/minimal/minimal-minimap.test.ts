@@ -71,7 +71,11 @@ describe("buildMinimalMinimapEntries", () => {
     ]);
   });
 
-  it("hides cells inside collapsed sections until the next peer heading", () => {
+  it("hides cells inside a collapsed section only up to the next heading (flat block semantics)", () => {
+    // Section blocks are flat: computeSectionBlocks starts a new block at
+    // EVERY heading, so collapsing "# One" hides only the cells before
+    // "## Child" — the rendered notebook keeps the Child section visible,
+    // and the minimap must agree.
     const cells = fromJS({
       h1: { id: "h1", cell_type: "markdown", input: "# One" },
       code: { id: "code", cell_type: "code", input: "1" },
@@ -87,8 +91,32 @@ describe("buildMinimalMinimapEntries", () => {
       lastExecInputHash: {},
     });
 
-    expect(entries.map(({ id }) => id)).toEqual(["h1", "h2"]);
+    expect(entries.map(({ id }) => id)).toEqual([
+      "h1",
+      "child",
+      "nested",
+      "h2",
+    ]);
     expect(entries[0].pixelHeight).toBe(24);
+  });
+
+  it("collapsing a nested subsection hides only that subsection's cells", () => {
+    const cells = fromJS({
+      h1: { id: "h1", cell_type: "markdown", input: "# One" },
+      code: { id: "code", cell_type: "code", input: "1" },
+      child: { id: "child", cell_type: "markdown", input: "## Child" },
+      nested: { id: "nested", cell_type: "code", input: "2" },
+      h2: { id: "h2", cell_type: "markdown", input: "# Two" },
+    });
+    const entries = buildMinimalMinimapEntries({
+      cellList: List(["h1", "code", "child", "nested", "h2"]),
+      cells,
+      collapsedSections: new globalThis.Set(["child"]),
+      heightCache: {},
+      lastExecInputHash: {},
+    });
+
+    expect(entries.map(({ id }) => id)).toEqual(["h1", "code", "child", "h2"]);
   });
 });
 
