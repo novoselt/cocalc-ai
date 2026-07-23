@@ -1998,10 +1998,10 @@ export function ChatRoomThreadPanel({
                 size={compactThreadBadgeSize}
               />
             )}
-            {compactThreadLabel}
             <ThreadAnchorButton
               actions={actions}
               threadKey={selectedThreadId}
+              label={compactThreadLabel}
             />
             <ThreadResolveButton
               actions={actions}

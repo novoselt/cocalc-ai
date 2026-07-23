@@ -356,7 +356,33 @@ export function ChatRoomSidebarContent({
               <Icon name={isAI ? "robot" : "users"} style={{ color: "#888" }} />
             </Tooltip>
           )}
-          <div style={THREAD_ITEM_LABEL_STYLE}>{plainLabel}</div>
+          <div
+            style={{
+              ...THREAD_ITEM_LABEL_STYLE,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span
+              style={{
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {plainLabel}
+            </span>
+            {unreadCount > 0 && (
+              <Badge
+                count={unreadCount}
+                size="small"
+                overflowCount={99}
+                style={{ flexShrink: 0 }}
+              />
+            )}
+          </div>
           {showDot && (
             <Tooltip title={dotTitle}>
               <span
@@ -373,17 +399,6 @@ export function ChatRoomSidebarContent({
                 }}
               />
             </Tooltip>
-          )}
-          {unreadCount > 0 && !isHovered && (
-            <Badge
-              count={unreadCount}
-              size="small"
-              overflowCount={99}
-              style={{
-                backgroundColor: COLORS.GRAY_L0,
-                color: COLORS.GRAY_D,
-              }}
-            />
           )}
           {showMenu && (
             <ChatRoomThreadMenu
@@ -434,16 +449,7 @@ export function ChatRoomSidebarContent({
     if (count <= 0) {
       return null;
     }
-    const badge = (
-      <Badge
-        count={count}
-        size="small"
-        style={{
-          backgroundColor: COLORS.GRAY_L0,
-          color: COLORS.GRAY_D,
-        }}
-      />
-    );
+    const badge = <Badge count={count} size="small" />;
     if (!actions?.markThreadRead) {
       return badge;
     }

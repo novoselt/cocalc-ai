@@ -32,6 +32,10 @@ import { isChatPath } from "./paths";
 export interface AnchorEditorActions {
   // scroll/focus the document location of the anchor
   jumpToAnchor?: (anchorId: string) => void;
+  // whether the target currently exists; false suppresses dead jump links
+  canJumpToAnchor?: (anchorId: string) => boolean;
+  // tooltip shown beside an unavailable anchor's stored title
+  getMissingAnchorMessage?: (anchorId: string) => string;
   // human label for the anchor, e.g. "Cell 3" or "section.tex:12"
   getAnchorLabel?: (anchorId: string) => string | undefined;
   // shorter label used for the jump button; falls back to getAnchorLabel

@@ -148,6 +148,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
   const fileContext = useFileContext();
   const [mdHovered, setMdHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
   // Protected (metadata.editable=false) cell whose editor is open read-only
   // for inspection; the notebook itself stays in escape mode for these.
   const [viewProtected, setViewProtected] = useState(false);
@@ -157,6 +158,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
     }
   }, [is_current, viewProtected]);
   const [rowHovered, setRowHovered] = useState(false);
+  const controlsVisible = rowHovered || menuOpen || chatMenuOpen;
   const outputRef = useRef<HTMLDivElement>(null);
   const [outputHeight, setOutputHeight] = useState<number>(0);
 
@@ -677,57 +679,53 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                       display: "flex",
                       gap: "2px",
                       alignItems: "center",
-                      background: "rgba(255,255,255,0.85)",
+                      background: controlsVisible
+                        ? "rgba(255,255,255,0.85)"
+                        : "transparent",
                       borderRadius: "4px",
-                      padding: "1px",
-                      visibility: rowHovered || menuOpen ? "visible" : "hidden",
+                      padding: controlsVisible ? "1px" : 0,
                     }}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {isCode && !read_only && (
-                      <Tooltip title="Edit this code cell" placement="top">
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<Icon name="pencil" />}
-                          onClick={handleActivateCode}
+                    {controlsVisible ? (
+                      <>
+                        {isCode && !read_only && (
+                          <Tooltip title="Edit this code cell" placement="top">
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={<Icon name="pencil" />}
+                              onClick={handleActivateCode}
+                            />
+                          </Tooltip>
+                        )}
+                        {isCode && !read_only && renderRunDropdownButton()}
+                        {isCode && !read_only && aiTools && actions && (
+                          <AgentCellTool
+                            id={id}
+                            actions={actions}
+                            aiTools={aiTools}
+                            cellType="code"
+                          />
+                        )}
+                        {actions && (
+                          <CellChatButton
+                            cellId={id}
+                            onOpenChange={setChatMenuOpen}
+                          />
+                        )}
+                        <CodeBarDropdownMenu
+                          actions={actions}
+                          frameActions={frameActions}
+                          id={id}
+                          cell={cell}
+                          onOpenChange={setMenuOpen}
+                          hideSplitCell
                         />
-                      </Tooltip>
+                      </>
+                    ) : (
+                      <CellChatUnreadBadge cellId={id} />
                     )}
-                    {isCode && !read_only && renderRunDropdownButton()}
-                    {isCode && !read_only && aiTools && actions && (
-                      <AgentCellTool
-                        id={id}
-                        actions={actions}
-                        aiTools={aiTools}
-                        cellType="code"
-                      />
-                    )}
-                    {actions && <CellChatButton cellId={id} />}
-                    <CodeBarDropdownMenu
-                      actions={actions}
-                      frameActions={frameActions}
-                      id={id}
-                      cell={cell}
-                      onOpenChange={setMenuOpen}
-                      hideSplitCell
-                    />
-                  </div>
-                )}
-                {/* Zen mode: sticky unread chat badge in the same top-right
-                    slot; the hover toolbar above (opaque background) covers
-                    it while the toolbar is visible. */}
-                {zenMode && !isActiveEditing && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: "4px",
-                      right: "6px",
-                      zIndex: 4,
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <CellChatUnreadBadge cellId={id} />
                   </div>
                 )}
                 {isCode && hasTransientOrPersistedOutput && (
@@ -955,32 +953,43 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                           minHeight: "22px",
                           gap: "2px",
                           alignItems: "center",
-                          visibility:
-                            rowHovered || menuOpen ? "visible" : "hidden",
                           position: "relative",
                           zIndex: 2,
                         }}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {!read_only &&
-                          renderRunDropdownButton({ marginRight: "auto" })}
-                        {!read_only && aiTools && actions && (
-                          <AgentCellTool
-                            id={id}
-                            actions={actions}
-                            aiTools={aiTools}
-                            cellType={isCode ? "code" : "markdown"}
-                          />
+                        {controlsVisible ? (
+                          <>
+                            {!read_only &&
+                              renderRunDropdownButton({
+                                marginRight: "auto",
+                              })}
+                            {!read_only && aiTools && actions && (
+                              <AgentCellTool
+                                id={id}
+                                actions={actions}
+                                aiTools={aiTools}
+                                cellType={isCode ? "code" : "markdown"}
+                              />
+                            )}
+                            {actions && (
+                              <CellChatButton
+                                cellId={id}
+                                onOpenChange={setChatMenuOpen}
+                              />
+                            )}
+                            <CodeBarDropdownMenu
+                              actions={actions}
+                              frameActions={frameActions}
+                              id={id}
+                              cell={cell}
+                              onOpenChange={setMenuOpen}
+                              hideSplitCell
+                            />
+                          </>
+                        ) : (
+                          <CellChatUnreadBadge cellId={id} />
                         )}
-                        {actions && <CellChatButton cellId={id} />}
-                        <CodeBarDropdownMenu
-                          actions={actions}
-                          frameActions={frameActions}
-                          id={id}
-                          cell={cell}
-                          onOpenChange={setMenuOpen}
-                          hideSplitCell
-                        />
                       </div>
                     )}
                     {isCode && !isActiveEditing && !sourceHidden && (
@@ -1142,20 +1151,29 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                           padding: "0 4px",
                           minHeight: "22px",
                           alignItems: "center",
-                          visibility:
-                            rowHovered || menuOpen ? "visible" : "hidden",
                         }}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {actions && <CellChatButton cellId={id} />}
-                        <CodeBarDropdownMenu
-                          actions={actions}
-                          frameActions={frameActions}
-                          id={id}
-                          cell={cell}
-                          onOpenChange={setMenuOpen}
-                          hideSplitCell
-                        />
+                        {controlsVisible ? (
+                          <>
+                            {actions && (
+                              <CellChatButton
+                                cellId={id}
+                                onOpenChange={setChatMenuOpen}
+                              />
+                            )}
+                            <CodeBarDropdownMenu
+                              actions={actions}
+                              frameActions={frameActions}
+                              id={id}
+                              cell={cell}
+                              onOpenChange={setMenuOpen}
+                              hideSplitCell
+                            />
+                          </>
+                        ) : (
+                          <CellChatUnreadBadge cellId={id} />
+                        )}
                       </div>
                     )}
                   </>

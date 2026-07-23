@@ -54,7 +54,13 @@ export function CellChatUnreadBadge({ cellId }: { cellId: string }) {
   );
 }
 
-export function CellChatButton({ cellId }: { cellId: string }) {
+export function CellChatButton({
+  cellId,
+  onOpenChange,
+}: {
+  cellId: string;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const frameContext = useFrameContext();
   const { project_id, path } = frameContext;
   const { threads, totalMessages, totalUnread } = useAnchoredThreads(
@@ -124,10 +130,11 @@ export function CellChatButton({ cellId }: { cellId: string }) {
         mouseLeaveDelay={1.5}
         icon={<Icon name="angle-down" />}
         onClick={handleMainClick}
+        onOpenChange={onOpenChange}
         menu={{ items: menuItems }}
       >
         <Tooltip placement="top" title="Discuss this cell in side chat">
-          <span style={CODE_BAR_BTN_STYLE}>
+          <span style={{ ...CODE_BAR_BTN_STYLE, height: "auto" }}>
             <Icon name="comment" /> Chat
             {badgeCount > 0 && (
               <Badge

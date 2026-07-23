@@ -2291,6 +2291,14 @@ export class Actions extends BaseActions<LatexEditorState> {
     return `${hash} (${jumpLabel})`;
   };
 
+  public canJumpToAnchor = (hash: string): boolean => {
+    return this.getAnchorLocations(hash).length > 0;
+  };
+
+  public getMissingAnchorMessage = (_hash: string): string => {
+    return "This chat marker was removed";
+  };
+
   public jumpToAnchor = async (hash: string): Promise<void> => {
     const locations = this.getAnchorLocations(hash);
     if (locations.length === 0) return;

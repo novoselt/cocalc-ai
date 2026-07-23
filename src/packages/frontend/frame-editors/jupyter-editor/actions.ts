@@ -590,6 +590,15 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
     this.jump_to_cell(anchorId, "top");
   };
 
+  public canJumpToAnchor = (anchorId: string): boolean => {
+    const cellList = this.jupyter_actions.store.get("cell_list");
+    return cellList?.includes(anchorId) === true;
+  };
+
+  public getMissingAnchorMessage = (_anchorId: string): string => {
+    return "This cell was deleted";
+  };
+
   public getAnchorLabel = (anchorId: string): string | undefined => {
     return this.getCellLabel(anchorId);
   };
