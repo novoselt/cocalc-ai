@@ -1134,6 +1134,12 @@ export class JupyterActions extends JupyterActions0 {
         console.warn("failed to replay jupyter live runs", err);
       }
     } finally {
+      // close() deletes non-function fields via misc.close(this). A replay can
+      // finish afterward, so only the subscription that still owns this
+      // actions instance may flush its buffered messages.
+      if (this.isClosed() || this.liveRunSub !== sub) {
+        return;
+      }
       this.liveRunReplayPending = false;
       const buffered = this.liveRunReplayBuffer;
       this.liveRunReplayBuffer = [];

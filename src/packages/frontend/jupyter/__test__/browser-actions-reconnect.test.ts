@@ -3,11 +3,13 @@
 import { EventEmitter } from "events";
 
 const registerReconnectResource = jest.fn();
+const projectConat = jest.fn();
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
     conat_client: {
       registerReconnectResource,
+      projectConat,
     },
   },
 }));
@@ -25,6 +27,7 @@ describe("JupyterActions reconnect coordination", () => {
       requestReconnect: jest.fn(),
       close: jest.fn(),
     });
+    projectConat.mockReset();
   });
 
   it("registers a reconnect resource that waits for live syncdb recovery", async () => {
@@ -86,5 +89,59 @@ describe("JupyterActions reconnect coordination", () => {
     expect(clearRunQueue).toHaveBeenCalled();
     expect(clear_all_cell_run_state).toHaveBeenCalled();
     expect(target.runningNow).toBe(false);
+  });
+
+  it("does not flush live-run replay after the actions close", async () => {
+    let finishReplay!: () => void;
+    const replay = new Promise<void>((resolve) => {
+      finishReplay = resolve;
+    });
+    let markReplayStarted!: () => void;
+    const replayStarted = new Promise<void>((resolve) => {
+      markReplayStarted = resolve;
+    });
+    let finishSubscription!: () => void;
+    const subscription = {
+      close: jest.fn(() => finishSubscription()),
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      next: jest.fn(
+        () =>
+          new Promise<IteratorResult<never>>((resolve) => {
+            finishSubscription = () =>
+              resolve({ done: true, value: undefined });
+          }),
+      ),
+    };
+    projectConat.mockResolvedValue({
+      subscribe: jest.fn(async () => subscription),
+    });
+    const actions: any = new JupyterActions("jupyter-test", {
+      getStore: jest.fn(() => undefined),
+      removeActions: jest.fn(),
+    } as any);
+    actions.project_id = "project-1";
+    actions.liveRunPath = "notebook.ipynb";
+    actions._state = "ready";
+    actions.replaySharedLiveRuns = jest.fn(() => {
+      markReplayStarted();
+      return replay;
+    });
+    const runDebug = jest.fn();
+    actions.runDebug = runDebug;
+
+    const pending = actions.ensureLiveRunSubscription();
+    await replayStarted;
+    expect(actions.replaySharedLiveRuns).toHaveBeenCalledTimes(1);
+
+    await actions.close();
+    finishReplay();
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(runDebug).not.toHaveBeenCalledWith(
+      "liveRun.batch.buffer.flush",
+      expect.anything(),
+    );
   });
 });
