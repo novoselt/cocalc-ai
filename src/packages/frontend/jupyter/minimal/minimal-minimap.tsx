@@ -109,7 +109,6 @@ export function buildMinimalMinimapEntries({
 }): MinimalMinimapEntry[] {
   const entries: MinimalMinimapEntry[] = [];
   let inCollapsed = false;
-  let collapsedLevel = 0;
   let collapsedEntryIdx: number | null = null;
 
   cellList.forEach((id: string) => {
@@ -127,7 +126,6 @@ export function buildMinimalMinimapEntries({
     if (headingLevel > 0) {
       if (collapsedSections.has(id)) {
         inCollapsed = true;
-        collapsedLevel = headingLevel;
         collapsedEntryIdx = entries.length;
         entries.push({
           id,
@@ -138,7 +136,11 @@ export function buildMinimalMinimapEntries({
           isSelected: selIds?.has(id) ?? false,
         });
         return;
-      } else if (inCollapsed && headingLevel <= collapsedLevel) {
+      } else if (inCollapsed) {
+        // Any heading ends the collapsed run: section blocks are flat
+        // (computeSectionBlocks starts a new block at every heading, so
+        // collapsing hides only the cells up to the next heading of ANY
+        // level) — the minimap must mirror that, not a nested hierarchy.
         inCollapsed = false;
         collapsedEntryIdx = null;
       }
