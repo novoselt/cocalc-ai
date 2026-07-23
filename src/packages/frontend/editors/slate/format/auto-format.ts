@@ -34,6 +34,31 @@ function rememberAutoformatSelection(editor: Editor, selection: Range): void {
   (editor as any).__autoformatSelection = selection;
 }
 
+function isInsideUnclosedMathSource(text: string, offset: number): boolean {
+  let openDelimiter: "$" | "$$" | undefined;
+  const beforeCursor = text.slice(0, offset);
+  for (let i = 0; i < beforeCursor.length; i++) {
+    if (beforeCursor[i] !== "$") continue;
+
+    let precedingBackslashes = 0;
+    for (let j = i - 1; j >= 0 && beforeCursor[j] === "\\"; j--) {
+      precedingBackslashes += 1;
+    }
+    if (precedingBackslashes % 2 === 1) continue;
+
+    const delimiter = beforeCursor[i + 1] === "$" ? "$$" : "$";
+    if (delimiter === "$$") {
+      i += 1;
+    }
+    if (openDelimiter == null) {
+      openDelimiter = delimiter;
+    } else if (openDelimiter === delimiter) {
+      openDelimiter = undefined;
+    }
+  }
+  return openDelimiter != null;
+}
+
 function spacerParagraph(): Element {
   return {
     type: "paragraph",
@@ -893,7 +918,7 @@ export function insertPlainTextInCodeBlock(
 // what is right before the cursor in the current text node.
 // Returns true if autoformat actually happens.
 export function markdownAutoformat(editor: SlateEditor): boolean {
-  if (isSelectionInCodeBlock(editor)) return false;
+  if (isSelectionInCodeBlock(editor) || isSelectionInMath(editor)) return false;
   const { selection } = editor;
   if (!selection) return false;
   const markAutoformat = (applied: boolean): boolean => {
@@ -916,6 +941,17 @@ export function markdownAutoformat(editor: SlateEditor): boolean {
 
   // Must be a text node
   if (!Text.isText(node)) return false;
+
+  // Until the closing "$" is typed, LaTeX is plain source text. Markdown
+  // autoformat can reinterpret "\\" as a line break and move the caret.
+  const isEmptyBlockMathShortcut =
+    node.text === "$$" && selection.focus.offset === 2;
+  if (
+    !isEmptyBlockMathShortcut &&
+    isInsideUnclosedMathSource(node.text, selection.focus.offset)
+  ) {
+    return false;
+  }
 
   if (markAutoformat(autoformatBlockquoteAtStart(editor))) return true;
   if (markAutoformat(autoformatListAtStart(editor))) return true;
@@ -986,6 +1022,18 @@ function isSelectionInCodeBlock(editor: SlateEditor): boolean {
   const entry = Editor.above(editor, {
     at: selection.focus,
     match: (node) => Element.isElement(node) && isCodeLikeBlockType(node.type),
+  });
+  return !!entry;
+}
+
+function isSelectionInMath(editor: SlateEditor): boolean {
+  const selection = editor.selection ?? editor.lastSelection;
+  if (!selection) return false;
+  const entry = Editor.above(editor, {
+    at: selection.focus,
+    match: (node) =>
+      Element.isElement(node) &&
+      (node.type === "math_inline" || node.type === "math_block"),
   });
   return !!entry;
 }
