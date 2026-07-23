@@ -4202,6 +4202,76 @@ export class BaseEditorActions<
     this.redux.getActions("page").settings("editor-settings");
   };
 
+  // Anchored side-chat threads: newest call wins when several opens race.
+  private _openAnchorChatGeneration: number = 0;
+
+  // Wait until the side chat frame's ChatActions are usable (syncdb
+  // initialized and mounted in the frame tree).
+  private async waitForSideChatActions(
+    generation: number,
+  ): Promise<ReturnType<typeof getSideChatActions> | undefined> {
+    for (const d of [1, 10, 50, 200, 500, 1000, 2000, 4000]) {
+      if (generation !== this._openAnchorChatGeneration || this.isClosed()) {
+        return undefined;
+      }
+      const actions = getSideChatActions({
+        project_id: this.project_id,
+        path: this.path,
+      });
+      if (actions?.syncdb != null && actions.frameTreeActions != null) {
+        return actions;
+      }
+      await delay(d);
+    }
+    return undefined;
+  }
+
+  // Open the side chat showing the newest thread anchored to anchorId,
+  // creating a new empty anchored thread when none exists.  Editors
+  // provide the anchor semantics via getAnchorLabel/jumpToAnchor.
+  async openAnchorChat(anchorId: string, path?: string): Promise<void> {
+    if (isChatPath(this.path)) return;
+    const generation = ++this._openAnchorChatGeneration;
+    this.redux
+      .getProjectActions(this.project_id)
+      .open_chat({ path: this.path });
+    this.show_focused_frame_of_type(chat.type);
+    const label = (this as any).getAnchorLabel?.(anchorId);
+    const actions = await this.waitForSideChatActions(generation);
+    actions?.findOrCreateAnchorThread({ anchorId, label, path });
+  }
+
+  // Open the side chat with a fresh empty thread anchored to anchorId,
+  // even if other threads for this anchor exist.
+  async openAnchorChatNewThread(
+    anchorId: string,
+    path?: string,
+  ): Promise<void> {
+    if (isChatPath(this.path)) return;
+    const generation = ++this._openAnchorChatGeneration;
+    this.redux
+      .getProjectActions(this.project_id)
+      .open_chat({ path: this.path });
+    this.show_focused_frame_of_type(chat.type);
+    const label = (this as any).getAnchorLabel?.(anchorId);
+    const actions = await this.waitForSideChatActions(generation);
+    actions?.createAnchorThread({ anchorId, label, path });
+  }
+
+  // Open the side chat showing one specific (typically anchored) thread.
+  async openAnchorChatThread(threadKey: string): Promise<void> {
+    if (isChatPath(this.path)) return;
+    const generation = ++this._openAnchorChatGeneration;
+    this.redux
+      .getProjectActions(this.project_id)
+      .open_chat({ path: this.path });
+    this.show_focused_frame_of_type(chat.type);
+    const actions = await this.waitForSideChatActions(generation);
+    if (actions == null) return;
+    actions.clearAllFilters();
+    actions.setSelectedThread(threadKey);
+  }
+
   // NOTE: can't be an arrow function because gets called in derived classes
   async gotoFragment(fragmentId: FragmentId) {
     if (fragmentId == null) {

@@ -257,12 +257,35 @@ export function buildThreadRecord(
   };
 }
 
+// A thread can be anchored to a location in the document the side chat
+// belongs to.  The anchor id is opaque to chat: for Jupyter it is the
+// cell's UUID, for LaTeX it is the marker hash of a "% chat: <hash>"
+// comment in the source.  `path` optionally names a sub-file for
+// multi-file editors (e.g. LaTeX \input files).
+export interface ChatThreadAnchor {
+  id: string;
+  path?: string;
+}
+
+// Set when an anchored thread has been resolved (collaborative-TODO
+// flow).  The live anchor is cleared and preserved here so stale
+// markers left in the source can still be recognized.
+export interface ChatThreadResolvedMeta {
+  account_id: string;
+  at: string; // ISO timestamp
+  anchorId: string;
+  path?: string;
+  label?: string;
+}
+
 export interface ChatThreadConfigRecord {
   event: "chat-thread-config";
   sender_id: string;
   date: string;
   thread_id: string;
   name?: string;
+  anchor?: ChatThreadAnchor;
+  resolved?: ChatThreadResolvedMeta;
   thread_color?: string;
   thread_accent_color?: string;
   thread_icon?: string;
@@ -291,6 +314,8 @@ export interface BuildThreadConfigRecordOptions {
   sender_id?: string;
   date?: Date | string;
   name?: string;
+  anchor?: ChatThreadAnchor;
+  resolved?: ChatThreadResolvedMeta;
   thread_color?: string;
   thread_accent_color?: string;
   thread_icon?: string;
@@ -322,6 +347,8 @@ export function buildThreadConfigRecord(
     date,
     thread_id: key.thread_id,
     name: options.name,
+    anchor: options.anchor,
+    resolved: options.resolved,
     thread_color: options.thread_color,
     thread_accent_color: options.thread_accent_color,
     thread_icon: options.thread_icon,

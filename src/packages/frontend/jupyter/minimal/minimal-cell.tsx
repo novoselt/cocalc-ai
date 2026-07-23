@@ -31,6 +31,10 @@ import { attachmentTransform } from "@cocalc/frontend/jupyter/attachment-transfo
 
 import { AgentCellTool } from "@cocalc/frontend/jupyter/ai";
 import { CodeBarDropdownMenu } from "@cocalc/frontend/jupyter/cell-buttonbar-menu";
+import {
+  CellChatButton,
+  CellChatUnreadBadge,
+} from "@cocalc/frontend/jupyter/cell-chat-button";
 import { MinimalCodePreview } from "./minimal-code-preview";
 import {
   CODE_BAR_BTN_STYLE,
@@ -699,6 +703,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                         cellType="code"
                       />
                     )}
+                    {actions && <CellChatButton cellId={id} />}
                     <CodeBarDropdownMenu
                       actions={actions}
                       frameActions={frameActions}
@@ -707,6 +712,22 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                       onOpenChange={setMenuOpen}
                       hideSplitCell
                     />
+                  </div>
+                )}
+                {/* Zen mode: sticky unread chat badge in the same top-right
+                    slot; the hover toolbar above (opaque background) covers
+                    it while the toolbar is visible. */}
+                {zenMode && !isActiveEditing && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "4px",
+                      right: "6px",
+                      zIndex: 4,
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <CellChatUnreadBadge cellId={id} />
                   </div>
                 )}
                 {isCode && hasTransientOrPersistedOutput && (
@@ -951,6 +972,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                             cellType={isCode ? "code" : "markdown"}
                           />
                         )}
+                        {actions && <CellChatButton cellId={id} />}
                         <CodeBarDropdownMenu
                           actions={actions}
                           frameActions={frameActions}
@@ -1125,6 +1147,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                         }}
                         onClick={(e) => e.stopPropagation()}
                       >
+                        {actions && <CellChatButton cellId={id} />}
                         <CodeBarDropdownMenu
                           actions={actions}
                           frameActions={frameActions}

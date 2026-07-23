@@ -30,6 +30,7 @@ import {
   RUN_ALL_CELLS_BELOW_ICON,
 } from "./consts";
 import { AgentCellTool } from "./ai/agent-cell-tool";
+import { CellChatButton } from "./cell-chat-button";
 
 export function PlaceholderButtonBar() {
   return <div style={CODE_BAR_BTN_STYLE} />;
@@ -225,6 +226,11 @@ export const CellButtonBar: React.FC<Props> = React.memo(
       );
     }
 
+    function renderCodeBarChatButton() {
+      if (actions == null) return;
+      return <CellChatButton cellId={id} />;
+    }
+
     function renderCodeBarFormatButton() {
       // Should only show formatter button if there is a way to format this code.
       if (!isCodeCell || is_readonly || actions == null || input_is_readonly) {
@@ -321,6 +327,7 @@ export const CellButtonBar: React.FC<Props> = React.memo(
         >
           {controlsVisible ? renderCodeBarRunStop() : null}
           {controlsVisible ? renderCodeBarAIButtons() : null}
+          {controlsVisible ? renderCodeBarChatButton() : null}
           {controlsVisible ? renderMarkdownEditButton() : null}
           {controlsVisible ? renderCodeBarFormatButton() : null}
           {controlsVisible ? renderDropdownMenu() : null}

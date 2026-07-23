@@ -557,11 +557,9 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
     this.close_recently_focused_frame_of_type("introspect");
   }
 
-  async gotoFragment(fragmentId: FragmentId) {
-    if (fragmentId.chat) {
-      // deal with side chat in base class
-      await super.gotoFragment(fragmentId);
-    }
+  // Focus a notebook frame (preferring an existing one) and scroll to the
+  // given cell.  Returns the frame id used, or undefined if none is ready.
+  private async focusNotebookFrame(): Promise<string | undefined> {
     // Prefer an existing notebook frame (minimal or default) rather than
     // always creating a jupyter_cell_notebook which overrides the saved layout.
     const existingMinimal =
@@ -573,6 +571,35 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
       type: frameType,
       syncdoc: this.jupyter_actions.syncdb,
     });
+    return frameId ? frameId : undefined;
+  }
+
+  // 1-based human label for a cell, e.g. "Cell 3"; undefined if the cell
+  // no longer exists.
+  public getCellLabel(cellId: string): string | undefined {
+    const cellList = this.jupyter_actions.store.get("cell_list");
+    if (cellList == null) return undefined;
+    const index = cellList.indexOf(cellId);
+    if (index === -1) return undefined;
+    return `Cell ${index + 1}`;
+  }
+
+  // Anchored side-chat thread adapter (shared chat UI duck-types on
+  // these; the anchor id for Jupyter is the cell's UUID).
+  public jumpToAnchor = (anchorId: string): void => {
+    this.jump_to_cell(anchorId, "top");
+  };
+
+  public getAnchorLabel = (anchorId: string): string | undefined => {
+    return this.getCellLabel(anchorId);
+  };
+
+  async gotoFragment(fragmentId: FragmentId) {
+    if (fragmentId.chat) {
+      // deal with side chat in base class
+      await super.gotoFragment(fragmentId);
+    }
+    const frameId = await this.focusNotebookFrame();
     if (!frameId) return;
     const { id, anchor } = fragmentId;
 
