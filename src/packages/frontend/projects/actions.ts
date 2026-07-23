@@ -115,6 +115,13 @@ function isProjectionConvergenceError(err: unknown, name: string): boolean {
   return message === `${name} projection did not converge`;
 }
 
+function isProjectAlreadyAssignedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : `${err}`;
+  return message.includes(
+    "project is already assigned to a host; use move instead",
+  );
+}
+
 function dateOrNull(value: unknown): Date | null {
   if (value == null) return null;
   const date = value instanceof Date ? value : new Date(`${value}`);
@@ -4934,6 +4941,26 @@ export class ProjectsActions extends Actions<ProjectsState> {
         }
         await this.ensure_host_info(dest_host_id, true);
       } catch (err) {
+        if (isProjectAlreadyAssignedError(err)) {
+          await this.repairProjectProjection({
+            kind: "project-ids",
+            project_ids: [project_id],
+            reason: "project-move",
+          });
+          const authoritative_host_id = store.getIn([
+            "project_map",
+            project_id,
+            "host_id",
+          ]);
+          if (typeof authoritative_host_id === "string") {
+            actions?.setState({ control_error: "" });
+            if (authoritative_host_id === dest_host_id) {
+              await this.ensure_host_info(dest_host_id, true);
+              return true;
+            }
+            return await this.move_project_to_host(project_id, dest_host_id);
+          }
+        }
         const error = `Error assign project host -- ${err}`;
         actions?.setState({ control_error: error });
         throw err;
