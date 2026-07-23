@@ -8,6 +8,24 @@ const logger = getLogger("server:conat:persist");
 
 const children = new Map<string, ChildProcess>();
 let shuttingDown = false;
+let lifecycleHandlersInstalled = false;
+
+function installLifecycleHandlers() {
+  if (lifecycleHandlersInstalled) {
+    return;
+  }
+  lifecycleHandlersInstalled = true;
+
+  process.once("exit", close);
+  ["SIGTERM", "SIGQUIT"].forEach((sig) => {
+    process.once(sig, () => {
+      shuttingDown = true;
+      for (const child of children.values()) {
+        child.kill(sig as NodeJS.Signals);
+      }
+    });
+  });
+}
 
 export function createForkedPersistServer(
   id: string,
@@ -18,6 +36,7 @@ export function createForkedPersistServer(
     env: { ...process.env, PERSIST_SERVER_ID: id },
   });
   children.set(id, child);
+  installLifecycleHandlers();
   child.on("message", (message: PersistMaintenanceWorkerEvent) => {
     if (!maintenance || message == null) return;
     try {
@@ -86,14 +105,3 @@ function close() {
   }
   children.clear();
 }
-
-process.once("exit", close);
-
-["SIGTERM", "SIGQUIT"].forEach((sig) => {
-  process.once(sig, () => {
-    shuttingDown = true;
-    for (const child of children.values()) {
-      child.kill(sig as NodeJS.Signals);
-    }
-  });
-});
