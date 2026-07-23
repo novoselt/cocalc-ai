@@ -147,6 +147,7 @@ export default function AdminRefund({
               <Select.Option value="requested_by_customer">
                 Requested by Customer
               </Select.Option>
+              <Select.Option value="other">Other</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="notes" label={<div style={labelStyle}>Notes</div>}>
