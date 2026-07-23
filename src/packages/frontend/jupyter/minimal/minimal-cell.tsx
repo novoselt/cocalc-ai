@@ -993,12 +993,6 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                     )}
                     {isCode && isActiveEditing && (
                       <div
-                        style={{
-                          position: "relative",
-                          maxHeight: `${codeEditMaxHeight}px`,
-                          overflowY: "auto",
-                          overflowX: "hidden",
-                        }}
                         onBlur={(e) => {
                           // Close editor when focus leaves the entire editing area
                           // (but not when clicking buttons inside it)
@@ -1009,89 +1003,111 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                           }
                         }}
                       >
-                        <FileContext.Provider value={minimalFileContext}>
-                          <div
-                            className="minimal-code-editor"
-                            style={{ position: "relative" }}
-                          >
-                            <CellInput
-                              cell={cell}
-                              actions={actions}
-                              cm_options={cm_options}
-                              is_markdown_edit={false}
-                              is_focused={!!is_focused}
-                              is_current={!!is_current}
-                              id={id}
-                              index={index}
-                              font_size={font_size}
-                              project_id={project_id}
-                              directory={directory}
-                              complete={complete}
-                              trust={trust}
-                              is_readonly={!!read_only}
-                              input_is_readonly={
-                                !cell.getIn(["metadata", "editable"], true)
-                              }
-                              aiTools={aiTools}
-                            />
-                          </div>
-                        </FileContext.Provider>
+                        {/* toolbar sits as a tab on the top edge of the
+                            editor box, so it never covers the first line
+                            of code in narrow views */}
                         <div
                           style={{
-                            position: "absolute",
-                            top: "4px",
-                            right: "4px",
-                            zIndex: 10,
                             display: "flex",
-                            gap: "2px",
-                            background: "rgba(255,255,255,0.85)",
-                            borderRadius: "4px",
-                            padding: "1px",
+                            justifyContent: "flex-end",
+                            paddingRight: "10px",
                           }}
                         >
-                          {/* labeled Run first, so the small icon-only
-                              buttons next to it aren't clicked by accident */}
-                          <Tooltip
-                            title="Run cell and close editor"
-                            placement="top"
+                          <div
+                            style={{
+                              position: "relative",
+                              zIndex: 1,
+                              display: "flex",
+                              gap: "2px",
+                              background: "white",
+                              border: `1px solid ${COLORS.GRAY_L}`,
+                              borderBottom: "none",
+                              borderRadius: "4px 4px 0 0",
+                              padding: "1px 2px",
+                              // overlap the editor's top border so the tab
+                              // visually belongs to the box below
+                              marginBottom: "-1px",
+                            }}
                           >
-                            <Button
-                              type="text"
-                              size="small"
-                              icon={<Icon name="play" />}
-                              onClick={handleRunAndClose}
-                            >
-                              Run
-                            </Button>
-                          </Tooltip>
-                          {/* splitting would modify a protected cell, so
-                              hide it in the read-only view */}
-                          {!isNotEditable && (
+                            {/* labeled Run first, so the small icon-only
+                              buttons next to it aren't clicked by accident */}
                             <Tooltip
-                              title="Split cell at cursor"
+                              title="Run cell and close editor"
                               placement="top"
                             >
                               <Button
                                 type="text"
                                 size="small"
-                                icon={<Icon name={SPLIT_CELL_ICON} />}
-                                onClick={() => {
-                                  // needs the live editor for the cursor
-                                  // position, so it only exists here and not
-                                  // in the (closed-editor) dropdown menu
-                                  frameActions.current?.split_current_cell();
-                                }}
+                                icon={<Icon name="play" />}
+                                onClick={handleRunAndClose}
+                              >
+                                Run
+                              </Button>
+                            </Tooltip>
+                            {/* splitting would modify a protected cell, so
+                              hide it in the read-only view */}
+                            {!isNotEditable && (
+                              <Tooltip
+                                title="Split cell at cursor"
+                                placement="top"
+                              >
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  icon={<Icon name={SPLIT_CELL_ICON} />}
+                                  onClick={() => {
+                                    // needs the live editor for the cursor
+                                    // position, so it only exists here and not
+                                    // in the (closed-editor) dropdown menu
+                                    frameActions.current?.split_current_cell();
+                                  }}
+                                />
+                              </Tooltip>
+                            )}
+                            <Tooltip title="Close editor" placement="top">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<Icon name="times" />}
+                                onClick={handleCloseEditor}
                               />
                             </Tooltip>
-                          )}
-                          <Tooltip title="Close editor" placement="top">
-                            <Button
-                              type="text"
-                              size="small"
-                              icon={<Icon name="times" />}
-                              onClick={handleCloseEditor}
-                            />
-                          </Tooltip>
+                          </div>
+                        </div>
+                        <div
+                          style={{
+                            maxHeight: `${codeEditMaxHeight}px`,
+                            overflowY: "auto",
+                            overflowX: "hidden",
+                          }}
+                        >
+                          <FileContext.Provider value={minimalFileContext}>
+                            <div
+                              className="minimal-code-editor"
+                              style={{ position: "relative" }}
+                            >
+                              <CellInput
+                                cell={cell}
+                                actions={actions}
+                                cm_options={cm_options}
+                                is_markdown_edit={false}
+                                is_focused={!!is_focused}
+                                is_current={!!is_current}
+                                id={id}
+                                index={index}
+                                font_size={font_size}
+                                project_id={project_id}
+                                directory={directory}
+                                complete={complete}
+                                trust={trust}
+                                is_readonly={!!read_only}
+                                input_is_readonly={
+                                  !cell.getIn(["metadata", "editable"], true)
+                                }
+                                aiTools={aiTools}
+                              />
+                            </div>
+                          </FileContext.Provider>
                         </div>
                       </div>
                     )}
