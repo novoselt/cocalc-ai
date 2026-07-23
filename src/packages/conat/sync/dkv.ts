@@ -239,25 +239,42 @@ export class DKV<T = any> extends EventEmitter {
     });
   };
 
+  private isActiveStream = (kv: CoreStream<T>) => {
+    return this.kv === kv && kv.getRecoveryState() !== "closed";
+  };
+
   init = async () => {
     if (this.initialized) {
       throw Error("init can only be called once");
     }
     this.initialized = true;
-    if (this.kv == null) {
+    const kv = this.kv;
+    if (kv == null) {
       throw Error("closed");
     }
-    this.kv.on("change", this.handleRemoteChange);
-    this.kv.on("recovery-state", this.handleRecoveryState);
-    this.kv.on("disconnected", this.handleDisconnected);
-    this.kv.on("recovering", this.handleRecovering);
-    this.kv.on("paused", this.handlePaused);
-    this.kv.on("recovered", this.handleRecovered);
-    await this.kv.init();
+    kv.on("change", this.handleRemoteChange);
+    kv.on("recovery-state", this.handleRecoveryState);
+    kv.on("disconnected", this.handleDisconnected);
+    kv.on("recovering", this.handleRecovering);
+    kv.on("paused", this.handlePaused);
+    kv.on("recovered", this.handleRecovered);
+    await kv.init();
+    if (!this.isActiveStream(kv)) {
+      return;
+    }
     // allow_msg_ttl is used for deleting tombstones so MUST be enabled for dkv.
     this.emitInitPhase("dkv_allow_msg_ttl_config_start");
-    await this.kv.config({ allow_msg_ttl: true });
+    if (!this.isActiveStream(kv)) {
+      return;
+    }
+    await kv.config({ allow_msg_ttl: true });
+    if (!this.isActiveStream(kv)) {
+      return;
+    }
     this.emitInitPhase("dkv_allow_msg_ttl_config_done");
+    if (!this.isActiveStream(kv)) {
+      return;
+    }
     this.emit("connected");
   };
 
