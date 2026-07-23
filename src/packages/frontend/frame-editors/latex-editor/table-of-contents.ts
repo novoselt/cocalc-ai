@@ -8,7 +8,64 @@ change them.
 
 import { TableOfContentsEntry as Entry } from "@cocalc/frontend/components";
 
-export function parseTableOfContents(latex: string): Entry[] {
+import { scanBookmarks, scanMarkers } from "./chat-markers";
+
+export interface ChatTocExtra {
+  kind: "chat";
+  hash: string;
+}
+
+export interface ParseTableOfContentsOptions {
+  // Overlay `% chat: <hash>` markers as entries (deduped by hash,
+  // first occurrence wins).
+  includeChatMarkers?: boolean;
+  // Overlay `% bookmark: <text>` comments as entries (deduped by text).
+  includeBookmarks?: boolean;
+}
+
+export function parseTableOfContents(
+  latex: string,
+  opts: ParseTableOfContentsOptions = {},
+): Entry[] {
+  const entries = parseHeadings(latex);
+  const overlay: Entry[] = [];
+  if (opts.includeChatMarkers) {
+    const seen = new Set<string>();
+    for (const m of scanMarkers(latex)) {
+      if (seen.has(m.hash)) continue;
+      seen.add(m.hash);
+      overlay.push({
+        // ids must be unique across the TOC; scrollToHeading parseInt()s
+        // them, so a "<line>-..." suffix still jumps to the right line.
+        id: `${m.line + 1}-chat-${m.hash}`,
+        value: `Chat ${m.hash} (line ${m.line + 1})`,
+        icon: "comment",
+        extra: { kind: "chat", hash: m.hash } as ChatTocExtra,
+      });
+    }
+  }
+  if (opts.includeBookmarks) {
+    const seen = new Set<string>();
+    for (const b of scanBookmarks(latex)) {
+      if (seen.has(b.text)) continue;
+      seen.add(b.text);
+      overlay.push({
+        id: `${b.line + 1}-bookmark-${b.text}`,
+        value: b.text,
+        icon: "tag-outlined",
+      });
+    }
+  }
+  if (overlay.length === 0) {
+    return entries;
+  }
+  // Interleave overlay entries into the heading list in document order.
+  const merged = [...entries, ...overlay];
+  merged.sort((a, b) => parseInt(a.id) - parseInt(b.id));
+  return merged;
+}
+
+function parseHeadings(latex: string): Entry[] {
   let id = 0;
   const entries: Entry[] = [];
   let number: number[] = [0];

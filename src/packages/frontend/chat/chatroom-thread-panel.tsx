@@ -49,6 +49,7 @@ import { AgentMessageStatus } from "./agent-message-status";
 import CodexConfigButton from "./codex";
 import { ThreadAnchorButton } from "./thread-anchor-button";
 import { ThreadBadge } from "./thread-badge";
+import { ThreadResolveButton } from "./thread-resolve-button";
 import type { ChatActions } from "./actions";
 import type { ChatMessages } from "./types";
 import type * as immutable from "immutable";
@@ -1999,6 +2000,10 @@ export function ChatRoomThreadPanel({
             )}
             {compactThreadLabel}
             <ThreadAnchorButton
+              actions={actions}
+              threadKey={selectedThreadId}
+            />
+            <ThreadResolveButton
               actions={actions}
               threadKey={selectedThreadId}
             />

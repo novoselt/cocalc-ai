@@ -222,6 +222,13 @@
   white-space: nowrap;
 }
 
+.Codemirror-latex-chat {
+  padding: 0 2px 0 4px;
+  min-width: 15px;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .webapp-editor-pdf-preview-message {
   padding: 20px;
 }

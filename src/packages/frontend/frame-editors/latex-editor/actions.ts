@@ -22,6 +22,10 @@ const HELP_SLUG = "latex/build-papers";
 // NOTE: These names are the keys in EDITOR_SPEC in editor.ts, not the type field
 const VIEWERS = ["pdfjs_canvas", "pdf_embed", "build", "output"] as const;
 
+// CodeMirror gutter id for chat markers and bookmarks; must be listed in
+// the cm frame's `gutters` in editor.ts and styled in styles/editor.css.
+export const CHAT_GUTTER_ID = "Codemirror-latex-chat";
+
 import { delay } from "awaiting";
 import * as CodeMirror from "codemirror";
 import { fromJS, List, Map } from "immutable";
@@ -61,6 +65,25 @@ import { normalizeAbsolutePath } from "@cocalc/util/path-model";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import * as tree_ops from "../frame-tree/tree-ops";
 import { bibtex } from "./bibtex";
+import type { BookmarkMarker, ChatMarker } from "./chat-markers";
+import {
+  buildBookmarkLine,
+  buildInlineInsertion,
+  buildMarkerLine,
+  generateBookmarkText,
+  generateMarkerHash,
+  lineHasTexContent,
+  removeMarkersForHash,
+  scanBookmarks,
+  scanMarkers,
+} from "./chat-markers";
+import {
+  renderBookmarkGutter,
+  renderChatMarkerGutter,
+} from "./chat-marker-gutter";
+// Side-effect import: registers the Insert-menu chat marker/bookmark commands.
+import "./chat-marker-command";
+import { ensureSideChatActions } from "@cocalc/frontend/chat/unread";
 import { clean } from "./clean";
 import { KNITR_EXTS } from "./constants";
 import { count_words } from "./count_words";
@@ -106,6 +129,10 @@ interface LatexEditorState extends CodeEditorState {
   output_panel_id_for_sync?: string; // stores the output panel ID for SyncTeX operations
   // job_infos: JobInfos;
   autoSyncInProgress?: boolean; // unified flag to prevent sync loops - true when any auto sync operation is in progress
+  // Chat anchor markers / bookmarks found in the master + open sub-files,
+  // keyed by file path.
+  chat_markers?: Map<string, List<TypedMap<ChatMarker>>>;
+  chat_bookmarks?: Map<string, List<TypedMap<BookmarkMarker>>>;
 }
 
 export class Actions extends BaseActions<LatexEditorState> {
@@ -221,6 +248,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     );
     this._init_pdf_directory_watcher();
     this.word_count = reuseInFlight(this._word_count.bind(this));
+    this._initChatMarkers();
   }
 
   // Watch the directory containing the PDF file for changes
@@ -763,6 +791,10 @@ export class Actions extends BaseActions<LatexEditorState> {
       this.pdf_watcher.close();
       this.pdf_watcher = undefined;
     }
+    for (const handle of Object.values(this._chatMarkerScanners)) {
+      handle.dispose();
+    }
+    this._chatMarkerScanners = {};
     super.close();
   }
 
@@ -1959,7 +1991,12 @@ export class Actions extends BaseActions<LatexEditorState> {
       // sync doc can race during startup/refresh.
       return;
     }
-    const contents = fromJS(parseTableOfContents(value)) as any;
+    const contents = fromJS(
+      parseTableOfContents(value, {
+        includeBookmarks: true,
+        includeChatMarkers: true,
+      }),
+    ) as any;
     this.setState({ contents });
   }
 
@@ -1967,6 +2004,284 @@ export class Actions extends BaseActions<LatexEditorState> {
     const id = this.show_focused_frame_of_type("cm");
     if (id == null) return;
     this.programmatically_goto_line(parseInt(entry.id), true, true, id);
+  }
+
+  // ===== Chat anchors =======================================================
+  //
+  // A `% chat: <hash>` comment in the tex source anchors a thread in the
+  // side chat.  We scan the master file (and each open sub-file) for
+  // markers on every syncstring change, then render a gutter icon + badge
+  // on each marker line.  The per-anchor threads live in the master
+  // `.sage-chat`; their thread-config rows carry `anchor.id = <hash>` and
+  // optionally `anchor.path = <sub-file>`.  See chat-markers.ts for the
+  // marker format and @cocalc/frontend/chat/anchors for the thread side.
+
+  private _chatMarkerScanners: {
+    [path: string]: { dispose: () => void; rescan: () => void };
+  } = {};
+
+  private _initChatMarkers(): void {
+    this._attachChatMarkerScanner(this, this.path);
+    // Sub-files get picked up whenever the build discovers dependencies
+    // (set_switch_to_files) or the store otherwise changes.
+    this.store.on(
+      "change",
+      debounce(
+        () => {
+          if (this._state === ("closed" as any)) return;
+          this._refreshChatMarkerScanners();
+        },
+        1000,
+        { leading: false, trailing: true },
+      ),
+    );
+  }
+
+  private _refreshChatMarkerScanners(): void {
+    for (const actions of this.all_actions()) {
+      const path = (actions as any).path;
+      if (typeof path !== "string" || !path) continue;
+      this._attachChatMarkerScanner(actions, path);
+    }
+  }
+
+  private _attachChatMarkerScanner(actions: any, path: string): void {
+    if (this._chatMarkerScanners[path] != null) return;
+    const syncstring = (actions as any)._syncstring;
+    if (syncstring == null) return;
+    const scan = () => {
+      if (this._state === ("closed" as any)) return;
+      let text: string;
+      try {
+        text = syncstring.to_str() ?? "";
+      } catch {
+        // syncstring not ready yet -- a later change event will rescan.
+        return;
+      }
+      const markers = scanMarkers(text);
+      const bookmarks = scanBookmarks(text);
+      this.setState({
+        chat_markers: (
+          this.store.get("chat_markers") ?? (fromJS({}) as any)
+        ).set(path, fromJS(markers)),
+        chat_bookmarks: (
+          this.store.get("chat_bookmarks") ?? (fromJS({}) as any)
+        ).set(path, fromJS(bookmarks)),
+      });
+      this._updateChatGutters(path, markers, bookmarks);
+    };
+    const debounced = debounce(scan, 300, { leading: false, trailing: true });
+    syncstring.on("change", debounced);
+    const onReady = () => scan();
+    syncstring.once("ready", onReady);
+    this._chatMarkerScanners[path] = {
+      dispose: () => {
+        debounced.cancel();
+        syncstring.removeListener("change", debounced);
+        syncstring.removeListener("ready", onReady);
+      },
+      rescan: scan,
+    };
+    scan();
+  }
+
+  private _updateChatGutters(
+    path: string,
+    markers: ChatMarker[],
+    bookmarks: BookmarkMarker[],
+  ): void {
+    const actions: any =
+      path === this.path
+        ? this
+        : this.redux.getEditorActions(this.project_id, path);
+    if (actions == null || actions._state === "closed") return;
+    actions.clear_gutter(CHAT_GUTTER_ID);
+    const openAnchorChat = (hash: string, markerPath: string) => {
+      void this.openAnchorChat(
+        hash,
+        markerPath === this.path ? undefined : markerPath,
+      );
+    };
+    const openAnchorChatThread = (threadKey: string) => {
+      void this.openAnchorChatThread(threadKey);
+    };
+    const removeStaleMarker = (hash: string, markerPath: string) => {
+      this._removeChatMarkersForHash(markerPath, hash);
+    };
+    for (const m of markers) {
+      actions.set_gutter_marker({
+        line: m.line,
+        gutter_id: CHAT_GUTTER_ID,
+        component: renderChatMarkerGutter({
+          hash: m.hash,
+          path,
+          masterPath: this.path,
+          project_id: this.project_id,
+          openAnchorChat,
+          openAnchorChatThread,
+          removeStaleMarker,
+        }),
+      });
+    }
+    for (const b of bookmarks) {
+      actions.set_gutter_marker({
+        line: b.line,
+        gutter_id: CHAT_GUTTER_ID,
+        component: renderBookmarkGutter(b.text),
+      });
+    }
+  }
+
+  // All locations of a marker hash across the scanned files, in
+  // (path, line) order with the master file first.
+  public getAnchorLocations(hash: string): { path: string; line: number }[] {
+    const chatMarkers = this.store.get("chat_markers");
+    if (chatMarkers == null) return [];
+    const locations: { path: string; line: number }[] = [];
+    const paths = chatMarkers.keySeq().toJS() as string[];
+    paths.sort((a, b) =>
+      a === this.path ? -1 : b === this.path ? 1 : a.localeCompare(b),
+    );
+    for (const path of paths) {
+      const markers = (chatMarkers.get(path)?.toJS() ??
+        []) as unknown as ChatMarker[];
+      for (const m of markers) {
+        if (m.hash === hash) {
+          locations.push({ path, line: m.line });
+        }
+      }
+    }
+    return locations;
+  }
+
+  public getAnchorJumpLabel = (hash: string): string | undefined => {
+    const locations = this.getAnchorLocations(hash);
+    if (locations.length === 0) return undefined;
+    if (locations.length > 1) {
+      return `${locations.length} locations`;
+    }
+    const { path, line } = locations[0];
+    return `${path_split(path).tail}:${line + 1}`;
+  };
+
+  public getAnchorLabel = (hash: string): string | undefined => {
+    const jumpLabel = this.getAnchorJumpLabel(hash);
+    if (jumpLabel == null) return hash;
+    return `${hash} (${jumpLabel})`;
+  };
+
+  public jumpToAnchor = async (hash: string): Promise<void> => {
+    const locations = this.getAnchorLocations(hash);
+    if (locations.length === 0) return;
+    const { path, line } = locations[0];
+    if (path === this.path) {
+      const id = this.show_focused_frame_of_type("cm");
+      if (id == null) return;
+      this.programmatically_goto_line(line + 1, true, true, id);
+    } else {
+      const id = await this.switch_to_file(path);
+      this.programmatically_goto_line(line + 1, true, true, id);
+    }
+  };
+
+  // Insert a `% chat: <hash>` marker at the cursor of the most recently
+  // active source frame and open a fresh side-chat thread for it.
+  public insertChatMarker = async (
+    _opts: { mode?: "inline" | "block" } = {},
+  ): Promise<void> => {
+    if (this.is_read_only_preview()) return;
+    const hash = generateMarkerHash();
+    if (
+      !this._insertMarkerText(buildMarkerLine(hash), buildInlineInsertion(hash))
+    ) {
+      return;
+    }
+    this._chatMarkerScanners[this.path]?.rescan();
+    await this.openAnchorChatNewThread(hash);
+  };
+
+  // Insert a `% bookmark: <text>` comment at the cursor.  Bookmarks are
+  // source-only: they show up in the table of contents but have no
+  // chat thread.
+  public insertBookmark = async (
+    _opts: Record<string, never> = {},
+  ): Promise<void> => {
+    if (this.is_read_only_preview()) return;
+    const text = generateBookmarkText(new Date());
+    this._insertMarkerText(buildBookmarkLine(text));
+    this._chatMarkerScanners[this.path]?.rescan();
+    this.updateTableOfContents(true);
+  };
+
+  // Insert a standalone comment line (or an inline tail when the cursor
+  // line has tex content and `inline` is provided) at the cursor of the
+  // most recent CM.  Returns false when no editor is available.
+  private _insertMarkerText(blockLine: string, inline?: string): boolean {
+    const cm = this._get_cm(undefined, true);
+    if (cm == null) return false;
+    const cur = cm.getCursor();
+    const lineText = cm.getLine(cur.line) ?? "";
+    if (inline != null && lineHasTexContent(lineText)) {
+      cm.replaceRange(inline, { line: cur.line, ch: lineText.length });
+    } else if (lineText.trim() === "") {
+      cm.replaceRange(
+        blockLine,
+        { line: cur.line, ch: 0 },
+        { line: cur.line, ch: lineText.length },
+      );
+    } else {
+      // comment-only (or otherwise occupied) line: add a new line below.
+      cm.replaceRange(`\n${blockLine}`, {
+        line: cur.line,
+        ch: lineText.length,
+      });
+    }
+    this.set_syncstring_to_codemirror();
+    this.syncstring_commit();
+    return true;
+  }
+
+  // Resolve every thread anchored to `hash` (collaborative-TODO flow)
+  // and remove the marker comment(s) from all scanned files.  The
+  // threads remain in the side chat as a read-only record.
+  public resolveChatMarker = (hash: string): void => {
+    let chatActions;
+    try {
+      chatActions = ensureSideChatActions(this.project_id, this.path);
+    } catch (err) {
+      console.warn("resolveChatMarker: no side chat available", err);
+      return;
+    }
+    const label = this.getAnchorLabel(hash);
+    for (const threadKey of chatActions.listAnchoredThreadKeys(hash)) {
+      chatActions.resolveAnchoredThread(threadKey, { label });
+    }
+    const chatMarkers = this.store.get("chat_markers");
+    if (chatMarkers == null) return;
+    for (const path of chatMarkers.keySeq().toJS() as string[]) {
+      this._removeChatMarkersForHash(path, hash);
+    }
+  };
+
+  // Remove all `% chat: <hash>` markers for one hash from one file.
+  private _removeChatMarkersForHash(path: string, hash: string): void {
+    const actions: any =
+      path === this.path
+        ? this
+        : this.redux.getEditorActions(this.project_id, path);
+    const syncstring = actions?._syncstring;
+    if (actions == null || syncstring == null) return;
+    let text: string;
+    try {
+      text = syncstring.to_str() ?? "";
+    } catch {
+      return;
+    }
+    const newText = removeMarkersForHash(text, hash);
+    if (newText === text) return;
+    actions.set_value(newText);
+    actions.syncstring_commit();
+    this._chatMarkerScanners[path]?.rescan();
   }
 
   languageModelExtraFileInfo() {
