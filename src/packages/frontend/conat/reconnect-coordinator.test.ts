@@ -421,6 +421,32 @@ describe("ReconnectCoordinator", () => {
     }
   });
 
+  it("forces registered resources to rebuild when soft standby resumes", async () => {
+    const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0.5);
+    const reconnect = jest.fn(async () => {});
+    const coordinator = new ReconnectCoordinator({
+      canReconnect: () => true,
+      connect: jest.fn(async () => {}),
+      isConnected: () => true,
+    });
+    const resource = coordinator.registerResource({
+      isConnected: () => true,
+      priority: () => "foreground",
+      reconnect,
+    });
+
+    try {
+      coordinator.softStandby();
+      coordinator.resume();
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(reconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      resource.close();
+      coordinator.close();
+      randomSpy.mockRestore();
+    }
+  });
+
   it("can force all registered resources to reconnect in place", async () => {
     const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0.5);
     const foregroundReconnect = jest.fn(async () => {});

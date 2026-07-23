@@ -185,6 +185,16 @@ export class ReconnectCoordinator extends EventEmitter {
     const previousStage = this.standbyStage;
     this.standbyStage = "active";
     this.emit("standby_stage", this.standbyStage);
+    if (previousStage !== "active") {
+      // Standby sheds project-local transports, so resources that still look
+      // connected locally must also be rebuilt.
+      this.requestResourceReconnects({
+        includeBackground: true,
+        force: true,
+        reason: "resume",
+        resetBackoff: true,
+      });
+    }
     if (previousStage === "hard" || !this.options.isConnected()) {
       this.requestReconnect({
         reason: "resume",

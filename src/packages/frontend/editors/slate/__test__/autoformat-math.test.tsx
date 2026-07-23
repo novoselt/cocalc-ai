@@ -127,3 +127,47 @@ test("autoformat inline math keeps caret before existing trailing words", () => 
 
   focusSpy.mockRestore();
 });
+
+test("space inside unfinished inline math preserves latex and selection", () => {
+  const editor = withAutoFormat(
+    withIsInline(withIsVoid(withReact(createEditor()))),
+  );
+  const unfinished = String.raw`Name the type of vector $\begin{pmatrix} 2\\`;
+  const value: Descendant[] = [
+    {
+      type: "paragraph",
+      children: [
+        { text: "What is different about " },
+        {
+          type: "math_inline",
+          value: String.raw`\begin{pmatrix} 2\\1\end{pmatrix}`,
+          isInline: true,
+          isVoid: true,
+          display: false,
+          children: [{ text: "" }],
+        },
+        { text: `? ${unfinished}` },
+      ],
+    },
+  ];
+  editor.children = value;
+  editor.selection = null;
+
+  const focusSpy = jest
+    .spyOn(ReactEditor, "focus")
+    .mockImplementation(() => undefined);
+
+  Transforms.select(editor, {
+    path: [0, 2],
+    offset: unfinished.length + 2,
+  });
+  editor.insertText(" ", true);
+
+  expect((editor.children[0] as any).children[2].text).toBe(`? ${unfinished} `);
+  expect(editor.selection).toEqual({
+    anchor: { path: [0, 2], offset: unfinished.length + 3 },
+    focus: { path: [0, 2], offset: unfinished.length + 3 },
+  });
+
+  focusSpy.mockRestore();
+});
