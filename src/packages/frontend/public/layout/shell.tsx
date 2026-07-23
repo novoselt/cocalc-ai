@@ -149,6 +149,19 @@ function getPoliciesFooterLink(
   }
 }
 
+function getStatusPageUrl(config?: PublicConfig): string | undefined {
+  const value = config?.status_page_url?.trim();
+  if (!value) return;
+  try {
+    const url = new URL(value);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return value;
+    }
+  } catch {
+    // Ignore invalid configuration rather than rendering an unsafe link.
+  }
+}
+
 function getFooterColumns(config?: PublicConfig) {
   const contactHref = config?.help_email?.trim()
     ? `mailto:${config.help_email.trim()}`
@@ -181,13 +194,24 @@ function getFooterColumns(config?: PublicConfig) {
     });
   }
 
+  const platformLinks: FooterLinkSpec[] = [
+    { href: appPath("features"), label: "Features" },
+    { href: appPath("products"), label: "Products" },
+    { href: appPath("pricing"), label: "Pricing" },
+  ];
+  const statusPageUrl = getStatusPageUrl(config);
+  if (statusPageUrl) {
+    platformLinks.push({
+      href: statusPageUrl,
+      label: "Status",
+      rel: "noopener noreferrer",
+      target: "_blank",
+    });
+  }
+
   return [
     {
-      links: [
-        { href: appPath("features"), label: "Features" },
-        { href: appPath("products"), label: "Products" },
-        { href: appPath("pricing"), label: "Pricing" },
-      ],
+      links: platformLinks,
       title: "Platform",
     },
     {
