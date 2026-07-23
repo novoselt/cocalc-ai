@@ -467,9 +467,11 @@ export async function cancelPaymentIntent({
     if (e.includes("invoice")) {
       // try voiding the invoice instead:
       const paymentIntent = await stripe.paymentIntents.retrieve(id);
-      const invoice = (paymentIntent as any).invoice;
-      if (typeof invoice == "string") {
-        await stripe.invoices.voidInvoice(invoice);
+      const invoiceId =
+        paymentIntentIdFromValue((paymentIntent as any).invoice) ??
+        paymentIntentIdFromValue(paymentIntent.metadata?.invoice_id);
+      if (invoiceId?.startsWith("in_")) {
+        await stripe.invoices.voidInvoice(invoiceId);
         return;
       }
     }

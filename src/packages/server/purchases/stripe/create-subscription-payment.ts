@@ -26,6 +26,7 @@ import {
 import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
 import { getMembershipTierById } from "@cocalc/server/membership/tiers";
 import type { SubscriptionRenewalAttempt } from "@cocalc/util/db-schema/subscription-renewal-attempts";
+import { stripeToDecimal } from "@cocalc/util/stripe/calc";
 import {
   bindSubscriptionRenewalPaymentIntent,
   cancelOpenSubscriptionRenewalAttempts,
@@ -41,6 +42,7 @@ import { lockMembershipSubscriptionAccount } from "../membership-subscription-gu
 // nothing should ever be this small, but just in case:
 const MIN_SUBSCRIPTION_AMOUNT = 1;
 const SUBSCRIPTION_PAYMENT_SLACK = 0.01;
+const MAX_LEGACY_PAYMENT_PERIOD_DRIFT_MS = 15 * 60 * 1000;
 
 const logger = getLogger("purchases:stripe:create-subscription-payment");
 
@@ -117,14 +119,16 @@ function legacyPaymentMatchesAttempt({
   subscription_id: number;
 }): boolean {
   try {
+    const targetPeriodEnd = new Date(attempt.target_period_end).valueOf();
+    const legacyPeriodEnd = Number(payment?.new_expires_ms);
     return (
       payment?.status === "active" &&
       payment?.renewal_attempt_id == null &&
       cleanString(payment?.payment_intent_id) != null &&
       Number(payment?.subscription_id) === subscription_id &&
       toDecimal(payment?.amount).eq(toDecimal(attempt.amount)) &&
-      Number(payment?.new_expires_ms) ===
-        new Date(attempt.target_period_end).valueOf()
+      legacyPeriodEnd >= targetPeriodEnd &&
+      legacyPeriodEnd - targetPeriodEnd <= MAX_LEGACY_PAYMENT_PERIOD_DRIFT_MS
     );
   } catch {
     return false;
@@ -158,9 +162,9 @@ async function adoptLegacyRenewalPaymentIntent({
   const existingAttemptId = cleanString(metadata.renewal_attempt_id);
   let stripeAmountMatches = false;
   try {
-    stripeAmountMatches = toDecimal(metadata.total_excluding_tax_usd).eq(
-      toDecimal(attempt.amount),
-    );
+    stripeAmountMatches = toDecimal(
+      stripeToDecimal(metadata.total_excluding_tax_usd),
+    ).eq(toDecimal(attempt.amount));
   } catch {
     // Missing or malformed Stripe metadata must fail closed.
   }

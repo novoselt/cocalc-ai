@@ -160,7 +160,8 @@ describe("createSubscriptionPayment", () => {
         end,
       },
     );
-    const targetPeriodEnd = dayjs(end).add(1, "month").valueOf();
+    const targetPeriodEnd =
+      dayjs(end).add(1, "month").valueOf() + 5 * 60 * 1000;
     await getPool().query("UPDATE subscriptions SET payment=$2 WHERE id=$1", [
       subscription_id,
       {
@@ -178,7 +179,7 @@ describe("createSubscriptionPayment", () => {
         invoice_id: "in_legacy_renewal",
         purpose: SUBSCRIPTION_RENEWAL,
         subscription_id: `${subscription_id}`,
-        total_excluding_tax_usd: `${cost}`,
+        total_excluding_tax_usd: `${cost * 100}`,
       },
       status: "requires_payment_method",
     });
@@ -245,7 +246,7 @@ describe("createSubscriptionPayment", () => {
         account_id: uuid(),
         purpose: SUBSCRIPTION_RENEWAL,
         subscription_id: `${subscription_id}`,
-        total_excluding_tax_usd: `${cost}`,
+        total_excluding_tax_usd: `${cost * 100}`,
       },
       status: "requires_payment_method",
     });
@@ -254,6 +255,37 @@ describe("createSubscriptionPayment", () => {
       createSubscriptionPayment({ account_id, subscription_id }),
     ).rejects.toThrow(/does not match the durable renewal attempt/);
     expect(mockCreatePaymentIntent).not.toHaveBeenCalled();
+    expect(mockUpdatePaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("does not adopt legacy renewal timing outside the migration window", async () => {
+    const account_id = uuid();
+    const end = new Date(Date.now() - 60_000);
+    await createTestAccount(account_id);
+    const { cost, subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end,
+      },
+    );
+    await getPool().query("UPDATE subscriptions SET payment=$2 WHERE id=$1", [
+      subscription_id,
+      {
+        amount: cost,
+        new_expires_ms: dayjs(end).add(1, "month").valueOf() + 16 * 60 * 1000,
+        payment_intent_id: "pi_wrong_period",
+        status: "active",
+        subscription_id,
+      },
+    ]);
+
+    await expect(
+      createSubscriptionPayment({ account_id, subscription_id }),
+    ).rejects.toThrow(/current outstanding active payment/);
+    expect(mockCreatePaymentIntent).not.toHaveBeenCalled();
+    expect(mockRetrievePaymentIntent).not.toHaveBeenCalled();
     expect(mockUpdatePaymentIntent).not.toHaveBeenCalled();
   });
 
