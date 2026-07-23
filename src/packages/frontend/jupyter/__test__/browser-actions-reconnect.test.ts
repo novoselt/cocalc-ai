@@ -144,4 +144,42 @@ describe("JupyterActions reconnect coordination", () => {
       expect.anything(),
     );
   });
+
+  it("stops a pending file deletion check when the actions close", async () => {
+    let finishExists!: (exists: boolean) => void;
+    const exists = jest.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishExists = resolve;
+        }),
+    );
+    const syncdb: any = {
+      fs: { exists },
+      opts: {
+        deletedCheckInterval: 1,
+        deletedThreshold: 10,
+      },
+      emit: jest.fn(),
+    };
+    let closed = false;
+    const actions: any = new JupyterActions("jupyter-test", {
+      getStore: jest.fn(() => undefined),
+      removeActions: jest.fn(),
+    } as any);
+    actions.isClosed = () => closed;
+    actions.isIpynbDeleted = false;
+    actions.path = "notebook.ipynb";
+    actions.syncdb = syncdb;
+
+    const checking = actions.signalIfFileDeleted();
+    expect(exists).toHaveBeenCalledWith("notebook.ipynb");
+
+    closed = true;
+    delete syncdb.opts;
+    delete actions.syncdb;
+    finishExists(false);
+
+    await expect(checking).resolves.toBeUndefined();
+    expect(syncdb.emit).not.toHaveBeenCalled();
+  });
 });
