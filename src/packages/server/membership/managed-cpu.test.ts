@@ -10,6 +10,9 @@ const ensureAccountUsageWindowsForEventMock = jest.fn();
 const getActiveAccountUsageWindowsMock = jest.fn();
 const getManagedCpuAccountingClassificationForHostMock = jest.fn();
 const getAdminAccountMembershipStatusMapMock = jest.fn();
+const ensureAccountUsageCountersInitializedMock = jest.fn();
+const getAccountUsageCounterValuesMock = jest.fn();
+const recordAccountUsageCounterDeltaMock = jest.fn();
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -38,6 +41,15 @@ jest.mock("./usage-windows", () => ({
     ensureAccountUsageWindowsForEventMock(...args),
   getActiveAccountUsageWindows: (...args: any[]) =>
     getActiveAccountUsageWindowsMock(...args),
+}));
+
+jest.mock("./usage-counters", () => ({
+  ensureAccountUsageCountersInitialized: (...args: any[]) =>
+    ensureAccountUsageCountersInitializedMock(...args),
+  getAccountUsageCounterValues: (...args: any[]) =>
+    getAccountUsageCounterValuesMock(...args),
+  recordAccountUsageCounterDelta: (...args: any[]) =>
+    recordAccountUsageCounterDeltaMock(...args),
 }));
 
 jest.mock("./managed-cpu-scope", () => ({
@@ -69,25 +81,36 @@ describe("managed CPU usage accounting", () => {
     getActiveAccountUsageWindowsMock.mockReset();
     getManagedCpuAccountingClassificationForHostMock.mockReset();
     getAdminAccountMembershipStatusMapMock.mockReset();
+    ensureAccountUsageCountersInitializedMock.mockReset();
+    getAccountUsageCounterValuesMock.mockReset();
+    recordAccountUsageCounterDeltaMock.mockReset();
     listActiveAbuseReviewAnnotationsMock.mockResolvedValue([]);
     getAdminAccountMembershipStatusMapMock.mockResolvedValue(new Map());
-    ensureAccountUsageWindowsForEventMock.mockResolvedValue({});
+    ensureAccountUsageCountersInitializedMock.mockResolvedValue(undefined);
+    getAccountUsageCounterValuesMock.mockResolvedValue({
+      "5h": {},
+      "7d": {},
+    });
     getManagedCpuAccountingClassificationForHostMock.mockResolvedValue({
       scope: "shared_managed",
       counts_toward_managed_cpu_budget: true,
       host_tier_snapshot: 1,
       host_kind_snapshot: "shared-tiered-host",
     });
-    getActiveAccountUsageWindowsMock.mockResolvedValue({
+    const windows = {
       "5h": {
+        id: "11111111-1111-4111-8111-111111111111",
         starts_at: new Date("2026-05-30T08:00:00.000Z"),
         resets_at: new Date("2026-05-30T13:00:00.000Z"),
       },
       "7d": {
+        id: "22222222-2222-4222-8222-222222222222",
         starts_at: new Date("2026-05-29T08:00:00.000Z"),
         resets_at: new Date("2026-06-05T08:00:00.000Z"),
       },
-    });
+    };
+    ensureAccountUsageWindowsForEventMock.mockResolvedValue(windows);
+    getActiveAccountUsageWindowsMock.mockResolvedValue(windows);
     mockSchemaQueries();
   });
 
@@ -138,6 +161,13 @@ describe("managed CPU usage accounting", () => {
       account_id: "account-1",
       occurred_at: new Date("2026-05-30T10:01:00.000Z"),
     });
+    expect(ensureAccountUsageCountersInitializedMock).toHaveBeenCalledTimes(1);
+    expect(recordAccountUsageCounterDeltaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metric: "managed-cpu-seconds",
+        amount: 12.5,
+      }),
+    );
   });
 
   it("records account-funded dedicated CPU without creating shared budget windows", async () => {
@@ -200,29 +230,9 @@ describe("managed CPU usage accounting", () => {
   });
 
   it("aggregates 5-hour and 7-day windows for an account", async () => {
-    queryMock.mockImplementation(async (sql: string, params?: any[]) => {
-      if (
-        sql.includes("CREATE TABLE IF NOT EXISTS account_cpu_usage_events") ||
-        sql.includes("ALTER TABLE account_cpu_usage_events") ||
-        sql.includes("UPDATE account_cpu_usage_events") ||
-        sql.includes("CREATE INDEX IF NOT EXISTS account_cpu_usage_events_")
-      ) {
-        return { rows: [] };
-      }
-      if (sql.includes("AS seconds_5h")) {
-        expect(sql).toContain("events.counts_toward_managed_cpu_budget = TRUE");
-        expect(params).toEqual([
-          "account-1",
-          new Date("2026-05-30T08:00:00.000Z"),
-          new Date("2026-05-30T13:00:00.000Z"),
-          new Date("2026-05-29T08:00:00.000Z"),
-          new Date("2026-06-05T08:00:00.000Z"),
-        ]);
-        return {
-          rows: [{ seconds_5h: "120.5", seconds_7d: "900.25" }],
-        };
-      }
-      throw new Error(`unhandled query: ${sql}`);
+    getAccountUsageCounterValuesMock.mockResolvedValue({
+      "5h": { "": 120.5 },
+      "7d": { "": 900.25 },
     });
 
     const { getManagedCpuUsageForAccount } = await import("./managed-cpu");
@@ -246,6 +256,36 @@ describe("managed CPU usage accounting", () => {
     expect(usage.managed_cpu_7d_reset_at?.toISOString()).toBe(
       "2026-06-05T08:00:00.000Z",
     );
+    expect(ensureAccountUsageCountersInitializedMock).toHaveBeenCalledTimes(1);
+    expect(getAccountUsageCounterValuesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves 7-day usage when the shorter window has expired", async () => {
+    getActiveAccountUsageWindowsMock.mockResolvedValue({
+      "7d": {
+        id: "22222222-2222-4222-8222-222222222222",
+        starts_at: new Date("2026-05-29T08:00:00.000Z"),
+        resets_at: new Date("2026-06-05T08:00:00.000Z"),
+      },
+    });
+    getAccountUsageCounterValuesMock.mockResolvedValue({
+      "5h": {},
+      "7d": { "": 900.25 },
+    });
+    const { getManagedCpuUsageForAccount } = await import("./managed-cpu");
+
+    await expect(
+      getManagedCpuUsageForAccount({
+        account_id: "account-1",
+        limit5h: 100,
+        limit7d: 800,
+      }),
+    ).resolves.toMatchObject({
+      managed_cpu_5h_seconds: 0,
+      managed_cpu_7d_seconds: 900.25,
+      over_managed_cpu_5h: false,
+      over_managed_cpu_7d: true,
+    });
   });
 
   it("lists top CPU accounts and projects for admin overview", async () => {

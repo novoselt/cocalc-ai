@@ -8,6 +8,9 @@ const listActiveAbuseReviewAnnotationsMock = jest.fn();
 const getAdminAccountMembershipStatusMapMock = jest.fn();
 const ensureAccountUsageWindowsForEventMock = jest.fn();
 const getActiveAccountUsageWindowsMock = jest.fn();
+const ensureAccountUsageCountersInitializedMock = jest.fn();
+const getAccountUsageCounterValuesMock = jest.fn();
+const recordAccountUsageCounterDeltaMock = jest.fn();
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -33,6 +36,15 @@ jest.mock("./usage-windows", () => ({
     getActiveAccountUsageWindowsMock(...args),
 }));
 
+jest.mock("./usage-counters", () => ({
+  ensureAccountUsageCountersInitialized: (...args: any[]) =>
+    ensureAccountUsageCountersInitializedMock(...args),
+  getAccountUsageCounterValues: (...args: any[]) =>
+    getAccountUsageCounterValuesMock(...args),
+  recordAccountUsageCounterDelta: (...args: any[]) =>
+    recordAccountUsageCounterDeltaMock(...args),
+}));
+
 function isSchemaQuery(sql: string): boolean {
   return (
     sql.includes("CREATE TABLE IF NOT EXISTS account_managed_egress_events") ||
@@ -53,9 +65,30 @@ describe("managed egress history", () => {
     getAdminAccountMembershipStatusMapMock.mockReset();
     ensureAccountUsageWindowsForEventMock.mockReset();
     getActiveAccountUsageWindowsMock.mockReset();
+    ensureAccountUsageCountersInitializedMock.mockReset();
+    getAccountUsageCounterValuesMock.mockReset();
+    recordAccountUsageCounterDeltaMock.mockReset();
     listActiveAbuseReviewAnnotationsMock.mockResolvedValue([]);
     getAdminAccountMembershipStatusMapMock.mockResolvedValue(new Map());
-    getActiveAccountUsageWindowsMock.mockResolvedValue({});
+    ensureAccountUsageCountersInitializedMock.mockResolvedValue(undefined);
+    getAccountUsageCounterValuesMock.mockResolvedValue({
+      "5h": {},
+      "7d": {},
+    });
+    const windows = {
+      "5h": {
+        id: "11111111-1111-4111-8111-111111111111",
+        starts_at: new Date("2026-04-28T07:00:00.000Z"),
+        resets_at: new Date("2026-04-28T12:00:00.000Z"),
+      },
+      "7d": {
+        id: "22222222-2222-4222-8222-222222222222",
+        starts_at: new Date("2026-04-21T12:00:00.000Z"),
+        resets_at: new Date("2026-04-28T12:00:00.000Z"),
+      },
+    };
+    ensureAccountUsageWindowsForEventMock.mockResolvedValue(windows);
+    getActiveAccountUsageWindowsMock.mockResolvedValue(windows);
     queryMock.mockImplementation(async (sql: string) => {
       if (isSchemaQuery(sql)) {
         return { rows: [] };
@@ -221,31 +254,20 @@ describe("managed egress history", () => {
     const starts7d = new Date("2026-04-21T12:00:00.000Z");
     const resets7d = new Date("2026-04-28T12:00:00.000Z");
     getActiveAccountUsageWindowsMock.mockResolvedValue({
-      "5h": { starts_at: starts5h, resets_at: resets5h },
-      "7d": { starts_at: starts7d, resets_at: resets7d },
+      "5h": {
+        id: "11111111-1111-4111-8111-111111111111",
+        starts_at: starts5h,
+        resets_at: resets5h,
+      },
+      "7d": {
+        id: "22222222-2222-4222-8222-222222222222",
+        starts_at: starts7d,
+        resets_at: resets7d,
+      },
     });
-    queryMock.mockImplementation(async (sql: string, params?: any[]) => {
-      if (isSchemaQuery(sql)) {
-        return { rows: [] };
-      }
-      if (
-        sql.includes("FROM account_managed_egress_rollups") &&
-        sql.includes("bytes_5h")
-      ) {
-        expect(params).toEqual([
-          "account-1",
-          starts5h,
-          resets5h,
-          starts7d,
-          resets7d,
-          ["interactive-conat", "control-plane-conat"],
-        ]);
-        expect(sql).toContain("category <> ALL($6::text[])");
-        return {
-          rows: [{ category: "raw-network", bytes_5h: "200", bytes_7d: "500" }],
-        };
-      }
-      throw new Error(`unhandled query: ${sql}`);
+    getAccountUsageCounterValuesMock.mockResolvedValue({
+      "5h": { "raw-network": 200 },
+      "7d": { "raw-network": 500 },
     });
 
     const { getManagedEgressUsageForAccount } =
@@ -263,6 +285,37 @@ describe("managed egress history", () => {
     });
     expect(result.managed_egress_categories_7d_bytes).toEqual({
       "raw-network": 500,
+    });
+    expect(ensureAccountUsageCountersInitializedMock).toHaveBeenCalledTimes(1);
+    expect(getAccountUsageCounterValuesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves 7-day usage when the shorter window has expired", async () => {
+    getActiveAccountUsageWindowsMock.mockResolvedValue({
+      "7d": {
+        id: "22222222-2222-4222-8222-222222222222",
+        starts_at: new Date("2026-04-21T12:00:00.000Z"),
+        resets_at: new Date("2026-04-28T12:00:00.000Z"),
+      },
+    });
+    getAccountUsageCounterValuesMock.mockResolvedValue({
+      "5h": {},
+      "7d": { "raw-network": 500 },
+    });
+    const { getManagedEgressUsageForAccount } =
+      await import("./managed-egress");
+
+    await expect(
+      getManagedEgressUsageForAccount({
+        account_id: "account-1",
+        limit5h: 1000,
+        limit7d: 400,
+      }),
+    ).resolves.toMatchObject({
+      managed_egress_5h_bytes: 0,
+      managed_egress_7d_bytes: 500,
+      over_managed_egress_5h: false,
+      over_managed_egress_7d: true,
     });
   });
 
@@ -287,6 +340,7 @@ describe("managed egress history", () => {
       account_id: "account-1",
       occurred_at: undefined,
     });
+    expect(recordAccountUsageCounterDeltaMock).toHaveBeenCalledTimes(1);
   });
 
   it("computes a dedicated rolling category usage window", async () => {

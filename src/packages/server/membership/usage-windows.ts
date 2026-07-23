@@ -34,8 +34,13 @@ const WINDOW_MS: Record<AccountUsageWindowName, number> = {
 const WINDOWS_TABLE = "account_usage_windows";
 const EPOCHS_TABLE = "account_usage_epochs";
 const RESET_TABLE = "account_usage_epoch_resets";
+const EPOCH_CACHE_TTL_MS = 5_000;
 
 let ensuredSchema: Promise<void> | undefined;
+const epochCache = new Map<
+  AccountUsageWindowName,
+  { expires_at: number; value: Promise<AccountUsageEpoch> }
+>();
 
 // The table column is still named "family" for schema compatibility, but the
 // user-visible account windows intentionally have a single shared scope.
@@ -121,7 +126,7 @@ export async function ensureAccountUsageWindowSchema(): Promise<void> {
   await ensuredSchema;
 }
 
-export async function getAccountUsageEpoch({
+async function loadAccountUsageEpoch({
   window,
 }: {
   window: AccountUsageWindowName;
@@ -158,6 +163,28 @@ export async function getAccountUsageEpoch({
     window: row.window,
     epoch: Number(row.epoch),
   };
+}
+
+export async function getAccountUsageEpoch({
+  window,
+}: {
+  window: AccountUsageWindowName;
+}): Promise<AccountUsageEpoch> {
+  const cached = epochCache.get(window);
+  if (cached != null && cached.expires_at > Date.now()) {
+    return await cached.value;
+  }
+  const value = loadAccountUsageEpoch({ window }).catch((err) => {
+    if (epochCache.get(window)?.value === value) {
+      epochCache.delete(window);
+    }
+    throw err;
+  });
+  epochCache.set(window, {
+    expires_at: Date.now() + EPOCH_CACHE_TTL_MS,
+    value,
+  });
+  return await value;
 }
 
 export async function getActiveAccountUsageWindow({
@@ -241,6 +268,48 @@ async function selectActiveAccountUsageWindow({
   return rows[0] ? mapWindowRow(rows[0]) : undefined;
 }
 
+async function selectActiveAccountUsageWindows({
+  account_id,
+  epochs,
+  at,
+}: {
+  account_id: string;
+  epochs: Record<AccountUsageWindowName, number>;
+  at: Date;
+}): Promise<Partial<Record<AccountUsageWindowName, AccountUsageWindow>>> {
+  const { rows } = await getPool("short").query<{
+    id: string;
+    account_id: string;
+    family: AccountUsageWindowScope;
+    window: AccountUsageWindowName;
+    epoch: string | number;
+    starts_at: Date | string;
+    resets_at: Date | string;
+  }>(
+    `
+      SELECT DISTINCT ON ("window")
+        id, account_id, family, "window" AS window, epoch, starts_at, resets_at
+      FROM ${WINDOWS_TABLE}
+      WHERE account_id = $1
+        AND family = $2
+        AND (
+          ("window" = '5h' AND epoch = $3)
+          OR ("window" = '7d' AND epoch = $4)
+        )
+        AND starts_at <= $5
+        AND resets_at > $5
+      ORDER BY "window", starts_at DESC, created_at DESC
+    `,
+    [account_id, MEMBERSHIP_USAGE_SCOPE, epochs["5h"], epochs["7d"], at],
+  );
+  const result: Partial<Record<AccountUsageWindowName, AccountUsageWindow>> =
+    {};
+  for (const row of rows) {
+    result[row.window] = mapWindowRow(row);
+  }
+  return result;
+}
+
 export async function getActiveAccountUsageWindows({
   account_id,
   at,
@@ -250,14 +319,25 @@ export async function getActiveAccountUsageWindows({
   at?: Date | string;
   create?: boolean;
 }): Promise<Partial<Record<AccountUsageWindowName, AccountUsageWindow>>> {
-  const result: Partial<Record<AccountUsageWindowName, AccountUsageWindow>> =
-    {};
+  const time = normalizeDate(at);
+  const [epoch5h, epoch7d] = await Promise.all(
+    WINDOWS.map(async (window) => await getAccountUsageEpoch({ window })),
+  );
+  const result = await selectActiveAccountUsageWindows({
+    account_id,
+    at: time,
+    epochs: {
+      "5h": epoch5h.epoch,
+      "7d": epoch7d.epoch,
+    },
+  });
+  if (!create) return result;
   for (const window of WINDOWS) {
-    result[window] = await getActiveAccountUsageWindow({
+    result[window] ??= await getActiveAccountUsageWindow({
       account_id,
       window,
-      at,
-      create,
+      at: time,
+      create: true,
     });
   }
   return result;
@@ -325,5 +405,6 @@ export async function resetAccountUsageEpoch({
       trimmedReason,
     ],
   );
+  epochCache.delete(window);
   return { scope: MEMBERSHIP_USAGE_SCOPE, window, epoch: newEpoch };
 }
