@@ -46,7 +46,13 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
     (message.includes('waiting for "info"') ||
       message.includes("waiting for 'info'") ||
       message.includes("waiting for info"));
-  return rootfsUnavailable || routingUnavailable || conatInfoBootstrapTimeout;
+  const socketIoTransportClosed = message === "socket has been disconnected";
+  return (
+    rootfsUnavailable ||
+    routingUnavailable ||
+    conatInfoBootstrapTimeout ||
+    socketIoTransportClosed
+  );
 }
 
 export function isOpaqueCrossOriginScriptError({
