@@ -50,7 +50,11 @@ import {
   type ChatThreadAutomationConfig,
   type ChatThreadAutomationState,
 } from "@cocalc/chat";
-import { parseThreadAnchor, parseThreadResolved } from "./anchors";
+import {
+  chooseAnchorThread,
+  parseThreadAnchor,
+  parseThreadResolved,
+} from "./anchors";
 import {
   DEFAULT_CODEX_MODEL_NAME,
   normalizeCodexSessionId,
@@ -1748,12 +1752,8 @@ export class ChatActions extends Actions<ChatState> {
 
   // Select the newest existing thread anchored to anchorId, or create a
   // new empty anchored thread.  Returns the selected/created thread key.
-  //
-  // A hash whose only match is a *resolved* thread is retired: we select
-  // the resolved thread (a read-only record) instead of reviving the
-  // hash with a fresh thread -- this also guards against the hydration
-  // race where resolved metadata has not arrived yet when a stale
-  // marker is clicked.
+  // The selection policy (archived / resolved / hydration-race
+  // semantics) lives in chooseAnchorThread -- see anchors.ts.
   findOrCreateAnchorThread = ({
     anchorId,
     label,
@@ -1765,47 +1765,15 @@ export class ChatActions extends Actions<ChatState> {
   }): string => {
     const id = `${anchorId ?? ""}`.trim();
     if (!id) return "";
-    const live: { key: string; time: number; archived: boolean }[] = [];
-    const resolved: { key: string; time: number }[] = [];
-    for (const row of this.listThreadConfigRows()) {
-      const threadId = `${(row as any)?.thread_id ?? ""}`.trim();
-      if (!threadId) continue;
-      const rowResolved = parseThreadResolved((row as any)?.resolved);
-      if (rowResolved != null) {
-        if (rowResolved.anchorId === id) {
-          resolved.push({
-            key: threadId,
-            time: this.threadRecencyTime(threadId, row),
-          });
-        }
-        continue;
-      }
-      const anchor = parseThreadAnchor((row as any)?.anchor);
-      if (anchor?.id !== id) continue;
-      live.push({
-        key: threadId,
-        time: this.threadRecencyTime(threadId, row),
-        archived: (row as any)?.archived === true,
-      });
-    }
-    const pick = (candidates: { key: string; time: number }[]) =>
-      candidates.sort((a, b) => b.time - a.time)[0].key;
-    // Manually archived threads are hidden from badges/menus, so the
-    // button must not silently reopen them: when every live match is
-    // archived, fall through and create a fresh thread instead (the
-    // archived ones stay reachable via the sidebar's archive list).
-    const unarchived = live.filter((t) => !t.archived);
-    if (unarchived.length > 0) {
-      const newest = pick(unarchived);
+    const choice = chooseAnchorThread({
+      rows: this.listThreadConfigRows(),
+      anchorId: id,
+      recencyTime: this.threadRecencyTime,
+    });
+    if (choice.action === "select") {
       this.clearAllFilters();
-      this.setSelectedThread(newest);
-      return newest;
-    }
-    if (live.length === 0 && resolved.length > 0) {
-      const newest = pick(resolved);
-      this.clearAllFilters();
-      this.setSelectedThread(newest);
-      return newest;
+      this.setSelectedThread(choice.key);
+      return choice.key;
     }
     return this.createAnchorThread({ anchorId: id, label, path });
   };

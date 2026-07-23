@@ -94,6 +94,63 @@ export function parseThreadResolved(
   return resolved;
 }
 
+export type AnchorThreadChoice =
+  | { action: "select"; key: string }
+  | { action: "create" };
+
+// Selection policy for opening the chat of an anchor (pure; used by
+// ChatActions.findOrCreateAnchorThread):
+// - newest *unarchived* live thread wins;
+// - if every live match is manually archived, create a fresh thread
+//   (archived threads must not silently reopen -- they stay reachable
+//   via the sidebar's archive list);
+// - a hash whose only matches are *resolved* threads is retired: select
+//   the newest resolved thread as a read-only record instead of
+//   reviving the hash;
+// - otherwise create.
+export function chooseAnchorThread({
+  rows,
+  anchorId,
+  recencyTime,
+}: {
+  rows: any[];
+  anchorId: string;
+  recencyTime: (threadId: string, row: any) => number;
+}): AnchorThreadChoice {
+  const id = `${anchorId ?? ""}`.trim();
+  if (!id) return { action: "create" };
+  const live: { key: string; time: number; archived: boolean }[] = [];
+  const resolved: { key: string; time: number }[] = [];
+  for (const row of rows) {
+    const threadId = `${(row as any)?.thread_id ?? ""}`.trim();
+    if (!threadId) continue;
+    const rowResolved = parseThreadResolved((row as any)?.resolved);
+    if (rowResolved != null) {
+      if (rowResolved.anchorId === id) {
+        resolved.push({ key: threadId, time: recencyTime(threadId, row) });
+      }
+      continue;
+    }
+    const anchor = parseThreadAnchor((row as any)?.anchor);
+    if (anchor?.id !== id) continue;
+    live.push({
+      key: threadId,
+      time: recencyTime(threadId, row),
+      archived: (row as any)?.archived === true,
+    });
+  }
+  const pick = (candidates: { key: string; time: number }[]) =>
+    candidates.sort((a, b) => b.time - a.time)[0].key;
+  const unarchived = live.filter((t) => !t.archived);
+  if (unarchived.length > 0) {
+    return { action: "select", key: pick(unarchived) };
+  }
+  if (live.length === 0 && resolved.length > 0) {
+    return { action: "select", key: pick(resolved) };
+  }
+  return { action: "create" };
+}
+
 export interface AnchoredThreadSummary {
   key: string; // thread key == thread_id
   label: string;

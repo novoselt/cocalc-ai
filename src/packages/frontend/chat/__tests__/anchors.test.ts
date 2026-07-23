@@ -4,6 +4,7 @@
  */
 
 import {
+  chooseAnchorThread,
   computeAnchoredThreads,
   parseThreadAnchor,
   parseThreadResolved,
@@ -74,6 +75,92 @@ function fakeActions({
     isProjectReadStateReady: () => readStateReady,
   };
 }
+
+describe("chooseAnchorThread", () => {
+  // recency straight from the row for test simplicity
+  const recencyTime = (_threadId: string, row: any) => row?.time ?? 0;
+
+  it("selects the newest unarchived live match", () => {
+    expect(
+      chooseAnchorThread({
+        rows: [
+          { thread_id: "t1", anchor: { id: "h1" }, time: 100 },
+          { thread_id: "t2", anchor: { id: "h1" }, time: 300 },
+          { thread_id: "t3", anchor: { id: "h1" }, time: 200, archived: true },
+          { thread_id: "t4", anchor: { id: "other" }, time: 900 },
+        ],
+        anchorId: "h1",
+        recencyTime,
+      }),
+    ).toEqual({ action: "select", key: "t2" });
+  });
+
+  it("creates a fresh thread when every live match is archived", () => {
+    expect(
+      chooseAnchorThread({
+        rows: [
+          { thread_id: "t1", anchor: { id: "h1" }, time: 100, archived: true },
+          { thread_id: "t2", anchor: { id: "h1" }, time: 300, archived: true },
+        ],
+        anchorId: "h1",
+        recencyTime,
+      }),
+    ).toEqual({ action: "create" });
+  });
+
+  it("selects the newest resolved record when the hash is retired", () => {
+    expect(
+      chooseAnchorThread({
+        rows: [
+          {
+            thread_id: "r1",
+            resolved: { account_id: "u", at: "x", anchorId: "h1" },
+            time: 100,
+          },
+          {
+            thread_id: "r2",
+            resolved: { account_id: "u", at: "y", anchorId: "h1" },
+            time: 200,
+          },
+        ],
+        anchorId: "h1",
+        recencyTime,
+      }),
+    ).toEqual({ action: "select", key: "r2" });
+  });
+
+  it("creates when an archived live thread exists next to a resolved one", () => {
+    // The hash is not fully retired (a live-but-archived thread exists),
+    // and archived threads must not reopen: create.
+    expect(
+      chooseAnchorThread({
+        rows: [
+          { thread_id: "t1", anchor: { id: "h1" }, time: 100, archived: true },
+          {
+            thread_id: "r1",
+            resolved: { account_id: "u", at: "x", anchorId: "h1" },
+            time: 200,
+          },
+        ],
+        anchorId: "h1",
+        recencyTime,
+      }),
+    ).toEqual({ action: "create" });
+  });
+
+  it("creates when nothing matches or the anchor id is empty", () => {
+    expect(
+      chooseAnchorThread({ rows: [], anchorId: "h1", recencyTime }),
+    ).toEqual({ action: "create" });
+    expect(
+      chooseAnchorThread({
+        rows: [{ thread_id: "t1", anchor: { id: "h1" } }],
+        anchorId: "  ",
+        recencyTime,
+      }),
+    ).toEqual({ action: "create" });
+  });
+});
 
 describe("computeAnchoredThreads", () => {
   const rows = [
