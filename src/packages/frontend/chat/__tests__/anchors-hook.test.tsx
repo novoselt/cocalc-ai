@@ -60,13 +60,18 @@ function Probe({
 }
 
 describe("useAnchoredThreads reconnect", () => {
+  let warnSpy: jest.SpyInstance;
+
   beforeEach(() => {
     jest.useFakeTimers();
     ensureSideChatActions.mockReset();
+    // the failed acquisition below warns by design; keep CI output clean
+    warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
     jest.useRealTimers();
+    warnSpy.mockRestore();
   });
 
   it("re-acquires after close, retrying through a failed attempt", async () => {
@@ -90,6 +95,14 @@ describe("useAnchoredThreads reconnect", () => {
     });
     await waitFor(() => expect(ensureSideChatActions).toHaveBeenCalledTimes(2));
     expect(latest?.chatActions).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      "failed to initialize side chat actions",
+      expect.objectContaining({
+        project_id: "project-1",
+        path: "notes.tex",
+        err: expect.any(Error),
+      }),
+    );
 
     // ...but the retry timer recovers with the fresh actions.
     await act(async () => {
