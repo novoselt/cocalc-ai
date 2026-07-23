@@ -1,0 +1,64 @@
+import {
+  isIgnorableBrowserError,
+  isOpaqueCrossOriginScriptError,
+} from "./webapp-error-filter";
+
+describe("isIgnorableBrowserError", () => {
+  test.each([
+    "ResizeObserver loop completed with undelivered notifications.",
+    "ResizeObserver loop limit exceeded",
+  ])("ignores the browser-generated delivery warning %p", (message) => {
+    expect(isIgnorableBrowserError(message)).toBe(true);
+  });
+
+  test.each([
+    "TypeError: ResizeObserver callback failed",
+    "ResizeObserver loop completed with undelivered notifications: callback failed",
+    new Error("ResizeObserver loop limit exceeded"),
+    undefined,
+  ])("preserves real or malformed errors %p", (message) => {
+    expect(isIgnorableBrowserError(message)).toBe(false);
+  });
+});
+
+describe("isOpaqueCrossOriginScriptError", () => {
+  it("ignores Safari's detail-free cross-origin script error", () => {
+    expect(
+      isOpaqueCrossOriginScriptError({
+        message: "Script error.",
+        error: null,
+        filename: "",
+        lineNumber: 0,
+      }),
+    ).toBe(true);
+  });
+
+  test.each([
+    {
+      message: "Script error.",
+      error: new Error("Script error."),
+      filename: "",
+      lineNumber: 0,
+    },
+    {
+      message: "Script error.",
+      error: null,
+      filename: "https://cocalc.ai/app.js",
+      lineNumber: 0,
+    },
+    {
+      message: "Script error.",
+      error: null,
+      filename: "",
+      lineNumber: 42,
+    },
+    {
+      message: "TypeError: script failed",
+      error: null,
+      filename: "",
+      lineNumber: 0,
+    },
+  ])("preserves an error with actionable details: %p", (event) => {
+    expect(isOpaqueCrossOriginScriptError(event)).toBe(false);
+  });
+});
