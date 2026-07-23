@@ -9,3 +9,22 @@ export function isIgnorableBrowserError(message: unknown): boolean {
     IGNORED_BROWSER_ERROR_MESSAGES.has(message.trim())
   );
 }
+
+export function isOpaqueCrossOriginScriptError({
+  message,
+  error,
+  filename,
+  lineNumber,
+}: {
+  message: unknown;
+  error: unknown;
+  filename: unknown;
+  lineNumber: unknown;
+}): boolean {
+  return (
+    message === "Script error." &&
+    error == null &&
+    !filename &&
+    (lineNumber == null || lineNumber === 0)
+  );
+}

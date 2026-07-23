@@ -21,7 +21,10 @@
 // this avoids excessive resubmission of errors
 let ENABLED;
 const already_reported = [];
-const { isIgnorableBrowserError } = require("./webapp-error-filter");
+const {
+  isIgnorableBrowserError,
+  isOpaqueCrossOriginScriptError,
+} = require("./webapp-error-filter");
 
 // set this to true, to enable the webapp error reporter for development
 const enable_for_testing = false;
@@ -184,6 +187,20 @@ if (ENABLED) {
     // IE 6+ support.
     if (!charNo && window.event) {
       charNo = window.event.errorCharacter;
+    }
+
+    if (
+      isOpaqueCrossOriginScriptError({
+        message,
+        error: exception,
+        filename: url,
+        lineNumber: lineNo,
+      })
+    ) {
+      if (typeof previousOnError === "function") {
+        return previousOnError(message, url, lineNo, charNo, exception);
+      }
+      return;
     }
 
     const name = exception?.name || "window.onerror";
