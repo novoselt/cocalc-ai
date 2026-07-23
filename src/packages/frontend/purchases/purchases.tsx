@@ -62,6 +62,7 @@ import ServiceTag from "./service";
 import { LineItemsButton } from "./line-items";
 import { describeNumberOf, SectionDivider } from "./util";
 import PurchasesPlot from "./purchases-plot";
+import { getInvoiceUrlOrNull } from "./invoice-url";
 import searchFilter from "@cocalc/frontend/search/filter";
 import { debounce } from "lodash";
 import dayjs from "dayjs";
@@ -1018,7 +1019,7 @@ function InvoiceLink({ invoice_id }) {
       onClick={async () => {
         try {
           setLoading(true);
-          const invoiceUrl = await api.getInvoiceUrl(invoice_id);
+          const invoiceUrl = await getInvoiceUrlOrNull(invoice_id);
           if (invoiceUrl) {
             open_new_tab(invoiceUrl, false);
           } else {
