@@ -33,10 +33,12 @@ jest.mock("@cocalc/frontend/app-framework", () => {
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolve0) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolve0, reject0) => {
     resolve = resolve0;
+    reject = reject0;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function FieldConsumer({
@@ -113,5 +115,31 @@ describe("useProjectField", () => {
       second.resolve("second");
       await second.promise;
     });
+  });
+
+  it("contains fetch failures and permits an explicit retry", async () => {
+    const state = createProjectFieldState<string>(
+      `field-retry-${Date.now()}-${Math.random()}`,
+    );
+    const fetch = jest
+      .fn<Promise<string | null>, [string]>()
+      .mockRejectedValueOnce(new Error("temporary hub failure"))
+      .mockResolvedValueOnce("recovered");
+    let refresh: (() => void) | undefined;
+
+    render(
+      <FieldConsumer
+        state={state}
+        fetch={fetch}
+        onRefresh={(nextRefresh) => {
+          refresh = nextRefresh;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    act(() => refresh?.());
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(state.cache.get("project-1")).toBe("recovered"));
   });
 });

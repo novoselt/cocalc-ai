@@ -12,6 +12,7 @@ import {
   getSnapshotHomeDirectoryForPaths,
   getSnapshotsRouteRelativePath,
   isVirtualListingPath,
+  resolveRoutePathIsDirectory,
   toAbsoluteCurrentPath,
   toAuxTabPath,
   toUrlPath,
@@ -92,5 +93,30 @@ describe("project redux path routing", () => {
     expect(
       getPathRoute({ path: "/home/user/work", homeDirectory: "/home/user" }),
     ).toEqual({ relativePath: "home/user/work" });
+  });
+
+  it.each([
+    Object.assign(new Error("missing"), { code: "ENOENT" }),
+    new Error("ENOENT: no such file or directory, stat 'missing.term'"),
+  ])("classifies a missing direct route as a file", async (err) => {
+    await expect(
+      resolveRoutePathIsDirectory({
+        path: "missing.term",
+        isDir: async () => {
+          throw err;
+        },
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("preserves actionable route lookup failures", async () => {
+    await expect(
+      resolveRoutePathIsDirectory({
+        path: "work",
+        isDir: async () => {
+          throw new Error("permission denied");
+        },
+      }),
+    ).rejects.toThrow("permission denied");
   });
 });
