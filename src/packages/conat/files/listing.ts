@@ -9,6 +9,7 @@ Tests in packages/backend/conat/files/test/listing.test.ts
 import { EventEmitter } from "events";
 import { join } from "path";
 import { type FilesystemClient } from "./fs";
+import type { WatchIterator } from "./watch";
 import { EventIterator } from "@cocalc/util/event-iterator";
 
 export type FileTypeLabel = "f" | "d" | "l" | "b" | "c" | "s" | "p";
@@ -52,7 +53,7 @@ export default async function listing(opts: Options): Promise<Listing> {
 export class Listing extends EventEmitter {
   public files?: Files = {};
   public truncated?: boolean;
-  private watch?;
+  private watch?: WatchIterator;
   private iters: EventIterator<FileData & { name: string }>[] = [];
   constructor(public readonly opts: Options) {
     super();
@@ -96,7 +97,7 @@ export class Listing extends EventEmitter {
     void this.attachWatch(fs.watch(path, { closeOnUnlink: true, stats: true }));
   };
 
-  private attachWatch = async (watchPromise: Promise<any>) => {
+  private attachWatch = async (watchPromise: Promise<WatchIterator>) => {
     try {
       const watch = await watchPromise;
       if (this.files == null) {
@@ -105,7 +106,10 @@ export class Listing extends EventEmitter {
       }
       this.watch = watch;
       await this.syncAfterWatchAttach();
-      void this.handleUpdates();
+      if (this.files == null || this.watch !== watch) {
+        return;
+      }
+      void this.handleUpdates(watch);
     } catch (err) {
       if (this.files == null) {
         return;
@@ -147,12 +151,18 @@ export class Listing extends EventEmitter {
     }
   };
 
-  private handleUpdates = async () => {
-    for await (const x of this.watch) {
-      if (this.files == null) {
-        return;
+  private handleUpdates = async (watch: WatchIterator) => {
+    try {
+      for await (const x of watch) {
+        if (this.files == null || this.watch !== watch) {
+          return;
+        }
+        await this.update(x);
       }
-      this.update(x);
+    } catch (err) {
+      if (this.files != null && this.watch === watch) {
+        console.warn("WARNING:", err);
+      }
     }
   };
 
@@ -163,7 +173,7 @@ export class Listing extends EventEmitter {
   }: {
     filename: string;
     event;
-    stats;
+    stats?;
   }) => {
     // console.log("update", { filename, event, stats });
     if (this.files == null) {

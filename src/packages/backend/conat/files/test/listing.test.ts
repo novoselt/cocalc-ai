@@ -139,6 +139,49 @@ describe("listing initialization", () => {
     }
   });
 
+  it("does not start a watcher after closing during catch-up sync", async () => {
+    let getListingCall = 0;
+    let resolveResync;
+    let markResyncStarted;
+    const resyncStarted = new Promise<void>((resolve) => {
+      markResyncStarted = resolve;
+    });
+    const resync = new Promise((resolve) => {
+      resolveResync = resolve;
+    });
+    const iteratorStarted = jest.fn();
+    const close = jest.fn();
+    const watch = {
+      [Symbol.asyncIterator]() {
+        iteratorStarted();
+        return {
+          next: async () => ({ done: true, value: undefined }),
+        };
+      },
+      close,
+    };
+    const fs: any = {
+      getListing: jest.fn(async () => {
+        getListingCall += 1;
+        if (getListingCall === 1) {
+          return { files: {}, truncated: false };
+        }
+        markResyncStarted();
+        return await resync;
+      }),
+      watch: jest.fn(async () => watch),
+    };
+
+    const dir = await listing({ path: "", fs });
+    await resyncStarted;
+    dir.close();
+    resolveResync({ files: {}, truncated: false });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(iteratorStarted).not.toHaveBeenCalled();
+  });
+
   it("keeps the initial listing when read-only filesystem watch is unavailable", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const fs: any = {
