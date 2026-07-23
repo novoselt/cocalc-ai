@@ -486,6 +486,16 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
     },
   ),
 
+  ...adHocEntries(["account_usage_counters", "account_usage_counter_states"], {
+    ownership: "account-home",
+    authority: "account_id",
+    portability: "unsupported",
+    source: "server usage counter schema bootstrap",
+    migrate_to_schema: true,
+    notes:
+      "Account-scoped usage counter state keyed by account_usage_windows. Authority is inherited from the referenced window's account_id; these rows must move or be removed with that account's usage windows.",
+  }),
+
   ...adHocEntries(["ai_sessions"], {
     ownership: "account-home",
     authority: "account_id",
