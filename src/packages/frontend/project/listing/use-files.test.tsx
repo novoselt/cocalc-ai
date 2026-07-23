@@ -307,6 +307,42 @@ describe("useFiles", () => {
     });
   });
 
+  it("retries live listing bootstrap while the project rootfs is unavailable", async () => {
+    const rootfsUnavailable = new Error(
+      "rootfs is not mounted; cannot access absolute path '/home'. Start the project and try again.",
+    );
+    const listing = {
+      files: { "mounted.txt": { mtime: 0, isDir: false, size: 1 } },
+      on: jest.fn(),
+      close: jest.fn(),
+    };
+    (withTimeout as jest.Mock).mockImplementation(
+      async (promise: Promise<any>) => await promise,
+    );
+
+    const fs = {
+      getListing: jest
+        .fn()
+        .mockResolvedValueOnce({ files: {} })
+        .mockResolvedValue({ files: listing.files }),
+      listing: jest
+        .fn()
+        .mockRejectedValueOnce(rootfsUnavailable)
+        .mockResolvedValueOnce(listing),
+    };
+
+    useFilesForTest({ fs, path: "/rootfs-retry" });
+    await flushEffects();
+
+    const result = useFilesForTest({ fs, path: "/rootfs-retry" });
+    expect(fs.listing).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalled();
+    expect(result.error).toBeNull();
+    expect(result.files).toEqual({
+      "mounted.txt": { mtime: 0, isDir: false, size: 1 },
+    });
+  });
+
   it("requests a fresh filesystem client after a closed snapshot failure", async () => {
     const refreshFs = jest.fn();
     (withTimeout as jest.Mock).mockRejectedValue(new Error("closed"));

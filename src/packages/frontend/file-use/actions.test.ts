@@ -4,6 +4,7 @@ const markProjectDocumentActivity = jest.fn();
 const touch_project = jest.fn();
 const publishDocumentPresence = jest.fn();
 const getProjectStoreMock = jest.fn();
+const projectConat = jest.fn();
 
 let mockLite = true;
 
@@ -59,17 +60,21 @@ jest.mock("../webapp-client", () => ({
     },
     conat_client: {
       conat: jest.fn(() => ({ id: "client-1" })),
+      projectConat: (...args: any[]) => projectConat(...args),
     },
   },
 }));
 
-describe("FileUseActions in lite mode", () => {
+describe("FileUseActions", () => {
   beforeEach(() => {
     mockLite = true;
     markProjectDocumentActivity.mockReset();
     touch_project.mockReset();
     publishDocumentPresence.mockReset();
     getProjectStoreMock.mockReset();
+    projectConat.mockReset();
+    projectConat.mockResolvedValue({ id: "project-client-1" });
+    touch_project.mockResolvedValue(undefined);
     getProjectStoreMock.mockReturnValue({
       getIn: () => true,
     });
@@ -94,5 +99,30 @@ describe("FileUseActions in lite mode", () => {
     );
     expect(publishDocumentPresence).toHaveBeenCalledTimes(1);
     expect(markProjectDocumentActivity).not.toHaveBeenCalled();
+  });
+
+  it("contains document-activity failures in full mode", async () => {
+    mockLite = false;
+    markProjectDocumentActivity.mockRejectedValueOnce(
+      new Error("operation has timed out subject:document-activity"),
+    );
+    const { FileUseActions } = await import("./actions");
+    const actions = new FileUseActions(undefined as any, undefined as any);
+
+    await expect(
+      actions.mark_file(
+        "00000000-1000-4000-8000-000000000000",
+        "/home/user/test.txt",
+        "open",
+        0,
+        false,
+        new Date("2026-04-15T19:00:00.000Z"),
+        true,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(projectConat).toHaveBeenCalledTimes(1);
+    expect(markProjectDocumentActivity).toHaveBeenCalledTimes(1);
+    expect(touch_project).toHaveBeenCalledTimes(1);
   });
 });

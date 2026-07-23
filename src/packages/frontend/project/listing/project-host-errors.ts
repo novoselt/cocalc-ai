@@ -20,3 +20,28 @@ export function isConatInfoBootstrapTimeout(error: unknown): boolean {
     message.includes("waiting for info")
   );
 }
+
+export function isProjectRootfsUnavailable(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  return (
+    message.includes("rootfs is not mounted") &&
+    message.includes("start the project and try again")
+  );
+}
+
+export function isProjectHostRoutingUnavailable(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  return (
+    message.includes("unable to route") &&
+    message.includes("project-host") &&
+    message.includes("host routing info unavailable")
+  );
+}
+
+export function isProjectHostTemporarilyUnavailable(error: unknown): boolean {
+  return (
+    isConatInfoBootstrapTimeout(error) ||
+    isProjectRootfsUnavailable(error) ||
+    isProjectHostRoutingUnavailable(error)
+  );
+}

@@ -23,6 +23,7 @@ let ENABLED;
 const already_reported = [];
 const {
   isIgnorableBrowserError,
+  isIgnorableUnhandledRejection,
   isOpaqueCrossOriginScriptError,
 } = require("./webapp-error-filter");
 
@@ -225,6 +226,9 @@ if (ENABLED) {
 
 if (ENABLED) {
   window.addEventListener("unhandledrejection", (e) => {
+    if (isIgnorableUnhandledRejection(e.reason)) {
+      return;
+    }
     // just to make sure there is a message
     let reason = e.reason != null ? e.reason : "<no reason>";
     if (typeof reason === "object") {

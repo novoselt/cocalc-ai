@@ -1,5 +1,6 @@
 import {
   isIgnorableBrowserError,
+  isIgnorableUnhandledRejection,
   isOpaqueCrossOriginScriptError,
 } from "./webapp-error-filter";
 
@@ -18,6 +19,36 @@ describe("isIgnorableBrowserError", () => {
     undefined,
   ])("preserves real or malformed errors %p", (message) => {
     expect(isIgnorableBrowserError(message)).toBe(false);
+  });
+});
+
+describe("isIgnorableUnhandledRejection", () => {
+  test.each([
+    new Error(
+      "rootfs is not mounted; cannot access absolute path '/home'. Start the project and try again.",
+    ),
+    new Error(
+      "unable to route 'ProjectActions.fs' to project-host for project 00000000-0000-4000-8000-000000000000; host routing info unavailable",
+    ),
+    new Error('once: timeout of 4000ms waiting for "info"'),
+    new Error("socket has been disconnected"),
+    new Error(
+      'COCALC_RUNTIME_SPONSOR_DENIAL:{"code":"runtime_sponsor_slots_exhausted","sponsor_account_id":"00000000-0000-4000-8000-000000000001","limit":1,"current":1,"active_projects":[]}',
+    ),
+  ])("ignores an expected non-actionable rejection", (reason) => {
+    expect(isIgnorableUnhandledRejection(reason)).toBe(true);
+  });
+
+  test.each([
+    new Error("permission denied"),
+    new Error("unable to route billing request"),
+    new Error('once: timeout of 4000ms waiting for "ready"'),
+    new Error("socket has been disconnected while saving a document"),
+    new Error("COCALC_RUNTIME_SPONSOR_DENIAL:not-json"),
+    "rootfs is not mounted",
+    undefined,
+  ])("preserves an actionable rejection %p", (reason) => {
+    expect(isIgnorableUnhandledRejection(reason)).toBe(false);
   });
 });
 

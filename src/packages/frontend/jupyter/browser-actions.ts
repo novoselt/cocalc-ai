@@ -2495,7 +2495,7 @@ export class JupyterActions extends JupyterActions0 {
       let using_default_kernel = false;
 
       const account_store = this.redux.getStore("account");
-      const editor_settings = account_store.get("editor_settings");
+      const editor_settings = account_store?.get?.("editor_settings");
       if (
         editor_settings != null &&
         !editor_settings.get("ask_jupyter_kernel")
