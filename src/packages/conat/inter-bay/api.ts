@@ -14,6 +14,12 @@ import type {
   AccountFeedProjectRemoveEvent,
   AccountFeedProjectUpsertEvent,
 } from "@cocalc/conat/hub/api/account-feed";
+import type {
+  AdminCrashLocalReadRequest,
+  AdminCrashLocalReadResponse,
+  AdminCrashLocalResolutionRequest,
+  AdminCrashLocalResolutionResponse,
+} from "@cocalc/conat/hub/api/admin-crashes";
 import type { ManagedProjectEgressOverride } from "@cocalc/conat/files/file-server";
 import type { LroEvent, LroSummary } from "@cocalc/conat/hub/api/lro";
 import type {
@@ -2312,6 +2318,8 @@ export type BayOpsMethod =
   | "get-active-user-map"
   | "get-membership-analytics-events"
   | "backfill-membership-analytics-purchases"
+  | "get-webapp-crashes"
+  | "set-webapp-crash-resolution"
   | "set-server-setting"
   | "set-site-settings"
   | "get-site-settings"
@@ -3802,6 +3810,12 @@ export interface InterBayBayOpsApi {
   backfillMembershipAnalyticsPurchases: (
     opts: MembershipAnalyticsBackfillQuery,
   ) => Promise<MembershipAnalyticsBackfillResult>;
+  getWebappCrashes: (
+    opts: AdminCrashLocalReadRequest,
+  ) => Promise<AdminCrashLocalReadResponse>;
+  setWebappCrashResolution: (
+    opts: AdminCrashLocalResolutionRequest,
+  ) => Promise<AdminCrashLocalResolutionResponse>;
   setServerSetting: (opts: BayOpsSetServerSettingRequest) => Promise<void>;
   setSiteSettings: (
     opts: BayOpsSetSiteSettingsRequest,
@@ -8751,6 +8765,24 @@ export function createInterBayBayOpsClient({
       method: "backfill-membership-analytics-purchases",
     }),
   });
+  const webappCrashesClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getWebappCrashes">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-webapp-crashes",
+    }),
+  });
+  const webappCrashResolutionClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "setWebappCrashResolution">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "set-webapp-crash-resolution",
+    }),
+  });
   return {
     getLoad: async (opts) => await loadClient.getLoad(opts),
     getBackups: async (opts) => await backupsClient.getBackups(opts),
@@ -8784,6 +8816,10 @@ export function createInterBayBayOpsClient({
       await membershipAnalyticsBackfillClient.backfillMembershipAnalyticsPurchases(
         opts,
       ),
+    getWebappCrashes: async (opts) =>
+      await webappCrashesClient.getWebappCrashes(opts),
+    setWebappCrashResolution: async (opts) =>
+      await webappCrashResolutionClient.setWebappCrashResolution(opts),
     setServerSetting: async (opts) =>
       await setServerSettingClient.setServerSetting(opts),
     setSiteSettings: async (opts) =>
@@ -8995,6 +9031,29 @@ export function createInterBayBayOpsHandlers({
       impl: {
         backfillMembershipAnalyticsPurchases: async (opts) =>
           await impl.backfillMembershipAnalyticsPurchases(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "getWebappCrashes">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-webapp-crashes",
+      }),
+      impl: {
+        getWebappCrashes: async (opts) => await impl.getWebappCrashes(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "setWebappCrashResolution">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "set-webapp-crash-resolution",
+      }),
+      impl: {
+        setWebappCrashResolution: async (opts) =>
+          await impl.setWebappCrashResolution(opts),
       },
     }),
     createServiceHandler<Pick<InterBayBayOpsApi, "getRootfsCatalog">>({

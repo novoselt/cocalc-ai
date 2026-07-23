@@ -40,6 +40,7 @@ import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 import {
   computePlacementPermission,
   getUserHostTier,
+  hostIoPlacementConformant,
 } from "@cocalc/server/project-host/placement";
 import {
   getHostAccessForAccount,
@@ -409,6 +410,7 @@ export async function resolveHostConnectionLocalHelper({
     isOwner,
     accessRole,
   });
+  const ioPlacementConformant = hostIoPlacementConformant(row);
   if (!hostAccessRoleCan(accessRole, "view") && !isShared) {
     const { rows: projectRows } = await pool().query(
       `SELECT 1
@@ -482,7 +484,7 @@ export async function resolveHostConnectionLocalHelper({
         ? row.bay_id.trim()
         : null,
     name: row.name ?? null,
-    can_place: placement.can_place,
+    can_place: placement.can_place && ioPlacementConformant,
     region: row.region ?? null,
     size: typeof metadata?.size === "string" ? metadata.size : null,
     ssh_server,

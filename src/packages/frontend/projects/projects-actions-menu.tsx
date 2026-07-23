@@ -25,6 +25,10 @@ import {
   useActions,
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
+import {
+  FreshAuthModal,
+  useFreshAuthAction,
+} from "@cocalc/frontend/auth/fresh-auth";
 import { Icon } from "@cocalc/frontend/components";
 import { labels } from "@cocalc/frontend/i18n";
 import { FIXED_PROJECT_TABS } from "@cocalc/frontend/project/page/file-tab";
@@ -105,6 +109,7 @@ function HydratedProjectActionsMenu({
   const [moveOpen, setMoveOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
   const intl = useIntl();
   const actions = useActions("projects");
   const account_id = useTypedRedux("account", "account_id");
@@ -436,16 +441,18 @@ function HydratedProjectActionsMenu({
               const destProjectRegion = host
                 ? mapCloudRegionToR2Region(host.region)
                 : undefined;
-              await actions.move_project_to_host(
-                record.project_id,
-                dest_host_id,
-                {
-                  backup_region_cutover:
-                    destProjectRegion != null &&
-                    destProjectRegion !== projectRegion,
-                  dest_project_region: destProjectRegion,
-                },
-              );
+              await runFreshAuthAction(async () => {
+                await actions.move_project_to_host(
+                  record.project_id,
+                  dest_host_id,
+                  {
+                    backup_region_cutover:
+                      destProjectRegion != null &&
+                      destProjectRegion !== projectRegion,
+                    dest_project_region: destProjectRegion,
+                  },
+                );
+              });
             } catch (err) {
               console.error("move project failed", err);
               Modal.error({
@@ -501,6 +508,7 @@ function HydratedProjectActionsMenu({
           await actions.archive_project(project_id);
         }}
       />
+      <FreshAuthModal {...freshAuthModalProps} />
     </div>
   );
 }

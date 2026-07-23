@@ -18,8 +18,12 @@ import {
   processPaymentIntent,
 } from "./process-payment-intents";
 import { decimalToStripe, grandTotal } from "@cocalc/util/stripe/calc";
-import { RESUME_SUBSCRIPTION } from "@cocalc/util/db-schema/purchases";
+import {
+  RESUME_SUBSCRIPTION,
+  SUBSCRIPTION_RENEWAL,
+} from "@cocalc/util/db-schema/purchases";
 import { resumeSubscriptionSetPaymentIntent } from "./create-subscription-payment";
+import { bindSubscriptionRenewalPaymentIntent } from "../subscription-renewal-attempts";
 import send, { name, support, url } from "@cocalc/server/messages/send";
 import { delay } from "awaiting";
 import { assertPaymentCheckoutAllowed } from "@cocalc/server/launch/kill-switches";
@@ -37,6 +41,8 @@ export default async function createPaymentIntent({
   force,
   requireAddress = false,
   processImmediately = true,
+  idempotencyKeyPrefix,
+  allowedPaymentMethodTypes,
 }: {
   account_id: string;
   purpose: string;
@@ -58,6 +64,10 @@ export default async function createPaymentIntent({
   // Some callers must persist local state that processPaymentIntent reads
   // before an immediately paid invoice can be safely processed.
   processImmediately?: boolean;
+  // Stable identity for replaying every Stripe mutation in this payment.
+  idempotencyKeyPrefix?: string;
+  // Restrict automatic collection to explicitly supported instant methods.
+  allowedPaymentMethodTypes?: string[];
 }): Promise<{ payment_intent: string; hosted_invoice_url: string }> {
   logger.debug("createPaymentIntent", {
     account_id,
@@ -116,7 +126,10 @@ export default async function createPaymentIntent({
   };
 
   const addLineItems = async (invoice) => {
-    for (const { amount, description } of lineItemsWithoutCredit) {
+    for (const [
+      index,
+      { amount, description },
+    ] of lineItemsWithoutCredit.entries()) {
       logger.debug("creating and add invoice item", {
         customer,
         amount: decimalToStripe(amount),
@@ -124,29 +137,46 @@ export default async function createPaymentIntent({
         description,
         invoice: invoice.id,
       });
-      await stripe.invoiceItems.create({
+      const params = {
         customer,
         amount: decimalToStripe(amount),
         currency: "usd",
         description,
         invoice: invoice.id,
-      });
+      };
+      if (idempotencyKeyPrefix) {
+        await stripe.invoiceItems.create(params, {
+          idempotencyKey: `${idempotencyKeyPrefix}:item:${index}`,
+        });
+      } else {
+        await stripe.invoiceItems.create(params);
+      }
     }
   };
 
   let finalizedInvoice;
   logger.debug("creating invoice with automatic_tax enabled");
   // try with tax enabled
-  invoice = await stripe.invoices.create({
+  const createParams = {
     ...invoiceCreateParams,
     automatic_tax: { enabled: true },
-  });
+  };
+  invoice = idempotencyKeyPrefix
+    ? await stripe.invoices.create(createParams, {
+        idempotencyKey: `${idempotencyKeyPrefix}:invoice`,
+      })
+    : await stripe.invoices.create(createParams);
   await addLineItems(invoice);
   try {
-    finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id, {
+    const finalizeParams = {
       auto_advance: false,
       expand: INVOICE_PAYMENT_EXPAND,
-    });
+    };
+    finalizedInvoice = idempotencyKeyPrefix
+      ? await stripe.invoices.finalizeInvoice(invoice.id, finalizeParams, {
+          idempotencyKey: `${idempotencyKeyPrefix}:finalize`,
+        })
+      : await stripe.invoices.finalizeInvoice(invoice.id, finalizeParams);
   } catch (err) {
     if (requireAddress) {
       throw Error(
@@ -164,13 +194,25 @@ export default async function createPaymentIntent({
     // enter their address for tax purposes, and when they do then things will work
     // for all future purposes.  I think it is only likely that old customers would
     // ever get in this situation.
-    await stripe.invoices.update(invoice.id, {
+    const updateParams = {
       automatic_tax: { enabled: false },
-    });
-    finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id, {
+    };
+    if (idempotencyKeyPrefix) {
+      await stripe.invoices.update(invoice.id, updateParams, {
+        idempotencyKey: `${idempotencyKeyPrefix}:disable-tax`,
+      });
+    } else {
+      await stripe.invoices.update(invoice.id, updateParams);
+    }
+    const finalizeParams = {
       auto_advance: false,
       expand: INVOICE_PAYMENT_EXPAND,
-    });
+    };
+    finalizedInvoice = idempotencyKeyPrefix
+      ? await stripe.invoices.finalizeInvoice(invoice.id, finalizeParams, {
+          idempotencyKey: `${idempotencyKeyPrefix}:finalize-without-tax`,
+        })
+      : await stripe.invoices.finalizeInvoice(invoice.id, finalizeParams);
     send({
       to_ids: [account_id],
       subject: "ACTION REQUIRED: Enter your address for tax purposes",
@@ -215,31 +257,66 @@ ${await support()}
   metadata = { ...metadata, invoice_id: invoice.id };
   await recordPaymentIntent({ purpose, account_id, paymentIntentId, metadata });
 
-  await stripe.paymentIntents.update(paymentIntentId, {
+  const paymentIntentUpdate = {
     description,
     metadata,
     // needed so if user pays for the first time we keep their payment method
-    setup_future_usage: "off_session",
-  });
+    setup_future_usage: "off_session" as const,
+  };
+  if (idempotencyKeyPrefix) {
+    await stripe.paymentIntents.update(paymentIntentId, paymentIntentUpdate, {
+      idempotencyKey: `${idempotencyKeyPrefix}:payment-intent`,
+    });
+  } else {
+    await stripe.paymentIntents.update(paymentIntentId, paymentIntentUpdate);
+  }
 
   let success = false;
-  try {
-    invoice = await stripe.invoices.pay(finalizedInvoice.id);
-    success = true;
-  } catch (err) {
-    logger.debug(
-      `attempt to use default payment method failed (which is fine!): ${err}`,
-    );
-    logger.debug(
-      "instead we check for others or just let user fill something in",
-    );
+  if (allowedPaymentMethodTypes == null) {
+    try {
+      invoice = idempotencyKeyPrefix
+        ? await stripe.invoices.pay(
+            finalizedInvoice.id,
+            {},
+            { idempotencyKey: `${idempotencyKeyPrefix}:pay:default` },
+          )
+        : await stripe.invoices.pay(finalizedInvoice.id);
+      success = true;
+    } catch (err) {
+      logger.debug(
+        `attempt to use default payment method failed (which is fine!): ${err}`,
+      );
+      logger.debug(
+        "instead we check for others or just let user fill something in",
+      );
+    }
+  }
 
-    for (const payment_method of await getPaymentMethods({ customer })) {
-      await stripe.invoices.update(invoice.id, {
+  if (!success) {
+    for (const payment_method of await getPaymentMethods({
+      customer,
+      allowedPaymentMethodTypes,
+    })) {
+      const updateParams = {
         default_payment_method: payment_method,
-      });
+      };
+      if (idempotencyKeyPrefix) {
+        await stripe.invoices.update(invoice.id, updateParams, {
+          idempotencyKey: `${idempotencyKeyPrefix}:method:${payment_method}`,
+        });
+      } else {
+        await stripe.invoices.update(invoice.id, updateParams);
+      }
       try {
-        invoice = await stripe.invoices.pay(finalizedInvoice.id);
+        invoice = idempotencyKeyPrefix
+          ? await stripe.invoices.pay(
+              finalizedInvoice.id,
+              {},
+              {
+                idempotencyKey: `${idempotencyKeyPrefix}:pay:${payment_method}`,
+              },
+            )
+          : await stripe.invoices.pay(finalizedInvoice.id);
         logger.debug("paying with another method on file worked");
         success = true;
         break;
@@ -334,19 +411,29 @@ function invoiceWithPaymentIntent(invoice, paymentIntentId: string) {
 
 // returns first ~10 distinct payment method ids, with the default first if there
 // is a default.
-async function getPaymentMethods({ customer }): Promise<string[]> {
+async function getPaymentMethods({
+  customer,
+  allowedPaymentMethodTypes,
+}: {
+  customer: string;
+  allowedPaymentMethodTypes?: string[];
+}): Promise<string[]> {
   const stripe = await getConn();
   const paymentMethods: string[] = [];
 
   const c = await stripe.customers.retrieve(customer);
-  const id = (c as any)?.invoice_settings?.default_payment_method;
-  if (id) {
-    paymentMethods.push(id);
-  }
-
-  // no default, so what do they have?
   const { data } = await stripe.customers.listPaymentMethods(customer);
-  for (const { id } of data) {
+  const usable = data.filter(
+    ({ type }) =>
+      allowedPaymentMethodTypes == null ||
+      allowedPaymentMethodTypes.includes(type),
+  );
+  const defaultId = (c as any)?.invoice_settings?.default_payment_method;
+  const defaultMethod = usable.find(({ id }) => id === defaultId);
+  if (defaultMethod) {
+    paymentMethods.push(defaultMethod.id);
+  }
+  for (const { id } of usable) {
     if (!paymentMethods.includes(id)) {
       paymentMethods.push(id);
     }
@@ -380,9 +467,11 @@ export async function cancelPaymentIntent({
     if (e.includes("invoice")) {
       // try voiding the invoice instead:
       const paymentIntent = await stripe.paymentIntents.retrieve(id);
-      const invoice = (paymentIntent as any).invoice;
-      if (typeof invoice == "string") {
-        await stripe.invoices.voidInvoice(invoice);
+      const invoiceId =
+        paymentIntentIdFromValue((paymentIntent as any).invoice) ??
+        paymentIntentIdFromValue(paymentIntent.metadata?.invoice_id);
+      if (invoiceId?.startsWith("in_")) {
+        await stripe.invoices.voidInvoice(invoiceId);
         return;
       }
     }
@@ -418,6 +507,14 @@ export async function recordPaymentIntent({
       account_id,
       subscription_id: parseInt(metadata.subscription_id),
       paymentIntentId,
+    });
+  } else if (purpose == SUBSCRIPTION_RENEWAL) {
+    await bindSubscriptionRenewalPaymentIntent({
+      account_id,
+      subscription_id: parseInt(metadata.subscription_id),
+      attempt_id: metadata.renewal_attempt_id,
+      payment_intent_id: paymentIntentId,
+      stripe_invoice_id: metadata.invoice_id,
     });
   }
 }

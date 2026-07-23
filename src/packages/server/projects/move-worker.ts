@@ -4,7 +4,6 @@ import getPool from "@cocalc/database/pool";
 import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import {
   ensureLroSchema,
-  expireDueLros,
   getLro,
   touchLro,
   updateLro,
@@ -659,13 +658,6 @@ async function claimMoveLroOps({
   lease_ms?: number;
 }): Promise<LroSummary[]> {
   if (limit <= 0) return [];
-  const expired = await expireDueLros({ kind: MOVE_LRO_KIND });
-  if (expired.length > 0) {
-    logger.info("expired stale move LROs before claim", {
-      count: expired.length,
-      op_ids: expired.map(({ op_id }) => op_id),
-    });
-  }
   const runningRows = await listFreshRunningMoveTopologyRows({ lease_ms });
   const sourceRunningCounts = new Map<string, number>();
   const destRunningCounts = new Map<string, number>();

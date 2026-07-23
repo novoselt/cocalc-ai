@@ -211,6 +211,7 @@ describe("processPaymentIntents invoice-payment links", () => {
     expect(mockApplyMembershipChange).toHaveBeenCalledWith({
       account_id: "acct-1",
       allowDowngrade: true,
+      creditId: 101,
       interval: "month",
       paymentAmount: expect.anything(),
       storeVisibleOnly: true,

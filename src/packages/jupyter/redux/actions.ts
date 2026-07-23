@@ -31,7 +31,7 @@ declare const localStorage: any;
 import * as immutable from "immutable";
 import { Actions } from "@cocalc/util/redux/Actions";
 import { three_way_merge } from "@cocalc/sync/editor/generic/util";
-import { callback2 } from "@cocalc/util/async-utils";
+import { callback2, once } from "@cocalc/util/async-utils";
 import * as misc from "@cocalc/util/misc";
 import { delay } from "awaiting";
 import * as cell_utils from "@cocalc/jupyter/util/cell-utils";
@@ -84,6 +84,8 @@ const CellDeleteProtectedException = new Error("CellDeleteProtectedException");
 type State = "init" | "load" | "ready" | "closed";
 
 const COCALC_LAST_RUNTIME_MS_KEY = "last_runtime_ms";
+const ACCOUNT_TABLE_CONNECT_TIMEOUT_MS = 15_000;
+const ACCOUNT_TABLE_WRITE_ATTEMPTS = 2;
 
 function normalizeLastRuntimeMs(value: any): number | undefined {
   if (value == null) {
@@ -2057,23 +2059,59 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     this._sync();
   };
 
-  set_default_kernel = (kernel?: string) => {
+  private persistDefaultKernel = async (kernel: string): Promise<void> => {
+    for (
+      let attempt = 0;
+      attempt < ACCOUNT_TABLE_WRITE_ATTEMPTS;
+      attempt += 1
+    ) {
+      const accountTable = this.redux.getTable("account") as any;
+      const syncTable = accountTable?._table;
+      if (accountTable == null || syncTable == null) {
+        return;
+      }
+      if (!syncTable.is_ready?.()) {
+        try {
+          await once(syncTable, "connected", ACCOUNT_TABLE_CONNECT_TIMEOUT_MS);
+        } catch {
+          continue;
+        }
+      }
+      if (
+        this.redux.getTable("account") !== accountTable ||
+        !syncTable.is_ready?.()
+      ) {
+        continue;
+      }
+      const accountStore = this.redux.getStore("account") as any;
+      if (accountStore == null) {
+        return;
+      }
+      const current: any = {};
+      const jupyter = accountStore.getIn(["editor_settings", "jupyter"]);
+      if (jupyter != null) {
+        Object.assign(current, jupyter.toJS());
+      }
+      current.kernel = kernel;
+      await accountTable.set({
+        editor_settings: { jupyter: current },
+      });
+      return;
+    }
+  };
+
+  set_default_kernel = async (kernel?: string): Promise<void> => {
     if (kernel == null || kernel === "") return;
     // doesn't make sense for project (right now at least)
     if (this.is_project) return;
-    const account_store = this.redux.getStore("account") as any;
-    if (account_store == null) return;
-    const cur: any = {};
-    // if available, retain existing jupyter config
-    const acc_jup = account_store.getIn(["editor_settings", "jupyter"]);
-    if (acc_jup != null) {
-      Object.assign(cur, acc_jup.toJS());
+    try {
+      await this.persistDefaultKernel(kernel);
+    } catch (err) {
+      this.dbg("set_default_kernel")(
+        "failed to persist default kernel preference",
+        err,
+      );
     }
-    // set new kernel and save it
-    cur.kernel = kernel;
-    (this.redux.getTable("account") as any).set({
-      editor_settings: { jupyter: cur },
-    });
   };
 
   edit_attachments = (id: string): void => {

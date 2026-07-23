@@ -1134,6 +1134,12 @@ export class JupyterActions extends JupyterActions0 {
         console.warn("failed to replay jupyter live runs", err);
       }
     } finally {
+      // close() deletes non-function fields via misc.close(this). A replay can
+      // finish afterward, so only the subscription that still owns this
+      // actions instance may flush its buffered messages.
+      if (this.isClosed() || this.liveRunSub !== sub) {
+        return;
+      }
       this.liveRunReplayPending = false;
       const buffered = this.liveRunReplayBuffer;
       this.liveRunReplayBuffer = [];
@@ -4030,7 +4036,9 @@ export class JupyterActions extends JupyterActions0 {
           this.runDebug("watch.stream.failed", { err: `${err}` });
         }
         // check if file was deleted
-        this.signalIfFileDeleted();
+        void this.signalIfFileDeleted().catch((err) => {
+          this.runDebug("watch.delete-check.failed", { err: `${err}` });
+        });
         this.fileWatcher?.close();
         this.runDebug("watch.stream.closed");
         delete this.fileWatcher;
@@ -4045,17 +4053,25 @@ export class JupyterActions extends JupyterActions0 {
 
   private signalIfFileDeleted = async (): Promise<void> => {
     if (this.isClosed()) return;
+    const syncdb = this.syncdb;
+    const fs = syncdb.fs;
+    const path = this.path;
+    const opts = syncdb.opts;
     const start = Date.now();
-    const threshold = this.syncdb.opts.deletedThreshold ?? DELETED_THRESHOLD;
-    while (!this.isClosed()) {
+    const threshold = opts.deletedThreshold ?? DELETED_THRESHOLD;
+    const interval = opts.deletedCheckInterval ?? DELETED_CHECK_INTERVAL;
+    while (!this.isClosed() && this.syncdb === syncdb) {
       try {
-        if (await this.syncdb.fs.exists(this.path)) {
+        if (await fs.exists(path)) {
           // file definitely exists right now -- NOT deleted.
           return;
         }
         // file definitely does NOT exist right now.
       } catch {
         // network not working or project off -- no way to know.
+        return;
+      }
+      if (this.isClosed() || this.syncdb !== syncdb) {
         return;
       }
       const elapsed = Date.now() - start;
@@ -4070,12 +4086,7 @@ export class JupyterActions extends JupyterActions0 {
         }
         return;
       }
-      await delay(
-        Math.min(
-          this.syncdb.opts.deletedCheckInterval ?? DELETED_CHECK_INTERVAL,
-          threshold - elapsed,
-        ),
-      );
+      await delay(Math.min(interval, threshold - elapsed));
     }
   };
 }

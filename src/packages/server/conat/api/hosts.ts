@@ -87,6 +87,7 @@ import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/accoun
 import {
   computePlacementPermission,
   getUserHostTier,
+  hostIoPlacementConformant,
 } from "@cocalc/server/project-host/placement";
 import {
   getHostAccessForAccount,
@@ -3241,10 +3242,16 @@ export async function listHostsLocal({
       continue;
     }
     const availability = computeHostOperationalAvailability(row);
-    const can_place = placement.can_place && availability.operational;
+    const ioPlacementConformant = hostIoPlacementConformant(row);
+    const can_place =
+      placement.can_place && availability.operational && ioPlacementConformant;
     const reason_unavailable =
       placement.reason_unavailable ??
-      (availability.operational ? undefined : availability.reason_unavailable);
+      (!ioPlacementConformant
+        ? "Host I/O containment policy is not validated"
+        : availability.operational
+          ? undefined
+          : availability.reason_unavailable);
 
     const can_start = hostAccessRoleCan(accessRole, "start-stop");
 

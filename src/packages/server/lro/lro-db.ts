@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import getLogger from "@cocalc/backend/logger";
 import getPool, { type PoolClient } from "@cocalc/database/pool";
 import type {
   LroScopeType,
@@ -14,6 +15,41 @@ const TERMINAL_STATUSES: LroStatus[] = [
 ];
 
 const pool = () => getPool();
+const logger = getLogger("server:lro:lro-db");
+let ensuredSchema: Promise<void> | undefined;
+let expiryIndexReady: Promise<void> | undefined;
+
+async function ensureExpiryIndexBestEffort(): Promise<void> {
+  const db = pool();
+  if (typeof (db as any).connect !== "function") {
+    await db.query(
+      "CREATE INDEX IF NOT EXISTS lro_expiry_idx ON long_running_operations(expires_at) WHERE dismissed_at IS NULL AND status IN ('queued', 'running')",
+    );
+    return;
+  }
+  const client = await db.connect();
+  let locked = false;
+  try {
+    const { rows } = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      ["lro_expiry_idx"],
+    );
+    locked = rows[0]?.locked === true;
+    if (!locked) return;
+    await client.query(
+      "CREATE INDEX CONCURRENTLY IF NOT EXISTS lro_expiry_idx ON long_running_operations(expires_at) WHERE dismissed_at IS NULL AND status IN ('queued', 'running')",
+    );
+  } catch (err) {
+    logger.warn("failed to create LRO expiration index", { err: `${err}` });
+  } finally {
+    if (locked) {
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext($1))", ["lro_expiry_idx"])
+        .catch(() => undefined);
+    }
+    client.release();
+  }
+}
 
 async function hasColumn({
   client,
@@ -56,16 +92,14 @@ async function addColumnIfMissing({
   );
 }
 
-export async function ensureLroSchema(): Promise<void> {
+async function ensureLroSchemaInternal(): Promise<void> {
   const client = await pool().connect();
   let locked = false;
   try {
-    const lock = await client.query<{ acquired: boolean }>(
-      "SELECT pg_try_advisory_lock(hashtext($1)) AS acquired",
-      ["cocalc:lro-schema"],
-    );
-    locked = lock.rows[0]?.acquired === true;
-    if (!locked) return;
+    await client.query("SELECT pg_advisory_lock(hashtext($1))", [
+      "cocalc:lro-schema",
+    ]);
+    locked = true;
     await client.query(`
       CREATE TABLE IF NOT EXISTS long_running_operations (
         op_id UUID PRIMARY KEY,
@@ -137,6 +171,19 @@ export async function ensureLroSchema(): Promise<void> {
     }
     client.release();
   }
+}
+
+export async function ensureLroSchema(): Promise<void> {
+  ensuredSchema ??= ensureLroSchemaInternal().catch((err) => {
+    ensuredSchema = undefined;
+    throw err;
+  });
+  await ensuredSchema;
+  expiryIndexReady ??= ensureExpiryIndexBestEffort().catch((err) => {
+    expiryIndexReady = undefined;
+    logger.warn("failed to initialize LRO expiration index", { err: `${err}` });
+  });
+  await expiryIndexReady;
 }
 
 export async function createLro({
@@ -364,27 +411,40 @@ export async function dismissLro({
 
 export async function expireDueLros({
   kind,
+  limit = 1000,
 }: {
   kind?: string;
+  limit?: number;
 } = {}): Promise<LroSummary[]> {
   await ensureLroSchema();
-  const values: any[] = [TERMINAL_STATUSES];
+  const values: any[] = [["queued", "running"]];
   let kindClause = "";
   if (kind != null && `${kind}`.trim()) {
     values.push(`${kind}`.trim());
     kindClause = `AND kind=$${values.length}`;
   }
+  values.push(Math.max(1, Math.min(10_000, Math.floor(limit))));
+  const limitParam = `$${values.length}`;
   const { rows } = await pool().query(
     `
+      WITH candidates AS (
+        SELECT op_id
+        FROM long_running_operations
+        WHERE status = ANY($1::text[])
+          AND dismissed_at IS NULL
+          AND expires_at <= now()
+          ${kindClause}
+        ORDER BY expires_at
+        FOR UPDATE SKIP LOCKED
+        LIMIT ${limitParam}
+      )
       UPDATE long_running_operations
       SET status='expired',
           error=COALESCE(NULLIF(error, ''), 'expired'),
           finished_at=COALESCE(finished_at, now()),
           updated_at=now()
-      WHERE status <> ALL($1::text[])
-        AND dismissed_at IS NULL
-        AND expires_at <= now()
-        ${kindClause}
+      FROM candidates
+      WHERE long_running_operations.op_id = candidates.op_id
       RETURNING *
     `,
     values,
@@ -466,7 +526,6 @@ export async function claimLroOps({
   lease_ms?: number;
   input_not_before_key?: string;
 }): Promise<LroSummary[]> {
-  await expireDueLros({ kind });
   await ensureLroSchema();
   const client = await pool().connect();
   try {

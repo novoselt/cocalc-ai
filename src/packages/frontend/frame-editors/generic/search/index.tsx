@@ -106,11 +106,27 @@ function Search({
       setResult([]);
       return;
     }
-    (async () => {
-      const result = await index.search({ term: search, limit: 30 /* todo */ });
-      setResult(result);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await index.search({
+          term: search,
+          limit: 30 /* todo */,
+        });
+        if (!cancelled) {
+          setResult(result);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setResult([]);
+          setError(`${err}`);
+        }
+      }
     })();
-  }, [search, index]);
+    return () => {
+      cancelled = true;
+    };
+  }, [search, index, setError]);
 
   useEffect(() => {
     if (indexedData != data) {

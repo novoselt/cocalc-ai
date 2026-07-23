@@ -49,6 +49,7 @@ import * as adminData from "./admin-data-explorer";
 import * as adminDb from "./admin-db";
 import * as adminHost from "./admin-host";
 import * as adminSupport from "./admin-support";
+import * as adminCrashes from "./admin-crashes";
 import * as aiSessions from "./ai-sessions";
 import * as legacyMigration from "./legacy-migration";
 import * as publicDirectoryShares from "./public-directory-shares";
@@ -90,6 +91,7 @@ export const hubApi: HubApi = {
   adminDb,
   adminHost,
   adminSupport,
+  adminCrashes,
   aiSessions,
   legacyMigration,
   publicDirectoryShares,

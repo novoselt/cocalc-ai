@@ -22,6 +22,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
           adminDb: {},
           adminHost: {},
           adminSupport: {},
+          adminCrashes: {},
         },
       };
       Object.assign(ctx.hub.system, overrides.system ?? {});
@@ -30,6 +31,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
       Object.assign(ctx.hub.adminDb, overrides.adminDb ?? {});
       Object.assign(ctx.hub.adminHost, overrides.adminHost ?? {});
       Object.assign(ctx.hub.adminSupport, overrides.adminSupport ?? {});
+      Object.assign(ctx.hub.adminCrashes, overrides.adminCrashes ?? {});
       return await fn(ctx);
     },
     resolveAccountByIdentifier: async (_ctx: unknown, identifier: string) => ({
@@ -261,6 +263,87 @@ test("admin support triage forwards deterministic grouping options", async () =>
     statuses: ["new", "pending"],
     max_bytes: 262144,
     reason: "group active support incidents",
+  });
+});
+
+test("admin crashes triage forwards fleet filtering options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminCrashes: {
+        triage: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-crash-1", groups: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crashes",
+    "triage",
+    "--since-minutes",
+    "720",
+    "--limit",
+    "500",
+    "--status",
+    "all",
+    "--bay",
+    "bay-1",
+    "--reason",
+    "investigate recent browser crashes",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    since_minutes: 720,
+    limit: 500,
+    max_bytes: 524288,
+    bay_id: "bay-1",
+    status: "all",
+    reason: "investigate recent browser crashes",
+  });
+});
+
+test("admin crashes resolve forwards representative report and bay", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminCrashes: {
+        resolve: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-crash-2" };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "crashes",
+    "resolve",
+    "11111111-1111-4111-8111-111111111111",
+    "--bay",
+    "bay-1",
+    "--note",
+    "fixed by frontend deployment",
+    "--reason",
+    "close confirmed crash signature",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    report_id: "11111111-1111-4111-8111-111111111111",
+    bay_id: "bay-1",
+    note: "fixed by frontend deployment",
+    reason: "close confirmed crash signature",
   });
 });
 

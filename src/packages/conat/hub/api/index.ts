@@ -18,6 +18,7 @@ import { type AdminData, adminData } from "./admin-data-explorer";
 import { type AdminDbApi, adminDb } from "./admin-db";
 import { type AdminHostApi, adminHost } from "./admin-host";
 import { type AdminSupportApi, adminSupport } from "./admin-support";
+import { type AdminCrashesApi, adminCrashes } from "./admin-crashes";
 import { type AiSessionsApi, aiSessions } from "./ai-sessions";
 import { type LegacyMigration, legacyMigration } from "./legacy-migration";
 import {
@@ -44,6 +45,7 @@ export interface HubApi {
   adminDb: AdminDbApi;
   adminHost: AdminHostApi;
   adminSupport: AdminSupportApi;
+  adminCrashes: AdminCrashesApi;
   aiSessions: AiSessionsApi;
   legacyMigration: LegacyMigration;
   publicDirectoryShares: PublicDirectoryShares;
@@ -68,6 +70,7 @@ const HubApiStructure = {
   adminDb,
   adminHost,
   adminSupport,
+  adminCrashes,
   aiSessions,
   legacyMigration,
   publicDirectoryShares,

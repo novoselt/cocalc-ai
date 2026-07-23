@@ -56,13 +56,29 @@ async function buildMembershipCandidates(
   const pool = getPool("medium");
   const [subResult, adminResult, adminGroupResult, grants] = await Promise.all([
     pool.query(
-      `SELECT id, metadata, cost, interval, current_period_start, current_period_end, status
-       FROM subscriptions
-       WHERE account_id=$1
-         AND metadata->>'type'='membership'
-         AND status IN ('active','canceled')
-         AND current_period_end >= NOW()
-       ORDER BY current_period_end DESC, id DESC`,
+      `SELECT s.id, s.metadata, s.cost, s.interval,
+              s.current_period_start, s.current_period_end, s.status,
+              CASE WHEN a.not_before <= NOW() THEN a.state END
+                AS renewal_state,
+              CASE WHEN a.not_before <= NOW() THEN a.not_before END
+                AS renewal_started_at
+         FROM subscriptions s
+         LEFT JOIN LATERAL (
+           SELECT state, not_before
+             FROM subscription_renewal_attempts
+            WHERE subscription_id=s.id
+              AND state IN ('scheduled','processing')
+            ORDER BY period_end DESC
+            LIMIT 1
+         ) a ON TRUE
+        WHERE s.account_id=$1
+          AND s.metadata->>'type'='membership'
+          AND s.status IN ('active','canceled')
+          AND (
+            s.current_period_end >= NOW() OR
+            (s.status='active' AND a.not_before <= NOW())
+          )
+        ORDER BY s.current_period_end DESC, s.id DESC`,
       [account_id],
     ),
     pool.query(
@@ -104,6 +120,8 @@ async function buildMembershipCandidates(
       starts: sub.current_period_start,
       subscription_id: sub.id,
       subscription_status: sub.status,
+      subscription_renewal_state: sub.renewal_state,
+      subscription_renewal_started_at: sub.renewal_started_at,
       subscription_cost: normalizeSubscriptionCost(sub.cost),
       subscription_interval: sub.interval,
       expires: sub.current_period_end,
@@ -445,6 +463,8 @@ function pickBestMembership(
       starts: best.starts,
       subscription_id: best.subscription_id,
       subscription_status: best.subscription_status,
+      subscription_renewal_state: best.subscription_renewal_state,
+      subscription_renewal_started_at: best.subscription_renewal_started_at,
       subscription_cost: best.subscription_cost,
       subscription_interval: best.subscription_interval,
       grant_id: best.grant_id,

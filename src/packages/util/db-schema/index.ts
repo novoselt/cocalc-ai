@@ -107,12 +107,14 @@ import "./sso";
 import "./statements";
 import "./stats";
 import "./subscriptions";
+import "./subscription-renewal-attempts";
 import "./support-ticket-attempts";
 import "./syncstring-schema";
 import "./team-licenses";
 import "./tracking";
 import "./usage-info";
 import "./webapp-errors";
+import "./webapp-error-resolutions";
 
 export {
   DEFAULT_FONT_SIZE,

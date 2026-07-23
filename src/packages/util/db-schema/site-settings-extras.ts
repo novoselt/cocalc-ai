@@ -1403,8 +1403,9 @@ export const EXTRAS: SettingsExtras = {
   },
   subscription_maintenance: {
     name: "Subscription Maintenance Parameters",
-    desc: 'Example -- {"request":6}" -- send renewal reminders 6 days before the subscription ends. Automatic renewal payment is attempted when the subscription period ends.',
-    default: '{"request":6}',
+    desc: 'Example -- { "renewal_mode": "disabled", "request": 6, "renewal_warning_minutes": 10, "renewal_critical_minutes": 1440, "renewal_concurrency": 1 }. Renewal mode is disabled, schedule-only, or active. Send reminders before renewal, control renewal worker concurrency, and aggregate admin alerts when processing is delayed.',
+    default:
+      '{"renewal_mode":"disabled","request":6,"renewal_warning_minutes":10,"renewal_critical_minutes":1440,"renewal_concurrency":1}',
     to_val: from_json,
     to_display: displayJson,
     valid: parsableJson,

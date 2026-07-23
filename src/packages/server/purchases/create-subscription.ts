@@ -3,8 +3,13 @@ import type {
   Metadata,
   Subscription,
 } from "@cocalc/util/db-schema/subscriptions";
-import { getPoolClient, PoolClient } from "@cocalc/database/pool";
+import { getTransactionClient, type PoolClient } from "@cocalc/database/pool";
 import isValidAccount from "@cocalc/server/accounts/is-valid-account";
+import {
+  assertNoCompetingMembershipSubscription,
+  lockMembershipSubscriptionAccount,
+} from "./membership-subscription-guard";
+import { scheduleSubscriptionRenewalAttempt } from "./subscription-renewal-attempts";
 import { is_date as isDate, is_integer } from "@cocalc/util/misc";
 import {
   moneyToDbString,
@@ -21,6 +26,7 @@ export default async function createSubscription(
   client: PoolClient | null, // useful to allow null for unit testing, but must be explicit
 ): Promise<number> {
   let db: PoolClient | null = client;
+  const useTransaction = client == null;
   // some consistency checks below.  It's very likely this should always hold,
   // since data isn't user supplied, but it's still good to be careful.
 
@@ -75,7 +81,17 @@ export default async function createSubscription(
       throw Error("membership metadata must include class");
     }
 
-    db = db ?? (await getPoolClient());
+    db = db ?? (await getTransactionClient());
+    if (opts.status != "canceled") {
+      await lockMembershipSubscriptionAccount({
+        account_id: opts.account_id,
+        client: db,
+      });
+      await assertNoCompetingMembershipSubscription({
+        account_id: opts.account_id,
+        client: db,
+      });
+    }
     const { rows } = await db.query(
       "INSERT INTO subscriptions (account_id,created,cost,interval,current_period_start,current_period_end,latest_purchase_id,status,metadata) VALUES($1,NOW(),$2,$3,$4,$5,$6,$7,$8)  RETURNING id",
       [
@@ -90,9 +106,24 @@ export default async function createSubscription(
       ],
     );
     const { id } = rows[0];
+    if (opts.status == "active") {
+      await scheduleSubscriptionRenewalAttempt({
+        account_id: opts.account_id,
+        subscription_id: id,
+        client: db,
+      });
+    }
+    if (useTransaction) {
+      await db.query("COMMIT");
+    }
     return id;
+  } catch (err) {
+    if (useTransaction && db != null) {
+      await db.query("ROLLBACK");
+    }
+    throw err;
   } finally {
-    if (client == null && db != null) {
+    if (useTransaction && db != null) {
       db.release();
     }
   }

@@ -29,6 +29,8 @@ import Plot from "@cocalc/frontend/components/plotly";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS } from "@cocalc/util/theme";
 
+const ADMIN_RETENTION_RPC_TIMEOUT_MS = 120_000;
+
 const { Paragraph, Text } = Typography;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -354,6 +356,7 @@ export function RetentionAdminOverview() {
         const result =
           (await webapp_client.conat_client.hub.purchases.getAdminActiveUsersOverview(
             {
+              timeout: ADMIN_RETENTION_RPC_TIMEOUT_MS,
               start: activeWindow.start,
               end: activeWindow.end,
               bucket: activeBucket,
@@ -368,6 +371,7 @@ export function RetentionAdminOverview() {
         const result =
           (await webapp_client.conat_client.hub.purchases.getAdminRetentionOverview(
             {
+              timeout: ADMIN_RETENTION_RPC_TIMEOUT_MS,
               start: cohortWindow.start,
               end: cohortWindow.end,
               unit,

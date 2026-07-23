@@ -7,6 +7,14 @@ import { getEffectiveMembershipUsageLimits } from "@cocalc/server/membership/eff
 import { getManagedCpuUsageForAccount } from "@cocalc/server/membership/managed-cpu";
 import { getProjectUsageAccountId } from "@cocalc/server/membership/project-usage";
 import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
+import LRU from "lru-cache";
+
+const POLICY_CACHE_TTL_MS = 30_000;
+
+const policyCache = new LRU<string, Promise<ManagedProjectCpuPolicy>>({
+  max: 20_000,
+  ttl: POLICY_CACHE_TTL_MS,
+});
 
 export interface ManagedProjectCpuPolicy {
   account_id?: string;
@@ -24,17 +32,9 @@ export interface ManagedProjectCpuPolicy {
   cpu_7d_seconds?: number;
 }
 
-export async function getManagedProjectCpuPolicy(opts: {
-  account_id?: string;
-  project_id?: string;
-}): Promise<ManagedProjectCpuPolicy> {
-  const project_id = `${opts.project_id ?? ""}`.trim() || undefined;
-  const account_id =
-    `${opts.account_id ?? ""}`.trim() ||
-    (project_id ? await getProjectUsageAccountId(project_id) : undefined);
-  if (!account_id) {
-    return { allowed: true };
-  }
+async function computeManagedProjectCpuPolicy(
+  account_id: string,
+): Promise<ManagedProjectCpuPolicy> {
   const resolution = await resolveMembershipForAccount(account_id);
   const effectiveLimits = getEffectiveMembershipUsageLimits(resolution);
   const cpu_5h_seconds = effectiveLimits.cpu_5h_seconds;
@@ -64,6 +64,27 @@ export async function getManagedProjectCpuPolicy(opts: {
     cpu_5h_seconds,
     cpu_7d_seconds,
   };
+}
+
+export async function getManagedProjectCpuPolicy(opts: {
+  account_id?: string;
+  project_id?: string;
+}): Promise<ManagedProjectCpuPolicy> {
+  const project_id = `${opts.project_id ?? ""}`.trim() || undefined;
+  const account_id =
+    `${opts.account_id ?? ""}`.trim() ||
+    (project_id ? await getProjectUsageAccountId(project_id) : undefined);
+  if (!account_id) {
+    return { allowed: true };
+  }
+  const cached = policyCache.get(account_id);
+  if (cached) return await cached;
+  const value = computeManagedProjectCpuPolicy(account_id).catch((err) => {
+    if (policyCache.get(account_id) === value) policyCache.delete(account_id);
+    throw err;
+  });
+  policyCache.set(account_id, value);
+  return await value;
 }
 
 export function shouldStopRunningProjectForManagedCpuPolicy(
@@ -101,3 +122,7 @@ export function formatManagedProjectCpuPolicyBlockMessage(
   const resetText = reset ? ` The window begins freeing up in ${reset}.` : "";
   return `This account has used ${formatCpuHours(used)} of ${formatCpuHours(limit)} CPU-hours in its rolling ${window} compute budget.${resetText} Starting another project is paused until the budget window frees up or the account is upgraded.`;
 }
+
+export const __test__ = {
+  clearPolicyCache: () => policyCache.clear(),
+};

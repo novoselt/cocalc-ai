@@ -191,6 +191,8 @@ export interface MembershipResolution {
   starts?: Date;
   subscription_id?: number;
   subscription_status?: "active" | "canceled";
+  subscription_renewal_state?: "scheduled" | "processing";
+  subscription_renewal_started_at?: Date | string;
   subscription_cost?: number;
   subscription_interval?: "month" | "year";
   grant_id?: string;
@@ -218,6 +220,8 @@ export interface MembershipCandidate {
   starts?: Date;
   subscription_id?: number;
   subscription_status?: "active" | "canceled";
+  subscription_renewal_state?: "scheduled" | "processing";
+  subscription_renewal_started_at?: Date | string;
   subscription_cost?: number;
   subscription_interval?: "month" | "year";
   grant_id?: string;
@@ -1194,6 +1198,7 @@ export interface AdminRetentionOverview {
 
 export interface AdminRetentionOverviewQuery {
   account_id?: string;
+  timeout?: number;
   start?: string | Date;
   end?: string | Date;
   unit?: AdminRetentionCohortUnit;
@@ -1221,6 +1226,7 @@ export interface AdminActiveUsersOverview {
 
 export interface AdminActiveUsersOverviewQuery {
   account_id?: string;
+  timeout?: number;
   start?: string | Date;
   end?: string | Date;
   bucket?: AdminActiveUsersBucket;

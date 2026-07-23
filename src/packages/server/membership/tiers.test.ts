@@ -474,4 +474,37 @@ describe("membership change pricing", () => {
     expect(quote.refund).toBeCloseTo(50, 2);
     expect(quote.charge).toBeCloseTo(1390, 2);
   });
+
+  it("refuses to quote a change while renewal is pending", async () => {
+    const account_id = uuid();
+    const currentTier = `renewing-${uuid().slice(0, 8)}` as any;
+    const targetTier = `target-${uuid().slice(0, 8)}` as any;
+    await createTestAccount(account_id);
+    await createTestMembershipTier({
+      id: currentTier,
+      price_monthly: 24,
+      price_yearly: 216,
+      priority: 20,
+    });
+    await createTestMembershipTier({
+      id: targetTier,
+      price_monthly: 50,
+      price_yearly: 500,
+      priority: 30,
+    });
+    await createTestMembershipSubscription(account_id, {
+      class: currentTier,
+      start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      end: new Date(Date.now() - 60_000),
+    });
+
+    await expect(
+      computeMembershipChange({
+        account_id,
+        targetClass: targetTier,
+        interval: "month",
+        client: getPool() as any,
+      }),
+    ).rejects.toThrow(/is renewing/);
+  });
 });

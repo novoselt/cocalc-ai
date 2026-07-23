@@ -23,8 +23,10 @@ export interface MembershipMetadata {
 export type Metadata = MembershipMetadata;
 
 export interface SubscriptionPayment {
+  // durable renewal attempt that owns this payment
+  renewal_attempt_id?: string;
   // id of the payment intent in stripe
-  payment_intent_id: string;
+  payment_intent_id?: string;
   // the cost of the subscription renewal; this is usually the same as the cost of the subscription,
   // but could be different, e.g,. if part of the renewal is paid from the user's balance.
   amount: MoneyValue;
@@ -137,6 +139,14 @@ Table({
     desc: "Subscriptions",
     primary_key: "id",
     pg_indexes: ["account_id"],
+    pg_custom_indexes: [
+      {
+        name: "subscriptions_one_renewable_personal_membership_idx",
+        query:
+          "(account_id) WHERE metadata->>'type'='membership' AND status != 'canceled'",
+        unique: true,
+      },
+    ],
     user_query: {
       get: {
         pg_where: [{ "account_id = $::UUID": "account_id" }],

@@ -37,7 +37,6 @@ import {
   normalizeProjectStateForDisplay,
 } from "@cocalc/frontend/projects/host-operational";
 import { MembershipStatusPanel } from "@cocalc/frontend/account/membership-status";
-import MoveProject from "@cocalc/frontend/project/settings/move-project";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
   formatProgressDetail,
@@ -502,16 +501,7 @@ export function StartButton({
               >
                 This {projectLabel.toLowerCase()} is assigned to{" "}
                 {assignedHostLabel} ({hostUnavailableReason}). Wait for this
-                host to come online, or move this {projectLabel.toLowerCase()}{" "}
-                to an available host.
-              </div>
-              <div style={{ marginTop: "10px" }}>
-                <MoveProject
-                  project_id={project_id}
-                  size="large"
-                  label="Move Project"
-                  showHostName={false}
-                />
+                host to come online, then try again.
               </div>
             </>
           }
@@ -544,8 +534,7 @@ export function StartButton({
                 }}
               >
                 {assignedHostLabel} is unavailable ({hostUnavailableReason}).
-                Open Settings and move this project to an available host, or
-                start the assigned host.
+                Wait for the assigned host to come online, then try again.
               </div>
             )}
           </>

@@ -24,6 +24,7 @@ jest.mock("./resolve", () => ({
 
 describe("getManagedProjectEgressPolicy", () => {
   beforeEach(() => {
+    jest.resetModules();
     jest.clearAllMocks();
     delete process.env.COCALC_CONTROL_PLANE_EGRESS_5H_BYTES;
     delete process.env.COCALC_CONTROL_PLANE_EGRESS_7D_BYTES;
@@ -223,5 +224,42 @@ describe("getManagedProjectEgressPolicy", () => {
     });
     expect(resolveMembershipForAccountMock).not.toHaveBeenCalled();
     expect(getManagedEgressUsageForAccountMock).not.toHaveBeenCalled();
+  });
+
+  it("coalesces and briefly caches identical account policy checks", async () => {
+    resolveMembershipForAccountMock.mockResolvedValue({
+      class: "pro",
+      source: "subscription",
+      entitlements: {},
+      effective_limits: {
+        egress_5h_bytes: 1000,
+        egress_7d_bytes: 2000,
+      },
+    });
+    getManagedEgressUsageForAccountMock.mockResolvedValue({
+      managed_egress_5h_bytes: 100,
+      managed_egress_7d_bytes: 200,
+      over_managed_egress_5h: false,
+      over_managed_egress_7d: false,
+      managed_egress_categories_5h_bytes: { "raw-network": 100 },
+      managed_egress_categories_7d_bytes: { "raw-network": 200 },
+    });
+    const { getManagedProjectEgressPolicy } =
+      await import("./managed-egress-policy");
+    const options = {
+      account_id: "account-3",
+      category: "raw-network" as const,
+    };
+
+    const [first, second] = await Promise.all([
+      getManagedProjectEgressPolicy(options),
+      getManagedProjectEgressPolicy(options),
+    ]);
+    expect(second).toEqual(first);
+    await expect(getManagedProjectEgressPolicy(options)).resolves.toEqual(
+      first,
+    );
+    expect(resolveMembershipForAccountMock).toHaveBeenCalledTimes(1);
+    expect(getManagedEgressUsageForAccountMock).toHaveBeenCalledTimes(1);
   });
 });

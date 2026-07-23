@@ -1,14 +1,23 @@
-import getPool, { type PoolClient } from "@cocalc/database/pool";
+import getPool, {
+  getTransactionClient,
+  type PoolClient,
+} from "@cocalc/database/pool";
 import send, { support, url, name } from "@cocalc/server/messages/send";
 import adminAlert from "@cocalc/server/messages/admin-alert";
 import { moneyToCurrency } from "@cocalc/util/money";
 import { recordMembershipAnalyticsEvent } from "@cocalc/server/membership/analytics";
+import { cancelOpenSubscriptionRenewalAttempts } from "./subscription-renewal-attempts";
+import {
+  assertNoDueMembershipRenewal,
+  lockMembershipSubscriptionAccount,
+} from "./membership-subscription-guard";
 
 interface Options {
   account_id: string;
   subscription_id: number;
   reason?: string;
   client?: PoolClient;
+  notify?: boolean;
 }
 
 export default async function cancelSubscription({
@@ -16,46 +25,73 @@ export default async function cancelSubscription({
   subscription_id,
   reason = "no reason specified",
   client,
+  notify = true,
 }: Options) {
-  const pool = client ?? getPool();
+  const pool = client ?? (await getTransactionClient());
+  const useTransaction = client == null;
   const now = new Date();
-
-  const update = await pool.query(
-    `UPDATE subscriptions
+  try {
+    await lockMembershipSubscriptionAccount({ account_id, client: pool });
+    await assertNoDueMembershipRenewal({ account_id, client: pool });
+    const update = await pool.query(
+      `UPDATE subscriptions
         SET status='canceled', canceled_at=$1, canceled_reason=$2
       WHERE id=$3 AND account_id=$4
       RETURNING metadata, interval, current_period_start, current_period_end`,
-    [now, reason, subscription_id, account_id],
-  );
-  if (update.rowCount != 1) {
-    throw Error(`You do not have a subscription with id ${subscription_id}.`);
+      [now, reason, subscription_id, account_id],
+    );
+    if (update.rowCount != 1) {
+      throw Error(`You do not have a subscription with id ${subscription_id}.`);
+    }
+    const row = update.rows[0];
+    if (row?.metadata?.type === "membership") {
+      await cancelOpenSubscriptionRenewalAttempts({
+        subscription_id,
+        account_id,
+        reason,
+        client: pool,
+      });
+      await recordMembershipAnalyticsEvent({
+        event_key: `subscription:${subscription_id}:canceled:${now.toISOString()}`,
+        event_type: "membership_canceled",
+        event_time: now,
+        account_id,
+        membership_class: row.metadata.class,
+        source: "subscription",
+        interval: row.interval,
+        subscription_id,
+        period_start: row.current_period_start,
+        period_end: row.current_period_end,
+        trial_status: row.metadata.trial === true ? "canceled" : "none",
+        client: pool,
+      });
+    }
+    if (useTransaction) {
+      await pool.query("COMMIT");
+    }
+  } catch (err) {
+    if (useTransaction) {
+      await pool.query("ROLLBACK");
+    }
+    throw err;
+  } finally {
+    if (useTransaction) {
+      pool.release();
+    }
   }
-  const row = update.rows[0];
-  if (row?.metadata?.type === "membership") {
-    await recordMembershipAnalyticsEvent({
-      event_key: `subscription:${subscription_id}:canceled:${now.toISOString()}`,
-      event_type: "membership_canceled",
-      event_time: now,
-      account_id,
-      membership_class: row.metadata.class,
-      source: "subscription",
-      interval: row.interval,
-      subscription_id,
-      period_start: row.current_period_start,
-      period_end: row.current_period_end,
-      trial_status: row.metadata.trial === true ? "canceled" : "none",
-      client,
-    });
+  if (notify) {
+    await sendCancelNotification({ subscription_id, client });
   }
-  await sendCancelNotification({ subscription_id, client });
 }
 
 export async function sendCancelNotification({
   subscription_id,
   client,
+  alertAdmin = true,
 }: {
   subscription_id: number;
   client?: PoolClient;
+  alertAdmin?: boolean;
 }) {
   const pool = client ?? getPool();
   const { rows } = await pool.query(
@@ -85,9 +121,10 @@ ${await support()}
     body,
   });
 
-  adminAlert({
-    subject: `Alert -- User Subscription for ${moneyToCurrency(cost)}/${interval} Id=${subscription_id} was Canceled`,
-    body: `
+  if (alertAdmin) {
+    adminAlert({
+      subject: `Alert -- User Subscription for ${moneyToCurrency(cost)}/${interval} Id=${subscription_id} was Canceled`,
+      body: `
 - User: ${await name(account_id)}, account_id=${account_id}
 
 - User provided reason: "${JSON.stringify(canceled_reason)}"
@@ -97,5 +134,6 @@ ${await support()}
 - subscription_id=${subscription_id}
 
 `,
-  });
+    });
+  }
 }

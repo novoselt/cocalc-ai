@@ -117,6 +117,42 @@ describe("PublicPage", () => {
     ).toBe(2);
   });
 
+  it("opens the configured status page in a new tab", () => {
+    render(
+      <PublicPage
+        config={{
+          site_name: "CoCalc",
+          status_page_url: "https://status.example.com/uptime",
+        }}
+      >
+        Body
+      </PublicPage>,
+    );
+
+    const status = within(screen.getByRole("contentinfo")).getByRole("link", {
+      name: "Status",
+    });
+    expect(status).toHaveAttribute("href", "https://status.example.com/uptime");
+    expect(status).toHaveAttribute("target", "_blank");
+    expect(status).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("does not render an unsafe status page URL", () => {
+    render(
+      <PublicPage
+        config={{ site_name: "CoCalc", status_page_url: "javascript:void(0)" }}
+      >
+        Body
+      </PublicPage>,
+    );
+
+    expect(
+      within(screen.getByRole("contentinfo")).queryByRole("link", {
+        name: "Status",
+      }),
+    ).toBeNull();
+  });
+
   it("uses the custom brand in the footer for custom branding", () => {
     render(
       <PublicPage

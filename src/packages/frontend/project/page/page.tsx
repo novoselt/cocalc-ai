@@ -81,7 +81,6 @@ import {
   hostLabel,
 } from "@cocalc/frontend/projects/host-operational";
 import { projectThemeColor } from "@cocalc/frontend/projects/theme";
-import MoveProject from "@cocalc/frontend/project/settings/move-project";
 import ProjectControlStatus from "@cocalc/frontend/project/settings/project-control-status";
 import { workspaceStrongThemeChrome } from "../workspaces/strong-theme";
 import type { MoveLroState } from "@cocalc/frontend/project/move-ops";
@@ -936,12 +935,6 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
                 <Icon name="refresh" /> Check Host Status
               </Button>
             ) : null}
-            <MoveProject
-              project_id={project_id}
-              size="small"
-              label="Move Project"
-              showHostName={false}
-            />
           </Space>
         }
       />
