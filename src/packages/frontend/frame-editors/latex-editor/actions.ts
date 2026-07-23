@@ -1991,16 +1991,89 @@ export class Actions extends BaseActions<LatexEditorState> {
       // sync doc can race during startup/refresh.
       return;
     }
-    const contents = fromJS(
-      parseTableOfContents(value, {
-        includeBookmarks: true,
-        includeChatMarkers: true,
-      }),
-    ) as any;
+    const entries = parseTableOfContents(value, {
+      includeBookmarks: true,
+      includeChatMarkers: true,
+    });
+    this._appendSubfileTocEntries(entries);
+    const contents = fromJS(entries) as any;
     this.setState({ contents });
   }
 
+  // Append chat markers and bookmarks scanned from *included* files
+  // (the master's are already overlaid by parseTableOfContents).  We
+  // can't interleave across files by line number, so sub-file entries
+  // go at the end, labeled with their file, deduped against the master
+  // (same hash / bookmark text).
+  private _appendSubfileTocEntries(entries: TableOfContentsEntry[]): void {
+    const chatMarkers = this.store.get("chat_markers");
+    const chatBookmarks = this.store.get("chat_bookmarks");
+    if (chatMarkers == null && chatBookmarks == null) return;
+    const seenHashes = new Set<string>();
+    for (const e of entries) {
+      const extra = (e as any)?.extra;
+      if (extra?.kind === "chat" && typeof extra.hash === "string") {
+        seenHashes.add(extra.hash);
+      }
+    }
+    const seenBookmarks = new Set<string>(
+      ((chatBookmarks?.get(this.path)?.toJS() ?? []) as any[]).map(
+        (b) => b.text,
+      ),
+    );
+    const subPaths = new Set<string>([
+      ...((chatMarkers?.keySeq().toJS() ?? []) as string[]),
+      ...((chatBookmarks?.keySeq().toJS() ?? []) as string[]),
+    ]);
+    subPaths.delete(this.path);
+    for (const path of [...subPaths].sort()) {
+      const tail = path_split(path).tail;
+      const markers = (chatMarkers?.get(path)?.toJS() ??
+        []) as unknown as ChatMarker[];
+      for (const m of markers) {
+        if (seenHashes.has(m.hash)) continue;
+        seenHashes.add(m.hash);
+        entries.push({
+          id: `sub:${path}:${m.line + 1}-chat-${m.hash}`,
+          value: `Chat ${m.hash} (${tail}:${m.line + 1})`,
+          icon: "comment",
+          extra: { kind: "chat", hash: m.hash },
+        });
+      }
+      const bookmarks = (chatBookmarks?.get(path)?.toJS() ??
+        []) as unknown as BookmarkMarker[];
+      for (const b of bookmarks) {
+        if (seenBookmarks.has(b.text)) continue;
+        seenBookmarks.add(b.text);
+        entries.push({
+          id: `sub:${path}:${b.line + 1}-bookmark-${b.text}`,
+          value: `${b.text} (${tail}:${b.line + 1})`,
+          icon: "tag-outlined",
+          extra: { kind: "bookmark", path, line: b.line },
+        });
+      }
+    }
+  }
+
   public async scrollToHeading(entry: TableOfContentsEntry): Promise<void> {
+    const extra = (entry as any)?.extra;
+    // Chat markers jump via the anchor adapter (handles sub-files and
+    // markers that moved since the TOC was computed).
+    if (extra?.kind === "chat" && typeof extra.hash === "string") {
+      await this.jumpToAnchor(extra.hash);
+      return;
+    }
+    // Bookmarks in included files carry their own path + line.
+    if (extra?.kind === "bookmark" && typeof extra.path === "string") {
+      const frameId = await this.switch_to_file(extra.path);
+      this.programmatically_goto_line(
+        (extra.line ?? 0) + 1,
+        true,
+        true,
+        frameId,
+      );
+      return;
+    }
     const id = this.show_focused_frame_of_type("cm");
     if (id == null) return;
     this.programmatically_goto_line(parseInt(entry.id), true, true, id);
@@ -2069,6 +2142,10 @@ export class Actions extends BaseActions<LatexEditorState> {
         ).set(path, fromJS(bookmarks)),
       });
       this._updateChatGutters(path, markers, bookmarks);
+      if (path !== this.path) {
+        // master changes already refresh the TOC via their own listener
+        this.updateTableOfContents();
+      }
     };
     const debounced = debounce(scan, 300, { leading: false, trailing: true });
     syncstring.on("change", debounced);
@@ -2184,20 +2261,53 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
   };
 
+  // Resolve the most recently focused source pane in this frame tree:
+  // the file path it shows (master or an included file), the owning
+  // editor actions, and the live CM instance.  Frames showing included
+  // files are cm frames with a path override; their CM is registered on
+  // the included file's own editor actions.
+  private _activeSourceTarget():
+    | { path: string; actions: any; cm: CodeMirror.Editor; frameId?: string }
+    | undefined {
+    const frameId = this._get_most_recent_active_frame_id_of_type("cm");
+    if (frameId == null) return undefined;
+    const node = this._get_frame_node(frameId);
+    const path = node?.get("path") ?? this.path;
+    const actions: any =
+      path === this.path
+        ? this
+        : this.redux.getEditorActions(this.project_id, path);
+    if (actions == null) return undefined;
+    let cm: CodeMirror.Editor | undefined = actions._cm?.[frameId];
+    let cmFrameId: string | undefined = frameId;
+    if (cm == null) {
+      cm = actions._get_cm?.(undefined, true);
+      cmFrameId = undefined;
+    }
+    if (cm == null) return undefined;
+    return { path, actions, cm, frameId: cmFrameId };
+  }
+
   // Insert a `% chat: <hash>` marker at the cursor of the most recently
-  // active source frame and open a fresh side-chat thread for it.
+  // active source pane (master or included file) and open a fresh
+  // side-chat thread for it.
   public insertChatMarker = async (
     _opts: { mode?: "inline" | "block" } = {},
   ): Promise<void> => {
     if (this.is_read_only_preview()) return;
     const hash = generateMarkerHash();
-    if (
-      !this._insertMarkerText(buildMarkerLine(hash), buildInlineInsertion(hash))
-    ) {
+    const target = this._insertMarkerText(
+      buildMarkerLine(hash),
+      buildInlineInsertion(hash),
+    );
+    if (target == null) {
       return;
     }
-    this._chatMarkerScanners[this.path]?.rescan();
-    await this.openAnchorChatNewThread(hash);
+    this._chatMarkerScanners[target.path]?.rescan();
+    await this.openAnchorChatNewThread(
+      hash,
+      target.path === this.path ? undefined : target.path,
+    );
   };
 
   // Insert a `% bookmark: <text>` comment at the cursor.  Bookmarks are
@@ -2208,17 +2318,25 @@ export class Actions extends BaseActions<LatexEditorState> {
   ): Promise<void> => {
     if (this.is_read_only_preview()) return;
     const text = generateBookmarkText(new Date());
-    this._insertMarkerText(buildBookmarkLine(text));
-    this._chatMarkerScanners[this.path]?.rescan();
+    const target = this._insertMarkerText(buildBookmarkLine(text));
+    if (target == null) {
+      return;
+    }
+    this._chatMarkerScanners[target.path]?.rescan();
     this.updateTableOfContents(true);
   };
 
   // Insert a standalone comment line (or an inline tail when the cursor
   // line has tex content and `inline` is provided) at the cursor of the
-  // most recent CM.  Returns false when no editor is available.
-  private _insertMarkerText(blockLine: string, inline?: string): boolean {
-    const cm = this._get_cm(undefined, true);
-    if (cm == null) return false;
+  // focused source pane.  Returns the pane's file path, or undefined
+  // when no editor is available.
+  private _insertMarkerText(
+    blockLine: string,
+    inline?: string,
+  ): { path: string } | undefined {
+    const target = this._activeSourceTarget();
+    if (target == null) return undefined;
+    const { cm, actions, path, frameId } = target;
     const cur = cm.getCursor();
     const lineText = cm.getLine(cur.line) ?? "";
     if (inline != null && lineHasTexContent(lineText)) {
@@ -2236,9 +2354,9 @@ export class Actions extends BaseActions<LatexEditorState> {
         ch: lineText.length,
       });
     }
-    this.set_syncstring_to_codemirror();
-    this.syncstring_commit();
-    return true;
+    actions.set_syncstring_to_codemirror(frameId);
+    actions.syncstring_commit();
+    return { path };
   }
 
   // Resolve every thread anchored to `hash` (collaborative-TODO flow)

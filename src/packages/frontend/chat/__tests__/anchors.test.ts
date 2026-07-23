@@ -157,6 +157,50 @@ describe("computeAnchoredThreads", () => {
     ).toEqual([]);
   });
 
+  it("excludes manually archived threads from live matches", () => {
+    const info = computeAnchoredThreads({
+      actions: fakeActions({
+        rows: [
+          { thread_id: "a1", anchor: { id: "cell-a" }, archived: true },
+          { thread_id: "a2", anchor: { id: "cell-a" } },
+        ],
+        index: new Map([
+          ["a1", { messageCount: 4, newestTime: 400 }],
+          ["a2", { messageCount: 1, newestTime: 10 }],
+        ]),
+      }),
+      anchorId: "cell-a",
+      accountId: "acct",
+      resolved: false,
+    });
+    expect(info.threads.map((t) => t.key)).toEqual(["a2"]);
+  });
+
+  it("falls back to updated_at for config-only thread recency", () => {
+    const info = computeAnchoredThreads({
+      actions: fakeActions({
+        rows: [
+          {
+            thread_id: "old",
+            anchor: { id: "cell-a" },
+            updated_at: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            thread_id: "new",
+            anchor: { id: "cell-a" },
+            updated_at: "2026-07-01T00:00:00.000Z",
+          },
+        ],
+        index: new Map(),
+      }),
+      anchorId: "cell-a",
+      accountId: "acct",
+      resolved: false,
+    });
+    expect(info.threads.map((t) => t.key)).toEqual(["new", "old"]);
+    expect(info.threads[0].newestTime).toBeGreaterThan(0);
+  });
+
   it("includes config-only threads with zero messages", () => {
     const info = computeAnchoredThreads({
       actions: fakeActions({

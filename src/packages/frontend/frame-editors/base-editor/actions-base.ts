@@ -4218,7 +4218,13 @@ export class BaseEditorActions<
         project_id: this.project_id,
         path: this.path,
       });
-      if (actions?.syncdb != null && actions.frameTreeActions != null) {
+      if (
+        actions?.syncdb != null &&
+        actions.frameTreeActions != null &&
+        // wait for hydration: anchor lookups need the thread-config rows,
+        // otherwise a stale hash could be revived as a fresh thread
+        actions.syncdb.get_state?.() === "ready"
+      ) {
         return actions;
       }
       await delay(d);

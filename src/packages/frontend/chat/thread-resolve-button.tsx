@@ -70,14 +70,54 @@ export function ThreadResolveButton({
   );
 }
 
+// Shown in place of the composer when the selected thread is resolved:
+// the thread is an archival record and replying is disabled.
+export function ResolvedThreadNotice({
+  resolved,
+}: {
+  resolved: { account_id: string; at: string; label?: string };
+}) {
+  const { name, when } = describeResolved(resolved);
+  return (
+    <div
+      style={{
+        padding: "8px 12px",
+        borderTop: "1px solid #e5e5e5",
+        background: "#f7fff2",
+        color: COLORS.GRAY_D,
+        fontSize: "12.5px",
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+      }}
+    >
+      <Icon name="check" style={{ color: COLORS.ANTD_GREEN_D }} />
+      <span>
+        Resolved by {name}
+        {when ? ` on ${when}` : ""}
+        {resolved.label ? ` — was anchored at ${resolved.label}` : ""}. This
+        thread is read-only.
+      </span>
+    </div>
+  );
+}
+
+function describeResolved(resolved: { account_id: string; at: string }): {
+  name: string;
+  when: string;
+} {
+  const name =
+    redux.getStore("users")?.get_name?.(resolved.account_id) ?? "collaborator";
+  const when = resolved.at ? new Date(resolved.at).toLocaleString() : "";
+  return { name, when };
+}
+
 function ThreadResolvedChip({
   resolved,
 }: {
   resolved: { account_id: string; at: string; label?: string };
 }) {
-  const name =
-    redux.getStore("users")?.get_name?.(resolved.account_id) ?? "collaborator";
-  const when = resolved.at ? new Date(resolved.at).toLocaleString() : "";
+  const { name, when } = describeResolved(resolved);
   return (
     <Tooltip
       title={`Resolved by ${name}${when ? ` on ${when}` : ""}${

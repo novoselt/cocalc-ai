@@ -139,9 +139,10 @@ export function computeAnchoredThreads({
     if (!threadId) continue;
     const rowResolved = parseThreadResolved((row as any)?.resolved);
     const rowAnchor = parseThreadAnchor((row as any)?.anchor);
+    const rowArchived = (row as any)?.archived === true;
     const matches = resolved
       ? rowResolved?.anchorId === id
-      : rowResolved == null && rowAnchor?.id === id;
+      : rowResolved == null && !rowArchived && rowAnchor?.id === id;
     if (!matches) continue;
     const entry = threadIndex?.get?.(threadId);
     const messageCount = entry?.messageCount ?? 0;
@@ -154,12 +155,18 @@ export function computeAnchoredThreads({
       unreadCount = Math.max(messageCount - readCount, 0);
     }
     const name = parseNonemptyString((row as any)?.name);
+    // Config-only threads have no messages yet; fall back to the config
+    // row's updated_at so "newest thread" ordering stays meaningful.
+    const updatedAt = Date.parse(`${(row as any)?.updated_at ?? ""}`);
     info.threads.push({
       key: threadId,
       label: name ?? "Discussion",
       messageCount,
       unreadCount,
-      newestTime: entry?.newestTime ?? 0,
+      newestTime: Math.max(
+        entry?.newestTime ?? 0,
+        Number.isFinite(updatedAt) ? updatedAt : 0,
+      ),
       anchor: rowAnchor,
       resolved: rowResolved,
     });
@@ -206,6 +213,33 @@ function useSideChatActions(
       }
     };
   }, [project_id, path]);
+
+  // If the chat syncdb closes (e.g. the file is closed then reopened),
+  // re-acquire fresh actions rather than staying bound to a dead one.
+  useEffect(() => {
+    if (!chatActions || !project_id || !path || isChatPath(path)) {
+      return;
+    }
+    const syncdb = (chatActions as any)?.syncdb;
+    let cancelled = false;
+    const reconnect = () => {
+      if (cancelled) return;
+      try {
+        setChatActions(ensureSideChatActions(project_id, path));
+      } catch {
+        setChatActions(undefined);
+      }
+    };
+    if (syncdb?.get_state?.() === "closed") {
+      reconnect();
+      return;
+    }
+    syncdb?.once?.("close", reconnect);
+    return () => {
+      cancelled = true;
+      syncdb?.removeListener?.("close", reconnect);
+    };
+  }, [chatActions, project_id, path]);
 
   useEffect(() => {
     if (!chatActions?.store) {

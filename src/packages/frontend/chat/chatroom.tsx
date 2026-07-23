@@ -90,6 +90,7 @@ import {
   type AgentSessionRecord,
 } from "./agent-session-index";
 import { resolveAgentSessionIdForThread } from "./thread-session";
+import { ResolvedThreadNotice } from "./thread-resolve-button";
 import { findInChatAndOpenFirstResult } from "./find-in-chat";
 import { sendGitCommitAgentTurn } from "./git-commit-agent-turn";
 import type {
@@ -2516,7 +2517,9 @@ export function ChatPanel({
         readOnly={readOnly}
       />
       {automationBanner}
-      {!readOnly ? (
+      {selectedThreadMetadata?.resolved != null ? (
+        <ResolvedThreadNotice resolved={selectedThreadMetadata.resolved} />
+      ) : !readOnly ? (
         <>
           <ChatRoomComposer
             actions={actions}

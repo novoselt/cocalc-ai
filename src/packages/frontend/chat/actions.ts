@@ -1737,8 +1737,23 @@ export class ChatActions extends Actions<ChatState> {
     return keys;
   };
 
+  // Sort key for a thread: newest message time, falling back to the
+  // config row's updated_at (config-only threads have no messages yet).
+  private threadRecencyTime = (threadId: string, row?: any): number => {
+    const fromIndex =
+      this.messageCache?.getThreadIndex?.()?.get(threadId)?.newestTime ?? 0;
+    const updatedAt = Date.parse(`${row?.updated_at ?? ""}`);
+    return Math.max(fromIndex, Number.isFinite(updatedAt) ? updatedAt : 0);
+  };
+
   // Select the newest existing thread anchored to anchorId, or create a
   // new empty anchored thread.  Returns the selected/created thread key.
+  //
+  // A hash whose only match is a *resolved* thread is retired: we select
+  // the resolved thread (a read-only record) instead of reviving the
+  // hash with a fresh thread -- this also guards against the hydration
+  // race where resolved metadata has not arrived yet when a stale
+  // marker is clicked.
   findOrCreateAnchorThread = ({
     anchorId,
     label,
@@ -1748,20 +1763,47 @@ export class ChatActions extends Actions<ChatState> {
     label?: string;
     path?: string;
   }): string => {
-    const existing = this.listAnchoredThreadKeys(anchorId);
-    if (existing.length > 0) {
-      const newest = existing
-        .map((key) => ({
-          key,
-          time:
-            this.messageCache?.getThreadIndex?.()?.get(key)?.newestTime ?? 0,
-        }))
-        .sort((a, b) => b.time - a.time)[0].key;
+    const id = `${anchorId ?? ""}`.trim();
+    if (!id) return "";
+    const live: { key: string; time: number; archived: boolean }[] = [];
+    const resolved: { key: string; time: number }[] = [];
+    for (const row of this.listThreadConfigRows()) {
+      const threadId = `${(row as any)?.thread_id ?? ""}`.trim();
+      if (!threadId) continue;
+      const rowResolved = parseThreadResolved((row as any)?.resolved);
+      if (rowResolved != null) {
+        if (rowResolved.anchorId === id) {
+          resolved.push({
+            key: threadId,
+            time: this.threadRecencyTime(threadId, row),
+          });
+        }
+        continue;
+      }
+      const anchor = parseThreadAnchor((row as any)?.anchor);
+      if (anchor?.id !== id) continue;
+      live.push({
+        key: threadId,
+        time: this.threadRecencyTime(threadId, row),
+        archived: (row as any)?.archived === true,
+      });
+    }
+    const pick = (candidates: { key: string; time: number }[]) =>
+      candidates.sort((a, b) => b.time - a.time)[0].key;
+    if (live.length > 0) {
+      const unarchived = live.filter((t) => !t.archived);
+      const newest = pick(unarchived.length > 0 ? unarchived : live);
       this.clearAllFilters();
       this.setSelectedThread(newest);
       return newest;
     }
-    return this.createAnchorThread({ anchorId, label, path });
+    if (resolved.length > 0) {
+      const newest = pick(resolved);
+      this.clearAllFilters();
+      this.setSelectedThread(newest);
+      return newest;
+    }
+    return this.createAnchorThread({ anchorId: id, label, path });
   };
 
   // Always create a fresh empty thread anchored to anchorId.
@@ -1820,6 +1862,10 @@ export class ChatActions extends Actions<ChatState> {
       !this.setThreadConfigRecord(threadKey, {
         anchor: null,
         resolved,
+        // Resolved threads are archival: hide them from the normal
+        // thread sections and unread rollups (reuses the existing
+        // archive semantics); the composer is disabled separately.
+        archived: true,
       })
     ) {
       return false;
