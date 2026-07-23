@@ -55,6 +55,7 @@ export type MembershipCandidateRow = {
   siteLicenseId?: string;
   state: string;
   subscriptionInterval?: "month" | "year";
+  subscriptionRenewalState?: "scheduled" | "processing";
   subscriptionStatus?: "active" | "canceled";
 };
 
@@ -169,6 +170,7 @@ export function useMembershipSettingsData(): {
         priority: candidate.priority,
         selected,
         subscriptionInterval: candidate.subscription_interval,
+        subscriptionRenewalState: candidate.subscription_renewal_state,
         subscriptionStatus: candidate.subscription_status,
         action: membershipCandidateAction(candidate),
       } satisfies MembershipCandidateRow;
@@ -264,6 +266,9 @@ function membershipSourceLabel({
 
 function membershipCandidateState(candidate: MembershipCandidate): string {
   if (candidate.source === "subscription") {
+    if (candidate.subscription_renewal_state) {
+      return "Renewing";
+    }
     if (candidate.subscription_status === "canceled") {
       return "Renewal canceled";
     }
@@ -276,6 +281,9 @@ function membershipCandidateState(candidate: MembershipCandidate): string {
 
 function membershipCandidateNote(candidate: MembershipCandidate): string {
   if (candidate.source === "subscription") {
+    if (candidate.subscription_renewal_state) {
+      return "Renewal processing";
+    }
     if (candidate.subscription_status === "canceled") {
       return `Ends ${formatLongDate(candidate.expires) ?? "at period end"}`;
     }

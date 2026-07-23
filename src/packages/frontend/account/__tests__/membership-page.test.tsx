@@ -42,6 +42,9 @@ jest.mock("@cocalc/frontend/i18n", () => ({
 
 jest.mock("@cocalc/frontend/components", () => ({
   Loading: () => <div>loading</div>,
+  Tooltip: ({ children, title }: { children?: ReactNode; title?: string }) => (
+    <span title={title}>{children}</span>
+  ),
 }));
 
 jest.mock("@cocalc/frontend/components/time-ago", () => ({
@@ -100,8 +103,8 @@ jest.mock("antd", () => {
   );
   return {
     Alert: Box,
-    Button: ({ children, onClick }: any) => (
-      <button onClick={onClick} type="button">
+    Button: ({ children, disabled, onClick }: any) => (
+      <button disabled={disabled} onClick={onClick} type="button">
         {children}
       </button>
     ),
@@ -211,6 +214,69 @@ describe("MembershipPage", () => {
 
     expect(refresh).toHaveBeenCalled();
     expect(dispatchEvent).toHaveBeenCalledWith(expect.any(Event));
+  });
+
+  it("shows renewing and blocks personal membership management", async () => {
+    useMembershipSettingsData.mockReturnValue(
+      baseData({
+        candidateRows: [
+          {
+            action: "personal",
+            class: "standard",
+            key: "subscription-standard-149",
+            membership: "Standard",
+            note: "Renewal processing",
+            selected: true,
+            source: "Personal",
+            sourceKind: "subscription",
+            state: "Renewing",
+            subscriptionInterval: "month",
+            subscriptionRenewalState: "processing",
+            subscriptionStatus: "active",
+          },
+        ],
+        details: {
+          candidates: [
+            {
+              class: "standard",
+              source: "subscription",
+              subscription_cost: 24,
+              subscription_id: 149,
+              subscription_interval: "month",
+              subscription_renewal_state: "processing",
+              subscription_status: "active",
+            },
+          ],
+          selected: { class: "standard", source: "subscription" },
+        },
+        membership: {
+          class: "standard",
+          source: "subscription",
+          subscription_cost: 24,
+          subscription_interval: "month",
+          subscription_renewal_state: "processing",
+          subscription_status: "active",
+        },
+        tierById: {
+          standard: { id: "standard", label: "Standard" },
+        },
+      }),
+    );
+
+    render(<MembershipPage />);
+
+    expect(screen.getByText("Renewing")).toBeTruthy();
+    expect(
+      screen.getByText("Renewal payment is being processed."),
+    ).toBeTruthy();
+    expect(screen.queryByText("balance-renewal-control")).toBeNull();
+    const manage = screen.getByRole("button", { name: "Manage" });
+    expect((manage as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByTitle(
+        "Your membership renewal is being processed. Membership changes will be available when it finishes.",
+      ),
+    ).toBeTruthy();
   });
 
   it("shows the free effective membership without raw technical details", async () => {
