@@ -21,6 +21,7 @@
 // this avoids excessive resubmission of errors
 let ENABLED;
 const already_reported = [];
+const { isIgnorableBrowserError } = require("./webapp-error-filter");
 
 // set this to true, to enable the webapp error reporter for development
 const enable_for_testing = false;
@@ -65,6 +66,9 @@ const WHITELIST = [
   "Viewport.syncScrollArea",
 ];
 const isWhitelisted = function (opts) {
+  if (isIgnorableBrowserError(opts?.message)) {
+    return true;
+  }
   const s = JSON.stringify(opts);
   for (let x of WHITELIST) {
     if (s.indexOf(x) !== -1) {
