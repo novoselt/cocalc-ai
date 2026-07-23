@@ -63,6 +63,7 @@ export type SiteSettingsKeys =
   | "theming"
   | "site_name"
   | "site_description"
+  | "status_page_url"
   | "account_creation_email_instructions"
   | "sign_in_email_instructions"
   | "help_email"
@@ -214,6 +215,16 @@ export const only_commercial = (conf): boolean =>
 export const to_bool = (val): boolean =>
   val === "true" || val === "yes" || (typeof val === "boolean" && val);
 export const to_trimmed_str = (val?: string): string => (val ?? "").trim();
+const is_optional_http_url = (val: string): boolean => {
+  const trimmed = to_trimmed_str(val);
+  if (!trimmed) return true;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
 export const only_booleans = ["yes", "no"]; // we also understand true and false
 export const to_int = (val): number => parseInt(val);
 export const only_ints = (val) =>
@@ -443,6 +454,18 @@ export const site_settings_conf: SiteSettings = {
     tags: ["Theme"],
     group: "Branding & UI",
     subgroup: "Branding",
+  },
+  status_page_url: {
+    name: "Status page URL",
+    desc: "Public uptime/status page URL. When configured, landing-page footers show a Status link that opens in a new tab.",
+    default: "",
+    clearable: true,
+    valid: is_optional_http_url,
+    to_val: to_trimmed_str,
+    show: show_theming_vars,
+    tags: ["Theme", "SLA"],
+    group: "Branding & UI",
+    subgroup: "Contact",
   },
   help_email: {
     name: help_email_name,

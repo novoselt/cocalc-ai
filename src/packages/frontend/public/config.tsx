@@ -45,6 +45,7 @@ export interface PublicConfig {
   policies?: string;
   policy_pages?: PublicPolicyPages;
   site_name?: string;
+  status_page_url?: string;
   sign_in_email_instructions?: string;
   signup_email_domain_public_policy?: SignupEmailDomainPublicPolicy;
   strategies?: PassportStrategyFrontend[];

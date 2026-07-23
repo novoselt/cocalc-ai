@@ -128,6 +128,7 @@ export interface CustomizeState {
   share_server: boolean;
   site_description: string;
   site_name: string;
+  status_page_url: string;
   splash_image: string;
   terms_of_service: string;
   terms_of_service_url: string;
