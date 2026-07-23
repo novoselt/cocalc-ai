@@ -130,6 +130,8 @@ const stats = {
   reconnectAttemptMax: 0,
   socketDisconnected: 0,
   socketClosed: 0,
+  socketReadyRecoveryScheduled: 0,
+  socketReadyRecoveryErrors: 0,
   getMissedRuns: 0,
   getMissedRetries: 0,
   getMissedSuccess: 0,
@@ -414,7 +416,30 @@ class PersistStreamClient extends EventEmitter {
         this.setRecoveryState("ready");
         return;
       }
-      void this.getMissed({ priority: "background", reason: "socket_ready" });
+      if (this.recoveryRegistration != null) {
+        stats.socketReadyRecoveryScheduled += 1;
+        this.setRecoveryState("recovering");
+        this.recoveryRegistration.requestRecovery({
+          reason: "persist_socket_ready",
+          resetBackoff: true,
+        });
+        return;
+      }
+      void this.getMissed({
+        priority: "background",
+        reason: "socket_ready",
+      }).catch((err) => {
+        if (this.isClosed()) {
+          return;
+        }
+        stats.socketReadyRecoveryErrors += 1;
+        logger.warn("persist socket-ready recovery failed", {
+          storage: this.storage.path,
+          service: this.service,
+          err: `${err}`,
+        });
+        this.setRecoveryState(this.recoveryPaused ? "paused" : "disconnected");
+      });
     } else {
       this.setRecoveryState("ready");
     }
