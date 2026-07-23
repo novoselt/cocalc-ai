@@ -70,7 +70,6 @@ In the browser console:
 import { EventEmitter } from "events";
 import {
   CoreStream,
-  type CoreStreamInitPhase,
   type CoreStreamInitPhaseReporter,
   type Configuration,
   type ChangeEvent,
@@ -196,7 +195,9 @@ export class DKV<T = any> extends EventEmitter {
       account_id,
       host_id,
       client,
-      config,
+      // DKV tombstones require TTL support. Apply this as part of CoreStream
+      // bootstrap, which already retries configuration and handles close races.
+      config: { ...config, allow_msg_ttl: true },
       ephemeral,
       sync,
       service,
@@ -229,16 +230,6 @@ export class DKV<T = any> extends EventEmitter {
   }
 
   private initialized = false;
-  private emitInitPhase = (
-    phase: CoreStreamInitPhase,
-    details?: { [key: string]: string | number | boolean | undefined },
-  ) => {
-    this.opts.initPhaseReporter?.(phase, {
-      name: this.name,
-      ...(details ?? {}),
-    });
-  };
-
   private isActiveStream = (kv: CoreStream<T>) => {
     return this.kv === kv && kv.getRecoveryState() !== "closed";
   };
@@ -259,19 +250,6 @@ export class DKV<T = any> extends EventEmitter {
     kv.on("paused", this.handlePaused);
     kv.on("recovered", this.handleRecovered);
     await kv.init();
-    if (!this.isActiveStream(kv)) {
-      return;
-    }
-    // allow_msg_ttl is used for deleting tombstones so MUST be enabled for dkv.
-    this.emitInitPhase("dkv_allow_msg_ttl_config_start");
-    if (!this.isActiveStream(kv)) {
-      return;
-    }
-    await kv.config({ allow_msg_ttl: true });
-    if (!this.isActiveStream(kv)) {
-      return;
-    }
-    this.emitInitPhase("dkv_allow_msg_ttl_config_done");
     if (!this.isActiveStream(kv)) {
       return;
     }

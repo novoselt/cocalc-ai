@@ -147,8 +147,6 @@ export type CoreStreamInitPhase =
   | "persist_request_many_done"
   | "persist_config_start"
   | "persist_config_done"
-  | "dkv_allow_msg_ttl_config_start"
-  | "dkv_allow_msg_ttl_config_done"
   | "listen_started"
   | "init_done";
 

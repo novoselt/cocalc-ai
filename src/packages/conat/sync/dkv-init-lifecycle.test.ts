@@ -6,6 +6,7 @@
 import type { RecoveryState } from "./core-stream";
 
 const mockCoreStreams: MockCoreStream[] = [];
+const mockCoreStreamOptions: any[] = [];
 
 class MockCoreStream extends (require("events")
   .EventEmitter as typeof import("events").EventEmitter) {
@@ -20,9 +21,10 @@ class MockCoreStream extends (require("events")
 
 jest.mock("./core-stream", () => ({
   CoreStream: class extends MockCoreStream {
-    constructor() {
+    constructor(options) {
       super();
       mockCoreStreams.push(this);
+      mockCoreStreamOptions.push(options);
     }
   },
 }));
@@ -37,17 +39,28 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
-function createDkv() {
+function createDkv(config?) {
   return new DKV({
     name: "init-lifecycle",
     client: {} as any,
     noInventory: true,
+    config,
   });
 }
 
 describe("DKV initialization lifecycle", () => {
   beforeEach(() => {
     mockCoreStreams.length = 0;
+    mockCoreStreamOptions.length = 0;
+  });
+
+  it("enables message TTL in the retrying CoreStream bootstrap config", () => {
+    createDkv({ max_age: 123, allow_msg_ttl: false });
+
+    expect(mockCoreStreamOptions[0].config).toEqual({
+      max_age: 123,
+      allow_msg_ttl: true,
+    });
   });
 
   it("stops initialization when the core stream closes during bootstrap", async () => {
@@ -82,30 +95,7 @@ describe("DKV initialization lifecycle", () => {
     expect(connected).not.toHaveBeenCalled();
   });
 
-  it("does not finish initialization when DKV closes during config", async () => {
-    const configStarted = deferred();
-    const configFinished = deferred();
-    const dkv = createDkv();
-    const stream = mockCoreStreams[0];
-    stream.config.mockImplementation(async () => {
-      configStarted.resolve();
-      await configFinished.promise;
-      return {};
-    });
-    const connected = jest.fn();
-    dkv.on("connected", connected);
-
-    const initializing = dkv.init();
-    await configStarted.promise;
-    dkv.close();
-    configFinished.resolve();
-
-    await expect(initializing).resolves.toBeUndefined();
-    expect(stream.config).toHaveBeenCalledWith({ allow_msg_ttl: true });
-    expect(connected).not.toHaveBeenCalled();
-  });
-
-  it("configures message TTL and connects while the stream remains active", async () => {
+  it("connects without a second post-bootstrap config RPC", async () => {
     const dkv = createDkv();
     const stream = mockCoreStreams[0];
     const connected = jest.fn();
@@ -113,7 +103,7 @@ describe("DKV initialization lifecycle", () => {
 
     await dkv.init();
 
-    expect(stream.config).toHaveBeenCalledWith({ allow_msg_ttl: true });
+    expect(stream.config).not.toHaveBeenCalled();
     expect(connected).toHaveBeenCalledTimes(1);
   });
 });
