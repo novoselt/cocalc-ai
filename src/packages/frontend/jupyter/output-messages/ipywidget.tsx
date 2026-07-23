@@ -54,15 +54,30 @@ export function IpyWidget({ id: cell_id, value, actions }: WidgetProps) {
   // done in parallel, hence unpredicatable order, over the network
   // (since using NATS instead of a single socket).
   useEffect(() => {
-    (async () => {
+    let canceled = false;
+    valueRef.current = value;
+    setUnknown(false);
+    void (async () => {
       const ipywidgets_state = actions?.widget_manager?.ipywidgets_state;
       if (ipywidgets_state == null) {
-        setIsReady(true);
+        if (!canceled) {
+          setIsReady(true);
+        }
         return;
+      }
+      if (ipywidgets_state.get_state() !== "ready") {
+        try {
+          await once(ipywidgets_state, "ready", MAX_WAIT);
+        } catch {
+          if (!canceled) {
+            setIsReady(true);
+          }
+          return;
+        }
       }
       const start = Date.now();
       const id = value.get("model_id");
-      while (Date.now() - start <= MAX_WAIT) {
+      while (!canceled && Date.now() - start <= MAX_WAIT) {
         if (!valueRef.current.equals(value)) {
           // let new function take over
           return;
@@ -91,13 +106,20 @@ ax.plot(x, y)
         try {
           await once(ipywidgets_state, "change", MAX_WAIT);
         } catch {
-          setIsReady(true);
+          if (!canceled) {
+            setIsReady(true);
+          }
           return;
         }
       }
-      setIsReady(true);
+      if (!canceled) {
+        setIsReady(true);
+      }
     })();
-  }, [value]);
+    return () => {
+      canceled = true;
+    };
+  }, [actions, value]);
 
   useEffect(() => {
     if (actions == null || !isVisible || !isReady) {
