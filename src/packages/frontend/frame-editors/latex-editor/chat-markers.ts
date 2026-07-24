@@ -19,8 +19,6 @@ The marker's hash anchors a thread in the side-chat (see
 resolve to the same thread.
 */
 
-import { generate as heroku } from "project-name-generator";
-
 import { randomId } from "@cocalc/conat/names";
 
 /**
@@ -47,8 +45,16 @@ const BODY_RE = new RegExp(
   `^\\s*${CHAT_PREFIX}:\\s*([A-Za-z0-9_-]{3,64})\\s*$`,
 );
 
-/** Alphabet length for generated hashes. Keep short and readable. */
+/** Alphabet length for the random suffix of generated hashes. */
 const HASH_LEN = 8;
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+function compactLocalDate(now: Date): string {
+  return (
+    `${now.getFullYear()}${pad2(now.getMonth() + 1)}` + `${pad2(now.getDate())}`
+  );
+}
 
 export interface ChatMarker {
   hash: string;
@@ -123,10 +129,13 @@ export function scanInvalidMarkers(text: string): InvalidChatMarker[] {
 }
 
 /** Generate a fresh marker hash. */
-export function generateMarkerHash(): string {
+export function generateMarkerHash(now: Date = new Date()): string {
   const r = randomId();
-  if (r.length >= HASH_LEN) return r.slice(0, HASH_LEN);
-  return (r + "0".repeat(HASH_LEN)).slice(0, HASH_LEN);
+  const suffix =
+    r.length >= HASH_LEN
+      ? r.slice(0, HASH_LEN)
+      : (r + "0".repeat(HASH_LEN)).slice(0, HASH_LEN);
+  return `${compactLocalDate(now)}-${suffix}`;
 }
 
 /** Build the exact text to append inline to a line of tex content. */
@@ -259,21 +268,16 @@ export function buildBookmarkLine(text: string): string {
 }
 
 /**
- * Generate a friendly default label for a new bookmark:
- * `adjective-noun-YYYYMMDD-HHMM` (e.g. `sparkling-butter-20260423-1432`).
- * More memorable than a raw 8-char hash and still unique enough in
- * practice — collisions would need two bookmarks within the same
- * minute using the same heroku pair.
+ * Generate a readable local timestamp for a new bookmark:
+ * `YYYY-MM-DD HH:MM:SS`.
  *
  * `now` is taken as a parameter (callers pass the shared server clock)
  * so tests can freeze time and so we don't couple this pure helper to
  * the webapp client.
  */
 export function generateBookmarkText(now: Date): string {
-  const { dashed } = heroku({ number: false });
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const stamp =
-    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-    `-${pad(now.getHours())}${pad(now.getMinutes())}`;
-  return `${dashed}-${stamp}`;
+  return (
+    `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}` +
+    ` ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`
+  );
 }

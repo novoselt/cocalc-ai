@@ -226,12 +226,11 @@ describe("lineHasTexContent", () => {
 });
 
 describe("generateMarkerHash", () => {
-  it("returns a non-empty string in the accepted alphabet", () => {
+  it("prefixes an eight-character random id with the local date", () => {
+    const now = new Date(2026, 6, 24, 9, 30);
     for (let i = 0; i < 20; i++) {
-      const h = generateMarkerHash();
-      expect(h).toMatch(/^[A-Za-z0-9_-]+$/);
-      expect(h.length).toBeGreaterThanOrEqual(3);
-      expect(h.length).toBeLessThanOrEqual(64);
+      const h = generateMarkerHash(now);
+      expect(h).toMatch(/^20260724-[A-Za-z0-9_-]{8}$/);
     }
   });
 
@@ -245,11 +244,10 @@ describe("generateMarkerHash", () => {
 });
 
 describe("generateBookmarkText", () => {
-  it("pairs two words with a zero-padded yyyymmdd-hhmm stamp", () => {
-    // 2026-04-23 07:05 local time (month is 0-indexed in the Date ctor).
-    const t = new Date(2026, 3, 23, 7, 5);
-    const s = generateBookmarkText(t);
-    expect(s).toMatch(/^[a-z]+-[a-z]+-20260423-0705$/);
+  it("uses a zero-padded local date and time", () => {
+    // Month is 0-indexed in the Date constructor.
+    const t = new Date(2026, 3, 23, 7, 5, 9);
+    expect(generateBookmarkText(t)).toBe("2026-04-23 07:05:09");
   });
 
   it("produces text the bookmark scanner accepts", () => {
