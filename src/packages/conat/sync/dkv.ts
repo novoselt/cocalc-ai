@@ -224,6 +224,12 @@ export class DKV<T = any> extends EventEmitter {
         return true;
       },
       get(target, prop) {
+        // Promise resolution probes returned objects for a `then` property.
+        // Do not turn that probe into a key lookup, especially after the
+        // underlying CoreStream has closed independently of this wrapper.
+        if (prop === "then") {
+          return undefined;
+        }
         return target[String(prop)] ?? target.get(String(prop));
       },
     });

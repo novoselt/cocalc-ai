@@ -54,7 +54,9 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
     (message.includes('waiting for "info"') ||
       message.includes("waiting for 'info'") ||
       message.includes("waiting for info"));
-  const socketIoTransportClosed = message === "socket has been disconnected";
+  const socketIoTransportClosed =
+    message === "socket has been disconnected" ||
+    message === "error: socket has been disconnected";
   const filesystemServerStarting = message === "file server not initialized";
   const staleCollaboratorAccess =
     message.includes("account '") &&

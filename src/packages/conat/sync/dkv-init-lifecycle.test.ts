@@ -16,6 +16,9 @@ class MockCoreStream extends (require("events")
   close = jest.fn(() => {
     this.recoveryState = "closed";
   });
+  getKv = jest.fn(() => {
+    throw Error("closed stream");
+  });
   getRecoveryState = jest.fn(() => this.recoveryState);
 }
 
@@ -105,5 +108,13 @@ describe("DKV initialization lifecycle", () => {
 
     expect(stream.config).not.toHaveBeenCalled();
     expect(connected).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not turn Promise's then probe into a DKV key lookup", async () => {
+    const dkv = createDkv();
+    const stream = mockCoreStreams[0];
+
+    await expect(Promise.resolve(dkv)).resolves.toBe(dkv);
+    expect(stream.getKv).not.toHaveBeenCalled();
   });
 });
