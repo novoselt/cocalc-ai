@@ -574,6 +574,7 @@ export interface AccountDirectorySearchRequest {
   limit?: number;
   admin?: boolean;
   only_email?: boolean;
+  verified_email_domains?: string[];
 }
 
 export interface AccountDirectoryBanEquivalentEmailAccountsRequest {
@@ -1184,6 +1185,14 @@ export interface AccountLocalQuarantineBillingResourcesResult {
 export interface AccountLocalSetAutoBalanceRequest {
   account_id: string;
   auto_balance: AutoBalanceConfig;
+}
+
+export interface AccountLocalSearchRelatedAccountsRequest {
+  account_id: string;
+  query: string;
+  limit?: number;
+  only_email?: boolean;
+  include_email?: boolean;
 }
 
 export interface AccountLocalRecentPasswordResetAttemptsRequest {
@@ -2206,6 +2215,7 @@ export type AccountLocalMethod =
   | "set-ban"
   | "quarantine-billing-resources"
   | "set-auto-balance"
+  | "search-related-accounts"
   | "set-password-from-reset"
   | "assert-product-access-trust"
   | "reconcile-dedicated-host-purchase-session"
@@ -3481,6 +3491,9 @@ export interface InterBayAccountLocalApi {
   setAutoBalance: (
     opts: AccountLocalSetAutoBalanceRequest,
   ) => Promise<AutoBalanceConfig>;
+  searchRelatedAccounts: (
+    opts: AccountLocalSearchRelatedAccountsRequest,
+  ) => Promise<UserSearchResult[]>;
   setPasswordFromReset: (
     opts: AccountLocalSetPasswordFromResetRequest,
   ) => Promise<void>;
@@ -5707,6 +5720,15 @@ export function createInterBayAccountLocalClient({
       method: "set-auto-balance",
     }),
   });
+  const searchRelatedAccountsClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "searchRelatedAccounts">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "search-related-accounts",
+    }),
+  });
   const setPasswordFromResetClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "setPasswordFromReset">
   >({
@@ -6653,6 +6675,8 @@ export function createInterBayAccountLocalClient({
       await quarantineBillingResourcesClient.quarantineBillingResources(opts),
     setAutoBalance: async (opts) =>
       await setAutoBalanceClient.setAutoBalance(opts),
+    searchRelatedAccounts: async (opts) =>
+      await searchRelatedAccountsClient.searchRelatedAccounts(opts),
     setPasswordFromReset: async (opts) =>
       await setPasswordFromResetClient.setPasswordFromReset(opts),
     assertProductAccessTrust: async (opts) =>
@@ -7238,6 +7262,20 @@ export function createInterBayAccountLocalHandler({
       }),
       impl: {
         setAutoBalance: async (opts) => await impl.setAutoBalance(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "searchRelatedAccounts">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "search-related-accounts",
+      }),
+      impl: {
+        searchRelatedAccounts: async (opts) =>
+          await impl.searchRelatedAccounts(opts),
       },
     }),
     createServiceHandler<Pick<InterBayAccountLocalApi, "setPasswordFromReset">>(

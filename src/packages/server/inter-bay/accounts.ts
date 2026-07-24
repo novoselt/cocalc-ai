@@ -128,11 +128,13 @@ export async function searchClusterAccounts({
   limit,
   admin,
   only_email,
+  verified_email_domains,
 }: {
   query: string;
   limit?: number;
   admin?: boolean;
   only_email?: boolean;
+  verified_email_domains?: string[];
 }): Promise<AccountDirectoryEntry[]> {
   if (!isMultiBayCluster() || getConfiguredClusterRole() === "seed") {
     return await searchClusterAccountsDirect({
@@ -140,6 +142,7 @@ export async function searchClusterAccounts({
       limit,
       admin,
       only_email,
+      verified_email_domains,
     });
   }
   return await createInterBayAccountDirectoryClient({
@@ -149,6 +152,7 @@ export async function searchClusterAccounts({
     limit,
     admin,
     only_email,
+    verified_email_domains,
   });
 }
 

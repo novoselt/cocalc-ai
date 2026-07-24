@@ -84,6 +84,7 @@ import {
   revokeAdminRole as revokeAdminRoleLocal,
 } from "@cocalc/server/accounts/admin-role";
 import { setAutoBalance as setAutoBalanceLocal } from "@cocalc/server/accounts/auto-balance";
+import { searchRelatedClusterAccounts } from "@cocalc/server/accounts/search-policy";
 import setPasswordFromResetLocal from "@cocalc/server/accounts/set-password-from-reset";
 import { adminDisableTwoFactor as adminDisableTwoFactorLocal } from "@cocalc/server/auth/two-factor";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
@@ -733,12 +734,19 @@ async function startAccountDirectoryService(): Promise<void> {
       await getClusterAccountsByIds(
         Array.isArray(account_ids) ? account_ids : [],
       ),
-    search: async ({ query, limit, admin, only_email }) =>
+    search: async ({
+      query,
+      limit,
+      admin,
+      only_email,
+      verified_email_domains,
+    }) =>
       await searchClusterAccounts({
         query: `${query ?? ""}`,
         limit,
         admin,
         only_email,
+        verified_email_domains,
       }),
     getBanEquivalentEmailAccounts: async ({ email_address, limit }) =>
       await getClusterBanEquivalentEmailAccounts({
@@ -890,6 +898,8 @@ async function startAccountLocalService(): Promise<void> {
     quarantineBillingResources: async (opts) =>
       await quarantineLocalClusterAccountBillingResources(opts),
     setAutoBalance: async (opts) => await setAutoBalanceLocal(opts),
+    searchRelatedAccounts: async (opts) =>
+      await searchRelatedClusterAccounts(opts),
     setPasswordFromReset: async ({ account_id, password }) => {
       await setPasswordFromResetLocal({ account_id, password });
     },

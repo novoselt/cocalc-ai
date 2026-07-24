@@ -46,6 +46,7 @@ import type {
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import getName from "@cocalc/server/accounts/get-name";
 import { searchRelatedClusterAccounts } from "@cocalc/server/accounts/search-policy";
+import { getNonAdminUserSearchRequest } from "@cocalc/server/accounts/user-search-policy";
 import type { AccountEntitlementOverride } from "@cocalc/conat/hub/api/purchases";
 import {
   clearAccountEntitlementOverrideLocal,
@@ -5253,10 +5254,14 @@ export async function userSearch({
       only_email,
     });
   }
+  const request = await getNonAdminUserSearchRequest({ query, limit });
+  if (!request.allowed || request.limit <= 0) {
+    return [];
+  }
   return await searchRelatedClusterAccounts({
     account_id,
-    query,
-    limit,
+    query: request.normalized,
+    limit: request.limit,
     only_email,
   });
 }

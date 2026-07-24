@@ -5,15 +5,12 @@
 
 import getPool from "@cocalc/database/pool";
 import { getLogger } from "@cocalc/backend/logger";
-import {
-  isValidUUID,
-  is_valid_email_address as isValidEmailAddress,
-  parse_user_search as parseUserSearch,
-} from "@cocalc/util/misc";
+import { isValidUUID } from "@cocalc/util/misc";
 import type { UserSearchResult } from "@cocalc/util/db-schema/accounts";
 import { ensureClusterAccountDirectorySchema } from "@cocalc/server/accounts/cluster-directory";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { toEpoch } from "@cocalc/database/postgres/utils/to-epoch";
+import { parseUserSearchQuery } from "@cocalc/server/accounts/user-search-policy";
 
 const logger = getLogger("accounts/search-policy");
 
@@ -81,6 +78,7 @@ export async function searchRelatedClusterAccounts({
   query,
   limit = 20,
   only_email,
+  include_email = false,
   db = getPool(),
   ensureDirectorySchema = ensureClusterAccountDirectorySchema,
 }: {
@@ -88,6 +86,7 @@ export async function searchRelatedClusterAccounts({
   query: string;
   limit?: number;
   only_email?: boolean;
+  include_email?: boolean;
   db?: Queryable;
   ensureDirectorySchema?: () => Promise<void>;
 }): Promise<UserSearchResult[]> {
@@ -97,29 +96,33 @@ export async function searchRelatedClusterAccounts({
     return [];
   }
 
-  const trimmedQuery = `${query ?? ""}`.trim().toLowerCase();
+  const parsed = parseUserSearchQuery(query);
   const params: (string | number | string[])[] = [account_id];
   const where: string[] = [];
   const emailMatch: string[] = [];
 
-  if (isValidUUID(trimmedQuery)) {
-    params.push(trimmedQuery);
+  if (parsed.account_id) {
+    params.push(parsed.account_id);
     where.push(`account_id=$${params.length}::uuid`);
-  } else if (isValidEmailAddress(trimmedQuery)) {
-    params.push(trimmedQuery);
+  } else if (parsed.kind === "email") {
+    params.push(parsed.email_queries[0]);
     const clause = `lower(email_address)=$${params.length}::TEXT`;
     where.push(clause);
     emailMatch.push(clause);
   } else {
-    const { string_queries, email_queries } = parseUserSearch(trimmedQuery);
-    if (email_queries.length > 0) {
-      params.push(email_queries.map((email) => email.toLowerCase()));
+    if (parsed.email_queries.length > 0) {
+      params.push(parsed.email_queries);
       const clause = `lower(email_address)=ANY($${params.length}::TEXT[])`;
       where.push(clause);
       emailMatch.push(clause);
     }
     if (!only_email) {
-      where.push(...addStringQueryClauses({ string_queries, params }));
+      where.push(
+        ...addStringQueryClauses({
+          string_queries: parsed.string_queries,
+          params,
+        }),
+      );
     }
   }
 
@@ -202,7 +205,10 @@ export async function searchRelatedClusterAccounts({
     [...params, getConfiguredBayId()],
   );
   return rows.map((row: any) => {
-    const result = sanitizeRelatedResult(row, !!row.matched_email);
+    const result = sanitizeRelatedResult(
+      row,
+      include_email || !!row.matched_email,
+    );
     delete (result as any).matched_email;
     toEpoch(result as any, ["last_active", "created"]);
     return result;
