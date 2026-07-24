@@ -3173,7 +3173,8 @@ export class Actions extends BaseActions<LatexEditorState> {
     if (locations.length === 0) {
       const path = this._getUnloadedAnchorPath(hash, recordedPath);
       if (path == null) return;
-      const frameId = await this.switch_to_file(path);
+      const frameId = await this._switchFocusedSourceTo(path);
+      if (frameId == null) return;
       for (let retries = 0; retries < 40; retries += 1) {
         this._refreshChatMarkerScanners();
         this._chatMarkerScanners[path]?.rescan();
@@ -3189,15 +3190,24 @@ export class Actions extends BaseActions<LatexEditorState> {
       return;
     }
     const { path, line } = locations[0];
-    if (path === this.path) {
-      const id = this.show_focused_frame_of_type("cm");
-      if (id == null) return;
-      this.programmatically_goto_line(line + 1, true, true, id);
-    } else {
-      const id = await this.switch_to_file(path);
-      this.programmatically_goto_line(line + 1, true, true, id);
-    }
+    const frameId = await this._switchFocusedSourceTo(path);
+    if (frameId == null) return;
+    this.programmatically_goto_line(line + 1, true, true, frameId);
   };
+
+  private async _switchFocusedSourceTo(
+    path: string,
+  ): Promise<string | undefined> {
+    const frameId =
+      this._get_most_recent_active_frame_id_of_type("cm") ??
+      this.show_focused_frame_of_type("cm");
+    if (frameId == null) return;
+    const currentPath = this._get_frame_node(frameId)?.get("path") ?? this.path;
+    if (currentPath === path) {
+      return frameId;
+    }
+    return await this.switch_to_file(path, frameId);
+  }
 
   // Resolve the most recently focused source pane in this frame tree:
   // the file path it shows (master or an included file), the owning

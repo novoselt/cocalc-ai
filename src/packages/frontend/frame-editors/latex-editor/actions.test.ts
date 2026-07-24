@@ -222,3 +222,31 @@ describe("LaTeX chat marker resolution", () => {
     );
   });
 });
+
+describe("LaTeX anchor pane targeting", () => {
+  it("switches the last focused subfile pane back to the master", async () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "main.tex";
+    actions._get_most_recent_active_frame_id_of_type = jest.fn(() => "cm-1");
+    actions._get_frame_node = jest.fn(() => Map({ path: "123.tex" }));
+    actions.switch_to_file = jest.fn(async () => "cm-1");
+
+    const frameId = await actions._switchFocusedSourceTo("main.tex");
+
+    expect(frameId).toBe("cm-1");
+    expect(actions.switch_to_file).toHaveBeenCalledWith("main.tex", "cm-1");
+  });
+
+  it("reuses the focused pane when it already shows the target file", async () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "main.tex";
+    actions._get_most_recent_active_frame_id_of_type = jest.fn(() => "cm-1");
+    actions._get_frame_node = jest.fn(() => Map({ path: "main.tex" }));
+    actions.switch_to_file = jest.fn();
+
+    const frameId = await actions._switchFocusedSourceTo("main.tex");
+
+    expect(frameId).toBe("cm-1");
+    expect(actions.switch_to_file).not.toHaveBeenCalled();
+  });
+});
