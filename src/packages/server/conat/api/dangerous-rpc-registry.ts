@@ -840,6 +840,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "site-license external token verification authority mutation",
   },
+  "purchases.setAutoBalance": {
+    decision: "fresh-auth-required",
+    reason: "automatic deposit settings authorize future saved-card charges",
+  },
   "purchases.setSiteLicenseManager": {
     decision: "fresh-auth-required",
     reason: "site-license manager authority mutation",

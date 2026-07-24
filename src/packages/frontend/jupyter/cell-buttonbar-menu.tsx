@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import { useIntl } from "react-intl";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { Icon } from "@cocalc/frontend/components";
+import { IS_MOBILE } from "@cocalc/frontend/feature";
 import { jupyter, labels } from "@cocalc/frontend/i18n";
 import { commands, CLEAR_CELL_OUTPUT_LABEL } from "./commands";
 import {
@@ -18,6 +19,55 @@ import {
   DELETE_CELL_ICON,
   SPLIT_CELL_ICON,
 } from "./consts";
+import { shortcut_to_string } from "./keyboard-shortcuts";
+
+// Map menu item keys to Jupyter command names for keyboard shortcut lookup
+const KEY_TO_COMMAND: Record<string, string> = {
+  undo: "global undo",
+  redo: "global redo",
+  copy: "copy cell",
+  cut: "cut cell",
+  "paste-cell-above": "paste cell above",
+  "paste-cell-below": "paste cell and replace",
+  "delete-cell": "delete cell",
+  "split-cell": "split cell at cursor",
+  "merge-above": "merge cell with previous cell",
+  "merge-below": "merge cell with next cell",
+  "move-cell-up": "move cell up",
+  "move-cell-down": "move cell down",
+  "cell-type-code": "change cell to code",
+  "cell-type-markdown": "change cell to markdown",
+  "cell-type-raw": "change cell to raw",
+  "clear-output": "clear cell output",
+};
+
+function withShortcut(
+  label: React.ReactNode,
+  key: string,
+  allCommands: Record<string, any>,
+): React.ReactNode {
+  if (IS_MOBILE) return label;
+  const cmdName = KEY_TO_COMMAND[key];
+  if (!cmdName) return label;
+  const cmd = allCommands[cmdName];
+  if (!cmd?.k?.length) return label;
+  const shortcutStr = cmd.k.map(shortcut_to_string).join(", ");
+  return (
+    <div style={{ display: "flex", width: "100%" }}>
+      {label}
+      <div
+        style={{
+          flex: 1,
+          color: "#999",
+          textAlign: "right",
+          marginLeft: "50px",
+        }}
+      >
+        {shortcutStr}
+      </div>
+    </div>
+  );
+}
 
 export function CodeBarDropdownMenu({
   actions,
@@ -25,6 +75,7 @@ export function CodeBarDropdownMenu({
   id,
   cell,
   onOpenChange,
+  hideSplitCell,
 }: {
   actions;
   frameActions;
@@ -33,6 +84,11 @@ export function CodeBarDropdownMenu({
   // called with the dropdown's open state, e.g. so the parent button bar can
   // stay mounted while the menu is open even when the cell is not hovered.
   onOpenChange?: (open: boolean) => void;
+  // hide the "Split Cell at Cursor" entry.  Used by the minimal notebook,
+  // where this menu is only reachable while the cell's code editor is
+  // closed — there is no cursor to split at (the open editor has its own
+  // split button instead).
+  hideSplitCell?: boolean;
 }) {
   const intl = useIntl();
   const [open, setOpen] = useState<boolean>(false);
@@ -354,16 +410,21 @@ export function CodeBarDropdownMenu({
         icon: <Icon name="arrow-down" />,
         onClick: () => move_cell(1),
       },
-    ].map(({ key, label, icon, onClick, children }) => {
-      return {
-        key,
-        label,
-        onClick,
-        icon: <span style={{ width: "24px" }}>{icon}</span>,
-        children,
-      };
-    });
-  }, [actions, cell, frameActions, id, intl, open]);
+    ]
+      .filter(({ key }) => !(hideSplitCell && key === "split-cell"))
+      .map(({ key, label, icon, onClick, children }) => {
+        return {
+          key,
+          label: withShortcut(label, key as string, allCommands),
+          onClick,
+          icon: <span style={{ width: "24px" }}>{icon}</span>,
+          children: children?.map((child: any) => ({
+            ...child,
+            label: withShortcut(child.label, child.key as string, allCommands),
+          })),
+        };
+      });
+  }, [actions, cell, frameActions, id, intl, open, hideSplitCell]);
 
   if (actions == null) return null;
 
@@ -375,7 +436,7 @@ export function CodeBarDropdownMenu({
       arrow
       trigger={["click"]}
       mouseLeaveDelay={1.5}
-      overlayClassName={"cc-jupyter-buttonbar-dropdown"}
+      classNames={{ root: "cc-jupyter-buttonbar-dropdown" }}
     >
       <Button type="text" size="small" style={CODE_BAR_BTN_STYLE}>
         <Icon name="ellipsis" rotate="90" style={{ fontSize: "20px" }} />

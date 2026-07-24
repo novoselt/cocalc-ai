@@ -63,14 +63,12 @@ export default function BalanceModal({
         onClose();
       }}
     >
-      <div style={{ textAlign: "center" }}>
-        <Balance
-          refresh={() => {
-            handleRefresh();
-            setTimeout(handleRefresh, 15000);
-          }}
-        />
-      </div>
+      <Balance
+        refresh={() => {
+          handleRefresh();
+          setTimeout(handleRefresh, 15000);
+        }}
+      />
       <div style={{ marginBottom: "10px" }}>
         <div
           style={{

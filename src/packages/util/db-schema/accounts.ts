@@ -52,6 +52,8 @@ export interface AutoBalance {
   status?: { day: number; week: number; month: number };
 }
 
+export type AutoBalanceConfig = Omit<AutoBalance, "reason" | "time" | "status">;
+
 // each of the parameters above must be a number in the
 // given interval below.
 // All fields should always be explicitly specified.
@@ -65,7 +67,7 @@ export const AUTOBALANCE_RANGES = {
 
 export const AUTOBALANCE_DEFAULTS = {
   trigger: 10,
-  amount: 20,
+  amount: 50,
   max_day: 200,
   max_week: 1000,
   max_month: 2500,
@@ -624,7 +626,6 @@ Table({
           tours: true,
           email_daily_statements: true,
           // obviously min_balance can't be set!
-          auto_balance: true,
         },
         async check_hook(_db, obj, _account_id, _project_id, cb) {
           if (obj["display_name"] != null) {
@@ -655,15 +656,6 @@ Table({
             }
           }
 
-          // Make sure auto_balance is valid.
-          if (obj["auto_balance"] != null) {
-            try {
-              ensureAutoBalanceValid(obj["auto_balance"]);
-            } catch (err) {
-              cb(`${err}`);
-              return;
-            }
-          }
           cb();
         },
         on_change(database, old_val, new_val, account_id, cb) {

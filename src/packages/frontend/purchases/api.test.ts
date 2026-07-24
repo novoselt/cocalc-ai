@@ -5,6 +5,7 @@
 
 const adminProvisionSiteLicense = jest.fn();
 const updateSiteLicense = jest.fn();
+const setAutoBalance = jest.fn();
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
@@ -15,6 +16,7 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
           adminProvisionSiteLicense: (...args: any[]) =>
             adminProvisionSiteLicense(...args),
           updateSiteLicense: (...args: any[]) => updateSiteLicense(...args),
+          setAutoBalance: (...args: any[]) => setAutoBalance(...args),
         },
       },
     },
@@ -66,6 +68,27 @@ describe("purchases api", () => {
       browser_id: "browser-1",
       site_license_id: "s1",
       name: "Updated Campus",
+    });
+  });
+
+  it("passes browser_id when configuring automatic deposits", async () => {
+    const config = {
+      trigger: 10,
+      amount: 20,
+      max_day: 200,
+      max_week: 1000,
+      max_month: 2500,
+      period: "week" as const,
+      enabled: true,
+    };
+    setAutoBalance.mockResolvedValue(config);
+    const { setAutoBalance: set } = await import("./api");
+
+    await set(config);
+
+    expect(setAutoBalance).toHaveBeenCalledWith({
+      auto_balance: config,
+      browser_id: "browser-1",
     });
   });
 });

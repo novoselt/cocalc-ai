@@ -1256,6 +1256,29 @@ export function commands(actions: AllActions): {
       r: true,
     },
 
+    "toggle minimal view": {
+      i: "swap",
+      m: defineMessage({
+        id: "jupyter.commands.toggle_minimal_view.label",
+        defaultMessage: "Toggle Minimal Notebook View",
+        description:
+          "Switch a Jupyter notebook frame between the regular and the minimal view",
+      }),
+      r: true,
+      f: () => {
+        const frameId = actions.frame_actions?.frame_id;
+        const editorActions = actions.editor_actions;
+        if (frameId == null || editorActions == null) return;
+        const type = editorActions._get_frame_type(frameId);
+        editorActions.set_frame_type(
+          frameId,
+          type === "jupyter_minimal"
+            ? "jupyter_cell_notebook"
+            : "jupyter_minimal",
+        );
+      },
+    },
+
     "toggle cell line numbers": {
       i: "list-ol",
       m: jupyter.commands.toggle_cell_line_numbers,

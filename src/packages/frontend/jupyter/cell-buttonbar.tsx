@@ -7,7 +7,7 @@
 React component that describes the input of a cell
 */
 
-import { Button, Dropdown } from "antd";
+import { Button, Dropdown, Space } from "antd";
 import { delay } from "awaiting";
 import { Map } from "immutable";
 import React, { useState } from "react";
@@ -143,49 +143,56 @@ export const CellButtonBar: React.FC<Props> = React.memo(
             display: "flex",
           }}
         >
-          <Dropdown.Button
-            size="small"
-            type="text"
-            trigger={["click"]}
-            mouseLeaveDelay={1.5}
-            onOpenChange={setRunMenuOpen}
-            icon={
-              <Icon
-                name="angle-down"
-                style={{
-                  lineHeight: 1,
-                  transform: "translateY(-1px)",
-                }}
+          <Space.Compact size="small">
+            <Button size="small" type="text" onClick={onClick}>
+              <Tooltip placement="top" title={tooltip}>
+                <span style={{ ...CODE_BAR_BTN_STYLE, height: "auto" }}>
+                  {isIconName(icon) && <Icon name={icon} />} {label}
+                </span>
+              </Tooltip>
+            </Button>
+            <Dropdown
+              trigger={["click"]}
+              mouseLeaveDelay={1.5}
+              onOpenChange={setRunMenuOpen}
+              menu={{
+                items: [
+                  {
+                    key: "all-above",
+                    icon: <Icon name={RUN_ALL_CELLS_ABOVE_ICON} />,
+                    label: intl.formatMessage(
+                      jupyter.commands.run_all_cells_above_menu,
+                    ),
+                    onClick: () => actions?.run_all_above_cell(id),
+                  },
+                  {
+                    key: "all-below",
+                    icon: (
+                      <Icon name={RUN_ALL_CELLS_BELOW_ICON} rotate={"90"} />
+                    ),
+                    label: intl.formatMessage(
+                      jupyter.commands.run_all_cells_below_menu,
+                    ),
+                    onClick: () => actions?.run_all_below_cell(id),
+                  },
+                ],
+              }}
+            >
+              <Button
+                size="small"
+                type="text"
+                icon={
+                  <Icon
+                    name="angle-down"
+                    style={{
+                      lineHeight: 1,
+                      transform: "translateY(-1px)",
+                    }}
+                  />
+                }
               />
-            }
-            onClick={onClick}
-            menu={{
-              items: [
-                {
-                  key: "all-above",
-                  icon: <Icon name={RUN_ALL_CELLS_ABOVE_ICON} />,
-                  label: intl.formatMessage(
-                    jupyter.commands.run_all_cells_above_menu,
-                  ),
-                  onClick: () => actions?.run_all_above_cell(id),
-                },
-                {
-                  key: "all-below",
-                  icon: <Icon name={RUN_ALL_CELLS_BELOW_ICON} rotate={"90"} />,
-                  label: intl.formatMessage(
-                    jupyter.commands.run_all_cells_below_menu,
-                  ),
-                  onClick: () => actions?.run_all_below_cell(id),
-                },
-              ],
-            }}
-          >
-            <Tooltip placement="top" title={tooltip}>
-              <span style={{ ...CODE_BAR_BTN_STYLE, height: "auto" }}>
-                {isIconName(icon) && <Icon name={icon} />} {label}
-              </span>
-            </Tooltip>
-          </Dropdown.Button>
+            </Dropdown>
+          </Space.Compact>
         </div>
       );
     }

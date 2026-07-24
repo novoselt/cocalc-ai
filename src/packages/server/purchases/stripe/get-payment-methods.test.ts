@@ -15,7 +15,7 @@ jest.mock("./util", () => ({
   getStripeCustomerId: (...args: any[]) => mockGetStripeCustomerId(...args),
 }));
 
-import { hasPaymentMethod } from "./get-payment-methods";
+import { hasCardPaymentMethod, hasPaymentMethod } from "./get-payment-methods";
 
 describe("hasPaymentMethod", () => {
   const stripe = {
@@ -81,5 +81,44 @@ describe("hasPaymentMethod", () => {
     });
 
     await expect(hasPaymentMethod("account-1")).resolves.toBe(false);
+  });
+});
+
+describe("hasCardPaymentMethod", () => {
+  const stripe = {
+    customers: {
+      listPaymentMethods: jest.fn(),
+    },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetConn.mockResolvedValue(stripe);
+    mockGetStripeCustomerId.mockResolvedValue("cus_123");
+    stripe.customers.listPaymentMethods.mockResolvedValue({ data: [] });
+  });
+
+  it("returns false without a Stripe customer", async () => {
+    mockGetStripeCustomerId.mockResolvedValue(undefined);
+
+    await expect(hasCardPaymentMethod("account-1")).resolves.toBe(false);
+
+    expect(mockGetConn).not.toHaveBeenCalled();
+  });
+
+  it("checks specifically for a modern saved card", async () => {
+    stripe.customers.listPaymentMethods.mockResolvedValue({
+      data: [{ id: "pm_card" }],
+    });
+
+    await expect(hasCardPaymentMethod("account-1")).resolves.toBe(true);
+
+    expect(stripe.customers.listPaymentMethods).toHaveBeenCalledWith(
+      "cus_123",
+      {
+        type: "card",
+        limit: 1,
+      },
+    );
   });
 });
