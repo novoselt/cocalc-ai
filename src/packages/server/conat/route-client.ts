@@ -12,6 +12,7 @@ import {
   type Client,
 } from "@cocalc/conat/core/client";
 import { issueProjectHostAuthToken } from "@cocalc/conat/auth/project-host-token";
+import LRU from "lru-cache";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import {
@@ -29,20 +30,103 @@ import { resolveHostBayAcrossCluster } from "@cocalc/server/inter-bay/directory"
 let listenerStarted = false;
 const HUB_ROUTE_TOKEN_LEEWAY_MS = 60_000;
 const ROUTED_RECONNECT_DELAYS_MS = [1_000, 3_500, 10_000];
+const DEFAULT_ROUTED_ACCOUNT_CLIENT_MAX = 256;
+const DEFAULT_ROUTED_ACCOUNT_CLIENT_TTL_MS = 10 * 60_000;
+const ROUTED_ACCOUNT_CLIENT_USE_GRACE_MS = 60_000;
 const log = getLogger("server:conat:route-client");
+
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const value = Number.parseInt(`${process.env[name] ?? ""}`, 10);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+const ROUTED_ACCOUNT_CLIENT_MAX = positiveIntegerEnv(
+  "COCALC_HUB_ROUTED_ACCOUNT_CLIENT_MAX",
+  DEFAULT_ROUTED_ACCOUNT_CLIENT_MAX,
+);
+const ROUTED_ACCOUNT_CLIENT_TTL_MS = positiveIntegerEnv(
+  "COCALC_HUB_ROUTED_ACCOUNT_CLIENT_TTL_MS",
+  DEFAULT_ROUTED_ACCOUNT_CLIENT_TTL_MS,
+);
 
 type RoutedHubClientState = {
   key: string;
   address: string;
   client: Client;
+  activeLeases: number;
+  cached: boolean;
+  closed: boolean;
+  protectedUntil: number;
   host_session_id?: string;
   account_id?: string;
   token?: string;
   expiresAt?: number;
   inFlight?: Promise<string>;
+  closeAfterInFlight?: Promise<void>;
+  closeAfterUseTimer?: ReturnType<typeof setTimeout>;
 };
 
 const routedHubClients: Record<string, RoutedHubClientState> = {};
+const routedAccountClientStates = new Set<RoutedHubClientState>();
+let routedAccountClientEvictions = 0;
+let routedAccountClientCreates = 0;
+let routedAccountClientReuses = 0;
+let routedHubClientCreates = 0;
+let routedHubClientReuses = 0;
+
+function closeRoutedClientWhenUnused(state: RoutedHubClientState): void {
+  if (state.closed || state.cached || state.activeLeases > 0) {
+    return;
+  }
+  if (state.inFlight) {
+    if (!state.closeAfterInFlight) {
+      const pending = state.inFlight;
+      state.closeAfterInFlight = pending
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .then(() => {
+          delete state.closeAfterInFlight;
+          closeRoutedClientWhenUnused(state);
+        });
+    }
+    return;
+  }
+  const remainingProtectionMs = state.protectedUntil - Date.now();
+  if (remainingProtectionMs > 0) {
+    if (!state.closeAfterUseTimer) {
+      state.closeAfterUseTimer = setTimeout(() => {
+        delete state.closeAfterUseTimer;
+        closeRoutedClientWhenUnused(state);
+      }, remainingProtectionMs);
+      state.closeAfterUseTimer.unref?.();
+    }
+    return;
+  }
+  state.closed = true;
+  routedAccountClientStates.delete(state);
+  try {
+    state.client.close();
+  } catch {
+    // ignore close errors
+  }
+}
+
+const routedAccountClients = new LRU<string, RoutedHubClientState>({
+  max: ROUTED_ACCOUNT_CLIENT_MAX,
+  ttl: ROUTED_ACCOUNT_CLIENT_TTL_MS,
+  ttlAutopurge: true,
+  updateAgeOnGet: true,
+  dispose: (state, _key, reason) => {
+    state.cached = false;
+    if (reason === "evict") {
+      routedAccountClientEvictions += 1;
+    }
+    closeRoutedClientWhenUnused(state);
+  },
+});
+
 const HOST_CONTROL_DIRECT_INTEREST_TIMEOUT_MS = 1_500;
 
 function hostControlSubject(host_id: string): string {
@@ -59,11 +143,52 @@ type RoutedTarget =
       client: Client;
     };
 
+function lookupRoutedClient(
+  key: string,
+  accountScoped: boolean,
+  touch = true,
+): RoutedHubClientState | undefined {
+  if (!accountScoped) {
+    return routedHubClients[key];
+  }
+  return touch ? routedAccountClients.get(key) : routedAccountClients.peek(key);
+}
+
+function removeClosedRoutedClient(state: RoutedHubClientState): void {
+  if (state.closed) {
+    return;
+  }
+  state.closed = true;
+  if (state.closeAfterUseTimer) {
+    clearTimeout(state.closeAfterUseTimer);
+    delete state.closeAfterUseTimer;
+  }
+  routedAccountClientStates.delete(state);
+  if (state.account_id) {
+    if (routedAccountClients.peek(state.key) === state) {
+      routedAccountClients.delete(state.key);
+    }
+    return;
+  }
+  if (routedHubClients[state.key] === state) {
+    delete routedHubClients[state.key];
+  }
+}
+
 function evictRoutedClient(key: string, expected?: RoutedHubClientState): void {
-  const current = routedHubClients[key];
+  const current =
+    expected?.account_id != null
+      ? routedAccountClients.peek(key)
+      : (routedHubClients[key] ?? routedAccountClients.peek(key));
   if (!current) return;
   if (expected != null && current !== expected) return;
+  if (current.account_id) {
+    routedAccountClients.delete(key);
+    return;
+  }
   delete routedHubClients[key];
+  current.cached = false;
+  current.closed = true;
   try {
     current.client.close();
   } catch {
@@ -185,18 +310,28 @@ function getOrCreateRoutedHubClient({
   address,
   host_session_id,
   account_id,
+  onUse,
 }: {
   host_id: string;
   address: string;
   host_session_id?: string;
   account_id?: string;
+  onUse?: (state: RoutedHubClientState) => void;
 }): Client {
   const key = routedClientKey({ host_id, account_id });
-  const existing = routedHubClients[key];
+  const accountScoped = account_id != null;
+  const existing = lookupRoutedClient(key, accountScoped);
   if (
     existing?.address === address &&
     existing?.host_session_id === host_session_id
   ) {
+    if (accountScoped) {
+      routedAccountClientReuses += 1;
+    } else {
+      routedHubClientReuses += 1;
+    }
+    existing.protectedUntil = Date.now() + ROUTED_ACCOUNT_CLIENT_USE_GRACE_MS;
+    onUse?.(existing);
     return existing.client;
   }
   if (existing) {
@@ -207,6 +342,10 @@ function getOrCreateRoutedHubClient({
     address,
     host_session_id,
     account_id,
+    activeLeases: 0,
+    cached: true,
+    closed: false,
+    protectedUntil: Date.now() + ROUTED_ACCOUNT_CLIENT_USE_GRACE_MS,
     client: undefined as unknown as Client,
   };
   state.client = connect({
@@ -237,7 +376,7 @@ function getOrCreateRoutedHubClient({
     for (const delayMs of ROUTED_RECONNECT_DELAYS_MS) {
       setTimeout(() => {
         void (async () => {
-          if (routedHubClients[key] !== state) {
+          if (lookupRoutedClient(key, accountScoped, false) !== state) {
             return;
           }
           if (state.client.conn?.connected) {
@@ -288,9 +427,18 @@ function getOrCreateRoutedHubClient({
     reconnectRouted();
   });
   state.client.on("closed", () => {
-    evictRoutedClient(key, state);
+    removeClosedRoutedClient(state);
   });
-  routedHubClients[key] = state;
+  if (accountScoped) {
+    routedAccountClientCreates += 1;
+    routedAccountClientStates.add(state);
+    routedAccountClients.set(key, state);
+  } else {
+    routedHubClientCreates += 1;
+    routedHubClients[key] = state;
+  }
+  state.protectedUntil = Date.now() + ROUTED_ACCOUNT_CLIENT_USE_GRACE_MS;
+  onUse?.(state);
   return state.client;
 }
 
@@ -323,6 +471,7 @@ function routeTargetToClient(
     host_session_id?: string;
   },
   account_id?: string,
+  onUse?: (state: RoutedHubClientState) => void,
 ): RoutedTarget | undefined {
   if (!target?.address || !target.host_id) {
     return target;
@@ -333,6 +482,7 @@ function routeTargetToClient(
       address: target.address,
       host_session_id: target.host_session_id,
       account_id,
+      onUse,
     }),
   };
 }
@@ -434,6 +584,16 @@ function conatWithProjectRoutingInternal(
     });
   }
   const { routeSubject, ...rest } = options ?? {};
+  const leasedRoutedClients = account_id
+    ? new Set<RoutedHubClientState>()
+    : undefined;
+  const leaseRoutedClient = (state: RoutedHubClientState) => {
+    if (!leasedRoutedClients || leasedRoutedClients.has(state)) {
+      return;
+    }
+    state.activeLeases += 1;
+    leasedRoutedClients.add(state);
+  };
   const client = connect({
     address: conatServer,
     inboxPrefix: inboxPrefix({ hub_id: "hub" }),
@@ -441,21 +601,93 @@ function conatWithProjectRoutingInternal(
       Cookie: `${HUB_PASSWORD_COOKIE_NAME}=${conatPassword}`,
     },
     ...rest,
+    ...(account_id ? { noCache: true } : undefined),
   });
   const combinedRoute =
     routeSubject == null
       ? (subject: string) => {
           const routed = routeProjectSubject(subject);
-          return routeTargetToClient(subject, routed, account_id);
+          return routeTargetToClient(
+            subject,
+            routed,
+            account_id,
+            leaseRoutedClient,
+          );
         }
       : (subject: string) => {
           const custom = routeSubject(subject);
           if (custom) return custom;
           const routed = routeProjectSubject(subject);
-          return routeTargetToClient(subject, routed, account_id);
+          return routeTargetToClient(
+            subject,
+            routed,
+            account_id,
+            leaseRoutedClient,
+          );
         };
   client.setRouteSubject(combinedRoute);
+  if (leasedRoutedClients) {
+    const close = client.close;
+    let released = false;
+    client.close = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      try {
+        close();
+      } finally {
+        for (const state of leasedRoutedClients) {
+          state.activeLeases = Math.max(0, state.activeLeases - 1);
+          if (state.activeLeases === 0) {
+            state.protectedUntil = 0;
+          }
+          closeRoutedClientWhenUnused(state);
+        }
+        leasedRoutedClients.clear();
+      }
+    };
+  }
   return client;
+}
+
+export function getRoutedClientCacheStats(): {
+  hub_clients: number;
+  account_clients: number;
+  active_account_clients: number;
+  deferred_account_clients: number;
+  account_client_max: number;
+  account_client_ttl_ms: number;
+  account_client_creates: number;
+  account_client_reuses: number;
+  account_client_evictions: number;
+  hub_client_creates: number;
+  hub_client_reuses: number;
+} {
+  routedAccountClients.purgeStale();
+  let active_account_clients = 0;
+  let deferred_account_clients = 0;
+  for (const state of routedAccountClientStates) {
+    if (state.activeLeases > 0) {
+      active_account_clients += 1;
+    }
+    if (!state.cached) {
+      deferred_account_clients += 1;
+    }
+  }
+  return {
+    hub_clients: Object.keys(routedHubClients).length,
+    account_clients: routedAccountClients.size,
+    active_account_clients,
+    deferred_account_clients,
+    account_client_max: ROUTED_ACCOUNT_CLIENT_MAX,
+    account_client_ttl_ms: ROUTED_ACCOUNT_CLIENT_TTL_MS,
+    account_client_creates: routedAccountClientCreates,
+    account_client_reuses: routedAccountClientReuses,
+    account_client_evictions: routedAccountClientEvictions,
+    hub_client_creates: routedHubClientCreates,
+    hub_client_reuses: routedHubClientReuses,
+  };
 }
 
 export function conatWithProjectRouting(options?: ClientOptions): Client {
