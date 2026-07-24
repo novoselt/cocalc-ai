@@ -44,6 +44,10 @@ export function ThreadResolveButton({
   if (anchor == null || editorActions?.resolveChatMarker == null) {
     return null;
   }
+  const anchorState = editorActions.getAnchorState?.(anchor.id, anchor.path);
+  if (anchorState != null && anchorState !== "available") {
+    return null;
+  }
   return (
     <Popconfirm
       title="Resolve this discussion?"

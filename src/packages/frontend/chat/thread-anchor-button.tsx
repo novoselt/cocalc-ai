@@ -38,7 +38,12 @@ export function ThreadAnchorButton({
   if (anchor == null || editorActions?.jumpToAnchor == null) {
     return labelOverride ?? null;
   }
-  if (editorActions.canJumpToAnchor?.(anchor.id) === false) {
+  const anchorState = editorActions.getAnchorState?.(anchor.id, anchor.path);
+  if (
+    anchorState === "missing" ||
+    (anchorState == null &&
+      editorActions.canJumpToAnchor?.(anchor.id, anchor.path) === false)
+  ) {
     const message =
       editorActions.getMissingAnchorMessage?.(anchor.id) ??
       "This anchor no longer exists";
@@ -65,15 +70,26 @@ export function ThreadAnchorButton({
   // stored thread title visible, but do not offer a jump into the void.
   let anchorLabel: string | undefined;
   if (editorActions.getAnchorJumpLabel != null) {
-    anchorLabel = editorActions.getAnchorJumpLabel(anchor.id);
-    if (anchorLabel == null) return labelOverride ?? null;
+    anchorLabel = editorActions.getAnchorJumpLabel(anchor.id, anchor.path);
+    if (anchorLabel == null && anchorState !== "unloaded") {
+      return labelOverride ?? null;
+    }
   } else if (editorActions.getAnchorLabel != null) {
-    anchorLabel = editorActions.getAnchorLabel(anchor.id);
-    if (anchorLabel == null) return labelOverride ?? null;
+    anchorLabel = editorActions.getAnchorLabel(anchor.id, anchor.path);
+    if (anchorLabel == null && anchorState !== "unloaded") {
+      return labelOverride ?? null;
+    }
   }
   const label = labelOverride ?? anchorLabel ?? anchor.id;
   return (
-    <Tooltip title={`Jump to ${label} in the document`} placement="top">
+    <Tooltip
+      title={
+        anchorState === "unloaded"
+          ? `Open the anchor's subfile and locate ${label}`
+          : `Jump to ${label} in the document`
+      }
+      placement="top"
+    >
       <Button
         size="small"
         type="text"
@@ -88,7 +104,11 @@ export function ThreadAnchorButton({
         }}
         icon={<Icon name="external-link" />}
         onClick={() => {
-          editorActions.jumpToAnchor?.(anchor.id);
+          if (anchor.path == null) {
+            editorActions.jumpToAnchor?.(anchor.id);
+          } else {
+            editorActions.jumpToAnchor?.(anchor.id, anchor.path);
+          }
         }}
       >
         {label}

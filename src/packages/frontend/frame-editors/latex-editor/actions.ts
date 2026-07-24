@@ -3090,9 +3090,15 @@ export class Actions extends BaseActions<LatexEditorState> {
     return locations;
   }
 
-  public getAnchorJumpLabel = (hash: string): string | undefined => {
+  public getAnchorJumpLabel = (
+    hash: string,
+    recordedPath?: string,
+  ): string | undefined => {
     const locations = this.getAnchorLocations(hash);
-    if (locations.length === 0) return undefined;
+    if (locations.length === 0) {
+      const path = this._getUnloadedAnchorPath(hash, recordedPath);
+      return path == null ? undefined : path_split(path).tail;
+    }
     if (locations.length > 1) {
       return `${locations.length} locations`;
     }
@@ -3106,17 +3112,80 @@ export class Actions extends BaseActions<LatexEditorState> {
     return `${hash} (${jumpLabel})`;
   };
 
-  public canJumpToAnchor = (hash: string): boolean => {
-    return this.getAnchorLocations(hash).length > 0;
+  public canJumpToAnchor = (hash: string, recordedPath?: string): boolean => {
+    return this.getAnchorState(hash, recordedPath) !== "missing";
   };
 
   public getMissingAnchorMessage = (_hash: string): string => {
     return "This chat marker was removed";
   };
 
-  public jumpToAnchor = async (hash: string): Promise<void> => {
+  public getAnchorState = (
+    hash: string,
+    recordedPath?: string,
+  ): "available" | "missing" | "unloaded" => {
+    if (this.getAnchorLocations(hash).length > 0) {
+      return "available";
+    }
+    return this._getUnloadedAnchorPath(hash, recordedPath) == null
+      ? "missing"
+      : "unloaded";
+  };
+
+  private _getUnloadedAnchorPath(
+    hash: string,
+    recordedPath?: string,
+  ): string | undefined {
+    if (
+      recordedPath != null &&
+      recordedPath !== this.path &&
+      !this.store.get("chat_markers")?.has(recordedPath)
+    ) {
+      return recordedPath;
+    }
+    let chatActions;
+    try {
+      chatActions = ensureSideChatActions(this.project_id, this.path);
+    } catch {
+      return;
+    }
+    for (const row of chatActions.listThreadConfigRows()) {
+      if (parseThreadResolved(row?.resolved) != null) continue;
+      const anchor = parseThreadAnchor(row?.anchor);
+      if (
+        anchor?.id === hash &&
+        anchor.path != null &&
+        anchor.path !== this.path &&
+        !this.store.get("chat_markers")?.has(anchor.path)
+      ) {
+        return anchor.path;
+      }
+    }
+  }
+
+  public jumpToAnchor = async (
+    hash: string,
+    recordedPath?: string,
+  ): Promise<void> => {
     const locations = this.getAnchorLocations(hash);
-    if (locations.length === 0) return;
+    if (locations.length === 0) {
+      const path = this._getUnloadedAnchorPath(hash, recordedPath);
+      if (path == null) return;
+      const frameId = await this.switch_to_file(path);
+      for (let retries = 0; retries < 40; retries += 1) {
+        this._refreshChatMarkerScanners();
+        this._chatMarkerScanners[path]?.rescan();
+        const loaded = this.getAnchorLocations(hash).find(
+          (location) => location.path === path,
+        );
+        if (loaded != null) {
+          this.programmatically_goto_line(loaded.line + 1, true, true, frameId);
+          return;
+        }
+        await delay(100);
+      }
+      return;
+    }
     const { path, line } = locations[0];
     if (path === this.path) {
       const id = this.show_focused_frame_of_type("cm");

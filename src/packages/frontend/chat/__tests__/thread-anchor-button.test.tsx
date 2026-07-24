@@ -14,6 +14,7 @@ jest.mock("@cocalc/frontend/components", () => ({
 }));
 
 import { ThreadAnchorButton } from "../thread-anchor-button";
+import { ThreadResolveButton } from "../thread-resolve-button";
 
 describe("ThreadAnchorButton", () => {
   it("makes the compact thread label jump to its anchor", () => {
@@ -67,6 +68,51 @@ describe("ThreadAnchorButton", () => {
     expect(
       screen.getByLabelText("This cell was deleted").parentElement,
     ).toHaveAttribute("data-tip", "This cell was deleted");
+  });
+
+  it("keeps an unloaded subfile anchor clickable without a trash icon", () => {
+    const jumpToAnchor = jest.fn();
+    const actions = {
+      getThreadMetadata: () => ({
+        anchor: { id: "subfile-anchor", path: "123.tex" },
+      }),
+      frameTreeActions: {
+        jumpToAnchor,
+        getAnchorState: () => "unloaded",
+        getAnchorJumpLabel: () => "123.tex",
+      },
+    } as any;
+
+    render(
+      <ThreadAnchorButton
+        actions={actions}
+        threadKey="thread-1"
+        label="SUBFILE-123 (123.TEX:5)"
+      />,
+    );
+
+    expect(screen.queryByText("trash")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: /SUBFILE-123 \(123.TEX:5\)/ }),
+    );
+    expect(jumpToAnchor).toHaveBeenCalledWith("subfile-anchor", "123.tex");
+  });
+
+  it("hides resolve while a subfile anchor is unloaded", () => {
+    const actions = {
+      getThreadMetadata: () => ({
+        anchor: { id: "subfile-anchor", path: "123.tex" },
+      }),
+      frameTreeActions: {
+        resolveChatMarker: jest.fn(),
+        getAnchorState: () => "unloaded",
+      },
+    } as any;
+
+    const { container } = render(
+      <ThreadResolveButton actions={actions} threadKey="thread-1" />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("keeps showing the thread label when there is no anchor", () => {

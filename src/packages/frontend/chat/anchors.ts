@@ -30,16 +30,28 @@ import { isChatPath } from "./paths";
 // methods; shared chat UI duck-types on them and hides affordances
 // when a method is missing.
 export interface AnchorEditorActions {
+  // Tri-state availability distinguishes a genuinely deleted anchor from an
+  // anchor in a subfile this client has not loaded yet.
+  getAnchorState?: (
+    anchorId: string,
+    anchorPath?: string,
+  ) => "available" | "missing" | "unloaded";
   // scroll/focus the document location of the anchor
-  jumpToAnchor?: (anchorId: string) => void;
+  jumpToAnchor?: (anchorId: string, anchorPath?: string) => void;
   // whether the target currently exists; false suppresses dead jump links
-  canJumpToAnchor?: (anchorId: string) => boolean;
+  canJumpToAnchor?: (anchorId: string, anchorPath?: string) => boolean;
   // tooltip shown beside an unavailable anchor's stored title
   getMissingAnchorMessage?: (anchorId: string) => string;
   // human label for the anchor, e.g. "Cell 3" or "section.tex:12"
-  getAnchorLabel?: (anchorId: string) => string | undefined;
+  getAnchorLabel?: (
+    anchorId: string,
+    anchorPath?: string,
+  ) => string | undefined;
   // shorter label used for the jump button; falls back to getAnchorLabel
-  getAnchorJumpLabel?: (anchorId: string) => string | undefined;
+  getAnchorJumpLabel?: (
+    anchorId: string,
+    anchorPath?: string,
+  ) => string | undefined;
   // open the side chat showing the newest thread for this anchor
   // (creating an empty anchored thread when none exists)
   openAnchorChat?: (anchorId: string, path?: string) => void;
