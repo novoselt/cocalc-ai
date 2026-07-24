@@ -36,6 +36,7 @@ import { getOrCreateSelfSigned } from "./tls";
 import { attachProxyServer } from "@cocalc/project/servers/proxy/proxy";
 import { assertLocalBindOrInsecure } from "@cocalc/backend/network/policy";
 import { maybeHandleLiteStaticAppRequest } from "./static-apps";
+import { isApiV2Enabled } from "./api-v2";
 
 const logger = getLogger("lite:static");
 
@@ -207,14 +208,6 @@ export async function initApp({ app, conatClient, AUTH_TOKEN, isHttps }) {
     params.set("target", target);
     res.redirect(`${redirectBase}?${params.toString()}`);
   });
-}
-
-export function isApiV2Enabled(): boolean {
-  const value = `${process.env.COCALC_LITE_API_V2 ?? ""}`.trim().toLowerCase();
-  if (value === "0" || value === "false" || value === "no") {
-    return false;
-  }
-  return `${process.env.COCALC_PRODUCT ?? ""}`.trim().toLowerCase() !== "plus";
 }
 
 function resolvePublicAssetsPath(): string | undefined {
