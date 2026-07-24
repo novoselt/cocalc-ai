@@ -9,6 +9,16 @@ describe("isCollaboratorRealtimeAccessError", () => {
     ).toBe(true);
   });
 
+  it("matches backend collaborator-removal failures", () => {
+    expect(
+      isCollaboratorRealtimeAccessError(
+        new Error(
+          "account 'account-id' is not a collaborator on project 'project-id'",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("matches project status subscribe permission failures", () => {
     expect(
       isCollaboratorRealtimeAccessError(

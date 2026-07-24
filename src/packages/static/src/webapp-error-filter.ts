@@ -25,6 +25,22 @@ function rejectionMessage(reason: unknown): string {
   return "";
 }
 
+function rejectionStack(reason: unknown): string {
+  if (reason == null || typeof reason !== "object") {
+    return "";
+  }
+  const stack = (reason as { stack?: unknown }).stack;
+  return typeof stack === "string" ? stack : "";
+}
+
+function rejectionCode(reason: unknown): string {
+  if (reason == null || typeof reason !== "object") {
+    return "";
+  }
+  const code = (reason as { code?: unknown }).code;
+  return typeof code === "string" || typeof code === "number" ? `${code}` : "";
+}
+
 export function isIgnorableUnhandledRejection(reason: unknown): boolean {
   if (extractRuntimeSponsorDenial(reason) != null) {
     return true;
@@ -46,12 +62,30 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
     (message.includes('waiting for "info"') ||
       message.includes("waiting for 'info'") ||
       message.includes("waiting for info"));
-  const socketIoTransportClosed = message === "socket has been disconnected";
+  const socketIoTransportClosed =
+    message === "socket has been disconnected" ||
+    message === "error: socket has been disconnected";
+  const conatSocketRequestTimedOut =
+    message === "request timed out" || message === "error: request timed out";
+  const conatRequestTimedOut =
+    message === "timeout" && rejectionCode(reason) === "408";
+  const filesystemServerStarting = message === "file server not initialized";
+  const staleCollaboratorAccess =
+    message.includes("account '") &&
+    message.includes("' is not a collaborator on project '");
+  const injectedMetaMaskFailure =
+    message === "failed to connect to metamask" &&
+    /(?:chrome|moz)-extension:\/\//i.test(rejectionStack(reason));
   return (
     rootfsUnavailable ||
     routingUnavailable ||
     conatInfoBootstrapTimeout ||
-    socketIoTransportClosed
+    socketIoTransportClosed ||
+    conatSocketRequestTimedOut ||
+    conatRequestTimedOut ||
+    filesystemServerStarting ||
+    staleCollaboratorAccess ||
+    injectedMetaMaskFailure
   );
 }
 

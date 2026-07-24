@@ -4,6 +4,15 @@
  */
 
 import { type FilesystemClient } from "@cocalc/conat/files/fs";
+import { sleep } from "@cocalc/util/async-utils";
+
+const FILE_SERVER_STARTING_RETRY_DELAYS_MS = [
+  100, 250, 500, 1_000, 2_000,
+] as const;
+
+export function isFilesystemServerStartingError(err: unknown): boolean {
+  return `${err}`.toLowerCase().includes("file server not initialized");
+}
 
 export function isRecoverableFilesystemClientError(err: unknown): boolean {
   const message = `${err}`.toLowerCase();
@@ -18,7 +27,7 @@ export function isRecoverableFilesystemClientError(err: unknown): boolean {
     message.includes("socket has been disconnected") ||
     message.includes("not connected") ||
     message.includes("failed to fetch") ||
-    message.includes("file server not initialized") ||
+    isFilesystemServerStartingError(err) ||
     message.includes("unable to route") ||
     message.includes("project-host") ||
     message.includes("project host")
@@ -30,14 +39,18 @@ export async function callFilesystemClientWithRecovery({
   clearClient,
   prop,
   args,
+  wait = sleep,
 }: {
   getClient: (forceRefresh?: boolean) => Promise<FilesystemClient>;
   clearClient: () => void;
   prop: PropertyKey;
   args: any[];
+  wait?: (ms: number) => Promise<void>;
 }) {
   let forceRefresh = false;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let genericRecoveryUsed = false;
+  let startupRetry = 0;
+  while (true) {
     try {
       const fs = await getClient(forceRefresh);
       const value = (fs as any)[prop];
@@ -46,7 +59,18 @@ export async function callFilesystemClientWithRecovery({
       }
       return await value.apply(fs, args);
     } catch (err) {
-      if (attempt === 0 && isRecoverableFilesystemClientError(err)) {
+      if (
+        isFilesystemServerStartingError(err) &&
+        startupRetry < FILE_SERVER_STARTING_RETRY_DELAYS_MS.length
+      ) {
+        const delay = FILE_SERVER_STARTING_RETRY_DELAYS_MS[startupRetry++];
+        forceRefresh = true;
+        clearClient();
+        await wait(delay);
+        continue;
+      }
+      if (!genericRecoveryUsed && isRecoverableFilesystemClientError(err)) {
+        genericRecoveryUsed = true;
         forceRefresh = true;
         clearClient();
         continue;

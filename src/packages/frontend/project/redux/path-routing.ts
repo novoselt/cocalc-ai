@@ -34,7 +34,7 @@ export function isMissingProjectPathError(err: unknown): boolean {
   );
 }
 
-export async function resolveRoutePathIsDirectory({
+export async function resolveProjectPathIsDirectory({
   path,
   isDir,
 }: {
@@ -50,6 +50,8 @@ export async function resolveRoutePathIsDirectory({
     throw err;
   }
 }
+
+export const resolveRoutePathIsDirectory = resolveProjectPathIsDirectory;
 
 export function getSnapshotHomeDirectoryForPaths(
   homeDirectory: string,

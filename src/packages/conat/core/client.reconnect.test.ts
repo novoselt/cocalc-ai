@@ -177,4 +177,44 @@ describe("core client socket.io reconnect policy", () => {
 
     client.close();
   });
+
+  it("keeps waiting when sign-in info races a disconnect", async () => {
+    jest.resetModules();
+
+    const socket = {
+      on: jest.fn(),
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+      close: jest.fn(),
+      io: {
+        on: jest.fn(),
+        connect: jest.fn(),
+        disconnect: jest.fn(),
+      },
+    };
+    const connectToSocketIO = jest.fn(() => socket);
+
+    jest.doMock("socket.io-client", () => ({
+      connect: connectToSocketIO,
+    }));
+
+    const { Client } = require("./client");
+    const client = new Client({
+      address: "http://example.com",
+      autoConnect: false,
+      noCache: true,
+    });
+    const anyClient = client as any;
+    const signedIn = client.waitUntilSignedIn({ timeout: 1_000 });
+
+    anyClient.info = { user: { account_id: "account-1" } };
+    client.emit("info", anyClient.info);
+    await Promise.resolve();
+
+    anyClient.state = "connected";
+    client.emit("info", anyClient.info);
+
+    await expect(signedIn).resolves.toBeUndefined();
+    client.close();
+  });
 });

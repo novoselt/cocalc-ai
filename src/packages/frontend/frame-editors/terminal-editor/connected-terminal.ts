@@ -19,8 +19,10 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { ProjectActions, redux } from "@cocalc/frontend/app-framework";
+import { alert_message } from "@cocalc/frontend/alerts";
 import type { RegisteredReconnectResource } from "@cocalc/frontend/conat/reconnect-coordinator";
 import { get_buffer, set_buffer } from "@cocalc/frontend/copy-paste-buffer";
+import { IS_MACOS } from "@cocalc/frontend/feature";
 import { file_associations } from "@cocalc/frontend/file-associations";
 import { isCoCalcURL } from "@cocalc/frontend/lib/cocalc-urls";
 import {
@@ -72,6 +74,7 @@ const TRANSIENT_RECONNECT_OPACITY = "0.62";
 const TERMINAL_DEBUG_STORAGE_KEY = "cocalc.debug.terminal";
 const TERMINAL_DEBUG_SESSION_LIST_TIMEOUT = 1500;
 const RUNTIME_RECOVERY_NOTICE_MAX_AGE_MS = 5 * 60 * 1000;
+const MOUSE_SELECTION_COPY_HINT_INTERVAL_MS = 10 * 60 * 1000;
 
 const EXIT_MESSAGE = "\r\n[Process completed - press any key]\r\n";
 const ANSI_RESET = "\x1b[0m";
@@ -347,6 +350,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
   private initialOutputReconnects = 0;
   private currentConnectStartedAt?: number;
   private projectDataDebugCount = 0;
+  private lastMouseSelectionCopyHintAt?: number;
 
   constructor(
     actions: Actions<T>,
@@ -755,10 +759,16 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
 
   private get_xtermjs_options = (): any => {
     const rendererType = this.rendererType;
+    const baseOptions = {
+      rendererType,
+      // TUI applications can own mouse drags. Give macOS users the xterm
+      // equivalent of Shift-drag on other platforms to select terminal text.
+      macOptionClickForcesSelection: true,
+    };
     const settings = this.account_store.get("terminal");
     if (settings == null) {
       // not fully loaded yet.
-      return { rendererType };
+      return baseOptions;
     }
     const scrollback = settings.get("scrollback", SCROLLBACK);
 
@@ -774,7 +784,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     // https://github.com/sagemathinc/cocalc/issues/3236
     // const useFlowControl = true;
 
-    return { rendererType, scrollback, fontFamily };
+    return { ...baseOptions, scrollback, fontFamily };
   };
 
   set_terminal_theme_override(theme?: string | null): void {
@@ -1718,14 +1728,15 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
         return false;
       }
 
-      if (
-        (event.ctrlKey || event.metaKey) &&
-        event.key === "c" &&
-        this.terminal.hasSelection()
-      ) {
-        // Return so that the usual OS copy happens
-        // instead of interrupt signal.
-        return false;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        if (this.terminal.hasSelection()) {
+          // Return so that the usual OS copy happens
+          // instead of interrupt signal.
+          return false;
+        }
+        if (this.terminal.modes.mouseTrackingMode !== "none") {
+          this.showMouseSelectionCopyHint();
+        }
       }
 
       if ((event.ctrlKey || event.metaKey) && event.key === "v") {
@@ -1734,6 +1745,26 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       }
 
       return true;
+    });
+  };
+
+  private showMouseSelectionCopyHint = (): void => {
+    const now = Date.now();
+    if (
+      this.lastMouseSelectionCopyHintAt != null &&
+      now - this.lastMouseSelectionCopyHintAt <
+        MOUSE_SELECTION_COPY_HINT_INTERVAL_MS
+    ) {
+      return;
+    }
+    this.lastMouseSelectionCopyHintAt = now;
+    alert_message({
+      type: "info",
+      title: "Copy terminal text",
+      message: IS_MACOS
+        ? "This application owns the mouse. Hold Option while dragging to select terminal text, then press Command+C."
+        : "This application owns the mouse. Hold Shift while dragging to select terminal text, then press Ctrl+C.",
+      timeout: 8,
     });
   };
 
