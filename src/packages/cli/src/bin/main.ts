@@ -102,6 +102,12 @@ import {
   printArrayTable,
 } from "./core/cli-output";
 import {
+  canOfferInteractiveAuthLogin,
+  interactiveAuthLoginArgs,
+  isCoCalcProjectEnvironment,
+  isMissingCookieAuthError,
+} from "./core/interactive-auth-login";
+import {
   HOST_CREATE_DISK_TYPES,
   HOST_CREATE_STORAGE_MODES,
   createHostHelpers,
@@ -1580,7 +1586,56 @@ async function withContext(
   let ctx: CommandContext | undefined;
   try {
     globals = globalsFrom(command);
-    ctx = await contextForGlobals(globals);
+    try {
+      ctx = await contextForGlobals(globals);
+    } catch (error) {
+      if (
+        canOfferInteractiveAuthLogin({
+          error,
+          globals,
+        })
+      ) {
+        const apiDescription = globals.api ? ` for ${globals.api}` : "";
+        process.stderr.write(
+          `No interactive CoCalc CLI login is available${apiDescription}; starting browser login.\n`,
+        );
+        const entrypoint = process.argv[1];
+        if (!entrypoint) {
+          throw error;
+        }
+        const scriptEntrypoint =
+          resolve(entrypoint) === resolve(process.execPath)
+            ? undefined
+            : entrypoint;
+        const login = spawnSync(
+          process.execPath,
+          interactiveAuthLoginArgs({
+            globals,
+            entrypoint: scriptEntrypoint,
+          }),
+          {
+            stdio: "inherit",
+            env: process.env,
+          },
+        );
+        if (login.error) {
+          throw login.error;
+        }
+        if (login.status !== 0) {
+          throw new Error(
+            `interactive CoCalc CLI login failed with exit code ${login.status ?? "unknown"}`,
+          );
+        }
+        ctx = await contextForGlobals(globals);
+      } else {
+        if (isMissingCookieAuthError(error) && isCoCalcProjectEnvironment()) {
+          process.stderr.write(
+            "Automatic account login is disabled inside CoCalc projects because it would store a broad, long-lived account session in the collaborative project filesystem. Use the browser project-to-project SSH setup instead.\n",
+          );
+        }
+        throw error;
+      }
+    }
     const data = await fn(ctx);
     emitSuccess(ctx, commandName, data);
   } catch (error) {
