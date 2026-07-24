@@ -796,6 +796,8 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
     this._chatMarkerScanners = {};
     this._disposeChatGutterUI();
+    this._chatStoreDispose?.();
+    this._chatStoreDispose = undefined;
     super.close();
   }
 
@@ -831,6 +833,14 @@ export class Actions extends BaseActions<LatexEditorState> {
     this._bookmarkGutterHosts = {};
     this._cursorInsertHosts = {};
     this._bookmarkLines = {};
+    for (const perCm of Object.values(this._chatTextMarkers)) {
+      for (const markers of perCm.values()) {
+        for (const marker of markers) {
+          marker.clear();
+        }
+      }
+    }
+    this._chatTextMarkers = {};
   }
 
   // supports the "Force Rebuild" button.
@@ -2205,8 +2215,15 @@ export class Actions extends BaseActions<LatexEditorState> {
 
   private _cursorInsertBound = new WeakSet<CodeMirror.Editor>();
 
+  private _chatTextMarkers: {
+    [path: string]: Map<CodeMirror.Editor, CodeMirror.TextMarker[]>;
+  } = {};
+
+  private _chatStoreDispose?: () => void;
+
   private _initChatMarkers(): void {
     this._attachChatMarkerScanner(this, this.path);
+    this._initChatAnchorLockListener();
     // Sub-files get picked up whenever the build discovers dependencies
     // (set_switch_to_files) or the store otherwise changes.
     this.store.on(
@@ -2255,6 +2272,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         ).set(path, fromJS(bookmarks)),
       });
       this._updateChatGutters(path, markers, bookmarks);
+      this._refreshChatMarkerText(path);
       this._refreshCursorInsert(path);
       if (path !== this.path) {
         // master changes already refresh the TOC via their own listener
@@ -2491,6 +2509,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     const bookmarks = (this.store.get("chat_bookmarks")?.get(path)?.toJS() ??
       []) as unknown as BookmarkMarker[];
     this._updateChatGutters(path, markers, bookmarks);
+    this._refreshChatMarkerText(path);
     this._refreshCursorInsert(path);
   }
 
@@ -2522,6 +2541,170 @@ export class Actions extends BaseActions<LatexEditorState> {
       }
       entry.currentHandle = nextHandle;
     }
+  }
+
+  private _anchorHasMessages(hash: string): boolean {
+    try {
+      const actions = ensureSideChatActions(this.project_id, this.path);
+      const threadIndex = actions.getThreadIndex();
+      return actions
+        .listAnchoredThreadKeys(hash)
+        .some(
+          (threadKey) => (threadIndex.get(threadKey)?.messageCount ?? 0) > 0,
+        );
+    } catch {
+      return false;
+    }
+  }
+
+  private _createChatTextMarker({
+    cm,
+    hash,
+    path,
+    from,
+    to,
+    locked,
+  }: {
+    cm: CodeMirror.Editor;
+    hash: string;
+    path: string;
+    from: CodeMirror.Position;
+    to: CodeMirror.Position;
+    locked: boolean;
+  }): CodeMirror.TextMarker {
+    const marker = cm.markText(from, to, {
+      className: locked
+        ? "cc-chat-marker cc-chat-marker-locked"
+        : "cc-chat-marker",
+      clearOnEnter: false,
+      inclusiveLeft: false,
+      inclusiveRight: false,
+      readOnly: locked,
+      atomic: locked,
+      attributes: {
+        title: locked
+          ? "Open chat thread (locked — remove the marker to edit)"
+          : "Open chat thread",
+      },
+    });
+    (marker as any).chatHash = hash;
+    (marker as any).chatPath = path;
+    (marker as any).chatLocked = locked;
+    return marker;
+  }
+
+  private _refreshChatMarkerText(path: string): void {
+    const actions = this._actionsForChatPath(path);
+    if (actions == null) return;
+    const cms = Object.values(
+      ((actions as any)._cm ?? {}) as Record<string, CodeMirror.Editor>,
+    );
+    if (cms.length === 0) return;
+    const perCm =
+      this._chatTextMarkers[path] ??
+      (this._chatTextMarkers[path] = new globalThis.Map());
+    const liveCms = new Set(cms);
+    for (const staleCm of [...perCm.keys()]) {
+      if (liveCms.has(staleCm)) continue;
+      for (const marker of perCm.get(staleCm) ?? []) {
+        marker.clear();
+      }
+      perCm.delete(staleCm);
+    }
+    const markers = (this.store.get("chat_markers")?.get(path)?.toJS() ??
+      []) as unknown as ChatMarker[];
+    for (const cm of cms) {
+      for (const marker of perCm.get(cm) ?? []) {
+        marker.clear();
+      }
+      const fresh: CodeMirror.TextMarker[] = [];
+      for (const marker of markers) {
+        const lineText = cm.getLine(marker.line) ?? "";
+        fresh.push(
+          this._createChatTextMarker({
+            cm,
+            hash: marker.hash,
+            path,
+            from: { line: marker.line, ch: marker.col },
+            to: { line: marker.line, ch: lineText.length },
+            locked: this._anchorHasMessages(marker.hash),
+          }),
+        );
+      }
+      perCm.set(cm, fresh);
+    }
+  }
+
+  private _refreshChatMarkerLocks(): void {
+    for (const [path, perCm] of Object.entries(this._chatTextMarkers)) {
+      for (const [cm, existing] of perCm) {
+        const fresh: CodeMirror.TextMarker[] = [];
+        for (const marker of existing) {
+          const range = marker.find() as
+            | { from: CodeMirror.Position; to: CodeMirror.Position }
+            | undefined;
+          const hash = (marker as any).chatHash as string | undefined;
+          if (range == null || hash == null || !("from" in range)) {
+            marker.clear();
+            continue;
+          }
+          const locked = this._anchorHasMessages(hash);
+          if ((marker as any).chatLocked === locked) {
+            fresh.push(marker);
+            continue;
+          }
+          marker.clear();
+          fresh.push(
+            this._createChatTextMarker({
+              cm,
+              hash,
+              path,
+              from: range.from,
+              to: range.to,
+              locked,
+            }),
+          );
+        }
+        perCm.set(cm, fresh);
+      }
+    }
+  }
+
+  private _initChatAnchorLockListener(retries = 40): void {
+    if (this._state === ("closed" as any)) return;
+    let chatActions;
+    try {
+      chatActions = ensureSideChatActions(this.project_id, this.path);
+    } catch {
+      if (retries > 0) {
+        setTimeout(() => this._initChatAnchorLockListener(retries - 1), 250);
+      }
+      return;
+    }
+    const store = chatActions.store;
+    if (store == null) {
+      if (retries > 0) {
+        setTimeout(() => this._initChatAnchorLockListener(retries - 1), 250);
+      }
+      return;
+    }
+    const refresh = debounce(() => {
+      if (this._state === ("closed" as any)) return;
+      this._refreshChatMarkerLocks();
+    }, 150);
+    store.on("change", refresh);
+    const reconnect = () => {
+      this._chatStoreDispose?.();
+      this._chatStoreDispose = undefined;
+      this._initChatAnchorLockListener();
+    };
+    chatActions.syncdb?.once?.("close", reconnect);
+    this._chatStoreDispose = () => {
+      store.removeListener("change", refresh);
+      chatActions.syncdb?.removeListener?.("close", reconnect);
+      refresh.cancel();
+    };
+    refresh();
   }
 
   // All locations of a marker hash across the scanned files, in

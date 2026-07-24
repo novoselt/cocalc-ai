@@ -244,6 +244,21 @@
   opacity: 1;
 }
 
+.CodeMirror .cc-chat-marker {
+  color: #1677ff;
+  cursor: pointer;
+  background-color: #f5f5f5;
+  border-radius: 2px;
+}
+
+.CodeMirror .cc-chat-marker:hover {
+  background-color: rgba(22, 119, 255, 0.18);
+}
+
+.CodeMirror .cc-chat-marker-locked {
+  font-weight: 600;
+}
+
 .webapp-editor-pdf-preview-message {
   padding: 20px;
 }
