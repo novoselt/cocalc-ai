@@ -96,6 +96,8 @@ describe("server/conat route-client", () => {
   beforeEach(() => {
     jest.useFakeTimers();
     jest.resetModules();
+    delete process.env.COCALC_HUB_ROUTED_ACCOUNT_CLIENT_MAX;
+    delete process.env.COCALC_HUB_ROUTED_ACCOUNT_CLIENT_TTL_MS;
     connectMock = jest.fn();
     materializeHostRouteTargetMock = jest.fn();
     materializeProjectHostTargetMock = jest.fn();
@@ -488,6 +490,201 @@ describe("server/conat route-client", () => {
     expect(first?.client).toBe(routed);
     expect(second?.client).toBe(routed);
     expect(connectMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses an idle account-routed client across short-lived callers", async () => {
+    const central1 = createFakeClient();
+    const routed = createFakeClient();
+    const central2 = createFakeClient();
+    connectMock
+      .mockImplementationOnce(() => central1)
+      .mockImplementationOnce(() => routed)
+      .mockImplementationOnce(() => central2);
+    routeProjectSubjectMock.mockReturnValue({
+      host_id: "host-local",
+      address: "https://host-local.example",
+    });
+
+    const { conatWithProjectRoutingForAccount, getRoutedClientCacheStats } =
+      await import("./route-client");
+    const first = conatWithProjectRoutingForAccount({
+      account_id: "account-1",
+    }) as any;
+    expect(
+      first.routeSubject("file-server.12345678-1234-1234-1234-123456789012.api")
+        ?.client,
+    ).toBe(routed);
+    first.close();
+
+    const second = conatWithProjectRoutingForAccount({
+      account_id: "account-1",
+    }) as any;
+    expect(
+      second.routeSubject(
+        "file-server.87654321-4321-4321-4321-210987654321.api",
+      )?.client,
+    ).toBe(routed);
+    second.close();
+
+    expect(connectMock).toHaveBeenCalledTimes(3);
+    expect(routed.close).not.toHaveBeenCalled();
+    expect(getRoutedClientCacheStats()).toEqual(
+      expect.objectContaining({
+        account_clients: 1,
+        active_account_clients: 0,
+        account_client_creates: 1,
+        account_client_reuses: 1,
+      }),
+    );
+  });
+
+  it("evicts least-recently-used idle account clients at the size bound", async () => {
+    process.env.COCALC_HUB_ROUTED_ACCOUNT_CLIENT_MAX = "2";
+    const central1 = createFakeClient();
+    const routed1 = createFakeClient();
+    const central2 = createFakeClient();
+    const routed2 = createFakeClient();
+    const central3 = createFakeClient();
+    const routed3 = createFakeClient();
+    for (const client of [
+      central1,
+      routed1,
+      central2,
+      routed2,
+      central3,
+      routed3,
+    ]) {
+      connectMock.mockImplementationOnce(() => client);
+    }
+    routeProjectSubjectMock.mockReturnValue({
+      host_id: "host-local",
+      address: "https://host-local.example",
+    });
+
+    const { conatWithProjectRoutingForAccount, getRoutedClientCacheStats } =
+      await import("./route-client");
+    for (const account_id of ["account-1", "account-2", "account-3"]) {
+      const client = conatWithProjectRoutingForAccount({ account_id }) as any;
+      client.routeSubject(
+        "file-server.12345678-1234-1234-1234-123456789012.api",
+      );
+      client.close();
+    }
+
+    expect(routed1.close).toHaveBeenCalledTimes(1);
+    expect(routed2.close).not.toHaveBeenCalled();
+    expect(routed3.close).not.toHaveBeenCalled();
+    expect(getRoutedClientCacheStats()).toEqual(
+      expect.objectContaining({
+        account_clients: 2,
+        active_account_clients: 0,
+        account_client_max: 2,
+        account_client_evictions: 1,
+      }),
+    );
+  });
+
+  it("defers LRU closure while an account caller is still using the route", async () => {
+    process.env.COCALC_HUB_ROUTED_ACCOUNT_CLIENT_MAX = "1";
+    const central1 = createFakeClient();
+    const routed1 = createFakeClient();
+    const central2 = createFakeClient();
+    const routed2 = createFakeClient();
+    for (const client of [central1, routed1, central2, routed2]) {
+      connectMock.mockImplementationOnce(() => client);
+    }
+    routeProjectSubjectMock.mockReturnValue({
+      host_id: "host-local",
+      address: "https://host-local.example",
+    });
+
+    const { conatWithProjectRoutingForAccount, getRoutedClientCacheStats } =
+      await import("./route-client");
+    const first = conatWithProjectRoutingForAccount({
+      account_id: "account-1",
+    }) as any;
+    first.routeSubject("file-server.12345678-1234-1234-1234-123456789012.api");
+
+    const second = conatWithProjectRoutingForAccount({
+      account_id: "account-2",
+    }) as any;
+    second.routeSubject("file-server.87654321-4321-4321-4321-210987654321.api");
+
+    expect(routed1.close).not.toHaveBeenCalled();
+    expect(getRoutedClientCacheStats()).toEqual(
+      expect.objectContaining({
+        account_clients: 1,
+        active_account_clients: 2,
+        deferred_account_clients: 1,
+      }),
+    );
+
+    first.close();
+    expect(routed1.close).toHaveBeenCalledTimes(1);
+    second.close();
+  });
+
+  it("gives direct account-routed clients time to finish after LRU eviction", async () => {
+    process.env.COCALC_HUB_ROUTED_ACCOUNT_CLIENT_MAX = "1";
+    const routed1 = createFakeClient();
+    const routed2 = createFakeClient();
+    connectMock
+      .mockImplementationOnce(() => routed1)
+      .mockImplementationOnce(() => routed2);
+    materializeProjectHostTargetMock.mockResolvedValue({
+      host_id: "host-local",
+      address: "https://host-local.example",
+    });
+
+    const { getExplicitProjectRoutedClient, getRoutedClientCacheStats } =
+      await import("./route-client");
+    await getExplicitProjectRoutedClient({
+      project_id: "12345678-1234-1234-1234-123456789012",
+      account_id: "account-1",
+    });
+    await getExplicitProjectRoutedClient({
+      project_id: "87654321-4321-4321-4321-210987654321",
+      account_id: "account-2",
+    });
+
+    expect(routed1.close).not.toHaveBeenCalled();
+    expect(getRoutedClientCacheStats()).toEqual(
+      expect.objectContaining({
+        account_clients: 1,
+        deferred_account_clients: 1,
+      }),
+    );
+
+    await jest.advanceTimersByTimeAsync(60_001);
+    expect(routed1.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires idle account-routed clients", async () => {
+    jest.useRealTimers();
+    process.env.COCALC_HUB_ROUTED_ACCOUNT_CLIENT_TTL_MS = "10";
+    const central = createFakeClient();
+    const routed = createFakeClient();
+    connectMock
+      .mockImplementationOnce(() => central)
+      .mockImplementationOnce(() => routed);
+    routeProjectSubjectMock.mockReturnValue({
+      host_id: "host-local",
+      address: "https://host-local.example",
+    });
+
+    const { conatWithProjectRoutingForAccount, getRoutedClientCacheStats } =
+      await import("./route-client");
+    const client = conatWithProjectRoutingForAccount({
+      account_id: "account-1",
+    }) as any;
+    client.routeSubject("file-server.12345678-1234-1234-1234-123456789012.api");
+    client.close();
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const stats = getRoutedClientCacheStats();
+    expect(routed.close).toHaveBeenCalledTimes(1);
+    expect(stats.account_clients).toBe(0);
   });
 
   it("asks the owning bay to issue account-scoped auth for remote hosts", async () => {
