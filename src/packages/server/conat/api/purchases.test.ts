@@ -97,6 +97,7 @@ const getInterBayBridgeMock = jest.fn();
 const getBrowserAuthSessionHashMock = jest.fn();
 const requireFreshAuthForSessionHashMock = jest.fn();
 const assertAccountTrustedForProductAccessMock = jest.fn();
+const hasCardPaymentMethodMock = jest.fn();
 const getConfiguredClusterSeedBayIdMock = jest.fn();
 const getConfiguredBayIdMock = jest.fn();
 
@@ -309,6 +310,10 @@ jest.mock("@cocalc/server/accounts/auto-balance", () => ({
   setAutoBalance: (...args: any[]) => setAutoBalanceLocalMock(...args),
 }));
 
+jest.mock("@cocalc/server/purchases/stripe/get-payment-methods", () => ({
+  hasCardPaymentMethod: (...args: any[]) => hasCardPaymentMethodMock(...args),
+}));
+
 jest.mock("@cocalc/server/inter-bay/fabric", () => ({
   getInterBayFabricClient: jest.fn(() => ({ kind: "fabric-client" })),
 }));
@@ -419,6 +424,8 @@ beforeEach(() => {
   getBrowserAuthSessionHashMock.mockReturnValue(undefined);
   requireFreshAuthForSessionHashMock.mockResolvedValue(undefined);
   assertAccountTrustedForProductAccessMock.mockResolvedValue(undefined);
+  hasCardPaymentMethodMock.mockReset();
+  hasCardPaymentMethodMock.mockResolvedValue(true);
   dbMock.mockReturnValue({ kind: "db" });
   membershipTiersQueryMock.mockResolvedValue([]);
   getMembershipTierRowsMock.mockResolvedValue([]);
@@ -509,6 +516,47 @@ describe("purchases automatic deposits", () => {
     expect(setAutoBalanceLocalMock).toHaveBeenCalledWith({
       account_id: "account-1",
       auto_balance: AUTO_BALANCE_CONFIG,
+    });
+    expect(hasCardPaymentMethodMock).toHaveBeenCalledWith("account-1");
+  });
+
+  it("rejects enabling without a saved card", async () => {
+    hasCardPaymentMethodMock.mockResolvedValue(false);
+
+    const { setAutoBalance } = await import("./purchases");
+    await expect(
+      setAutoBalance({
+        account_id: "account-1",
+        session_hash: "session-1",
+        auto_balance: AUTO_BALANCE_CONFIG,
+      }),
+    ).rejects.toMatchObject({
+      code: "payment_method_required",
+      message: "Add a card payment method before enabling automatic deposits.",
+    });
+
+    expect(setAutoBalanceLocalMock).not.toHaveBeenCalled();
+    expect(interBaySetAutoBalanceMock).not.toHaveBeenCalled();
+  });
+
+  it("allows disabling without a saved card", async () => {
+    hasCardPaymentMethodMock.mockResolvedValue(false);
+    setAutoBalanceLocalMock.mockResolvedValue({
+      ...AUTO_BALANCE_CONFIG,
+      enabled: false,
+    });
+
+    const { setAutoBalance } = await import("./purchases");
+    await setAutoBalance({
+      account_id: "account-1",
+      session_hash: "session-1",
+      auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },
+    });
+
+    expect(hasCardPaymentMethodMock).not.toHaveBeenCalled();
+    expect(setAutoBalanceLocalMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },
     });
   });
 

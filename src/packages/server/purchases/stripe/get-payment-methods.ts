@@ -71,6 +71,19 @@ export async function hasPaymentMethod(account_id: string) {
   );
 }
 
+export async function hasCardPaymentMethod(account_id: string) {
+  const customer = await getStripeCustomerId({ account_id, create: false });
+  if (!customer) {
+    return false;
+  }
+  const stripe = await getConn();
+  const methods = await stripe.customers.listPaymentMethods(customer, {
+    type: "card",
+    limit: 1,
+  });
+  return methods.data.length >= 1;
+}
+
 function isUsableLegacySource(source: unknown): boolean {
   if (source == null || typeof source !== "object") {
     return false;
