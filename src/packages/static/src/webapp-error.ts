@@ -18,6 +18,7 @@ import Crash from "./crash";
 import CrashMessage from "./crash-message";
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { isIgnorableBrowserError } from "./webapp-error-filter";
 
 function handleError(event) {
   if (event.defaultPrevented) {
@@ -25,6 +26,9 @@ function handleError(event) {
     return;
   }
   const { message: msg, filename: url, lineno, colno, error } = event;
+  if (isIgnorableBrowserError(msg)) {
+    return;
+  }
   if (error == null) {
     // Sometimes this window.onerror gets called with error null.
     // We ignore that here.  E.g., this happens when you open

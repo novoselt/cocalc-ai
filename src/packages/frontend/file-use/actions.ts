@@ -11,10 +11,13 @@ import * as misc from "@cocalc/util/misc";
 import { Actions } from "../app-framework";
 import { isChatPath } from "@cocalc/frontend/chat/paths";
 import { publishDocumentPresence } from "@cocalc/frontend/document-presence/service";
+import { getLogger } from "@cocalc/frontend/logger";
 import {
   getProjectUserRole,
   isViewerProjectRole,
 } from "@cocalc/frontend/project/realtime-access";
+
+const logger = getLogger("frontend:file-use");
 
 const DEFAULT_CHAT_TTL_S = 5;
 const DEFAULT_FILE_TTL_S = 45;
@@ -80,7 +83,7 @@ export class FileUseActions extends Actions<any> {
       setTimeout(() => {
         const deferredTs = this.mark_file_lock[key];
         if (deferredTs && deferredTs !== true) {
-          void this.do_mark_file(
+          void this.recordFileUse(
             account_id,
             action,
             project_id,
@@ -91,7 +94,28 @@ export class FileUseActions extends Actions<any> {
         delete this.mark_file_lock[key];
       }, ttl);
     }
-    await this.do_mark_file(account_id, action, project_id, path, ts);
+    await this.recordFileUse(account_id, action, project_id, path, ts);
+  }
+
+  private async recordFileUse(
+    account_id: string,
+    action: string,
+    project_id: string,
+    path: string,
+    timestamp: Date,
+  ): Promise<void> {
+    try {
+      await this.do_mark_file(account_id, action, project_id, path, timestamp);
+    } catch (err) {
+      // Presence and recent-file bookkeeping must never disrupt opening or
+      // editing a file when its optional backend service is unavailable.
+      logger.debug("unable to record best-effort file use", {
+        action,
+        project_id,
+        path,
+        error: `${err}`,
+      });
+    }
   }
 
   private async do_mark_file(

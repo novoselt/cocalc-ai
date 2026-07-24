@@ -3,8 +3,9 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { AppRedux } from "../app-framework";
+import type { AppRedux } from "../app-framework";
 import { bind_methods } from "@cocalc/util/misc";
+import { once } from "@cocalc/util/async-utils";
 import { webapp_client } from "../webapp-client";
 
 export type TableConstructor<T extends Table> = new (name, redux) => T;
@@ -66,20 +67,35 @@ export abstract class Table {
     merge?: "deep" | "shallow" | "none", // The actual default is "deep" (see @cocalc/sync/table/synctable.ts)
     cb?: (error?: string) => void,
   ): Promise<void> => {
+    const table = this._table;
+    if (!table.is_ready()) {
+      try {
+        await once(table, "connected");
+      } catch {
+        // Closing during sign-out or table replacement cancels this optional
+        // pending write. It must not become an unhandled frontend rejection.
+        cb?.();
+        return;
+      }
+      if (this._table !== table || !table.is_ready()) {
+        cb?.();
+        return;
+      }
+    }
     if (cb == null) {
       // No callback, so let async/await report errors.
       // Do not let the error silently hide (like using the code below did)!!
-      // We were missing  lot of bugs because of this...
-      this._table.set(changes, merge);
-      await this._table.save();
+      // We were missing a lot of bugs because of this...
+      table.set(changes, merge);
+      await table.save();
       return;
     }
 
     // callback is defined still.
     let e: undefined | string = undefined;
     try {
-      this._table.set(changes, merge);
-      await this._table.save();
+      table.set(changes, merge);
+      await table.save();
     } catch (err) {
       e = err.toString();
     }

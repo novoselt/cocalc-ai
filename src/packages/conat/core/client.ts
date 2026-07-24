@@ -236,7 +236,7 @@ import {
 } from "@cocalc/conat/util";
 export { ConatError, headerToError };
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
-import { once, until } from "@cocalc/util/async-utils";
+import { once, TimeoutError, until } from "@cocalc/util/async-utils";
 import { getLogger } from "@cocalc/conat/logger";
 import { refCacheSync } from "@cocalc/util/refcache";
 import jsonStableStringify from "json-stable-stringify";
@@ -822,24 +822,28 @@ export class Client extends EventEmitter {
   // this has NO timeout by default
   waitUntilSignedIn = reuseInFlight(
     async ({ timeout }: { timeout?: number } = {}) => {
+      const deadline =
+        timeout != null && timeout > 0 ? Date.now() + timeout : undefined;
       // not "signed in" if --
       //   - not connected, or
       //   - no info at all (which gets sent on sign in)
       //   - or the user is {error:....}, which is what happens when sign in fails
       //     e.g., do to an expired cookie
-      if (
+      while (
         this.info == null ||
         this.state != "connected" ||
         this.info?.user?.error
       ) {
-        await once(this, "info", timeout);
-      }
-      if (
-        this.info == null ||
-        this.state != "connected" ||
-        this.info?.user?.error
-      ) {
-        throw Error(`failed to sign in - ${this.info?.user?.error}`);
+        const remaining = deadline == null ? timeout : deadline - Date.now();
+        if (remaining != null && remaining <= 0) {
+          throw new TimeoutError(
+            `once: timeout of ${timeout}ms waiting for "info"`,
+          );
+        }
+        await once(this, "info", remaining);
+        if (this.info?.user?.error) {
+          throw Error(`failed to sign in - ${this.info.user.error}`);
+        }
       }
     },
   );

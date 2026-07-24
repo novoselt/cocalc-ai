@@ -257,7 +257,11 @@ function HydratedProjectActionsMenu({
         });
         break;
       case "hide":
-        await actions.toggle_hide_project(record.project_id);
+        try {
+          await actions.toggle_hide_project(record.project_id);
+        } catch {
+          // The action restores optimistic state and presents the error.
+        }
         break;
       case "delete":
         if (isDeleting) break;

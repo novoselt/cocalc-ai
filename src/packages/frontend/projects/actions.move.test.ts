@@ -244,4 +244,102 @@ describe("ProjectsActions move flow", () => {
     });
     expect(projectMap.getIn([project_id, "host_id"])).toBe("host-new");
   });
+
+  it("recovers when the authoritative project was already assigned", async () => {
+    projectMap = ImmutableMap<string, any>([
+      [
+        project_id,
+        ImmutableMap({
+          region: "us-central1",
+        }),
+      ],
+    ]);
+    const projectActions = {
+      setState: jest.fn(),
+    };
+    const redux = {
+      getStore: jest.fn((name: string) =>
+        name === "account" ? { get: jest.fn(() => "acct-1") } : {},
+      ),
+      _set_state: jest.fn((state) => {
+        projectMap = state.projects.project_map;
+      }),
+      removeActions: jest.fn(),
+      getProjectActions: jest.fn(() => projectActions),
+    } as any;
+    jest
+      .spyOn(appRedux, "getProjectActions")
+      .mockReturnValue(projectActions as any);
+    const actions = new ProjectsActions("projects", redux);
+    const ensureHostInfo = jest
+      .spyOn(actions as any, "ensure_host_info")
+      .mockResolvedValue(undefined as any);
+    jest
+      .spyOn(actions, "repairProjectProjection")
+      .mockImplementation(async () => {
+        projectMap = projectMap.setIn([project_id, "host_id"], "host-new");
+      });
+    mockedWebappClient.conat_client.hub.projects.assignProjectHost.mockRejectedValueOnce(
+      new Error("project is already assigned to a host; use move instead"),
+    );
+
+    await expect(
+      actions.assign_project_to_host(project_id, "host-new"),
+    ).resolves.toBe(true);
+
+    expect(actions.repairProjectProjection).toHaveBeenCalledWith({
+      kind: "project-ids",
+      project_ids: [project_id],
+      reason: "project-move",
+    });
+    expect(ensureHostInfo).toHaveBeenCalledWith("host-new", true);
+    expect(projectActions.setState).toHaveBeenCalledWith({
+      control_error: "",
+    });
+  });
+
+  it("moves when the authoritative assignment differs from the selection", async () => {
+    projectMap = ImmutableMap<string, any>([
+      [
+        project_id,
+        ImmutableMap({
+          region: "us-central1",
+        }),
+      ],
+    ]);
+    const projectActions = {
+      setState: jest.fn(),
+    };
+    const redux = {
+      getStore: jest.fn((name: string) =>
+        name === "account" ? { get: jest.fn(() => "acct-1") } : {},
+      ),
+      _set_state: jest.fn((state) => {
+        projectMap = state.projects.project_map;
+      }),
+      removeActions: jest.fn(),
+      getProjectActions: jest.fn(() => projectActions),
+    } as any;
+    jest
+      .spyOn(appRedux, "getProjectActions")
+      .mockReturnValue(projectActions as any);
+    const actions = new ProjectsActions("projects", redux);
+    jest
+      .spyOn(actions, "repairProjectProjection")
+      .mockImplementation(async () => {
+        projectMap = projectMap.setIn([project_id, "host_id"], "host-other");
+      });
+    const moveProject = jest
+      .spyOn(actions, "move_project_to_host")
+      .mockResolvedValue(true);
+    mockedWebappClient.conat_client.hub.projects.assignProjectHost.mockRejectedValueOnce(
+      new Error("project is already assigned to a host; use move instead"),
+    );
+
+    await expect(
+      actions.assign_project_to_host(project_id, "host-new"),
+    ).resolves.toBe(true);
+
+    expect(moveProject).toHaveBeenCalledWith(project_id, "host-new");
+  });
 });

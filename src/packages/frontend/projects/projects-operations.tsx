@@ -315,7 +315,15 @@ export function ProjectsOperations({
       ),
       okText: hide ? "Hide" : "Unhide",
       onOk: async () => {
-        await actions.set_projects_hide(account_id, selected_project_ids, hide);
+        try {
+          await actions.set_projects_hide(
+            account_id,
+            selected_project_ids,
+            hide,
+          );
+        } catch {
+          // The action restores failed rows and presents the error.
+        }
       },
     });
   }

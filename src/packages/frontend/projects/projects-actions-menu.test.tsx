@@ -13,6 +13,7 @@ import { ProjectActionsMenu } from "./projects-actions-menu";
 
 const moveProjectToHost = jest.fn();
 const refreshProjectRegion = jest.fn(async () => undefined);
+const toggleHideProject = jest.fn(async () => undefined);
 const runFreshAuthAction = jest.fn();
 const protectedActions: Array<() => Promise<void>> = [];
 
@@ -32,6 +33,17 @@ jest.mock("antd", () => {
           }
         >
           Move to host…
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            menu.onClick({
+              key: "hide",
+              domEvent: { stopPropagation: jest.fn() },
+            })
+          }
+        >
+          Hide project
         </button>
       </div>
     ),
@@ -57,7 +69,7 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
     archive_project: jest.fn(),
     move_project_to_host: moveProjectToHost,
     open_project: jest.fn(),
-    toggle_hide_project: jest.fn(),
+    toggle_hide_project: toggleHideProject,
   }),
   useTypedRedux: (store: string | { project_id: string }, key: string) => {
     if (store === "account" && key === "account_id") return "account-1";
@@ -156,9 +168,27 @@ jest.mock("./util", () => ({
   useServersMenuItems: () => [],
 }));
 
+function renderMenu() {
+  return render(
+    <ProjectActionsMenu
+      record={
+        {
+          project_id: "project-1",
+          title: "Project One",
+          labels: {},
+          state: fromJS({ state: "running" }),
+        } as any
+      }
+      onToggleDetails={jest.fn()}
+    />,
+  );
+}
+
 describe("ProjectActionsMenu", () => {
   beforeEach(() => {
     moveProjectToHost.mockReset();
+    toggleHideProject.mockReset();
+    toggleHideProject.mockResolvedValue(undefined);
     refreshProjectRegion.mockClear();
     protectedActions.length = 0;
     runFreshAuthAction.mockReset();
@@ -168,20 +198,22 @@ describe("ProjectActionsMenu", () => {
     });
   });
 
-  it("runs project moves through fresh authentication", async () => {
-    render(
-      <ProjectActionsMenu
-        record={
-          {
-            project_id: "project-1",
-            title: "Project One",
-            labels: {},
-            state: fromJS({ state: "running" }),
-          } as any
-        }
-        onToggleDetails={jest.fn()}
-      />,
+  it("contains a hide failure already presented by the action", async () => {
+    toggleHideProject.mockRejectedValueOnce(
+      new Error("Some projects could not be hidden"),
     );
+
+    renderMenu();
+    fireEvent.click(screen.getByText("ellipsis"));
+    fireEvent.click(screen.getByRole("button", { name: "Hide project" }));
+
+    await waitFor(() =>
+      expect(toggleHideProject).toHaveBeenCalledWith("project-1"),
+    );
+  });
+
+  it("runs project moves through fresh authentication", async () => {
+    renderMenu();
 
     fireEvent.click(screen.getByText("ellipsis"));
     fireEvent.click(screen.getByText("Move to host…"));

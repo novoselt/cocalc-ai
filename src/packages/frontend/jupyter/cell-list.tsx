@@ -10,7 +10,14 @@ import useResizeObserver from "use-resize-observer";
 import { delay } from "awaiting";
 import * as immutable from "immutable";
 import { debounce } from "lodash";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { React, useIsMountedRef } from "@cocalc/frontend/app-framework";
 import { Loading } from "@cocalc/frontend/components";
 import {
@@ -57,6 +64,15 @@ function getSectionTitle(
 
 const LAZY_RENDER_INITIAL_CELLS = 24;
 const LAZY_RENDER_PLACEHOLDER_MIN_HEIGHT = 96;
+
+export function refreshLazyHydrationVersion(
+  setVersion: (update: (version: number) => number) => void,
+  runTransition: (update: () => void) => void = startTransition,
+): void {
+  runTransition(() => {
+    setVersion((version) => version + 1);
+  });
+}
 
 // the extra bottom cell at the very end
 // See https://github.com/sagemathinc/cocalc/issues/6141 for a discussion
@@ -286,7 +302,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     lazyHeightRefreshScheduledRef.current = true;
     const run = () => {
       lazyHeightRefreshScheduledRef.current = false;
-      setLazyHydrationVersion((n) => n + 1);
+      refreshLazyHydrationVersion(setLazyHydrationVersion);
     };
     if (
       typeof window !== "undefined" &&

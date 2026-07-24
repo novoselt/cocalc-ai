@@ -114,6 +114,7 @@ import {
 } from "@cocalc/server/membership/site-license-external-claims";
 import { getAIUsageStatus } from "@cocalc/server/ai/usage-status";
 import type { MoneyValue } from "@cocalc/util/money";
+import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import type { MembershipPackageProduct } from "@cocalc/util/membership-package-product";
 import purchaseMembershipPackage0, {
@@ -136,6 +137,8 @@ import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { requireFreshAuthForSessionHash } from "@cocalc/server/auth/auth-sessions";
 import { getBrowserAuthSessionHash } from "@cocalc/server/conat/socketio/browser-auth-sessions";
 import { assertAccountTrustedForProductAccess } from "@cocalc/server/accounts/trusted-product-access";
+import { setAutoBalance as setAutoBalanceLocal } from "@cocalc/server/accounts/auto-balance";
+import { hasCardPaymentMethod } from "@cocalc/server/purchases/stripe/get-payment-methods";
 import {
   backfillMembershipAnalyticsPurchaseEvents,
   getMembershipAnalyticsEventsLocal,
@@ -180,6 +183,59 @@ export async function getMinBalance({
   account_id: string;
 }): Promise<MoneyValue> {
   return await getMinBalance0(account_id);
+}
+
+export async function setAutoBalance({
+  account_id,
+  browser_id,
+  session_hash,
+  auto_balance,
+}: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string | null;
+  auto_balance?: AutoBalanceConfig;
+}) {
+  const owner = requireAccount(account_id);
+  if (auto_balance == null) {
+    throw Error("auto_balance is required");
+  }
+  if (auto_balance.enabled) {
+    await assertAccountTrustedForProductAccess(
+      owner,
+      "configure automatic deposits",
+    );
+  }
+  await requireFreshAuthForPurchaseAction({
+    account_id: owner,
+    browser_id,
+    session_hash,
+  });
+  if (auto_balance.enabled && !(await hasCardPaymentMethod(owner))) {
+    throw Object.assign(
+      new Error(
+        "Add a card payment method before enabling automatic deposits.",
+      ),
+      { code: "payment_method_required" },
+    );
+  }
+  const home_bay_id = await resolveTargetAccountHomeBay({
+    account_id: owner,
+    user_account_id: owner,
+  });
+  if (home_bay_id !== getConfiguredBayId()) {
+    return await createInterBayAccountLocalClient({
+      client: getInterBayFabricClient(),
+      dest_bay: home_bay_id,
+    }).setAutoBalance({
+      account_id: owner,
+      auto_balance,
+    });
+  }
+  return await setAutoBalanceLocal({
+    account_id: owner,
+    auto_balance,
+  });
 }
 
 export async function getMembership({ account_id }) {

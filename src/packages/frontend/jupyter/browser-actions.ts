@@ -2489,13 +2489,17 @@ export class JupyterActions extends JupyterActions0 {
   };
 
   private initKernel = (): void => {
-    if (this.store.get("kernel") == null) {
+    const store = this.store;
+    if (store == null) {
+      return;
+    }
+    if (store.get("kernel") == null) {
       // Creating a new notebook with no kernel set
       // we either let the user select a kernel, or use a stored one
       let using_default_kernel = false;
 
       const account_store = this.redux.getStore("account");
-      const editor_settings = account_store.get("editor_settings");
+      const editor_settings = account_store?.get?.("editor_settings");
       if (
         editor_settings != null &&
         !editor_settings.get("ask_jupyter_kernel")
@@ -2517,13 +2521,13 @@ export class JupyterActions extends JupyterActions0 {
       this.setState({ check_select_kernel_init: true });
     } else {
       // Opening an existing notebook
-      const default_kernel = this.store.get_default_kernel();
-      if (default_kernel == null && this.store.get("kernel")) {
+      const default_kernel = store.get_default_kernel();
+      if (default_kernel == null && store.get("kernel")) {
         // But user has no default kernel, since they never before explicitly set one.
         // So we set it.  This is so that a user's default
         // kernel is that of the first ipynb they
         // opened, which is very sensible in courses.
-        this.set_default_kernel(this.store.get("kernel"));
+        this.set_default_kernel(store.get("kernel"));
       }
     }
   };

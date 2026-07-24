@@ -56,7 +56,7 @@ export default function Payment({ balance, update, cost }: Props) {
         <Icon name="credit-card" style={{ marginRight: "10px" }} />
         {cost
           ? `Add at least ${moneyToCurrency(cost)} (plus tax) to your account`
-          : "Make a Deposit"}
+          : "Add funds"}
       </h3>
       <div>
         {balance != null && (

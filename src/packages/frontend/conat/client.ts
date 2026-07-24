@@ -98,6 +98,7 @@ import {
 } from "@cocalc/frontend/syncdoc-diagnostics";
 import { disconnect_from_all_projects } from "@cocalc/frontend/project/websocket/connect";
 import { parseManagedEgressBlockedError } from "@cocalc/frontend/purchases/managed-egress-blocked";
+import { annotateCallHubError } from "@cocalc/conat/hub/call-hub";
 import {
   getProjectUserRole,
   isViewerProjectRole,
@@ -3271,14 +3272,7 @@ export class ConatClient extends EventEmitter {
       if (!routeToProjectHost && this.isTimeoutLikeError(err)) {
         this.maybeProbeStaleHubTransport(`callHub:${name}`, err);
       }
-      try {
-        err.message = `${err.message} - callHub: subject='${subject}', name='${name}', code='${err.code}'`;
-      } catch {
-        err = new Error(
-          `${err.message} - callHub: subject='${subject}', name='${name}', code='${err.code}'`,
-        );
-      }
-      throw err;
+      throw annotateCallHubError({ err, subject, name });
     }
   };
 

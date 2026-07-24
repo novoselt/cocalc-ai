@@ -1292,8 +1292,16 @@ export const getGcpZoneOptions = (
     "global",
   );
   if (!regions?.length || !selection.region) return [];
-  const zones = regions.find((r) => r.name === selection.region)?.zones;
-  if (!zones?.length) return [];
+  const regionZones = regions.find((r) => r.name === selection.region)?.zones;
+  if (!regionZones?.length) return [];
+  const knownZoneNames = new Set(
+    (zonesMeta ?? []).map((zone) => zone.name).filter(Boolean),
+  );
+  // GCP regions may reference specialized AI zones that are not available
+  // through the ordinary VM zones catalog used by project hosts.
+  const zones = knownZoneNames.size
+    ? regionZones.filter((zone) => knownZoneNames.has(zone))
+    : regionZones;
   const gpuType =
     selection.gpu_type && selection.gpu_type !== "none"
       ? selection.gpu_type

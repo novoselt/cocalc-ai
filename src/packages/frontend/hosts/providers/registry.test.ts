@@ -6,6 +6,7 @@ import {
   getHostPriceEstimate,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
+  getGcpZoneOptions,
   getNebiusRegionOptions,
   getProviderEnablement,
   getProviderOptions,
@@ -230,6 +231,64 @@ describe("buildCreateHostPayload", () => {
       spot_restore_retry_window_minutes: 5,
       standard_fallback_enabled: false,
     });
+  });
+});
+
+describe("GCP zone options", () => {
+  it("omits specialized region zones absent from the selectable zones catalog", () => {
+    const catalog = testCatalog([
+      {
+        kind: "regions",
+        scope: "global",
+        payload: [
+          {
+            name: "us-south1",
+            zones: [
+              "us-south1-a",
+              "us-south1-b",
+              "us-south1-c",
+              "us-south1-ai1b",
+            ],
+          },
+        ],
+      },
+      {
+        kind: "zones",
+        scope: "global",
+        payload: [
+          { name: "us-south1-a", region: "us-south1" },
+          { name: "us-south1-b", region: "us-south1" },
+          { name: "us-south1-c", region: "us-south1" },
+        ],
+      },
+    ]);
+
+    expect(
+      getGcpZoneOptions(catalog, { region: "us-south1" }).map(
+        (option) => option.value,
+      ),
+    ).toEqual(["us-south1-a", "us-south1-b", "us-south1-c"]);
+  });
+
+  it("keeps region zones when an older catalog has no zone metadata", () => {
+    const catalog = testCatalog([
+      {
+        kind: "regions",
+        scope: "global",
+        payload: [
+          {
+            name: "us-west1",
+            zones: ["us-west1-a", "us-west1-b"],
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      getGcpZoneOptions(catalog, { region: "us-west1" }).map(
+        (option) => option.value,
+      ),
+    ).toEqual(["us-west1-a", "us-west1-b"]);
   });
 });
 

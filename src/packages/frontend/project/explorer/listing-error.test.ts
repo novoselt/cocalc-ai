@@ -94,6 +94,15 @@ describe("getUserFacingListingError", () => {
     expect(getUserFacingListingError(new TypeError("Failed to fetch"))).toBe(
       "The project connection closed while the file listing was loading. Please wait a moment.",
     );
+    expect(
+      getUserFacingListingError(
+        new Error(
+          "rootfs is not mounted; cannot access absolute path '/home'. Start the project and try again.",
+        ),
+      ),
+    ).toBe(
+      "The project connection closed while the file listing was loading. Please wait a moment.",
+    );
   });
 
   it("rewrites plain closed listing failures into a clear message", () => {

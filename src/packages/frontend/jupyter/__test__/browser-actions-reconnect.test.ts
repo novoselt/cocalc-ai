@@ -182,4 +182,36 @@ describe("JupyterActions reconnect coordination", () => {
     await expect(checking).resolves.toBeUndefined();
     expect(syncdb.emit).not.toHaveBeenCalled();
   });
+
+  it("falls back to kernel selection when the account store is unavailable", () => {
+    const actions: any = new JupyterActions("jupyter-test", {
+      getStore: jest.fn(() => undefined),
+      removeActions: jest.fn(),
+    } as any);
+    actions.store = {
+      get: jest.fn(() => undefined),
+    };
+    actions.show_select_kernel = jest.fn();
+    actions.setState = jest.fn();
+
+    expect(() => actions.initKernel()).not.toThrow();
+    expect(actions.show_select_kernel).toHaveBeenCalledWith("bad kernel");
+    expect(actions.setState).toHaveBeenCalledWith({
+      check_select_kernel_init: true,
+    });
+  });
+
+  it("stops kernel initialization after the Jupyter store is removed", () => {
+    const actions: any = new JupyterActions("jupyter-test", {
+      getStore: jest.fn(),
+      removeActions: jest.fn(),
+    } as any);
+    actions.store = undefined;
+    actions.show_select_kernel = jest.fn();
+    actions.setState = jest.fn();
+
+    expect(() => actions.initKernel()).not.toThrow();
+    expect(actions.show_select_kernel).not.toHaveBeenCalled();
+    expect(actions.setState).not.toHaveBeenCalled();
+  });
 });

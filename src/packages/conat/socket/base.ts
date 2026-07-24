@@ -4,6 +4,7 @@ import {
   type Subscription,
   DEFAULT_REQUEST_TIMEOUT,
 } from "@cocalc/conat/core/client";
+import { ConatError } from "@cocalc/conat/util";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import {
   type Role,
@@ -317,7 +318,7 @@ export abstract class ConatSocketBase extends EventEmitter {
       }
       timer = setTimeout(() => {
         cleanup();
-        reject(Error("timeout"));
+        reject(new ConatError("timeout", { code: 408 }));
       }, ms);
       timer.unref?.();
       if (this.state == "ready") {

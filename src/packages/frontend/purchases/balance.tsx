@@ -1,14 +1,17 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
-import { Button, Card, Space, Spin } from "antd";
-import { Tooltip } from "@cocalc/frontend/components";
-import { zIndexTip } from "./zindex";
-import MoneyStatistic from "./money-statistic";
+import { Button, Card, Space, Spin, Typography } from "antd";
 import Payment from "./payment";
 import { Icon } from "@cocalc/frontend/components/icon";
 import AutoBalance from "./auto-balance";
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
-import type { MoneyValue } from "@cocalc/util/money";
+import {
+  moneyRound2Down,
+  moneyToCurrency,
+  type MoneyValue,
+} from "@cocalc/util/money";
+
+const { Text } = Typography;
 
 interface Props {
   style?: CSSProperties;
@@ -46,40 +49,35 @@ export default function Balance({ style, refresh, cost, defaultAdd }: Props) {
       </div>
     );
   } else {
-    let stat = (
-      <MoneyStatistic title={"Current Balance"} value={balance} roundDown />
-    );
-    if (balance < 0) {
-      stat = (
-        <Tooltip
-          zIndex={zIndexTip}
-          title="You have a negative balance (an account credit).  This is money that you can spend anywhere in CoCalc."
-        >
-          {stat}
-        </Tooltip>
-      );
-    }
-
     if (!add) {
       body = (
-        <div>
-          {stat}
-          <Space style={{ marginTop: "5px" }} wrap>
-            <Button type="primary" size="large" onClick={() => setAdd(true)}>
-              <Icon name="credit-card" style={{ marginRight: "5px" }} />
-              Deposit Money
-            </Button>
+        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Space align="center" wrap>
+            <Text>
+              Current balance:{" "}
+              <Text strong style={{ fontSize: "18px" }}>
+                {moneyToCurrency(moneyRound2Down(balance))}
+              </Text>
+            </Text>
             {refresh != null && (
-              <Button size="large" loading={refreshing} onClick={handleRefresh}>
-                <Icon name="refresh" style={{ marginRight: "5px" }} />
+              <Button
+                icon={<Icon name="refresh" />}
+                loading={refreshing}
+                onClick={handleRefresh}
+              >
                 Refresh
               </Button>
             )}
+            <Button
+              icon={<Icon name="credit-card" />}
+              type="primary"
+              onClick={() => setAdd(true)}
+            >
+              Add funds
+            </Button>
           </Space>
-          <div style={{ marginTop: "20px" }}>
-            <AutoBalance />
-          </div>
-        </div>
+          <AutoBalance />
+        </Space>
       );
     } else {
       body = (
@@ -102,5 +100,5 @@ export default function Balance({ style, refresh, cost, defaultAdd }: Props) {
       );
     }
   }
-  return <Card style={style}>{body}</Card>;
+  return <Card style={{ ...style, textAlign: "left" }}>{body}</Card>;
 }

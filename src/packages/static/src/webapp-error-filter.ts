@@ -1,0 +1,109 @@
+import { extractRuntimeSponsorDenial } from "@cocalc/util/runtime-sponsor-denial";
+
+const IGNORED_BROWSER_ERROR_MESSAGES = new Set([
+  "ResizeObserver loop completed with undelivered notifications.",
+  "ResizeObserver loop limit exceeded",
+]);
+
+export function isIgnorableBrowserError(message: unknown): boolean {
+  return (
+    typeof message === "string" &&
+    IGNORED_BROWSER_ERROR_MESSAGES.has(message.trim())
+  );
+}
+
+function rejectionMessage(reason: unknown): string {
+  if (typeof reason === "string") {
+    return reason.trim().toLowerCase();
+  }
+  if (reason != null && typeof reason === "object") {
+    const message = (reason as { message?: unknown }).message;
+    if (typeof message === "string") {
+      return message.trim().toLowerCase();
+    }
+  }
+  return "";
+}
+
+function rejectionStack(reason: unknown): string {
+  if (reason == null || typeof reason !== "object") {
+    return "";
+  }
+  const stack = (reason as { stack?: unknown }).stack;
+  return typeof stack === "string" ? stack : "";
+}
+
+function rejectionCode(reason: unknown): string {
+  if (reason == null || typeof reason !== "object") {
+    return "";
+  }
+  const code = (reason as { code?: unknown }).code;
+  return typeof code === "string" || typeof code === "number" ? `${code}` : "";
+}
+
+export function isIgnorableUnhandledRejection(reason: unknown): boolean {
+  if (extractRuntimeSponsorDenial(reason) != null) {
+    return true;
+  }
+  const message = rejectionMessage(reason);
+  if (!message) {
+    return false;
+  }
+  const rootfsUnavailable =
+    message.includes("rootfs is not mounted") &&
+    message.includes("start the project and try again");
+  const routingUnavailable =
+    message.includes("unable to route") &&
+    message.includes("'projectactions.fs'") &&
+    message.includes("project-host") &&
+    message.includes("host routing info unavailable");
+  const conatInfoBootstrapTimeout =
+    message.includes("once: timeout") &&
+    (message.includes('waiting for "info"') ||
+      message.includes("waiting for 'info'") ||
+      message.includes("waiting for info"));
+  const socketIoTransportClosed =
+    message === "socket has been disconnected" ||
+    message === "error: socket has been disconnected";
+  const conatSocketRequestTimedOut =
+    message === "request timed out" || message === "error: request timed out";
+  const conatRequestTimedOut =
+    message === "timeout" && rejectionCode(reason) === "408";
+  const filesystemServerStarting = message === "file server not initialized";
+  const staleCollaboratorAccess =
+    message.includes("account '") &&
+    message.includes("' is not a collaborator on project '");
+  const injectedMetaMaskFailure =
+    message === "failed to connect to metamask" &&
+    /(?:chrome|moz)-extension:\/\//i.test(rejectionStack(reason));
+  return (
+    rootfsUnavailable ||
+    routingUnavailable ||
+    conatInfoBootstrapTimeout ||
+    socketIoTransportClosed ||
+    conatSocketRequestTimedOut ||
+    conatRequestTimedOut ||
+    filesystemServerStarting ||
+    staleCollaboratorAccess ||
+    injectedMetaMaskFailure
+  );
+}
+
+export function isOpaqueCrossOriginScriptError({
+  message,
+  error,
+  filename,
+  lineNumber,
+}: {
+  message: unknown;
+  error: unknown;
+  filename: unknown;
+  lineNumber: unknown;
+}): boolean {
+  return (
+    message === "Script error." &&
+    error == null &&
+    !filename &&
+    (lineNumber == null || lineNumber === 0)
+  );
+}
