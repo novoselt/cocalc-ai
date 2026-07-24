@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 
 export type ProjectIoPolicyMode = "disabled" | "observe" | "enforce";
 export type ProjectIoClass = "standard" | "member" | "premium";
+export type ProjectIoCapacityMode = "static" | "gcp-pd-balanced";
 
 export interface ProjectIoLimits {
   rbps: number;
@@ -25,6 +26,7 @@ export interface ProjectIoPolicy {
   mountpoint: string;
   profile: string;
   capacitySource: string;
+  capacity: { mode: ProjectIoCapacityMode };
   pool: ProjectIoLimits;
   leafClasses: Record<ProjectIoClass, ProjectIoLeafClass>;
   adaptive: {
@@ -53,6 +55,7 @@ export const DEFAULT_PROJECT_IO_POLICY: ProjectIoPolicy = {
   mountpoint: "/mnt/cocalc",
   profile: "unconfigured",
   capacitySource: "unconfigured",
+  capacity: { mode: "static" },
   pool: { ...DEFAULT_LIMITS },
   leafClasses: {
     standard: { ...DEFAULT_LIMITS, weight: 100 },
@@ -141,6 +144,7 @@ function mergePolicyObjects(
     },
     adaptive: { ...object(base.adaptive), ...object(override.adaptive) },
     ioCost: { ...object(base.ioCost), ...object(override.ioCost) },
+    capacity: { ...object(base.capacity), ...object(override.capacity) },
   };
 }
 
@@ -172,9 +176,14 @@ export function parseProjectIoPolicy(value: unknown): ProjectIoPolicy {
   ) as Record<ProjectIoClass, ProjectIoLeafClass>;
   const adaptive = object(row.adaptive);
   const ioCost = object(row.ioCost);
+  const capacity = object(row.capacity);
   const ioCostMode = `${ioCost.mode ?? "disabled"}`;
   if (!["disabled", "observe", "enforce"].includes(ioCostMode)) {
     throw new Error("ioCost.mode must be disabled, observe, or enforce");
+  }
+  const capacityMode = `${capacity.mode ?? "static"}`;
+  if (!["static", "gcp-pd-balanced"].includes(capacityMode)) {
+    throw new Error("capacity.mode must be static or gcp-pd-balanced");
   }
   const policy: ProjectIoPolicy = {
     version: 1,
@@ -186,6 +195,7 @@ export function parseProjectIoPolicy(value: unknown): ProjectIoPolicy {
       "unconfigured",
       "capacitySource",
     ),
+    capacity: { mode: capacityMode as ProjectIoCapacityMode },
     pool,
     leafClasses,
     adaptive: {
@@ -208,7 +218,7 @@ export function parseProjectIoPolicy(value: unknown): ProjectIoPolicy {
   if (!policy.mountpoint.startsWith("/")) {
     throw new Error("mountpoint must be absolute");
   }
-  if (mode === "enforce") {
+  if (mode === "enforce" && policy.capacity.mode === "static") {
     for (const [scope, limits] of [
       ["pool", policy.pool],
       ...Object.entries(policy.leafClasses),

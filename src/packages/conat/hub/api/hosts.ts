@@ -712,6 +712,17 @@ export interface HostIoDeviceMetrics {
   device: string;
   major_minor: string;
   scheduler?: string;
+  size_bytes?: number;
+  provider?: string;
+  disk_type?: string;
+  mountpoints?: string[];
+  filesystems?: string[];
+  limits?: {
+    rbps: number;
+    wbps: number;
+    riops: number;
+    wiops: number;
+  };
   read_bytes_per_second?: number;
   write_bytes_per_second?: number;
   read_iops?: number;
@@ -734,7 +745,16 @@ export interface HostIoContainmentMetrics {
   policy_version?: number;
   policy_profile?: string;
   capacity_source?: string;
+  capacity_mode?: "static" | "gcp-pd-balanced";
+  derived_capacity?: {
+    total_bytes: number;
+    device_count: number;
+    physical_read_bps: number;
+    physical_write_bps: number;
+    physical_iops: number;
+  };
   mountpoint: string;
+  mountpoints?: string[];
   filesystem?: string;
   capability: HostIoCapabilityState;
   capability_reason?: string;
