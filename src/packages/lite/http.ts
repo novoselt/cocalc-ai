@@ -127,7 +127,7 @@ export async function initApp({ app, conatClient, AUTH_TOKEN, isHttps }) {
   initAuth({ app, AUTH_TOKEN, isHttps });
   if (isApiV2Enabled()) {
     const { createApiV2Router } = await import("@cocalc/http-api");
-    app.use("/api/v2", createApiV2Router());
+    app.use("/api/v2", createApiV2Router({ browserCors: "request-origin" }));
   }
 
   let pathToStaticAssets;

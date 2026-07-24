@@ -340,4 +340,28 @@ describe("bay-public-origin", () => {
       "127.0.0.1",
     );
   });
+
+  it("applies request-origin CORS without loading server settings", async () => {
+    const { applyBrowserCors } = await import("./bay-public-origin");
+    const req = {
+      headers: {
+        host: "lite.example.com",
+        origin: "https://lite.example.com",
+      },
+      protocol: "https",
+      secure: true,
+    } as any;
+    const res = {
+      setHeader: jest.fn(),
+    } as any;
+
+    await applyBrowserCors(req, res, { requestOriginOnly: true });
+
+    expect(getServerSettingsMock).not.toHaveBeenCalled();
+    expect(listClusterBayRegistryMock).not.toHaveBeenCalled();
+    expect(res.setHeader).toHaveBeenCalledWith(
+      "Access-Control-Allow-Origin",
+      "https://lite.example.com",
+    );
+  });
 });
