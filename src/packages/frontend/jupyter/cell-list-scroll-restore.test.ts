@@ -1,6 +1,10 @@
 /** @jest-environment jsdom */
 
-import { canShowCellDragHandle, restoreNotebookScroll } from "./cell-list";
+import {
+  canShowCellDragHandle,
+  refreshLazyHydrationVersion,
+  restoreNotebookScroll,
+} from "./cell-list";
 
 function makeScroller({
   scrollTop,
@@ -77,5 +81,18 @@ describe("canShowCellDragHandle", () => {
 
     expect(canShowCellDragHandle(actions, "cell-1")).toBe(true);
     expect(is_cell_editable).toHaveBeenCalledWith("cell-1");
+  });
+});
+
+describe("refreshLazyHydrationVersion", () => {
+  it("schedules measured-height refreshes as transition updates", () => {
+    const setVersion = jest.fn();
+    const runTransition = jest.fn((update: () => void) => update());
+
+    refreshLazyHydrationVersion(setVersion, runTransition);
+
+    expect(runTransition).toHaveBeenCalledTimes(1);
+    expect(setVersion).toHaveBeenCalledTimes(1);
+    expect(setVersion.mock.calls[0][0](7)).toBe(8);
   });
 });
