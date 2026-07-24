@@ -192,6 +192,66 @@ describe("accounts.cluster-directory", () => {
     });
   });
 
+  it("filters domain searches by verified primary email before limiting", async () => {
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("information_schema.columns")) {
+        return { rows: [{ exists: true }] };
+      }
+      if (
+        sql.includes("CREATE TABLE") ||
+        sql.includes("CREATE INDEX") ||
+        sql.includes("UPDATE cluster_account_directory")
+      ) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("WITH candidates AS")) {
+        return {
+          rows: [
+            {
+              account_id: "11111111-1111-4111-8111-111111111111",
+              email_address: "ada@example.edu",
+              display_name: "Ada Lovelace",
+              first_name: "Ada",
+              last_name: "Lovelace",
+              home_bay_id: "bay-2",
+              created: null,
+              last_active: null,
+              banned: false,
+              email_address_verified: true,
+            },
+          ],
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    const { searchClusterAccountsByVerifiedEmailDomainsDirect } =
+      await import("./cluster-directory");
+    await expect(
+      searchClusterAccountsByVerifiedEmailDomainsDirect({
+        query: "Ada",
+        verified_email_domains: ["EXAMPLE.EDU"],
+        limit: 10,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        account_id: "11111111-1111-4111-8111-111111111111",
+        email_address: "ada@example.edu",
+      }),
+    ]);
+
+    const [sql, params] = queryMock.mock.calls.find(([sql]) =>
+      sql.includes("WITH candidates AS"),
+    );
+    expect(sql).toContain("email_address_verified ? email_address");
+    expect(sql).toContain("email_address_verified IS TRUE");
+    expect(sql).toContain(
+      "lower(split_part(email_address, '@', 2))=ANY($1::TEXT[])",
+    );
+    expect(sql).toContain("LIMIT $4::INTEGER");
+    expect(params).toEqual([["example.edu"], "%ada%", "bay-0", 10]);
+  });
+
   it("does not add is_admin to non-admin cluster searches", async () => {
     const { searchClusterAccountsDirect } = await import("./cluster-directory");
     const [account] = await searchClusterAccountsDirect({

@@ -75,4 +75,33 @@ describe("searchRelatedClusterAccounts", () => {
       }),
     ]);
   });
+
+  it("can return collaborator email addresses for an authorized caller", async () => {
+    const query = jest.fn(async () => ({
+      rows: [
+        {
+          account_id: RELATED_ID,
+          display_name: "Related User",
+          email_address: "related@example.com",
+          matched_email: false,
+        },
+      ],
+    }));
+    const { searchRelatedClusterAccounts } = await import("./search-policy");
+
+    await expect(
+      searchRelatedClusterAccounts({
+        account_id: ACCOUNT_ID,
+        query: "Related",
+        include_email: true,
+        db: { query },
+        ensureDirectorySchema: async () => {},
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        account_id: RELATED_ID,
+        email_address: "related@example.com",
+      }),
+    ]);
+  });
 });
