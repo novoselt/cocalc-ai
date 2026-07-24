@@ -138,6 +138,7 @@ import { requireFreshAuthForSessionHash } from "@cocalc/server/auth/auth-session
 import { getBrowserAuthSessionHash } from "@cocalc/server/conat/socketio/browser-auth-sessions";
 import { assertAccountTrustedForProductAccess } from "@cocalc/server/accounts/trusted-product-access";
 import { setAutoBalance as setAutoBalanceLocal } from "@cocalc/server/accounts/auto-balance";
+import { hasCardPaymentMethod } from "@cocalc/server/purchases/stripe/get-payment-methods";
 import {
   backfillMembershipAnalyticsPurchaseEvents,
   getMembershipAnalyticsEventsLocal,
@@ -208,6 +209,14 @@ export async function setAutoBalance({
     browser_id,
     session_hash,
   });
+  if (auto_balance.enabled && !(await hasCardPaymentMethod(owner))) {
+    throw Object.assign(
+      new Error(
+        "Add a card payment method before enabling automatic deposits.",
+      ),
+      { code: "payment_method_required" },
+    );
+  }
   const home_bay_id = await resolveTargetAccountHomeBay({
     account_id: owner,
     user_account_id: owner,
