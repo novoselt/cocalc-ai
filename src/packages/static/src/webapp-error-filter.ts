@@ -33,6 +33,14 @@ function rejectionStack(reason: unknown): string {
   return typeof stack === "string" ? stack : "";
 }
 
+function rejectionCode(reason: unknown): string {
+  if (reason == null || typeof reason !== "object") {
+    return "";
+  }
+  const code = (reason as { code?: unknown }).code;
+  return typeof code === "string" || typeof code === "number" ? `${code}` : "";
+}
+
 export function isIgnorableUnhandledRejection(reason: unknown): boolean {
   if (extractRuntimeSponsorDenial(reason) != null) {
     return true;
@@ -59,6 +67,8 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
     message === "error: socket has been disconnected";
   const conatSocketRequestTimedOut =
     message === "request timed out" || message === "error: request timed out";
+  const conatRequestTimedOut =
+    message === "timeout" && rejectionCode(reason) === "408";
   const filesystemServerStarting = message === "file server not initialized";
   const staleCollaboratorAccess =
     message.includes("account '") &&
@@ -72,6 +82,7 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
     conatInfoBootstrapTimeout ||
     socketIoTransportClosed ||
     conatSocketRequestTimedOut ||
+    conatRequestTimedOut ||
     filesystemServerStarting ||
     staleCollaboratorAccess ||
     injectedMetaMaskFailure

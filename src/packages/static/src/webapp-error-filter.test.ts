@@ -27,6 +27,10 @@ describe("isIgnorableUnhandledRejection", () => {
   metaMaskError.stack =
     "Error: Failed to connect to MetaMask\n" +
     "    at Object.connect (chrome-extension://extension-id/scripts/inpage.js:7:84179)";
+  const conatTimeout = Object.assign(new Error("timeout"), { code: 408 });
+  const conatStringTimeout = Object.assign(new Error("timeout"), {
+    code: "408",
+  });
 
   test.each([
     new Error(
@@ -40,6 +44,8 @@ describe("isIgnorableUnhandledRejection", () => {
     "Error: socket has been disconnected",
     new Error("request timed out"),
     "Error: request timed out",
+    conatTimeout,
+    conatStringTimeout,
     new Error("file server not initialized"),
     new Error(
       "account 'account-id' is not a collaborator on project 'project-id'",
@@ -60,6 +66,8 @@ describe("isIgnorableUnhandledRejection", () => {
     "Error: socket has been disconnected while saving a document",
     new Error("request timed out while saving a document"),
     "Error: request timed out while saving a document",
+    new Error("timeout"),
+    Object.assign(new Error("timeout"), { code: 500 }),
     new Error("file server failed to initialize"),
     new Error("account is not a collaborator"),
     new Error("Failed to connect to MetaMask"),
