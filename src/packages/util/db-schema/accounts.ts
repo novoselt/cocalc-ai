@@ -67,7 +67,7 @@ export const AUTOBALANCE_RANGES = {
 
 export const AUTOBALANCE_DEFAULTS = {
   trigger: 10,
-  amount: 20,
+  amount: 50,
   max_day: 200,
   max_week: 1000,
   max_month: 2500,
