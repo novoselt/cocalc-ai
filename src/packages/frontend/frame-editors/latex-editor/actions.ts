@@ -77,12 +77,21 @@ import {
   generateMarkerHash,
   lineHasTexContent,
   removeMarkersForHash,
+  replacementMarkerHash,
   scanBookmarks,
   scanMarkers,
 } from "./chat-markers";
-import { BookmarkGutter, ChatMarkerGutter } from "./chat-marker-gutter";
+import {
+  BookmarkGutter,
+  ChatMarkerGutter,
+  ChatMarkerInlineTail,
+} from "./chat-marker-gutter";
 // Side-effect import: registers the Insert-menu chat marker/bookmark commands.
 import "./chat-marker-command";
+import {
+  parseThreadAnchor,
+  parseThreadResolved,
+} from "@cocalc/frontend/chat/anchors";
 import { ensureSideChatActions } from "@cocalc/frontend/chat/unread";
 import { clean } from "./clean";
 import { KNITR_EXTS } from "./constants";
@@ -841,6 +850,15 @@ export class Actions extends BaseActions<LatexEditorState> {
       }
     }
     this._chatTextMarkers = {};
+    for (const perCm of Object.values(this._chatTailHosts)) {
+      for (const tails of perCm.values()) {
+        for (const tail of tails) {
+          tail.bookmark.clear();
+          tail.root.unmount();
+        }
+      }
+    }
+    this._chatTailHosts = {};
   }
 
   // supports the "Force Rebuild" button.
@@ -2107,10 +2125,11 @@ export class Actions extends BaseActions<LatexEditorState> {
         group.push({
           id: `sub:${path}:${m.line + 1}-chat-${m.hash}`,
           value: `Chat ${m.hash} (line ${m.line + 1})`,
+          level: 6,
           icon: "comment",
           // line is only used for in-group ordering; jumping goes via
           // the hash (jumpToAnchor) so it survives marker moves.
-          extra: { kind: "chat", hash: m.hash, line: m.line },
+          extra: { kind: "chat", hash: m.hash, path, line: m.line },
         });
       }
       const bookmarks = (chatBookmarks?.get(path)?.toJS() ??
@@ -2121,6 +2140,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         group.push({
           id: `sub:${path}:${b.line + 1}-bookmark-${b.text}`,
           value: b.text,
+          level: 6,
           icon: "tag-outlined",
           extra: { kind: "line", path, line: b.line },
         });
@@ -2214,9 +2234,22 @@ export class Actions extends BaseActions<LatexEditorState> {
   } = {};
 
   private _cursorInsertBound = new WeakSet<CodeMirror.Editor>();
+  private _chatClickHandlerInstalled = new WeakSet<CodeMirror.Editor>();
+  private _chatKeybindingInstalled = new WeakSet<CodeMirror.Editor>();
 
   private _chatTextMarkers: {
     [path: string]: Map<CodeMirror.Editor, CodeMirror.TextMarker[]>;
+  } = {};
+
+  private _chatTailHosts: {
+    [path: string]: Map<
+      CodeMirror.Editor,
+      Array<{
+        bookmark: CodeMirror.TextMarker;
+        host: HTMLElement;
+        root: Root;
+      }>
+    >;
   } = {};
 
   private _chatStoreDispose?: () => void;
@@ -2240,12 +2273,61 @@ export class Actions extends BaseActions<LatexEditorState> {
   }
 
   private _refreshChatMarkerScanners(): void {
+    const wanted = new Set<string>();
     for (const actions of this.all_actions()) {
       const path = (actions as any).path;
       if (typeof path !== "string" || !path) continue;
+      wanted.add(path);
       this._attachChatMarkerScanner(actions, path);
       this._ensureChatGutterUI(path);
     }
+    for (const path of Object.keys(this._chatMarkerScanners)) {
+      if (wanted.has(path)) continue;
+      this._chatMarkerScanners[path].dispose();
+      delete this._chatMarkerScanners[path];
+      this._disposeChatStateForPath(path);
+      const chatMarkers = this.store.get("chat_markers");
+      const chatBookmarks = this.store.get("chat_bookmarks");
+      this.setState({
+        chat_markers: chatMarkers?.delete(path),
+        chat_bookmarks: chatBookmarks?.delete(path),
+      });
+    }
+  }
+
+  private _disposeChatStateForPath(path: string): void {
+    for (const cache of [this._chatGutterHosts, this._bookmarkGutterHosts]) {
+      const perCm = cache[path];
+      if (perCm == null) continue;
+      for (const [cm, entries] of perCm) {
+        for (const entry of entries) {
+          try {
+            cm.setGutterMarker(entry.line, CHAT_GUTTER_ID, null);
+            entry.root.unmount();
+          } catch {
+            // The CodeMirror pane may already be gone.
+          }
+        }
+      }
+      delete cache[path];
+    }
+    const cursorHosts = this._cursorInsertHosts[path];
+    if (cursorHosts != null) {
+      for (const [cm, entry] of cursorHosts) {
+        try {
+          if (entry.currentHandle != null) {
+            cm.setGutterMarker(entry.currentHandle, CHAT_GUTTER_ID, null);
+          }
+          entry.chatRoot.unmount();
+          entry.bookmarkRoot.unmount();
+        } catch {
+          // The CodeMirror pane may already be gone.
+        }
+      }
+      delete this._cursorInsertHosts[path];
+    }
+    delete this._bookmarkLines[path];
+    this._clearChatTextDecorations(path);
   }
 
   private _attachChatMarkerScanner(actions: any, path: string): void {
@@ -2254,6 +2336,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     if (syncstring == null) return;
     const scan = () => {
       if (this._state === ("closed" as any)) return;
+      if (syncstring.get_state?.() !== "ready") return;
       let text: string;
       try {
         text = syncstring.to_str() ?? "";
@@ -2263,6 +2346,10 @@ export class Actions extends BaseActions<LatexEditorState> {
       }
       const markers = scanMarkers(text);
       const bookmarks = scanBookmarks(text);
+      const previousMarkers = (this.store
+        .get("chat_markers")
+        ?.get(path)
+        ?.toJS() ?? []) as unknown as ChatMarker[];
       this.setState({
         chat_markers: (
           this.store.get("chat_markers") ?? (fromJS({}) as any)
@@ -2271,6 +2358,7 @@ export class Actions extends BaseActions<LatexEditorState> {
           this.store.get("chat_bookmarks") ?? (fromJS({}) as any)
         ).set(path, fromJS(bookmarks)),
       });
+      this._reconcileEmptyAnchorThread(path, previousMarkers, markers);
       this._updateChatGutters(path, markers, bookmarks);
       this._refreshChatMarkerText(path);
       this._refreshCursorInsert(path);
@@ -2293,6 +2381,45 @@ export class Actions extends BaseActions<LatexEditorState> {
     };
     scan();
     this._ensureChatGutterUI(path);
+  }
+
+  /**
+   * cocalc-ai represents a not-yet-messaged anchor as a config-only thread,
+   * whereas cocalc.com keeps a separate pending anchor.  Follow a direct
+   * source edit of that marker id so the first eventual message is attached
+   * to the id the document actually contains.
+   */
+  private _reconcileEmptyAnchorThread(
+    path: string,
+    previous: ChatMarker[],
+    next: ChatMarker[],
+  ): void {
+    let chatActions;
+    try {
+      chatActions = ensureSideChatActions(this.project_id, this.path);
+    } catch {
+      return;
+    }
+    const selectedKey = `${chatActions.store?.get("selectedThreadKey") ?? ""}`;
+    if (!selectedKey || selectedKey === "0") return;
+    const row = chatActions
+      .listThreadConfigRows()
+      .find((candidate) => candidate?.thread_id === selectedKey);
+    if (row == null || parseThreadResolved(row.resolved) != null) return;
+    const anchor = parseThreadAnchor(row.anchor);
+    if (anchor == null || (anchor.path ?? this.path) !== path) return;
+    if (
+      (chatActions.getThreadIndex().get(selectedKey)?.messageCount ?? 0) !== 0
+    ) {
+      return;
+    }
+    const replacement = replacementMarkerHash(previous, next, anchor.id);
+    if (replacement == null) return;
+    chatActions.setThreadAnchor(selectedKey, {
+      id: replacement,
+      ...(anchor.path ? { path: anchor.path } : undefined),
+    });
+    chatActions.renameThread(selectedKey, this.getAnchorLabel(replacement));
   }
 
   private _updateChatGutters(
@@ -2454,6 +2581,8 @@ export class Actions extends BaseActions<LatexEditorState> {
       perCm.delete(staleCm);
     }
     for (const cm of cms) {
+      this._ensureChatMarkerClickHandler(cm, path);
+      this._ensureChatKeybindings(cm, path);
       if (!perCm.has(cm)) {
         const host = document.createElement("span");
         host.className = "cc-chat-cursor-insert";
@@ -2511,6 +2640,39 @@ export class Actions extends BaseActions<LatexEditorState> {
     this._updateChatGutters(path, markers, bookmarks);
     this._refreshChatMarkerText(path);
     this._refreshCursorInsert(path);
+  }
+
+  private _ensureChatMarkerClickHandler(
+    cm: CodeMirror.Editor,
+    path: string,
+  ): void {
+    if (this._chatClickHandlerInstalled.has(cm)) return;
+    this._chatClickHandlerInstalled.add(cm);
+    cm.on("mousedown", (_editor, event) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey) return;
+      const pos = cm.coordsChar(
+        { left: event.clientX, top: event.clientY },
+        "window",
+      );
+      for (const marker of cm.findMarksAt(pos)) {
+        const hash = (marker as any).chatHash as string | undefined;
+        if (typeof hash !== "string") continue;
+        event.preventDefault();
+        void this.openAnchorChat(hash, path === this.path ? undefined : path);
+        return;
+      }
+    });
+  }
+
+  private _ensureChatKeybindings(cm: CodeMirror.Editor, path: string): void {
+    if (this._chatKeybindingInstalled.has(cm)) return;
+    this._chatKeybindingInstalled.add(cm);
+    cm.addKeyMap({
+      "Shift-Ctrl-M": () => void this.insertChatMarker({ path, cm }),
+      "Shift-Cmd-M": () => void this.insertChatMarker({ path, cm }),
+      "Shift-Ctrl-B": () => void this.insertBookmark({ path, cm }),
+      "Shift-Cmd-B": () => void this.insertBookmark({ path, cm }),
+    });
   }
 
   private _refreshCursorInsert(path: string, onlyCm?: CodeMirror.Editor): void {
@@ -2579,6 +2741,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       clearOnEnter: false,
       inclusiveLeft: false,
       inclusiveRight: false,
+      handleMouseEvents: false,
       readOnly: locked,
       atomic: locked,
       attributes: {
@@ -2603,6 +2766,9 @@ export class Actions extends BaseActions<LatexEditorState> {
     const perCm =
       this._chatTextMarkers[path] ??
       (this._chatTextMarkers[path] = new globalThis.Map());
+    const tailsPerCm =
+      this._chatTailHosts[path] ??
+      (this._chatTailHosts[path] = new globalThis.Map());
     const liveCms = new Set(cms);
     for (const staleCm of [...perCm.keys()]) {
       if (liveCms.has(staleCm)) continue;
@@ -2611,6 +2777,14 @@ export class Actions extends BaseActions<LatexEditorState> {
       }
       perCm.delete(staleCm);
     }
+    for (const staleCm of [...tailsPerCm.keys()]) {
+      if (liveCms.has(staleCm)) continue;
+      for (const tail of tailsPerCm.get(staleCm) ?? []) {
+        tail.bookmark.clear();
+        tail.root.unmount();
+      }
+      tailsPerCm.delete(staleCm);
+    }
     const markers = (this.store.get("chat_markers")?.get(path)?.toJS() ??
       []) as unknown as ChatMarker[];
     for (const cm of cms) {
@@ -2618,6 +2792,12 @@ export class Actions extends BaseActions<LatexEditorState> {
         marker.clear();
       }
       const fresh: CodeMirror.TextMarker[] = [];
+      const oldTails = tailsPerCm.get(cm) ?? [];
+      const freshTails: Array<{
+        bookmark: CodeMirror.TextMarker;
+        host: HTMLElement;
+        root: Root;
+      }> = [];
       for (const marker of markers) {
         const lineText = cm.getLine(marker.line) ?? "";
         fresh.push(
@@ -2630,8 +2810,39 @@ export class Actions extends BaseActions<LatexEditorState> {
             locked: this._anchorHasMessages(marker.hash),
           }),
         );
+        const reused = oldTails[freshTails.length];
+        const host = reused?.host ?? document.createElement("span");
+        const root = reused?.root ?? createRoot(host);
+        root.render(
+          React.createElement(ChatMarkerInlineTail, {
+            hash: marker.hash,
+            masterPath: this.path,
+            project_id: this.project_id,
+            onOpen: () => {
+              void this.openAnchorChat(
+                marker.hash,
+                path === this.path ? undefined : path,
+              );
+            },
+            onConfirmResolve: () => this.resolveChatMarker(marker.hash),
+            onConfirmRemoveStale: () =>
+              this._removeChatMarkersForHash(path, marker.hash),
+          }),
+        );
+        reused?.bookmark.clear();
+        host.parentNode?.removeChild(host);
+        const bookmark = cm.setBookmark(
+          { line: marker.line, ch: lineText.length },
+          { widget: host, insertLeft: false, handleMouseEvents: true },
+        );
+        freshTails.push({ bookmark, host, root });
+      }
+      for (let i = freshTails.length; i < oldTails.length; i++) {
+        oldTails[i].bookmark.clear();
+        oldTails[i].root.unmount();
       }
       perCm.set(cm, fresh);
+      tailsPerCm.set(cm, freshTails);
     }
   }
 
@@ -2772,9 +2983,25 @@ export class Actions extends BaseActions<LatexEditorState> {
   // editor actions, and the live CM instance.  Frames showing included
   // files are cm frames with a path override; their CM is registered on
   // the included file's own editor actions.
-  private _activeSourceTarget():
+  private _activeSourceTarget(requested?: {
+    path: string;
+    cm: CodeMirror.Editor;
+  }):
     | { path: string; actions: any; cm: CodeMirror.Editor; frameId?: string }
     | undefined {
+    if (requested != null) {
+      const actions: any = this._actionsForChatPath(requested.path);
+      if (actions == null) return undefined;
+      const frameId = Object.entries(
+        (actions._cm ?? {}) as Record<string, CodeMirror.Editor>,
+      ).find(([, candidate]) => candidate === requested.cm)?.[0];
+      return {
+        path: requested.path,
+        actions,
+        cm: requested.cm,
+        frameId,
+      };
+    }
     const frameId = this._get_most_recent_active_frame_id_of_type("cm");
     if (frameId == null) return undefined;
     const node = this._get_frame_node(frameId);
@@ -2798,13 +3025,20 @@ export class Actions extends BaseActions<LatexEditorState> {
   // active source pane (master or included file) and open a fresh
   // side-chat thread for it.
   public insertChatMarker = async (
-    _opts: { mode?: "inline" | "block" } = {},
+    opts: {
+      mode?: "inline" | "block";
+      path?: string;
+      cm?: CodeMirror.Editor;
+    } = {},
   ): Promise<void> => {
     if (this.is_read_only_preview()) return;
     const hash = generateMarkerHash();
     const target = this._insertMarkerText(
       buildMarkerLine(hash),
       buildInlineInsertion(hash),
+      opts.path != null && opts.cm != null
+        ? { path: opts.path, cm: opts.cm }
+        : undefined,
     );
     if (target == null) {
       return;
@@ -2820,11 +3054,17 @@ export class Actions extends BaseActions<LatexEditorState> {
   // source-only: they show up in the table of contents but have no
   // chat thread.
   public insertBookmark = async (
-    _opts: Record<string, never> = {},
+    opts: { path?: string; cm?: CodeMirror.Editor } = {},
   ): Promise<void> => {
     if (this.is_read_only_preview()) return;
     const text = generateBookmarkText(new Date());
-    const target = this._insertMarkerText(buildBookmarkLine(text));
+    const target = this._insertMarkerText(
+      buildBookmarkLine(text),
+      undefined,
+      opts.path != null && opts.cm != null
+        ? { path: opts.path, cm: opts.cm }
+        : undefined,
+    );
     if (target == null) {
       return;
     }
@@ -2839,8 +3079,9 @@ export class Actions extends BaseActions<LatexEditorState> {
   private _insertMarkerText(
     blockLine: string,
     inline?: string,
+    requested?: { path: string; cm: CodeMirror.Editor },
   ): { path: string } | undefined {
-    const target = this._activeSourceTarget();
+    const target = this._activeSourceTarget(requested);
     if (target == null) return undefined;
     const { cm, actions, path, frameId } = target;
     const cur = cm.getCursor();
@@ -2934,6 +3175,26 @@ export class Actions extends BaseActions<LatexEditorState> {
   };
 
   // Remove all `% chat: <hash>` markers for one hash from one file.
+  private _clearChatTextDecorations(path: string): void {
+    const markers = this._chatTextMarkers[path];
+    if (markers != null) {
+      for (const list of markers.values()) {
+        for (const marker of list) marker.clear();
+      }
+      delete this._chatTextMarkers[path];
+    }
+    const tails = this._chatTailHosts[path];
+    if (tails != null) {
+      for (const list of tails.values()) {
+        for (const tail of list) {
+          tail.bookmark.clear();
+          tail.root.unmount();
+        }
+      }
+      delete this._chatTailHosts[path];
+    }
+  }
+
   private _removeChatMarkersForHash(path: string, hash: string): void {
     const actions: any =
       path === this.path
@@ -2949,6 +3210,10 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
     const newText = removeMarkersForHash(text, hash);
     if (newText === text) return;
+    // CodeMirror read-only ranges intentionally reject overlapping edits.
+    // Remove our transient UI markers before applying the source transform;
+    // the scanner recreates any remaining markers immediately afterward.
+    this._clearChatTextDecorations(path);
     actions.set_value(newText);
     actions.syncstring_commit();
     this._chatMarkerScanners[path]?.rescan();

@@ -141,6 +141,133 @@ export function BookmarkGutter({ text }: { text: string }) {
   );
 }
 
+export function ChatMarkerInlineTail({
+  hash,
+  masterPath,
+  project_id,
+  onOpen,
+  onConfirmResolve,
+  onConfirmRemoveStale,
+}: {
+  hash: string;
+  masterPath: string;
+  project_id: string;
+  onOpen: () => void;
+  onConfirmResolve: () => void;
+  onConfirmRemoveStale: () => void;
+}) {
+  const { threads, totalMessages, totalUnread } = useAnchoredThreads(
+    project_id,
+    masterPath,
+    hash,
+  );
+  const { threads: resolvedThreads } = useResolvedAnchoredThreads(
+    project_id,
+    masterPath,
+    hash,
+  );
+  const isStale = resolvedThreads.length > 0 && threads.length === 0;
+  const hasUnread = totalUnread > 0;
+  const pillText =
+    isStale || totalMessages <= 0
+      ? undefined
+      : hasUnread
+        ? `${totalUnread} unread`
+        : `${totalMessages} message${totalMessages === 1 ? "" : "s"}`;
+
+  return (
+    <span
+      style={{ display: "inline-flex", alignItems: "center", marginLeft: 4 }}
+    >
+      {pillText != null && (
+        <Tooltip
+          title={
+            hasUnread ? `${totalUnread} unread of ${totalMessages}` : pillText
+          }
+          placement="top"
+        >
+          <span
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpen();
+            }}
+            style={{
+              display: "inline-block",
+              padding: "0 10px",
+              borderRadius: 10,
+              fontSize: "0.85em",
+              lineHeight: 1.4,
+              fontWeight: 500,
+              cursor: "pointer",
+              backgroundColor: hasUnread ? COLORS.ANTD_RED : COLORS.GRAY_LL,
+              color: hasUnread ? COLORS.GRAY_LLL : COLORS.GRAY_DD,
+            }}
+          >
+            {pillText}
+          </span>
+        </Tooltip>
+      )}
+      {isStale && (
+        <Tooltip title="Stale marker — chat is resolved" placement="top">
+          <span
+            onMouseDown={(event) => event.stopPropagation()}
+            style={{
+              display: "inline-block",
+              padding: "0 10px",
+              borderRadius: 10,
+              fontSize: "0.85em",
+              lineHeight: 1.4,
+              fontStyle: "italic",
+              color: COLORS.GRAY_M,
+              backgroundColor: COLORS.GRAY_LL,
+            }}
+          >
+            resolved
+          </span>
+        </Tooltip>
+      )}
+      <Popconfirm
+        title={
+          isStale ? "Remove stale marker?" : "Resolve chat and remove marker?"
+        }
+        description={
+          isStale
+            ? "The chat is already resolved. Remove this leftover marker?"
+            : "Resolve the chat and remove every source marker with this ID?"
+        }
+        okText={isStale ? "Remove" : "Resolve"}
+        cancelText="Cancel"
+        onConfirm={isStale ? onConfirmRemoveStale : onConfirmResolve}
+        placement="right"
+      >
+        <Tooltip
+          title={
+            isStale
+              ? "Remove this stale marker"
+              : "Resolve chat and remove marker"
+          }
+          placement="right"
+        >
+          <span
+            onMouseDown={(event) => event.stopPropagation()}
+            style={{
+              display: "inline-block",
+              cursor: "pointer",
+              color: isStale ? COLORS.GRAY_L : COLORS.BS_GREEN_D,
+              fontSize: isStale ? "0.9em" : "1.1em",
+              marginLeft: 8,
+              padding: "0 4px",
+            }}
+          >
+            <Icon name={isStale ? "times-circle" : "check-circle"} />
+          </span>
+        </Tooltip>
+      </Popconfirm>
+    </span>
+  );
+}
+
 // Plain-function wrappers so latex-editor/actions.ts (a .ts file, no JSX)
 // can build the gutter components.
 export function renderChatMarkerGutter(props: ChatMarkerGutterProps) {

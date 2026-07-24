@@ -45,4 +45,15 @@ describe("parseTableOfContents", () => {
     const heading = entries.find((e) => e.value === "One");
     expect(heading?.id).toBe("3");
   });
+
+  it("parses nested braces and ignores trailing chat comments", () => {
+    const entries = parseTableOfContents(
+      "\\section{One \\textbf{bold}} % chat: abc12345",
+      { includeChatMarkers: true },
+    );
+    expect(entries.map((e) => e.value)).toEqual([
+      "One \\textbf{bold}",
+      "Chat abc12345 (line 1)",
+    ]);
+  });
 });

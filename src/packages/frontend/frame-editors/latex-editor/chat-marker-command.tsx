@@ -15,6 +15,7 @@ editors that support them.
 
 import { defineMessage } from "react-intl";
 
+import { IS_MACOS } from "@cocalc/frontend/feature";
 import { menu } from "@cocalc/frontend/i18n";
 import { addCommands } from "../frame-tree/commands/commands";
 import { addMenus } from "../frame-tree/commands/menus";
@@ -42,6 +43,7 @@ addCommands({
         "Insert a chat anchor (% chat: [hash]) at the cursor and open a linked side-chat thread. Use inline after tex content or on its own line.",
       description: "Tooltip for inserting a chat marker in a LaTeX doc",
     }),
+    keyboard: `${IS_MACOS ? "⌘" : "control"} + shift + M`,
     isVisible: ({ props }) =>
       typeof (props.actions as any)?.insertChatMarker === "function",
     onClick: ({ props }) => {
@@ -62,6 +64,7 @@ addCommands({
         "Insert a collaborative bookmark (% bookmark: text) at the cursor. Appears in the Contents panel and lets collaborators jump there.",
       description: "Tooltip for inserting a bookmark in a LaTeX doc",
     }),
+    keyboard: `${IS_MACOS ? "⌘" : "control"} + shift + B`,
     isVisible: ({ props }) =>
       typeof (props.actions as any)?.insertBookmark === "function",
     onClick: ({ props }) => {

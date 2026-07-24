@@ -167,6 +167,29 @@ export function removeMarkersForHash(text: string, hash: string): string {
   return lines.join("\n");
 }
 
+/**
+ * Detect a direct edit of one marker id.  This deliberately requires the
+ * old hash to have existed in the previous scan and exactly one new hash
+ * to appear, so unrelated insertions cannot steal an empty chat thread.
+ */
+export function replacementMarkerHash(
+  previous: ChatMarker[],
+  next: ChatMarker[],
+  oldHash: string,
+): string | undefined {
+  if (!previous.some((marker) => marker.hash === oldHash)) return;
+  if (next.some((marker) => marker.hash === oldHash)) return;
+  const previousHashes = new Set(previous.map((marker) => marker.hash));
+  const added = [
+    ...new Set(
+      next
+        .map((marker) => marker.hash)
+        .filter((hash) => !previousHashes.has(hash)),
+    ),
+  ];
+  return added.length === 1 ? added[0] : undefined;
+}
+
 export interface BookmarkMarker {
   /** The free-form text identifying the bookmark. */
   text: string;

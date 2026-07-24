@@ -10,11 +10,12 @@ import {
   buildBookmarkLine,
   buildInlineInsertion,
   buildMarkerLine,
-  removeMarkersForHash,
   findCommentStart,
   generateBookmarkText,
   generateMarkerHash,
   lineHasTexContent,
+  removeMarkersForHash,
+  replacementMarkerHash,
   scanBlankLines,
   scanBookmarks,
   scanMarkers,
@@ -289,5 +290,39 @@ describe("removeMarkersForHash", () => {
   it("is a no-op when the hash is absent", () => {
     const text = "hello\nworld";
     expect(removeMarkersForHash(text, "missing123")).toBe(text);
+  });
+});
+
+describe("replacementMarkerHash", () => {
+  const marker = (hash: string, line = 0) => ({ hash, line, col: 0 });
+
+  it("detects a direct replacement of an existing marker id", () => {
+    expect(
+      replacementMarkerHash(
+        [marker("old-hash")],
+        [marker("new-hash")],
+        "old-hash",
+      ),
+    ).toBe("new-hash");
+  });
+
+  it("does not treat an unrelated insertion as a replacement", () => {
+    expect(
+      replacementMarkerHash(
+        [marker("old-hash")],
+        [marker("old-hash"), marker("new-hash", 1)],
+        "old-hash",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("refuses ambiguous replacements", () => {
+    expect(
+      replacementMarkerHash(
+        [marker("old-hash")],
+        [marker("new-one"), marker("new-two", 1)],
+        "old-hash",
+      ),
+    ).toBeUndefined();
   });
 });

@@ -13,6 +13,7 @@ import { scanBookmarks, scanMarkers } from "./chat-markers";
 export interface ChatTocExtra {
   kind: "chat";
   hash: string;
+  path?: string;
 }
 
 export interface ParseTableOfContentsOptions {
@@ -39,6 +40,7 @@ export function parseTableOfContents(
         // them, so a "<line>-..." suffix still jumps to the right line.
         id: `${m.line + 1}-chat-${m.hash}`,
         value: `Chat ${m.hash} (line ${m.line + 1})`,
+        level: 6,
         icon: "comment",
         extra: { kind: "chat", hash: m.hash } as ChatTocExtra,
       });
@@ -52,6 +54,7 @@ export function parseTableOfContents(
       overlay.push({
         id: `${b.line + 1}-bookmark-${b.text}`,
         value: b.text,
+        level: 6,
         icon: "tag-outlined",
       });
     }
@@ -72,47 +75,52 @@ function parseHeadings(latex: string): Entry[] {
   for (const line0 of latex.split("\n")) {
     id += 1;
     const line = line0.trim();
-    if (line.startsWith("\\section{")) {
+    const section = extractHeading(line, "\\section{");
+    if (section != null) {
       number = [number[0] + 1];
       entries.push({
         level: 1,
-        value: line.slice("\\section{".length, -1),
+        value: section,
         id: `${id}`,
         /*number, */
       });
       continue;
     }
-    if (line.startsWith("\\subsection{")) {
+    const subsection = extractHeading(line, "\\subsection{");
+    if (subsection != null) {
       number = [number[0], (number[1] ?? 0) + 1];
       entries.push({
         level: 2,
-        value: line.slice("\\subsection{".length, -1),
+        value: subsection,
         id: `${id}`,
         /* number, */
       });
       continue;
     }
-    if (line.startsWith("\\subsubsection{")) {
+    const subsubsection = extractHeading(line, "\\subsubsection{");
+    if (subsubsection != null) {
       number = [number[0], number[1], (number[2] ?? 0) + 1];
       entries.push({
         level: 3,
-        value: line.slice("\\subsubsection{".length, -1),
+        value: subsubsection,
         id: `${id}`,
         /* number, */
       });
       continue;
     }
-    if (line.startsWith("\\paragraph{")) {
+    const paragraph = extractHeading(line, "\\paragraph{");
+    if (paragraph != null) {
       number = [number[0], number[1], number[2], (number[3] ?? 0) + 1];
       entries.push({
         level: 4,
-        value: line.slice("\\paragraph{".length, -1),
+        value: paragraph,
         id: `${id}`,
         /* number, */
       });
       continue;
     }
-    if (line.startsWith("\\subparagraph{")) {
+    const subparagraph = extractHeading(line, "\\subparagraph{");
+    if (subparagraph != null) {
       number = [
         number[0],
         number[1],
@@ -122,7 +130,7 @@ function parseHeadings(latex: string): Entry[] {
       ];
       entries.push({
         level: 5,
-        value: line.slice("\\subparagraph{".length, -1),
+        value: subparagraph,
         id: `${id}`,
         /*number,*/
       });
@@ -131,4 +139,25 @@ function parseHeadings(latex: string): Entry[] {
   }
 
   return entries;
+}
+
+// Extract a section command argument while respecting nested braces.  The
+// command's closing brace need not be the final character on the line: a
+// comment, including a chat marker, may follow it.
+function extractHeading(line: string, prefix: string): string | null {
+  if (!line.startsWith(prefix)) {
+    return null;
+  }
+  let depth = 1;
+  for (let i = prefix.length; i < line.length; i += 1) {
+    if (line[i] === "{") {
+      depth += 1;
+    } else if (line[i] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return line.slice(prefix.length, i);
+      }
+    }
+  }
+  return null;
 }
