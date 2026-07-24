@@ -66,6 +66,7 @@ const getClusterAccountByIdDirectMock = jest.fn();
 const dbMock = jest.fn();
 const interBayGetMembershipDetailsMock = jest.fn();
 const interBaySetAutoBalanceMock = jest.fn();
+const interBaySearchRelatedAccountsMock = jest.fn();
 const interBayGetAccountUsageOverviewMock = jest.fn();
 const interBayGetMembershipPackagesMock = jest.fn();
 const interBayUpdateMembershipPackageMock = jest.fn();
@@ -100,6 +101,9 @@ const assertAccountTrustedForProductAccessMock = jest.fn();
 const hasCardPaymentMethodMock = jest.fn();
 const getConfiguredClusterSeedBayIdMock = jest.fn();
 const getConfiguredBayIdMock = jest.fn();
+const searchRelatedClusterAccountsMock = jest.fn();
+const getNonAdminUserSearchRequestMock = jest.fn();
+const searchClusterAccountsMock = jest.fn();
 
 jest.mock("@cocalc/server/purchases/get-balance", () => ({
   __esModule: true,
@@ -282,6 +286,26 @@ jest.mock("@cocalc/server/accounts/cluster-directory", () => ({
     getClusterAccountByIdDirectMock(...args),
 }));
 
+jest.mock("@cocalc/server/accounts/search-policy", () => ({
+  searchRelatedClusterAccounts: (...args: any[]) =>
+    searchRelatedClusterAccountsMock(...args),
+}));
+
+jest.mock("@cocalc/server/accounts/user-search-policy", () => {
+  const actual = jest.requireActual(
+    "@cocalc/server/accounts/user-search-policy",
+  );
+  return {
+    ...actual,
+    getNonAdminUserSearchRequest: (...args: any[]) =>
+      getNonAdminUserSearchRequestMock(...args),
+  };
+});
+
+jest.mock("@cocalc/server/inter-bay/accounts", () => ({
+  searchClusterAccounts: (...args: any[]) => searchClusterAccountsMock(...args),
+}));
+
 jest.mock("@cocalc/server/bay-config", () => ({
   getConfiguredBayId: (...args: any[]) => getConfiguredBayIdMock(...args),
 }));
@@ -328,6 +352,8 @@ jest.mock("@cocalc/conat/inter-bay/api", () => ({
     getMembershipDetails: (...args: any[]) =>
       interBayGetMembershipDetailsMock(...args),
     setAutoBalance: (...args: any[]) => interBaySetAutoBalanceMock(...args),
+    searchRelatedAccounts: (...args: any[]) =>
+      interBaySearchRelatedAccountsMock(...args),
     getAccountUsageOverview: (...args: any[]) =>
       interBayGetAccountUsageOverviewMock(...args),
     getMembershipPackages: (...args: any[]) =>
@@ -404,6 +430,7 @@ beforeEach(() => {
   removeSiteLicenseManagerMock.mockReset();
   interBayUpdateSiteLicenseMock.mockReset();
   interBaySetAutoBalanceMock.mockReset();
+  interBaySearchRelatedAccountsMock.mockReset();
   interBayAddSiteLicensePoolMock.mockReset();
   interBayArchiveSiteLicensePoolMock.mockReset();
   interBayRevokeSiteLicensePoolSeatMock.mockReset();
@@ -421,6 +448,9 @@ beforeEach(() => {
   listConfiguredBaysMock.mockReset();
   resolveAccountHomeBayMock.mockReset();
   getClusterAccountByIdDirectMock.mockReset();
+  searchRelatedClusterAccountsMock.mockReset();
+  getNonAdminUserSearchRequestMock.mockReset();
+  searchClusterAccountsMock.mockReset();
   getBrowserAuthSessionHashMock.mockReturnValue(undefined);
   requireFreshAuthForSessionHashMock.mockResolvedValue(undefined);
   assertAccountTrustedForProductAccessMock.mockResolvedValue(undefined);
@@ -466,6 +496,29 @@ beforeEach(() => {
     home_bay_id: "bay-0",
     source: "cluster-directory",
   });
+  getNonAdminUserSearchRequestMock.mockImplementation(
+    async ({ query, limit }: { query: string; limit?: number }) => {
+      const normalized = query.trim().toLowerCase();
+      const kind = normalized.includes("@")
+        ? "email"
+        : /^[0-9a-f-]{36}$/.test(normalized)
+          ? "account_id"
+          : "text";
+      return {
+        normalized,
+        kind,
+        email_queries: kind === "email" ? [normalized] : [],
+        string_queries: kind === "text" ? [[normalized]] : [],
+        account_id: kind === "account_id" ? normalized : undefined,
+        allowed: normalized.length >= 2,
+        limit: limit ?? 20,
+        minimum_text_length: 2,
+      };
+    },
+  );
+  searchRelatedClusterAccountsMock.mockResolvedValue([]);
+  interBaySearchRelatedAccountsMock.mockResolvedValue([]);
+  searchClusterAccountsMock.mockResolvedValue([]);
 });
 
 const AUTO_BALANCE_CONFIG = {
@@ -1102,6 +1155,147 @@ describe("purchases membership packages", () => {
     });
     expect(getSiteLicenseOverviewMock).not.toHaveBeenCalled();
     expect(result.site_license.id).toBe("license-remote-1");
+  });
+
+  it("merges collaborator and verified-domain results for site-license managers", async () => {
+    getSiteLicenseOverviewMock.mockResolvedValue({
+      site_license: {
+        id: "license-1",
+        allowed_domains: ["example.edu"],
+      },
+      pools: [
+        {
+          id: "pool-1",
+          metadata: { allowed_domains: ["example.edu"] },
+        },
+      ],
+      managers: [],
+      pending_requests: [],
+      viewer_role: "manager",
+    });
+    searchRelatedClusterAccountsMock.mockResolvedValue([
+      {
+        account_id: "collaborator-1",
+        display_name: "Outside Collaborator",
+        email_address: "outside@elsewhere.org",
+        last_active: 20,
+      },
+    ]);
+    searchClusterAccountsMock.mockResolvedValue([
+      {
+        account_id: "domain-user-1",
+        first_name: "Domain",
+        last_name: "User",
+        email_address: "domain@example.edu",
+        last_active: 10,
+      },
+    ]);
+
+    const { searchSiteLicensePoolAccounts } = await import("./purchases");
+    const result = await searchSiteLicensePoolAccounts({
+      account_id: "manager-1",
+      site_license_id: "license-1",
+      package_id: "pool-1",
+      query: "User",
+      limit: 20,
+    });
+
+    expect(searchRelatedClusterAccountsMock).toHaveBeenCalledWith({
+      account_id: "manager-1",
+      query: "user",
+      limit: 20,
+      include_email: true,
+    });
+    expect(searchClusterAccountsMock).toHaveBeenCalledWith({
+      query: "user",
+      limit: 20,
+      verified_email_domains: ["example.edu"],
+    });
+    expect(result).toEqual({
+      accounts: [
+        {
+          account_id: "collaborator-1",
+          display_name: "Outside Collaborator",
+          first_name: undefined,
+          last_name: undefined,
+          email_address: "outside@elsewhere.org",
+        },
+        {
+          account_id: "domain-user-1",
+          display_name: "Domain User",
+          first_name: "Domain",
+          last_name: "User",
+          email_address: "domain@example.edu",
+        },
+      ],
+      query_kind: "text",
+      minimum_text_length: 2,
+    });
+  });
+
+  it("routes collaborator search to the manager account home bay", async () => {
+    resolveAccountHomeBayMock.mockResolvedValue({
+      account_id: "manager-1",
+      home_bay_id: "bay-2",
+      source: "cluster-directory",
+    });
+    getSiteLicenseOverviewMock.mockResolvedValue({
+      site_license: { id: "license-1", allowed_domains: [] },
+      pools: [{ id: "pool-1", metadata: { allowed_domains: [] } }],
+      managers: [],
+      pending_requests: [],
+      viewer_role: "manager",
+    });
+    interBaySearchRelatedAccountsMock.mockResolvedValue([
+      {
+        account_id: "collaborator-1",
+        display_name: "Remote Collaborator",
+        email_address: "remote@elsewhere.org",
+      },
+    ]);
+
+    const { searchSiteLicensePoolAccounts } = await import("./purchases");
+    await searchSiteLicensePoolAccounts({
+      account_id: "manager-1",
+      site_license_id: "license-1",
+      package_id: "pool-1",
+      query: "Remote",
+    });
+
+    expect(interBaySearchRelatedAccountsMock).toHaveBeenCalledWith({
+      account_id: "manager-1",
+      query: "remote",
+      limit: 20,
+      include_email: true,
+    });
+    expect(searchRelatedClusterAccountsMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects site-license viewers before searching for accounts", async () => {
+    getSiteLicenseOverviewMock.mockResolvedValue({
+      site_license: { id: "license-1", allowed_domains: ["example.edu"] },
+      pools: [
+        {
+          id: "pool-1",
+          metadata: { allowed_domains: ["example.edu"] },
+        },
+      ],
+      managers: [],
+      pending_requests: [],
+      viewer_role: "viewer",
+    });
+
+    const { searchSiteLicensePoolAccounts } = await import("./purchases");
+    await expect(
+      searchSiteLicensePoolAccounts({
+        account_id: "viewer-1",
+        site_license_id: "license-1",
+        package_id: "pool-1",
+        query: "Ada",
+      }),
+    ).rejects.toThrow("must manage site license");
+    expect(searchRelatedClusterAccountsMock).not.toHaveBeenCalled();
+    expect(searchClusterAccountsMock).not.toHaveBeenCalled();
   });
 
   it("lists site-license overviews locally on the seed bay", async () => {
