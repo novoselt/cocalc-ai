@@ -33,6 +33,8 @@ const setSiteLicenseManager = jest.fn();
 const removeSiteLicenseManager = jest.fn();
 const updateMembershipPackage = jest.fn();
 const assignMembershipPackageSeat = jest.fn();
+const assignSiteLicensePoolSeat = jest.fn();
+const searchSiteLicensePoolAccounts = jest.fn();
 const revokeMembershipPackageSeat = jest.fn();
 const userSearch = jest.fn();
 const getNames = jest.fn();
@@ -169,6 +171,10 @@ jest.mock("@cocalc/frontend/purchases/api", () => ({
   updateMembershipPackage: (...args: any[]) => updateMembershipPackage(...args),
   assignMembershipPackageSeat: (...args: any[]) =>
     assignMembershipPackageSeat(...args),
+  assignSiteLicensePoolSeat: (...args: any[]) =>
+    assignSiteLicensePoolSeat(...args),
+  searchSiteLicensePoolAccounts: (...args: any[]) =>
+    searchSiteLicensePoolAccounts(...args),
   revokeMembershipPackageSeat: (...args: any[]) =>
     revokeMembershipPackageSeat(...args),
 }));
@@ -379,6 +385,11 @@ describe("membership package managers", () => {
     stripePaymentTotal = 0;
     runFreshAuthAction.mockClear();
     userSearch.mockResolvedValue([]);
+    searchSiteLicensePoolAccounts.mockResolvedValue({
+      accounts: [],
+      query_kind: "text",
+      minimum_text_length: 2,
+    });
     getNames.mockResolvedValue({
       "user-1": {
         email_address: "grace@example.edu",
@@ -1367,6 +1378,106 @@ describe("membership package managers", () => {
         "Only CoCalc admins can change delegated site-license roles.",
       ),
     ).toBeNull();
+  });
+
+  it("searches collaborators and verified-domain accounts when adding pool users", async () => {
+    listSiteLicenseOverviews.mockResolvedValue([
+      makeSiteLicenseOverview({
+        pools: [makeSitePackage()],
+      }),
+    ]);
+    searchSiteLicensePoolAccounts.mockResolvedValue({
+      accounts: [
+        {
+          account_id: "11111111-1111-4111-8111-111111111111",
+          display_name: "Ada Lovelace",
+          email_address: "ada@example.edu",
+        },
+      ],
+      query_kind: "text",
+      minimum_text_length: 2,
+    });
+
+    render(<SiteLicenseManager tiers={TIERS} />);
+    fireEvent.click(await screen.findByText("Add users"));
+
+    expect(
+      screen.getByText(
+        /Search includes your collaborators and accounts with a verified email/,
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByText("example.edu")).toHaveLength(2);
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Name, email, or account ID"),
+      {
+        target: { value: "Ada" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    await waitFor(() => {
+      expect(searchSiteLicensePoolAccounts).toHaveBeenCalledWith({
+        site_license_id: "license-1",
+        package_id: "site-1",
+        query: "Ada",
+        limit: 20,
+      });
+      expect(screen.getByText("Ada Lovelace")).toBeTruthy();
+      expect(
+        screen.getByText(
+          "ada@example.edu · 11111111-1111-4111-8111-111111111111",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("explains searches without pool domains and out-of-domain email misses", async () => {
+    listSiteLicenseOverviews.mockResolvedValue([
+      makeSiteLicenseOverview({
+        pools: [
+          makeSitePackage({
+            metadata: {
+              allowed_domains: [],
+              pool_name: "Students",
+              site_license_id: "license-1",
+              requires_approval: false,
+              verification_policy: "manager-approval",
+              exclusive_group: "student",
+            },
+          }),
+        ],
+      }),
+    ]);
+    searchSiteLicensePoolAccounts.mockResolvedValue({
+      accounts: [],
+      query_kind: "email",
+      minimum_text_length: 2,
+    });
+
+    render(<SiteLicenseManager tiers={TIERS} />);
+    fireEvent.click(await screen.findByText("Add users"));
+
+    expect(
+      screen.getByText(
+        "This pool has no allowed email domains. Search is limited to accounts that already collaborate with you.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(
+      screen.getByPlaceholderText("Name, email, or account ID"),
+      {
+        target: { value: "ada@outside.org" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "This email is outside the pool's allowed domains. The account can only be found if it already collaborates with you.",
+        ),
+      ).toBeTruthy();
+    });
   });
 
   it("renders customer-facing site-license header details", async () => {
