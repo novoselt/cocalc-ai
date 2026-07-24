@@ -2243,6 +2243,7 @@ export class Actions extends BaseActions<LatexEditorState> {
   private _cursorInsertBound = new WeakSet<CodeMirror.Editor>();
   private _chatClickHandlerInstalled = new WeakSet<CodeMirror.Editor>();
   private _chatKeybindingInstalled = new WeakSet<CodeMirror.Editor>();
+  private _chatTailTrackingInstalled = new WeakSet<CodeMirror.Editor>();
 
   private _chatTextMarkers: {
     [path: string]: Map<CodeMirror.Editor, CodeMirror.TextMarker[]>;
@@ -2596,6 +2597,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     for (const cm of cms) {
       this._ensureChatMarkerClickHandler(cm, path);
       this._ensureChatKeybindings(cm, path);
+      this._ensureChatTailTracking(cm, path);
       if (!perCm.has(cm)) {
         const host = document.createElement("span");
         host.className = "cc-chat-cursor-insert";
@@ -2686,6 +2688,64 @@ export class Actions extends BaseActions<LatexEditorState> {
       "Shift-Ctrl-B": () => void this.insertBookmark({ path, cm }),
       "Shift-Cmd-B": () => void this.insertBookmark({ path, cm }),
     });
+  }
+
+  /**
+   * CodeMirror normally tracks bookmark widgets through local edits, but a
+   * rapid sequence of line splits can briefly leave an inline widget painted
+   * at its previous visual line until the debounced source scan rebuilds it.
+   * The marker TextMarker itself moves synchronously, so use its live end
+   * position to realign the pill on every local CM change.
+   */
+  private _ensureChatTailTracking(cm: CodeMirror.Editor, path: string): void {
+    if (this._chatTailTrackingInstalled.has(cm)) return;
+    this._chatTailTrackingInstalled.add(cm);
+    cm.on("change", (_editor, change) => {
+      const insertedLineCount = change.text.length - 1;
+      const removedLineCount = change.to.line - change.from.line;
+      this._syncChatTailPositions(
+        path,
+        cm,
+        insertedLineCount === removedLineCount ? undefined : change.from.line,
+      );
+    });
+  }
+
+  private _syncChatTailPositions(
+    path: string,
+    cm: CodeMirror.Editor,
+    forceFromLine?: number,
+  ): void {
+    const markers = this._chatTextMarkers[path]?.get(cm);
+    const tails = this._chatTailHosts[path]?.get(cm);
+    if (markers == null || tails == null) return;
+    const count = Math.min(markers.length, tails.length);
+    for (let i = 0; i < count; i++) {
+      const range = markers[i].find() as
+        | { from: CodeMirror.Position; to: CodeMirror.Position }
+        | undefined;
+      if (range == null || !("to" in range)) continue;
+      const current = tails[i].bookmark.find() as
+        | CodeMirror.Position
+        | undefined;
+      const force = forceFromLine != null && range.to.line >= forceFromLine;
+      if (
+        !force &&
+        current != null &&
+        current.line === range.to.line &&
+        current.ch === range.to.ch
+      ) {
+        continue;
+      }
+      const { host } = tails[i];
+      tails[i].bookmark.clear();
+      host.parentNode?.removeChild(host);
+      tails[i].bookmark = cm.setBookmark(range.to, {
+        widget: host,
+        insertLeft: false,
+        handleMouseEvents: true,
+      });
+    }
   }
 
   private _refreshCursorInsert(path: string, onlyCm?: CodeMirror.Editor): void {
