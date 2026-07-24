@@ -30,6 +30,7 @@ const { ensureSideChatActions } = jest.requireMock("../unread") as {
 
 function makeFakeActions() {
   const store = new EventEmitter();
+  const messageCache = new EventEmitter();
   const syncdb = new EventEmitter() as EventEmitter & {
     get_state: () => string;
   };
@@ -37,6 +38,7 @@ function makeFakeActions() {
   syncdb.get_state = () => state;
   return {
     store,
+    messageCache,
     syncdb,
     close: () => {
       state = "closed";
@@ -109,5 +111,33 @@ describe("useAnchoredThreads reconnect", () => {
       jest.advanceTimersByTime(3000);
     });
     await waitFor(() => expect(latest?.chatActions).toBe(second));
+  });
+
+  it("refreshes counts when an incoming message updates only the cache", async () => {
+    const actions: any = makeFakeActions();
+    let messageCount = 0;
+    actions.listThreadConfigRows = () => [
+      {
+        event: "chat-thread-config",
+        thread_id: "thread-1",
+        anchor: { id: "hash1234" },
+      },
+    ];
+    actions.getThreadIndex = () =>
+      new Map([
+        ["thread-1", { key: "thread-1", messageCount, newestTime: Date.now() }],
+      ]);
+    ensureSideChatActions.mockReturnValue(actions);
+
+    let latest: any;
+    render(<Probe onInfo={(info) => (latest = info)} />);
+    await waitFor(() => expect(latest?.totalMessages).toBe(0));
+
+    act(() => {
+      messageCount = 1;
+      actions.messageCache.emit("version", 1);
+    });
+
+    await waitFor(() => expect(latest?.totalMessages).toBe(1));
   });
 });

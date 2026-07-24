@@ -322,9 +322,15 @@ function useSideChatActions(
       setChatVersion((value) => value + 1);
     };
     chatActions.store.on("change", refresh);
+    // Incoming chat rows update the shared message cache directly.  They do
+    // not necessarily mutate the Redux chat store, so listen to its version
+    // event as well or remote unread/message counts can remain stale until
+    // some unrelated store change (such as closing and reopening chat).
+    chatActions.messageCache?.on?.("version", refresh);
     refresh();
     return () => {
       chatActions.store?.removeListener("change", refresh);
+      chatActions.messageCache?.removeListener?.("version", refresh);
     };
   }, [chatActions]);
 
