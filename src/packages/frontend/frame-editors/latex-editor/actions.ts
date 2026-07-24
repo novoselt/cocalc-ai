@@ -24,17 +24,20 @@ const VIEWERS = ["pdfjs_canvas", "pdf_embed", "build", "output"] as const;
 
 // CodeMirror gutter id for chat markers and bookmarks; must be listed in
 // the cm frame's `gutters` in editor.ts and styled in styles/editor.css.
-export const CHAT_GUTTER_ID = "Codemirror-latex-chat";
+export const CHAT_GUTTER_ID = "CodeMirror-latex-chat";
 
 import { delay } from "awaiting";
 import * as CodeMirror from "codemirror";
-import { fromJS, List, Map } from "immutable";
+import { fromJS, List, Map as IMap } from "immutable";
 import { debounce, union } from "lodash";
 import { normalize as path_normalize } from "path";
+import * as React from "react";
+import { createRoot, type Root } from "react-dom/client";
 
 import { Store, TypedMap } from "@cocalc/frontend/app-framework";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import {
+  Icon,
   TableOfContentsEntry,
   TableOfContentsEntryList,
 } from "@cocalc/frontend/components";
@@ -77,10 +80,7 @@ import {
   scanBookmarks,
   scanMarkers,
 } from "./chat-markers";
-import {
-  renderBookmarkGutter,
-  renderChatMarkerGutter,
-} from "./chat-marker-gutter";
+import { BookmarkGutter, ChatMarkerGutter } from "./chat-marker-gutter";
 // Side-effect import: registers the Insert-menu chat marker/bookmark commands.
 import "./chat-marker-command";
 import { ensureSideChatActions } from "@cocalc/frontend/chat/unread";
@@ -131,8 +131,8 @@ interface LatexEditorState extends CodeEditorState {
   autoSyncInProgress?: boolean; // unified flag to prevent sync loops - true when any auto sync operation is in progress
   // Chat anchor markers / bookmarks found in the master + open sub-files,
   // keyed by file path.
-  chat_markers?: Map<string, List<TypedMap<ChatMarker>>>;
-  chat_bookmarks?: Map<string, List<TypedMap<BookmarkMarker>>>;
+  chat_markers?: IMap<string, List<TypedMap<ChatMarker>>>;
+  chat_bookmarks?: IMap<string, List<TypedMap<BookmarkMarker>>>;
 }
 
 export class Actions extends BaseActions<LatexEditorState> {
@@ -795,7 +795,42 @@ export class Actions extends BaseActions<LatexEditorState> {
       handle.dispose();
     }
     this._chatMarkerScanners = {};
+    this._disposeChatGutterUI();
     super.close();
+  }
+
+  private _disposeChatGutterUI(): void {
+    for (const cache of [this._chatGutterHosts, this._bookmarkGutterHosts]) {
+      for (const perCm of Object.values(cache)) {
+        for (const [cm, entries] of perCm) {
+          for (const entry of entries) {
+            try {
+              cm.setGutterMarker(entry.line, CHAT_GUTTER_ID, null);
+              entry.root.unmount();
+            } catch {
+              // The CodeMirror pane may already be gone.
+            }
+          }
+        }
+      }
+    }
+    for (const perCm of Object.values(this._cursorInsertHosts)) {
+      for (const [cm, entry] of perCm) {
+        try {
+          if (entry.currentHandle != null) {
+            cm.setGutterMarker(entry.currentHandle, CHAT_GUTTER_ID, null);
+          }
+          entry.chatRoot.unmount();
+          entry.bookmarkRoot.unmount();
+        } catch {
+          // The CodeMirror pane may already be gone.
+        }
+      }
+    }
+    this._chatGutterHosts = {};
+    this._bookmarkGutterHosts = {};
+    this._cursorInsertHosts = {};
+    this._bookmarkLines = {};
   }
 
   // supports the "Force Rebuild" button.
@@ -943,7 +978,7 @@ export class Actions extends BaseActions<LatexEditorState> {
   private async run_build(time: number, force: boolean): Promise<void> {
     if (this.is_stopping) return;
     // reset state of build_logs, since it is a fresh start
-    this.setState({ build_logs: Map() });
+    this.setState({ build_logs: IMap() });
 
     if (this.bad_filename) {
       const err = `ERROR: It is not possible to compile this LaTeX file with the name '${this.path}'.
@@ -1728,7 +1763,7 @@ export class Actions extends BaseActions<LatexEditorState> {
   }
 
   private set_build_logs(obj: { [K in keyof IBuildSpecs]?: BuildLog }): void {
-    let build_logs: BuildLogs = this.store.get("build_logs") ?? Map();
+    let build_logs: BuildLogs = this.store.get("build_logs") ?? IMap();
     let k: BuildSpecName;
     for (k in obj) {
       const v: BuildLog | undefined = obj[k];
@@ -1743,7 +1778,7 @@ export class Actions extends BaseActions<LatexEditorState> {
 
   async run_clean(): Promise<void> {
     let log: string = "";
-    this.setState({ build_logs: Map() });
+    this.setState({ build_logs: IMap() });
 
     const logger = (s: string): void => {
       log += s + "\n";
@@ -2137,6 +2172,39 @@ export class Actions extends BaseActions<LatexEditorState> {
     [path: string]: { dispose: () => void; rescan: () => void };
   } = {};
 
+  // CodeMirror owns gutter DOM, so keep one persistent React root per
+  // CodeMirror pane.  Going through the editor's Redux gutter state makes
+  // split panes compete for the same host and causes visible flicker.
+  private _chatGutterHosts: {
+    [path: string]: Map<
+      CodeMirror.Editor,
+      Array<{ host: HTMLElement; root: Root; line: number }>
+    >;
+  } = {};
+
+  private _bookmarkGutterHosts: {
+    [path: string]: Map<
+      CodeMirror.Editor,
+      Array<{ host: HTMLElement; root: Root; line: number }>
+    >;
+  } = {};
+
+  private _bookmarkLines: { [path: string]: Set<number> } = {};
+
+  private _cursorInsertHosts: {
+    [path: string]: Map<
+      CodeMirror.Editor,
+      {
+        host: HTMLElement;
+        chatRoot: Root;
+        bookmarkRoot: Root;
+        currentHandle: CodeMirror.LineHandle | null;
+      }
+    >;
+  } = {};
+
+  private _cursorInsertBound = new WeakSet<CodeMirror.Editor>();
+
   private _initChatMarkers(): void {
     this._attachChatMarkerScanner(this, this.path);
     // Sub-files get picked up whenever the build discovers dependencies
@@ -2159,6 +2227,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       const path = (actions as any).path;
       if (typeof path !== "string" || !path) continue;
       this._attachChatMarkerScanner(actions, path);
+      this._ensureChatGutterUI(path);
     }
   }
 
@@ -2186,6 +2255,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         ).set(path, fromJS(bookmarks)),
       });
       this._updateChatGutters(path, markers, bookmarks);
+      this._refreshCursorInsert(path);
       if (path !== this.path) {
         // master changes already refresh the TOC via their own listener
         this.updateTableOfContents();
@@ -2204,6 +2274,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       rescan: scan,
     };
     scan();
+    this._ensureChatGutterUI(path);
   }
 
   private _updateChatGutters(
@@ -2211,12 +2282,13 @@ export class Actions extends BaseActions<LatexEditorState> {
     markers: ChatMarker[],
     bookmarks: BookmarkMarker[],
   ): void {
-    const actions: any =
-      path === this.path
-        ? this
-        : this.redux.getEditorActions(this.project_id, path);
-    if (actions == null || actions._state === "closed") return;
-    actions.clear_gutter(CHAT_GUTTER_ID);
+    const actions = this._actionsForChatPath(path);
+    if (actions == null) return;
+    const cms = Object.values(
+      ((actions as any)._cm ?? {}) as Record<string, CodeMirror.Editor>,
+    );
+    if (cms.length === 0) return;
+
     const openAnchorChat = (hash: string, markerPath: string) => {
       void this.openAnchorChat(
         hash,
@@ -2229,27 +2301,226 @@ export class Actions extends BaseActions<LatexEditorState> {
     const removeStaleMarker = (hash: string, markerPath: string) => {
       this._removeChatMarkersForHash(markerPath, hash);
     };
-    for (const m of markers) {
-      actions.set_gutter_marker({
-        line: m.line,
-        gutter_id: CHAT_GUTTER_ID,
-        component: renderChatMarkerGutter({
-          hash: m.hash,
-          path,
-          masterPath: this.path,
-          project_id: this.project_id,
-          openAnchorChat,
-          openAnchorChatThread,
-          removeStaleMarker,
-        }),
-      });
+
+    const chatTargets: Array<{ line: number; hash: string }> = [];
+    const seenChatLines = new Set<number>();
+    for (const marker of markers) {
+      if (seenChatLines.has(marker.line)) continue;
+      seenChatLines.add(marker.line);
+      chatTargets.push({ line: marker.line, hash: marker.hash });
     }
-    for (const b of bookmarks) {
-      actions.set_gutter_marker({
-        line: b.line,
-        gutter_id: CHAT_GUTTER_ID,
-        component: renderBookmarkGutter(b.text),
-      });
+    this._updateNativeGutterHosts({
+      path,
+      cms,
+      targets: chatTargets,
+      cache: this._chatGutterHosts,
+      render: (root, target) => {
+        root.render(
+          React.createElement(ChatMarkerGutter, {
+            hash: target.hash,
+            path,
+            masterPath: this.path,
+            project_id: this.project_id,
+            openAnchorChat,
+            openAnchorChatThread,
+            removeStaleMarker,
+          }),
+        );
+      },
+    });
+
+    const seenBookmarkLines = new Set<number>();
+    const bookmarkTargets: Array<{ line: number; text: string }> = [];
+    for (const bookmark of bookmarks) {
+      if (seenBookmarkLines.has(bookmark.line)) continue;
+      seenBookmarkLines.add(bookmark.line);
+      bookmarkTargets.push({ line: bookmark.line, text: bookmark.text });
+    }
+    this._bookmarkLines[path] = seenBookmarkLines;
+    this._updateNativeGutterHosts({
+      path,
+      cms,
+      targets: bookmarkTargets,
+      cache: this._bookmarkGutterHosts,
+      render: (root, target) => {
+        root.render(React.createElement(BookmarkGutter, { text: target.text }));
+      },
+    });
+  }
+
+  private _actionsForChatPath(
+    path: string,
+  ): BaseActions<CodeEditorState> | undefined {
+    const actions =
+      path === this.path
+        ? this
+        : this.redux.getEditorActions(this.project_id, path_normalize(path));
+    if (actions == null || (actions as any)._state === "closed") {
+      return undefined;
+    }
+    return actions as BaseActions<CodeEditorState>;
+  }
+
+  private _updateNativeGutterHosts<T extends { line: number }>({
+    path,
+    cms,
+    targets,
+    cache,
+    render,
+  }: {
+    path: string;
+    cms: CodeMirror.Editor[];
+    targets: T[];
+    cache: {
+      [path: string]: Map<
+        CodeMirror.Editor,
+        Array<{ host: HTMLElement; root: Root; line: number }>
+      >;
+    };
+    render: (root: Root, target: T) => void;
+  }): void {
+    const perCm = cache[path] ?? (cache[path] = new globalThis.Map());
+    const liveCms = new Set(cms);
+    for (const staleCm of [...perCm.keys()]) {
+      if (liveCms.has(staleCm)) continue;
+      for (const entry of perCm.get(staleCm) ?? []) {
+        entry.root.unmount();
+      }
+      perCm.delete(staleCm);
+    }
+    for (const cm of cms) {
+      const existing = perCm.get(cm) ?? [];
+      const fresh: Array<{ host: HTMLElement; root: Root; line: number }> = [];
+      for (let i = 0; i < targets.length; i++) {
+        const target = targets[i];
+        const reused = existing[i];
+        const host = reused?.host ?? document.createElement("span");
+        const root = reused?.root ?? createRoot(host);
+        render(root, target);
+        if (reused != null && reused.line !== target.line) {
+          cm.setGutterMarker(reused.line, CHAT_GUTTER_ID, null);
+        }
+        cm.setGutterMarker(target.line, CHAT_GUTTER_ID, host);
+        fresh.push({ host, root, line: target.line });
+      }
+      for (let i = targets.length; i < existing.length; i++) {
+        const entry = existing[i];
+        cm.setGutterMarker(entry.line, CHAT_GUTTER_ID, null);
+        entry.root.unmount();
+      }
+      perCm.set(cm, fresh);
+    }
+  }
+
+  private _ensureChatGutterUI(path: string, retries = 8): void {
+    if (this._state === ("closed" as any)) return;
+    const actions = this._actionsForChatPath(path);
+    const cms = Object.values(
+      ((actions as any)?._cm ?? {}) as Record<string, CodeMirror.Editor>,
+    );
+    if (cms.length === 0) {
+      if (retries > 0) {
+        setTimeout(() => this._ensureChatGutterUI(path, retries - 1), 250);
+      }
+      return;
+    }
+    const perCm =
+      this._cursorInsertHosts[path] ??
+      (this._cursorInsertHosts[path] = new globalThis.Map());
+    const liveCms = new Set(cms);
+    for (const staleCm of [...perCm.keys()]) {
+      if (liveCms.has(staleCm)) continue;
+      const stale = perCm.get(staleCm);
+      stale?.chatRoot.unmount();
+      stale?.bookmarkRoot.unmount();
+      perCm.delete(staleCm);
+    }
+    for (const cm of cms) {
+      if (!perCm.has(cm)) {
+        const host = document.createElement("span");
+        host.className = "cc-chat-cursor-insert";
+        host.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        const makeIcon = (
+          title: string,
+          icon: "comment" | "tag-outlined",
+          onClick: (line: number) => void,
+        ): Root => {
+          const child = document.createElement("span");
+          child.title = title;
+          child.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const entry = this._cursorInsertHosts[path]?.get(cm);
+            if (entry?.currentHandle == null) return;
+            const line = cm.getLineNumber(entry.currentHandle);
+            if (line != null) onClick(line);
+          });
+          host.appendChild(child);
+          const root = createRoot(child);
+          root.render(React.createElement(Icon, { name: icon }));
+          return root;
+        };
+        const chatRoot = makeIcon(
+          "Insert chat anchor before this line",
+          "comment",
+          (line) => void this._insertChatMarkerBeforeLine(path, line, cm),
+        );
+        const bookmarkRoot = makeIcon(
+          "Insert bookmark before this line",
+          "tag-outlined",
+          (line) => this._insertBookmarkBeforeLine(path, line, cm),
+        );
+        perCm.set(cm, {
+          host,
+          chatRoot,
+          bookmarkRoot,
+          currentHandle: null,
+        });
+      }
+      if (!this._cursorInsertBound.has(cm)) {
+        this._cursorInsertBound.add(cm);
+        cm.on("cursorActivity", () => this._refreshCursorInsert(path, cm));
+      }
+    }
+
+    const markers = (this.store.get("chat_markers")?.get(path)?.toJS() ??
+      []) as unknown as ChatMarker[];
+    const bookmarks = (this.store.get("chat_bookmarks")?.get(path)?.toJS() ??
+      []) as unknown as BookmarkMarker[];
+    this._updateChatGutters(path, markers, bookmarks);
+    this._refreshCursorInsert(path);
+  }
+
+  private _refreshCursorInsert(path: string, onlyCm?: CodeMirror.Editor): void {
+    const perCm = this._cursorInsertHosts[path];
+    if (perCm == null) return;
+    const markerLines = new Set<number>(
+      ((this.store.get("chat_markers")?.get(path)?.toJS() ?? []) as any[]).map(
+        (marker) => marker.line,
+      ),
+    );
+    const occupied = new Set([
+      ...markerLines,
+      ...(this._bookmarkLines[path] ?? []),
+    ]);
+    for (const [cm, entry] of perCm) {
+      if (onlyCm != null && cm !== onlyCm) continue;
+      const line = cm.getCursor().line;
+      const nextHandle = occupied.has(line) ? null : cm.getLineHandle(line);
+      if (entry.currentHandle === nextHandle) continue;
+      if (entry.currentHandle != null) {
+        const oldLine = cm.getLineNumber(entry.currentHandle);
+        if (oldLine != null && !occupied.has(oldLine)) {
+          cm.setGutterMarker(entry.currentHandle, CHAT_GUTTER_ID, null);
+        }
+      }
+      if (nextHandle != null) {
+        cm.setGutterMarker(nextHandle, CHAT_GUTTER_ID, entry.host);
+      }
+      entry.currentHandle = nextHandle;
     }
   }
 
@@ -2409,6 +2680,52 @@ export class Actions extends BaseActions<LatexEditorState> {
     actions.set_syncstring_to_codemirror(frameId);
     actions.syncstring_commit();
     return { path };
+  }
+
+  private _commitChatGutterEdit(
+    actions: BaseActions<CodeEditorState>,
+    cm: CodeMirror.Editor,
+  ): void {
+    const frameId = Object.entries(
+      ((actions as any)._cm ?? {}) as Record<string, CodeMirror.Editor>,
+    ).find(([, candidate]) => candidate === cm)?.[0];
+    actions.set_syncstring_to_codemirror(frameId);
+    actions.syncstring_commit();
+  }
+
+  private async _insertChatMarkerBeforeLine(
+    path: string,
+    line: number,
+    cm: CodeMirror.Editor,
+  ): Promise<void> {
+    const actions = this._actionsForChatPath(path);
+    if (actions == null) return;
+    const hash = generateMarkerHash();
+    cm.replaceRange(`${buildMarkerLine(hash)}\n\n`, { line, ch: 0 });
+    this._commitChatGutterEdit(actions, cm);
+    this._chatMarkerScanners[path]?.rescan();
+    await this.openAnchorChatNewThread(
+      hash,
+      path === this.path ? undefined : path,
+    );
+  }
+
+  private _insertBookmarkBeforeLine(
+    path: string,
+    line: number,
+    cm: CodeMirror.Editor,
+  ): void {
+    const actions = this._actionsForChatPath(path);
+    if (actions == null) return;
+    const text = generateBookmarkText(new Date());
+    const markerLine = buildBookmarkLine(text);
+    cm.replaceRange(`${markerLine}\n\n`, { line, ch: 0 });
+    this._commitChatGutterEdit(actions, cm);
+    this._chatMarkerScanners[path]?.rescan();
+    this.updateTableOfContents(true);
+    const textStart = markerLine.length - text.length;
+    cm.setSelection({ line, ch: textStart }, { line, ch: markerLine.length });
+    cm.focus();
   }
 
   // Resolve every thread anchored to `hash` (collaborative-TODO flow)

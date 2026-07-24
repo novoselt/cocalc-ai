@@ -50,7 +50,7 @@ addCommands({
   },
   insert_bookmark: {
     group: "latex-chat",
-    icon: "bookmark",
+    icon: "tag-outlined",
     label: defineMessage({
       id: "command.latex.insert_bookmark.label",
       defaultMessage: "Bookmark",
