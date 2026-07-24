@@ -174,7 +174,7 @@ async function update({
     const credit = toDecimal(cost).neg();
     if (period == "day" && now - t <= ONE_DAY) {
       amount_day = amount_day.add(credit);
-      if (amount_day.add(baseAmount).gte(maxDay)) {
+      if (amount_day.add(baseAmount).gt(maxDay)) {
         return {
           reason: `daily threshold of ${moneyToCurrency(maxDay)} would be exceeded since ${moneyToCurrency(amount_day)} was already added during the last day, so not adding money`,
         };
@@ -182,7 +182,7 @@ async function update({
     }
     if (period == "week" && now - t <= ONE_WEEK) {
       amount_week = amount_week.add(credit);
-      if (amount_week.add(baseAmount).gte(maxWeek)) {
+      if (amount_week.add(baseAmount).gt(maxWeek)) {
         return {
           reason: `weekly threshold of ${moneyToCurrency(maxWeek)} would be exceeded since ${moneyToCurrency(amount_week)} was already added during the last week, so not adding money`,
         };
@@ -190,7 +190,7 @@ async function update({
     }
     if (period == "month" && now - t <= ONE_MONTH) {
       amount_month = amount_month.add(credit);
-      if (amount_month.add(baseAmount).gte(maxMonth)) {
+      if (amount_month.add(baseAmount).gt(maxMonth)) {
         return {
           reason: `monthly threshold of ${moneyToCurrency(maxMonth)} would be exceeded since ${moneyToCurrency(amount_month)} was already added during the last month, so not adding money`,
         };
@@ -277,3 +277,5 @@ ${await support()}
 
   await send({ to_ids: [account_id], subject, body });
 }
+
+export const __test__ = { update };
