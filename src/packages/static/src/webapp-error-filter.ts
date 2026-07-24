@@ -57,6 +57,8 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
   const socketIoTransportClosed =
     message === "socket has been disconnected" ||
     message === "error: socket has been disconnected";
+  const conatSocketRequestTimedOut =
+    message === "request timed out" || message === "error: request timed out";
   const filesystemServerStarting = message === "file server not initialized";
   const staleCollaboratorAccess =
     message.includes("account '") &&
@@ -69,6 +71,7 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
     routingUnavailable ||
     conatInfoBootstrapTimeout ||
     socketIoTransportClosed ||
+    conatSocketRequestTimedOut ||
     filesystemServerStarting ||
     staleCollaboratorAccess ||
     injectedMetaMaskFailure
