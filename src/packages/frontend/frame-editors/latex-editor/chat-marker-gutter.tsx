@@ -153,7 +153,7 @@ export function ChatMarkerInlineTail({
   masterPath: string;
   project_id: string;
   onOpen: () => void;
-  onConfirmResolve: () => void;
+  onConfirmResolve: (expectsThread: boolean) => void | Promise<void>;
   onConfirmRemoveStale: () => void;
 }) {
   const { threads, totalMessages, totalUnread } = useAnchoredThreads(
@@ -238,7 +238,11 @@ export function ChatMarkerInlineTail({
         }
         okText={isStale ? "Remove" : "Resolve"}
         cancelText="Cancel"
-        onConfirm={isStale ? onConfirmRemoveStale : onConfirmResolve}
+        onConfirm={
+          isStale
+            ? onConfirmRemoveStale
+            : () => onConfirmResolve(threads.length > 0)
+        }
         placement="right"
       >
         <Tooltip

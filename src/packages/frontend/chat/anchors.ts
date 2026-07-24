@@ -61,7 +61,7 @@ export interface AnchorEditorActions {
   openAnchorChatThread?: (threadKey: string) => void;
   // LaTeX only: resolve the thread(s) for a marker hash and remove the
   // marker(s) from the source
-  resolveChatMarker?: (hash: string) => void;
+  resolveChatMarker?: (hash: string, expectsThread?: boolean) => void;
 }
 
 function parseNonemptyString(value: unknown): string | undefined {

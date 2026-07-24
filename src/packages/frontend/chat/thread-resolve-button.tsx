@@ -54,7 +54,7 @@ export function ThreadResolveButton({
       description="Marks the thread resolved and removes its % chat marker from the source."
       okText="Resolve"
       onConfirm={() => {
-        editorActions.resolveChatMarker?.(anchor.id);
+        editorActions.resolveChatMarker?.(anchor.id, true);
       }}
     >
       <span>

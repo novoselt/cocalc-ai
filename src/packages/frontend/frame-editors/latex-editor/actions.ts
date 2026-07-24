@@ -27,6 +27,7 @@ const VIEWERS = ["pdfjs_canvas", "pdf_embed", "build", "output"] as const;
 export const CHAT_GUTTER_ID = "CodeMirror-latex-chat";
 
 import { delay } from "awaiting";
+import { message as antdMessage } from "antd";
 import * as CodeMirror from "codemirror";
 import { fromJS, List, Map as IMap } from "immutable";
 import { debounce, union } from "lodash";
@@ -2931,7 +2932,8 @@ export class Actions extends BaseActions<LatexEditorState> {
                 path === this.path ? undefined : path,
               );
             },
-            onConfirmResolve: () => this.resolveChatMarker(marker.hash),
+            onConfirmResolve: (expectsThread) =>
+              this.resolveChatMarker(marker.hash, expectsThread),
             onConfirmRemoveStale: () =>
               this._removeChatMarkersForHash(path, marker.hash),
           }),
@@ -3374,24 +3376,77 @@ export class Actions extends BaseActions<LatexEditorState> {
   // Resolve every thread anchored to `hash` (collaborative-TODO flow)
   // and remove the marker comment(s) from all scanned files.  The
   // threads remain in the side chat as a read-only record.
-  public resolveChatMarker = (hash: string): void => {
-    let chatActions;
-    try {
-      chatActions = ensureSideChatActions(this.project_id, this.path);
-    } catch (err) {
-      console.warn("resolveChatMarker: no side chat available", err);
+  public async resolveChatMarker(
+    hash: string,
+    expectsThread = true,
+  ): Promise<void> {
+    const chatActions = await this._waitForReadyChatActions();
+    if (chatActions == null) {
+      console.warn("resolveChatMarker: side chat did not become ready", {
+        project_id: this.project_id,
+        path: this.path,
+        hash,
+      });
+      antdMessage.warning(
+        "Chat is still loading; the marker was not removed. Please try again.",
+      );
       return;
     }
     const label = this.getAnchorLabel(hash);
-    for (const threadKey of chatActions.listAnchoredThreadKeys(hash)) {
-      chatActions.resolveAnchoredThread(threadKey, { label });
+    let resolved = false;
+    const attempts = expectsThread ? 30 : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const threadKeys = chatActions.listAnchoredThreadKeys(hash);
+      for (const threadKey of threadKeys) {
+        chatActions.resolveAnchoredThread(threadKey, { label });
+      }
+      const remaining = chatActions.listAnchoredThreadKeys(hash);
+      const hasResolved = chatActions
+        .listThreadConfigRows()
+        .some((row) => parseThreadResolved(row?.resolved)?.anchorId === hash);
+      if (remaining.length === 0 && hasResolved) {
+        resolved = true;
+        break;
+      }
+      if (!expectsThread) break;
+      await delay(100);
+    }
+    // Never turn a known discussion into a marker-only deletion just because
+    // this client has not received its thread-config row yet.
+    if (expectsThread && !resolved) {
+      console.warn("resolveChatMarker: anchored thread is still syncing", {
+        project_id: this.project_id,
+        path: this.path,
+        hash,
+      });
+      antdMessage.warning(
+        "Chat is still syncing; the marker was not removed. Please try again.",
+      );
+      return;
     }
     const chatMarkers = this.store.get("chat_markers");
     if (chatMarkers == null) return;
     for (const path of chatMarkers.keySeq().toJS() as string[]) {
       this._removeChatMarkersForHash(path, hash);
     }
-  };
+  }
+
+  private async _waitForReadyChatActions(): Promise<
+    ReturnType<typeof ensureSideChatActions> | undefined
+  > {
+    for (const wait of [0, 25, 50, 100, 250, 500, 1000, 2000]) {
+      if (wait > 0) await delay(wait);
+      if (this._state === ("closed" as any)) return;
+      try {
+        const actions = ensureSideChatActions(this.project_id, this.path);
+        if (actions.syncdb?.get_state?.() === "ready") {
+          return actions;
+        }
+      } catch {
+        // Side chat is still mounting; retry within the bounded window.
+      }
+    }
+  }
 
   // Remove all `% chat: <hash>` markers for one hash from one file.
   private _clearChatTextDecorations(path: string): void {

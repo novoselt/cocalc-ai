@@ -153,3 +153,72 @@ describe("LaTeX initial build", () => {
     expect(forceBuild).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("LaTeX chat marker resolution", () => {
+  function createResolutionActions(chatActions: any) {
+    const actions: any = Object.create(Actions.prototype);
+    actions._state = "open";
+    actions.path = "paper.tex";
+    actions.project_id = "project-1";
+    actions.getAnchorLabel = () => "anchor (paper.tex:4)";
+    actions._waitForReadyChatActions = jest.fn(async () => chatActions);
+    actions.store = {
+      get: (key: string) =>
+        key === "chat_markers" ? Map({ "paper.tex": List() }) : undefined,
+    };
+    actions._removeChatMarkersForHash = jest.fn();
+    return actions;
+  }
+
+  it("resolves a hydrated thread before removing its marker", async () => {
+    let liveKeys = ["thread-1"];
+    let resolvedRows: any[] = [];
+    const resolveAnchoredThread = jest.fn(() => {
+      liveKeys = [];
+      resolvedRows = [
+        {
+          thread_id: "thread-1",
+          resolved: {
+            account_id: "user-1",
+            at: "now",
+            anchorId: "anchor-1",
+          },
+        },
+      ];
+      return true;
+    });
+    const chatActions = {
+      listAnchoredThreadKeys: jest.fn(() => liveKeys),
+      listThreadConfigRows: jest.fn(() => resolvedRows),
+      resolveAnchoredThread,
+    };
+    const actions = createResolutionActions(chatActions);
+
+    await actions.resolveChatMarker("anchor-1", true);
+
+    expect(resolveAnchoredThread).toHaveBeenCalledWith("thread-1", {
+      label: "anchor (paper.tex:4)",
+    });
+    expect(actions._removeChatMarkersForHash).toHaveBeenCalledWith(
+      "paper.tex",
+      "anchor-1",
+    );
+  });
+
+  it("allows removing a marker that has no chat thread", async () => {
+    const chatActions = {
+      listAnchoredThreadKeys: jest.fn(() => []),
+      listThreadConfigRows: jest.fn(() => []),
+      resolveAnchoredThread: jest.fn(),
+    };
+    const actions = createResolutionActions(chatActions);
+
+    await actions.resolveChatMarker("anchor-1", false);
+
+    expect(chatActions.resolveAnchoredThread).not.toHaveBeenCalled();
+    expect(actions._removeChatMarkersForHash).toHaveBeenCalledWith(
+      "paper.tex",
+      "anchor-1",
+    );
+  });
+});

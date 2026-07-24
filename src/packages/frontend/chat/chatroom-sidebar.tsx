@@ -238,6 +238,29 @@ interface ChatRoomSidebarContentProps {
   openAutomationModal: (threadKey: string) => void;
 }
 
+export function openArchivedThread({
+  threadKey,
+  isCompact,
+  setSelectedThreadKey,
+  setAllowAutoSelectThread,
+  setArchivedOpen,
+  setSidebarVisible,
+}: {
+  threadKey: string;
+  isCompact: boolean;
+  setSelectedThreadKey: (value: string | null) => void;
+  setAllowAutoSelectThread: (value: boolean) => void;
+  setArchivedOpen: (value: boolean) => void;
+  setSidebarVisible: (value: boolean) => void;
+}): void {
+  setAllowAutoSelectThread(false);
+  setSelectedThreadKey(threadKey);
+  setArchivedOpen(false);
+  if (isCompact) {
+    setSidebarVisible(false);
+  }
+}
+
 export function ChatRoomSidebarContent({
   actions,
   accountId,
@@ -616,6 +639,21 @@ export function ChatRoomSidebarContent({
                     {label}
                   </div>
                   <Space size={6}>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        openArchivedThread({
+                          threadKey: thread.key,
+                          isCompact,
+                          setSelectedThreadKey,
+                          setAllowAutoSelectThread,
+                          setArchivedOpen,
+                          setSidebarVisible,
+                        });
+                      }}
+                    >
+                      Open
+                    </Button>
                     {actions.getThreadMetadata?.(thread.key, {
                       threadId: thread.key,
                     })?.resolved != null ? (
