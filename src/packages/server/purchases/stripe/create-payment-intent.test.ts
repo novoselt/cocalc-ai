@@ -62,6 +62,7 @@ jest.mock("../subscription-renewal-attempts", () => ({
 }));
 
 import createPaymentIntent, {
+  cancelPaymentIntent,
   getPaymentIntentIdFromInvoice,
 } from "./create-payment-intent";
 
@@ -84,8 +85,10 @@ describe("createPaymentIntent", () => {
       pay: jest.fn(),
       retrieve: jest.fn(),
       update: jest.fn(),
+      voidInvoice: jest.fn(),
     },
     paymentIntents: {
+      cancel: jest.fn(),
       retrieve: jest.fn(),
       update: jest.fn(),
     },
@@ -123,6 +126,8 @@ describe("createPaymentIntent", () => {
       hosted_invoice_url: "https://stripe.example/invoice",
     });
     stripe.invoices.update.mockResolvedValue({});
+    stripe.invoices.voidInvoice.mockResolvedValue({});
+    stripe.paymentIntents.cancel.mockResolvedValue({});
     stripe.paymentIntents.retrieve.mockResolvedValue({
       id: "pi_123",
       status: "requires_payment_method",
@@ -176,6 +181,25 @@ describe("createPaymentIntent", () => {
         payment_intent: "pi_legacy",
       }),
     ).toBe("pi_legacy");
+  });
+
+  it("voids the metadata invoice when Stripe rejects direct intent cancellation", async () => {
+    stripe.paymentIntents.cancel.mockRejectedValue(
+      new Error(
+        "You cannot cancel PaymentIntents created by invoices. Try voiding the invoice instead.",
+      ),
+    );
+    stripe.paymentIntents.retrieve.mockResolvedValue({
+      id: "pi_invoice",
+      metadata: { invoice_id: "in_from_metadata" },
+      status: "requires_payment_method",
+    });
+
+    await cancelPaymentIntent({ id: "pi_invoice", reason: "abandoned" });
+
+    expect(stripe.invoices.voidInvoice).toHaveBeenCalledWith(
+      "in_from_metadata",
+    );
   });
 
   it("creates an invoice and returns the default invoice payment intent", async () => {

@@ -26,7 +26,9 @@ import {
 import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
 import { getMembershipTierById } from "@cocalc/server/membership/tiers";
 import type { SubscriptionRenewalAttempt } from "@cocalc/util/db-schema/subscription-renewal-attempts";
+import { stripeToDecimal } from "@cocalc/util/stripe/calc";
 import {
+  bindSubscriptionRenewalPaymentIntent,
   cancelOpenSubscriptionRenewalAttempts,
   claimSubscriptionRenewalAttempt,
   completeSubscriptionRenewalAttempt,
@@ -40,6 +42,7 @@ import { lockMembershipSubscriptionAccount } from "../membership-subscription-gu
 // nothing should ever be this small, but just in case:
 const MIN_SUBSCRIPTION_AMOUNT = 1;
 const SUBSCRIPTION_PAYMENT_SLACK = 0.01;
+const MAX_LEGACY_PAYMENT_PERIOD_DRIFT_MS = 15 * 60 * 1000;
 
 const logger = getLogger("purchases:stripe:create-subscription-payment");
 
@@ -106,6 +109,92 @@ async function membershipRenewalDescription({
   }`;
 }
 
+function legacyPaymentMatchesAttempt({
+  payment,
+  attempt,
+  subscription_id,
+}: {
+  payment: any;
+  attempt: SubscriptionRenewalAttempt;
+  subscription_id: number;
+}): boolean {
+  try {
+    const targetPeriodEnd = new Date(attempt.target_period_end).valueOf();
+    const legacyPeriodEnd = Number(payment?.new_expires_ms);
+    return (
+      payment?.status === "active" &&
+      payment?.renewal_attempt_id == null &&
+      cleanString(payment?.payment_intent_id) != null &&
+      Number(payment?.subscription_id) === subscription_id &&
+      toDecimal(payment?.amount).eq(toDecimal(attempt.amount)) &&
+      legacyPeriodEnd >= targetPeriodEnd &&
+      legacyPeriodEnd - targetPeriodEnd <= MAX_LEGACY_PAYMENT_PERIOD_DRIFT_MS
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function adoptLegacyRenewalPaymentIntent({
+  payment,
+  attempt,
+  account_id,
+  subscription_id,
+}: {
+  payment: any;
+  attempt: SubscriptionRenewalAttempt;
+  account_id: string;
+  subscription_id: number;
+}): Promise<string | undefined> {
+  if (
+    !legacyPaymentMatchesAttempt({
+      payment,
+      attempt,
+      subscription_id,
+    })
+  ) {
+    return;
+  }
+  const paymentIntentId = cleanString(payment.payment_intent_id)!;
+  const stripe = await getConn();
+  const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+  const metadata = paymentIntent.metadata ?? {};
+  const existingAttemptId = cleanString(metadata.renewal_attempt_id);
+  let stripeAmountMatches = false;
+  try {
+    stripeAmountMatches = toDecimal(
+      stripeToDecimal(metadata.total_excluding_tax_usd),
+    ).eq(toDecimal(attempt.amount));
+  } catch {
+    // Missing or malformed Stripe metadata must fail closed.
+  }
+  if (
+    cleanString(metadata.account_id) !== account_id ||
+    Number(metadata.subscription_id) !== subscription_id ||
+    cleanString(metadata.purpose) !== SUBSCRIPTION_RENEWAL ||
+    !stripeAmountMatches ||
+    (existingAttemptId != null && existingAttemptId !== attempt.id)
+  ) {
+    throw Error(
+      "legacy renewal payment intent does not match the durable renewal attempt",
+    );
+  }
+  await stripe.paymentIntents.update(paymentIntentId, {
+    metadata: {
+      ...metadata,
+      renewal_attempt_id: attempt.id,
+    },
+  });
+  await bindSubscriptionRenewalPaymentIntent({
+    account_id,
+    attempt_id: attempt.id,
+    payment_intent_id: paymentIntentId,
+    stripe_invoice_id: cleanString(metadata.invoice_id),
+    subscription_id,
+  });
+  return paymentIntentId;
+}
+
 export default async function createSubscriptionPayment({
   account_id,
   subscription_id,
@@ -144,15 +233,6 @@ export default async function createSubscriptionPayment({
     status,
   } = subscriptions[0] as Subscription;
   const amountValue = toDecimal(attempt.amount ?? amountRaw ?? 0);
-  if (
-    payment != null &&
-    payment.status == "active" &&
-    payment.renewal_attempt_id !== attempt.id
-  ) {
-    throw Error(
-      "There is a current outstanding active payment -- either cancel it or pay it",
-    );
-  }
 
   if (metadata?.type != "membership") {
     throw Error("subscription must be for a membership");
@@ -165,6 +245,24 @@ export default async function createSubscriptionPayment({
     new Date(attempt.period_end).valueOf()
   ) {
     throw Error("renewal attempt does not match the current billing period");
+  }
+  if (
+    payment != null &&
+    payment.status == "active" &&
+    payment.renewal_attempt_id !== attempt.id
+  ) {
+    const adoptedPaymentIntentId = await adoptLegacyRenewalPaymentIntent({
+      payment,
+      attempt,
+      account_id,
+      subscription_id,
+    });
+    if (adoptedPaymentIntentId) {
+      return { payment_intent_id: adoptedPaymentIntentId };
+    }
+    throw Error(
+      "There is a current outstanding active payment -- either cancel it or pay it",
+    );
   }
   const new_expires_ms = new Date(attempt.target_period_end).valueOf();
   const renewalTerms = renewalMembershipTerms({ metadata, interval });
