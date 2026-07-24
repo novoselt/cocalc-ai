@@ -259,6 +259,12 @@
   font-weight: 600;
 }
 
+.CodeMirror .cc-chat-marker-invalid {
+  color: #f5222d;
+  background-color: #fff2f0;
+  border-radius: 2px;
+}
+
 .webapp-editor-pdf-preview-message {
   padding: 20px;
 }

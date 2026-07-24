@@ -18,6 +18,7 @@ import {
   replacementMarkerHash,
   scanBlankLines,
   scanBookmarks,
+  scanInvalidMarkers,
   scanMarkers,
 } from "./chat-markers";
 
@@ -122,6 +123,43 @@ describe("scanMarkers (chat)", () => {
 
   it("does not match the bookmark keyword", () => {
     expect(scanMarkers("% bookmark: something")).toEqual([]);
+  });
+});
+
+describe("scanInvalidMarkers", () => {
+  it("finds inline chat comments with invalid punctuation", () => {
+    const line = "some text 123  % chat: why-this?";
+    expect(scanInvalidMarkers(line)).toEqual([
+      { text: "why-this?", line: 0, col: line.indexOf("%") },
+    ]);
+  });
+
+  it("finds empty, short, spaced, and overlong IDs", () => {
+    expect(
+      scanInvalidMarkers(
+        [
+          "% chat:",
+          "% chat: ab",
+          "% chat: two words",
+          `% chat: ${"a".repeat(65)}`,
+        ].join("\n"),
+      ),
+    ).toEqual([
+      { text: "", line: 0, col: 0 },
+      { text: "ab", line: 1, col: 0 },
+      { text: "two words", line: 2, col: 0 },
+      { text: "a".repeat(65), line: 3, col: 0 },
+    ]);
+  });
+
+  it("does not report valid markers or unrelated comments", () => {
+    expect(
+      scanInvalidMarkers(
+        ["% chat: valid-id", "% bookmark: anything", "% chatter: nope"].join(
+          "\n",
+        ),
+      ),
+    ).toEqual([]);
   });
 });
 

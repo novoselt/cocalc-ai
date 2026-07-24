@@ -68,7 +68,11 @@ import { normalizeAbsolutePath } from "@cocalc/util/path-model";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import * as tree_ops from "../frame-tree/tree-ops";
 import { bibtex } from "./bibtex";
-import type { BookmarkMarker, ChatMarker } from "./chat-markers";
+import type {
+  BookmarkMarker,
+  ChatMarker,
+  InvalidChatMarker,
+} from "./chat-markers";
 import {
   buildBookmarkLine,
   buildInlineInsertion,
@@ -79,12 +83,14 @@ import {
   removeMarkersForHash,
   replacementMarkerHash,
   scanBookmarks,
+  scanInvalidMarkers,
   scanMarkers,
 } from "./chat-markers";
 import {
   BookmarkGutter,
   ChatMarkerGutter,
   ChatMarkerInlineTail,
+  InvalidChatMarkerTail,
 } from "./chat-marker-gutter";
 // Side-effect import: registers the Insert-menu chat marker/bookmark commands.
 import "./chat-marker-command";
@@ -141,6 +147,7 @@ interface LatexEditorState extends CodeEditorState {
   // Chat anchor markers / bookmarks found in the master + open sub-files,
   // keyed by file path.
   chat_markers?: IMap<string, List<TypedMap<ChatMarker>>>;
+  invalid_chat_markers?: IMap<string, List<TypedMap<InvalidChatMarker>>>;
   chat_bookmarks?: IMap<string, List<TypedMap<BookmarkMarker>>>;
 }
 
@@ -2287,9 +2294,11 @@ export class Actions extends BaseActions<LatexEditorState> {
       delete this._chatMarkerScanners[path];
       this._disposeChatStateForPath(path);
       const chatMarkers = this.store.get("chat_markers");
+      const invalidChatMarkers = this.store.get("invalid_chat_markers");
       const chatBookmarks = this.store.get("chat_bookmarks");
       this.setState({
         chat_markers: chatMarkers?.delete(path),
+        invalid_chat_markers: invalidChatMarkers?.delete(path),
         chat_bookmarks: chatBookmarks?.delete(path),
       });
     }
@@ -2345,6 +2354,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         return;
       }
       const markers = scanMarkers(text);
+      const invalidMarkers = scanInvalidMarkers(text);
       const bookmarks = scanBookmarks(text);
       const previousMarkers = (this.store
         .get("chat_markers")
@@ -2354,6 +2364,9 @@ export class Actions extends BaseActions<LatexEditorState> {
         chat_markers: (
           this.store.get("chat_markers") ?? (fromJS({}) as any)
         ).set(path, fromJS(markers)),
+        invalid_chat_markers: (
+          this.store.get("invalid_chat_markers") ?? (fromJS({}) as any)
+        ).set(path, fromJS(invalidMarkers)),
         chat_bookmarks: (
           this.store.get("chat_bookmarks") ?? (fromJS({}) as any)
         ).set(path, fromJS(bookmarks)),
@@ -2683,8 +2696,15 @@ export class Actions extends BaseActions<LatexEditorState> {
         (marker) => marker.line,
       ),
     );
+    const invalidMarkerLines = new Set<number>(
+      (
+        (this.store.get("invalid_chat_markers")?.get(path)?.toJS() ??
+          []) as any[]
+      ).map((marker) => marker.line),
+    );
     const occupied = new Set([
       ...markerLines,
+      ...invalidMarkerLines,
       ...(this._bookmarkLines[path] ?? []),
     ]);
     for (const [cm, entry] of perCm) {
@@ -2756,6 +2776,28 @@ export class Actions extends BaseActions<LatexEditorState> {
     return marker;
   }
 
+  private _createInvalidChatTextMarker({
+    cm,
+    from,
+    to,
+  }: {
+    cm: CodeMirror.Editor;
+    from: CodeMirror.Position;
+    to: CodeMirror.Position;
+  }): CodeMirror.TextMarker {
+    const marker = cm.markText(from, to, {
+      className: "cc-chat-marker-invalid",
+      clearOnEnter: false,
+      inclusiveLeft: false,
+      inclusiveRight: false,
+      attributes: {
+        title: "Invalid chat ID — edit this comment to fix it",
+      },
+    });
+    (marker as any).invalidChatMarker = true;
+    return marker;
+  }
+
   private _refreshChatMarkerText(path: string): void {
     const actions = this._actionsForChatPath(path);
     if (actions == null) return;
@@ -2787,6 +2829,10 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
     const markers = (this.store.get("chat_markers")?.get(path)?.toJS() ??
       []) as unknown as ChatMarker[];
+    const invalidMarkers = (this.store
+      .get("invalid_chat_markers")
+      ?.get(path)
+      ?.toJS() ?? []) as unknown as InvalidChatMarker[];
     for (const cm of cms) {
       for (const marker of perCm.get(cm) ?? []) {
         marker.clear();
@@ -2837,6 +2883,29 @@ export class Actions extends BaseActions<LatexEditorState> {
         );
         freshTails.push({ bookmark, host, root });
       }
+      for (const marker of invalidMarkers) {
+        const lineText = cm.getLine(marker.line) ?? "";
+        fresh.push(
+          this._createInvalidChatTextMarker({
+            cm,
+            from: { line: marker.line, ch: marker.col },
+            to: { line: marker.line, ch: lineText.length },
+          }),
+        );
+        const reused = oldTails[freshTails.length];
+        const host = reused?.host ?? document.createElement("span");
+        const root = reused?.root ?? createRoot(host);
+        root.render(
+          React.createElement(InvalidChatMarkerTail, { text: marker.text }),
+        );
+        reused?.bookmark.clear();
+        host.parentNode?.removeChild(host);
+        const bookmark = cm.setBookmark(
+          { line: marker.line, ch: lineText.length },
+          { widget: host, insertLeft: false, handleMouseEvents: true },
+        );
+        freshTails.push({ bookmark, host, root });
+      }
       for (let i = freshTails.length; i < oldTails.length; i++) {
         oldTails[i].bookmark.clear();
         oldTails[i].root.unmount();
@@ -2851,6 +2920,10 @@ export class Actions extends BaseActions<LatexEditorState> {
       for (const [cm, existing] of perCm) {
         const fresh: CodeMirror.TextMarker[] = [];
         for (const marker of existing) {
+          if ((marker as any).invalidChatMarker === true) {
+            fresh.push(marker);
+            continue;
+          }
           const range = marker.find() as
             | { from: CodeMirror.Position; to: CodeMirror.Position }
             | undefined;

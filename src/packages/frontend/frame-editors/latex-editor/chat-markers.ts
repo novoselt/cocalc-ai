@@ -58,6 +58,15 @@ export interface ChatMarker {
   col: number;
 }
 
+export interface InvalidChatMarker {
+  /** The user-entered value after `% chat:` (trimmed). */
+  text: string;
+  /** 0-based line index. */
+  line: number;
+  /** 0-based column of the `%` that begins the marker comment. */
+  col: number;
+}
+
 /**
  * Find the rightmost unescaped `%` on a line. Returns the column of the `%`,
  * or -1 if there isn't one.
@@ -87,6 +96,28 @@ export function scanMarkers(text: string): ChatMarker[] {
     const m = BODY_RE.exec(body);
     if (!m) continue;
     out.push({ hash: m[1], line: i, col: pct });
+  }
+  return out;
+}
+
+/**
+ * Scan syntactically recognizable `% chat:` comments whose IDs are invalid.
+ * They are editor diagnostics only and must never become thread anchors.
+ */
+export function scanInvalidMarkers(text: string): InvalidChatMarker[] {
+  const out: InvalidChatMarker[] = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const pct = findCommentStart(line);
+    if (pct < 0) continue;
+    const body = line.slice(pct + 1);
+    if (BODY_RE.test(body)) continue;
+    const candidate = body.match(
+      new RegExp(`^\\s*${CHAT_PREFIX}:\\s*(.*?)\\s*$`),
+    );
+    if (candidate == null) continue;
+    out.push({ text: candidate[1], line: i, col: pct });
   }
   return out;
 }

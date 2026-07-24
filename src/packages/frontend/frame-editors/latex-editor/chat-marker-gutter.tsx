@@ -20,7 +20,7 @@ gutter markers for sub-files render inside the sub-file's own editor,
 not the master latex editor's frame tree.
 */
 
-import { Popconfirm } from "antd";
+import { Popconfirm, Popover } from "antd";
 
 import {
   useAnchoredThreads,
@@ -265,6 +265,42 @@ export function ChatMarkerInlineTail({
         </Tooltip>
       </Popconfirm>
     </span>
+  );
+}
+
+export function InvalidChatMarkerTail({ text }: { text: string }) {
+  return (
+    <Popover
+      trigger="click"
+      title="Invalid chat ID"
+      content={
+        <div style={{ maxWidth: 320 }}>
+          Chat IDs must contain 3–64 letters, numbers, dashes, or underscores.
+          Edit the source comment to fix{" "}
+          <code>{text ? `% chat: ${text}` : "% chat:"}</code>.
+        </div>
+      }
+    >
+      <span
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          display: "inline-block",
+          marginLeft: 4,
+          padding: "0 8px",
+          border: `1px solid ${COLORS.ANTD_RED}`,
+          borderRadius: 10,
+          fontSize: "0.8em",
+          lineHeight: 1.4,
+          fontWeight: 500,
+          cursor: "pointer",
+          color: COLORS.ANTD_RED,
+          backgroundColor: COLORS.ANTD_BG_RED_L,
+        }}
+      >
+        invalid chat ID
+      </span>
+    </Popover>
   );
 }
 
