@@ -2918,6 +2918,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         );
         const reused = oldTails[freshTails.length];
         const host = reused?.host ?? document.createElement("span");
+        host.className = "cc-chat-marker-tail-host";
         const root = reused?.root ?? createRoot(host);
         root.render(
           React.createElement(ChatMarkerInlineTail, {
@@ -2954,6 +2955,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         );
         const reused = oldTails[freshTails.length];
         const host = reused?.host ?? document.createElement("span");
+        host.className = "cc-chat-marker-tail-host";
         const root = reused?.root ?? createRoot(host);
         root.render(
           React.createElement(InvalidChatMarkerTail, { text: marker.text }),
@@ -2972,6 +2974,21 @@ export class Actions extends BaseActions<LatexEditorState> {
       }
       perCm.set(cm, fresh);
       tailsPerCm.set(cm, freshTails);
+
+      // CodeMirror may leave a detached bookmark wrapper behind when a
+      // marker changes identity during a rescan. Remove any tail host in
+      // this pane that is not one of the hosts we just placed.
+      const wrapper = cm.getWrapperElement?.();
+      if (wrapper != null) {
+        const liveHosts = new Set(freshTails.map(({ host }) => host));
+        wrapper
+          .querySelectorAll<HTMLElement>(".cc-chat-marker-tail-host")
+          .forEach((host) => {
+            if (!liveHosts.has(host)) {
+              host.parentNode?.removeChild(host);
+            }
+          });
+      }
     }
   }
 
