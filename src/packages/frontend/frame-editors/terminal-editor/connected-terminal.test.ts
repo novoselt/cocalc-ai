@@ -94,15 +94,21 @@ function loadTerminalModule({
     reconnectResources.push(resource);
     return resource;
   });
+  const alertMessage = jest.fn();
 
   jest.resetModules();
 
   jest.doMock("@xterm/xterm", () => {
     class MockTerminal {
-      public options: Record<string, any> = {};
+      public options: Record<string, any>;
       public element: HTMLElement | null = null;
       public cols = 80;
       public rows = 24;
+      public modes = { mouseTrackingMode: "none" };
+
+      constructor(options: Record<string, any> = {}) {
+        this.options = options;
+      }
 
       loadAddon = jest.fn();
       open = (parent: HTMLElement) => {
@@ -122,6 +128,7 @@ function loadTerminalModule({
       focus = jest.fn();
       refresh = jest.fn();
       dispose = jest.fn();
+      hasSelection = jest.fn(() => false);
       getSelection = () => "";
       clearSelection = jest.fn();
       paste = jest.fn();
@@ -138,6 +145,10 @@ function loadTerminalModule({
         terminalClient,
       },
     },
+  }));
+
+  jest.doMock("@cocalc/frontend/alerts", () => ({
+    alert_message: alertMessage,
   }));
 
   jest.doMock("@cocalc/frontend/app-framework", () => {
@@ -212,10 +223,118 @@ function loadTerminalModule({
     terminalClient,
     showProjectStartRequiredModal,
     ensureProjectRunning,
+    alertMessage,
     reconnectResources,
     registerReconnectResource,
   };
 }
+
+function makeActions() {
+  return {
+    project_id: "project-1",
+    path: "/tmp/example.term",
+    get_term_env: jest.fn(() => ({})),
+    set_connection_status: jest.fn(),
+    set_title: jest.fn(),
+    set_error: jest.fn(),
+    _tree_is_single_leaf: jest.fn(() => false),
+    close_frame: jest.fn(),
+    open_code_editor_frame: jest.fn(),
+    _get_project_actions: jest.fn(() => ({
+      flag_file_activity: jest.fn(),
+      open_file: jest.fn(),
+      close_tab: jest.fn(),
+      isTabClosed: jest.fn(() => false),
+      open_directory: jest.fn(),
+    })),
+  } as any;
+}
+
+describe("connected terminal TUI selection", () => {
+  it("enables the macOS modifier override for application mouse mode", () => {
+    const { Terminal } = loadTerminalModule();
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const terminal = new Terminal(makeActions(), 0, "term-1", parent);
+
+    expect(terminal["terminal"].options.macOptionClickForcesSelection).toBe(
+      true,
+    );
+
+    terminal.close();
+  });
+
+  it("handles uppercase copy shortcuts when xterm owns the selection", () => {
+    const { Terminal, alertMessage } = loadTerminalModule();
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const terminal = new Terminal(makeActions(), 0, "term-1", parent);
+    const xterm = terminal["terminal"];
+    xterm.hasSelection.mockReturnValue(true);
+    const handler = xterm.attachCustomKeyEventHandler.mock.calls[0][0];
+
+    const handled = handler(
+      new KeyboardEvent("keydown", {
+        ctrlKey: true,
+        key: "C",
+        shiftKey: true,
+      }),
+    );
+
+    expect(handled).toBe(false);
+    expect(alertMessage).not.toHaveBeenCalled();
+
+    terminal.close();
+  });
+
+  it("explains forced selection without stealing Ctrl+C from a TUI", () => {
+    const { Terminal, alertMessage } = loadTerminalModule();
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const terminal = new Terminal(makeActions(), 0, "term-1", parent);
+    const xterm = terminal["terminal"];
+    xterm.modes.mouseTrackingMode = "any";
+    const handler = xterm.attachCustomKeyEventHandler.mock.calls[0][0];
+    const copyEvent = new KeyboardEvent("keydown", {
+      ctrlKey: true,
+      key: "c",
+    });
+
+    expect(handler(copyEvent)).toBe(true);
+    expect(handler(copyEvent)).toBe(true);
+    expect(alertMessage).toHaveBeenCalledTimes(1);
+    expect(alertMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "info",
+        title: "Copy terminal text",
+        message: expect.stringContaining("Shift"),
+      }),
+    );
+
+    terminal.close();
+  });
+
+  it("leaves ordinary Ctrl+C alone outside application mouse mode", () => {
+    const { Terminal, alertMessage } = loadTerminalModule();
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const terminal = new Terminal(makeActions(), 0, "term-1", parent);
+    const xterm = terminal["terminal"];
+    const handler = xterm.attachCustomKeyEventHandler.mock.calls[0][0];
+
+    expect(
+      handler(
+        new KeyboardEvent("keydown", {
+          ctrlKey: true,
+          key: "c",
+        }),
+      ),
+    ).toBe(true);
+    expect(alertMessage).not.toHaveBeenCalled();
+
+    terminal.close();
+  });
+});
 
 describe("connected terminal resizing", () => {
   it("swallows xterm resize failures during measureSize", async () => {
