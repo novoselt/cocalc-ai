@@ -100,3 +100,113 @@ whether a command is still active. Use Ctrl-C for a foreground command, open a
 new terminal for independent diagnosis, and inspect project memory if commands
 are being killed.
 `;
+
+export const SSH_ACCESS_BODY = String.raw`
+## SSH access on cocalc.ai
+
+SSH gives command-line tools on your computer direct access to a CoCalc
+project. You can run remote commands and use standard tools such as \`ssh\`,
+\`scp\`, \`sftp\`, and \`rsync\`.
+
+The legacy \`ssh.cocalc.com\` gateway belongs to the previous cocalc.com
+architecture. Commands such as
+\`ssh PROJECT_ID_WITHOUT_DASHES@ssh.cocalc.com\` do not connect to cocalc.ai
+projects. Each cocalc.ai project instead receives a managed SSH route, which
+the CoCalc CLI writes into your local \`~/.ssh/config\`.
+
+## Connect from your computer
+
+Open **Project Settings → SSH** in the target project. The panel shows commands
+for the current site and project.
+
+Install the CoCalc CLI once:
+
+~~~sh
+curl -fsSL https://software.cocalc.ai/software/cocalc/install.sh | bash
+~~~
+
+Configure the project, replacing the example project id:
+
+~~~sh
+cocalc --api https://cocalc.ai project ssh-config add \
+  -w 00000000-0000-4000-8000-000000000000
+~~~
+
+When run in an interactive terminal, the CLI starts browser login automatically
+if you have not signed in yet. Approve that login in your browser. The command
+then:
+
+1. creates or reuses \`~/.ssh/id_ed25519\`;
+2. installs its public key in the target project;
+3. installs the Cloudflare SSH transport helper when needed; and
+4. writes a managed host entry to \`~/.ssh/config\`.
+
+Connect using the project id as the host alias:
+
+~~~sh
+ssh 00000000-0000-4000-8000-000000000000
+~~~
+
+The key and SSH config remain usable after CLI login expires. The account
+session is needed for setup, not for each SSH connection.
+
+## Copy files
+
+After setup, file-transfer tools use the same host alias:
+
+~~~sh
+scp ./local-file 00000000-0000-4000-8000-000000000000:~/
+scp 00000000-0000-4000-8000-000000000000:~/remote-file ./
+rsync -a ./local-directory/ \
+  00000000-0000-4000-8000-000000000000:~/remote-directory/
+~~~
+
+\`rsync\` must be installed at both ends. If \`scp\` or \`sftp\` reports a
+missing SFTP server, install \`openssh-sftp-server\` in the project image.
+
+## Connect from one CoCalc project to another
+
+Do not run \`cocalc auth login\` inside a collaborative project. That would
+store a broad, long-lived account session in a filesystem shared with the
+project's collaborators.
+
+Instead:
+
+1. Open **Project Settings → SSH** in the target project.
+2. Choose **Configure project-to-project SSH**.
+3. Select the source project that will initiate connections.
+4. Confirm the operation with fresh authentication.
+5. In a terminal in the source project, run \`ssh TARGET_PROJECT_ID\`.
+
+CoCalc reuses \`~/.ssh/id_ed25519\` when the source already has one. Otherwise,
+it creates a new deploy key and stores its private key as the encrypted
+\`SSH_PRIVATE_KEY\` project secret. It authorizes only the public key on the
+target and writes the route in the source project. Your CoCalc account session
+is never stored in either project.
+
+Everyone with filesystem access to the source project can use its deploy key.
+Only select a source whose collaborators should receive access to the target.
+To revoke access, delete the corresponding project SSH key from the target
+project's SSH settings.
+
+## Automated course setup
+
+For an instructor deployment project that must connect to many student
+projects, use a dedicated deploy key owned by the deployment project and
+authorize its public key on each intended student project. Do not distribute an
+instructor's CoCalc account session or personal private key to student
+projects.
+
+## Troubleshooting
+
+- If the first connection starts a stopped project but does not immediately
+  open a shell, wait a moment and run the same command again.
+- Run \`ssh -v PROJECT_ID\` to see which host, key, and proxy command OpenSSH is
+  using.
+- Re-run \`cocalc project ssh-config add -w PROJECT_ID\` after a project moves
+  to another host or region.
+- Check that the private key named by \`IdentityFile\` exists and that the
+  matching public key remains listed in the target project's SSH settings.
+- SSH access is full shell access to the project. Treat private keys and source
+  projects accordingly.
+`;

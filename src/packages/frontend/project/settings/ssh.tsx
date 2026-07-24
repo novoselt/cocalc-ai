@@ -20,6 +20,8 @@ import {
 } from "@cocalc/util/consts/ui";
 import { Project } from "./types";
 import { lite } from "@cocalc/frontend/lite";
+import { ProjectToProjectSsh } from "./project-to-project-ssh";
+import { DocsLink } from "@cocalc/frontend/docs/link";
 
 const { Text, Paragraph } = Typography;
 const COPYABLE_PROPS = {
@@ -165,6 +167,14 @@ export function SSHPanel({
                     sign in and configure SSH for this {projectLabelLower}.
                   </>
                 }
+                description={
+                  <DocsLink
+                    href="/docs/terminal/ssh-access"
+                    slug="terminal/ssh-access"
+                  >
+                    Read the SSH access guide
+                  </DocsLink>
+                }
               />
               <div>
                 <Text strong>Install CoCalc CLI</Text>
@@ -231,6 +241,14 @@ export function SSHPanel({
                   />
                 </Space>
               </details>
+              <div>
+                <Text strong>Connect from another CoCalc project</Text>
+                <Paragraph type="secondary" style={{ margin: "4px 0 8px" }}>
+                  Authorize a dedicated deploy key without signing your CoCalc
+                  account into the source project.
+                </Paragraph>
+                <ProjectToProjectSsh target_project_id={projectId} />
+              </div>
             </Space>
             <Modal
               open={setupModalOpen}

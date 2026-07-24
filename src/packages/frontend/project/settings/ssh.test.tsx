@@ -100,6 +100,10 @@ jest.mock("@cocalc/frontend/lite", () => ({
   lite: false,
 }));
 
+jest.mock("./project-to-project-ssh", () => ({
+  ProjectToProjectSsh: () => <button>Configure project-to-project SSH</button>,
+}));
+
 describe("SSHPanel", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -150,6 +154,7 @@ describe("SSHPanel", () => {
     expect(screen.queryByText(/must be running/i)).toBeNull();
     expect(screen.queryByText(/<account-api-key>/i)).toBeNull();
     expect(screen.getByText(/Need scp or sftp help/i)).toBeTruthy();
+    expect(screen.getByText("Configure project-to-project SSH")).toBeTruthy();
 
     fireEvent.click(screen.getByText(/Need scp or sftp help/i));
     expect(screen.getByText("scp ./local-file project-1:~/")).toBeTruthy();

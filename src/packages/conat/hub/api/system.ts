@@ -2,6 +2,7 @@ import {
   noAuth,
   authFirst,
   authFirstRequireAccount,
+  authFirstRequireHost,
   authFirstRequireProject,
   authFirstRequireProjectOrHost,
   requireAccount,
@@ -175,7 +176,7 @@ export const system = {
   recordServiceAdmissionDenial: authFirstRequireProject,
   recordServiceAdmissionNearLimit: authFirstRequireProject,
   getServiceAdmissionConfig: authFirst,
-  resolveManagedProjectSshKeyAccount: authFirst,
+  resolveManagedProjectSshKeyAccount: authFirstRequireHost,
 
   adminSalesloftSync: authFirst,
   userSalesloftSync: authFirst,
@@ -2928,7 +2929,7 @@ export interface System {
   }>;
 
   resolveManagedProjectSshKeyAccount: (opts: {
-    account_id?: string;
+    host_id?: string;
     project_id: string;
     fingerprint: string;
   }) => Promise<{ account_id?: string }>;

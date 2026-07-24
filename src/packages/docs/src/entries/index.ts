@@ -66,6 +66,7 @@ const DOCS_ENTRY_IDS = [
   "api.http-api",
   "projects.open-terminal",
   "terminal.use-terminal",
+  "terminal.ssh-access",
   "files.project-files",
   "files.explorer",
   "files.markdown",
