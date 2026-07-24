@@ -2182,18 +2182,17 @@ export class Actions extends BaseActions<LatexEditorState> {
     // Entries from included files (file header, headings, bookmarks)
     // carry their own path + line.
     if (extra?.kind === "line" && typeof extra.path === "string") {
-      const frameId = await this.switch_to_file(extra.path);
-      this.programmatically_goto_line(
-        (extra.line ?? 0) + 1,
-        true,
-        true,
-        frameId,
-      );
+      const frameId = await this._switchFocusedSourceTo(extra.path);
+      if (frameId == null) return;
+      await this._gotoSourceLine(extra.path, (extra.line ?? 0) + 1, frameId);
       return;
     }
-    const id = this.show_focused_frame_of_type("cm");
-    if (id == null) return;
-    this.programmatically_goto_line(parseInt(entry.id), true, true, id);
+    // Plain entries come from the master document.  The last-focused
+    // source pane may currently show an included file, so retarget that
+    // pane before applying the master line number.
+    const frameId = await this._switchFocusedSourceTo(this.path);
+    if (frameId == null) return;
+    await this._gotoSourceLine(this.path, parseInt(entry.id), frameId);
   }
 
   // ===== Chat anchors =======================================================
@@ -3182,7 +3181,7 @@ export class Actions extends BaseActions<LatexEditorState> {
           (location) => location.path === path,
         );
         if (loaded != null) {
-          this.programmatically_goto_line(loaded.line + 1, true, true, frameId);
+          await this._gotoSourceLine(path, loaded.line + 1, frameId);
           return;
         }
         await delay(100);
@@ -3192,7 +3191,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     const { path, line } = locations[0];
     const frameId = await this._switchFocusedSourceTo(path);
     if (frameId == null) return;
-    this.programmatically_goto_line(line + 1, true, true, frameId);
+    await this._gotoSourceLine(path, line + 1, frameId);
   };
 
   private async _switchFocusedSourceTo(
@@ -3204,9 +3203,43 @@ export class Actions extends BaseActions<LatexEditorState> {
     if (frameId == null) return;
     const currentPath = this._get_frame_node(frameId)?.get("path") ?? this.path;
     if (currentPath === path) {
+      await this._waitForSourcePane(path, frameId);
       return frameId;
     }
-    return await this.switch_to_file(path, frameId);
+    const switchedFrameId = await this.switch_to_file(path, frameId);
+    await this._waitForSourcePane(path, switchedFrameId);
+    return switchedFrameId;
+  }
+
+  private async _waitForSourcePane(
+    path: string,
+    frameId: string,
+  ): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start <= 15000) {
+      if (this.isClosed()) return;
+      const actions: any = this._actionsForChatPath(path);
+      const cm: CodeMirror.Editor | undefined = actions?._cm?.[frameId];
+      const wrapper = cm?.getWrapperElement?.();
+      // CodeMirror keeps detached instances cached by frame id.  Wait for
+      // React to register the newly mounted, connected instance after a
+      // file switch instead of jumping in the stale document.
+      if (cm != null && (wrapper == null || wrapper.isConnected)) {
+        return;
+      }
+      await delay(50);
+    }
+  }
+
+  private async _gotoSourceLine(
+    path: string,
+    line: number,
+    frameId: string,
+  ): Promise<void> {
+    const actions = this._actionsForChatPath(path);
+    if (actions == null) return;
+    this.set_active_id(frameId, true);
+    await actions.programmatically_goto_line(line, true, true, frameId);
   }
 
   // Resolve the most recently focused source pane in this frame tree:

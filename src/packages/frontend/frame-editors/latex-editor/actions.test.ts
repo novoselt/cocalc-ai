@@ -230,11 +230,13 @@ describe("LaTeX anchor pane targeting", () => {
     actions._get_most_recent_active_frame_id_of_type = jest.fn(() => "cm-1");
     actions._get_frame_node = jest.fn(() => Map({ path: "123.tex" }));
     actions.switch_to_file = jest.fn(async () => "cm-1");
+    actions._waitForSourcePane = jest.fn();
 
     const frameId = await actions._switchFocusedSourceTo("main.tex");
 
     expect(frameId).toBe("cm-1");
     expect(actions.switch_to_file).toHaveBeenCalledWith("main.tex", "cm-1");
+    expect(actions._waitForSourcePane).toHaveBeenCalledWith("main.tex", "cm-1");
   });
 
   it("reuses the focused pane when it already shows the target file", async () => {
@@ -243,10 +245,70 @@ describe("LaTeX anchor pane targeting", () => {
     actions._get_most_recent_active_frame_id_of_type = jest.fn(() => "cm-1");
     actions._get_frame_node = jest.fn(() => Map({ path: "main.tex" }));
     actions.switch_to_file = jest.fn();
+    actions._waitForSourcePane = jest.fn();
 
     const frameId = await actions._switchFocusedSourceTo("main.tex");
 
     expect(frameId).toBe("cm-1");
     expect(actions.switch_to_file).not.toHaveBeenCalled();
+    expect(actions._waitForSourcePane).toHaveBeenCalledWith("main.tex", "cm-1");
+  });
+});
+
+describe("LaTeX TOC pane targeting", () => {
+  it("switches a subfile pane to the master for a master bookmark", async () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "main.tex";
+    actions._switchFocusedSourceTo = jest.fn(async () => "cm-1");
+    actions._gotoSourceLine = jest.fn();
+
+    await actions.scrollToHeading({
+      id: "12-bookmark-review",
+      value: "review",
+      level: 6,
+    });
+
+    expect(actions._switchFocusedSourceTo).toHaveBeenCalledWith("main.tex");
+    expect(actions._gotoSourceLine).toHaveBeenCalledWith(
+      "main.tex",
+      12,
+      "cm-1",
+    );
+  });
+
+  it("targets the same focused pane for a subfile bookmark", async () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "main.tex";
+    actions._switchFocusedSourceTo = jest.fn(async () => "cm-1");
+    actions._gotoSourceLine = jest.fn();
+
+    await actions.scrollToHeading({
+      id: "sub:123.tex:5-bookmark-review",
+      value: "review",
+      level: 6,
+      extra: { kind: "line", path: "123.tex", line: 4 },
+    });
+
+    expect(actions._switchFocusedSourceTo).toHaveBeenCalledWith("123.tex");
+    expect(actions._gotoSourceLine).toHaveBeenCalledWith("123.tex", 5, "cm-1");
+  });
+
+  it("moves and focuses through the actions that own the target file", async () => {
+    const targetActions = {
+      programmatically_goto_line: jest.fn(async () => undefined),
+    };
+    const actions: any = Object.create(Actions.prototype);
+    actions._actionsForChatPath = jest.fn(() => targetActions);
+    actions.set_active_id = jest.fn();
+
+    await actions._gotoSourceLine("123.tex", 5, "cm-1");
+
+    expect(actions.set_active_id).toHaveBeenCalledWith("cm-1", true);
+    expect(targetActions.programmatically_goto_line).toHaveBeenCalledWith(
+      5,
+      true,
+      true,
+      "cm-1",
+    );
   });
 });
