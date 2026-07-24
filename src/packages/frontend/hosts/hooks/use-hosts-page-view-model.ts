@@ -1800,8 +1800,12 @@ export const useHostsPageViewModel = () => {
     onEdit: openEdit,
     onDelete: deprovisionOrDeleteHost,
     onSetDeletionProtection: async (id: string, enabled: boolean) => {
+      if (enabled) {
+        await setHostDeletionProtection(id, true);
+        return;
+      }
       await runFreshAuthAction(async () => {
-        await setHostDeletionProtection(id, enabled);
+        await setHostDeletionProtection(id, false);
       });
     },
     onDeleteSharedScratch: async (id: string) => {

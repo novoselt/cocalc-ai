@@ -630,8 +630,24 @@ export const useHostActions = ({
       return;
     }
     try {
-      await hub.hosts.setHostDeletionProtection({ id, browser_id, enabled });
-      await refresh();
+      const updated = await hub.hosts.setHostDeletionProtection({
+        id,
+        browser_id,
+        enabled,
+      });
+      setHosts((prev) =>
+        prev.map((host) =>
+          host.id === id
+            ? {
+                ...host,
+                deletion_protection: updated.deletion_protection === true,
+              }
+            : host,
+        ),
+      );
+      void refresh().catch((err) => {
+        console.error("host refresh failed", err);
+      });
     } catch (err) {
       if (isFreshAuthRequiredError(err)) {
         throw err;
