@@ -5788,6 +5788,18 @@ def reconcile_project_io_policy(cfg: BootstrapConfig) -> None:
     )
 
 
+def reconcile_storage_and_containment(cfg: BootstrapConfig) -> None:
+    # Network reconciliation creates the project-pool hierarchy, which also
+    # applies io.max. Establish every required writable mount before that
+    # fail-closed policy can inspect the capacity manifest.
+    ensure_cocalc_mount(cfg)
+    setup_shared_scratch(cfg)
+    ensure_btrfs_data(cfg)
+    reconcile_bees_runtime_policy(cfg)
+    reconcile_project_network_limits(cfg)
+    reconcile_project_io_policy(cfg)
+
+
 def ensure_btrfs_data(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: ensuring /mnt/cocalc/data subvolume")
     try:
@@ -8411,12 +8423,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         image_size_gb = compute_image_size(cfg)
         install_btrfs_helper(cfg)
         install_privileged_wrappers(cfg)
-        reconcile_project_network_limits(cfg)
-        ensure_cocalc_mount(cfg)
-        reconcile_bees_runtime_policy(cfg)
-        setup_shared_scratch(cfg)
-        ensure_btrfs_data(cfg)
-        reconcile_project_io_policy(cfg)
+        reconcile_storage_and_containment(cfg)
         ensure_subuids(cfg)
         ensure_runtime_user_manager(cfg)
         configure_podman(cfg)

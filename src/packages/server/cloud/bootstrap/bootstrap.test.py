@@ -152,6 +152,38 @@ class ProjectHostStartTest(unittest.TestCase):
 
 
 class BootstrapSharedScratchTest(unittest.TestCase):
+    def test_reconcile_mounts_scratch_before_containment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = replace(make_cfg(tmpdir), shared_scratch_enabled=True)
+            events: list[str] = []
+            originals = {}
+
+            def patch(name: str) -> None:
+                originals[name] = getattr(bootstrap, name)
+                setattr(
+                    bootstrap,
+                    name,
+                    lambda _cfg, name=name: events.append(name),
+                )
+
+            names = [
+                "ensure_cocalc_mount",
+                "setup_shared_scratch",
+                "ensure_btrfs_data",
+                "reconcile_bees_runtime_policy",
+                "reconcile_project_network_limits",
+                "reconcile_project_io_policy",
+            ]
+            try:
+                for name in names:
+                    patch(name)
+                bootstrap.reconcile_storage_and_containment(cfg)
+            finally:
+                for name, original in originals.items():
+                    setattr(bootstrap, name, original)
+
+            self.assertEqual(events, names)
+
     def test_setup_shared_scratch_formats_mounts_and_records_fstab(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             device = Path(tmpdir) / "scratch-device"
