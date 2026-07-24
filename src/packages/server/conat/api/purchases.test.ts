@@ -489,10 +489,7 @@ describe("purchases automatic deposits", () => {
       }),
     ).rejects.toMatchObject({ code: "fresh_auth_required" });
 
-    expect(assertAccountTrustedForProductAccessMock).toHaveBeenCalledWith(
-      "account-1",
-      "configure automatic deposits",
-    );
+    expect(assertAccountTrustedForProductAccessMock).not.toHaveBeenCalled();
     expect(setAutoBalanceLocalMock).not.toHaveBeenCalled();
     expect(interBaySetAutoBalanceMock).not.toHaveBeenCalled();
   });
@@ -554,6 +551,29 @@ describe("purchases automatic deposits", () => {
     });
 
     expect(hasCardPaymentMethodMock).not.toHaveBeenCalled();
+    expect(setAutoBalanceLocalMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },
+    });
+  });
+
+  it("allows disabling when product-access trust is unavailable", async () => {
+    assertAccountTrustedForProductAccessMock.mockRejectedValue(
+      new Error("email verification required"),
+    );
+    setAutoBalanceLocalMock.mockResolvedValue({
+      ...AUTO_BALANCE_CONFIG,
+      enabled: false,
+    });
+
+    const { setAutoBalance } = await import("./purchases");
+    await setAutoBalance({
+      account_id: "account-1",
+      session_hash: "session-1",
+      auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },
+    });
+
+    expect(assertAccountTrustedForProductAccessMock).not.toHaveBeenCalled();
     expect(setAutoBalanceLocalMock).toHaveBeenCalledWith({
       account_id: "account-1",
       auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },

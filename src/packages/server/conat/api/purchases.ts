@@ -200,10 +200,12 @@ export async function setAutoBalance({
   if (auto_balance == null) {
     throw Error("auto_balance is required");
   }
-  await assertAccountTrustedForProductAccess(
-    owner,
-    "configure automatic deposits",
-  );
+  if (auto_balance.enabled) {
+    await assertAccountTrustedForProductAccess(
+      owner,
+      "configure automatic deposits",
+    );
+  }
   await requireFreshAuthForPurchaseAction({
     account_id: owner,
     browser_id,

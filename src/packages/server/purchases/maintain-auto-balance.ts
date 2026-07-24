@@ -233,6 +233,7 @@ async function update({
     lineItems: [{ description: longDescription, amount: amount.toNumber() }],
     description: shortDescription,
     purpose: AUTO_CREDIT,
+    allowedPaymentMethodTypes: ["card"],
   });
 
   try {

@@ -83,7 +83,7 @@ export default function AutoBalance({ style }: Props) {
   const enabled = autoBalance?.enabled === true;
   const targetEnabled = !enabled;
   const confirmation = targetEnabled
-    ? "CoCalc will automatically charge your default card according to the strategy shown below."
+    ? "CoCalc will automatically charge a saved card according to the strategy shown below."
     : "CoCalc will stop adding account credit automatically. Paid services may stop when the available credit is depleted.";
 
   const updateEnabled = async () => {

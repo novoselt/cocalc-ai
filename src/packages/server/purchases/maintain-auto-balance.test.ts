@@ -80,6 +80,7 @@ describe("automatic deposit rolling limits", () => {
       expect(createPaymentIntentMock).toHaveBeenCalledWith(
         expect.objectContaining({
           account_id: ACCOUNT_ID,
+          allowedPaymentMethodTypes: ["card"],
           lineItems: [
             expect.objectContaining({
               amount: 20,

@@ -148,7 +148,7 @@ describe("automatic deposit presentation", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "CoCalc will automatically charge your default card according to the strategy shown below.",
+        "CoCalc will automatically charge a saved card according to the strategy shown below.",
       ),
     ).toBeTruthy();
     expect(screen.getByTestId("confirmation")).toHaveStyle({
