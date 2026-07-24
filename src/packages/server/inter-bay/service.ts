@@ -83,6 +83,7 @@ import {
   grantAdminRole as grantAdminRoleLocal,
   revokeAdminRole as revokeAdminRoleLocal,
 } from "@cocalc/server/accounts/admin-role";
+import { setAutoBalance as setAutoBalanceLocal } from "@cocalc/server/accounts/auto-balance";
 import setPasswordFromResetLocal from "@cocalc/server/accounts/set-password-from-reset";
 import { adminDisableTwoFactor as adminDisableTwoFactorLocal } from "@cocalc/server/auth/two-factor";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
@@ -888,6 +889,7 @@ async function startAccountLocalService(): Promise<void> {
     setBan: async (opts) => await setLocalClusterAccountBan(opts),
     quarantineBillingResources: async (opts) =>
       await quarantineLocalClusterAccountBillingResources(opts),
+    setAutoBalance: async (opts) => await setAutoBalanceLocal(opts),
     setPasswordFromReset: async ({ account_id, password }) => {
       await setPasswordFromResetLocal({ account_id, password });
     },

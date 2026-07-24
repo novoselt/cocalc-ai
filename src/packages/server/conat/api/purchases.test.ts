@@ -57,6 +57,7 @@ const removeSiteLicenseManagerMock = jest.fn();
 const purchaseMembershipPackageMock = jest.fn();
 const purchaseMembershipPackagesMock = jest.fn();
 const purchaseTeamLicenseChangeMock = jest.fn();
+const setAutoBalanceLocalMock = jest.fn();
 const getTeamLicenseOverviewForOwnerMock = jest.fn();
 const resolveTeamLicenseQuoteMock = jest.fn();
 const resolveAccountHomeBayMock = jest.fn();
@@ -64,6 +65,7 @@ const listConfiguredBaysMock = jest.fn();
 const getClusterAccountByIdDirectMock = jest.fn();
 const dbMock = jest.fn();
 const interBayGetMembershipDetailsMock = jest.fn();
+const interBaySetAutoBalanceMock = jest.fn();
 const interBayGetAccountUsageOverviewMock = jest.fn();
 const interBayGetMembershipPackagesMock = jest.fn();
 const interBayUpdateMembershipPackageMock = jest.fn();
@@ -95,6 +97,7 @@ const getInterBayBridgeMock = jest.fn();
 const getBrowserAuthSessionHashMock = jest.fn();
 const requireFreshAuthForSessionHashMock = jest.fn();
 const assertAccountTrustedForProductAccessMock = jest.fn();
+const hasCardPaymentMethodMock = jest.fn();
 const getConfiguredClusterSeedBayIdMock = jest.fn();
 const getConfiguredBayIdMock = jest.fn();
 
@@ -303,6 +306,14 @@ jest.mock("@cocalc/server/accounts/trusted-product-access", () => ({
     assertAccountTrustedForProductAccessMock(...args),
 }));
 
+jest.mock("@cocalc/server/accounts/auto-balance", () => ({
+  setAutoBalance: (...args: any[]) => setAutoBalanceLocalMock(...args),
+}));
+
+jest.mock("@cocalc/server/purchases/stripe/get-payment-methods", () => ({
+  hasCardPaymentMethod: (...args: any[]) => hasCardPaymentMethodMock(...args),
+}));
+
 jest.mock("@cocalc/server/inter-bay/fabric", () => ({
   getInterBayFabricClient: jest.fn(() => ({ kind: "fabric-client" })),
 }));
@@ -316,6 +327,7 @@ jest.mock("@cocalc/conat/inter-bay/api", () => ({
     dest_bay,
     getMembershipDetails: (...args: any[]) =>
       interBayGetMembershipDetailsMock(...args),
+    setAutoBalance: (...args: any[]) => interBaySetAutoBalanceMock(...args),
     getAccountUsageOverview: (...args: any[]) =>
       interBayGetAccountUsageOverviewMock(...args),
     getMembershipPackages: (...args: any[]) =>
@@ -379,6 +391,7 @@ beforeEach(() => {
   purchaseMembershipPackageMock.mockReset();
   purchaseMembershipPackagesMock.mockReset();
   purchaseTeamLicenseChangeMock.mockReset();
+  setAutoBalanceLocalMock.mockReset();
   getTeamLicenseOverviewForOwnerMock.mockReset();
   resolveTeamLicenseQuoteMock.mockReset();
   updateSiteLicensePoolMock.mockReset();
@@ -390,6 +403,7 @@ beforeEach(() => {
   setSiteLicenseManagerMock.mockReset();
   removeSiteLicenseManagerMock.mockReset();
   interBayUpdateSiteLicenseMock.mockReset();
+  interBaySetAutoBalanceMock.mockReset();
   interBayAddSiteLicensePoolMock.mockReset();
   interBayArchiveSiteLicensePoolMock.mockReset();
   interBayRevokeSiteLicensePoolSeatMock.mockReset();
@@ -410,6 +424,8 @@ beforeEach(() => {
   getBrowserAuthSessionHashMock.mockReturnValue(undefined);
   requireFreshAuthForSessionHashMock.mockResolvedValue(undefined);
   assertAccountTrustedForProductAccessMock.mockResolvedValue(undefined);
+  hasCardPaymentMethodMock.mockReset();
+  hasCardPaymentMethodMock.mockResolvedValue(true);
   dbMock.mockReturnValue({ kind: "db" });
   membershipTiersQueryMock.mockResolvedValue([]);
   getMembershipTierRowsMock.mockResolvedValue([]);
@@ -449,6 +465,146 @@ beforeEach(() => {
     account_id: "account-1",
     home_bay_id: "bay-0",
     source: "cluster-directory",
+  });
+});
+
+const AUTO_BALANCE_CONFIG = {
+  trigger: 10,
+  amount: 20,
+  max_day: 200,
+  max_week: 1000,
+  max_month: 2500,
+  period: "week" as const,
+  enabled: true,
+};
+
+describe("purchases automatic deposits", () => {
+  it("requires fresh auth before changing any automatic-deposit setting", async () => {
+    const { setAutoBalance } = await import("./purchases");
+
+    await expect(
+      setAutoBalance({
+        account_id: "account-1",
+        auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },
+      }),
+    ).rejects.toMatchObject({ code: "fresh_auth_required" });
+
+    expect(assertAccountTrustedForProductAccessMock).not.toHaveBeenCalled();
+    expect(setAutoBalanceLocalMock).not.toHaveBeenCalled();
+    expect(interBaySetAutoBalanceMock).not.toHaveBeenCalled();
+  });
+
+  it("applies authenticated settings on the account home bay", async () => {
+    getBrowserAuthSessionHashMock.mockReturnValue("session-1");
+    setAutoBalanceLocalMock.mockResolvedValue(AUTO_BALANCE_CONFIG);
+
+    const { setAutoBalance } = await import("./purchases");
+    await setAutoBalance({
+      account_id: "account-1",
+      browser_id: "browser-1",
+      auto_balance: AUTO_BALANCE_CONFIG,
+    });
+
+    expect(requireFreshAuthForSessionHashMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      session_hash: "session-1",
+      allow_actor_impersonation: true,
+    });
+    expect(setAutoBalanceLocalMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      auto_balance: AUTO_BALANCE_CONFIG,
+    });
+    expect(hasCardPaymentMethodMock).toHaveBeenCalledWith("account-1");
+  });
+
+  it("rejects enabling without a saved card", async () => {
+    hasCardPaymentMethodMock.mockResolvedValue(false);
+
+    const { setAutoBalance } = await import("./purchases");
+    await expect(
+      setAutoBalance({
+        account_id: "account-1",
+        session_hash: "session-1",
+        auto_balance: AUTO_BALANCE_CONFIG,
+      }),
+    ).rejects.toMatchObject({
+      code: "payment_method_required",
+      message: "Add a card payment method before enabling automatic deposits.",
+    });
+
+    expect(setAutoBalanceLocalMock).not.toHaveBeenCalled();
+    expect(interBaySetAutoBalanceMock).not.toHaveBeenCalled();
+  });
+
+  it("allows disabling without a saved card", async () => {
+    hasCardPaymentMethodMock.mockResolvedValue(false);
+    setAutoBalanceLocalMock.mockResolvedValue({
+      ...AUTO_BALANCE_CONFIG,
+      enabled: false,
+    });
+
+    const { setAutoBalance } = await import("./purchases");
+    await setAutoBalance({
+      account_id: "account-1",
+      session_hash: "session-1",
+      auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },
+    });
+
+    expect(hasCardPaymentMethodMock).not.toHaveBeenCalled();
+    expect(setAutoBalanceLocalMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },
+    });
+  });
+
+  it("allows disabling when product-access trust is unavailable", async () => {
+    assertAccountTrustedForProductAccessMock.mockRejectedValue(
+      new Error("email verification required"),
+    );
+    setAutoBalanceLocalMock.mockResolvedValue({
+      ...AUTO_BALANCE_CONFIG,
+      enabled: false,
+    });
+
+    const { setAutoBalance } = await import("./purchases");
+    await setAutoBalance({
+      account_id: "account-1",
+      session_hash: "session-1",
+      auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },
+    });
+
+    expect(assertAccountTrustedForProductAccessMock).not.toHaveBeenCalled();
+    expect(setAutoBalanceLocalMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      auto_balance: { ...AUTO_BALANCE_CONFIG, enabled: false },
+    });
+  });
+
+  it("routes authenticated settings to a remote account home bay", async () => {
+    resolveAccountHomeBayMock.mockResolvedValue({
+      account_id: "account-1",
+      home_bay_id: "bay-2",
+      source: "cluster-directory",
+    });
+    interBaySetAutoBalanceMock.mockResolvedValue(AUTO_BALANCE_CONFIG);
+
+    const { setAutoBalance } = await import("./purchases");
+    await setAutoBalance({
+      account_id: "account-1",
+      session_hash: "session-1",
+      auto_balance: AUTO_BALANCE_CONFIG,
+    });
+
+    expect(requireFreshAuthForSessionHashMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      session_hash: "session-1",
+      allow_actor_impersonation: true,
+    });
+    expect(interBaySetAutoBalanceMock).toHaveBeenCalledWith({
+      account_id: "account-1",
+      auto_balance: AUTO_BALANCE_CONFIG,
+    });
+    expect(setAutoBalanceLocalMock).not.toHaveBeenCalled();
   });
 });
 

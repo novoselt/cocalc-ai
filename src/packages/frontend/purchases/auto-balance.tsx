@@ -1,69 +1,140 @@
 import {
-  Alert,
   Button,
-  Switch,
-  Divider,
-  Flex,
   Form,
   InputNumber,
   Modal,
-  Progress,
+  Popconfirm,
   Radio,
   Space,
-  Spin,
+  Switch,
+  Typography,
 } from "antd";
 import { useEffect, useState } from "react";
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
-import { Tooltip } from "@cocalc/frontend/components";
 import { currency } from "@cocalc/util/misc";
-import { webapp_client } from "@cocalc/frontend/webapp-client";
 import ShowError from "@cocalc/frontend/components/error";
 import { Icon } from "@cocalc/frontend/components/icon";
-import { TimeAgo } from "@cocalc/frontend/components/time-ago";
+import {
+  FreshAuthModal,
+  useFreshAuthAction,
+} from "@cocalc/frontend/auth/fresh-auth";
 import {
   AUTOBALANCE_RANGES,
   AUTOBALANCE_DEFAULTS,
   ensureAutoBalanceValid,
+  type AutoBalance,
+  type AutoBalanceConfig,
 } from "@cocalc/util/db-schema/accounts";
+import { setAutoBalance } from "@cocalc/frontend/purchases/api";
+
+const { Text } = Typography;
 
 interface Props {
   style?;
-  type?;
 }
 
-export default function AutoBalance({ style, type }: Props) {
+export function getAutoBalanceConfig(
+  autoBalance?: Partial<AutoBalance> | null,
+): AutoBalanceConfig {
+  return {
+    trigger: autoBalance?.trigger ?? AUTOBALANCE_DEFAULTS.trigger,
+    amount: autoBalance?.amount ?? AUTOBALANCE_DEFAULTS.amount,
+    max_day: autoBalance?.max_day ?? AUTOBALANCE_DEFAULTS.max_day,
+    max_week: autoBalance?.max_week ?? AUTOBALANCE_DEFAULTS.max_week,
+    max_month: autoBalance?.max_month ?? AUTOBALANCE_DEFAULTS.max_month,
+    period: autoBalance?.period ?? AUTOBALANCE_DEFAULTS.period,
+    enabled: autoBalance?.enabled ?? false,
+  };
+}
+
+function getPeriodLimit(autoBalance: AutoBalanceConfig): number {
+  if (autoBalance.period === "day") {
+    return autoBalance.max_day;
+  }
+  if (autoBalance.period === "month") {
+    return autoBalance.max_month;
+  }
+  return autoBalance.max_week;
+}
+
+export function describeAutoBalance(autoBalance: AutoBalanceConfig): string {
+  return `When account credit falls below ${currency(
+    autoBalance.trigger,
+  )}, add at least ${currency(
+    autoBalance.amount,
+  )}, with a maximum of ${currency(getPeriodLimit(autoBalance))} per ${
+    autoBalance.period
+  }.`;
+}
+
+export default function AutoBalance({ style }: Props) {
   const [open, setOpen] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [error, setError] = useState<string>("");
   const autoBalance = useTypedRedux("account", "auto_balance")?.toJS();
   const stripeEnabled = !!useTypedRedux("customize", "stripe_enabled");
+  const value = getAutoBalanceConfig(autoBalance);
+  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   if (!stripeEnabled) {
     return null;
   }
 
-  let btn = (
-    <Button type={type} style={style} onClick={() => setOpen(!open)}>
-      {autoBalance?.enabled
-        ? "Automatic Deposits are Enabled"
-        : "Enable Automatic Deposits"}
-    </Button>
-  );
-  if (autoBalance != null) {
-    btn = (
-      <Tooltip
-        title={<Status autoBalance={autoBalance} />}
-        color="white"
-        overlayInnerStyle={{ width: "450px" }}
-      >
-        {btn}{" "}
-      </Tooltip>
-    );
-  }
+  const enabled = autoBalance?.enabled === true;
+  const targetEnabled = !enabled;
+  const confirmation = targetEnabled
+    ? "CoCalc will automatically charge a saved card according to the strategy shown below."
+    : "CoCalc will stop adding account credit automatically. Paid services may stop when the available credit is depleted.";
+
+  const updateEnabled = async () => {
+    try {
+      setSaving(true);
+      setError("");
+      await runFreshAuthAction(async () => {
+        await setAutoBalance({ ...value, enabled: targetEnabled });
+      });
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <>
-      {btn}
+    <Space
+      direction="vertical"
+      size="small"
+      style={{ width: "100%", ...style }}
+    >
+      <Space align="center" wrap>
+        <Popconfirm
+          title={`${targetEnabled ? "Enable" : "Disable"} automatic deposits?`}
+          description={confirmation}
+          onConfirm={updateEnabled}
+          okText={targetEnabled ? "Enable" : "Disable"}
+          cancelText="Cancel"
+          styles={{ root: { maxWidth: "360px" } }}
+        >
+          <Switch
+            aria-label="Automatic deposits"
+            checked={enabled}
+            loading={saving}
+          />
+        </Popconfirm>
+        <Text>Automatic deposits are {enabled ? "enabled" : "disabled"}.</Text>
+      </Space>
+      <Space align="center" wrap>
+        <span>
+          <Text strong>Strategy:</Text> {describeAutoBalance(value)}
+        </span>
+        <Button icon={<Icon name="edit" />} onClick={() => setOpen(true)}>
+          Edit settings
+        </Button>
+      </Space>
+      <ShowError error={error} setError={setError} />
       {open && <AutoBalanceModal onClose={() => setOpen(false)} />}
-    </>
+      <FreshAuthModal {...freshAuthModalProps} />
+    </Space>
   );
 }
 
@@ -71,27 +142,14 @@ export function AutoBalanceModal({ onClose }) {
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
   const autoBalance = useTypedRedux("account", "auto_balance")?.toJS();
-  const [value, setValue] = useState<{
-    trigger: number;
-    amount: number;
-    max_day: number;
-    max_week: number;
-    max_month: number;
-    period: "day" | "week" | "month";
-    enabled: boolean;
-  } | null>(null);
+  const [value, setValue] = useState<AutoBalanceConfig | null>(null);
   const [form] = Form.useForm();
+  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   useEffect(() => {
-    setValue({
-      trigger: autoBalance?.trigger ?? AUTOBALANCE_DEFAULTS.trigger,
-      amount: autoBalance?.amount ?? AUTOBALANCE_DEFAULTS.amount,
-      max_day: autoBalance?.max_day ?? AUTOBALANCE_DEFAULTS.max_day,
-      max_week: autoBalance?.max_week ?? AUTOBALANCE_DEFAULTS.max_week,
-      max_month: autoBalance?.max_month ?? AUTOBALANCE_DEFAULTS.max_month,
-      period: autoBalance?.period ?? AUTOBALANCE_DEFAULTS.period,
-      enabled: autoBalance?.enabled ?? AUTOBALANCE_DEFAULTS.enabled,
-    });
+    const next = getAutoBalanceConfig(autoBalance);
+    setValue(next);
+    form.setFieldsValue(next);
   }, [
     autoBalance?.trigger,
     autoBalance?.amount,
@@ -100,29 +158,35 @@ export function AutoBalanceModal({ onClose }) {
     autoBalance?.max_month,
     autoBalance?.period,
     autoBalance?.enabled,
+    form,
   ]);
 
+  const initialValue = getAutoBalanceConfig(autoBalance);
   const changed =
-    autoBalance?.trigger != value?.trigger ||
-    autoBalance?.amount != value?.amount ||
-    autoBalance?.max_day != value?.max_day ||
-    autoBalance?.max_week != value?.max_week ||
-    autoBalance?.max_month != value?.max_month ||
-    autoBalance?.period != value?.period ||
-    !!autoBalance?.enabled != value?.enabled;
+    initialValue.trigger !== value?.trigger ||
+    initialValue.amount !== value?.amount ||
+    initialValue.max_day !== value?.max_day ||
+    initialValue.max_week !== value?.max_week ||
+    initialValue.max_month !== value?.max_month ||
+    initialValue.period !== value?.period;
 
-  const save = async () => {
+  const save = async (): Promise<boolean> => {
     if (!changed) {
-      return;
+      return true;
+    }
+    if (value == null) {
+      return false;
     }
     try {
       ensureAutoBalanceValid(value);
       setSaving(true);
-      await webapp_client.async_query({
-        query: { accounts: { auto_balance: value } },
+      setError("");
+      return await runFreshAuthAction(async () => {
+        await setAutoBalance(value);
       });
     } catch (err) {
       setError(`${err}`);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -134,80 +198,74 @@ export function AutoBalanceModal({ onClose }) {
 
   return (
     <Modal
-      width={600}
+      width={520}
       open
-      title={
-        <>
-          <Icon name="line-chart" /> Make Automatic Deposits
-          {autoBalance?.trigger ? (
-            <> to Keep Balance Above {currency(autoBalance.trigger)}</>
-          ) : undefined}
-        </>
-      }
-      onOk={() => {
-        save();
-        onClose();
+      title="Automatic deposit settings"
+      okText="Save changes"
+      cancelText="Cancel"
+      okButtonProps={{ disabled: !changed }}
+      onOk={async () => {
+        if (await save()) {
+          onClose();
+        }
       }}
       onCancel={onClose}
+      confirmLoading={saving}
     >
-      If you are using pay as you go features of CoCalc, you should configure
-      your account so that money is deposited when your balance goes below a
-      specified value.
       <Form
         form={form}
-        name="basic"
-        labelCol={{ span: 14 }}
-        wrapperCol={{ span: 10 }}
-        style={{ maxWidth: 500, marginTop: "30px" }}
+        colon={false}
+        labelCol={{ span: 12 }}
+        wrapperCol={{ span: 12 }}
+        style={{ marginTop: "20px" }}
         onValuesChange={(_, newValue) => setValue({ ...value, ...newValue })}
         initialValues={value}
       >
-        <Form.Item
-          label=<Tooltip
-            title={
-              <>
-                Every few minutes CoCalc will check if your balance is below{" "}
-                {currency(value.trigger)}, and if so, try to make a deposit to
-                bring the balance above this amount. If you have a payment that
-                is not working, or you hit your limit, then no deposit will be
-                attempted.
-              </>
-            }
-          >
-            Keep balance above
-          </Tooltip>
-          name="trigger"
-        >
+        <Form.Item label="If the balance goes below" name="trigger">
           <InputNumber
             prefix="$"
             min={AUTOBALANCE_RANGES.trigger[0]}
             max={AUTOBALANCE_RANGES.trigger[1]}
           />
         </Form.Item>
-        <Form.Item
-          label={
-            <Tooltip
-              title={
-                <>
-                  {currency(value.amount)} will typically be deposited when your
-                  balance goes below {currency(value.trigger)}. More may be
-                  deposited if the balance drops significantly lower, subject to
-                  your limit.
-                </>
-              }
-            >
-              By depositing at least
-            </Tooltip>
-          }
-          name="amount"
-        >
+        <Form.Item label="Deposit automatically" name="amount">
           <InputNumber
             prefix="$"
             min={AUTOBALANCE_RANGES.amount[0]}
             max={AUTOBALANCE_RANGES.amount[1]}
           />
         </Form.Item>
-        <Form.Item label={"Limit contribution during a given"} name="period">
+        {value.period === "day" && (
+          <Form.Item label="But no more than" name="max_day">
+            <InputNumber
+              step={10}
+              prefix="$"
+              min={AUTOBALANCE_RANGES.max_day[0]}
+              max={AUTOBALANCE_RANGES.max_day[1]}
+            />
+          </Form.Item>
+        )}
+        {value.period === "week" && (
+          <Form.Item label="But no more than" name="max_week">
+            <InputNumber
+              step={25}
+              prefix="$"
+              min={AUTOBALANCE_RANGES.max_week[0]}
+              max={AUTOBALANCE_RANGES.max_week[1]}
+            />
+          </Form.Item>
+        )}
+        {value.period === "month" && (
+          <Form.Item label="But no more than" name="max_month">
+            <InputNumber
+              step={100}
+              prefix="$"
+              min={AUTOBALANCE_RANGES.max_month[0]}
+              max={AUTOBALANCE_RANGES.max_month[1]}
+            />
+          </Form.Item>
+        )}
+        <Form.Item label="During one" name="period">
           <Radio.Group
             options={[
               { label: "Day", value: "day" },
@@ -218,191 +276,9 @@ export function AutoBalanceModal({ onClose }) {
             buttonStyle="solid"
           />
         </Form.Item>
-        {value.period == "day" && (
-          <Form.Item
-            label={
-              <Tooltip
-                title={
-                  <>
-                    CoCalc will not deposit more than {currency(value.max_day)}{" "}
-                    per day.
-                  </>
-                }
-              >
-                Maximum amount to add per day
-              </Tooltip>
-            }
-            name="max_day"
-          >
-            <InputNumber
-              step={10}
-              prefix="$"
-              min={AUTOBALANCE_RANGES.max_day[0]}
-              max={AUTOBALANCE_RANGES.max_day[1]}
-            />
-          </Form.Item>
-        )}
-        {value.period == "week" && (
-          <Form.Item
-            label={
-              <Tooltip
-                title={
-                  <>
-                    CoCalc will not deposit more than {currency(value.max_week)}{" "}
-                    per week.
-                  </>
-                }
-              >
-                Maximum amount to add per week
-              </Tooltip>
-            }
-            name="max_week"
-          >
-            <InputNumber
-              step={25}
-              prefix="$"
-              min={AUTOBALANCE_RANGES.max_week[0]}
-              max={AUTOBALANCE_RANGES.max_week[1]}
-            />
-          </Form.Item>
-        )}
-        {value.period == "month" && (
-          <Form.Item
-            label={
-              <Tooltip
-                title={
-                  <>
-                    CoCalc will not deposit more than{" "}
-                    {currency(value.max_month)} per month.
-                  </>
-                }
-              >
-                Maximum amount to add per month
-              </Tooltip>
-            }
-            name="max_month"
-          >
-            <InputNumber
-              step={100}
-              prefix="$"
-              min={AUTOBALANCE_RANGES.max_month[0]}
-              max={AUTOBALANCE_RANGES.max_month[1]}
-            />
-          </Form.Item>
-        )}
-        <Form.Item
-          label="Enable automatic deposits"
-          name="enabled"
-          valuePropName="checked"
-        >
-          <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
-        </Form.Item>
       </Form>
-      <div style={{ textAlign: "center", marginBottom: "15px" }}>
-        <Space>
-          {/*<Button onClick={() => setDefaults("min")}>Min</Button> */}
-          {/* <Button onClick={() => setDefaults("default")}>Defaults</Button> */}
-          {/* <Button onClick={() => setDefaults("max")}>Max</Button> */}
-          <Button disabled={!changed || saving} onClick={save} type="primary">
-            Save Changes{" "}
-            {saving && <Spin delay={2000} style={{ marginLeft: "15px" }} />}
-          </Button>
-        </Space>
-      </div>
       <ShowError error={error} setError={setError} />
-      <Status autoBalance={autoBalance} style={{ marginTop: "15px" }} />
+      <FreshAuthModal {...freshAuthModalProps} />
     </Modal>
-  );
-}
-
-function Status({ autoBalance, style }: { autoBalance; style? }) {
-  if (autoBalance == null) {
-    return null;
-  }
-  let limit;
-  if (autoBalance.period == "day") {
-    limit = autoBalance.max_day;
-  } else if (autoBalance.period == "week") {
-    limit = autoBalance.max_week;
-  } else if (autoBalance.period == "month") {
-    limit = autoBalance.max_month;
-  }
-  return (
-    <Alert
-      style={style}
-      showIcon
-      type={autoBalance.enabled ? "warning" : "info"}
-      title={
-        <Flex>
-          <div>
-            Status: <b>{autoBalance.enabled ? " Enabled" : " NOT Enabled"}</b>
-          </div>
-        </Flex>
-      }
-      description={
-        <div>
-          <div style={{ marginBottom: "15px" }}>
-            Strategy:{" "}
-            <i>
-              Try to keep balance above {currency(autoBalance.trigger)} by
-              depositing at least {currency(autoBalance.amount)}, never
-              depositing more than {currency(limit)} per {autoBalance.period}.
-            </i>
-          </div>
-          <ProgressBars autoBalance={autoBalance} />
-          <Divider />
-          Last Action (<TimeAgo date={autoBalance.time} />
-          ): {autoBalance.reason}
-        </div>
-      }
-    />
-  );
-}
-
-function ProgressBars({ autoBalance }) {
-  if (autoBalance?.status == null) {
-    return null;
-  }
-  const { day, week, month } = autoBalance.status;
-  const { period } = autoBalance;
-
-  return (
-    <div>
-      {period == "day" && (
-        <Flex>
-          <div style={{ width: "100px" }}>Day</div>
-          <div style={{ width: "100px" }}>{currency(day ?? 0)}</div>
-          {autoBalance?.max_day != null && (
-            <Progress
-              percent={Math.round((100 * (day ?? 0)) / autoBalance?.max_day)}
-            />
-          )}
-        </Flex>
-      )}
-      {period == "week" && (
-        <Flex>
-          <div style={{ width: "100px" }}>Week</div>
-          <div style={{ width: "100px" }}>{currency(week ?? 0)}</div>
-          {autoBalance?.max_week != null && (
-            <Progress
-              percent={Math.round((100 * (week ?? 0)) / autoBalance?.max_week)}
-            />
-          )}
-        </Flex>
-      )}
-      {period == "month" && (
-        <Flex>
-          <div style={{ width: "100px" }}>Month</div>
-          <div style={{ width: "100px" }}>{currency(month ?? 0)}</div>
-          {autoBalance?.max_month != null && (
-            <Progress
-              percent={Math.round(
-                (100 * (month ?? 0)) / autoBalance?.max_month,
-              )}
-            />
-          )}
-        </Flex>
-      )}
-    </div>
   );
 }
