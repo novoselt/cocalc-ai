@@ -92,6 +92,22 @@ describe("persist maintenance catalog and path safety", () => {
     ).toThrow(/resolves elsewhere|symlink/);
   });
 
+  it("allows canonicalized ancestors above the configured root", () => {
+    const real = join(root, "real");
+    const allowed = join(real, "allowed");
+    const alias = join(root, "alias");
+    mkdirSync(allowed, { recursive: true });
+    symlinkSync(real, alias);
+    const path = join(alias, "allowed", "test.db");
+    writeFileSync(path, "sqlite");
+    const safety = new PersistMaintenancePathSafety({
+      rootTemplates: [join(alias, "allowed")],
+      catalogPath,
+    });
+
+    expect(safety.assertExistingRegularFile(path).path).toBe(path);
+  });
+
   it("detects replacement identity and clears stale page statistics", () => {
     const path = join(root, "replace.db");
     writeFileSync(path, "first");
