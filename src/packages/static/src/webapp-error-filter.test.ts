@@ -37,6 +37,7 @@ describe("isIgnorableUnhandledRejection", () => {
     ),
     new Error('once: timeout of 4000ms waiting for "info"'),
     new Error("socket has been disconnected"),
+    "Error: socket has been disconnected",
     new Error("file server not initialized"),
     new Error(
       "account 'account-id' is not a collaborator on project 'project-id'",
@@ -54,6 +55,7 @@ describe("isIgnorableUnhandledRejection", () => {
     new Error("unable to route billing request"),
     new Error('once: timeout of 4000ms waiting for "ready"'),
     new Error("socket has been disconnected while saving a document"),
+    "Error: socket has been disconnected while saving a document",
     new Error("file server failed to initialize"),
     new Error("account is not a collaborator"),
     new Error("Failed to connect to MetaMask"),
