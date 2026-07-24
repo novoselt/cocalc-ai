@@ -762,7 +762,7 @@ function aboutRouteMetadata(
       return {
         canonicalPath: publicPath("about", options),
         description:
-          "Learn about the people and company behind CoCalc, the collaborative computing platform from SageMath, Inc.",
+          "Learn about SageMath, Inc., the mission, history, people, and operating principles behind CoCalc.",
         imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
         title: pageTitle(`About ${siteName}`, siteName),
       };

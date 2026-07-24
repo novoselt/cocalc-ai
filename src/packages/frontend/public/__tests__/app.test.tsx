@@ -224,7 +224,7 @@ describe("PublicApp", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Meet the People Behind CoCalc",
+        name: "About CoCalc",
       }),
     ).not.toBeNull();
   });
@@ -257,13 +257,22 @@ describe("PublicApp", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: "Meet the People Behind CoCalc" }),
+      screen.getByRole("heading", { name: "About CoCalc" }),
     ).not.toBeNull();
-    expect(screen.getByText("William Stein, Founder and CEO")).not.toBeNull();
     expect(
-      screen.getByText(/founder of CoCalc and SageMath, Inc\./),
+      screen.getByRole("heading", {
+        name: /Make serious computational work easy to share/i,
+      }),
     ).not.toBeNull();
-    expect(screen.queryByText("Team")).toBeNull();
+    expect(
+      screen.getByText("SageMath, Inc. · The company behind CoCalc"),
+    ).not.toBeNull();
+    expect(screen.getByText("Incorporated 2016")).not.toBeNull();
+    expect(screen.getByText("SOC 2")).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Leadership and team" }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Upcoming events")).toBeNull();
   });
 
   it("renders and updates managed public-route head metadata", async () => {
@@ -292,7 +301,7 @@ describe("PublicApp", () => {
       expect(canonicalHref()).toBe("https://cocalc.ai/about"),
     );
     expect(headMeta('meta[name="description"]')).toContain(
-      "people and company behind CoCalc",
+      "mission, history, people, and operating principles behind CoCalc",
     );
   });
 
