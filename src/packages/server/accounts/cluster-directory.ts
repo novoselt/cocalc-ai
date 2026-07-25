@@ -655,6 +655,10 @@ export async function searchClusterAccountsByVerifiedEmailDomainsDirect({
                0 AS source_rank
           FROM accounts
          WHERE deleted IS NOT TRUE
+           AND COALESCE(
+                 NULLIF(BTRIM(accounts.home_bay_id), ''),
+                 ${currentBayParam}::TEXT
+               ) = ${currentBayParam}::TEXT
            AND (${verifiedEmailAddressSql()})
            AND lower(split_part(email_address, '@', 2))=ANY($1::TEXT[])
         UNION ALL
