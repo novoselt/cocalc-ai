@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -50,6 +51,14 @@ let accountId = "owner-1";
 let emailAddress = "ada@example.edu";
 let emailVerified = true;
 let isAdmin = false;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolve0) => {
+    resolve = resolve0;
+  });
+  return { promise, resolve };
+}
 
 function emailAddressVerified() {
   return {
@@ -1426,6 +1435,75 @@ describe("membership package managers", () => {
         screen.queryByText(/11111111-1111-4111-8111-111111111111/),
       ).toBeNull();
     });
+  });
+
+  it("discards a pending search when the selected pool changes", async () => {
+    const pendingSearch = deferred<{
+      accounts: Array<{
+        account_id: string;
+        display_name: string;
+        email_address: string;
+      }>;
+      query_kind: "text";
+    }>();
+    listSiteLicenseOverviews.mockResolvedValue([
+      makeSiteLicenseOverview({
+        pools: [
+          makeSitePackage(),
+          makeSitePackage({
+            id: "site-2",
+            pool_name: "Faculty",
+            metadata: {
+              allowed_domains: ["faculty.example.edu"],
+              pool_name: "Faculty",
+              site_license_id: "license-1",
+              requires_approval: false,
+              verification_policy: "email-domain",
+              exclusive_group: "faculty",
+            },
+          }),
+        ],
+      }),
+    ]);
+    searchSiteLicensePoolAccounts.mockReturnValueOnce(pendingSearch.promise);
+
+    render(<SiteLicenseManager tiers={TIERS} />);
+    const addUsersButtons = await screen.findAllByRole("button", {
+      name: "Add users",
+    });
+    fireEvent.click(addUsersButtons[0]);
+    fireEvent.change(
+      screen.getByPlaceholderText("Name, email, or account ID"),
+      {
+        target: { value: "Stale" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await waitFor(() => {
+      expect(searchSiteLicensePoolAccounts).toHaveBeenCalledWith(
+        expect.objectContaining({ package_id: "site-1" }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(addUsersButtons[1]);
+    expect(await screen.findByText("Add users to Faculty")).toBeTruthy();
+
+    await act(async () => {
+      pendingSearch.resolve({
+        accounts: [
+          {
+            account_id: "11111111-1111-4111-8111-111111111111",
+            display_name: "Stale Result",
+            email_address: "stale@example.edu",
+          },
+        ],
+        query_kind: "text",
+      });
+      await pendingSearch.promise;
+    });
+
+    expect(screen.queryByText("Stale Result · stale@example.edu")).toBeNull();
   });
 
   it("explains searches without pool domains and out-of-domain email misses", async () => {
