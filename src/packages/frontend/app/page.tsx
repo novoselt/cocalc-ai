@@ -61,6 +61,7 @@ import { LegacyMigrationCtaBanner } from "./legacy-migration-cta-banner";
 import { TeamLicenseWarningBanner } from "./team-license-warning-banner";
 import AutomaticUpdateNotice from "./automatic-update-notice";
 import { useVisibleViewportBottom } from "./visible-viewport";
+import { OnboardingEmailPrompt } from "./onboarding-email-prompt";
 
 // ipad and ios have a weird trick where they make the screen
 // actually smaller than 100vh and have it be scrollable, even
@@ -431,6 +432,7 @@ export const Page: React.FC = () => {
       <ImportPublicUrlModal />
       <PopconfirmModal />
       <SettingsModal />
+      <OnboardingEmailPrompt />
     </div>
   );
   return (
