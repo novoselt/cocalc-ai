@@ -192,7 +192,7 @@ describe("accounts.cluster-directory", () => {
     });
   });
 
-  it("filters domain searches by the verified account email before limiting", async () => {
+  it("filters domain searches by locally owned, verified account emails", async () => {
     queryMock = jest.fn(async (sql: string) => {
       if (sql.includes("information_schema.columns")) {
         return { rows: [{ exists: true }] };
@@ -248,6 +248,9 @@ describe("accounts.cluster-directory", () => {
     expect(sql).toContain("email_address_verified IS TRUE");
     expect(sql).toContain(
       "lower(split_part(email_address, '@', 2))=ANY($1::TEXT[])",
+    );
+    expect(sql).toMatch(
+      /COALESCE\(\s+NULLIF\(BTRIM\(accounts\.home_bay_id\), ''\),\s+\$3::TEXT\s+\) = \$3::TEXT/,
     );
     expect(sql).toContain("LIMIT $4::INTEGER");
     expect(params).toEqual([["example.edu"], "%ada%", "bay-0", 10]);
