@@ -11,6 +11,7 @@ const mockGetServerSettings = jest.fn();
 const mockIsAccountAvailable = jest.fn();
 const mockReCaptcha = jest.fn();
 const mockGetAccountId = jest.fn();
+const mockAssertTrusted = jest.fn();
 const mockRedeemRegistrationToken = jest.fn();
 const mockValidateRegistrationToken = jest.fn();
 const mockDeleteRegistrationToken = jest.fn();
@@ -43,6 +44,13 @@ jest.mock("@cocalc/server/auth/recaptcha", () => ({
 jest.mock("@cocalc/http-api/lib/account/get-account", () => ({
   __esModule: true,
   default: (...args) => mockGetAccountId(...args),
+}));
+
+jest.mock("@cocalc/http-api/lib/api/assert-trusted", () => ({
+  __esModule: true,
+  default: (...args) => mockAssertTrusted(...args),
+  TRUST_ERROR_MESSAGE:
+    "Only admins are allowed to create accounts through the authenticated API.",
 }));
 
 jest.mock("@cocalc/server/auth/tokens/redeem", () => ({
@@ -122,6 +130,7 @@ describe("/api/v2/auth/sign-up", () => {
     mockIsAccountAvailable.mockReset().mockResolvedValue(true);
     mockReCaptcha.mockReset().mockResolvedValue(null);
     mockGetAccountId.mockReset().mockResolvedValue(undefined);
+    mockAssertTrusted.mockReset().mockResolvedValue(undefined);
     mockGetRequiresRegistrationToken.mockReset().mockResolvedValue(true);
     mockValidateRegistrationToken.mockReset().mockResolvedValue({});
     mockDeleteRegistrationToken.mockReset().mockResolvedValue(undefined);
@@ -200,6 +209,40 @@ describe("/api/v2/auth/sign-up", () => {
     expect(mockGetAccountId).not.toHaveBeenCalled();
     expect(mockReCaptcha).not.toHaveBeenCalled();
     expect(mockValidateRegistrationToken).not.toHaveBeenCalled();
+    expect(mockCreateClusterAccount).not.toHaveBeenCalled();
+  });
+
+  it("tells a signed-in non-admin to sign out before creating another account", async () => {
+    mockGetAccountId.mockResolvedValue("signed-in-account-id");
+    mockAssertTrusted.mockRejectedValue(
+      new Error(
+        "Only admins are allowed to create accounts through the authenticated API.",
+      ),
+    );
+    const { req, res } = createMocks({
+      method: "POST",
+      url: "/api/v2/auth/sign-up",
+      body: {
+        terms: true,
+        email: "new@example.com",
+        password: "correct horse battery staple 12345!",
+        firstName: "New",
+        lastName: "User",
+        registrationToken: "valid-token",
+      },
+    });
+
+    const { signUp } = await import("./sign-up");
+    await signUp(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      issues: {
+        api: "You are already signed in to a CoCalc account. Sign out before creating another account.",
+      },
+    });
+    expect(mockAssertTrusted).toHaveBeenCalledWith("signed-in-account-id");
+    expect(mockReCaptcha).not.toHaveBeenCalled();
     expect(mockCreateClusterAccount).not.toHaveBeenCalled();
   });
 
