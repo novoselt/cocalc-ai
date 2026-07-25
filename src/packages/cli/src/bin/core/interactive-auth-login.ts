@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 
 type InteractiveAuthGlobals = {
   json?: boolean;
@@ -78,4 +78,33 @@ export function interactiveAuthLoginArgs({
   }
   args.push("auth", "login");
   return args;
+}
+
+export function interactiveAuthLoginEntrypoint({
+  argvEntry = process.argv[1],
+  execPath = process.execPath,
+  sea = isSeaRuntime(),
+}: {
+  argvEntry?: string;
+  execPath?: string;
+  sea?: boolean;
+} = {}): string | undefined {
+  if (!argvEntry || sea) return undefined;
+  try {
+    // A SEA reached through a symlink can expose the symlink as argv[1] and
+    // the versioned binary as execPath. Neither path is a JavaScript entrypoint.
+    if (realpathSync(argvEntry) === realpathSync(execPath)) return undefined;
+  } catch {
+    // Normal JS entrypoints need not exist by the time this helper is called.
+  }
+  return argvEntry;
+}
+
+function isSeaRuntime(): boolean {
+  try {
+    const sea = require("node:sea") as { isSea?: () => boolean };
+    return typeof sea?.isSea === "function" ? !!sea.isSea() : false;
+  } catch {
+    return false;
+  }
 }
