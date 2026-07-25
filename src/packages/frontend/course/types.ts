@@ -35,6 +35,7 @@ export interface SyncDBRecordSettings {
   course_ends_at?: string;
   shared_project_id?: string;
   ssh_to_student_projects?: boolean;
+  ssh_to_student_projects_account_id?: string;
   copy_parallel?: number; // how many assignments to copy at once in parallel when assigning/collecting/returning
   nbgrader_grade_in_instructor_project?: boolean; // deprecated
   nbgrader_grade_project?: string;

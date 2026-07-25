@@ -213,6 +213,10 @@ export class SharedProjectActions {
         await configureNewCourseSshTarget({
           course_project_id: store.get("course_project_id"),
           target_project_id: project_id,
+          account_id: store.getIn([
+            "settings",
+            "ssh_to_student_projects_account_id",
+          ]),
         });
       } catch (err) {
         this.actions.set_error(

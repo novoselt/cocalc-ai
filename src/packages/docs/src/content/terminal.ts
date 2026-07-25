@@ -228,6 +228,10 @@ Everyone with filesystem access to the course project can use this key and thus
 receives full shell access to every configured target. Only enable the option
 when every course project collaborator should have that access.
 
+The course manager who enables the option owns the project-specific public-key
+entries and must also synchronize or disable them. This guard prevents a second
+manager from accidentally leaving the original manager's key authorized.
+
 ## Troubleshooting
 
 - If the first connection starts a stopped project but does not immediately

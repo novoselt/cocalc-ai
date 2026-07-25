@@ -8,14 +8,22 @@ import {
   readProjectDeployPublicKey,
   startSshSourceProject,
 } from "@cocalc/frontend/project/settings/project-to-project-ssh-service";
+import { webapp_client } from "@cocalc/frontend/webapp-client";
 
 export async function configureNewCourseSshTarget({
   course_project_id,
   target_project_id,
+  account_id,
 }: {
   course_project_id: string;
   target_project_id: string;
+  account_id?: string;
 }): Promise<void> {
+  if (account_id && account_id !== webapp_client.account_id) {
+    throw new Error(
+      "The course manager who enabled SSH access must synchronize this new project.",
+    );
+  }
   await startSshSourceProject(course_project_id);
   const publicKey = await readProjectDeployPublicKey(course_project_id);
   if (publicKey == null) {

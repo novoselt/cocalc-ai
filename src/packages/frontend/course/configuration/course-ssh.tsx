@@ -19,6 +19,7 @@ import {
   removeProjectToProjectSsh,
   startSshSourceProject,
 } from "@cocalc/frontend/project/settings/project-to-project-ssh-service";
+import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type { CourseActions } from "../actions";
 import type { CourseSettingsRecord, StudentsMap } from "../store";
 
@@ -39,6 +40,11 @@ export function CourseSshAccess({
 }: Props) {
   const students = useRedux(name, "students") as StudentsMap | undefined;
   const enabled = settings.get("ssh_to_student_projects") === true;
+  const keyOwnerAccountId = settings.get("ssh_to_student_projects_account_id");
+  const ownedByAnotherAccount =
+    enabled &&
+    !!keyOwnerAccountId &&
+    keyOwnerAccountId !== webapp_client.account_id;
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -75,6 +81,12 @@ export function CourseSshAccess({
   }, [activeTargetIds, students]);
 
   async function synchronize(nextEnabled: boolean): Promise<void> {
+    if (ownedByAnotherAccount) {
+      setError(
+        "The course manager who enabled SSH access must synchronize or disable it. This prevents leaving a second manager's SSH key authorized.",
+      );
+      return;
+    }
     await runFreshAuthAction(async () => {
       setBusy(true);
       setError("");
@@ -112,7 +124,10 @@ export function CourseSshAccess({
             });
           }
         }
-        actions.configuration.set_course_ssh_enabled(nextEnabled);
+        actions.configuration.set_course_ssh_enabled(
+          nextEnabled,
+          nextEnabled ? webapp_client.account_id : undefined,
+        );
         setProgress(
           nextEnabled
             ? `SSH access synchronized with ${targets.length} project${targets.length === 1 ? "" : "s"}.`
@@ -158,7 +173,7 @@ export function CourseSshAccess({
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Checkbox
             checked={enabled}
-            disabled={busy}
+            disabled={busy || ownedByAnotherAccount}
             onChange={(event) => void synchronize(event.target.checked)}
           >
             Allow this course project to SSH to every student project and the
@@ -177,9 +192,21 @@ export function CourseSshAccess({
             description="Every collaborator who can use this course project's files can use its deploy key. Only enable this when all course project collaborators should have access to every managed project."
           />
           {enabled ? (
-            <Button loading={busy} onClick={() => void synchronize(true)}>
+            <Button
+              disabled={ownedByAnotherAccount}
+              loading={busy}
+              onClick={() => void synchronize(true)}
+            >
               Synchronize SSH access
             </Button>
+          ) : null}
+          {ownedByAnotherAccount ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Managed by another course collaborator"
+              description="The account that enabled this deploy key must synchronize or revoke it, since project SSH keys are owned by the account that installs them."
+            />
           ) : null}
           {progress ? <Alert type="info" showIcon message={progress} /> : null}
           {error ? <Alert type="error" showIcon message={error} /> : null}
