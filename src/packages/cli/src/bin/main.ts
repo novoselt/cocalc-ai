@@ -104,6 +104,7 @@ import {
 import {
   canOfferInteractiveAuthLogin,
   interactiveAuthLoginArgs,
+  interactiveAuthLoginEntrypoint,
   isCoCalcProjectEnvironment,
   isMissingCookieAuthError,
 } from "./core/interactive-auth-login";
@@ -1599,19 +1600,11 @@ async function withContext(
         process.stderr.write(
           `No interactive CoCalc CLI login is available${apiDescription}; starting browser login.\n`,
         );
-        const entrypoint = process.argv[1];
-        if (!entrypoint) {
-          throw error;
-        }
-        const scriptEntrypoint =
-          resolve(entrypoint) === resolve(process.execPath)
-            ? undefined
-            : entrypoint;
         const login = spawnSync(
           process.execPath,
           interactiveAuthLoginArgs({
             globals,
-            entrypoint: scriptEntrypoint,
+            entrypoint: interactiveAuthLoginEntrypoint(),
           }),
           {
             stdio: "inherit",

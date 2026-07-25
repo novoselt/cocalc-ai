@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
   canOfferInteractiveAuthLogin,
   interactiveAuthLoginArgs,
+  interactiveAuthLoginEntrypoint,
   isCoCalcProjectEnvironment,
   isMissingCookieAuthError,
 } from "./interactive-auth-login";
@@ -100,5 +110,44 @@ test("supports a standalone executable without a JavaScript entrypoint", () => {
       globals: { api: "https://cocalc.ai" },
     }),
     ["--api", "https://cocalc.ai", "auth", "login"],
+  );
+});
+
+test("does not pass a symlinked standalone executable as a script", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "cocalc-cli-login-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const versionedBinary = join(dir, "versions", "1", "cocalc");
+  const installedLink = join(dir, "bin", "cocalc");
+  mkdirSync(dirname(versionedBinary), { recursive: true });
+  mkdirSync(dirname(installedLink), { recursive: true });
+  writeFileSync(versionedBinary, "");
+  symlinkSync(versionedBinary, installedLink);
+
+  assert.equal(
+    interactiveAuthLoginEntrypoint({
+      argvEntry: installedLink,
+      execPath: versionedBinary,
+      sea: false,
+    }),
+    undefined,
+  );
+});
+
+test("keeps a JavaScript CLI entrypoint when running under node", () => {
+  assert.equal(
+    interactiveAuthLoginEntrypoint({
+      argvEntry: "/opt/cocalc/bin2/cocalc-cli.js",
+      execPath: "/opt/cocalc/bin/node",
+      sea: false,
+    }),
+    "/opt/cocalc/bin2/cocalc-cli.js",
+  );
+  assert.equal(
+    interactiveAuthLoginEntrypoint({
+      argvEntry: "/home/user/.local/share/cocalc/bin/cocalc",
+      execPath: "/home/user/.local/share/cocalc/versions/1/cocalc",
+      sea: true,
+    }),
+    undefined,
   );
 });
