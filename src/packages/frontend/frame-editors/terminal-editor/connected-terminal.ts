@@ -778,6 +778,9 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
   };
 
   set_terminal_theme_override(theme?: string | null): void {
+    if (this.isClosed()) {
+      return;
+    }
     const nextTheme =
       typeof theme === "string" && theme.trim().length > 0
         ? theme.trim()
@@ -1988,11 +1991,17 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
   }
 
   set_font_size(font_size: number): void {
+    if (this.isClosed()) {
+      return;
+    }
     this.terminal.options.fontSize = font_size;
     this.measureSize();
   }
 
   getOption(option: string): any {
+    if (this.isClosed()) {
+      return undefined;
+    }
     return this.terminal.options[option];
   }
 
