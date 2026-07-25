@@ -12,6 +12,7 @@ import getPool, { type PoolClient } from "@cocalc/database/pool";
 import { createNotificationEventGraph } from "@cocalc/database/postgres/notifications-core";
 import { getClusterAccountsByIdsDirect } from "@cocalc/server/accounts/cluster-directory";
 import isAdmin from "@cocalc/server/accounts/is-admin";
+import { getVerifiedEmailAddressForAccount } from "@cocalc/server/accounts/verified-email-address";
 import type {
   MembershipPackageAssignment,
   MembershipPackageDetails,
@@ -1718,29 +1719,11 @@ export async function getVerifiedEmailAddressesForAccount(
   account_id: string,
   client?: PoolClient,
 ): Promise<string[]> {
-  const { rows } = await getQueryClient(client).query(
-    `SELECT email_address, email_address_verified
-     FROM accounts
-     WHERE account_id=$1`,
-    [account_id],
-  );
-  const row = rows[0];
-  if (!row) {
-    throw Error("account not found");
-  }
-  const verified = row.email_address_verified ?? {};
-  const emails = Object.entries(verified)
-    .filter(([, verified_at]) => verified_at != null && verified_at !== false)
-    .map(([email]) => normalizeEmailAddress(email));
-  if (
-    emails.length === 0 &&
-    row.email_address &&
-    verified?.[row.email_address] != null &&
-    verified?.[row.email_address] !== false
-  ) {
-    return [normalizeEmailAddress(row.email_address)];
-  }
-  return Array.from(new Set(emails));
+  const emailAddress = await getVerifiedEmailAddressForAccount({
+    account_id,
+    client,
+  });
+  return emailAddress == null ? [] : [emailAddress];
 }
 
 function findMatchingVerifiedEmail({

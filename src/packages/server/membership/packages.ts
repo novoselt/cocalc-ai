@@ -11,6 +11,7 @@ import {
   assertAccountWriteOnHomeBay,
   withAccountRehomeWriteFence,
 } from "@cocalc/server/accounts/rehome-fence";
+import { getVerifiedEmailAddressForAccount } from "@cocalc/server/accounts/verified-email-address";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import type {
   ClaimableMembershipPackage,
@@ -862,35 +863,6 @@ function getInstitutionalClaimDescriptorForEmail({
     matched_email_address: normalizedEmail,
     claimed_domain,
   };
-}
-
-async function getVerifiedEmailAddressesForAccount(
-  account_id: string,
-  client?: PoolClient,
-): Promise<string[]> {
-  const { rows } = await getQueryClient(client).query(
-    `SELECT email_address, email_address_verified
-     FROM accounts
-     WHERE account_id=$1`,
-    [account_id],
-  );
-  const row = rows[0];
-  if (!row) {
-    throw Error("account not found");
-  }
-  const verified = row.email_address_verified ?? {};
-  const emails = Object.keys(verified)
-    .map((value) => normalizeEmailAddress(value))
-    .filter((value): value is string => !!value);
-  if (
-    emails.length === 0 &&
-    row.email_address &&
-    verified?.[row.email_address] != null
-  ) {
-    const normalized = normalizeEmailAddress(row.email_address);
-    return normalized ? [normalized] : [];
-  }
-  return Array.from(new Set(emails));
 }
 
 function sortClaimableMembershipPackages<T extends ClaimableMembershipPackage>(
@@ -2432,10 +2404,12 @@ export async function listClaimableMembershipPackagesForAccount({
   include_claimed_site_license_pools?: boolean;
   client?: PoolClient;
 }): Promise<ClaimableMembershipPackage[]> {
-  const verifiedEmailAddresses = await getVerifiedEmailAddressesForAccount(
+  const verifiedEmailAddress = await getVerifiedEmailAddressForAccount({
     account_id,
     client,
-  );
+  });
+  const verifiedEmailAddresses =
+    verifiedEmailAddress == null ? [] : [verifiedEmailAddress];
   if (verifiedEmailAddresses.length === 0) {
     return [];
   }
@@ -3153,10 +3127,12 @@ export async function claimMembershipPackageSeat({
   accepted_terms?: boolean;
   client?: PoolClient;
 }): Promise<MembershipPackageAssignment> {
-  const verifiedEmailAddresses = await getVerifiedEmailAddressesForAccount(
+  const verifiedEmailAddress = await getVerifiedEmailAddressForAccount({
     account_id,
     client,
-  );
+  });
+  const verifiedEmailAddresses =
+    verifiedEmailAddress == null ? [] : [verifiedEmailAddress];
   if (verifiedEmailAddresses.length === 0) {
     throw Error("verify an email address before claiming this package");
   }
