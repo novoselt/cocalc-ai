@@ -3,6 +3,7 @@ import {
   INSTALL_CLOUDFLARED_SCRIPT,
   parseSshPublicKey,
   projectSshConfigBlock,
+  removeProjectSshConfigBlock,
   upsertProjectSshConfigBlock,
 } from "./project-to-project-ssh-config";
 
@@ -56,6 +57,20 @@ describe("project-to-project SSH config", () => {
     expect(() => parseSshPublicKey("not-a-key")).toThrow(
       "SSH public key is invalid",
     );
+  });
+
+  it("removes only the matching managed block", () => {
+    const first = projectSshConfigBlock({
+      alias: "target-project",
+      route: ROUTE,
+    });
+    const content = `Host personal\n  HostName example.com\n\n${first}`;
+    expect(
+      removeProjectSshConfigBlock({
+        content,
+        alias: "target-project",
+      }),
+    ).toBe("Host personal\n  HostName example.com\n");
   });
 
   it("keeps shell variable expansion in the cloudflared installer", () => {

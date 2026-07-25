@@ -199,6 +199,13 @@ export class ConfigurationActions {
     });
   };
 
+  set_course_ssh_enabled = (ssh_to_student_projects: boolean): void => {
+    this.set({
+      ssh_to_student_projects,
+      table: "settings",
+    });
+  };
+
   configure_nbgrader_grade_project = async (
     project_id?: string,
   ): Promise<void> => {

@@ -14,10 +14,10 @@ export const TERMINAL_ENTRIES: DocsEntry[] = [
     category: "Terminal",
     id: "terminal.ssh-access",
     image: docsIcon(
-      "/public/docs/terminal-56905fa2.webp",
-      "Terminal connected to a persistent CoCalc project",
+      "/public/docs/ssh-access-32a43270.webp",
+      "Secure SSH routes from a laptop and course project to CoCalc projects",
     ),
-    lastReviewed: "2026-07-24",
+    lastReviewed: "2026-07-25",
     slug: "terminal/ssh-access",
     status: "ready",
     summary:

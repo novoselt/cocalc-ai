@@ -106,6 +106,25 @@ export function upsertProjectSshConfigBlock({
   return stripped ? `${stripped}\n\n${block}` : block;
 }
 
+export function removeProjectSshConfigBlock({
+  content,
+  alias,
+}: {
+  content: string;
+  alias: string;
+}): string {
+  const markers = blockMarkers(alias);
+  const pattern = new RegExp(
+    `(?:^|\\n)${escapeRegExp(markers.start)}\\n[\\s\\S]*?\\n${escapeRegExp(markers.end)}(?:\\n|$)`,
+    "g",
+  );
+  const stripped = content
+    .replace(pattern, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+  return stripped ? `${stripped}\n` : "";
+}
+
 export const INSTALL_CLOUDFLARED_SCRIPT = `
 set -euo pipefail
 destination="$HOME/.local/share/cocalc/bin/cloudflared"

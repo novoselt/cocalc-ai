@@ -191,11 +191,42 @@ project's SSH settings.
 
 ## Automated course setup
 
-For an instructor deployment project that must connect to many student
-projects, use a dedicated deploy key owned by the deployment project and
-authorize its public key on each intended student project. Do not distribute an
-instructor's CoCalc account session or personal private key to student
-projects.
+If a script in the project containing a \`.course\` file must connect to every
+student project:
+
+1. Open the \`.course\` file and select **Configuration**.
+2. Find **SSH to course projects**.
+3. Check **Allow this course project to SSH to every student project and the
+   shared project**.
+4. Complete the fresh-authentication prompt.
+
+CoCalc creates one deploy key in the course project, authorizes it in every
+active student project and the shared project, and writes a managed SSH entry
+for each target. A deployment script can then use a project id directly:
+
+~~~sh
+ssh STUDENT_PROJECT_ID 'python3 ~/setup.py'
+rsync -a ./course-environment/ STUDENT_PROJECT_ID:~/course-environment/
+~~~
+
+The CoCalc CLI is already installed inside CoCalc projects, but this course
+workflow does not run \`cocalc auth login\` and does not store an instructor's
+account session in the collaborative course project.
+
+Use **Synchronize SSH access** after adding or restoring student projects, or
+after a target project moves to another host or region. CoCalc also attempts to
+configure newly created student and shared projects automatically. If that
+attempt happens after fresh authentication has expired, project creation still
+succeeds; open Course Configuration and synchronize SSH access again.
+
+Unchecking the option removes the managed public key from all known student
+projects and the shared project, and removes their managed SSH config entries.
+The deploy key itself remains in the course project so it can be reused if the
+option is enabled again.
+
+Everyone with filesystem access to the course project can use this key and thus
+receives full shell access to every configured target. Only enable the option
+when every course project collaborator should have that access.
 
 ## Troubleshooting
 

@@ -31,6 +31,7 @@ import { CourseStore } from "../store";
 import { Result, run_in_all_projects } from "./run-in-all-projects";
 import type { StudentRecord } from "../store";
 import { getEmailInviteValidationError } from "../configuration/email-invite-validation";
+import { configureNewCourseSshTarget } from "../configuration/course-ssh-service";
 
 // Project starts can mount RootFS overlays and update host/control-plane state.
 // Keep course-wide start/stop fanout conservative for single-host Star installs.
@@ -205,6 +206,18 @@ export class StudentProjectsActions {
       student_id,
       student_project_id: project_id,
     });
+    if (store.getIn(["settings", "ssh_to_student_projects"]) === true) {
+      try {
+        await configureNewCourseSshTarget({
+          course_project_id: store.get("course_project_id"),
+          target_project_id: project_id,
+        });
+      } catch (err) {
+        this.course_actions.set_error(
+          `Student project created, but course SSH setup requires synchronization in Course Configuration - ${err}`,
+        );
+      }
+    }
     return project_id;
   };
 
