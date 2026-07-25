@@ -31,6 +31,7 @@ import {
   HARD_MAX_USER_SEARCH_RESULTS,
   parseUserSearchQuery,
 } from "@cocalc/server/accounts/user-search-policy";
+import { verifiedEmailAddressSql } from "@cocalc/server/accounts/verified-email-address";
 
 const logger = getLogger("server:accounts:cluster-directory");
 
@@ -654,7 +655,7 @@ export async function searchClusterAccountsByVerifiedEmailDomainsDirect({
                0 AS source_rank
           FROM accounts
          WHERE deleted IS NOT TRUE
-           AND email_address_verified ? email_address
+           AND (${verifiedEmailAddressSql()})
            AND lower(split_part(email_address, '@', 2))=ANY($1::TEXT[])
         UNION ALL
         SELECT ${fields}, 1 AS source_rank

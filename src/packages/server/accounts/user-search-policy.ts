@@ -106,7 +106,11 @@ export async function getNonAdminUserSearchRequest({
   return {
     ...parsed,
     allowed:
-      parsed.kind !== "text" || parsed.normalized.length >= minimum_text_length,
+      parsed.kind !== "text" ||
+      (parsed.string_queries
+        .flat()
+        .every((term) => term.length >= minimum_text_length) &&
+        (parsed.string_queries.length > 0 || parsed.email_queries.length > 0)),
     limit: Math.min(requestedLimit, maximumResults),
     minimum_text_length,
   };
