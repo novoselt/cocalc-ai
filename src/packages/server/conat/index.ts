@@ -3,7 +3,7 @@ import { initAPI } from "./api";
 import { loadConatConfiguration } from "./configuration";
 import { createTimeService } from "@cocalc/conat/service/time";
 import { listenForUpdates as listenForProjectHostUpdates } from "./route-project";
-export { initConatPersist } from "./persist";
+export { getConatPersistDiagnostics, initConatPersist } from "./persist";
 import { conatApiCount, projectRunnerCount } from "@cocalc/backend/data";
 import * as Module from "module";
 import { conat } from "@cocalc/backend/conat";

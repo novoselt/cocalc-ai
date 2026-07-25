@@ -55,7 +55,7 @@ export class ClientWithState extends EventEmitter {
   }
 
   numSubscriptions = () => {
-    this.conatClient?.numSubscriptions() ?? 0;
+    return this.conatClient?.numSubscriptions() ?? 0;
   };
 
   reconnect = async () => {

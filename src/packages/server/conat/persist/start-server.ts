@@ -10,6 +10,10 @@ const children = new Map<string, ChildProcess>();
 let shuttingDown = false;
 let lifecycleHandlersInstalled = false;
 
+export function getForkedPersistServerCount(): number {
+  return children.size;
+}
+
 function installLifecycleHandlers() {
   if (lifecycleHandlersInstalled) {
     return;
