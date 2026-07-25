@@ -34,8 +34,9 @@ export default function PdfjsTextLayer({ page, scale, viewport }: Props) {
     if (!elt) {
       return;
     }
-    (async () => {
-      const t = new TextLayer({
+    let textLayer: TextLayer;
+    try {
+      textLayer = new TextLayer({
         textContentSource: page.streamTextContent({
           includeMarkedContent: true,
           disableNormalization: true,
@@ -44,8 +45,20 @@ export default function PdfjsTextLayer({ page, scale, viewport }: Props) {
         viewport,
       });
       elt.innerHTML = "";
-      await t.render();
-    })();
+    } catch (err) {
+      console.warn(`pdf.js -- Error creating text layer: ${err}`);
+      return;
+    }
+    let disposed = false;
+    void textLayer.render().catch((err) => {
+      if (!disposed) {
+        console.warn(`pdf.js -- Error rendering text layer: ${err}`);
+      }
+    });
+    return () => {
+      disposed = true;
+      textLayer.cancel();
+    };
   }, [page, scale]);
 
   return (

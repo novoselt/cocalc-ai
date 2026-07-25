@@ -68,7 +68,9 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
   const conatSocketRequestTimedOut =
     message === "request timed out" || message === "error: request timed out";
   const conatRequestTimedOut =
-    message === "timeout" && rejectionCode(reason) === "408";
+    rejectionCode(reason) === "408" &&
+    (message === "timeout" ||
+      (message.startsWith("timeout - ") && message.includes(" subject:")));
   const filesystemServerStarting = message === "file server not initialized";
   const staleCollaboratorAccess =
     message.includes("account '") &&

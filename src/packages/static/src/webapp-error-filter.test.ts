@@ -31,6 +31,12 @@ describe("isIgnorableUnhandledRejection", () => {
   const conatStringTimeout = Object.assign(new Error("timeout"), {
     code: "408",
   });
+  const conatSubjectTimeout = Object.assign(
+    new Error(
+      "timeout - Error: operation has timed out subject:jupyter.project-id.server",
+    ),
+    { code: 408 },
+  );
 
   test.each([
     new Error(
@@ -46,6 +52,7 @@ describe("isIgnorableUnhandledRejection", () => {
     "Error: request timed out",
     conatTimeout,
     conatStringTimeout,
+    conatSubjectTimeout,
     new Error("file server not initialized"),
     new Error(
       "account 'account-id' is not a collaborator on project 'project-id'",
@@ -68,6 +75,9 @@ describe("isIgnorableUnhandledRejection", () => {
     "Error: request timed out while saving a document",
     new Error("timeout"),
     Object.assign(new Error("timeout"), { code: 500 }),
+    Object.assign(new Error("timeout - operation failed without a subject"), {
+      code: 408,
+    }),
     new Error("file server failed to initialize"),
     new Error("account is not a collaborator"),
     new Error("Failed to connect to MetaMask"),

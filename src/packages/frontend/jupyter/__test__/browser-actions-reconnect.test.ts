@@ -214,4 +214,22 @@ describe("JupyterActions reconnect coordination", () => {
     expect(actions.show_select_kernel).not.toHaveBeenCalled();
     expect(actions.setState).not.toHaveBeenCalled();
   });
+
+  it("stops kernel selection after Jupyter resources are removed", async () => {
+    const actions: any = new JupyterActions("jupyter-test", {
+      getStore: jest.fn(),
+      removeActions: jest.fn(),
+    } as any);
+    actions.isClosed = jest.fn(() => false);
+    actions.syncdb = undefined;
+    actions.store = undefined;
+    actions.restart = jest.fn();
+    actions.halt = jest.fn();
+    actions._set = jest.fn();
+
+    await expect(actions.set_kernel("python3")).resolves.toBeUndefined();
+    expect(actions._set).not.toHaveBeenCalled();
+    expect(actions.restart).not.toHaveBeenCalled();
+    expect(actions.halt).not.toHaveBeenCalled();
+  });
 });

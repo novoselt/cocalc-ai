@@ -2533,11 +2533,16 @@ export class JupyterActions extends JupyterActions0 {
   };
 
   set_kernel = async (kernel: string | null) => {
-    if (this.syncdb.get_state() != "ready") {
+    const syncdb = this.syncdb;
+    const store = this.store;
+    if (this.isClosed() || syncdb == null || store == null) {
+      return;
+    }
+    if (syncdb.get_state() != "ready") {
       console.warn("Jupyter syncdb not yet ready -- not setting kernel");
       return;
     }
-    if (this.store.get("kernel") !== kernel) {
+    if (store.get("kernel") !== kernel) {
       this._set({
         type: "settings",
         kernel,
@@ -2545,7 +2550,7 @@ export class JupyterActions extends JupyterActions0 {
       // clear error when changing the kernel
       this.set_error(null);
     }
-    if (this.store.get("show_kernel_selector") || kernel === "") {
+    if (store.get("show_kernel_selector") || kernel === "") {
       this.hide_select_kernel();
     }
     try {
