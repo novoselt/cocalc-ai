@@ -388,7 +388,6 @@ describe("membership package managers", () => {
     searchSiteLicensePoolAccounts.mockResolvedValue({
       accounts: [],
       query_kind: "text",
-      minimum_text_length: 2,
     });
     getNames.mockResolvedValue({
       "user-1": {
@@ -1395,7 +1394,6 @@ describe("membership package managers", () => {
         },
       ],
       query_kind: "text",
-      minimum_text_length: 2,
     });
 
     render(<SiteLicenseManager tiers={TIERS} />);
@@ -1450,7 +1448,6 @@ describe("membership package managers", () => {
     searchSiteLicensePoolAccounts.mockResolvedValue({
       accounts: [],
       query_kind: "email",
-      minimum_text_length: 2,
     });
 
     render(<SiteLicenseManager tiers={TIERS} />);

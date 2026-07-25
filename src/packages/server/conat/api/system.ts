@@ -5255,7 +5255,7 @@ export async function userSearch({
     });
   }
   const request = await getNonAdminUserSearchRequest({ query, limit });
-  if (!request.allowed || request.limit <= 0) {
+  if (request.limit <= 0) {
     return [];
   }
   return await searchRelatedClusterAccounts({

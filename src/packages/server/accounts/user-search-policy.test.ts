@@ -9,39 +9,18 @@ import {
 } from "./user-search-policy";
 
 describe("non-admin user search policy", () => {
-  it("requires the configured minimum for text searches", async () => {
-    const settings = {
-      user_search_min_text_length: 2,
-      user_search_max_results: 50,
-    };
-    for (const query of ["a", "a,", "a;"]) {
+  it("allows short and SQL wildcard text terms", async () => {
+    for (const query of ["a", "a,", "a;", "%%", "__"]) {
       await expect(
-        getNonAdminUserSearchRequest({ query, settings }),
+        getNonAdminUserSearchRequest({
+          query,
+          settings: { user_search_max_results: 50 },
+        }),
       ).resolves.toMatchObject({
-        allowed: false,
         kind: "text",
-        minimum_text_length: 2,
+        limit: 20,
       });
     }
-  });
-
-  it("does not apply the text minimum to exact email or account-id searches", async () => {
-    const settings = {
-      user_search_min_text_length: 20,
-      user_search_max_results: 50,
-    };
-    await expect(
-      getNonAdminUserSearchRequest({
-        query: "ada@example.edu",
-        settings,
-      }),
-    ).resolves.toMatchObject({ allowed: true, kind: "email" });
-    await expect(
-      getNonAdminUserSearchRequest({
-        query: "11111111-1111-4111-8111-111111111111",
-        settings,
-      }),
-    ).resolves.toMatchObject({ allowed: true, kind: "account_id" });
   });
 
   it("clamps configurable and requested result limits to the hard maximum", async () => {
@@ -50,12 +29,10 @@ describe("non-admin user search policy", () => {
         query: "Ada",
         limit: 500,
         settings: {
-          user_search_min_text_length: 2,
           user_search_max_results: 500,
         },
       }),
     ).resolves.toMatchObject({
-      allowed: true,
       limit: 50,
     });
   });

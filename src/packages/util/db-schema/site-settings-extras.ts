@@ -233,7 +233,6 @@ export type SiteSettingsExtrasKeys =
   | "cryptomining_abuse_heading"
   | "cryptomining_abuse_enforcement_enabled"
   | "cryptomining_abuse_auto_ban_enabled"
-  | "user_search_min_text_length"
   | "user_search_max_results"
   | "launch_sla_heading"
   | "launch_sla_project_start_warm_p95_ms"
@@ -453,16 +452,6 @@ export const EXTRAS: SettingsExtras = {
     tags: ["Security", "Project Hosts"],
     group: "System / Advanced",
     subgroup: "Abuse Detection",
-  },
-  user_search_min_text_length: {
-    name: "User Search Minimum Text Length",
-    desc: "Minimum number of characters required for non-admin name searches. Exact email addresses and account IDs are not subject to this minimum.",
-    default: "2",
-    valid: only_pos_int,
-    to_val: to_int,
-    tags: ["Security"],
-    group: "System / Advanced",
-    subgroup: "User Search",
   },
   user_search_max_results: {
     name: "User Search Maximum Results",

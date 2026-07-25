@@ -3067,7 +3067,6 @@ function AssignSiteLicensePoolSeatModal({
   const [results, setResults] = useState<PackageUserSearchResult[]>([]);
   const [queryKind, setQueryKind] =
     useState<SiteLicensePoolAccountSearchResult["query_kind"]>("text");
-  const [minimumTextLength, setMinimumTextLength] = useState(2);
   const [assignedMatchCount, setAssignedMatchCount] = useState(0);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [grantExpiresAt, setGrantExpiresAt] = useState<Dayjs | null>(null);
@@ -3096,7 +3095,6 @@ function AssignSiteLicensePoolSeatModal({
     setSearching(false);
     setResults([]);
     setQueryKind("text");
-    setMinimumTextLength(2);
     setAssignedMatchCount(0);
     setSelectedAccountIds([]);
     setGrantExpiresAt(null);
@@ -3138,7 +3136,6 @@ function AssignSiteLicensePoolSeatModal({
         )
         .slice(0, 20);
       setQueryKind(response.query_kind);
-      setMinimumTextLength(response.minimum_text_length);
       setAssignedMatchCount(
         rawResults.filter((result) => activeAccountIds.has(result.account_id))
           .length,
@@ -3278,7 +3275,6 @@ function AssignSiteLicensePoolSeatModal({
             adminSearch={adminSearch}
             allowedDomains={allowedDomains}
             assignedMatchCount={assignedMatchCount}
-            minimumTextLength={minimumTextLength}
             query={lastSearchQuery}
             queryKind={queryKind}
           />
@@ -3301,14 +3297,12 @@ function SiteLicenseSearchEmptyAlert({
   adminSearch,
   allowedDomains,
   assignedMatchCount,
-  minimumTextLength,
   query,
   queryKind,
 }: {
   adminSearch: boolean;
   allowedDomains: string[];
   assignedMatchCount: number;
-  minimumTextLength: number;
   query: string;
   queryKind: SiteLicensePoolAccountSearchResult["query_kind"];
 }) {
@@ -3323,20 +3317,6 @@ function SiteLicenseSearchEmptyAlert({
             : "Accounts already have access"
         }
         description="The matching accounts are already assigned to this pool."
-      />
-    );
-  }
-  if (
-    !adminSearch &&
-    queryKind === "text" &&
-    query.trim().length < minimumTextLength
-  ) {
-    return (
-      <Alert
-        type="info"
-        showIcon
-        title="Enter a longer search"
-        description={`Enter at least ${minimumTextLength} characters to search by name.`}
       />
     );
   }
