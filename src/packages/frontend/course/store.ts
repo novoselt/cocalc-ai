@@ -157,6 +157,8 @@ export type CourseSettingsRecord = TypedMap<{
   student_membership_grace_days?: number;
   course_ends_at?: string;
   shared_project_id: string;
+  ssh_to_student_projects?: boolean;
+  ssh_to_student_projects_account_id?: string;
   student_pay: boolean;
   title: string;
   copy_parallel?: number;

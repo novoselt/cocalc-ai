@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -33,6 +34,8 @@ const setSiteLicenseManager = jest.fn();
 const removeSiteLicenseManager = jest.fn();
 const updateMembershipPackage = jest.fn();
 const assignMembershipPackageSeat = jest.fn();
+const assignSiteLicensePoolSeat = jest.fn();
+const searchSiteLicensePoolAccounts = jest.fn();
 const revokeMembershipPackageSeat = jest.fn();
 const userSearch = jest.fn();
 const getNames = jest.fn();
@@ -48,6 +51,14 @@ let accountId = "owner-1";
 let emailAddress = "ada@example.edu";
 let emailVerified = true;
 let isAdmin = false;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolve0) => {
+    resolve = resolve0;
+  });
+  return { promise, resolve };
+}
 
 function emailAddressVerified() {
   return {
@@ -169,6 +180,10 @@ jest.mock("@cocalc/frontend/purchases/api", () => ({
   updateMembershipPackage: (...args: any[]) => updateMembershipPackage(...args),
   assignMembershipPackageSeat: (...args: any[]) =>
     assignMembershipPackageSeat(...args),
+  assignSiteLicensePoolSeat: (...args: any[]) =>
+    assignSiteLicensePoolSeat(...args),
+  searchSiteLicensePoolAccounts: (...args: any[]) =>
+    searchSiteLicensePoolAccounts(...args),
   revokeMembershipPackageSeat: (...args: any[]) =>
     revokeMembershipPackageSeat(...args),
 }));
@@ -379,6 +394,10 @@ describe("membership package managers", () => {
     stripePaymentTotal = 0;
     runFreshAuthAction.mockClear();
     userSearch.mockResolvedValue([]);
+    searchSiteLicensePoolAccounts.mockResolvedValue({
+      accounts: [],
+      query_kind: "text",
+    });
     getNames.mockResolvedValue({
       "user-1": {
         email_address: "grace@example.edu",
@@ -1369,6 +1388,171 @@ describe("membership package managers", () => {
     ).toBeNull();
   });
 
+  it("searches collaborators and verified-domain accounts when adding pool users", async () => {
+    listSiteLicenseOverviews.mockResolvedValue([
+      makeSiteLicenseOverview({
+        pools: [makeSitePackage()],
+      }),
+    ]);
+    searchSiteLicensePoolAccounts.mockResolvedValue({
+      accounts: [
+        {
+          account_id: "11111111-1111-4111-8111-111111111111",
+          display_name: "Ada Lovelace",
+          email_address: "ada@example.edu",
+        },
+      ],
+      query_kind: "text",
+    });
+
+    render(<SiteLicenseManager tiers={TIERS} />);
+    fireEvent.click(await screen.findByText("Add users"));
+
+    expect(
+      screen.getByText(
+        /Search includes your collaborators and accounts with a verified email/,
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByText("example.edu")).toHaveLength(2);
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Name, email, or account ID"),
+      {
+        target: { value: "Ada" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    await waitFor(() => {
+      expect(searchSiteLicensePoolAccounts).toHaveBeenCalledWith({
+        site_license_id: "license-1",
+        package_id: "site-1",
+        query: "Ada",
+        limit: 20,
+      });
+      expect(screen.getByText("Ada Lovelace · ada@example.edu")).toBeTruthy();
+      expect(
+        screen.queryByText(/11111111-1111-4111-8111-111111111111/),
+      ).toBeNull();
+    });
+  });
+
+  it("discards a pending search when the selected pool changes", async () => {
+    const pendingSearch = deferred<{
+      accounts: Array<{
+        account_id: string;
+        display_name: string;
+        email_address: string;
+      }>;
+      query_kind: "text";
+    }>();
+    listSiteLicenseOverviews.mockResolvedValue([
+      makeSiteLicenseOverview({
+        pools: [
+          makeSitePackage(),
+          makeSitePackage({
+            id: "site-2",
+            pool_name: "Faculty",
+            metadata: {
+              allowed_domains: ["faculty.example.edu"],
+              pool_name: "Faculty",
+              site_license_id: "license-1",
+              requires_approval: false,
+              verification_policy: "email-domain",
+              exclusive_group: "faculty",
+            },
+          }),
+        ],
+      }),
+    ]);
+    searchSiteLicensePoolAccounts.mockReturnValueOnce(pendingSearch.promise);
+
+    render(<SiteLicenseManager tiers={TIERS} />);
+    const addUsersButtons = await screen.findAllByRole("button", {
+      name: "Add users",
+    });
+    fireEvent.click(addUsersButtons[0]);
+    fireEvent.change(
+      screen.getByPlaceholderText("Name, email, or account ID"),
+      {
+        target: { value: "Stale" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await waitFor(() => {
+      expect(searchSiteLicensePoolAccounts).toHaveBeenCalledWith(
+        expect.objectContaining({ package_id: "site-1" }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(addUsersButtons[1]);
+    expect(await screen.findByText("Add users to Faculty")).toBeTruthy();
+
+    await act(async () => {
+      pendingSearch.resolve({
+        accounts: [
+          {
+            account_id: "11111111-1111-4111-8111-111111111111",
+            display_name: "Stale Result",
+            email_address: "stale@example.edu",
+          },
+        ],
+        query_kind: "text",
+      });
+      await pendingSearch.promise;
+    });
+
+    expect(screen.queryByText("Stale Result · stale@example.edu")).toBeNull();
+  });
+
+  it("explains searches without pool domains and out-of-domain email misses", async () => {
+    listSiteLicenseOverviews.mockResolvedValue([
+      makeSiteLicenseOverview({
+        pools: [
+          makeSitePackage({
+            metadata: {
+              allowed_domains: [],
+              pool_name: "Students",
+              site_license_id: "license-1",
+              requires_approval: false,
+              verification_policy: "manager-approval",
+              exclusive_group: "student",
+            },
+          }),
+        ],
+      }),
+    ]);
+    searchSiteLicensePoolAccounts.mockResolvedValue({
+      accounts: [],
+      query_kind: "email",
+    });
+
+    render(<SiteLicenseManager tiers={TIERS} />);
+    fireEvent.click(await screen.findByText("Add users"));
+
+    expect(
+      screen.getByText(
+        "This pool has no allowed email domains. Search is limited to accounts that already collaborate with you.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(
+      screen.getByPlaceholderText("Name, email, or account ID"),
+      {
+        target: { value: "ada@outside.org" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "This email is outside the pool's allowed domains. The account can only be found if it already collaborates with you.",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
   it("renders customer-facing site-license header details", async () => {
     listSiteLicenseOverviews.mockResolvedValue([
       makeSiteLicenseOverview({
@@ -1711,7 +1895,9 @@ describe("membership package managers", () => {
         admin: true,
       });
     });
-    expect(await screen.findByText("Ada Lovelace")).toBeTruthy();
+    expect(
+      await screen.findByText("Ada Lovelace · ada@example.edu"),
+    ).toBeTruthy();
   });
 
   it("confirms before removing a site-license manager", async () => {

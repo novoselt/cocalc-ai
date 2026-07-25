@@ -72,6 +72,11 @@ import {
   resolveAccountHomeBay,
 } from "@cocalc/server/bay-directory";
 import { getClusterAccountByIdDirect } from "@cocalc/server/accounts/cluster-directory";
+import { searchRelatedClusterAccounts } from "@cocalc/server/accounts/search-policy";
+import {
+  getNonAdminUserSearchRequest,
+  parseUserSearchQuery,
+} from "@cocalc/server/accounts/user-search-policy";
 import {
   assignMembershipPackageSeat as assignMembershipPackageSeat0,
   claimMembershipPackageSeat as claimMembershipPackageSeat0,
@@ -158,7 +163,11 @@ import type {
   SiteLicensePoolConfig,
   SiteLicensePoolRequest,
   MembershipPackageAssignment,
+  SiteLicenseAccountDetails,
+  SiteLicensePoolAccountSearchResult,
 } from "@cocalc/conat/hub/api/purchases";
+import { searchClusterAccounts } from "@cocalc/server/inter-bay/accounts";
+import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 
 export { getBalance };
 
@@ -1757,6 +1766,159 @@ export async function assignSiteLicensePoolSeat({
     return await getSeedSiteLicenseClient().assignSiteLicensePoolSeat(opts);
   }
   return await assignSiteLicensePoolSeat0(opts);
+}
+
+function siteLicenseSearchAccountDetails(
+  account: SiteLicenseAccountDetails,
+): SiteLicenseAccountDetails {
+  return {
+    account_id: account.account_id,
+    display_name: displayNameFromAccount(account) || undefined,
+    first_name: account.first_name || undefined,
+    last_name: account.last_name || undefined,
+    email_address: account.email_address || undefined,
+  };
+}
+
+function mergeSiteLicenseSearchAccounts(
+  accounts: Array<
+    SiteLicenseAccountDetails & {
+      created?: number | Date | null;
+      last_active?: number | Date | null;
+    }
+  >,
+  limit: number,
+): SiteLicenseAccountDetails[] {
+  const merged = new Map<
+    string,
+    SiteLicenseAccountDetails & {
+      created?: number | Date | null;
+      last_active?: number | Date | null;
+    }
+  >();
+  for (const account of accounts) {
+    const current = merged.get(account.account_id);
+    merged.set(account.account_id, {
+      ...account,
+      display_name: current?.display_name ?? account.display_name,
+      first_name: current?.first_name ?? account.first_name,
+      last_name: current?.last_name ?? account.last_name,
+      email_address: current?.email_address ?? account.email_address,
+      last_active: current?.last_active ?? account.last_active,
+      created: current?.created ?? account.created,
+    });
+  }
+  const activity = (value?: number | Date | null): number =>
+    value instanceof Date ? value.valueOf() : Number(value ?? 0) || 0;
+  return [...merged.values()]
+    .sort(
+      (a, b) =>
+        Math.max(activity(b.last_active), activity(b.created)) -
+        Math.max(activity(a.last_active), activity(a.created)),
+    )
+    .slice(0, limit)
+    .map(siteLicenseSearchAccountDetails);
+}
+
+export async function searchSiteLicensePoolAccounts({
+  account_id,
+  site_license_id,
+  package_id,
+  query = "",
+  limit,
+}: {
+  account_id?: string;
+  site_license_id?: string;
+  package_id?: string;
+  query?: string;
+  limit?: number;
+} = {}): Promise<SiteLicensePoolAccountSearchResult> {
+  const actorId = requireAccount(account_id);
+  const siteLicenseId = `${site_license_id ?? ""}`.trim();
+  const packageId = `${package_id ?? ""}`.trim();
+  if (!siteLicenseId) {
+    throw Error("site_license_id required");
+  }
+  if (!packageId) {
+    throw Error("package_id required");
+  }
+  const overview = await getSiteLicenseOverview({
+    account_id: actorId,
+    site_license_id: siteLicenseId,
+  });
+  if (overview.viewer_role !== "manager" && overview.viewer_role !== "admin") {
+    throw Error("must manage site license");
+  }
+  const pool = overview.pools.find(({ id }) => id === packageId);
+  if (pool == null) {
+    throw Error("site-license pool not found");
+  }
+
+  const parsed = parseUserSearchQuery(query);
+  if (overview.viewer_role === "admin") {
+    const accounts = await searchClusterAccounts({
+      query: parsed.normalized,
+      limit,
+      admin: true,
+    });
+    return {
+      accounts: accounts.map(siteLicenseSearchAccountDetails),
+      query_kind: parsed.kind,
+    };
+  }
+
+  const request = await getNonAdminUserSearchRequest({ query, limit });
+  if (request.limit <= 0) {
+    return {
+      accounts: [],
+      query_kind: request.kind,
+    };
+  }
+  const allowedDomains = Array.isArray(pool.metadata?.allowed_domains)
+    ? pool.metadata.allowed_domains.map((domain) =>
+        `${domain ?? ""}`.trim().toLowerCase(),
+      )
+    : [];
+  const actorHomeBay = await resolveTargetAccountHomeBay({
+    account_id: actorId,
+    user_account_id: actorId,
+  });
+  const relatedPromise =
+    actorHomeBay === getConfiguredBayId()
+      ? searchRelatedClusterAccounts({
+          account_id: actorId,
+          query: request.normalized,
+          limit: request.limit,
+          include_email: true,
+        })
+      : createInterBayAccountLocalClient({
+          client: getInterBayFabricClient(),
+          dest_bay: actorHomeBay,
+        }).searchRelatedAccounts({
+          account_id: actorId,
+          query: request.normalized,
+          limit: request.limit,
+          include_email: true,
+        });
+  const domainPromise =
+    allowedDomains.length === 0
+      ? Promise.resolve([])
+      : searchClusterAccounts({
+          query: request.normalized,
+          limit: request.limit,
+          verified_email_domains: allowedDomains,
+        });
+  const [related, domainAccounts] = await Promise.all([
+    relatedPromise,
+    domainPromise,
+  ]);
+  return {
+    accounts: mergeSiteLicenseSearchAccounts(
+      [...related, ...domainAccounts],
+      request.limit,
+    ),
+    query_kind: request.kind,
+  };
 }
 
 export async function getClaimableMembershipPackages({

@@ -22,6 +22,7 @@ import { SharedProjectPanel } from "@cocalc/frontend/course/shared-project/share
 import { CourseActions } from "../actions";
 import { CourseSettingsRecord, CourseStore } from "../store";
 import ConfigurationCopying from "./configuration-copying";
+import { CourseSshAccess } from "./course-ssh";
 import { CustomizeStudentProjectFunctionality } from "./customize-student-project-functionality";
 import { DatastoreConfig } from "./datastore-config";
 import { EnvironmentVariablesConfig } from "./envvars-config";
@@ -123,6 +124,13 @@ export function ConfigurationPanel({
           />
           <br />
           <SharedSecrets
+            actions={actions}
+            name={name}
+            project_id={project_id}
+            settings={settings}
+          />
+          <br />
+          <CourseSshAccess
             actions={actions}
             name={name}
             project_id={project_id}

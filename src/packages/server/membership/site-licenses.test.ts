@@ -114,7 +114,7 @@ describe("site license seat pools", () => {
     });
   }
 
-  it("only treats positive email verification markers as verified", async () => {
+  it("only returns the account email when it is verified", async () => {
     const account_id = uuid();
     await createTestAccount(account_id);
     await getPool().query(
@@ -134,7 +134,23 @@ describe("site license seat pools", () => {
 
     await expect(
       getVerifiedEmailAddressesForAccount(account_id),
-    ).resolves.toEqual(["verified@example.edu"]);
+    ).resolves.toEqual([]);
+
+    await getPool().query(
+      `UPDATE accounts
+       SET email_address_verified=$2::jsonb
+       WHERE account_id=$1`,
+      [
+        account_id,
+        {
+          "student@example.edu": new Date().toISOString(),
+          "verified@example.edu": new Date().toISOString(),
+        },
+      ],
+    );
+    await expect(
+      getVerifiedEmailAddressesForAccount(account_id),
+    ).resolves.toEqual(["student@example.edu"]);
   });
 
   it("rejects site-license pools that reference missing membership tiers", async () => {
@@ -1694,9 +1710,13 @@ describe("site license seat pools", () => {
     expect(claimablesAfterStudentClaim).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ package_id: teachingStaffPool.id }),
-        expect.objectContaining({ package_id: researcherPool.id }),
       ]),
     );
+    expect(
+      claimablesAfterStudentClaim.some(
+        (claimable) => claimable.package_id === researcherPool.id,
+      ),
+    ).toBe(false);
 
     await expect(
       claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay({
@@ -1726,6 +1746,7 @@ describe("site license seat pools", () => {
       ]),
     );
 
+    await markVerifiedEmail(account_id, `ada+research@${researchDomain}`);
     await expect(
       claimMembershipPackageSeat({
         account_id,

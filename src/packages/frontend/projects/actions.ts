@@ -3007,9 +3007,10 @@ export class ProjectsActions extends Actions<ProjectsState> {
   };
 
   updateAuthorizedKeys = async (project_id: string) => {
-    // only do this if running, since it only matters when
-    // running and is updated on startup
-    if (store.get_state(project_id) == "running") {
+    // Project-host projects report "opened" while their runtime is active.
+    // Stopped projects receive current keys on their next startup.
+    const state = store.get_state(project_id);
+    if (state === "running" || state === "opened") {
       try {
         await webapp_client.conat_client.hub.projects.updateAuthorizedKeysOnHost(
           { project_id },

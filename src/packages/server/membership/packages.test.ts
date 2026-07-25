@@ -951,6 +951,50 @@ describe("membership packages", () => {
     expect(localGrantCount.rows[0]?.count).toBe(0);
   });
 
+  it("does not use email verification history for site eligibility", async () => {
+    const owner_account_id = uuid();
+    const account_id = uuid();
+    const domain = `history-${uuid().slice(0, 8)}.edu`;
+    const emailAddress = `member-${uuid()}@example.net`;
+    const historicalEmailAddress = `member@${domain}`;
+    await createTestAccount(owner_account_id);
+    await createTestAccount(account_id);
+    await getPool().query(
+      `UPDATE accounts
+       SET email_address=$2,
+           email_address_verified=$3::jsonb
+       WHERE account_id=$1`,
+      [
+        account_id,
+        emailAddress,
+        {
+          [emailAddress]: new Date().toISOString(),
+          [historicalEmailAddress]: new Date().toISOString(),
+        },
+      ],
+    );
+
+    const package_id = await createTestMembershipPackage({
+      owner_account_id,
+      kind: "site",
+      membership_class: teamTier,
+      seat_count: 1,
+      metadata: {
+        interval: "year",
+        seat_price: 100,
+        allowed_domains: [domain],
+      },
+    });
+
+    const claimables = await listClaimableMembershipPackagesForAccount({
+      account_id,
+    });
+    expect(claimables.some((row) => row.package_id === package_id)).toBe(false);
+    await expect(
+      claimMembershipPackageSeat({ package_id, account_id }),
+    ).rejects.toThrow("no claimable seat found for this account");
+  });
+
   it("can include already claimed site-license pools for account settings", async () => {
     const owner_account_id = uuid();
     const site_user_account_id = uuid();

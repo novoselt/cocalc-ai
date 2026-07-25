@@ -26,9 +26,11 @@ import {
   onlyPosFloat,
   only_booleans,
   only_cocalc_com,
+  only_pos_int,
   parsableJson,
   toFloat,
   to_bool,
+  to_int,
   to_trimmed_str,
 } from "./site-defaults";
 
@@ -231,6 +233,7 @@ export type SiteSettingsExtrasKeys =
   | "cryptomining_abuse_heading"
   | "cryptomining_abuse_enforcement_enabled"
   | "cryptomining_abuse_auto_ban_enabled"
+  | "user_search_max_results"
   | "launch_sla_heading"
   | "launch_sla_project_start_warm_p95_ms"
   | "launch_sla_project_start_overall_p95_ms"
@@ -449,6 +452,16 @@ export const EXTRAS: SettingsExtras = {
     tags: ["Security", "Project Hosts"],
     group: "System / Advanced",
     subgroup: "Abuse Detection",
+  },
+  user_search_max_results: {
+    name: "User Search Maximum Results",
+    desc: "Maximum number of accounts returned by a non-admin user search. The hard safety limit is 50.",
+    default: "50",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["Security"],
+    group: "System / Advanced",
+    subgroup: "User Search",
   },
   launch_sla_heading: {
     name: "Launch SLA Thresholds",

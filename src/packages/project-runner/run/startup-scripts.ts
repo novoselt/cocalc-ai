@@ -67,7 +67,7 @@ if [ -z "$DROPBEAR" ]; then
   exit 1
 fi
 
-"$DROPBEAR" -p \${COCALC_SSHD_PORT:=22} -e -s -a -R
+"$DROPBEAR" -p \${COCALC_SSHD_PORT:=22} -e -s -a -R -W 2097152
 
 SFTP_SERVER="$(command -v sftp-server || true)"
 if [ -z "$SFTP_SERVER" ]; then

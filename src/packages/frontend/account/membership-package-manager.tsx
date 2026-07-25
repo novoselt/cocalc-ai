@@ -65,6 +65,7 @@ import {
   requestSiteLicensePool,
   reviewSiteLicensePoolRequest,
   revokeMembershipPackageSeat,
+  searchSiteLicensePoolAccounts,
   setSiteLicenseManager,
   updateMembershipPackage,
   updateSiteLicense,
@@ -81,6 +82,7 @@ import type {
   MembershipPackageKind,
   SiteLicenseManagerRole,
   SiteLicenseOverview,
+  SiteLicensePoolAccountSearchResult,
   SiteLicensePoolConfig,
   SiteLicensePoolRequest,
   SiteLicenseVerificationPolicy,
@@ -185,12 +187,10 @@ type SiteLicenseRecentAuditEvent = NonNullable<
 function packageUserSearchLabel(user: PackageUserSearchResult): ReactNode {
   const displayName = displayNameFromAccount(user);
   return (
-    <Space orientation="vertical" size={0}>
-      <Text>{displayName || user.email_address || user.account_id}</Text>
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        {[user.email_address, user.account_id].filter(Boolean).join(" · ")}
-      </Text>
-    </Space>
+    <Text>
+      {[displayName, user.email_address].filter(Boolean).join(" · ") ||
+        user.account_id}
+    </Text>
   );
 }
 
@@ -2854,6 +2854,7 @@ function SiteLicenseDashboard({
         adminSearch={isAdmin}
         open={assigningSiteLicensePool != null}
         pool={assigningSiteLicensePool?.pool}
+        siteLicenseId={assigningSiteLicensePool?.overview.site_license.id}
         onClose={() => setAssigningSiteLicensePool(null)}
         onAssigned={async (targetAccountIds, grantExpiresAt) => {
           const pool = assigningSiteLicensePool?.pool;
@@ -3046,12 +3047,14 @@ function AssignSiteLicensePoolSeatModal({
   adminSearch,
   open,
   pool,
+  siteLicenseId,
   onClose,
   onAssigned,
 }: {
   adminSearch: boolean;
   open: boolean;
   pool?: SiteLicenseOverview["pools"][number];
+  siteLicenseId?: string;
   onClose: () => void;
   onAssigned: (
     target_account_ids: string[],
@@ -3062,6 +3065,9 @@ function AssignSiteLicensePoolSeatModal({
   const [lastSearchQuery, setLastSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<PackageUserSearchResult[]>([]);
+  const [queryKind, setQueryKind] =
+    useState<SiteLicensePoolAccountSearchResult["query_kind"]>("text");
+  const [assignedMatchCount, setAssignedMatchCount] = useState(0);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [grantExpiresAt, setGrantExpiresAt] = useState<Dayjs | null>(null);
   const [assigning, setAssigning] = useState(false);
@@ -3077,18 +3083,25 @@ function AssignSiteLicensePoolSeatModal({
       ),
     [pool],
   );
+  const allowedDomains = useMemo(
+    () => normalizeDomainList(pool == null ? [] : getPackageDomains(pool)),
+    [pool],
+  );
 
   useEffect(() => {
+    ++searchRunRef.current;
     if (!open) return;
     setQuery("");
     setLastSearchQuery("");
     setSearching(false);
     setResults([]);
+    setQueryKind("text");
+    setAssignedMatchCount(0);
     setSelectedAccountIds([]);
     setGrantExpiresAt(null);
     setAssigning(false);
     setError("");
-  }, [open, pool?.id]);
+  }, [open, pool?.id, siteLicenseId]);
 
   async function runSearch(searchQuery = query) {
     const trimmed = searchQuery.trim();
@@ -3096,19 +3109,26 @@ function AssignSiteLicensePoolSeatModal({
     if (!trimmed) {
       setLastSearchQuery("");
       setResults([]);
+      setAssignedMatchCount(0);
       setSelectedAccountIds([]);
+      return;
+    }
+    if (!siteLicenseId || !pool?.id) {
+      setError("Site-license pool is not available.");
       return;
     }
     setSearching(true);
     setError("");
     try {
-      const rawResults = await webapp_client.users_client.user_search({
+      const response = await searchSiteLicensePoolAccounts({
+        site_license_id: siteLicenseId,
+        package_id: pool.id,
         query: trimmed,
         limit: 20,
-        admin: adminSearch,
       });
       if (run !== searchRunRef.current) return;
-      const next = (rawResults ?? [])
+      const rawResults = response.accounts ?? [];
+      const next = rawResults
         .filter(
           (result): result is PackageUserSearchResult =>
             typeof result?.account_id === "string" &&
@@ -3116,6 +3136,11 @@ function AssignSiteLicensePoolSeatModal({
             !activeAccountIds.has(result.account_id),
         )
         .slice(0, 20);
+      setQueryKind(response.query_kind);
+      setAssignedMatchCount(
+        rawResults.filter((result) => activeAccountIds.has(result.account_id))
+          .length,
+      );
       setResults(next);
       setLastSearchQuery(trimmed);
       setSelectedAccountIds((selected) =>
@@ -3179,8 +3204,32 @@ function AssignSiteLicensePoolSeatModal({
             onClose={() => setError("")}
           />
         ) : null}
+        {adminSearch ? (
+          <Text type="secondary">
+            Search any existing CoCalc account by name, email, or account ID.
+          </Text>
+        ) : allowedDomains.length > 0 ? (
+          <Space orientation="vertical" size="small">
+            <Text type="secondary">
+              Search includes your collaborators and accounts with a verified
+              email in these domains:
+            </Text>
+            <Space wrap size={[4, 4]}>
+              {allowedDomains.map((domain) => (
+                <Tag key={domain}>{domain}</Tag>
+              ))}
+            </Space>
+          </Space>
+        ) : (
+          <Alert
+            type="warning"
+            showIcon
+            title="Search is limited"
+            description="This pool has no allowed email domains. Search is limited to accounts that already collaborate with you."
+          />
+        )}
         <Input.Search
-          placeholder="Search by name, email, or account id"
+          placeholder="Name, email, or account ID"
           value={query}
           enterButton="Search"
           loading={searching}
@@ -3188,6 +3237,7 @@ function AssignSiteLicensePoolSeatModal({
             setQuery(e.target.value);
             setLastSearchQuery("");
             setResults([]);
+            setAssignedMatchCount(0);
             setSelectedAccountIds([]);
           }}
           onSearch={(value) => {
@@ -3222,11 +3272,12 @@ function AssignSiteLicensePoolSeatModal({
           </Checkbox.Group>
         ) : null}
         {!searching && lastSearchQuery && results.length === 0 && !error ? (
-          <Alert
-            type="info"
-            showIcon
-            title="No matching account found"
-            description="Search for an existing CoCalc account. This direct assignment flow does not reserve seats for email addresses."
+          <SiteLicenseSearchEmptyAlert
+            adminSearch={adminSearch}
+            allowedDomains={allowedDomains}
+            assignedMatchCount={assignedMatchCount}
+            query={lastSearchQuery}
+            queryKind={queryKind}
           />
         ) : null}
         <div>
@@ -3240,6 +3291,67 @@ function AssignSiteLicensePoolSeatModal({
         </div>
       </Space>
     </Modal>
+  );
+}
+
+function SiteLicenseSearchEmptyAlert({
+  adminSearch,
+  allowedDomains,
+  assignedMatchCount,
+  query,
+  queryKind,
+}: {
+  adminSearch: boolean;
+  allowedDomains: string[];
+  assignedMatchCount: number;
+  query: string;
+  queryKind: SiteLicensePoolAccountSearchResult["query_kind"];
+}) {
+  if (assignedMatchCount > 0) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        title={
+          assignedMatchCount === 1
+            ? "Account already has access"
+            : "Accounts already have access"
+        }
+        description="The matching accounts are already assigned to this pool."
+      />
+    );
+  }
+  if (adminSearch) {
+    return <Alert type="info" showIcon title="No matching account found" />;
+  }
+  if (queryKind === "email") {
+    const domain = query.trim().toLowerCase().split("@")[1] ?? "";
+    if (!allowedDomains.includes(domain)) {
+      return (
+        <Alert
+          type="info"
+          showIcon
+          title="No matching account found"
+          description="This email is outside the pool's allowed domains. The account can only be found if it already collaborates with you."
+        />
+      );
+    }
+    return (
+      <Alert
+        type="info"
+        showIcon
+        title="No matching account found"
+        description="No existing account uses this as its verified account email."
+      />
+    );
+  }
+  return (
+    <Alert
+      type="info"
+      showIcon
+      title="No matching account found"
+      description="No matching collaborator or account in the allowed domains was found."
+    />
   );
 }
 

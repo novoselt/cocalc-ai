@@ -27,6 +27,11 @@ import {
   is_valid_email_address as isValidEmailAddress,
   parse_user_search as parseUserSearch,
 } from "@cocalc/util/misc";
+import {
+  HARD_MAX_USER_SEARCH_RESULTS,
+  parseUserSearchQuery,
+} from "@cocalc/server/accounts/user-search-policy";
+import { verifiedEmailAddressSql } from "@cocalc/server/accounts/verified-email-address";
 
 const logger = getLogger("server:accounts:cluster-directory");
 
@@ -569,6 +574,120 @@ async function searchDirectoryAccounts({
     .slice(0, limit);
 }
 
+export async function searchClusterAccountsByVerifiedEmailDomainsDirect({
+  query,
+  verified_email_domains,
+  limit = 20,
+}: {
+  query: string;
+  verified_email_domains: string[];
+  limit?: number;
+}): Promise<AccountDirectoryEntry[]> {
+  const domains = [
+    ...new Set(
+      verified_email_domains
+        .map((domain) => `${domain ?? ""}`.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  const cappedLimit = Math.max(
+    0,
+    Math.min(Number(limit) || 20, HARD_MAX_USER_SEARCH_RESULTS),
+  );
+  if (domains.length === 0 || cappedLimit <= 0) {
+    return [];
+  }
+  const parsed = parseUserSearchQuery(query);
+  const params: Array<string | number | string[]> = [domains];
+  const where: string[] = [];
+  if (parsed.account_id) {
+    params.push(parsed.account_id);
+    where.push(`account_id=$${params.length}::UUID`);
+  } else if (parsed.kind === "email") {
+    params.push(parsed.email_queries[0]);
+    where.push(`lower(email_address)=$${params.length}::TEXT`);
+  } else {
+    if (parsed.email_queries.length > 0) {
+      params.push(parsed.email_queries);
+      where.push(`lower(email_address)=ANY($${params.length}::TEXT[])`);
+    }
+    for (const terms of parsed.string_queries) {
+      const clauses: string[] = [];
+      for (const term of terms) {
+        params.push(`%${term}%`);
+        const pos = params.length;
+        clauses.push(
+          `(lower(display_name) LIKE $${pos}::TEXT OR lower(first_name) LIKE $${pos}::TEXT OR lower(last_name) LIKE $${pos}::TEXT)`,
+        );
+      }
+      if (clauses.length > 0) {
+        where.push(`(${clauses.join(" AND ")})`);
+      }
+    }
+  }
+  if (where.length === 0) {
+    return [];
+  }
+
+  await ensureClusterAccountDirectorySchema();
+  params.push(getConfiguredBayId(), cappedLimit);
+  const currentBayParam = `$${params.length - 1}`;
+  const limitParam = `$${params.length}`;
+  const identityFields = `
+    account_id,
+    display_name,
+    first_name,
+    last_name,
+    email_address,
+    home_bay_id,
+    created,
+    last_active,
+    banned
+  `;
+  const fields = `
+    ${identityFields},
+    email_address_verified
+  `;
+  const { rows } = await getPool("medium").query(
+    `
+      WITH candidates AS (
+        SELECT ${identityFields}, TRUE AS email_address_verified,
+               0 AS source_rank
+          FROM accounts
+         WHERE deleted IS NOT TRUE
+           AND COALESCE(
+                 NULLIF(BTRIM(accounts.home_bay_id), ''),
+                 ${currentBayParam}::TEXT
+               ) = ${currentBayParam}::TEXT
+           AND (${verifiedEmailAddressSql()})
+           AND lower(split_part(email_address, '@', 2))=ANY($1::TEXT[])
+        UNION ALL
+        SELECT ${fields}, 1 AS source_rank
+          FROM ${TABLE}
+         WHERE provisioned=TRUE
+           AND email_address_verified IS TRUE
+           AND lower(split_part(email_address, '@', 2))=ANY($1::TEXT[])
+           AND ${withCurrentBayParam(
+             activeDirectoryAccountSql(),
+             currentBayParam,
+           )}
+      ),
+      deduped AS (
+        SELECT DISTINCT ON (account_id) ${fields}, source_rank
+          FROM candidates
+         WHERE ${where.map((clause) => `(${clause})`).join(" OR ")}
+         ORDER BY account_id, source_rank
+      )
+      SELECT ${fields}
+        FROM deduped
+       ORDER BY COALESCE(last_active, created) DESC NULLS LAST, account_id
+       LIMIT ${limitParam}::INTEGER
+    `,
+    params,
+  );
+  return rows.map(canonicalDirectoryEntry);
+}
+
 function mergeEntries(
   entries: AccountDirectoryEntry[],
 ): AccountDirectoryEntry[] {
@@ -701,12 +820,21 @@ export async function searchClusterAccountsDirect({
   limit,
   admin,
   only_email,
+  verified_email_domains,
 }: {
   query: string;
   limit?: number;
   admin?: boolean;
   only_email?: boolean;
+  verified_email_domains?: string[];
 }): Promise<AccountDirectoryEntry[]> {
+  if (verified_email_domains != null) {
+    return await searchClusterAccountsByVerifiedEmailDomainsDirect({
+      query,
+      verified_email_domains,
+      limit,
+    });
+  }
   const cappedLimit = Math.min(
     Math.max(1, Number(limit ?? 20) || 20),
     admin ? ADMIN_SEARCH_LIMIT : USER_SEARCH_LIMIT,

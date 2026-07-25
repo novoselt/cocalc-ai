@@ -46,6 +46,7 @@ import type {
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import getName from "@cocalc/server/accounts/get-name";
 import { searchRelatedClusterAccounts } from "@cocalc/server/accounts/search-policy";
+import { getNonAdminUserSearchRequest } from "@cocalc/server/accounts/user-search-policy";
 import type { AccountEntitlementOverride } from "@cocalc/conat/hub/api/purchases";
 import {
   clearAccountEntitlementOverrideLocal,
@@ -301,7 +302,7 @@ import {
 } from "@cocalc/server/membership/cryptomining-abuse";
 import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
 import { getEffectiveMembershipUsageLimits } from "@cocalc/server/membership/effective-limits";
-import sshKeys from "@cocalc/server/projects/get-ssh-keys";
+import resolveManagedProjectSshKeyAccountForHost from "@cocalc/server/projects/resolve-managed-ssh-key-account";
 import { getAppFeedData as listAppNews0 } from "@cocalc/database/postgres/news";
 import type { NewsItemWebapp } from "@cocalc/util/types/news";
 import type {
@@ -5253,10 +5254,14 @@ export async function userSearch({
       only_email,
     });
   }
+  const request = await getNonAdminUserSearchRequest({ query, limit });
+  if (request.limit <= 0) {
+    return [];
+  }
   return await searchRelatedClusterAccounts({
     account_id,
-    query,
-    limit,
+    query: request.normalized,
+    limit: request.limit,
     only_email,
   });
 }
@@ -7056,18 +7061,19 @@ export async function getManagedProjectEgressPolicy({
 }
 
 export async function resolveManagedProjectSshKeyAccount({
-  account_id,
+  host_id,
   project_id,
   fingerprint,
 }: {
-  account_id?: string;
+  host_id?: string;
   project_id: string;
   fingerprint: string;
 }): Promise<{ account_id?: string }> {
-  await assertProjectCollaboratorAccessAllowRemote({ account_id, project_id });
-  const keys = await sshKeys(project_id);
-  const resolved_account_id = keys[fingerprint]?.account_id;
-  return resolved_account_id ? { account_id: resolved_account_id } : {};
+  return await resolveManagedProjectSshKeyAccountForHost({
+    host_id,
+    project_id,
+    fingerprint,
+  });
 }
 
 export async function getPublicSiteUrl({
