@@ -192,7 +192,7 @@ describe("accounts.cluster-directory", () => {
     });
   });
 
-  it("filters domain searches by verified primary email before limiting", async () => {
+  it("filters domain searches by the verified account email before limiting", async () => {
     queryMock = jest.fn(async (sql: string) => {
       if (sql.includes("information_schema.columns")) {
         return { rows: [{ exists: true }] };
@@ -244,6 +244,7 @@ describe("accounts.cluster-directory", () => {
       sql.includes("WITH candidates AS"),
     );
     expect(sql).toContain("email_address_verified ? email_address");
+    expect(sql).toContain("NOT IN ('null'::jsonb, 'false'::jsonb)");
     expect(sql).toContain("email_address_verified IS TRUE");
     expect(sql).toContain(
       "lower(split_part(email_address, '@', 2))=ANY($1::TEXT[])",
