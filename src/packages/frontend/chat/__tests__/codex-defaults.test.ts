@@ -25,6 +25,7 @@ describe("codex new chat defaults", () => {
     const {
       saveCodexNewChatDefaults,
       getDefaultCodexNewChatDefaults,
+      getCodexNewChatModeOptions,
       codexNewChatDefaultsEqual,
     } = require("../codex-defaults");
 
@@ -49,6 +50,11 @@ describe("codex new chat defaults", () => {
         codex_new_chat_defaults: saved,
       },
     });
+    expect(getCodexNewChatModeOptions()).toEqual([
+      { value: "read-only", label: "Read only" },
+      { value: "workspace-write", label: "Workspace write" },
+      { value: "full-access", label: "Full access" },
+    ]);
   });
 
   it("loads stored defaults for new thread setup", () => {
@@ -98,13 +104,13 @@ describe("codex new chat defaults", () => {
       codexConfig: {
         model: "gpt-5.4",
         reasoning: "high",
-        sessionMode: "read-only",
+        sessionMode: "full-access",
         serviceTier: "fast",
       },
     });
   });
 
-  it("maps legacy workspace-write launchpad settings to full-access and hides the option", () => {
+  it("forces full access and hides other modes in cloud CoCalc", () => {
     jest.doMock("@cocalc/frontend/lite", () => ({
       lite: false,
     }));
@@ -132,7 +138,6 @@ describe("codex new chat defaults", () => {
 
     expect(getDefaultCodexSessionMode()).toBe("full-access");
     expect(getCodexNewChatModeOptions()).toEqual([
-      { value: "read-only", label: "Read only" },
       { value: "full-access", label: "Full access" },
     ]);
     expect(

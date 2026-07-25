@@ -26,22 +26,15 @@ export const ALL_CODEX_NEW_CHAT_MODE_OPTIONS: {
   { value: "full-access", label: "Full access" },
 ];
 
-function isLaunchpadCodexRuntime(): boolean {
-  if (lite) return false;
-  const customizeStore = redux?.getStore?.("customize");
-  return customizeStore?.get?.("is_launchpad") === true;
-}
-
 export function getCodexNewChatModeOptions(): {
   value: CodexSessionMode;
   label: string;
 }[] {
-  if (isLaunchpadCodexRuntime()) {
-    return ALL_CODEX_NEW_CHAT_MODE_OPTIONS.filter(
-      ({ value }) => value !== "workspace-write",
-    );
-  }
-  return ALL_CODEX_NEW_CHAT_MODE_OPTIONS;
+  return lite
+    ? ALL_CODEX_NEW_CHAT_MODE_OPTIONS
+    : ALL_CODEX_NEW_CHAT_MODE_OPTIONS.filter(
+        ({ value }) => value === "full-access",
+      );
 }
 
 export interface CodexNewChatDefaults {
@@ -53,8 +46,7 @@ export interface CodexNewChatDefaults {
 
 export function getDefaultCodexSessionMode(): CodexSessionMode {
   if (lite) return "workspace-write";
-  if (isLaunchpadCodexRuntime()) return "full-access";
-  return "workspace-write";
+  return "full-access";
 }
 
 export function normalizeCodexNewChatDefaults(
@@ -123,14 +115,12 @@ function normalizeCodexModelName(model?: string): string {
 }
 
 function normalizeCodexSessionModeValue(mode?: string): CodexSessionMode {
+  if (!lite) return "full-access";
   if (
     mode === "read-only" ||
     mode === "workspace-write" ||
     mode === "full-access"
   ) {
-    if (isLaunchpadCodexRuntime() && mode === "workspace-write") {
-      return "full-access";
-    }
     return mode;
   }
   return getDefaultCodexSessionMode();
