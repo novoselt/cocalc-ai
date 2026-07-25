@@ -86,6 +86,7 @@ function createFakeClient() {
     emitter.conn.connected = true;
   });
   emitter.waitForInterest = jest.fn(async () => true);
+  emitter.numSubscriptions = jest.fn(() => 0);
   emitter.close = jest.fn(() => {
     emitter.emit("closed");
   });
@@ -495,6 +496,7 @@ describe("server/conat route-client", () => {
   it("reuses an idle account-routed client across short-lived callers", async () => {
     const central1 = createFakeClient();
     const routed = createFakeClient();
+    routed.numSubscriptions.mockReturnValue(7);
     const central2 = createFakeClient();
     connectMock
       .mockImplementationOnce(() => central1)
@@ -531,6 +533,8 @@ describe("server/conat route-client", () => {
     expect(getRoutedClientCacheStats()).toEqual(
       expect.objectContaining({
         account_clients: 1,
+        tracked_account_clients: 1,
+        account_client_subscriptions: 7,
         active_account_clients: 0,
         account_client_creates: 1,
         account_client_reuses: 1,

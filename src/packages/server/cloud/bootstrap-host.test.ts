@@ -113,6 +113,34 @@ describe("GCP bootstrap helpers", () => {
       bootstrapHost.configuredGcpProjectIdFromServiceAccountJson("{"),
     ).toBeUndefined();
   });
+
+  it("describes every project-writable balanced disk for I/O containment", () => {
+    expect(
+      bootstrapHost.buildProjectIoCapacity({
+        providerId: "gcp",
+        diskType: "balanced",
+        sharedScratchEnabled: true,
+        sharedScratchDiskType: "balanced",
+      }),
+    ).toEqual({
+      version: 1,
+      provider: "gcp",
+      targets: [
+        {
+          mountpoint: "/mnt/cocalc",
+          discovery: "btrfs",
+          disk_type: "balanced",
+          required: true,
+        },
+        {
+          mountpoint: "/mnt/cocalc-scratch",
+          discovery: "mount",
+          disk_type: "balanced",
+          required: true,
+        },
+      ],
+    });
+  });
 });
 
 describe("bootstrap-host shell templates", () => {
@@ -243,6 +271,7 @@ describe("bootstrap-host shell templates", () => {
 
     expect(source).toContain(`"shared_scratch_disk_devices"`);
     expect(source).toContain(`"shared_scratch"`);
+    expect(source).toContain(`"project_io_capacity"`);
     expect(source).toContain(`/mnt/cocalc-scratch`);
     expect(source).toContain(`COCALC_SHARED_SCRATCH_HOST_MOUNT`);
   });

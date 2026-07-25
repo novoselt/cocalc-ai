@@ -47,6 +47,25 @@ describe("project I/O policy", () => {
     expect(policy.leafClasses.premium.wiops).toBe(1000);
   });
 
+  it("accepts runtime-derived GCP balanced disk limits", () => {
+    const policy = parseProjectIoPolicy({
+      ...DEFAULT_PROJECT_IO_POLICY,
+      mode: "enforce",
+      capacity: { mode: "gcp-pd-balanced" },
+    });
+    expect(policy.capacity.mode).toBe("gcp-pd-balanced");
+    expect(policy.pool.rbps).toBe(0);
+  });
+
+  it("rejects unknown capacity modes", () => {
+    expect(() =>
+      parseProjectIoPolicy({
+        ...DEFAULT_PROJECT_IO_POLICY,
+        capacity: { mode: "unbounded" },
+      }),
+    ).toThrow("capacity.mode must be static or gcp-pd-balanced");
+  });
+
   it.each([
     ["numeric strings", { rbps: "64" }],
     ["boolean values", { rbps: true }],

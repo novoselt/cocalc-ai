@@ -653,7 +653,10 @@ function conatWithProjectRoutingInternal(
 
 export function getRoutedClientCacheStats(): {
   hub_clients: number;
+  hub_client_subscriptions: number;
   account_clients: number;
+  tracked_account_clients: number;
+  account_client_subscriptions: number;
   active_account_clients: number;
   deferred_account_clients: number;
   account_client_max: number;
@@ -667,6 +670,7 @@ export function getRoutedClientCacheStats(): {
   routedAccountClients.purgeStale();
   let active_account_clients = 0;
   let deferred_account_clients = 0;
+  let account_client_subscriptions = 0;
   for (const state of routedAccountClientStates) {
     if (state.activeLeases > 0) {
       active_account_clients += 1;
@@ -674,10 +678,18 @@ export function getRoutedClientCacheStats(): {
     if (!state.cached) {
       deferred_account_clients += 1;
     }
+    account_client_subscriptions += state.client.numSubscriptions?.() ?? 0;
   }
+  const hubStates = Object.values(routedHubClients);
   return {
-    hub_clients: Object.keys(routedHubClients).length,
+    hub_clients: hubStates.length,
+    hub_client_subscriptions: hubStates.reduce(
+      (total, state) => total + (state.client.numSubscriptions?.() ?? 0),
+      0,
+    ),
     account_clients: routedAccountClients.size,
+    tracked_account_clients: routedAccountClientStates.size,
+    account_client_subscriptions,
     active_account_clients,
     deferred_account_clients,
     account_client_max: ROUTED_ACCOUNT_CLIENT_MAX,

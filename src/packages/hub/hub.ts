@@ -66,6 +66,7 @@ import { conatWithProjectRouting } from "@cocalc/server/conat/route-client";
 import { createProjectHostProxyHandlers } from "./proxy/project-host";
 import { ensureSelfHostReverseTunnelsOnStartup } from "@cocalc/server/self-host/ssh-target";
 import { assertLocalBindOrInsecure } from "@cocalc/backend/network/policy";
+import { startWorkerDiagnosticsServer } from "./worker-diagnostics";
 
 // Logger tagged with 'hub' for this file.
 const logger = getLogger("hub");
@@ -180,6 +181,14 @@ async function startServer(): Promise<void> {
     bindHost: program.hostname,
     serviceName: "hub http listener",
   });
+
+  try {
+    await startWorkerDiagnosticsServer();
+  } catch (err) {
+    logger.warn("failed starting loopback worker diagnostics", {
+      err: `${err}`,
+    });
+  }
 
   logger.info(`basePath='${basePath}'`);
   logger.info("database: using env configuration");

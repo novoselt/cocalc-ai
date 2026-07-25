@@ -4,7 +4,10 @@ import {
   initLoadBalancer,
 } from "@cocalc/backend/conat/persist";
 import { conatPersistCount } from "@cocalc/backend/data";
-import { createForkedPersistServer } from "./start-server";
+import {
+  createForkedPersistServer,
+  getForkedPersistServerCount,
+} from "./start-server";
 import getLogger from "@cocalc/backend/logger";
 import { conat } from "@cocalc/backend/conat";
 import { SERVICE as PERSIST_SERVICE } from "@cocalc/conat/persist/util";
@@ -13,8 +16,24 @@ import {
   type PersistMaintenanceCoordinator,
 } from "@cocalc/backend/conat/persist-maintenance/coordinator";
 import { loadPersistMaintenanceConfig } from "@cocalc/backend/conat/persist-maintenance/config";
+import { openPaths } from "@cocalc/conat/persist/storage";
 
 const logger = getLogger("server:conat:persist");
+
+export function getConatPersistDiagnostics(): {
+  mode: "in-process" | "forked";
+  configured_servers: number;
+  child_processes: number;
+  local_open_streams: number;
+} {
+  const configured_servers = Math.max(1, conatPersistCount || 1);
+  return {
+    mode: configured_servers > 1 ? "forked" : "in-process",
+    configured_servers,
+    child_processes: getForkedPersistServerCount(),
+    local_open_streams: openPaths.size,
+  };
+}
 
 export async function initConatPersist() {
   logger.debug("initPersistServer: sqlite3 stream persistence", {
