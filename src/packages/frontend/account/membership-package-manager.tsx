@@ -3089,6 +3089,7 @@ function AssignSiteLicensePoolSeatModal({
   );
 
   useEffect(() => {
+    ++searchRunRef.current;
     if (!open) return;
     setQuery("");
     setLastSearchQuery("");
@@ -3100,7 +3101,7 @@ function AssignSiteLicensePoolSeatModal({
     setGrantExpiresAt(null);
     setAssigning(false);
     setError("");
-  }, [open, pool?.id]);
+  }, [open, pool?.id, siteLicenseId]);
 
   async function runSearch(searchQuery = query) {
     const trimmed = searchQuery.trim();
