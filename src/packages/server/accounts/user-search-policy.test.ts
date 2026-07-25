@@ -10,19 +10,19 @@ import {
 
 describe("non-admin user search policy", () => {
   it("requires the configured minimum for text searches", async () => {
-    await expect(
-      getNonAdminUserSearchRequest({
-        query: "a",
-        settings: {
-          user_search_min_text_length: 2,
-          user_search_max_results: 50,
-        },
-      }),
-    ).resolves.toMatchObject({
-      allowed: false,
-      kind: "text",
-      minimum_text_length: 2,
-    });
+    const settings = {
+      user_search_min_text_length: 2,
+      user_search_max_results: 50,
+    };
+    for (const query of ["a", "a,", "a;"]) {
+      await expect(
+        getNonAdminUserSearchRequest({ query, settings }),
+      ).resolves.toMatchObject({
+        allowed: false,
+        kind: "text",
+        minimum_text_length: 2,
+      });
+    }
   });
 
   it("does not apply the text minimum to exact email or account-id searches", async () => {
