@@ -1163,4 +1163,29 @@ describe("connected terminal resizing", () => {
     );
     terminal.close();
   });
+
+  it("ignores delayed option updates after the terminal closes", () => {
+    const { Terminal } = loadTerminalModule();
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const actions = {
+      project_id: "project-1",
+      path: "/tmp/example.term",
+      get_term_env: jest.fn(() => ({})),
+      set_connection_status: jest.fn(),
+      set_title: jest.fn(),
+      set_error: jest.fn(),
+      _tree_is_single_leaf: jest.fn(() => false),
+      close_frame: jest.fn(),
+      open_code_editor_frame: jest.fn(),
+      _get_project_actions: jest.fn(() => ({})),
+    } as any;
+
+    const terminal = new Terminal(actions, 0, "term-1", parent);
+    terminal.close();
+
+    expect(() => terminal.set_font_size(18)).not.toThrow();
+    expect(() => terminal.set_terminal_theme_override("default")).not.toThrow();
+    expect(terminal.getOption("fontSize")).toBeUndefined();
+  });
 });
