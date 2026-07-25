@@ -25,6 +25,7 @@ import {
   useWorkspaceChatWorkingDirectory,
 } from "@cocalc/frontend/project/workspaces/chat-defaults";
 import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
+import { lite } from "@cocalc/frontend/lite";
 import { COLORS } from "@cocalc/util/theme";
 import { HelpIcon } from "@cocalc/frontend/components/help-icon";
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
@@ -49,6 +50,7 @@ import {
   getDefaultCodexSessionMode,
 } from "./codex-defaults";
 import { ThreadImageUpload } from "./thread-image-upload";
+import { CodexFullAccessNotice } from "./codex-full-access";
 import type { ChatExportOpenRequest, ChatExportScope } from "./export-types";
 
 export interface ChatRoomModalHandlers {
@@ -836,25 +838,29 @@ export function ChatRoomModals({
                   }
                 />
               </div>
-              <div>
-                <div style={{ marginBottom: 4, color: COLORS.GRAY_D }}>
-                  Execution mode
+              {lite ? (
+                <div>
+                  <div style={{ marginBottom: 4, color: COLORS.GRAY_D }}>
+                    Execution mode
+                  </div>
+                  <Select
+                    value={
+                      normalizeSessionMode(renameCodexConfig) ??
+                      defaultSessionMode
+                    }
+                    style={{ width: "100%" }}
+                    options={getCodexNewChatModeOptions()}
+                    onChange={(value) =>
+                      setRenameCodexConfig((prev) => ({
+                        ...prev,
+                        sessionMode: value as CodexSessionMode,
+                      }))
+                    }
+                  />
                 </div>
-                <Select
-                  value={
-                    normalizeSessionMode(renameCodexConfig) ??
-                    defaultSessionMode
-                  }
-                  style={{ width: "100%" }}
-                  options={getCodexNewChatModeOptions()}
-                  onChange={(value) =>
-                    setRenameCodexConfig((prev) => ({
-                      ...prev,
-                      sessionMode: value as CodexSessionMode,
-                    }))
-                  }
-                />
-              </div>
+              ) : (
+                <CodexFullAccessNotice />
+              )}
               <div>
                 <div style={{ marginBottom: 4, color: COLORS.GRAY_D }}>
                   Working directory

@@ -63,6 +63,7 @@ import {
   getCodexNewChatModeOptions,
   getDefaultCodexSessionMode,
 } from "./codex-defaults";
+import { CodexFullAccessNotice } from "./codex-full-access";
 import { getLatestAcpThreadIdForThread } from "./thread-session";
 import {
   getCodexPaymentSourceShortLabel,
@@ -763,19 +764,23 @@ export function CodexConfigButton({
                   {selectedModelValue}
                 </button>
               </Dropdown>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                ·
-              </Text>
-              <Dropdown menu={modeMenu} trigger={["click"]}>
-                <button
-                  type="button"
-                  title="Change Codex access mode"
-                  style={pillSegmentStyle("mode")}
-                  {...pillSegmentHandlers("mode")}
-                >
-                  {modeLabel}
-                </button>
-              </Dropdown>
+              {lite ? (
+                <>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    ·
+                  </Text>
+                  <Dropdown menu={modeMenu} trigger={["click"]}>
+                    <button
+                      type="button"
+                      title="Change Codex access mode"
+                      style={pillSegmentStyle("mode")}
+                      {...pillSegmentHandlers("mode")}
+                    >
+                      {modeLabel}
+                    </button>
+                  </Dropdown>
+                </>
+              ) : null}
               {reasoningLabel ? (
                 <>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -888,8 +893,7 @@ export function CodexConfigButton({
                 }}
               >
                 These settings apply to the selected Codex thread. The compact
-                pill in chat shows the same model, access mode, and reasoning
-                level.
+                pill in chat shows the same model and reasoning level.
               </div>
             </div>
             {paymentSource?.source === "subscription" ? (
@@ -918,9 +922,11 @@ export function CodexConfigButton({
             >
               <Space size={6} wrap style={{ justifyContent: "flex-end" }}>
                 <Tag color="blue">{selectedModelValue ?? "Model"}</Tag>
-                <Tag color={selectedModeOption?.warning ? "red" : "green"}>
-                  {modeLabel}
-                </Tag>
+                {lite ? (
+                  <Tag color={selectedModeOption?.warning ? "red" : "green"}>
+                    {modeLabel}
+                  </Tag>
+                ) : null}
                 {reasoningLabel ? <Tag>{reasoningLabel}</Tag> : null}
                 {serviceTierLabel ? <Tag color="orange">Fast</Tag> : null}
               </Space>
@@ -952,7 +958,7 @@ export function CodexConfigButton({
                     margin: "3px 0 10px",
                   }}
                 >
-                  Choose the model, access continuity, and directory Codex uses
+                  Choose the model, session continuity, and directory Codex uses
                   for future turns.
                 </div>
                 <div style={gridTwoColStyle}>
@@ -1049,85 +1055,92 @@ export function CodexConfigButton({
               </div>
               <div style={sectionStyle}>
                 <SectionTitle>Access</SectionTitle>
-                <div
-                  style={{
-                    color: COLORS.GRAY_M,
-                    fontSize: 12,
-                    margin: "3px 0 10px",
-                  }}
-                >
-                  Control whether Codex can only inspect files, edit this
-                  workspace, or use full project-container access.
-                </div>
-                <Form.Item
-                  name="sessionMode"
-                  tooltip="Control how much access Codex has inside your project."
-                  style={{ marginBottom: 0 }}
-                >
-                  <Radio.Group style={{ width: "100%" }}>
+                {lite ? (
+                  <>
                     <div
                       style={{
-                        display: "grid",
-                        gridTemplateColumns:
-                          "repeat(auto-fit, minmax(185px, 1fr))",
-                        gap: 8,
+                        color: COLORS.GRAY_M,
+                        fontSize: 12,
+                        margin: "3px 0 10px",
                       }}
                     >
-                      {modeOptions.map((option) => {
-                        const selected = currentSessionMode === option.value;
-                        return (
-                          <label
-                            key={option.value}
-                            style={{
-                              border: `1px solid ${
-                                selected ? COLORS.BLUE : COLORS.GRAY_L
-                              }`,
-                              borderRadius: 10,
-                              padding: "10px 12px",
-                              background: selected
-                                ? COLORS.ANTD_BG_BLUE_L
-                                : "white",
-                              boxShadow: selected
-                                ? `0 0 0 1px ${COLORS.BLUE} inset`
-                                : undefined,
-                              cursor: "pointer",
-                              minHeight: 88,
-                              display: "block",
-                            }}
-                          >
-                            <Radio
-                              value={option.value}
-                              style={{ width: "100%" }}
-                            >
-                              <div>
-                                <strong
-                                  style={{
-                                    color: option.warning
-                                      ? COLORS.FG_RED
-                                      : COLORS.GRAY_D,
-                                  }}
-                                >
-                                  {option.label}
-                                </strong>
-                                <div
-                                  style={{
-                                    fontSize: 12,
-                                    color: option.warning
-                                      ? COLORS.FG_RED
-                                      : COLORS.GRAY_M,
-                                    lineHeight: 1.35,
-                                  }}
-                                >
-                                  {option.description}
-                                </div>
-                              </div>
-                            </Radio>
-                          </label>
-                        );
-                      })}
+                      Control whether Codex can only inspect files, edit this
+                      workspace, or use full access.
                     </div>
-                  </Radio.Group>
-                </Form.Item>
+                    <Form.Item
+                      name="sessionMode"
+                      tooltip="Control how much access Codex has."
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Radio.Group style={{ width: "100%" }}>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns:
+                              "repeat(auto-fit, minmax(185px, 1fr))",
+                            gap: 8,
+                          }}
+                        >
+                          {modeOptions.map((option) => {
+                            const selected =
+                              currentSessionMode === option.value;
+                            return (
+                              <label
+                                key={option.value}
+                                style={{
+                                  border: `1px solid ${
+                                    selected ? COLORS.BLUE : COLORS.GRAY_L
+                                  }`,
+                                  borderRadius: 10,
+                                  padding: "10px 12px",
+                                  background: selected
+                                    ? COLORS.ANTD_BG_BLUE_L
+                                    : "white",
+                                  boxShadow: selected
+                                    ? `0 0 0 1px ${COLORS.BLUE} inset`
+                                    : undefined,
+                                  cursor: "pointer",
+                                  minHeight: 88,
+                                  display: "block",
+                                }}
+                              >
+                                <Radio
+                                  value={option.value}
+                                  style={{ width: "100%" }}
+                                >
+                                  <div>
+                                    <strong
+                                      style={{
+                                        color: option.warning
+                                          ? COLORS.FG_RED
+                                          : COLORS.GRAY_D,
+                                      }}
+                                    >
+                                      {option.label}
+                                    </strong>
+                                    <div
+                                      style={{
+                                        fontSize: 12,
+                                        color: option.warning
+                                          ? COLORS.FG_RED
+                                          : COLORS.GRAY_M,
+                                        lineHeight: 1.35,
+                                      }}
+                                    >
+                                      {option.description}
+                                    </div>
+                                  </div>
+                                </Radio>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </Radio.Group>
+                    </Form.Item>
+                  </>
+                ) : (
+                  <CodexFullAccessNotice />
+                )}
               </div>
             </Space>
           </Form>

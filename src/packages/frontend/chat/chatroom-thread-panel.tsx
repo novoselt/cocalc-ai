@@ -71,6 +71,7 @@ import {
   saveCodexNewChatDefaults,
 } from "./codex-defaults";
 import { Icon, Tooltip } from "@cocalc/frontend/components";
+import { lite } from "@cocalc/frontend/lite";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { useAnyChatOverlayOpen } from "./drawer-overlay-state";
 import { resolveThreadStatusDot } from "./chatroom-sidebar";
@@ -80,6 +81,7 @@ import {
 } from "./chatroom-thread-panel-shortcuts";
 import { resolveAgentSessionIdForThread } from "./thread-session";
 import { useCodexLiveActivityStatus } from "./use-codex-log";
+import { CodexFullAccessNotice } from "./codex-full-access";
 import {
   automationConfigMissingReason,
   AutomationConfigFields,
@@ -1580,28 +1582,31 @@ export function ChatRoomThreadPanel({
                     }
                   />
                 </div>
-                <div>
-                  <div style={{ marginBottom: 4, color: COLORS.GRAY_D }}>
-                    Execution mode
+                {lite ? (
+                  <div>
+                    <div style={{ marginBottom: 4, color: COLORS.GRAY_D }}>
+                      Execution mode
+                    </div>
+                    <Select
+                      value={
+                        normalizeSessionMode(newThreadSetup.codexConfig) ??
+                        defaultSessionMode
+                      }
+                      style={{ width: "100%" }}
+                      options={getCodexNewChatModeOptions()}
+                      onChange={(value) =>
+                        update({
+                          codexConfig: {
+                            ...newThreadSetup.codexConfig,
+                            sessionMode: value as CodexSessionMode,
+                          },
+                        })
+                      }
+                    />
                   </div>
-                  <Select
-                    value={
-                      normalizeSessionMode(newThreadSetup.codexConfig) ??
-                      defaultSessionMode
-                    }
-                    style={{ width: "100%" }}
-                    options={getCodexNewChatModeOptions()}
-                    onChange={(value) =>
-                      update({
-                        codexConfig: {
-                          ...newThreadSetup.codexConfig,
-                          sessionMode: value as CodexSessionMode,
-                        },
-                      })
-                    }
-                  />
-                </div>
+                ) : null}
               </div>
+              {!lite ? <CodexFullAccessNotice /> : null}
               <div
                 style={{
                   display: "flex",

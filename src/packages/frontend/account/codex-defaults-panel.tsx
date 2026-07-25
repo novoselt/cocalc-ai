@@ -22,6 +22,8 @@ import {
   saveCodexNewChatDefaults,
   type CodexNewChatDefaults,
 } from "@cocalc/frontend/chat/codex-defaults";
+import { CodexFullAccessNotice } from "@cocalc/frontend/chat/codex-full-access";
+import { lite } from "@cocalc/frontend/lite";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -111,25 +113,32 @@ export function CodexDefaultsPanel({ other_settings }: Readonly<Props>) {
             }
           />
         </div>
-        <div>
-          <div style={{ marginBottom: 4 }}>
-            <Text type="secondary">Execution mode</Text>
+        {lite ? (
+          <div>
+            <div style={{ marginBottom: 4 }}>
+              <Text type="secondary">Execution mode</Text>
+            </div>
+            <Select
+              value={draft.sessionMode}
+              style={{ width: "100%" }}
+              options={getCodexNewChatModeOptions()}
+              onChange={(value) =>
+                setDraft(
+                  normalizeCodexNewChatDefaults({
+                    ...draft,
+                    sessionMode: value as CodexSessionMode,
+                  }),
+                )
+              }
+            />
           </div>
-          <Select
-            value={draft.sessionMode}
-            style={{ width: "100%" }}
-            options={getCodexNewChatModeOptions()}
-            onChange={(value) =>
-              setDraft(
-                normalizeCodexNewChatDefaults({
-                  ...draft,
-                  sessionMode: value as CodexSessionMode,
-                }),
-              )
-            }
-          />
-        </div>
+        ) : null}
       </div>
+      {!lite ? (
+        <div style={{ marginBottom: 12 }}>
+          <CodexFullAccessNotice />
+        </div>
+      ) : null}
       <Space>
         <Button
           type="primary"
