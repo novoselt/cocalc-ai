@@ -1423,12 +1423,10 @@ describe("membership package managers", () => {
         query: "Ada",
         limit: 20,
       });
-      expect(screen.getByText("Ada Lovelace")).toBeTruthy();
+      expect(screen.getByText("Ada Lovelace · ada@example.edu")).toBeTruthy();
       expect(
-        screen.getByText(
-          "ada@example.edu · 11111111-1111-4111-8111-111111111111",
-        ),
-      ).toBeTruthy();
+        screen.queryByText(/11111111-1111-4111-8111-111111111111/),
+      ).toBeNull();
     });
   });
 
@@ -1822,7 +1820,9 @@ describe("membership package managers", () => {
         admin: true,
       });
     });
-    expect(await screen.findByText("Ada Lovelace")).toBeTruthy();
+    expect(
+      await screen.findByText("Ada Lovelace · ada@example.edu"),
+    ).toBeTruthy();
   });
 
   it("confirms before removing a site-license manager", async () => {
