@@ -13,6 +13,7 @@ import {
   MARKETING_CONSENT_OTHER_SETTINGS_KEY,
   MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY,
 } from "@cocalc/util/notification-preferences";
+import { COLORS } from "@cocalc/util/theme";
 import type { CSS } from "@cocalc/frontend/app-framework";
 
 const PROMPT_DELAY_MS = 1_200;
@@ -23,6 +24,12 @@ const CONTAINER_STYLE: CSS = {
   top: "56px",
   width: "min(430px, calc(100vw - 32px))",
   zIndex: 1100,
+} as const;
+
+const CARD_STYLE: CSS = {
+  border: `1px solid ${COLORS.GRAY_L}`,
+  borderRadius: 10,
+  boxShadow: `0 6px 16px ${COLORS.GRAY_L}`,
 } as const;
 
 type Eligibility = "unknown" | "saw-zero" | "eligible" | "done";
@@ -121,7 +128,7 @@ export function OnboardingEmailPrompt(): React.JSX.Element | null {
       role="region"
       style={CONTAINER_STYLE}
     >
-      <Card size="small">
+      <Card size="small" style={CARD_STYLE}>
         <Space vertical size="small">
           <Typography.Title level={4} style={{ margin: 0 }}>
             Get productive with CoCalc faster
