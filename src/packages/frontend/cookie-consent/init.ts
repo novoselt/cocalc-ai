@@ -11,7 +11,11 @@ import { joinUrlPath } from "@cocalc/util/url-path";
 
 import { COOKIE_CATEGORIES, type CookieCategory } from "./categories";
 import { COOKIE_CONSENT_REVISION } from "./index";
-import { markBannerActive, markBannerDecidedDisabled } from "./state";
+import {
+  markBannerActive,
+  markBannerDecidedDisabled,
+  markBannerReady,
+} from "./state";
 import { buildTranslation } from "./translations";
 
 function buildCategoriesConfig(): Record<string, CookieConsent.Category> {
@@ -90,7 +94,7 @@ export function initCookieConsent({
       guiOptions: {
         consentModal: {
           layout: "box inline",
-          position: "bottom right",
+          position: "middle center",
           equalWeightButtons: true,
           flipButtons: false,
         },
@@ -108,9 +112,11 @@ export function initCookieConsent({
           en: buildTranslation(descHtml, privacyUrl, termsUrl),
         },
       },
-    }).catch((err: unknown) =>
-      console.error("cookie-consent: run rejected", err),
-    );
+    })
+      .then(markBannerReady)
+      .catch((err: unknown) =>
+        console.error("cookie-consent: run rejected", err),
+      );
   } catch (err) {
     console.error("cookie-consent: run threw", err);
   }
