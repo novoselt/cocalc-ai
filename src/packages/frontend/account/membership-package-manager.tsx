@@ -187,12 +187,10 @@ type SiteLicenseRecentAuditEvent = NonNullable<
 function packageUserSearchLabel(user: PackageUserSearchResult): ReactNode {
   const displayName = displayNameFromAccount(user);
   return (
-    <Space orientation="vertical" size={0}>
-      <Text>{displayName || user.email_address || user.account_id}</Text>
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        {[user.email_address, user.account_id].filter(Boolean).join(" · ")}
-      </Text>
-    </Space>
+    <Text>
+      {[displayName, user.email_address].filter(Boolean).join(" · ") ||
+        user.account_id}
+    </Text>
   );
 }
 
