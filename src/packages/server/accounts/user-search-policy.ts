@@ -11,7 +11,6 @@ import {
 } from "@cocalc/util/misc";
 
 export const DEFAULT_USER_SEARCH_LIMIT = 20;
-export const DEFAULT_USER_SEARCH_MIN_TEXT_LENGTH = 2;
 export const HARD_MAX_USER_SEARCH_RESULTS = 50;
 
 export type UserSearchQueryKind = "account_id" | "email" | "text";
@@ -25,13 +24,10 @@ export interface ParsedUserSearchQuery {
 }
 
 export interface NonAdminUserSearchRequest extends ParsedUserSearchQuery {
-  allowed: boolean;
   limit: number;
-  minimum_text_length: number;
 }
 
 type UserSearchSettings = {
-  user_search_min_text_length?: unknown;
   user_search_max_results?: unknown;
 };
 
@@ -86,12 +82,6 @@ export async function getNonAdminUserSearchRequest({
   settings?: UserSearchSettings;
 }): Promise<NonAdminUserSearchRequest> {
   const configured = settings ?? (await getServerSettings());
-  const minimum_text_length = boundedInteger(
-    configured.user_search_min_text_length,
-    DEFAULT_USER_SEARCH_MIN_TEXT_LENGTH,
-    1,
-    20,
-  );
   const maximumResults = boundedInteger(
     configured.user_search_max_results,
     HARD_MAX_USER_SEARCH_RESULTS,
@@ -105,13 +95,6 @@ export async function getNonAdminUserSearchRequest({
   const parsed = parseUserSearchQuery(query);
   return {
     ...parsed,
-    allowed:
-      parsed.kind !== "text" ||
-      (parsed.string_queries
-        .flat()
-        .every((term) => term.length >= minimum_text_length) &&
-        (parsed.string_queries.length > 0 || parsed.email_queries.length > 0)),
     limit: Math.min(requestedLimit, maximumResults),
-    minimum_text_length,
   };
 }

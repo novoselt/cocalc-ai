@@ -796,7 +796,6 @@ export interface SiteLicenseAccountDetails {
 export interface SiteLicensePoolAccountSearchResult {
   accounts: SiteLicenseAccountDetails[];
   query_kind: "account_id" | "email" | "text";
-  minimum_text_length: number;
 }
 
 export interface SiteLicenseOverview {

@@ -510,9 +510,7 @@ beforeEach(() => {
         email_queries: kind === "email" ? [normalized] : [],
         string_queries: kind === "text" ? [[normalized]] : [],
         account_id: kind === "account_id" ? normalized : undefined,
-        allowed: normalized.length >= 2,
         limit: limit ?? 20,
-        minimum_text_length: 2,
       };
     },
   );
@@ -1229,7 +1227,6 @@ describe("purchases membership packages", () => {
         },
       ],
       query_kind: "text",
-      minimum_text_length: 2,
     });
   });
 

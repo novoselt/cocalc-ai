@@ -1864,16 +1864,14 @@ export async function searchSiteLicensePoolAccounts({
     return {
       accounts: accounts.map(siteLicenseSearchAccountDetails),
       query_kind: parsed.kind,
-      minimum_text_length: 0,
     };
   }
 
   const request = await getNonAdminUserSearchRequest({ query, limit });
-  if (!request.allowed || request.limit <= 0) {
+  if (request.limit <= 0) {
     return {
       accounts: [],
       query_kind: request.kind,
-      minimum_text_length: request.minimum_text_length,
     };
   }
   const allowedDomains = Array.isArray(pool.metadata?.allowed_domains)
@@ -1920,7 +1918,6 @@ export async function searchSiteLicensePoolAccounts({
       request.limit,
     ),
     query_kind: request.kind,
-    minimum_text_length: request.minimum_text_length,
   };
 }
 
