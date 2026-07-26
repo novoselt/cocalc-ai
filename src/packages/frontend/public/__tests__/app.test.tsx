@@ -430,6 +430,8 @@ describe("PublicApp", () => {
               memory: 2000,
             },
             usage_limits: {
+              cpu_5h_seconds: 3_600,
+              egress_5h_bytes: 1_000_000_000,
               shared_compute_priority: 1,
             },
             store_description: "Start exploring CoCalc.",
@@ -450,6 +452,8 @@ describe("PublicApp", () => {
             },
             usage_limits: {
               credit_spend_limit_7d_usd: 1000,
+              cpu_5h_seconds: 18_000,
+              egress_5h_bytes: 12_000_000_000,
               max_sponsored_running_projects: 3,
               project_max_collaborators_and_pending_invites: 50,
               shared_compute_priority: 2,
@@ -476,6 +480,8 @@ describe("PublicApp", () => {
             },
             usage_limits: {
               credit_spend_limit_7d_usd: 1000,
+              cpu_5h_seconds: 252_000,
+              egress_5h_bytes: 125_000_000_000,
               shared_compute_priority: 8,
             },
             store_description: "For demanding projects.",
@@ -515,25 +521,33 @@ describe("PublicApp", () => {
     expect(
       screen.getByRole("heading", { name: "Compare Memberships" }),
     ).not.toBeNull();
-    expect(screen.getByText("Limits Per Project")).not.toBeNull();
+    expect(screen.getByText("Compute and projects")).not.toBeNull();
+    expect(screen.getByText("Network transfer")).not.toBeNull();
+    expect(screen.getByText("Storage and backups")).not.toBeNull();
+    expect(screen.getByText("AI and Codex automation")).not.toBeNull();
+    expect(screen.getByText("Collaboration and courses")).not.toBeNull();
     expect(
-      screen.getByText("Global Limits Across All Projects"),
-    ).not.toBeNull();
-    expect(screen.getByText("Functionality")).not.toBeNull();
+      screen.getAllByText("Dedicated project hosts").length,
+    ).toBeGreaterThan(1);
+    expect(screen.getByText("Managed CPU, rolling 5 hours")).not.toBeNull();
     expect(
-      screen.getByText(
-        "Pay at the end of the month for dedicated project host",
-      ),
+      screen.getByText("Managed network transfer, rolling 5 hours"),
     ).not.toBeNull();
-    expect(screen.getByText("CPU priority")).not.toBeNull();
-    expect(screen.getByText("Low")).not.toBeNull();
-    expect(screen.getByText("Medium")).not.toBeNull();
-    expect(screen.getByText("Highest")).not.toBeNull();
+    expect(screen.getByText("5 CPU-hours")).not.toBeNull();
+    expect(screen.getByText("12 GB")).not.toBeNull();
     expect(screen.getByText("8 GB")).not.toBeNull();
     expect(screen.getAllByText("10 GB").length).toBe(2);
-    expect(screen.getByText("125 GB")).not.toBeNull();
-    expect(screen.queryByText("Collaborators")).toBeNull();
-    expect(screen.queryByText("Included AI usage")).toBeNull();
+    expect(screen.getAllByText("125 GB").length).toBe(2);
+    expect(
+      screen.getByText("Project collaborators and pending invitations"),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("Included AI usage, rolling 5 hours"),
+    ).not.toBeNull();
+    expect(screen.getByText("Rent dedicated project hosts")).not.toBeNull();
+    expect(
+      screen.getByText(/These are the current membership parameters/),
+    ).not.toBeNull();
     expect(screen.queryByText("Launchpad license")).toBeNull();
     expect(screen.getByRole("link", { name: /Member/ })).toHaveAttribute(
       "href",
