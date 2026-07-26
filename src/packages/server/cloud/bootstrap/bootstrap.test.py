@@ -626,6 +626,13 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
                 bootstrap.RSYSLOG_LOGROTATE_CONTENT,
                 encoding="utf-8",
             )
+            rsyslog_config_dir = Path(tmpdir) / "rsyslog.d"
+            rsyslog_config_dir.mkdir()
+            (rsyslog_config_dir / "50-default.conf").write_text(
+                f"{bootstrap.RSYSLOG_HEADLESS_OUTPUT_COMMENT}\n"
+                "# *.emerg :omusrmsg:*\n",
+                encoding="utf-8",
+            )
             calls = []
             original_run_best_effort = bootstrap.run_best_effort
             try:
@@ -635,6 +642,7 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
                 bootstrap.configure_rsyslog_limits(
                     cfg,
                     logrotate_path=logrotate_path,
+                    rsyslog_config_dir=rsyslog_config_dir,
                 )
             finally:
                 bootstrap.run_best_effort = original_run_best_effort
@@ -646,6 +654,7 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
             cfg = make_cfg(tmpdir)
             logrotate_path = Path(tmpdir) / "logrotate.d" / "rsyslog"
             logrotate_path.parent.mkdir()
+            rsyslog_config_dir = Path(tmpdir) / "rsyslog.d"
             calls = []
             original_run_best_effort = bootstrap.run_best_effort
             original_which = bootstrap.shutil.which
@@ -657,6 +666,7 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
                 bootstrap.configure_rsyslog_limits(
                     cfg,
                     logrotate_path=logrotate_path,
+                    rsyslog_config_dir=rsyslog_config_dir,
                 )
             finally:
                 bootstrap.run_best_effort = original_run_best_effort
@@ -679,6 +689,75 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
                                 "logrotate.service",
                             ],
                             "queue classic system log rotation",
+                        ),
+                        {"timeout": 15},
+                    )
+                ],
+            )
+
+    def test_disables_headless_interactive_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            logrotate_path = Path(tmpdir) / "logrotate.d" / "rsyslog"
+            logrotate_path.parent.mkdir()
+            logrotate_path.write_text(
+                bootstrap.RSYSLOG_LOGROTATE_CONTENT,
+                encoding="utf-8",
+            )
+            rsyslog_config_dir = Path(tmpdir) / "rsyslog.d"
+            rsyslog_config_dir.mkdir()
+            default_config_path = rsyslog_config_dir / "50-default.conf"
+            default_config_path.write_text(
+                "auth,authpriv.* /var/log/auth.log\n"
+                "*.emerg                 :omusrmsg:*\n",
+                encoding="utf-8",
+            )
+            google_config_path = rsyslog_config_dir / "90-google.conf"
+            google_config_path.write_text(
+                "daemon,kern.* /dev/console\n",
+                encoding="utf-8",
+            )
+            calls = []
+            original_run_best_effort = bootstrap.run_best_effort
+            original_which = bootstrap.shutil.which
+            try:
+                bootstrap.run_best_effort = lambda *args, **kwargs: calls.append(
+                    (args, kwargs)
+                )
+                bootstrap.shutil.which = lambda _name: "/usr/bin/systemctl"
+                bootstrap.configure_rsyslog_limits(
+                    cfg,
+                    logrotate_path=logrotate_path,
+                    rsyslog_config_dir=rsyslog_config_dir,
+                )
+            finally:
+                bootstrap.run_best_effort = original_run_best_effort
+                bootstrap.shutil.which = original_which
+
+            self.assertEqual(
+                default_config_path.read_text(encoding="utf-8"),
+                "auth,authpriv.* /var/log/auth.log\n"
+                f"{bootstrap.RSYSLOG_HEADLESS_OUTPUT_COMMENT}\n"
+                "# *.emerg                 :omusrmsg:*\n",
+            )
+            self.assertEqual(
+                google_config_path.read_text(encoding="utf-8"),
+                f"{bootstrap.RSYSLOG_HEADLESS_OUTPUT_COMMENT}\n"
+                "# daemon,kern.* /dev/console\n",
+            )
+            self.assertEqual(
+                calls,
+                [
+                    (
+                        (
+                            cfg,
+                            [
+                                "systemctl",
+                                "restart",
+                                "--no-block",
+                                "rsyslog.service",
+                            ],
+                            "queue rsyslog restart after disabling interactive delivery",
                         ),
                         {"timeout": 15},
                     )
