@@ -180,6 +180,11 @@ function ProductsOverviewPage({ config }: { config?: PublicConfig }) {
             />
           </Popover>
         </Flex>
+        <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
+          Every path runs the same core model: a persistent computer where
+          people and agents share a Linux project. Choose who should operate it
+          and where it should run.
+        </Paragraph>
         <Flex gap={12} wrap>
           <LinkButton href={appPath("pricing")}>
             Pricing and licensing

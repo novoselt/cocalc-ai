@@ -89,7 +89,7 @@ describe("PublicHomeApp visual quality contract", () => {
     expect(getCardTitles(codexGrid, "h3")).toEqual([
       "Runs where your work lives",
       "You stay in review",
-      "Powered by OpenAI",
+      "Bring the agent you use",
     ]);
 
     expect(getDirectCards(audienceGrid)).toHaveLength(3);
@@ -212,7 +212,9 @@ describe("PublicHomeApp visual quality contract", () => {
 
     const h1 = container.querySelectorAll("h1");
     expect(h1).toHaveLength(1);
-    expect(h1[0]).toHaveTextContent("Shared Projects for Research Teams");
+    expect(h1[0]).toHaveTextContent(
+      "A persistent shared computer for technical work.",
+    );
     expect(textLength(h1[0])).toBeLessThanOrEqual(HERO_H1_MAX);
 
     // Section identity and order are canaried by the aria-label array in
@@ -242,7 +244,7 @@ describe("PublicHomeApp visual quality contract", () => {
     const heroImage = within(
       screen.getByRole("region", { name: "CoCalc hero" }),
     ).getByRole("img", {
-      name: "CoCalc-AI collaborative project overview",
+      name: "A persistent CoCalc project shared by people and AI agents",
     });
     expect(heroImage.getAttribute("src")).toBe("/public/landing/home-hero.jpg");
     expect(heroImage.getAttribute("style") ?? "").toContain(
