@@ -26,11 +26,13 @@ jest.mock("antd", () => ({
   Divider: () => <hr />,
   Popover: ({ children }: any) => <>{children}</>,
   Select: () => <select aria-label="Switch project" />,
-  Tabs: ({ items = [], onEdit, onChange }: any) => (
+  Tabs: ({ hideAdd, items = [], onEdit, onChange }: any) => (
     <div>
-      <button type="button" onClick={() => onEdit?.("", "add")}>
-        Add project
-      </button>
+      {!hideAdd && (
+        <button type="button" onClick={() => onEdit?.("", "add")}>
+          Add project
+        </button>
+      )}
       {items.map((item: any) => (
         <div
           key={item.key}
@@ -150,15 +152,18 @@ describe("ProjectsNav", () => {
     mockBookmarkedProjects = [];
   });
 
-  it("opens the create-project modal from the editable tabs add button", () => {
+  it("opens the create-project modal from a button outside the tabs control", () => {
     render(<ProjectsNav height={42} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Add project/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
 
     expect(screen.getByTestId("new-project-creator")).toHaveAttribute(
       "data-open",
       "true",
     );
+    expect(
+      screen.queryByRole("button", { name: "Add project" }),
+    ).not.toBeInTheDocument();
     expect(pageActions.set_active_tab).not.toHaveBeenCalledWith("projects");
   });
 

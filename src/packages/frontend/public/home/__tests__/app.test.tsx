@@ -3,6 +3,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import PublicHomeApp from "../app";
+import { COLORS } from "@cocalc/util/theme";
 import {
   combineLeak,
   DARK_FEATURE_CARD_STYLE,
@@ -87,6 +88,9 @@ describe("PublicHomeApp", () => {
       "Next step",
     ]);
     expectHomepageSectionsLabeled(container);
+    expect(
+      screen.getByText("Shared Linux Workspace").closest(".ant-typography"),
+    ).toHaveStyle({ color: COLORS.BLUE_DD });
 
     // Section identity + order are canaried by the aria-label array above.
     // Here we only hold the h2 count and an anti-sprawl length bound, so the
@@ -347,6 +351,15 @@ describe("PublicHomeApp", () => {
     ]) {
       expect(within(products).getByText(option)).not.toBeNull();
     }
+    expect(within(products).getByText("Local")).toHaveStyle({
+      color: COLORS.ANTD_GREEN_D,
+    });
+    expect(within(products).getByText("One VM")).toHaveStyle({
+      color: COLORS.BRWN,
+    });
+    expect(within(products).getByText("Private")).toHaveStyle({
+      color: COLORS.BRWN,
+    });
     for (const removedLabel of [
       "Same CoCalc project model",
       "Code",
@@ -370,6 +383,12 @@ describe("PublicHomeApp", () => {
 
     const difference = screen.getByRole("region", {
       name: "Why CoCalc is different",
+    });
+    expect(within(difference).getByText("Review together")).toHaveStyle({
+      color: COLORS.ANTD_GREEN_D,
+    });
+    expect(within(difference).getByText("Keep moving")).toHaveStyle({
+      color: COLORS.BRWN,
     });
     for (const title of [
       "Project-centered workflow",

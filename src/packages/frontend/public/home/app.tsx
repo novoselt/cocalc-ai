@@ -431,6 +431,15 @@ function alpha(hexColor: string, opacity: number): string {
   return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
 }
 
+function accessibleAccentTextColor(accent: string): string {
+  if (accent === COLORS.RUN) return COLORS.ANTD_GREEN_D;
+  if (accent === COLORS.AI_ASSISTANT_FONT || accent === PUBLIC_COLORS.warning) {
+    return COLORS.BRWN;
+  }
+  if (accent === PUBLIC_COLORS.link) return PUBLIC_COLORS.linkHover;
+  return accent;
+}
+
 function appPath(path: string): string {
   return joinUrlPath(appBasePath, path);
 }
@@ -440,7 +449,7 @@ function Eyebrow({ children }: { children: ReactNode }) {
     <Text
       strong
       style={{
-        color: PUBLIC_COLORS.link,
+        color: PUBLIC_COLORS.linkHover,
         display: "block",
         fontSize: 12,
         letterSpacing: 0,
@@ -912,7 +921,7 @@ function ProductsSection() {
                     alignSelf: "flex-start",
                     background: alpha(option.accent, 0.08),
                     borderColor: alpha(option.accent, 0.2),
-                    color: option.accent,
+                    color: accessibleAccentTextColor(option.accent),
                     marginInlineEnd: 0,
                   }}
                 >
@@ -1020,7 +1029,7 @@ function DifferenceSection() {
                   <Text
                     strong
                     style={{
-                      color: item.accent,
+                      color: accessibleAccentTextColor(item.accent),
                       display: "block",
                       fontSize: 12,
                       textTransform: "uppercase",

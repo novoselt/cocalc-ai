@@ -143,6 +143,11 @@ describe("DiskUsage backup UI", () => {
 
     render(<DiskUsage compact project_id="project-1" />);
 
+    expect(
+      screen.getByRole("progressbar", {
+        name: "Project storage usage: 17%",
+      }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Backup")).not.toBeInTheDocument();
     expect(screen.queryByText(/Live/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Retained/)).not.toBeInTheDocument();

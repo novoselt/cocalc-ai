@@ -110,6 +110,7 @@ export function ProjectThemeAvatar({
   if (image) {
     return (
       <Avatar
+        alt=""
         src={image}
         size={size}
         shape={shape}

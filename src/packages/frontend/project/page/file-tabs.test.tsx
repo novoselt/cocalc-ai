@@ -41,11 +41,13 @@ jest.mock("antd", () => ({
       {popupRender?.()}
     </div>
   ),
-  Tabs: ({ activeKey, items, onChange, onEdit }: any) => (
+  Tabs: ({ activeKey, hideAdd, items, onChange, onEdit }: any) => (
     <div>
-      <button type="button" onClick={() => onEdit?.("", "add")}>
-        Add tab
-      </button>
+      {!hideAdd && (
+        <button type="button" onClick={() => onEdit?.("", "add")}>
+          Add tab
+        </button>
+      )}
       {items.map((item: any) => (
         <div
           key={item.key}
@@ -245,7 +247,7 @@ describe("FileTabs keyboard navigation", () => {
     expect(mockActions.set_active_tab).not.toHaveBeenCalled();
   });
 
-  it("opens the new-file page from the editable tabs add button", () => {
+  it("opens the new-file page from the external create button", () => {
     render(
       <FileTabs
         activeTab="editor-a.ts"
@@ -254,8 +256,11 @@ describe("FileTabs keyboard navigation", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Add tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create file" }));
 
     expect(mockActions.set_active_tab).toHaveBeenCalledWith("new");
+    expect(
+      screen.queryByRole("button", { name: "Add tab" }),
+    ).not.toBeInTheDocument();
   });
 });

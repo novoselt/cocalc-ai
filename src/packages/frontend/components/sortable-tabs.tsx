@@ -155,8 +155,9 @@ export function SortableTabs(props: Props) {
 }
 
 export function SortableTab({ children, id, style }) {
-  const { attributes, listeners, setNodeRef, transform, transition, active } =
-    useSortable({ id });
+  const { listeners, setNodeRef, transform, transition, active } = useSortable({
+    id,
+  });
   return (
     <div
       ref={setNodeRef}
@@ -168,7 +169,6 @@ export function SortableTab({ children, id, style }) {
         transition,
         zIndex: active?.id == id ? 1 : undefined,
       }}
-      {...attributes}
       {...listeners}
     >
       {children}

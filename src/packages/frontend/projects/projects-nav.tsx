@@ -755,6 +755,7 @@ export function ProjectsNav(props: ProjectsNavProps) {
                   size="small"
                   tabBarStyle={{ margin: 0 }}
                   activeKey={activeTopTab}
+                  hideAdd
                   onEdit={onEdit}
                   onChange={(project_id) => {
                     actions.set_active_tab(project_id);
@@ -766,6 +767,15 @@ export function ProjectsNav(props: ProjectsNavProps) {
               </SortableTabs>
             )}
           </div>
+          <Tooltip title="Create a new project">
+            <Button
+              aria-label="Create project"
+              icon={<Icon name="plus" />}
+              onClick={() => onEdit("", "add")}
+              size="small"
+              style={{ flex: "0 0 auto" }}
+            />
+          </Tooltip>
         </div>
       )}
     </div>
