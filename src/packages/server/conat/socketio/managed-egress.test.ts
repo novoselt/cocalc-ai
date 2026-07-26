@@ -61,12 +61,12 @@ describe("hub conat managed egress", () => {
         category: "control-plane-conat",
         allowed: false,
         blocked_by: "5h",
-        managed_egress_5h_bytes: 1_100_000_000,
-        managed_egress_7d_bytes: 500_000_000,
-        egress_5h_bytes: 1_000_000_000,
-        egress_7d_bytes: 10_000_000_000,
+        managed_egress_5h_bytes: 11_000_000_000,
+        managed_egress_7d_bytes: 5_000_000_000,
+        egress_5h_bytes: 10_000_000_000,
+        egress_7d_bytes: 100_000_000_000,
         managed_egress_categories_5h_bytes: {
-          "control-plane-conat": 1_100_000_000,
+          "control-plane-conat": 11_000_000_000,
         },
       }),
     ).toContain("Account control traffic safety limit reached.");
