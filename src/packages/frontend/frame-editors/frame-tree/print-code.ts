@@ -9,16 +9,32 @@ Use React to convert a code file to printable form, entirely on the frontend.
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { React } from "../../app-framework";
-import { fromJS } from "immutable";
 import { print_window, popup } from "./print";
 import { path_split } from "@cocalc/util/misc";
 import { CodeMirrorStatic } from "../../jupyter/codemirror-static";
+import type { Options as CodeMirrorStaticOptions } from "../../jupyter/codemirror-static";
 
 interface Options {
   value: string;
-  options: any /* codemirror options object -- this is cm.options where cm is a CodeMirror editor*/;
+  options: CodeMirrorStaticOptions;
   path: string;
   font_size?: number;
+}
+
+export function renderPrintableCodeMarkup({
+  value,
+  options,
+}: Pick<Options, "value" | "options">): string {
+  // The popup only includes syntax colors for the default print theme.
+  const printableOptions = { ...options, theme: "default" };
+  return renderToStaticMarkup(
+    React.createElement(CodeMirrorStatic, {
+      value: value + "\n",
+      options: printableOptions,
+      style: { background: "white", width: "auto" },
+      no_border: true,
+    }),
+  );
 }
 
 // Raises exception if fails.
@@ -32,19 +48,8 @@ export function print_code(opts: Options) {
   // dark theme, ...) has its CSS loaded via webpack in the main app only, so
   // its markup would print as unstyled black text -- and for printing on
   // paper the light default colors are the right choice anyway.
-  const options = fromJS({ ...opts.options, theme: "default" });
-
-  // We add a trailing whitespace, since some printers grey the last line (e.g., chrome, but not firefox)
-  const value = opts.value + "\n";
-  const props = {
-    value,
-    options,
-    style: { background: "white", width: "auto" },
-    no_border: true,
-  };
-  const s: string = renderToStaticMarkup(
-    React.createElement(CodeMirrorStatic, props),
-  );
+  // We add trailing whitespace since some printers grey the last line.
+  const s = renderPrintableCodeMarkup(opts);
 
   const font_size =
     opts.font_size != null ? `font-size:${opts.font_size}px` : "";
