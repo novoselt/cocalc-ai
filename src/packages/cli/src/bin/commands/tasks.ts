@@ -63,6 +63,25 @@ type TasksAddCliOptions = {
   deleted?: string;
 };
 
+export function resolveTasksProjectIdentifier(
+  explicitProject?: string,
+  envProjectId = process.env.COCALC_PROJECT_ID,
+): string | undefined {
+  return explicitProject?.trim() || envProjectId?.trim() || undefined;
+}
+
+function bindTasksDocument(
+  tasksApi: TasksApi<any, any>,
+  ctx: any,
+  path: string,
+  project?: string,
+) {
+  return tasksApi.bindDocument(ctx, {
+    projectIdentifier: resolveTasksProjectIdentifier(project),
+    path,
+  });
+}
+
 function compactTaskRecord(task: TaskRecord): Record<string, unknown> {
   return {
     task_id: task.task_id,
@@ -233,10 +252,7 @@ Paths may be absolute or project-relative. Relative paths resolve against $HOME.
     .action(
       async (path: string, opts: TasksListCliOptions, command: Command) => {
         await deps.withContext(command, "tasks list", async (ctx) => {
-          const doc = deps.tasksApi.bindDocument(ctx, {
-            projectIdentifier: opts.project,
-            path,
-          });
+          const doc = bindTasksDocument(deps.tasksApi, ctx, path, opts.project);
           const query: TaskQuery = {
             includeDone: opts.includeDone === true,
             includeDeleted: opts.includeDeleted === true,
@@ -261,10 +277,7 @@ Paths may be absolute or project-relative. Relative paths resolve against $HOME.
     .action(
       async (path: string, opts: TasksGetCliOptions, command: Command) => {
         await deps.withContext(command, "tasks get", async (ctx) => {
-          const doc = deps.tasksApi.bindDocument(ctx, {
-            projectIdentifier: opts.project,
-            path,
-          });
+          const doc = bindTasksDocument(deps.tasksApi, ctx, path, opts.project);
           const result = await doc.getTask(requireTaskId(opts.taskId));
           if (!result.task) {
             throw new Error(`Task '${requireTaskId(opts.taskId)}' not found`);
@@ -291,10 +304,7 @@ Paths may be absolute or project-relative. Relative paths resolve against $HOME.
       async (path: string, opts: TasksSetDoneCliOptions, command: Command) => {
         await deps.withContext(command, "tasks set-done", async (ctx) => {
           const taskId = requireTaskId(opts.taskId);
-          const doc = deps.tasksApi.bindDocument(ctx, {
-            projectIdentifier: opts.project,
-            path,
-          });
+          const doc = bindTasksDocument(deps.tasksApi, ctx, path, opts.project);
           const result = await doc.setDone(
             taskId,
             parseOptionalBoolean(opts.done) ?? true,
@@ -330,10 +340,7 @@ Paths may be absolute or project-relative. Relative paths resolve against $HOME.
           if (!text.trim()) {
             throw new Error("--text is required");
           }
-          const doc = deps.tasksApi.bindDocument(ctx, {
-            projectIdentifier: opts.project,
-            path,
-          });
+          const doc = bindTasksDocument(deps.tasksApi, ctx, path, opts.project);
           const result = await doc.appendToDescription(taskId, text);
           return {
             project_id: result.project.project_id,
@@ -372,10 +379,7 @@ Paths may be absolute or project-relative. Relative paths resolve against $HOME.
           const taskId = requireTaskId(opts.taskId);
           const changes = buildUpdateChanges(opts);
           assertHasUpdates(changes);
-          const doc = deps.tasksApi.bindDocument(ctx, {
-            projectIdentifier: opts.project,
-            path,
-          });
+          const doc = bindTasksDocument(deps.tasksApi, ctx, path, opts.project);
           const result = await doc.updateTask(taskId, changes);
           return {
             project_id: result.project.project_id,
@@ -409,10 +413,7 @@ Paths may be absolute or project-relative. Relative paths resolve against $HOME.
     .action(
       async (path: string, opts: TasksAddCliOptions, command: Command) => {
         await deps.withContext(command, "tasks add", async (ctx) => {
-          const doc = deps.tasksApi.bindDocument(ctx, {
-            projectIdentifier: opts.project,
-            path,
-          });
+          const doc = bindTasksDocument(deps.tasksApi, ctx, path, opts.project);
           const result = await doc.createTask(buildCreateInput(opts));
           return {
             project_id: result.project.project_id,
