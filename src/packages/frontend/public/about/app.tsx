@@ -271,7 +271,7 @@ function Eyebrow({ children }: { children: string }) {
   return (
     <div
       style={{
-        color: PUBLIC_COLORS.brand,
+        color: PUBLIC_COLORS.brandActive,
         fontSize: PUBLIC_TYPE.eyebrow,
         fontWeight: PUBLIC_WEIGHT.bold,
         letterSpacing: "0.14em",

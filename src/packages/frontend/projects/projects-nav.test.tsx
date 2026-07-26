@@ -25,7 +25,9 @@ jest.mock("antd", () => ({
   ),
   Divider: () => <hr />,
   Popover: ({ children }: any) => <>{children}</>,
-  Select: () => <select aria-label="Switch project" />,
+  Select: ({ "aria-label": ariaLabel }: any) => (
+    <select aria-label={ariaLabel} />
+  ),
   Tabs: ({ hideAdd, items = [], onEdit, onChange }: any) => (
     <div>
       {!hideAdd && (
@@ -174,6 +176,16 @@ describe("ProjectsNav", () => {
     expect(screen.queryByRole("button", { name: "Star project" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unstar project" })).toBeNull();
     expect(mockSetProjectBookmarked).not.toHaveBeenCalled();
+  });
+
+  it("labels the project switcher in list mode", () => {
+    render(<ProjectsNav height={42} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Tabs" }));
+
+    expect(
+      screen.getByRole("combobox", { name: "Switch project" }),
+    ).toBeInTheDocument();
   });
 
   it("closes project tabs with the pointer control or Delete key", () => {

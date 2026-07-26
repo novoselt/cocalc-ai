@@ -67,6 +67,9 @@
     "lint:frontend": "cd packages && pnpm lint:frontend",
     "lint": "cd packages && ./node_modules/.bin/oxlint --config .oxlintrc.jsonc frontend && ./node_modules/.bin/oxlint --config .oxlintrc.non-frontend.jsonc .",
     "qa:multibay-browser": "node ./scripts/dev/multibay-browser-qa.mjs",
+    "accessibility:audit": "node ./scripts/accessibility/audit.mjs",
+    "accessibility:audit:public": "node ./scripts/accessibility/audit.mjs --public --no-auth",
+    "accessibility:test": "node --test ./scripts/accessibility/*.test.mjs",
     "smoke:multibay-reconnect": "node ./scripts/dev/multibay-reconnect-smoke.mjs",
     "smoke:host-density": "node ./scripts/dev/host-density-smoke.mjs",
     "smoke:codex-launchpad": "node ./scripts/dev/codex-launchpad-smoke.mjs",
@@ -116,5 +119,8 @@
   "homepage": "https://github.com/sagemathinc/cocalc",
   "dependencies": {
     "lru-cache": "^7.18.3"
+  },
+  "devDependencies": {
+    "lighthouse": "^13.4.1"
   }
 }

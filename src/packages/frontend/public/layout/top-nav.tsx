@@ -134,6 +134,7 @@ export default function PublicTopNav({
   active?: PublicTopNavActiveKey;
 }) {
   const config = usePublicConfig();
+  const { token } = theme.useToken();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isAuthenticated = !!config?.is_authenticated;
   const accountDisplayName = config?.account_display_name?.trim();
@@ -171,7 +172,14 @@ export default function PublicTopNav({
   const menuItems: MenuProps["items"] = publicInfoItems.map((item) => ({
     key: item.key,
     label: (
-      <a href={item.href} rel={item.rel} target={item.target}>
+      <a
+        href={item.href}
+        rel={item.rel}
+        style={{
+          color: active === item.key ? token.colorPrimaryActive : undefined,
+        }}
+        target={item.target}
+      >
         {item.label}
       </a>
     ),

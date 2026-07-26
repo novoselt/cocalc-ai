@@ -398,6 +398,11 @@ export function PublicPage({
   return (
     <ConfigProvider
       theme={{
+        components: {
+          Menu: {
+            itemSelectedColor: PUBLIC_COLORS.brandActive,
+          },
+        },
         token: {
           borderRadius: 8,
           colorBgLayout: PUBLIC_COLORS.pageBackground,
@@ -411,6 +416,7 @@ export function PublicPage({
           colorPrimaryActive: PUBLIC_COLORS.brandActive,
           colorPrimaryHover: PUBLIC_COLORS.linkHover,
           colorText: PUBLIC_COLORS.text,
+          colorTextDescription: PUBLIC_COLORS.mutedText,
           colorTextHeading: PUBLIC_COLORS.heading,
           colorTextSecondary: PUBLIC_COLORS.mutedText,
         },

@@ -669,6 +669,7 @@ export function ProjectsNav(props: ProjectsNavProps) {
           />
         ) : null}
         <Select
+          aria-label="Switch project"
           ref={selectRef}
           size="middle"
           open={dropdownOpen}
