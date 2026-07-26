@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 
-import { Alert, Button, Flex, Space, Typography } from "antd";
+import { Alert, Button, Collapse, Flex, Space, Typography } from "antd";
 
 import { MembershipTierComparison } from "@cocalc/frontend/account/membership-tier-details";
 import {
@@ -22,6 +22,7 @@ import { joinUrlPath } from "@cocalc/util/url-path";
 
 import { PublicGrid, PublicSection } from "../layout/shell";
 import { publicPath } from "../routes";
+import { MembershipOverviewTable } from "./membership-overview-table";
 
 const { Paragraph, Title } = Typography;
 
@@ -134,8 +135,23 @@ export default function PricingPage({
                   />
                 ))}
               </MembershipPricingTierGrid>
+              <MembershipOverviewTable tiers={visibleTiers} />
               <PublicSection>
-                <MembershipTierComparison tiers={visibleTiers} />
+                <Collapse
+                  destroyOnHidden
+                  items={[
+                    {
+                      children: (
+                        <MembershipTierComparison
+                          showTitle={false}
+                          tiers={visibleTiers}
+                        />
+                      ),
+                      key: "exact-membership-details",
+                      label: "Compare exact limits and features",
+                    },
+                  ]}
+                />
               </PublicSection>
             </>
           ) : (

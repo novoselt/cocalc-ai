@@ -521,23 +521,37 @@ describe("PublicApp", () => {
     expect(
       screen.getByRole("heading", { name: "Compare Memberships" }),
     ).not.toBeNull();
+    expect(screen.getByText("Limits Per Project")).not.toBeNull();
+    expect(
+      screen.getByText("Global Limits Across All Projects"),
+    ).not.toBeNull();
+    expect(screen.getByText("Functionality")).not.toBeNull();
+    expect(
+      screen.getByText(
+        "Pay at the end of the month for dedicated project host",
+      ),
+    ).not.toBeNull();
+    expect(screen.getByText("CPU priority")).not.toBeNull();
+    expect(screen.getByText("Low")).not.toBeNull();
+    expect(screen.getByText("Medium")).not.toBeNull();
+    expect(screen.getByText("Highest")).not.toBeNull();
+    expect(screen.getByText("8 GB")).not.toBeNull();
+    expect(screen.getAllByText("10 GB").length).toBe(2);
+    expect(screen.getByText("125 GB")).not.toBeNull();
+    expect(screen.queryByText("Managed CPU, rolling 5 hours")).toBeNull();
+
+    fireEvent.click(screen.getByText("Compare exact limits and features"));
+
+    expect(
+      await screen.findByText("Managed CPU, rolling 5 hours"),
+    ).not.toBeNull();
     expect(screen.getByText("Compute and projects")).not.toBeNull();
     expect(screen.getByText("Network transfer")).not.toBeNull();
     expect(screen.getByText("Storage and backups")).not.toBeNull();
     expect(screen.getByText("AI and Codex automation")).not.toBeNull();
     expect(screen.getByText("Collaboration and courses")).not.toBeNull();
-    expect(
-      screen.getAllByText("Dedicated project hosts").length,
-    ).toBeGreaterThan(1);
-    expect(screen.getByText("Managed CPU, rolling 5 hours")).not.toBeNull();
-    expect(
-      screen.getByText("Managed network transfer, rolling 5 hours"),
-    ).not.toBeNull();
     expect(screen.getByText("5 CPU-hours")).not.toBeNull();
     expect(screen.getByText("12 GB")).not.toBeNull();
-    expect(screen.getByText("8 GB")).not.toBeNull();
-    expect(screen.getAllByText("10 GB").length).toBe(2);
-    expect(screen.getAllByText("125 GB").length).toBe(2);
     expect(
       screen.getByText("Project collaborators and pending invitations"),
     ).not.toBeNull();
