@@ -13,8 +13,8 @@ import { getEffectiveMembershipUsageLimits } from "@cocalc/server/membership/eff
 import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
 import LRU from "lru-cache";
 
-export const DEFAULT_CONTROL_PLANE_EGRESS_5H_BYTES = 1_000_000_000;
-export const DEFAULT_CONTROL_PLANE_EGRESS_7D_BYTES = 10_000_000_000;
+export const DEFAULT_CONTROL_PLANE_EGRESS_5H_BYTES = 10_000_000_000;
+export const DEFAULT_CONTROL_PLANE_EGRESS_7D_BYTES = 100_000_000_000;
 const POLICY_CACHE_TTL_MS = 30_000;
 
 const policyCache = new LRU<string, Promise<ManagedProjectEgressPolicy>>({
