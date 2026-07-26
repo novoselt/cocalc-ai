@@ -68,6 +68,11 @@ type RemoteInstance = {
 
 const RECONCILE_MISSING_CONFIRMATIONS = 2;
 const RECONCILE_GRACE_MS = 2 * 60 * 1000;
+const HOST_READY_VERIFICATION_PHASES = new Set([
+  "retrying_spot",
+  "returning_to_spot",
+  "running_standard_fallback",
+]);
 
 type DiskStatus = "present" | "missing" | "unknown";
 
@@ -381,6 +386,49 @@ export async function hasPendingRestoreBlockingWork(
   return !!rows[0]?.exists;
 }
 
+export async function ensureHostReadyVerificationWork({
+  provider,
+  row,
+  provider_status,
+}: {
+  provider: Provider;
+  row: HostRow;
+  provider_status?: string;
+}): Promise<boolean> {
+  if (provider_status !== "running") return false;
+  const state = row.metadata?.spot_recovery_state;
+  if (!HOST_READY_VERIFICATION_PHASES.has(`${state?.phase ?? ""}`)) {
+    return false;
+  }
+  const startedAt = new Date(`${state?.verification_started_at ?? ""}`);
+  const deadlineAt = new Date(`${state?.verification_deadline_at ?? ""}`);
+  if (
+    !Number.isFinite(startedAt.getTime()) ||
+    !Number.isFinite(deadlineAt.getTime())
+  ) {
+    return false;
+  }
+  const workId = await enqueueCloudVmWorkOnce({
+    vm_id: row.id,
+    action: "verify_host_ready",
+    payload: {
+      provider,
+      started_at: startedAt.toISOString(),
+      deadline_at: deadlineAt.toISOString(),
+    },
+  });
+  if (workId) {
+    logger.warn("cloud reconcile: restored host readiness verification", {
+      provider,
+      host_id: row.id,
+      recovery_phase: state.phase,
+      verification_started_at: startedAt.toISOString(),
+      verification_deadline_at: deadlineAt.toISOString(),
+    });
+  }
+  return !!workId;
+}
+
 async function dataDiskStatus(
   provider: Provider,
   row: HostRow,
@@ -676,6 +724,11 @@ async function reconcileProvider(provider: Provider) {
 
     const desiredStatus =
       entry.provider.mapStatus?.(remote.status) ?? row.status;
+    await ensureHostReadyVerificationWork({
+      provider,
+      row,
+      provider_status: desiredStatus,
+    });
     const bootstrapDone =
       row.metadata?.bootstrap?.status === "done" ||
       row.metadata?.bootstrap_lifecycle?.summary_status === "in_sync";
