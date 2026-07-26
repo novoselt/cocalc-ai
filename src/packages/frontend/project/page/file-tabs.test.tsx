@@ -168,6 +168,23 @@ describe("FileTabs keyboard navigation", () => {
     expect(mockActions.focus_file_tab_strip).toHaveBeenCalled();
   });
 
+  it("closes file tabs with the pointer control or Delete key", () => {
+    const props = {
+      activeTab: "editor-a.ts",
+      openFiles: List(["a.ts", "b.ts"]),
+      project_id: "project-1",
+    };
+    const { rerender } = render(<FileTabs {...props} />);
+
+    fireEvent.click(screen.getByTitle("Close a.ts"));
+    expect(mockActions.close_tab).toHaveBeenCalledWith("a.ts");
+
+    mockActions.close_tab.mockReset();
+    rerender(<FileTabs {...props} />);
+    fireEvent.keyDown(screen.getAllByRole("tab")[0], { key: "Delete" });
+    expect(mockActions.close_tab).toHaveBeenCalledWith("a.ts");
+  });
+
   it("reorders only the visible workspace subset when dragging tabs", () => {
     workspaces.selection = { kind: "workspace", workspace_id: "w1" } as any;
     workspaces.filterPaths = (paths: string[]) =>

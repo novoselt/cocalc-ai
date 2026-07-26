@@ -5,6 +5,7 @@
 
 import type { TabsProps } from "antd";
 import { Button, Divider, Popover, Select, Tabs } from "antd";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -267,6 +268,22 @@ function ProjectTab({ project_id }: ProjectTabProps) {
       <div style={PROJECT_NAME_STYLE} onClick={click_title}>
         {renderNoInternet()}
         {renderAvatar()} <span style={PROJECT_TITLE_FADE_STYLE}>{title}</span>
+        <span
+          aria-hidden="true"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            pageActions.close_project_tab(project_id);
+          }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          style={{ cursor: "pointer", flex: "0 0 auto" }}
+          title={`Close ${title}`}
+        >
+          <Icon name="times" />
+        </span>
       </div>
     </div>
   );
@@ -349,6 +366,7 @@ export function ProjectsNav(props: ProjectsNavProps) {
     if (openProjects == null) return [];
     return openProjects.toJS().map((project_id) => {
       return {
+        closable: false,
         label: <ProjectTab project_id={project_id} />,
         key: project_id,
       };
@@ -443,6 +461,21 @@ export function ProjectsNav(props: ProjectsNavProps) {
     if (event?.active?.id != activeTopTab) {
       actions.set_active_tab(event?.active?.id);
     }
+  }
+
+  function onTabKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Delete") return;
+    if (!(event.target instanceof HTMLElement)) return;
+    if (event.target.getAttribute("role") !== "tab") return;
+    const tabs = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'),
+    );
+    const index = tabs.indexOf(event.target);
+    const project_id = project_ids[index];
+    if (!project_id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    actions.close_project_tab(project_id);
   }
 
   function renderTabBar0(tabBarProps, DefaultTabBar) {
@@ -746,24 +779,26 @@ export function ProjectsNav(props: ProjectsNavProps) {
                 itemChromeWidth={30}
                 overflowWidth={36}
               >
-                <Tabs
-                  animated={false}
-                  className="cocalc-project-tabs"
-                  moreIcon={
-                    <Icon style={{ fontSize: "18px" }} name="ellipsis" />
-                  }
-                  size="small"
-                  tabBarStyle={{ margin: 0 }}
-                  activeKey={activeTopTab}
-                  hideAdd
-                  onEdit={onEdit}
-                  onChange={(project_id) => {
-                    actions.set_active_tab(project_id);
-                  }}
-                  type={"editable-card"}
-                  renderTabBar={renderTabBar0}
-                  items={items}
-                />
+                <div onKeyDownCapture={onTabKeyDown}>
+                  <Tabs
+                    animated={false}
+                    className="cocalc-project-tabs"
+                    moreIcon={
+                      <Icon style={{ fontSize: "18px" }} name="ellipsis" />
+                    }
+                    size="small"
+                    tabBarStyle={{ margin: 0 }}
+                    activeKey={activeTopTab}
+                    hideAdd
+                    onEdit={onEdit}
+                    onChange={(project_id) => {
+                      actions.set_active_tab(project_id);
+                    }}
+                    type={"editable-card"}
+                    renderTabBar={renderTabBar0}
+                    items={items}
+                  />
+                </div>
               </SortableTabs>
             )}
           </div>

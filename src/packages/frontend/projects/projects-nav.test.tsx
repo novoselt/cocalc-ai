@@ -175,4 +175,16 @@ describe("ProjectsNav", () => {
     expect(screen.queryByRole("button", { name: "Unstar project" })).toBeNull();
     expect(mockSetProjectBookmarked).not.toHaveBeenCalled();
   });
+
+  it("closes project tabs with the pointer control or Delete key", () => {
+    const { rerender } = render(<ProjectsNav height={42} />);
+
+    fireEvent.click(screen.getByTitle("Close Alpha"));
+    expect(pageActions.close_project_tab).toHaveBeenCalledWith("project-1");
+
+    pageActions.close_project_tab.mockReset();
+    rerender(<ProjectsNav height={42} />);
+    fireEvent.keyDown(screen.getByRole("tab"), { key: "Delete" });
+    expect(pageActions.close_project_tab).toHaveBeenCalledWith("project-1");
+  });
 });

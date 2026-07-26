@@ -9,17 +9,16 @@
    with the main cocalc page.
 */
 
-import { CSSProperties, ReactNode } from "react";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { Tooltip } from "./tip";
 
-interface AProps {
+interface AProps extends Omit<
+  AnchorHTMLAttributes<HTMLAnchorElement>,
+  "children" | "href" | "rel" | "target"
+> {
   href: string;
   children: ReactNode;
-  title?: string;
   placement?: string;
-  style?: CSSProperties;
-  onClick?: (any) => void;
-  onMouseDown?: (any) => void;
 }
 
 export function A({
@@ -28,37 +27,26 @@ export function A({
   style,
   title,
   placement,
-  onClick,
-  onMouseDown,
+  ...anchorProps
 }: AProps) {
-  if (title) {
-    // use nicer antd tooltip.
-    return (
-      <Tooltip title={title} placement={placement as any}>
-        <a
-          href={href}
-          target={"_blank"}
-          rel={"noopener"}
-          style={style}
-          onClick={onClick}
-          onMouseDown={onMouseDown}
-        >
-          {children}
-        </a>
-      </Tooltip>
-    );
-  }
-  return (
+  const anchor = (
     <a
+      {...anchorProps}
       href={href}
-      target={"_blank"}
-      rel={"noopener"}
+      target="_blank"
+      rel="noopener"
       style={style}
-      title={title}
-      onClick={onClick}
-      onMouseDown={onMouseDown}
     >
       {children}
     </a>
   );
+  if (title) {
+    // use nicer antd tooltip.
+    return (
+      <Tooltip title={title} placement={placement as any}>
+        {anchor}
+      </Tooltip>
+    );
+  }
+  return anchor;
 }

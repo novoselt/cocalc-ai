@@ -1058,6 +1058,7 @@ export function FileListing({
               }}
             >
               <Checkbox
+                aria-label="Select all files"
                 checked={allChecked}
                 indeterminate={someChecked}
                 onChange={handleSelectAll}
@@ -1149,7 +1150,23 @@ export function FileListing({
                 />
               </span>
             </th>
-            <th style={{ ...thStyle, width: COL_W.ACTIONS }} />
+            <th style={{ ...thStyle, width: COL_W.ACTIONS }}>
+              <span
+                style={{
+                  border: 0,
+                  clip: "rect(0 0 0 0)",
+                  height: 1,
+                  margin: -1,
+                  overflow: "hidden",
+                  padding: 0,
+                  position: "absolute",
+                  whiteSpace: "nowrap",
+                  width: 1,
+                }}
+              >
+                Actions
+              </span>
+            </th>
           </>
         )}
       </tr>
@@ -1243,6 +1260,7 @@ export function FileListing({
                 }}
               >
                 <Checkbox
+                  aria-label={`Select ${record.isDir ? "folder" : "file"} ${record.name}`}
                   checked={checked_files.has(record.fullPath)}
                   disabled={record.name === ".."}
                   onClick={(e) => e.stopPropagation()}
