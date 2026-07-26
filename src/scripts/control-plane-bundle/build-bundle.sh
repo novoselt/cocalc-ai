@@ -374,6 +374,12 @@ fi
 ncc_build "${NCC_ARGS[@]}"
 rm -f "$GENERATED_CONTROL_PLANE_ENTRY"
 
+# The hub serves this compiled browser script through /analytics.js. It is read
+# relative to the bundled entrypoint at runtime, so ncc cannot infer the asset.
+ANALYTICS_SCRIPT="$ROOT/packages/hub/dist/analytics-script.js"
+[[ -f "$ANALYTICS_SCRIPT" ]] || die "missing built analytics script: $ANALYTICS_SCRIPT"
+cp "$ANALYTICS_SCRIPT" "$OUT/bundle/analytics-script.js"
+
 # Workspace packages must be part of the self-contained bundle. ncc can
 # silently leave them as runtime requires when their dist output was missing
 # as dependency analysis started, which only fails after a hub worker starts.

@@ -29,7 +29,7 @@ export const COOKIE_CATEGORIES = [
     key: "analytics",
     label: "Analytics cookies",
     description:
-      "Third-party analytics that help us understand how the site is used.",
+      "First- and third-party analytics that help us understand how the site is used.",
     readOnly: false,
     defaultEnabled: false,
     autoClearCookies: [{ name: /^_ga/ }, { name: /^_gid/ }, { name: "CC_ANA" }],

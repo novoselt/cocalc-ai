@@ -77,7 +77,7 @@ const delim = PREFIX[PREFIX.length - 1] === "/" ? "" : "/";
 const fetch_url = `${PREFIX}${delim}analytics.js`;
 
 // send back a beacon (token is in an http-only cookie)
-window
+window.__cocalcFirstPartyAnalyticsReady = window
   .fetch(fetch_url, {
     method: "POST",
     mode: "cors",

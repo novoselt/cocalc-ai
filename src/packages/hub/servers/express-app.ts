@@ -9,9 +9,9 @@ import { existsSync } from "fs";
 import ms from "ms";
 import { join } from "path";
 import { parse as parseURL } from "url";
-import * as Module from "module";
 import { path as WEBAPP_PATH } from "@cocalc/assets";
 import { path as CDN_PATH } from "@cocalc/cdn/path";
+import { initAnalytics } from "../analytics";
 import { setup_health_checks as setupHealthChecks } from "../health-checks";
 import { getLogger } from "../logger";
 import initProxy from "../proxy";
@@ -208,14 +208,13 @@ export default async function init(opts: Options): Promise<{
   router.use("/robots.txt", initRobots());
   router.use("/sitemap.xml", initSitemap());
 
-  // setup the analytics.js endpoint (skip for launchpad/minimal modes)
-  if (!isLaunchpadMode() && !process.env.COCALC_DISABLE_ANALYTICS) {
-    const analyticsModule = lazyRequire(join(__dirname, "..", "analytics")) as {
-      initAnalytics?: (router: express.Router, db: any) => Promise<void>;
-    };
-    if (analyticsModule?.initAnalytics) {
-      await analyticsModule.initAnalytics(router, database);
-    }
+  // Hosted bays currently run in Launchpad mode too. Keep self-hosted
+  // Launchpad analytics opt-in while enabling it by default for Rocket.
+  const analyticsEnabled =
+    !isEnabled(process.env.COCALC_DISABLE_ANALYTICS) &&
+    (!isLaunchpadMode() || isEnabled(process.env.COCALC_ENABLE_ANALYTICS));
+  if (analyticsEnabled) {
+    await initAnalytics(router, database);
   }
 
   // The /static content, used by docker, development, etc.
@@ -687,22 +686,4 @@ function initLaunchpadActivationGate(router: express.Router) {
       res.redirect(basePath === "/" ? "/" : `${basePath}/`);
     })().catch((err) => next(err));
   });
-}
-
-const moduleRequire: NodeRequire | undefined =
-  typeof require === "function"
-    ? require
-    : typeof (Module as { createRequire?: (path: string) => NodeRequire })
-          .createRequire === "function"
-      ? (
-          Module as { createRequire: (path: string) => NodeRequire }
-        ).createRequire(join(process.cwd(), "noop.js"))
-      : undefined;
-
-function lazyRequire<T = any>(moduleName: string): T {
-  // Avoid static require so ncc doesn't try to bundle dev-only deps.
-  if (!moduleRequire) {
-    throw new Error("require is not available in this runtime");
-  }
-  return moduleRequire(moduleName) as T;
 }
