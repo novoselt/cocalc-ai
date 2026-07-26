@@ -13,10 +13,16 @@ import { print_window, popup } from "./print";
 import { path_split } from "@cocalc/util/misc";
 import { CodeMirrorStatic } from "../../jupyter/codemirror-static";
 import type { Options as CodeMirrorStaticOptions } from "../../jupyter/codemirror-static";
+import type * as CodeMirror from "codemirror";
+
+type PrintEditorOptions = Pick<
+  CodeMirror.EditorConfiguration,
+  "lineNumbers" | "lineWrapping" | "mode" | "theme"
+>;
 
 interface Options {
   value: string;
-  options: CodeMirrorStaticOptions;
+  options: PrintEditorOptions;
   path: string;
   font_size?: number;
 }
@@ -26,7 +32,12 @@ export function renderPrintableCodeMarkup({
   options,
 }: Pick<Options, "value" | "options">): string {
   // The popup only includes syntax colors for the default print theme.
-  const printableOptions = { ...options, theme: "default" };
+  const printableOptions: CodeMirrorStaticOptions = {
+    lineNumbers: options.lineNumbers,
+    lineWrapping: options.lineWrapping,
+    mode: options.mode ?? undefined,
+    theme: "default",
+  };
   return renderToStaticMarkup(
     React.createElement(CodeMirrorStatic, {
       value: value + "\n",
