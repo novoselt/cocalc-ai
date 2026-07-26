@@ -67,6 +67,12 @@ jest.mock("../membership-purchase-modal", () => (props: unknown) => {
   return null;
 });
 
+jest.mock("../membership-tier-details", () => ({
+  MembershipTierDetails: ({ tier }: any) => (
+    <div>{tier.label ?? tier.id} exact membership details</div>
+  ),
+}));
+
 jest.mock("../balance-toward-subs", () => ({
   UseBalance: () => <div>balance-renewal-control</div>,
 }));
@@ -273,10 +279,10 @@ describe("MembershipPage", () => {
     const manage = screen.getByRole("button", { name: "Manage" });
     expect((manage as HTMLButtonElement).disabled).toBe(true);
     expect(
-      screen.getByTitle(
+      screen.getAllByTitle(
         "Your membership renewal is being processed. Membership changes will be available when it finishes.",
-      ),
-    ).toBeTruthy();
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   it("shows the free effective membership without raw technical details", async () => {
@@ -321,6 +327,25 @@ describe("MembershipPage", () => {
     expect(text).not.toContain("Project host tier");
     expect(text).not.toContain("Shared compute priority");
     expect(text).not.toContain("SourceFree");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Compare or change personal membership",
+      }),
+    );
+    await waitFor(() => {
+      expect(mockMembershipPurchaseModal.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({
+          currentClassOverride: "free",
+          open: true,
+        }),
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "View full Free details" }),
+    );
+    expect(screen.getByText("Free exact membership details")).toBeTruthy();
   });
 
   it("shows personal annual membership pricing from subscription data", async () => {
