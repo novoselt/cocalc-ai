@@ -20,7 +20,7 @@ import { startHostLroWorker } from "@cocalc/server/hosts/start-worker";
 import { startHostRuntimeFleetRolloutWorker } from "@cocalc/server/hosts/runtime-fleet-rollout-worker";
 import { startLegacyMigrationProjectRestoreWorker } from "@cocalc/server/legacy-migration/restore-worker";
 import { startLegacyMigrationArtifactRefreshMaintenance } from "@cocalc/server/legacy-migration/artifact-refresh-maintenance";
-import { isLaunchpadProduct } from "@cocalc/server/launchpad/mode";
+import { getProjectRuntimeMode } from "@cocalc/server/launchpad/project-runtime";
 import { startRootfsReleaseGcMaintenance } from "@cocalc/server/rootfs/gc-maintenance";
 import { startRootfsScanMaintenance } from "@cocalc/server/rootfs/scan-maintenance";
 import { startBackgroundAutoGrowMaintenance } from "@cocalc/server/project-host/auto-grow-maintenance";
@@ -158,21 +158,40 @@ export async function initConatApi() {
   initInterBayServices().catch((err) => {
     logger.warn("failed to initialize inter-bay services", { err: `${err}` });
   });
-  if (!isLaunchpadProduct()) {
+  const projectRuntime = getProjectRuntimeMode();
+  if (projectRuntime === "workspace" && !isPrimaryBayWorker()) {
+    logger.info(
+      "workspace project runtime skipped on non-primary Launchpad worker",
+      {
+        worker_id: process.env.COCALC_BAY_WORKER_ID,
+      },
+    );
+  } else if (projectRuntime !== "external") {
     const { init: initProjectRunner } = lazyRequire("./project/run") as {
-      init: () => Promise<void>;
+      init: (count?: number) => Promise<void>;
     };
-    for (let i = 0; i < projectRunnerCount; i++) {
-      initProjectRunner();
-    }
+    const runnerCount = projectRuntime === "workspace" ? 1 : projectRunnerCount;
     const { init: initProjectRunnerLoadBalancer } = lazyRequire(
       "./project/load-balancer",
     ) as {
       init: () => Promise<void>;
     };
-    initProjectRunnerLoadBalancer();
+    void (async () => {
+      await initProjectRunner(runnerCount);
+      await initProjectRunnerLoadBalancer();
+      logger.info("embedded project runtime services initialized", {
+        runtime: projectRuntime,
+        runner_count: runnerCount,
+      });
+    })().catch((err) => {
+      logger.error("failed to initialize embedded project runtime services", {
+        runtime: projectRuntime,
+        runner_count: runnerCount,
+        err: `${err}`,
+      });
+    });
   } else {
-    logger.info("launchpad product: skipping project runner services");
+    logger.info("external project runtime: skipping embedded runner services");
   }
   createTimeService({ client: conat() });
 }

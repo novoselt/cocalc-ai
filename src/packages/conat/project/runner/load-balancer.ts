@@ -31,6 +31,7 @@ export interface Options {
     state: ProjectState;
   }) => Promise<void>;
   getConfig?: ({ project_id }: { project_id: string }) => Promise<any>;
+  allowMove?: boolean;
 }
 
 export interface API {
@@ -50,6 +51,7 @@ export async function server({
   client,
   setState,
   getConfig,
+  allowMove = true,
 }: Options) {
   if (!client) {
     throw Error("project runner load balancer client MUST be specified");
@@ -115,6 +117,11 @@ export async function server({
   const sub = await client.service<API>(subject, {
     async move({ force, server }: { force?: boolean; server?: string } = {}) {
       const project_id = getProjectId(this);
+      if (!allowMove) {
+        throw new Error(
+          `project move is unsupported by this project runtime (${project_id})`,
+        );
+      }
       logger.debug("move", project_id);
       const cur = projects.get(project_id);
       if (cur == null || !cur.server) {

@@ -873,6 +873,47 @@ Exit gate:
 - Podman runner tests remain unchanged and passing;
 - Launchpad default remains external.
 
+Result (2026-07-26):
+
+- Runtime-mode parsing now has one canonical implementation in
+  `@cocalc/project-runner/runtime-mode`. Launchpad remains `external` by
+  default, explicit workspace mode is Launchpad-only, invalid values fail
+  startup, and nested Podman is rejected.
+- The project runner now selects a named backend. The existing Podman exports
+  are wrapped without changing their behavior and are loaded lazily, so a
+  workspace Launchpad does not load the Podman implementation.
+- The Linux workspace backend starts detached `cocalc-project` process groups,
+  writes append-only per-project stdout/stderr logs, and records runtime
+  identity atomically. Records include PID, process group, `/proc` start ticks,
+  a project-specific `argv0`, executable, command, project ID, home, data
+  directory, ports, runner instance, and last state. The `argv0` contract lets
+  a restarted supervisor identify an orphan safely even when Linux Yama blocks
+  the new parent from reading the orphan's `/proc/<pid>/environ` and
+  `/proc/<pid>/exe`.
+- Start, status, stop, and recovery validate the complete process identity
+  before trusting or signaling a PID. Dead records are removed; ambiguous
+  records are removed without signaling; healthy children are adopted after
+  an inner Launchpad restart; positively identified unhealthy children are
+  terminated before relaunch.
+- Child environments are built from an allowlist, point explicitly at the
+  inner Conat server, force project diagnostics to `owned`, and discard
+  credential-shaped configured variables. Workspace state, logs, and project
+  directories must be absolute and outside the source checkout.
+- Explicit Launchpad workspace mode starts exactly one embedded runner and its
+  load balancer on the primary worker. New projects remain hostless. Recovered
+  project ports and state are republished into runner state before RPC service.
+- Workspace rootfs save and move fail explicitly, home save is a no-op, SSH
+  reports unavailable, and resource/image options are logged as unenforced
+  rather than silently claiming container semantics.
+- The real-process integration test runs two inner projects concurrently,
+  constructs a second backend that adopts both, stops one without disturbing
+  the other, and verifies persistent logs. A stale-PID test proves that an
+  identity mismatch is cleaned without signaling the unrelated process. A
+  separate orphan test exercises recovery identity checks under actual
+  Yama-restricted `/proc` behavior.
+- Focused Podman, runner load-balancer, Launchpad configuration, hostless
+  creation, PGlite lifecycle, and package typechecks pass.
+
 Expected effort: 2 to 4 focused engineering days after Phase 0.
 
 ### Phase 2: capabilities and UI correctness

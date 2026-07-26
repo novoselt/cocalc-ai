@@ -59,6 +59,16 @@ describe("Launchpad project runtime mode", () => {
     expect(isWorkspaceProjectRuntime()).toBe(true);
   });
 
+  it("rejects nested Podman inside Launchpad", async () => {
+    const { getProjectRuntimeMode } = await loadMode({
+      product: "launchpad",
+      runtime: "podman",
+    });
+    expect(() => getProjectRuntimeMode()).toThrow(
+      "podman is not supported inside Launchpad",
+    );
+  });
+
   it("rejects workspace mode outside Launchpad", async () => {
     const { getProjectRuntimeMode } = await loadMode({
       product: "plus",

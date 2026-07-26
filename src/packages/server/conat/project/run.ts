@@ -26,7 +26,7 @@ export async function init(count: number = 1) {
 
 export function close() {
   for (const server of servers) {
-    server.close();
+    void server.close();
   }
   servers.length = 0;
 }

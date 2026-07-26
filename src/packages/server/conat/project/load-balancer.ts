@@ -13,6 +13,7 @@ import getPool from "@cocalc/database/pool";
 import { getProject } from "@cocalc/server/projects/control";
 import { type Configuration } from "@cocalc/conat/project/runner/types";
 import { getProjectSecretToken } from "@cocalc/server/projects/control/secret-token";
+import { isWorkspaceProjectRuntime } from "@cocalc/server/launchpad/project-runtime";
 
 const logger = getLogger("server:conat:project:load-balancer");
 
@@ -26,6 +27,7 @@ export async function init() {
     client: conat(),
     setState: setProjectState,
     getConfig,
+    allowMove: !isWorkspaceProjectRuntime(),
   });
   logger.debug("running");
 }

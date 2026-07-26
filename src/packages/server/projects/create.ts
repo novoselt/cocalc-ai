@@ -63,6 +63,7 @@ import {
   reserveProjectRuntimeSlot,
 } from "@cocalc/server/projects/runtime-slots";
 import { assertProjectCreationAllowed } from "@cocalc/server/launch/kill-switches";
+import { isWorkspaceProjectRuntime } from "@cocalc/server/launchpad/project-runtime";
 
 const log = getLogger("server:projects:create");
 // Project placement must react quickly to dead hosts; do not use UI heartbeat
@@ -608,7 +609,7 @@ async function createProjectImpl(
     });
   }
 
-  if (!host_id && account_id) {
+  if (!host_id && account_id && !isWorkspaceProjectRuntime()) {
     try {
       await ensurePlacement(project_id, account_id);
     } catch (err) {
