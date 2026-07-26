@@ -9,7 +9,6 @@ import {
   Card,
   Col,
   Descriptions,
-  Modal,
   Progress,
   Row,
   Space,
@@ -27,10 +26,8 @@ import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { ManagedEgressHistoryButton } from "@cocalc/frontend/purchases/managed-egress-history";
 import { formatManagedEgressCategory } from "@cocalc/frontend/purchases/managed-egress-recent-events";
 import type {
-  AccountUsageMeter,
   AccountUsageOverview,
   AccountUsageSummaryPressure,
-  MembershipUsageStatus,
 } from "@cocalc/conat/hub/api/purchases";
 import { humanSize } from "@cocalc/util/misc";
 import { useMembershipSettingsData } from "./membership-settings-data";
@@ -45,42 +42,36 @@ import type { SettingsPageDefinition } from "./settings-page";
 import { getUsageLimitsItems } from "./usage-limit-items";
 import { getUsageStatusAlerts } from "./usage-status-alerts";
 import type { UsageStatusAlert } from "./usage-status-alerts";
-import {
-  getUsageStatusItems,
-  type UsageStatusItem,
-} from "./usage-status-items";
+import { getUsageStatusItems } from "./usage-status-items";
 import { openAccountSettings } from "./settings-routing";
 import { dispatchAccountUsageOverviewRefreshed } from "./membership-usage-events";
+import { UsageMeterDashboard } from "./usage-meter-dashboard";
 
-const { Paragraph, Text } = Typography;
+const { Paragraph, Text, Title } = Typography;
 
 const GRID_COL_PROPS = {
   xs: 24,
   lg: 12,
-  xl: 8,
-  xxl: 6,
+  xxl: 8,
 } as const;
 
-const PROJECT_AND_STORAGE_LIMIT_KEYS = new Set([
-  "total_storage_soft_bytes",
-  "total_storage_hard_bytes",
-  "max_projects",
-  "max_snapshots_per_project",
-  "max_backups_per_project",
-]);
-
-const ROOTFS_LIMIT_KEYS = new Set([
-  "rootfs_count",
-  "rootfs_total_storage_gb",
-  "rootfs_max_storage_gb",
-  "rootfs_oci_images",
-]);
-
-const SHARED_COMPUTE_LIMIT_KEYS = new Set(["shared_compute_priority"]);
-const DATA_TRANSFER_LIMIT_KEYS = new Set([
-  "egress_5h_bytes",
-  "egress_7d_bytes",
-]);
+const METER_ID_BY_LIMIT_KEY: Record<string, string> = {
+  blob_account_count: "blob-count",
+  blob_account_total_bytes: "blob-storage",
+  cpu_5h_seconds: "managed-cpu-5h",
+  cpu_7d_seconds: "managed-cpu-7d",
+  credit_spend_limit_5h_usd: "dedicated-host-credit-5h",
+  credit_spend_limit_7d_usd: "dedicated-host-credit-7d",
+  egress_5h_bytes: "managed-egress-5h",
+  egress_7d_bytes: "managed-egress-7d",
+  max_projects: "projects-owned",
+  prepaid_host_usage_limit_5h_usd: "dedicated-host-prepaid-5h",
+  prepaid_host_usage_limit_7d_usd: "dedicated-host-prepaid-7d",
+  rootfs_count: "rootfs-count",
+  rootfs_total_storage_gb: "rootfs-storage",
+  total_storage_hard_bytes: "project-storage-hard",
+  total_storage_soft_bytes: "project-storage-soft",
+};
 
 type DescriptionItem = {
   key: string;
@@ -103,24 +94,11 @@ type InfoItem = DescriptionItem & {
   };
 };
 
-type UsageWindowRow = {
-  key: string;
-  label: string;
-  limit?: number | null;
-  loading?: boolean;
-  unavailable?: boolean;
-  used?: number;
-};
-
 type UsageOverviewState = {
   error: string;
   loading: boolean;
   overview: AccountUsageOverview | null;
 };
-
-function renderSectionLabel(label: string): ReactElement {
-  return <Text type="secondary">{label}</Text>;
-}
 
 export const USAGE_LIMITS_SETTINGS_PAGE = {
   component: UsageLimitsPage,
@@ -184,34 +162,6 @@ function renderManagedEgressBreakdown(
   });
 }
 
-function renderResetTimes({
-  items,
-}: {
-  items: Array<{
-    key: string;
-    label: string;
-    resetAt?: Date | string;
-    resetIn?: string;
-  }>;
-}): ReactElement | null {
-  const visibleItems = items.filter((item) => item.resetAt || item.resetIn);
-  if (visibleItems.length === 0) return null;
-  return renderInfoItems({
-    items: visibleItems.map((item) => ({
-      key: item.key,
-      label: item.label,
-      value: (
-        <>
-          {item.resetAt ? formatResetAt(item.resetAt) : "Unknown"}
-          {item.resetIn ? (
-            <Text type="secondary">{` · in ${item.resetIn}`}</Text>
-          ) : null}
-        </>
-      ),
-    })),
-  });
-}
-
 function useAccountUsageOverview(
   account_id?: string,
   refreshToken = 0,
@@ -261,150 +211,6 @@ function useAccountUsageOverview(
 function formatUsagePercent(percent: number): string {
   if (percent > 0 && percent < 1) return "<1%";
   return `${Math.round(percent)}%`;
-}
-
-function getUsageWindowDisplay(row: UsageWindowRow): {
-  danger: boolean;
-  percent: number;
-  title: string;
-  value: ReactNode;
-} {
-  if (row.loading) {
-    return {
-      danger: false,
-      percent: 0,
-      title: `${row.label} is loading.`,
-      value: <Text type="secondary">Loading…</Text>,
-    };
-  }
-  if (row.unavailable) {
-    return {
-      danger: false,
-      percent: 0,
-      title: `${row.label} is unavailable.`,
-      value: <Text type="secondary">Unavailable</Text>,
-    };
-  }
-  if (typeof row.limit !== "number" || !Number.isFinite(row.limit)) {
-    return {
-      danger: false,
-      percent: 0,
-      title: `${row.label} has no configured limit.`,
-      value: <Text type="secondary">No limit</Text>,
-    };
-  }
-  if (row.limit <= 0) {
-    return {
-      danger: false,
-      percent: 0,
-      title: `${row.label} is not included in the current membership.`,
-      value: <Text type="secondary">Not included</Text>,
-    };
-  }
-  const used =
-    typeof row.used === "number" && Number.isFinite(row.used) ? row.used : 0;
-  const percent = (100 * used) / row.limit;
-  return {
-    danger: percent >= 100,
-    percent: getProgressPercent(used, row.limit),
-    title: `${row.label}: ${formatUsagePercent(percent)} used.`,
-    value: formatUsagePercent(percent),
-  };
-}
-
-function renderUsageWindowRows(rows: UsageWindowRow[]): ReactElement {
-  return (
-    <Space vertical size="small" style={{ width: "100%" }}>
-      {rows.map((row) => {
-        const display = getUsageWindowDisplay(row);
-        return (
-          <div key={row.key} title={display.title}>
-            <Space vertical size={0} style={{ width: "100%" }}>
-              <div>
-                <Text type="secondary">{row.label}: </Text>
-                {display.danger ? (
-                  <Text type="danger">{display.value}</Text>
-                ) : (
-                  <Text>{display.value}</Text>
-                )}
-              </div>
-              <Progress
-                percent={display.percent}
-                showInfo={false}
-                size="small"
-                status={display.danger ? "exception" : "normal"}
-              />
-            </Space>
-          </div>
-        );
-      })}
-    </Space>
-  );
-}
-
-function findUsageMeter(
-  overview: AccountUsageOverview | null,
-  id: string,
-): AccountUsageMeter | undefined {
-  return overview?.meters.find((meter) => meter.id === id);
-}
-
-function AIAndCPUUsageContent({
-  aiLimit5h,
-  aiLimit7d,
-  cpuLimit5h,
-  cpuLimit7d,
-  overview,
-  overviewError,
-  overviewLoading,
-  usageStatus,
-}: {
-  aiLimit5h?: number;
-  aiLimit7d?: number;
-  cpuLimit5h?: number;
-  cpuLimit7d?: number;
-  overview: AccountUsageOverview | null;
-  overviewError: string;
-  overviewLoading: boolean;
-  usageStatus?: MembershipUsageStatus | null;
-}): ReactElement {
-  const ai5h = findUsageMeter(overview, "ai-5h");
-  const ai7d = findUsageMeter(overview, "ai-7d");
-  const cpu5h = findUsageMeter(overview, "managed-cpu-5h");
-  const cpu7d = findUsageMeter(overview, "managed-cpu-7d");
-
-  return renderUsageWindowRows([
-    {
-      key: "ai_5h",
-      label: "AI 5-hour usage limit",
-      limit: ai5h?.limit ?? aiLimit5h,
-      loading: overviewLoading,
-      unavailable: !!overviewError && !ai5h,
-      used: ai5h?.used,
-    },
-    {
-      key: "ai_7d",
-      label: "AI weekly usage limit",
-      limit: ai7d?.limit ?? aiLimit7d,
-      loading: overviewLoading,
-      unavailable: !!overviewError && !ai7d,
-      used: ai7d?.used,
-    },
-    {
-      key: "cpu_5h",
-      label: "CPU 5-hour usage limit",
-      limit: cpu5h?.limit ?? cpuLimit5h,
-      loading: overviewLoading,
-      used: cpu5h?.used ?? usageStatus?.managed_cpu_5h_seconds,
-    },
-    {
-      key: "cpu_7d",
-      label: "CPU weekly usage limit",
-      limit: cpu7d?.limit ?? cpuLimit7d,
-      loading: overviewLoading,
-      used: cpu7d?.used ?? usageStatus?.managed_cpu_7d_seconds,
-    },
-  ]);
 }
 
 function severityProgressStatus(
@@ -461,85 +267,34 @@ function UsagePressureSummary({
   overview: AccountUsageOverview | null;
 }): ReactElement | null {
   if (!overview) return null;
+  const liveCapacity = overview.summary.live_capacity;
+  const columnWidth = liveCapacity ? 6 : 8;
   return (
     <Row gutter={[16, 16]}>
-      <Col xs={24} md={8}>
+      <Col xs={24} md={12} xl={columnWidth}>
         <UsagePressureCard
           label="5-hour pressure"
           pressure={overview.summary.pressure_5h}
         />
       </Col>
-      <Col xs={24} md={8}>
+      <Col xs={24} md={12} xl={columnWidth}>
         <UsagePressureCard
           label="7-day pressure"
           pressure={overview.summary.pressure_7d}
         />
       </Col>
-      <Col xs={24} md={8}>
+      <Col xs={24} md={12} xl={columnWidth}>
         <UsagePressureCard
           label="Storage pressure"
           pressure={overview.summary.storage}
         />
       </Col>
+      {liveCapacity ? (
+        <Col xs={24} md={12} xl={columnWidth}>
+          <UsagePressureCard label="Codex capacity" pressure={liveCapacity} />
+        </Col>
+      ) : null}
     </Row>
-  );
-}
-
-function renderManagedEgressResetTimes(
-  usageStatus?: MembershipUsageStatus | null,
-): ReactElement | null {
-  if (!usageStatus) return null;
-  return renderResetTimes({
-    items: [
-      {
-        key: "5h",
-        label: "Managed egress 5-hour next reset",
-        resetAt: usageStatus.managed_egress_5h_reset_at,
-        resetIn: usageStatus.managed_egress_5h_reset_in,
-      },
-      {
-        key: "7d",
-        label: "Managed egress 7-day next reset",
-        resetAt: usageStatus.managed_egress_7d_reset_at,
-        resetIn: usageStatus.managed_egress_7d_reset_in,
-      },
-    ],
-  });
-}
-
-function isRootFSStatusItem(item: UsageStatusItem): boolean {
-  return item.key.startsWith("rootfs_");
-}
-
-function isSharedComputeStatusItem(item: UsageStatusItem): boolean {
-  return item.key.startsWith("managed_cpu_");
-}
-
-function isDataTransferStatusItem(item: UsageStatusItem): boolean {
-  return item.key.startsWith("managed_egress_");
-}
-
-function isProjectAndStorageStatusItem(item: UsageStatusItem): boolean {
-  return (
-    !isRootFSStatusItem(item) &&
-    !isSharedComputeStatusItem(item) &&
-    !isDataTransferStatusItem(item)
-  );
-}
-
-function filterItemsByKeys<T extends { key: string }>(
-  items: T[],
-  keys: Set<string>,
-): T[] {
-  return items.filter((item) => keys.has(item.key));
-}
-
-function isCategorizedLimitItem(item: InfoItem): boolean {
-  return (
-    PROJECT_AND_STORAGE_LIMIT_KEYS.has(item.key) ||
-    ROOTFS_LIMIT_KEYS.has(item.key) ||
-    SHARED_COMPUTE_LIMIT_KEYS.has(item.key) ||
-    DATA_TRANSFER_LIMIT_KEYS.has(item.key)
   );
 }
 
@@ -590,70 +345,6 @@ function renderInfoItems({
         </Descriptions.Item>
       ))}
     </Descriptions>
-  );
-}
-
-function renderInfoSection({
-  emptyValue,
-  items,
-  label,
-}: {
-  emptyValue: string;
-  items: InfoItem[];
-  label: string;
-}): ReactElement {
-  if (items.length === 0) {
-    return (
-      renderInfoItems({
-        emptyLabel: label,
-        emptyValue,
-        items,
-      }) ?? <></>
-    );
-  }
-  return (
-    <Space vertical size={0} style={{ width: "100%" }}>
-      {renderSectionLabel(label)}
-      {renderInfoItems({ items })}
-    </Space>
-  );
-}
-
-function AdvancedProjectStorageDetailsButton({
-  limitItems,
-  usageItems,
-}: {
-  limitItems: InfoItem[];
-  usageItems: InfoItem[];
-}): ReactElement | null {
-  const [open, setOpen] = useState(false);
-  if (limitItems.length === 0 && usageItems.length === 0) return null;
-  return (
-    <>
-      <Button size="small" onClick={() => setOpen(true)}>
-        Advanced details
-      </Button>
-      <Modal
-        title="Advanced project storage details"
-        open={open}
-        onCancel={() => setOpen(false)}
-        footer={null}
-        width={720}
-      >
-        <Space vertical size="middle" style={{ width: "100%" }}>
-          {renderInfoSection({
-            emptyValue: "Unavailable",
-            items: usageItems,
-            label: "Image usage",
-          })}
-          {renderInfoSection({
-            emptyValue: "Not configured",
-            items: limitItems,
-            label: "Image limits",
-          })}
-        </Space>
-      </Modal>
-    </>
   );
 }
 
@@ -735,10 +426,6 @@ function UsageLimitsSettingsContent(): ReactElement | null {
   const usageLimits = normalizeRecord(
     membership.effective_limits ?? entitlements.usage_limits,
   );
-  const aiLimit5h = extractLimit(aiLimits, ["units_5h", "limit_5h"]);
-  const aiLimit7d = extractLimit(aiLimits, ["units_7d", "limit_7d"]);
-  const cpuLimit5h = extractLimit(usageLimits, ["cpu_5h_seconds"]);
-  const cpuLimit7d = extractLimit(usageLimits, ["cpu_7d_seconds"]);
   const projectDefaultsItems = getProjectDefaultsItems(projectDefaults);
   const usageLimitItems = getUsageLimitsItems(usageLimits);
   const usageStatusItems = getUsageStatusItems(
@@ -747,73 +434,57 @@ function UsageLimitsSettingsContent(): ReactElement | null {
   );
   const usageStatusAlerts = getUsageStatusAlerts(details?.usage_status);
   const gridGutter: [number, number] = [token.margin, token.margin];
-  const projectAndStorageLimitItems = [
-    ...filterItemsByKeys(usageLimitItems, PROJECT_AND_STORAGE_LIMIT_KEYS),
-    ...usageLimitItems.filter((item) => !isCategorizedLimitItem(item)),
-  ];
-  const rootFSLimitItems = filterItemsByKeys(
-    usageLimitItems,
-    ROOTFS_LIMIT_KEYS,
+  const representedMeterIds = new Set(
+    overview?.meters.map(({ id }) => id) ?? [],
   );
-  const sharedComputeLimitItems = filterItemsByKeys(
-    usageLimitItems,
-    SHARED_COMPUTE_LIMIT_KEYS,
+  const aiLimitItems: InfoItem[] = [
+    {
+      id: "ai-5h",
+      key: "ai_units_5h",
+      label: "AI 5-hour window",
+      value: extractLimit(aiLimits, ["units_5h", "limit_5h"]),
+    },
+    {
+      id: "ai-7d",
+      key: "ai_units_7d",
+      label: "AI 7-day window",
+      value: extractLimit(aiLimits, ["units_7d", "limit_7d"]),
+    },
+  ]
+    .filter(({ id, value }) => value != null && !representedMeterIds.has(id))
+    .map(({ key, label, value }) => ({
+      key,
+      label,
+      value: `${value?.toLocaleString()} units`,
+    }));
+  const supplementalLimitItems = usageLimitItems.filter(({ key }) => {
+    const meterId = METER_ID_BY_LIMIT_KEY[key];
+    return meterId == null || !representedMeterIds.has(meterId);
+  });
+  const sharedComputeLimitItems = supplementalLimitItems.filter(
+    ({ key }) => key === "shared_compute_priority",
   );
-  const dataTransferLimitItems = filterItemsByKeys(
-    usageLimitItems,
-    DATA_TRANSFER_LIMIT_KEYS,
+  const additionalLimitItems = supplementalLimitItems.filter(
+    ({ key }) => key !== "shared_compute_priority",
   );
-  const projectAndStorageStatusItems = usageStatusItems.filter(
-    isProjectAndStorageStatusItem,
-  );
-  const rootFSStatusItems = usageStatusItems.filter(isRootFSStatusItem);
   const runtimeEnvironmentItems = [
     ...sharedComputeLimitItems,
     ...projectDefaultsItems,
   ];
-  const dataTransferStatusItems = usageStatusItems.filter(
-    isDataTransferStatusItem,
-  );
 
-  const cards: DashboardCard[] = [
+  const fallbackCards: DashboardCard[] = [
     {
-      key: "ai-cpu-usage",
-      title: "AI and CPU usage",
-      content: (
-        <AIAndCPUUsageContent
-          aiLimit5h={aiLimit5h}
-          aiLimit7d={aiLimit7d}
-          cpuLimit5h={cpuLimit5h}
-          cpuLimit7d={cpuLimit7d}
-          overview={overview}
-          overviewError={overviewError}
-          overviewLoading={overviewLoading}
-          usageStatus={details?.usage_status}
-        />
-      ),
+      key: "fallback-usage",
+      title: "Last available usage",
+      content: renderInfoItems({
+        emptyLabel: "Usage",
+        emptyValue: "Unavailable",
+        items: usageStatusItems,
+      }),
     },
-    {
-      key: "projects-storage",
-      title: "Projects and storage",
-      content: (
-        <Space vertical size="small" style={{ width: "100%" }}>
-          {renderInfoSection({
-            emptyValue: "Unavailable",
-            items: projectAndStorageStatusItems,
-            label: "Usage",
-          })}
-          {renderInfoSection({
-            emptyValue: "Not configured",
-            items: projectAndStorageLimitItems,
-            label: "Limits",
-          })}
-          <AdvancedProjectStorageDetailsButton
-            limitItems={rootFSLimitItems}
-            usageItems={rootFSStatusItems}
-          />
-        </Space>
-      ),
-    },
+  ];
+
+  const configurationCards: DashboardCard[] = [
     {
       key: "runtime-environment",
       title: "Runtime environment",
@@ -823,21 +494,22 @@ function UsageLimitsSettingsContent(): ReactElement | null {
         items: runtimeEnvironmentItems,
       }),
     },
+    ...([...additionalLimitItems, ...aiLimitItems].length > 0
+      ? [
+          {
+            key: "additional-limits",
+            title: "Additional limits",
+            content: renderInfoItems({
+              items: [...additionalLimitItems, ...aiLimitItems],
+            }),
+          },
+        ]
+      : []),
     {
-      key: "data-transfer",
-      title: "Network transfer",
+      key: "network-details",
+      title: "Network details",
       content: (
         <Space vertical size="small" style={{ width: "100%" }}>
-          {renderInfoSection({
-            emptyValue: "Unavailable",
-            items: dataTransferStatusItems,
-            label: "Usage",
-          })}
-          {renderInfoSection({
-            emptyValue: "Not configured",
-            items: dataTransferLimitItems,
-            label: "Limits",
-          })}
           {renderManagedEgressBreakdown(
             "Managed egress by category (5 hours)",
             details?.usage_status?.managed_egress_categories_5h_bytes,
@@ -846,8 +518,10 @@ function UsageLimitsSettingsContent(): ReactElement | null {
             "Managed egress by category (7 days)",
             details?.usage_status?.managed_egress_categories_7d_bytes,
           )}
-          {renderManagedEgressResetTimes(details?.usage_status)}
-          <ManagedEgressHistoryButton buttonText="History" size="small" />
+          <ManagedEgressHistoryButton
+            buttonText="View network history"
+            size="small"
+          />
         </Space>
       ),
     },
@@ -860,7 +534,9 @@ function UsageLimitsSettingsContent(): ReactElement | null {
           Last checked{" "}
           {overview?.collected_at
             ? formatResetAt(overview.collected_at)
-            : "now"}
+            : overviewLoading
+              ? "now"
+              : "unavailable"}
         </Text>
         <Button onClick={refreshUsage} loading={loading || overviewLoading}>
           Refresh usage
@@ -870,11 +546,10 @@ function UsageLimitsSettingsContent(): ReactElement | null {
         <Alert
           type="warning"
           showIcon
-          message="Usage pressure summary is unavailable"
+          message="Current usage overview is unavailable"
           description={overviewError}
         />
       ) : null}
-      <UsagePressureSummary overview={overview} />
       {overview?.measurement_warnings?.length ? (
         <Alert
           type="warning"
@@ -890,8 +565,38 @@ function UsageLimitsSettingsContent(): ReactElement | null {
         />
       ) : null}
       {renderAlertsGrid({ alerts: usageStatusAlerts, gutter: gridGutter })}
+      {overview ? (
+        <>
+          <Title level={4} style={{ marginBottom: 0 }}>
+            At a glance
+          </Title>
+          <UsagePressureSummary overview={overview} />
+          <Title level={4} style={{ marginBottom: 0 }}>
+            Usage by resource
+          </Title>
+          <UsageMeterDashboard meters={overview.meters} />
+        </>
+      ) : overviewLoading ? (
+        <Card size="small">
+          <Loading text="Loading current usage..." />
+        </Card>
+      ) : (
+        <>
+          <Title level={4} style={{ marginBottom: 0 }}>
+            Available usage information
+          </Title>
+          {renderDashboardGrid({
+            cards: fallbackCards,
+            gutter: gridGutter,
+            headerBackgroundColor: token.colorWarningBg,
+          })}
+        </>
+      )}
+      <Title level={4} style={{ marginBottom: 0 }}>
+        Membership configuration
+      </Title>
       {renderDashboardGrid({
-        cards,
+        cards: configurationCards,
         gutter: gridGutter,
         headerBackgroundColor: token.colorInfoBg,
       })}
