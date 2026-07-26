@@ -3,7 +3,15 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { humanSize } from "@cocalc/util/misc";
+import { currency, humanSize } from "@cocalc/util/misc";
+
+function formatCpuSeconds(seconds: number): string {
+  const hours = seconds / 3600;
+  const value = hours.toLocaleString(undefined, {
+    maximumFractionDigits: hours < 1 ? 3 : 2,
+  });
+  return `${value} CPU-${hours === 1 ? "hour" : "hours"}`;
+}
 
 export function formatSharedComputePriority(priority: number): string {
   if (priority <= 0) return "Low";
@@ -54,6 +62,17 @@ export function getUsageLimitsItems(
       key: "max_projects",
       label: "Max projects",
       value: `${maxProjects}`,
+    });
+  }
+  const maxSponsoredProjects = usageLimits.max_sponsored_running_projects;
+  if (
+    typeof maxSponsoredProjects === "number" &&
+    Number.isFinite(maxSponsoredProjects)
+  ) {
+    items.push({
+      key: "max_sponsored_running_projects",
+      label: "Max sponsored running projects",
+      value: `${maxSponsoredProjects}`,
     });
   }
   const maxSnapshots = usageLimits.max_snapshots_per_project;
@@ -125,6 +144,101 @@ export function getUsageLimitsItems(
       label: "Data transfer 7-day window",
       value: humanSize(egress7d),
     });
+  }
+  const cpu5h = usageLimits.cpu_5h_seconds;
+  if (typeof cpu5h === "number" && Number.isFinite(cpu5h)) {
+    items.push({
+      key: "cpu_5h_seconds",
+      label: "CPU 5-hour window",
+      value: formatCpuSeconds(cpu5h),
+    });
+  }
+  const cpu7d = usageLimits.cpu_7d_seconds;
+  if (typeof cpu7d === "number" && Number.isFinite(cpu7d)) {
+    items.push({
+      key: "cpu_7d_seconds",
+      label: "CPU 7-day window",
+      value: formatCpuSeconds(cpu7d),
+    });
+  }
+  const blobAccountStorage = usageLimits.blob_account_total_bytes;
+  if (
+    typeof blobAccountStorage === "number" &&
+    Number.isFinite(blobAccountStorage)
+  ) {
+    items.push({
+      key: "blob_account_total_bytes",
+      label: "Account blob storage cap",
+      value: humanSize(blobAccountStorage),
+    });
+  }
+  const blobAccountCount = usageLimits.blob_account_count;
+  if (
+    typeof blobAccountCount === "number" &&
+    Number.isFinite(blobAccountCount)
+  ) {
+    items.push({
+      key: "blob_account_count",
+      label: "Account blob count",
+      value: `${blobAccountCount}`,
+    });
+  }
+  const blobProjectStorage = usageLimits.blob_project_total_bytes;
+  if (
+    typeof blobProjectStorage === "number" &&
+    Number.isFinite(blobProjectStorage)
+  ) {
+    items.push({
+      key: "blob_project_total_bytes",
+      label: "Per-project blob storage cap",
+      value: humanSize(blobProjectStorage),
+    });
+  }
+  const blobProjectCount = usageLimits.blob_project_count;
+  if (
+    typeof blobProjectCount === "number" &&
+    Number.isFinite(blobProjectCount)
+  ) {
+    items.push({
+      key: "blob_project_count",
+      label: "Per-project blob count",
+      value: `${blobProjectCount}`,
+    });
+  }
+  const publicDirectoryShares = usageLimits.public_directory_shares;
+  if (
+    typeof publicDirectoryShares === "number" &&
+    Number.isFinite(publicDirectoryShares)
+  ) {
+    items.push({
+      key: "public_directory_shares",
+      label: "Published directory shares",
+      value: `${publicDirectoryShares}`,
+    });
+  }
+  const spendingLimits = [
+    {
+      key: "prepaid_host_usage_limit_5h_usd",
+      label: "Prepaid dedicated host spend, 5 hours",
+    },
+    {
+      key: "prepaid_host_usage_limit_7d_usd",
+      label: "Prepaid dedicated host spend, 7 days",
+    },
+    {
+      key: "credit_spend_limit_5h_usd",
+      label: "Postpaid dedicated host spend, 5 hours",
+    },
+    {
+      key: "credit_spend_limit_7d_usd",
+      label: "Postpaid dedicated host spend, 7 days",
+    },
+  ];
+  for (const { key, label } of spendingLimits) {
+    const value = usageLimits[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      items.push({ key, label, value: currency(value) });
+    }
   }
   return items;
 }
