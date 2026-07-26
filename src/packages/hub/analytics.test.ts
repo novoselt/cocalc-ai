@@ -42,6 +42,19 @@ describe("normalizeAnalyticsPostPayload", () => {
     });
   });
 
+  it("retains mobile app referrer identity without its path", () => {
+    expect(
+      normalizeAnalyticsPostPayload({
+        landing: "https://cocalc.ai/",
+        referrer:
+          "android-app://com.google.android.googlequicksearchbox/private/search",
+      }),
+    ).toEqual({
+      landing: "https://cocalc.ai/",
+      referrer: "android-app://com.google.android.googlequicksearchbox/",
+    });
+  });
+
   it("coarsens unknown routes and preserves only curated public slugs", () => {
     expect(
       normalizeAnalyticsPostPayload({

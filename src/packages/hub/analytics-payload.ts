@@ -9,9 +9,7 @@ const MAX_UTM_VALUE_LENGTH = 200;
 function parseUrl(value: unknown): URL | undefined {
   if (typeof value !== "string" || value.length > 4_000) return;
   try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return;
-    return url;
+    return new URL(value);
   } catch {
     return;
   }
@@ -67,7 +65,9 @@ function normalizePublicPath(pathname: string): string {
 
 function normalizeLanding(value: unknown): string | undefined {
   const url = parseUrl(value);
-  if (url == null) return;
+  if (url == null || (url.protocol !== "http:" && url.protocol !== "https:")) {
+    return;
+  }
   return `${url.origin}${normalizePublicPath(url.pathname)}`;
 }
 
@@ -76,7 +76,16 @@ function normalizeReferrer(value: unknown): string | undefined {
   if (url == null) return;
   // Referrer paths and queries can contain search terms, document names,
   // tokens, or other PII. The origin is enough for acquisition attribution.
-  return `${url.origin}/`;
+  if (url.protocol === "http:" || url.protocol === "https:") {
+    return `${url.origin}/`;
+  }
+  if (
+    (url.protocol === "android-app:" || url.protocol === "ios-app:") &&
+    url.host
+  ) {
+    return `${url.protocol}//${url.host}/`;
+  }
+  return;
 }
 
 function normalizeUtm(value: unknown): Record<string, string> | undefined {
