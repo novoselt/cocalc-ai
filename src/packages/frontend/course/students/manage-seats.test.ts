@@ -8,6 +8,7 @@ import {
   getManageSeatsAssignmentMatches,
   getNextManageSeatsPagination,
   MANAGE_SEATS_MODAL_BODY_STYLE,
+  runSeatChangesWithConcurrency,
   type ManageSeatsStudent,
 } from "./manage-seats";
 
@@ -52,7 +53,7 @@ function packageWithAssignment({
   };
 }
 
-describe("ManageSeats modal layout", () => {
+describe("ManageSeats", () => {
   it("contains long seat tables in a viewport-bounded scrolling body", () => {
     expect(MANAGE_SEATS_MODAL_BODY_STYLE).toEqual({
       maxHeight: "calc(100vh - 180px)",
@@ -94,5 +95,28 @@ describe("ManageSeats modal layout", () => {
         previousPageSize: 20,
       }),
     ).toEqual({ current: 1, pageSize: 100 });
+  });
+
+  it("propagates fresh-auth failures so the verification modal can retry", async () => {
+    const ordinaryFailure = new Error("student is missing an account");
+    const freshAuthFailure = Object.assign(
+      new Error("fresh auth is required"),
+      {
+        code: "fresh_auth_required",
+      },
+    );
+
+    await expect(
+      runSeatChangesWithConcurrency(
+        [ordinaryFailure, freshAuthFailure],
+        2,
+        (e) => Promise.reject(e),
+      ),
+    ).rejects.toBe(freshAuthFailure);
+    await expect(
+      runSeatChangesWithConcurrency([ordinaryFailure], 1, (e) =>
+        Promise.reject(e),
+      ),
+    ).resolves.toEqual([ordinaryFailure]);
   });
 });

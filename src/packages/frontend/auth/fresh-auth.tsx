@@ -415,7 +415,10 @@ export function useFreshAuthAction({ origin }: { origin?: string } = {}) {
   // action that can hit a fresh-auth-protected HTTP route or Conat RPC should
   // run the mutation through runFreshAuthAction and render FreshAuthModal with
   // freshAuthModalProps. Backend-only fresh-auth changes without this wiring
-  // leave users with an opaque "fresh auth is required" error.
+  // leave users with an opaque "fresh auth is required" error. Batch actions
+  // that collect per-item failures must rethrow fresh-auth errors instead of
+  // converting them into ordinary results, or this wrapper cannot open the
+  // verification modal and retry the action.
   const [open, setOpen] = useState(false);
   const pendingActionRef = useRef<PendingFreshAuthAction | null>(null);
 

@@ -24,6 +24,7 @@ import type { PublicDirectoryShareSummary } from "@cocalc/conat/hub/api/public-d
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
 import {
   FreshAuthModal,
+  isFreshAuthRequiredError,
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
 import { Loading, TimeAgo, Tooltip } from "@cocalc/frontend/components";
@@ -283,6 +284,7 @@ function PublicSharesPage() {
     const failures: string[] = [];
     try {
       const completed = await runFreshAuthAction(async () => {
+        failures.length = 0;
         for (const share of shares) {
           try {
             await webapp_client.conat_client.hub.publicDirectoryShares.update({
@@ -290,6 +292,9 @@ function PublicSharesPage() {
               ...updateForShare(share),
             });
           } catch (err) {
+            if (isFreshAuthRequiredError(err)) {
+              throw err;
+            }
             failures.push(
               `${share.slug}: ${normalizeUserFacingError(err).message}`,
             );
