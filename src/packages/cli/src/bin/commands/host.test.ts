@@ -1867,6 +1867,121 @@ test("host projects lists assigned projects", async () => {
   assert.equal(capture.data.next_cursor, "cursor-1");
 });
 
+test("host projects-count totals summaries from running hosts", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const program = new Command();
+  registerHostCommand(
+    program,
+    makeDeps(capture, {
+      listHosts: async () => [
+        {
+          id: "host-1",
+          name: "alpha",
+          status: "running",
+          funding_mode: "site",
+        },
+        {
+          id: "host-2",
+          name: "beta",
+          status: "active",
+          funding_mode: "account",
+        },
+        {
+          id: "host-3",
+          name: "offline",
+          status: "off",
+          funding_mode: "site",
+        },
+      ],
+    }),
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "projects-count",
+    "--parallel",
+    "2",
+  ]);
+
+  assert.deepEqual(capture.hostProjectsRequests, [
+    {
+      id: "host-1",
+      limit: 1,
+      cursor: undefined,
+      risk_only: undefined,
+      state_filter: "running",
+      project_state: undefined,
+    },
+    {
+      id: "host-2",
+      limit: 1,
+      cursor: undefined,
+      risk_only: undefined,
+      state_filter: "running",
+      project_state: undefined,
+    },
+  ]);
+  assert.equal(capture.data.running_projects, 2);
+  assert.equal(capture.data.running_hosts, 2);
+  assert.deepEqual(
+    capture.data.hosts.map((host) => host.host_id),
+    ["host-1", "host-2"],
+  );
+});
+
+test("host projects-count renders a human-readable total", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const program = new Command();
+  registerHostCommand(
+    program,
+    makeDeps(
+      capture,
+      {
+        listHosts: async () => [
+          {
+            id: "host-1",
+            name: "alpha",
+            status: "running",
+            funding_mode: "site",
+          },
+        ],
+      },
+      { json: false, output: "table" },
+    ),
+  );
+
+  const output = await withConsoleCapture(async () => {
+    await program.parseAsync([
+      "node",
+      "test",
+      "host",
+      "projects-count",
+      "--by-host",
+    ]);
+  });
+
+  assert.match(output, /Running projects: 1/);
+  assert.match(output, /Running hosts: 1/);
+  assert.match(output, /Hosts/);
+  assert.match(output, /alpha/);
+});
+
 test("host projects renders human-readable summary and rows", async () => {
   const capture: Capture = {
     upgrades: [],
