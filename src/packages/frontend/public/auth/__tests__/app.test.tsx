@@ -431,6 +431,7 @@ describe("PublicAuthApp", () => {
     expect(
       screen.getByText(/By creating an account, you agree/),
     ).not.toBeNull();
+    expect(screen.queryByText(/Send me occasional platform tips/)).toBeNull();
   });
 
   it("shows policy notice before Google sign-up without disabling SSO", async () => {
@@ -517,6 +518,7 @@ describe("PublicAuthApp", () => {
           endpoint: "auth/sign-up",
           body: expect.objectContaining({
             displayName: "New User",
+            marketing_consent: false,
             terms: true,
           }),
         }),

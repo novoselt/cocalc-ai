@@ -80,6 +80,51 @@ describe("AccountActions.set_other_settings", () => {
     );
   });
 
+  it("sets related other_settings values in one table update", () => {
+    let currentOtherSettings: Record<string, any> = {
+      vertical_fixed_bar: "both",
+    };
+    const set = jest.fn((obj) => {
+      currentOtherSettings = obj.other_settings;
+    });
+    const redux = {
+      getStore: () => ({
+        get: (name: string) =>
+          name === "other_settings"
+            ? {
+                get: (key: string) => currentOtherSettings[key],
+                toJS: () => currentOtherSettings,
+              }
+            : undefined,
+      }),
+      getTable: () => ({ set }),
+    };
+    const actions = Object.create(AccountActions.prototype);
+    actions.redux = redux;
+
+    actions.set_other_settings_many({
+      newsletter: true,
+      marketing_email_consent_record: {
+        version: 1,
+        enabled: true,
+      },
+    });
+
+    expect(set).toHaveBeenCalledWith(
+      {
+        other_settings: {
+          vertical_fixed_bar: "both",
+          newsletter: true,
+          marketing_email_consent_record: {
+            version: 1,
+            enabled: true,
+          },
+        },
+      },
+      "shallow",
+    );
+  });
+
   it("repairs account projection with an explicit reason", async () => {
     await AccountActions.prototype.repairAccountProjection.call(
       {},

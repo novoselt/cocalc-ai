@@ -7,7 +7,7 @@ import {
   restoreConsentCookieFromSnapshot,
   type ConsentSnapshot,
 } from "./index";
-import { markBannerActive } from "./state";
+import { markBannerActive, markBannerReady } from "./state";
 
 const show = jest.fn();
 let validConsent = false;
@@ -108,8 +108,16 @@ describe("cookie consent snapshots", () => {
 });
 
 describe("forced cookie consent", () => {
-  it("blocks the page behind the consent banner until consent changes", () => {
+  it("waits for the banner before blocking the page", () => {
     enableForceConsent();
+
+    expect(document.getElementById(FORCE_CONSENT_OVERLAY_ID)).toBeNull();
+    expect(document.documentElement.classList).not.toContain(
+      "disable--interaction",
+    );
+    expect(show).not.toHaveBeenCalled();
+
+    markBannerReady();
 
     const overlay = document.getElementById(FORCE_CONSENT_OVERLAY_ID);
     expect(overlay).not.toBeNull();
@@ -131,6 +139,7 @@ describe("forced cookie consent", () => {
   it("keeps the page blocked while another force-consent caller is active", () => {
     const firstCleanup = enableForceConsent();
     const secondCleanup = enableForceConsent();
+    markBannerReady();
 
     firstCleanup();
     expect(document.getElementById(FORCE_CONSENT_OVERLAY_ID)).not.toBeNull();

@@ -298,7 +298,7 @@ function FooterBrand({ config }: { config?: PublicConfig }) {
           maxWidth: "34ch",
         }}
       >
-        AI-native workspace for research, teaching, and technical teams.
+        Persistent shared computers for research, teaching, and technical teams.
       </Paragraph>
       {defaultBrand ? (
         <Text style={{ color: PUBLIC_COLORS.footerText }}>

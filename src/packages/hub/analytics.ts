@@ -5,7 +5,6 @@
 
 import { join } from "path";
 import * as fs from "fs";
-import ms from "ms";
 import { isEqual } from "lodash";
 import { Router, json } from "express";
 // express-js cors plugin:
@@ -16,31 +15,22 @@ import {
   ParseResultType,
   ParseResult,
 } from "parse-domain";
-const UglifyJS = require("uglify-js");
 
-import { pii_retention_to_future } from "@cocalc/database/postgres/account/pii";
 import { get_server_settings } from "@cocalc/database/postgres/settings/server-settings";
 import type { PostgreSQL } from "@cocalc/database/postgres/types";
-import {
-  analytics_cookie_name,
-  is_valid_uuid_string,
-  uuid,
-} from "@cocalc/util/misc";
+import getAccountId from "@cocalc/server/auth/get-account";
+import { analytics_cookie_name } from "@cocalc/util/misc";
 
+import { setAnalyticsCookie } from "./analytics-cookie";
+import { normalizeAnalyticsPostPayload } from "./analytics-payload";
+import { recordAnalyticsData } from "./analytics-record";
 import { getLogger } from "./logger";
 
-// Minifying analytics-script.js.  Note
-// that this file analytics.ts gets compiled to
-// dist/analytics.js and also analytics-script.ts
-// gets compiled to dist/analytics-script.js.
-const result = UglifyJS.minify(
-  fs.readFileSync(join(__dirname, "analytics-script.js")).toString(),
-);
-if (result.error) {
-  throw Error(`Error minifying analytics-script.js -- ${result.error}`);
-}
+// analytics-script.ts is compiled beside this file and copied into release
+// bundles. It is small enough that runtime minification is not worthwhile.
 export const analytics_js =
-  "if (window.exports === undefined) { var exports={}; } \n" + result.code;
+  "if (window.exports === undefined) { var exports={}; } \n" +
+  fs.readFileSync(join(__dirname, "analytics-script.js"), "utf8");
 
 function create_log(name) {
   return getLogger(`analytics.${name}`).debug;
@@ -52,72 +42,6 @@ const _PNG_DATA =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
 const PNG_1x1 = Buffer.from(_PNG_DATA, "base64");
 */
-
-function sanitize(obj: object, recursive = 0): any {
-  if (recursive >= 2) return { error: "recursion limit" };
-  const ret: any = {};
-  let cnt = 0;
-  for (const key of Object.keys(obj)) {
-    cnt += 1;
-    if (cnt > 20) break;
-    const key_san = key.slice(0, 50);
-    let val_san = obj[key];
-    if (val_san == null) continue;
-    if (typeof val_san === "object") {
-      val_san = sanitize(val_san, recursive + 1);
-    } else if (typeof val_san === "string") {
-      val_san = val_san.slice(0, 2000);
-    } else {
-      // do nothing
-    }
-    ret[key_san] = val_san;
-  }
-  return ret;
-}
-
-// record analytics data
-// case 1: store "token" with associated "data", referrer, utm, etc.
-// case 2: update entry with a known "token" with the account_id + 2nd timestamp
-function recordAnalyticsData(
-  db: any,
-  token: string,
-  payload: object | undefined,
-  pii_retention: number | false,
-): void {
-  if (payload == null) return;
-  if (!is_valid_uuid_string(token)) return;
-  const dbg = create_log("record");
-  dbg({ token, payload });
-  // sanitize data (limits size and number of characters)
-  const rec_data = sanitize(payload);
-  dbg("sanitized data", rec_data);
-  const expire = pii_retention_to_future(pii_retention);
-
-  if (rec_data.account_id != null) {
-    // dbg("update analytics", rec_data.account_id);
-    // only update if account id isn't already set!
-    db._query({
-      query: "UPDATE analytics",
-      where: [{ "token = $::UUID": token }, "account_id IS NULL"],
-      set: {
-        "account_id       :: UUID": rec_data.account_id,
-        "account_id_time  :: TIMESTAMP": new Date(),
-        "expire           :: TIMESTAMP": expire,
-      },
-    });
-  } else {
-    db._query({
-      query: "INSERT INTO analytics",
-      values: {
-        "token     :: UUID": token,
-        "data      :: JSONB": rec_data,
-        "data_time :: TIMESTAMP": new Date(),
-        "expire    :: TIMESTAMP": expire,
-      },
-      conflict: "token",
-    });
-  }
-}
 
 // could throw an error
 function check_cors(
@@ -244,20 +168,19 @@ export async function initAnalytics(
       `/analytics.js GET analytics_cookie='${req.cookies[analytics_cookie_name]}'`,
     );
 
-    if (!req.cookies[analytics_cookie_name]) {
+    const existingToken = req.cookies[analytics_cookie_name];
+    let analyticsToken = existingToken;
+    if (!existingToken) {
       // No analytics cookie is set, so we set one.
       // We always set this despite any issues with parsing or
       // or whether or not we are actually using the analytics.js
       // script, since it's *also* useful to have this cookie set
       // for other purposes, e.g., logging.
-      setAnalyticsCookie(res /* DNS */);
+      analyticsToken = setAnalyticsCookie(res);
     }
 
     // also, don't write a script if the DNS is not valid
-    if (
-      req.cookies[analytics_cookie_name] ||
-      dns_parsed.type !== ParseResultType.Listed
-    ) {
+    if (existingToken || dns_parsed.type !== ParseResultType.Listed) {
       // cache for 6 hours -- max-age has unit seconds
       res.header(
         "Cache-Control",
@@ -276,7 +199,7 @@ export async function initAnalytics(
       ".",
     )}`;
     res.write(`var NAME = '${analytics_cookie_name}';\n`);
-    res.write(`var ID = '${uuid()}';\n`);
+    res.write(`var ID = '${analyticsToken}';\n`);
     res.write(`var DOMAIN = '${DOMAIN}';\n`);
     //  BASE_PATH
     if (req.query.fqd === "false") {
@@ -306,34 +229,45 @@ export async function initAnalytics(
   );
   */
 
-  router.post("/analytics.js", cors(analytics_cors), function (req, res): void {
+  router.post("/analytics.js", cors(analytics_cors), async function (req, res) {
     // check if token is in the cookie (see above)
     // if not, ignore it
     const token = req.cookies[analytics_cookie_name];
     dbg(`/analytics.js POST token='${token}'`);
-    if (token) {
-      // req.body is an object (json middlewhere somewhere?)
-      // e.g. {"utm":{"source":"asdfasdf"},"landing":"https://cocalc.ai/..."}
-      // ATTN key/values could be malicious
-      // record it, there is no need for a callback
-      recordAnalyticsData(database, token, req.body, pii_retention);
+    try {
+      if (!token) {
+        res.end();
+        return;
+      }
+      if (req.body?.account_link === true) {
+        const account_id = await getAccountId(req);
+        if (account_id) {
+          await recordAnalyticsData({
+            database,
+            piiRetention: pii_retention,
+            record: { accountId: account_id },
+            token,
+          });
+        }
+      } else {
+        // e.g. {"utm":{"source":"asdfasdf"},"landing":"https://cocalc.ai/..."}
+        // ATTN key/values could be malicious.
+        const payload = normalizeAnalyticsPostPayload(req.body);
+        if (payload != null && Object.keys(payload).length > 0) {
+          await recordAnalyticsData({
+            database,
+            piiRetention: pii_retention,
+            record: { data: payload },
+            token,
+          });
+        }
+      }
+    } catch (err) {
+      dbg("analytics POST failed", err);
     }
     res.end();
   });
 
   // additionally, custom content types require a preflight cors check
   router.options("/analytics.js", cors(analytics_cors));
-}
-
-// I'm not setting the domain, since it's making testing difficult.
-function setAnalyticsCookie(res /* DNS: string */): void {
-  // set the cookie (TODO sign it?  that would be good so that
-  // users can fake a cookie.)
-  const analytics_token = uuid();
-  res.cookie(analytics_cookie_name, analytics_token, {
-    path: "/",
-    maxAge: ms("7 days"),
-    // httpOnly: true,
-    // domain: DNS,
-  });
 }

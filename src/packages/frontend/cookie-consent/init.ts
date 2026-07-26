@@ -9,9 +9,14 @@ import "vanilla-cookieconsent/dist/cookieconsent.css";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { joinUrlPath } from "@cocalc/util/url-path";
 
+import { loadFirstPartyAnalytics } from "./analytics";
 import { COOKIE_CATEGORIES, type CookieCategory } from "./categories";
 import { COOKIE_CONSENT_REVISION } from "./index";
-import { markBannerActive, markBannerDecidedDisabled } from "./state";
+import {
+  markBannerActive,
+  markBannerDecidedDisabled,
+  markBannerReady,
+} from "./state";
 import { buildTranslation } from "./translations";
 
 function buildCategoriesConfig(): Record<string, CookieConsent.Category> {
@@ -83,6 +88,13 @@ export function initCookieConsent({
   const descHtml = markdownToHtml(textMarkdown?.trim() || "");
   const privacyUrl = joinUrlPath(appBasePath, "policies/privacy");
   const termsUrl = joinUrlPath(appBasePath, "policies/terms");
+  const maybeLoadAnalytics = () => {
+    void loadFirstPartyAnalytics().catch((err: unknown) =>
+      console.error("cookie-consent: analytics load failed", err),
+    );
+  };
+  window.addEventListener("cc:onConsent", maybeLoadAnalytics);
+  window.addEventListener("cc:onChange", maybeLoadAnalytics);
 
   try {
     void CookieConsent.run({
@@ -90,7 +102,7 @@ export function initCookieConsent({
       guiOptions: {
         consentModal: {
           layout: "box inline",
-          position: "bottom right",
+          position: "middle center",
           equalWeightButtons: true,
           flipButtons: false,
         },
@@ -108,9 +120,14 @@ export function initCookieConsent({
           en: buildTranslation(descHtml, privacyUrl, termsUrl),
         },
       },
-    }).catch((err: unknown) =>
-      console.error("cookie-consent: run rejected", err),
-    );
+    })
+      .then(() => {
+        markBannerReady();
+        maybeLoadAnalytics();
+      })
+      .catch((err: unknown) =>
+        console.error("cookie-consent: run rejected", err),
+      );
   } catch (err) {
     console.error("cookie-consent: run threw", err);
   }

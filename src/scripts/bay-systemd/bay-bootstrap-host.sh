@@ -203,6 +203,35 @@ ensure_rsyslog_output_files() {
   done
 }
 
+disable_rsyslog_headless_outputs() {
+  local changed=0
+  local config
+  local tmp
+
+  for config in /etc/rsyslog.d/*.conf; do
+    [[ -f "$config" ]] || continue
+    if ! grep -Eq '^[[:space:]]*(\*\.emerg[[:space:]]+:omusrmsg:\*|[^#[:space:]].*[[:space:]]+-?/dev/console)[[:space:]]*(#.*)?$' "$config"; then
+      continue
+    fi
+    tmp="$(mktemp)"
+    awk '
+      /^[[:space:]]*\*\.emerg[[:space:]]+:omusrmsg:\*[[:space:]]*(#.*)?$/ ||
+      /^[[:space:]]*[^#[:space:]].*[[:space:]]+-?\/dev\/console[[:space:]]*(#.*)?$/ {
+        print "# CoCalc headless hosts retain emergency messages in syslog and journald."
+        print "# " $0
+        next
+      }
+      { print }
+    ' "$config" >"$tmp"
+    run install -o root -g root -m 0644 "$tmp" "$config"
+    rm -f "$tmp"
+    changed=1
+  done
+  if [[ "$changed" -eq 1 ]] && command -v systemctl >/dev/null 2>&1; then
+    run systemctl restart --no-block rsyslog.service || true
+  fi
+}
+
 configure_system_logging() {
   if [[ "$CONFIGURE_SYSTEM_LOGGING" -ne 1 ]]; then
     return 0
@@ -219,6 +248,7 @@ EOF
 
   ensure_rsyslog_output_files
   configure_rsyslog_logrotate
+  disable_rsyslog_headless_outputs
 
   if command -v systemctl >/dev/null 2>&1; then
     run systemctl restart systemd-journald || true

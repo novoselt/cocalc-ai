@@ -1881,31 +1881,88 @@ RSYSLOG_LOGROTATE_CONTENT = """/var/log/syslog
 }
 """
 
+RSYSLOG_EMERGENCY_WALL_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<rule>\*\.emerg[ \t]+:omusrmsg:\*[ \t]*(?:#.*)?)$",
+    re.MULTILINE,
+)
+RSYSLOG_CONSOLE_OUTPUT_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<rule>[^#\s][^\n]*[ \t]+-?/dev/console[ \t]*(?:#.*)?)$",
+    re.MULTILINE,
+)
+RSYSLOG_HEADLESS_OUTPUT_COMMENT = (
+    "# CoCalc headless hosts retain emergency messages in syslog and journald."
+)
+
+
+def disable_rsyslog_headless_outputs(config_dir: Path) -> bool:
+    changed = False
+    for config_path in sorted(config_dir.glob("*.conf")):
+        changed = disable_rsyslog_headless_outputs_in_file(config_path) or changed
+    return changed
+
+
+def disable_rsyslog_headless_outputs_in_file(config_path: Path) -> bool:
+    try:
+        content = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    def comment_rule(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        rule = match.group("rule").rstrip()
+        return (
+            f"{indent}{RSYSLOG_HEADLESS_OUTPUT_COMMENT}\n"
+            f"{indent}# {rule}"
+        )
+
+    updated, wall_count = RSYSLOG_EMERGENCY_WALL_RE.subn(comment_rule, content)
+    updated, console_count = RSYSLOG_CONSOLE_OUTPUT_RE.subn(
+        comment_rule, updated
+    )
+    if wall_count + console_count == 0:
+        return False
+    config_path.write_text(updated, encoding="utf-8")
+    return True
+
 
 def configure_rsyslog_limits(
     cfg: BootstrapConfig,
     *,
     logrotate_path: Path = Path("/etc/logrotate.d/rsyslog"),
+    rsyslog_config_dir: Path = Path("/etc/rsyslog.d"),
 ) -> None:
     if not logrotate_path.parent.exists():
         return
     log_line(cfg, "bootstrap: configuring classic system log limits")
     try:
-        changed = (
+        logrotate_changed = (
             logrotate_path.read_text(encoding="utf-8")
             != RSYSLOG_LOGROTATE_CONTENT
         )
     except OSError:
-        changed = True
-    if not changed:
+        logrotate_changed = True
+    if logrotate_changed:
+        logrotate_path.write_text(RSYSLOG_LOGROTATE_CONTENT, encoding="utf-8")
+    headless_outputs_changed = disable_rsyslog_headless_outputs(
+        rsyslog_config_dir
+    )
+    if not logrotate_changed and not headless_outputs_changed:
         log_line(cfg, "bootstrap: classic system log limits already current")
         return
-    logrotate_path.write_text(RSYSLOG_LOGROTATE_CONTENT, encoding="utf-8")
-    if shutil.which("systemctl") is not None:
+    if shutil.which("systemctl") is None:
+        return
+    if logrotate_changed:
         run_best_effort(
             cfg,
             ["systemctl", "start", "--no-block", "logrotate.service"],
             "queue classic system log rotation",
+            timeout=15,
+        )
+    if headless_outputs_changed:
+        run_best_effort(
+            cfg,
+            ["systemctl", "restart", "--no-block", "rsyslog.service"],
+            "queue rsyslog restart after disabling interactive delivery",
             timeout=15,
         )
 
@@ -8464,6 +8521,7 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
     try:
         ensure_runtime_user(cfg)
         ensure_bootstrap_paths(cfg)
+        configure_rsyslog_limits(cfg)
         install_privileged_wrappers(cfg)
         configure_runtime_sudoers(cfg)
         verify_runtime_sudoers(cfg)

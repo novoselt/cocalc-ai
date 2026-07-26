@@ -93,7 +93,7 @@ const FEATURE_GROUPS = [
   {
     accent: COLORS.ANTD_LINK_BLUE_DARK,
     description:
-      "Find shell and Linux environments for work that needs a real runtime.",
+      "Use a persistent Linux environment for shells, packages, processes, and services.",
     icon: "terminal",
     slugs: ["terminal", "linux"],
     title: "Runtime",
@@ -111,7 +111,7 @@ const FEATURE_GROUPS = [
   {
     accent: COLORS.AI_ASSISTANT_FONT,
     description:
-      "Use Codex inside CoCalc projects or drive CoCalc from scripts and pipelines with the API.",
+      "Use Codex, terminal-based agents, scripts, and pipelines with the same persistent project.",
     icon: "robot",
     slugs: ["ai", "api", "compare"],
     title: "AI workflows",
@@ -692,7 +692,7 @@ function FeaturesIndex() {
               textTransform: "uppercase",
             }}
           >
-            CoCalc workflows
+            Persistent project workflows
           </Text>
           <div>
             <Title
@@ -703,7 +703,7 @@ function FeaturesIndex() {
                 margin: 0,
               }}
             >
-              Collaborate using your favorite software and AI agents.
+              One persistent computer for people, tools, and agents.
             </Title>
             <Paragraph
               style={{
@@ -714,8 +714,8 @@ function FeaturesIndex() {
                 maxWidth: 600,
               }}
             >
-              Keep your notebooks, code, and history all together in one
-              project.
+              Work together in a shared Linux project with notebooks, code,
+              terminals, documents, services, and history.
             </Paragraph>
           </div>
         </Flex>

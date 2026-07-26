@@ -43,7 +43,7 @@ describe("PublicFeaturesApp", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Collaborate using your favorite software and AI agents.",
+        name: "One persistent computer for people, tools, and agents.",
       }),
     ).not.toBeNull();
     expect(screen.queryByText("Durable collaborative projects")).toBeNull();

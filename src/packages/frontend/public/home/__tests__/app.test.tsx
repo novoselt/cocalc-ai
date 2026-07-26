@@ -79,7 +79,7 @@ describe("PublicHomeApp", () => {
     ).toBeNull();
     expect(getHomepageSectionLabels(container)).toEqual([
       "CoCalc hero",
-      "Codex in CoCalc",
+      "AI agents in CoCalc",
       "Who CoCalc helps",
       "Core workflows",
       "Ways to run CoCalc",
@@ -103,7 +103,7 @@ describe("PublicHomeApp", () => {
     const heroHeadings = within(hero).getAllByRole("heading", { level: 1 });
     expect(heroHeadings).toHaveLength(1);
     expect(heroHeadings[0]).toHaveTextContent(
-      "Shared Projects for Research Teams",
+      "A persistent shared computer for technical work.",
     );
     expect(textLength(heroHeadings[0])).toBeLessThanOrEqual(HERO_H1_MAX);
     expect(
@@ -145,18 +145,11 @@ describe("PublicHomeApp", () => {
     const heroLead = hero.querySelector(".cocalc-public-home-hero-title + *");
     expect(heroLead).not.toBeNull();
     expect(textLength(heroLead as Element)).toBeLessThanOrEqual(210);
-    expect(hero.textContent ?? "").toMatch(/AI-Native Technical Workspace/i);
+    expect(hero.textContent ?? "").toMatch(/Shared Linux Workspace/i);
+    expect(hero.textContent ?? "").toMatch(/People and AI agents work/i);
+    expect(hero.textContent ?? "").toMatch(/same Linux project/i);
     expect(hero.textContent ?? "").toMatch(
-      /collaborators one shared place to work/i,
-    );
-    expect(hero.textContent ?? "").toMatch(/one shared place to work/i);
-    expect(hero.textContent ?? "").toMatch(/review/i);
-    expect(hero.textContent ?? "").toMatch(/move forward/i);
-    expect(hero.textContent ?? "").toMatch(/without rebuilding context/i);
-    expect(hero.textContent ?? "").not.toMatch(/use agents/i);
-    expect(hero.textContent ?? "").not.toMatch(/keep going/i);
-    expect(hero.textContent ?? "").not.toMatch(
-      /teams one shared place to work/i,
+      /ready whenever the work continues/i,
     );
     expect(hero.textContent ?? "").not.toMatch(
       /collaborative technical computing online since 2013/i,
@@ -169,7 +162,7 @@ describe("PublicHomeApp", () => {
     expect(
       within(hero)
         .getByRole("img", {
-          name: "CoCalc-AI collaborative project overview",
+          name: "A persistent CoCalc project shared by people and AI agents",
         })
         .getAttribute("src"),
     ).toBe("/public/landing/home-hero.jpg");
@@ -195,36 +188,30 @@ describe("PublicHomeApp", () => {
       (heroCtaPanel as HTMLElement).getAttribute("style") ?? "",
     ).not.toMatch(DARK_FEATURE_CARD_STYLE);
 
-    const codex = screen.getByRole("region", {
-      name: "Codex in CoCalc",
+    const agents = screen.getByRole("region", {
+      name: "AI agents in CoCalc",
     });
-    expect(codex.textContent ?? "").toMatch(/Your Agent Assistant/i);
-    expect(codex.textContent ?? "").not.toMatch(/Agent Assistance/i);
-    expect(codex.textContent ?? "").not.toMatch(/Your in-project AI agent/i);
+    expect(agents.textContent ?? "").toMatch(/Agent-ready by design/i);
     expect(
-      within(codex).getByRole("heading", {
+      within(agents).getByRole("heading", {
         level: 2,
-        name: "Codex helps inside the project.",
+        name: "Agents work where your project lives.",
       }),
     ).not.toBeNull();
-    expect(codex.textContent ?? "").not.toMatch(/you already share/i);
-    expect(codex.textContent ?? "").toMatch(
-      /Ask Codex to work with your files, notebooks, terminals, and documents/i,
-    );
-    expect(codex.textContent ?? "").not.toMatch(
-      /It runs inside your isolated CoCalc project/i,
+    expect(agents.textContent ?? "").toMatch(
+      /Use Codex, Claude Code, or another shell-capable agent/i,
     );
     for (const title of [
       "Runs where your work lives",
       "You stay in review",
-      "Powered by OpenAI",
+      "Bring the agent you use",
     ]) {
       expect(
-        within(codex).getByRole("heading", { level: 3, name: title }),
+        within(agents).getByRole("heading", { level: 3, name: title }),
       ).not.toBeNull();
     }
-    expect(codex.textContent ?? "").not.toMatch(/Self-hosted CoCalc/i);
-    expect(codex.textContent ?? "").not.toMatch(
+    expect(agents.textContent ?? "").not.toMatch(/Self-hosted CoCalc/i);
+    expect(agents.textContent ?? "").not.toMatch(
       /Launchpad, Rocket, Star, or Plus/i,
     );
 

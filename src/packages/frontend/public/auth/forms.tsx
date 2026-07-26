@@ -73,16 +73,6 @@ const TERMS_NOTICE_STYLE: CSSProperties = {
   lineHeight: "18px",
 } as const;
 
-const CHECKBOX_ROW_STYLE: CSSProperties = {
-  alignItems: "flex-start",
-  color: COLORS.GRAY_D,
-  cursor: "pointer",
-  display: "flex",
-  fontSize: "14px",
-  gap: "8px",
-  lineHeight: "20px",
-} as const;
-
 const INPUT_STYLE: CSSProperties = {
   width: "100%",
   borderRadius: "8px",
@@ -1064,7 +1054,6 @@ export function PublicSignUpForm({
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [marketingConsent, setMarketingConsent] = useState(false);
   const [signingUp, setSigningUp] = useState(false);
   const [issues, setIssues] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
@@ -1190,7 +1179,7 @@ export function PublicSignUpForm({
         endpoint: "auth/sign-up",
         body: {
           terms: true,
-          marketing_consent: marketingConsent,
+          marketing_consent: false,
           email,
           password,
           displayName,
@@ -1289,17 +1278,6 @@ export function PublicSignUpForm({
               termsUrl={termsUrl}
             />
           ) : null}
-          <label style={CHECKBOX_ROW_STYLE}>
-            <input
-              checked={marketingConsent}
-              type="checkbox"
-              onChange={(e) => setMarketingConsent(e.currentTarget.checked)}
-            />
-            <span>
-              Send me occasional platform tips, onboarding help, and product
-              updates. You can change this later in Account Preferences.
-            </span>
-          </label>
           <SsoButton
             disabled={!canGoogleSignUp}
             cookieBannerEnabled={cookieBannerEnabled}
@@ -1307,7 +1285,7 @@ export function PublicSignUpForm({
             href={ssoLoginHref("google", {
               target: resolveAuthRedirectPath(redirectToPath),
               terms: policiesVisible ? true : undefined,
-              marketing_consent: marketingConsent,
+              marketing_consent: false,
               registration_token: registrationToken.trim(),
             })}
           >
@@ -1400,19 +1378,6 @@ export function PublicSignUpForm({
           />
           {issues.terms && <div style={TERMS_NOTICE_STYLE}>{issues.terms}</div>}
         </>
-      ) : null}
-      {googleStrategy == null ? (
-        <label style={CHECKBOX_ROW_STYLE}>
-          <input
-            checked={marketingConsent}
-            type="checkbox"
-            onChange={(e) => setMarketingConsent(e.currentTarget.checked)}
-          />
-          <span>
-            Send me occasional platform tips, onboarding help, and product
-            updates. You can change this later in Account Preferences.
-          </span>
-        </label>
       ) : null}
       <ActionButton disabled={!canSubmit} onClick={signUp}>
         {signingUp

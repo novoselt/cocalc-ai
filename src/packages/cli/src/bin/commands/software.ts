@@ -607,7 +607,7 @@ function rawSoftwareComponentInfo(
         "The latest bootstrap URL is mutable, so deploy history is the audit trail for what changed.",
         "Deploy updates desired state without touching running hosts unless --rollout is explicit.",
         "A rollout requires --bootstrap-scope so daemon restart behavior is explicit.",
-        "Use helpers for privileged helper/sudo policy changes; it does not restart project-host, Conat, or ACP.",
+        "Use helpers for privileged helper, sudo, networking, I/O, and host logging policy changes; it does not restart project-host, Conat, or ACP.",
         "Use full only when complete host convergence is required; it restarts project-host.",
         "Use this after bootstrap/sysctl/rootctl changes that do not require rebuilding project-host runtime.",
       ],
