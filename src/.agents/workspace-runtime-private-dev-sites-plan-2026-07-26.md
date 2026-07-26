@@ -814,6 +814,31 @@ Exit gate:
 - any placement assumptions are documented;
 - no production code defaults change.
 
+Result (2026-07-26):
+
+- The placement assumption required one explicit correction. Current
+  `BaseProject.start()` always assigns a project host, and
+  `BaseProject.stop()` treats a missing `host_id` as already stopped. Only
+  runner-backed state inspection remained. Explicit Launchpad workspace mode
+  now routes start and stop through the existing local runner RPC without
+  creating a fake host row.
+- A PGlite integration harness creates a real hostless project row under
+  Launchpad workspace configuration and verifies that start reaches an
+  injected runner while `host_id` remains `NULL`.
+- A separate real-process integration harness starts `cocalc-project` as the
+  current Unix user with a temporary home and an allowlisted environment. It
+  verifies `owned` project diagnostics, Conat file write/read, terminal
+  execution, and process-group shutdown.
+- The old `hub-server.port` and `browser-server.port` files are no longer a
+  useful readiness contract for this path. The current project daemon exposes
+  its compute services over Conat, while the project app proxy uses its
+  explicitly assigned loopback port. Phase 1 should use Conat readiness plus
+  an HTTP proxy health check.
+- `COCALC_PROJECT_RUNTIME` remains `external` by default for Launchpad and
+  `podman` by default elsewhere. Workspace mode fails closed outside Launchpad.
+- Embedded workspace runner startup, durable process records, adoption, logs,
+  and unsupported-operation handling remain Phase 1 work.
+
 Expected effort: 0.5 to 1.5 focused engineering days.
 
 ### Phase 1: backend abstraction and workspace lifecycle
