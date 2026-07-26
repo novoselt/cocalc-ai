@@ -5,7 +5,6 @@
 
 import { join } from "path";
 import * as fs from "fs";
-import ms from "ms";
 import { isEqual } from "lodash";
 import { Router, json } from "express";
 // express-js cors plugin:
@@ -20,8 +19,9 @@ import {
 import { get_server_settings } from "@cocalc/database/postgres/settings/server-settings";
 import type { PostgreSQL } from "@cocalc/database/postgres/types";
 import getAccountId from "@cocalc/server/auth/get-account";
-import { analytics_cookie_name, uuid } from "@cocalc/util/misc";
+import { analytics_cookie_name } from "@cocalc/util/misc";
 
+import { setAnalyticsCookie } from "./analytics-cookie";
 import { normalizeAnalyticsPostPayload } from "./analytics-payload";
 import { recordAnalyticsData } from "./analytics-record";
 import { getLogger } from "./logger";
@@ -168,20 +168,19 @@ export async function initAnalytics(
       `/analytics.js GET analytics_cookie='${req.cookies[analytics_cookie_name]}'`,
     );
 
-    if (!req.cookies[analytics_cookie_name]) {
+    const existingToken = req.cookies[analytics_cookie_name];
+    let analyticsToken = existingToken;
+    if (!existingToken) {
       // No analytics cookie is set, so we set one.
       // We always set this despite any issues with parsing or
       // or whether or not we are actually using the analytics.js
       // script, since it's *also* useful to have this cookie set
       // for other purposes, e.g., logging.
-      setAnalyticsCookie(res /* DNS */);
+      analyticsToken = setAnalyticsCookie(res);
     }
 
     // also, don't write a script if the DNS is not valid
-    if (
-      req.cookies[analytics_cookie_name] ||
-      dns_parsed.type !== ParseResultType.Listed
-    ) {
+    if (existingToken || dns_parsed.type !== ParseResultType.Listed) {
       // cache for 6 hours -- max-age has unit seconds
       res.header(
         "Cache-Control",
@@ -200,7 +199,7 @@ export async function initAnalytics(
       ".",
     )}`;
     res.write(`var NAME = '${analytics_cookie_name}';\n`);
-    res.write(`var ID = '${uuid()}';\n`);
+    res.write(`var ID = '${analyticsToken}';\n`);
     res.write(`var DOMAIN = '${DOMAIN}';\n`);
     //  BASE_PATH
     if (req.query.fqd === "false") {
@@ -271,17 +270,4 @@ export async function initAnalytics(
 
   // additionally, custom content types require a preflight cors check
   router.options("/analytics.js", cors(analytics_cors));
-}
-
-// I'm not setting the domain, since it's making testing difficult.
-function setAnalyticsCookie(res /* DNS: string */): void {
-  // set the cookie (TODO sign it?  that would be good so that
-  // users can fake a cookie.)
-  const analytics_token = uuid();
-  res.cookie(analytics_cookie_name, analytics_token, {
-    path: "/",
-    maxAge: ms("7 days"),
-    // httpOnly: true,
-    // domain: DNS,
-  });
 }
