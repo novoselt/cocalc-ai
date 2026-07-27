@@ -2725,20 +2725,25 @@ export class Actions extends BaseActions<LatexEditorState> {
    * CodeMirror normally tracks bookmark widgets through local edits, but a
    * rapid sequence of line splits can briefly leave an inline widget painted
    * at its previous visual line until the debounced source scan rebuilds it.
-   * The marker TextMarker itself moves synchronously, so use its live end
-   * position to realign the pill on every local CM change.
+   * The marker TextMarker itself moves synchronously. Use the post-operation
+   * `changes` event, after CodeMirror has finalized every marker position, to
+   * realign the pill without a transient jump from the old visual line.
    */
   private _ensureChatTailTracking(cm: CodeMirror.Editor, path: string): void {
     if (this._chatTailTrackingInstalled.has(cm)) return;
     this._chatTailTrackingInstalled.add(cm);
-    cm.on("change", (_editor, change) => {
-      const insertedLineCount = change.text.length - 1;
-      const removedLineCount = change.to.line - change.from.line;
-      this._syncChatTailPositions(
-        path,
-        cm,
-        insertedLineCount === removedLineCount ? undefined : change.from.line,
-      );
+    cm.on("changes", (_editor, changes) => {
+      let forceFromLine: number | undefined;
+      for (const change of changes) {
+        const insertedLineCount = change.text.length - 1;
+        const removedLineCount = change.to.line - change.from.line;
+        if (insertedLineCount === removedLineCount) continue;
+        forceFromLine =
+          forceFromLine == null
+            ? change.from.line
+            : Math.min(forceFromLine, change.from.line);
+      }
+      this._syncChatTailPositions(path, cm, forceFromLine);
     });
   }
 

@@ -427,3 +427,42 @@ describe("LaTeX chat marker locking", () => {
     );
   });
 });
+
+describe("LaTeX chat tail tracking", () => {
+  it("realigns after the complete CodeMirror operation", () => {
+    let eventName: string | undefined;
+    let onChanges:
+      | ((editor: unknown, changes: Record<string, any>[]) => void)
+      | undefined;
+    const cm = {
+      on: jest.fn((name, callback) => {
+        eventName = name;
+        onChanges = callback;
+      }),
+    };
+    const actions: any = Object.create(Actions.prototype);
+    actions._chatTailTrackingInstalled = new WeakSet();
+    actions._syncChatTailPositions = jest.fn();
+
+    actions._ensureChatTailTracking(cm, "123.tex");
+
+    expect(eventName).toBe("changes");
+    onChanges?.(cm, [
+      {
+        from: { line: 8, ch: 0 },
+        to: { line: 8, ch: 0 },
+        text: ["", "", ""],
+      },
+      {
+        from: { line: 3, ch: 0 },
+        to: { line: 4, ch: 0 },
+        text: [""],
+      },
+    ]);
+    expect(actions._syncChatTailPositions).toHaveBeenCalledWith(
+      "123.tex",
+      cm,
+      3,
+    );
+  });
+});
