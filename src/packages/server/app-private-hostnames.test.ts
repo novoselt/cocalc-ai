@@ -7,6 +7,13 @@ const hasDns = jest.fn(async () => true);
 const ensureAppSubdomainDns = jest.fn(async ({ record_id }) => ({
   record_id: record_id ?? "dns-record-1",
 }));
+const ensureCloudflareProjectHostSslRule = jest.fn(async () => ({
+  ruleset_id: "ruleset-1",
+  rule_id: "rule-1",
+  ref: "cocalc_project_host_direct_tls_v2",
+  expression: "test",
+  ssl: "full" as const,
+}));
 const deleteAppSubdomainDns = jest.fn(async () => undefined);
 const getCnameTargetForHostname = jest.fn(async () => undefined);
 const getServerSettings = jest.fn(async () => ({
@@ -44,6 +51,7 @@ const query = jest.fn(async (sqlRaw: string, params: any[] = []) => {
     return {
       rows: [
         {
+          host_id: "33333333-3333-4333-8333-333333333333",
           public_url: "https://host-abc.cocalc.ai",
           internal_url: "http://10.0.0.2:5000",
         },
@@ -170,6 +178,8 @@ jest.mock("@cocalc/database/settings/site-url", () => ({
 jest.mock("@cocalc/server/cloud/dns", () => ({
   hasDns: (...args: any[]) => hasDns(...args),
   ensureAppSubdomainDns: (...args: any[]) => ensureAppSubdomainDns(...args),
+  ensureCloudflareProjectHostSslRule: (...args: any[]) =>
+    ensureCloudflareProjectHostSslRule(...args),
   deleteAppSubdomainDns: (...args: any[]) => deleteAppSubdomainDns(...args),
   getCnameTargetForHostname: (...args: any[]) =>
     getCnameTargetForHostname(...args),
@@ -202,6 +212,13 @@ describe("private app hostnames", () => {
     ensureAppSubdomainDns.mockImplementation(async ({ record_id }) => ({
       record_id: record_id ?? "dns-record-1",
     }));
+    ensureCloudflareProjectHostSslRule.mockResolvedValue({
+      ruleset_id: "ruleset-1",
+      rule_id: "rule-1",
+      ref: "cocalc_project_host_direct_tls_v2",
+      expression: "test",
+      ssl: "full",
+    });
     deleteAppSubdomainDns.mockResolvedValue(undefined);
   });
 
@@ -221,6 +238,11 @@ describe("private app hostnames", () => {
     expect(second.hostname).toBe(first.hostname);
     expect(first.base_path).toBe("/apps/workspace-dev");
     expect(first.url).toBe(`https://${first.hostname}`);
+    expect(ensureCloudflareProjectHostSslRule).toHaveBeenCalledWith({
+      hostname: "host-abc.cocalc.ai",
+      host_id: "33333333-3333-4333-8333-333333333333",
+      zone_hostname: "cocalc.ai",
+    });
     expect(ensureAppSubdomainDns).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -318,6 +340,23 @@ describe("private app hostnames", () => {
       }),
     ).rejects.toThrow("at most 32 private app hostnames");
     expect(ensureAppSubdomainDns).not.toHaveBeenCalled();
+  });
+
+  it("does not allocate DNS when the Cloudflare origin rule cannot be ensured", async () => {
+    ensureCloudflareProjectHostSslRule.mockRejectedValueOnce(
+      new Error("cloudflare rules unavailable"),
+    );
+
+    await expect(
+      reserveProjectAppPrivateHostname({
+        project_id: PROJECT_ID,
+        app_id: "workspace-dev",
+        created_by: ACCOUNT_ID,
+      }),
+    ).rejects.toThrow("cloudflare rules unavailable");
+
+    expect(ensureAppSubdomainDns).not.toHaveBeenCalled();
+    expect(rows.size).toBe(0);
   });
 
   it("keeps the route row when DNS deletion fails", async () => {

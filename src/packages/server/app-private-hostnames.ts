@@ -12,6 +12,7 @@ import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import {
   deleteAppSubdomainDns,
   ensureAppSubdomainDns,
+  ensureCloudflareProjectHostSslRule,
   getCnameTargetForHostname,
   hasDns,
 } from "@cocalc/server/cloud/dns";
@@ -147,28 +148,38 @@ async function getSiteHostname(): Promise<string | undefined> {
   }
 }
 
-async function getProjectHostPublicHostname(
+interface ProjectHostPublicRoute {
+  host_id: string;
+  hostname: string;
+}
+
+async function getProjectHostPublicRoute(
   project_id: string,
-): Promise<string | undefined> {
+): Promise<ProjectHostPublicRoute | undefined> {
   const { rows } = await getPool().query(
     `
-      SELECT project_hosts.public_url AS public_url
+      SELECT project_hosts.id AS host_id,
+             project_hosts.public_url AS public_url
       FROM projects
       LEFT JOIN project_hosts ON project_hosts.id = projects.host_id
       WHERE projects.project_id=$1
     `,
     [project_id],
   );
+  const host_id = `${rows[0]?.host_id ?? ""}`.trim();
   const raw = `${rows[0]?.public_url ?? ""}`.trim();
-  if (!raw) return;
+  if (!host_id || !raw) return;
   try {
-    return new URL(raw).hostname.toLowerCase();
+    return { host_id, hostname: new URL(raw).hostname.toLowerCase() };
   } catch {
-    return raw
-      .replace(/^https?:\/\//i, "")
-      .split("/")[0]
-      .split(":")[0]
-      .toLowerCase();
+    return {
+      host_id,
+      hostname: raw
+        .replace(/^https?:\/\//i, "")
+        .split("/")[0]
+        .split(":")[0]
+        .toLowerCase(),
+    };
   }
 }
 
@@ -189,7 +200,7 @@ export async function getProjectAppPrivateHostnamePolicy(
   const enabledBySetting = await privateHostnamesEnabled();
   const dnsConfigured = await hasDns();
   const site_hostname = await getSiteHostname();
-  const host_hostname = await getProjectHostPublicHostname(project_id);
+  const host_hostname = (await getProjectHostPublicRoute(project_id))?.hostname;
 
   if (!enabledBySetting) {
     warnings.push("Private project app hostnames are disabled by site policy.");
@@ -290,6 +301,18 @@ export async function reserveProjectAppPrivateHostname(opts: {
       policy.warnings[0] ?? "Private project app hostnames are unavailable.",
     );
   }
+
+  const route = await getProjectHostPublicRoute(project_id);
+  if (!route || route.hostname !== policy.host_hostname) {
+    throw new Error(
+      "The project host placement changed while reserving its private app hostname.",
+    );
+  }
+  await ensureCloudflareProjectHostSslRule({
+    hostname: route.hostname,
+    host_id: route.host_id,
+    zone_hostname: policy.site_hostname,
+  });
 
   const pool = getPool();
   const existing = await inspectProjectAppPrivateHostname({
@@ -519,6 +542,31 @@ export async function reconcileProjectAppPrivateHostnamesForProject(opts: {
   if (!policy.enabled || !policy.dns_target) {
     const error =
       policy.warnings[0] ?? "Private project app hostnames are unavailable.";
+    for (const record of records) {
+      await noteDnsError({
+        project_id,
+        app_id: record.app_id,
+        error,
+      });
+      result.errors.push({ app_id: record.app_id, error });
+    }
+    return result;
+  }
+
+  try {
+    const route = await getProjectHostPublicRoute(project_id);
+    if (!route || route.hostname !== policy.host_hostname) {
+      throw new Error(
+        "The project host placement changed while reconciling its private app hostnames.",
+      );
+    }
+    await ensureCloudflareProjectHostSslRule({
+      hostname: route.hostname,
+      host_id: route.host_id,
+      zone_hostname: policy.site_hostname,
+    });
+  } catch (err) {
+    const error = `${err}`;
     for (const record of records) {
       await noteDnsError({
         project_id,

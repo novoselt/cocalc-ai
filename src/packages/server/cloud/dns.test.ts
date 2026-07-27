@@ -161,9 +161,21 @@ describe("cloud dns", () => {
 
     expect(staging).toBe(prod);
     expect(prod).toContain('starts_with(http.host, "host-")');
+    expect(prod).toContain('starts_with(http.host, "dev-")');
     expect(prod).toContain('ends_with(http.host, ".cocalc.ai")');
     expect(prod).not.toContain("cocalc-prod");
     expect(prod).not.toContain("cocalc-staging");
+
+    const separatePrivateDomain = projectHostSslRuleExpression({
+      hostname:
+        "host-99838afd-80f3-4e5b-96b8-7aff05ba9452-cocalc-staging.cocalc.ai",
+      hostId: "99838afd-80f3-4e5b-96b8-7aff05ba9452",
+      zoneHostname: "cocalc.dev",
+    });
+    expect(separatePrivateDomain).toContain('starts_with(http.host, "dev-")');
+    expect(separatePrivateDomain).toContain(
+      'ends_with(http.host, ".cocalc.dev")',
+    );
   });
 
   it("adds the v2 Full SSL rule without replacing legacy or unrelated rules", async () => {
@@ -237,6 +249,7 @@ describe("cloud dns", () => {
     expect(result.expression).toContain(
       'starts_with(http.host, "direct-check-")',
     );
+    expect(result.expression).toContain('starts_with(http.host, "dev-")');
     expect(rules[0]?.id).toBe("unrelated-rule");
     expect(rules[1]?.id).toBe("legacy-project-host-rule");
     expect(rules[1]?.expression).toContain("cocalc-staging.cocalc.ai");
@@ -313,7 +326,7 @@ describe("cloud dns", () => {
 
   it("does not rewrite an exact v2 SSL rule", async () => {
     const expression =
-      '((starts_with(http.host, "host-") and ends_with(http.host, ".example.com")) or (starts_with(http.host, "direct-check-") and ends_with(http.host, ".example.com")))';
+      '((starts_with(http.host, "host-") and ends_with(http.host, ".example.com")) or (starts_with(http.host, "direct-check-") and ends_with(http.host, ".example.com")) or (starts_with(http.host, "dev-") and ends_with(http.host, ".example.com")))';
     const managedRule = {
       id: "project-host-rule",
       ref: "cocalc_project_host_direct_tls_v2",

@@ -463,14 +463,14 @@ export function projectHostSslRuleExpression(opts: {
   const hostId = `${opts.hostId ?? ""}`.trim().toLowerCase();
   const labels = hostname.split(".").filter(Boolean);
   const idOffset = labels[0]?.indexOf(hostId) ?? -1;
-  const zoneHostname =
-    normalizeCloudflareHostname(opts.zoneHostname) ?? labels.slice(1).join(".");
+  const explicitZoneHostname = normalizeCloudflareHostname(opts.zoneHostname);
+  const zoneHostname = explicitZoneHostname ?? labels.slice(1).join(".");
   if (
     !hostname ||
     !hostId ||
     idOffset <= 0 ||
     !zoneHostname ||
-    !hostname.endsWith(`.${zoneHostname}`)
+    (!explicitZoneHostname && !hostname.endsWith(`.${zoneHostname}`))
   ) {
     throw new Error(
       "cannot derive project-host Cloudflare SSL rule expression",
@@ -483,6 +483,8 @@ export function projectHostSslRuleExpression(opts: {
     `(starts_with(http.host, ${JSON.stringify(stablePrefix)}) and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
     " or ",
     `(starts_with(http.host, "direct-check-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
+    " or ",
+    `(starts_with(http.host, "dev-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
     ")",
   ].join("");
 }
@@ -504,9 +506,10 @@ function configurationRuleMatches(
 export async function ensureCloudflareProjectHostSslRule(opts: {
   hostname: string;
   host_id: string;
+  zone_hostname?: string;
 }): Promise<CloudflareProjectHostSslRule> {
   const { token, zoneId, zoneHostname } = await getZoneClientForHostname(
-    opts.hostname,
+    opts.zone_hostname ?? opts.hostname,
   );
   const expression = projectHostSslRuleExpression({
     hostname: opts.hostname,
