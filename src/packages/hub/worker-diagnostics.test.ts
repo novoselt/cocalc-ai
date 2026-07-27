@@ -29,6 +29,11 @@ jest.mock("@cocalc/server/conat", () => ({
     configured_servers: 1,
     child_processes: 0,
     local_open_streams: 11,
+    local_streams: {
+      open_total: 11,
+      open_ephemeral: 9,
+      open_disk: 2,
+    },
   })),
 }));
 
@@ -71,6 +76,9 @@ describe("hub worker diagnostics", () => {
       expect.objectContaining({ hub_clients: 3, account_clients: 5 }),
     );
     expect(diagnostics.conat.persistence.local_open_streams).toBe(11);
+    expect(diagnostics.conat.persistence.local_streams).toEqual(
+      expect.objectContaining({ open_ephemeral: 9, open_disk: 2 }),
+    );
   });
 
   it("serves diagnostics without exposing any other route", async () => {

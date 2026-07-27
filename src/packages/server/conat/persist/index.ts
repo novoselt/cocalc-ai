@@ -16,7 +16,7 @@ import {
   type PersistMaintenanceCoordinator,
 } from "@cocalc/backend/conat/persist-maintenance/coordinator";
 import { loadPersistMaintenanceConfig } from "@cocalc/backend/conat/persist-maintenance/config";
-import { openPaths } from "@cocalc/conat/persist/storage";
+import { getPersistentStreamDiagnostics } from "@cocalc/conat/persist/storage";
 
 const logger = getLogger("server:conat:persist");
 
@@ -25,13 +25,16 @@ export function getConatPersistDiagnostics(): {
   configured_servers: number;
   child_processes: number;
   local_open_streams: number;
+  local_streams: ReturnType<typeof getPersistentStreamDiagnostics>;
 } {
   const configured_servers = Math.max(1, conatPersistCount || 1);
+  const local_streams = getPersistentStreamDiagnostics();
   return {
     mode: configured_servers > 1 ? "forked" : "in-process",
     configured_servers,
     child_processes: getForkedPersistServerCount(),
-    local_open_streams: openPaths.size,
+    local_open_streams: local_streams.open_total,
+    local_streams,
   };
 }
 
