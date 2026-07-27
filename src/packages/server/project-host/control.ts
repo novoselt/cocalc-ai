@@ -875,6 +875,7 @@ export async function startProjectOnHost(
   }
   const task = (async () => {
     await cancelStaleProjectStartLros({ project_id });
+    const explicitRestoreBackupId = `${opts?.restore_backup_id ?? ""}`.trim();
     const snapshot = await getProjectStateSnapshot(project_id);
     const activeStartLro =
       snapshot.state === "starting"
@@ -884,7 +885,12 @@ export async function startProjectOnHost(
       state: snapshot.state,
       timeMs: snapshot.timeMs,
       hasActiveStartLro: activeStartLro,
-      ignoreRecentState: opts?.ignore_recent_state_snapshot === true,
+      // An explicit restore is an atomic data replacement, not a duplicate
+      // runtime start. A recent state snapshot may describe the previous host
+      // after placement changed and must never suppress the restore.
+      ignoreRecentState:
+        !!explicitRestoreBackupId ||
+        opts?.ignore_recent_state_snapshot === true,
     });
     if (startDecision.skip) {
       log.debug("startProjectOnHost skipping duplicate start", {
@@ -912,7 +918,6 @@ export async function startProjectOnHost(
     }
 
     const placement = await ensurePlacement(project_id, opts?.account_id);
-    const explicitRestoreBackupId = `${opts?.restore_backup_id ?? ""}`.trim();
     const client = await getRoutedHostControlClient({
       host_id: placement.host_id,
       timeout: START_PROJECT_TIMEOUT_MS,

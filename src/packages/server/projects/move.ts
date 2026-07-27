@@ -46,6 +46,11 @@ import {
   type ProjectBackupPurgeResult,
 } from "./backup-purge";
 import { getLro, updateLro } from "@cocalc/server/lro/lro-db";
+import {
+  acquireProjectMoveGuard,
+  heartbeatProjectMoveGuard,
+  releaseProjectMoveGuard,
+} from "./move-guard";
 
 const log = getLogger("server:projects:move");
 const BACKUP_TIMEOUT_MS = 6 * 60 * 60 * 1000;
@@ -58,6 +63,10 @@ const MOVE_START_DEST_TIMEOUT_MS = Math.max(
   Number(process.env.COCALC_MOVE_START_DEST_TIMEOUT_MS) || 2 * 60 * 60 * 1000,
 );
 const TRANSIENT_MOVE_RPC_RETRY_DELAY_MS = 1000;
+const MOVE_GUARD_HEARTBEAT_MS = Math.max(
+  1000,
+  Number(process.env.COCALC_PROJECT_MOVE_GUARD_HEARTBEAT_MS) || 30 * 1000,
+);
 const BACKUP_CONFIG_INVALIDATION_TIMEOUT_MS = Math.max(
   1,
   Number(process.env.COCALC_MOVE_BACKUP_CONFIG_INVALIDATION_TIMEOUT_MS) ||
@@ -1513,6 +1522,25 @@ export async function moveProjectToHost(
     project_id: context.project_id,
     operation: "move",
   });
+  await acquireProjectMoveGuard({
+    project_id: context.project_id,
+    move_id: move_log_id,
+    source_host_id: context.project_host_id,
+    dest_host_id: context.dest_host_id,
+  });
+  const moveGuardHeartbeat = setInterval(() => {
+    heartbeatProjectMoveGuard({
+      project_id: context.project_id,
+      move_id: move_log_id,
+    }).catch((err) => {
+      log.warn("moveProjectToHost move guard heartbeat failed", {
+        project_id: context.project_id,
+        move_log_id,
+        err,
+      });
+    });
+  }, MOVE_GUARD_HEARTBEAT_MS);
+  moveGuardHeartbeat.unref?.();
   log.debug("moveProjectToHost context", {
     project_id: context.project_id,
     dest_host_id: context.dest_host_id,
@@ -1860,6 +1888,24 @@ export async function moveProjectToHost(
         }
       }
       await checkCanceled("backup");
+      currentStage = "stop-source-final";
+      progress({
+        step: "stop-source",
+        message: "confirming source project is stopped after final backup",
+      });
+      await retryOnceOnTransientMoveError({
+        operation: "stop-source",
+        detail: {
+          project_id: context.project_id,
+          stage: "post-backup-confirmation",
+        },
+        progress,
+        run: async () =>
+          await stopProjectOnHost(context.project_id, {
+            timeout_ms: MOVE_STOP_PROJECT_TIMEOUT_MS,
+          }),
+      });
+      await checkCanceled("stop-source-final");
     }
     if (startDest && finalBackupId && context.provisioned !== false) {
       currentStage = "prepare-destination-restore";
@@ -1949,6 +1995,8 @@ export async function moveProjectToHost(
               managed_egress_override_auth: input.managed_egress_override
                 ? PROJECT_DANGEROUS_INTERNAL_AUTH
                 : undefined,
+              project_move_id: move_log_id,
+              project_move_auth: PROJECT_DANGEROUS_INTERNAL_AUTH,
               wait: false,
             });
             progress({
@@ -2341,6 +2389,18 @@ export async function moveProjectToHost(
       fresh: true,
     });
     throw stagedError;
+  } finally {
+    clearInterval(moveGuardHeartbeat);
+    await releaseProjectMoveGuard({
+      project_id: context.project_id,
+      move_id: move_log_id,
+    }).catch((err) => {
+      log.warn("moveProjectToHost move guard release failed", {
+        project_id: context.project_id,
+        move_log_id,
+        err,
+      });
+    });
   }
 }
 

@@ -27,8 +27,14 @@ let conatPublishMock: jest.Mock;
 let getRoutedHostControlClientMock: jest.Mock;
 let invalidateBackupConfigMock: jest.Mock;
 let projectLogDstreamMock: jest.Mock;
+let acquireProjectMoveGuardMock: jest.Mock;
+let heartbeatProjectMoveGuardMock: jest.Mock;
+let releaseProjectMoveGuardMock: jest.Mock;
 let projectLogRows: any[];
 let moveCallOrder: string[];
+const mockProjectDangerousInternalAuth = Symbol(
+  "PROJECT_DANGEROUS_INTERNAL_AUTH",
+);
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -73,6 +79,7 @@ jest.mock("../project-host/client", () => ({
 
 jest.mock("../conat/api/projects", () => ({
   start: (...args: any[]) => startProjectLroMock(...args),
+  PROJECT_DANGEROUS_INTERNAL_AUTH: mockProjectDangerousInternalAuth,
 }));
 
 jest.mock("../conat/api/project-backups", () => ({
@@ -124,6 +131,15 @@ jest.mock("../project-backup", () => ({
 jest.mock("./backup-purge", () => ({
   purgeProjectBackupsForRepo: (...args: any[]) =>
     purgeProjectBackupsForRepoMock(...args),
+}));
+
+jest.mock("./move-guard", () => ({
+  acquireProjectMoveGuard: (...args: any[]) =>
+    acquireProjectMoveGuardMock(...args),
+  heartbeatProjectMoveGuard: (...args: any[]) =>
+    heartbeatProjectMoveGuardMock(...args),
+  releaseProjectMoveGuard: (...args: any[]) =>
+    releaseProjectMoveGuardMock(...args),
 }));
 
 describe("moveProjectToHost", () => {
@@ -247,6 +263,9 @@ describe("moveProjectToHost", () => {
     stopProjectOnHostMock = jest.fn(async () => {
       moveCallOrder.push("stop-source");
     });
+    acquireProjectMoveGuardMock = jest.fn(async () => undefined);
+    heartbeatProjectMoveGuardMock = jest.fn(async () => undefined);
+    releaseProjectMoveGuardMock = jest.fn(async () => undefined);
     startProjectLroMock = jest.fn(async () => ({
       op_id: "44444444-4444-4444-8444-444444444444",
       scope_type: "project",
@@ -654,6 +673,31 @@ describe("moveProjectToHost", () => {
     expect(moveCallOrder.indexOf("placement")).toBeLessThan(
       moveCallOrder.indexOf("start-dest"),
     );
+    const stopIndexes = moveCallOrder.flatMap((entry, index) =>
+      entry === "stop-source" ? [index] : [],
+    );
+    expect(stopIndexes).toHaveLength(2);
+    expect(stopIndexes[1]).toBeGreaterThan(moveCallOrder.indexOf("backup"));
+    expect(stopIndexes[1]).toBeLessThan(moveCallOrder.indexOf("clear-dest"));
+
+    expect(acquireProjectMoveGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: PROJECT_ID,
+        source_host_id: SOURCE_HOST_ID,
+        dest_host_id: DEST_HOST_ID,
+      }),
+    );
+    const moveId = acquireProjectMoveGuardMock.mock.calls[0][0].move_id;
+    expect(startProjectLroMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_move_id: moveId,
+        project_move_auth: mockProjectDangerousInternalAuth,
+      }),
+    );
+    expect(releaseProjectMoveGuardMock).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+      move_id: moveId,
+    });
   });
 
   it("retries when the source project file server is still initializing", async () => {
@@ -1810,7 +1854,9 @@ describe("moveProjectToHost", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(stopProjectOnHostMock).toHaveBeenCalledTimes(2);
+    // The initial stop retries once, then the post-backup stop closes the
+    // admission/stop race before placement changes.
+    expect(stopProjectOnHostMock).toHaveBeenCalledTimes(3);
   });
 
   it("retries the final backup once after a transient parse failure", async () => {

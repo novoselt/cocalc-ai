@@ -403,6 +403,47 @@ describe("projects.start", () => {
     });
   });
 
+  it("forwards an internally authorized project move id", async () => {
+    const { start, PROJECT_DANGEROUS_INTERNAL_AUTH } =
+      await import("./projects");
+
+    await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      restore_backup_id: "backup-1",
+      project_move_id: "move-1",
+      project_move_auth: PROJECT_DANGEROUS_INTERNAL_AUTH,
+      wait: false,
+    });
+    await flushBackgroundStartTask();
+
+    expect(interBayCheckStartAdmissionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: "move-1" }),
+    );
+    expect(interBayStartMock).toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: "move-1" }),
+    );
+  });
+
+  it("does not forward a caller-supplied project move id", async () => {
+    const { start } = await import("./projects");
+
+    await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      project_move_id: "move-1",
+      wait: false,
+    });
+    await flushBackgroundStartTask();
+
+    expect(interBayCheckStartAdmissionMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: expect.anything() }),
+    );
+    expect(interBayStartMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: expect.anything() }),
+    );
+  });
+
   it("uses finalized migration backup id when starting archived migration destination", async () => {
     poolQueryMock = jest.fn(async (sql: string) => {
       if (sql.includes("FROM project_site_migrations")) {

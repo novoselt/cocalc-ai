@@ -4464,6 +4464,8 @@ export async function start({
   autostart,
   managed_egress_override,
   managed_egress_override_auth,
+  project_move_id,
+  project_move_auth,
   wait = true,
 }: {
   account_id: string;
@@ -4476,6 +4478,8 @@ export async function start({
   autostart?: boolean;
   managed_egress_override?: ManagedProjectEgressOverride;
   managed_egress_override_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
+  project_move_id?: string;
+  project_move_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
   wait?: boolean;
 }): Promise<{
   op_id: string;
@@ -4492,6 +4496,8 @@ export async function start({
     autostart,
     managed_egress_override,
     managed_egress_override_auth,
+    project_move_id,
+    project_move_auth,
     wait,
   });
 }
@@ -4587,6 +4593,8 @@ async function runProjectStartLikeAction({
   autostart,
   managed_egress_override,
   managed_egress_override_auth,
+  project_move_id,
+  project_move_auth,
   wait = true,
 }: {
   kind: "start" | "restart";
@@ -4596,6 +4604,8 @@ async function runProjectStartLikeAction({
   autostart?: boolean;
   managed_egress_override?: ManagedProjectEgressOverride;
   managed_egress_override_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
+  project_move_id?: string;
+  project_move_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
   wait?: boolean;
 }): Promise<{
   op_id: string;
@@ -4620,6 +4630,10 @@ async function runProjectStartLikeAction({
       : undefined;
   const effectiveRestoreBackupId =
     explicitRestoreBackupId || implicitMigrationRestore?.snapshot_id;
+  const effectiveProjectMoveId =
+    project_move_auth === PROJECT_DANGEROUS_INTERNAL_AUTH
+      ? project_move_id
+      : undefined;
   try {
     const ownership = await resolveProjectBay(project_id);
     if (ownership == null) {
@@ -4636,6 +4650,9 @@ async function runProjectStartLikeAction({
         account_id,
         ...(effectiveRestoreBackupId
           ? { restore_backup_id: effectiveRestoreBackupId }
+          : {}),
+        ...(effectiveProjectMoveId
+          ? { project_move_id: effectiveProjectMoveId }
           : {}),
         ...(autostart ? { autostart } : {}),
         source_bay_id: getConfiguredBayId(),
@@ -4755,6 +4772,9 @@ async function runProjectStartLikeAction({
           account_id,
           ...(effectiveRestoreBackupId
             ? { restore_backup_id: effectiveRestoreBackupId }
+            : {}),
+          ...(effectiveProjectMoveId
+            ? { project_move_id: effectiveProjectMoveId }
             : {}),
           ...(autostart ? { autostart } : {}),
           lro_op_id: op.op_id,
