@@ -412,7 +412,7 @@ export function PublicPage({
           colorLink: PUBLIC_COLORS.link,
           colorLinkActive: PUBLIC_COLORS.brandActive,
           colorLinkHover: PUBLIC_COLORS.linkHover,
-          colorPrimary: PUBLIC_COLORS.brand,
+          colorPrimary: PUBLIC_COLORS.brandActive,
           colorPrimaryActive: PUBLIC_COLORS.brandActive,
           colorPrimaryHover: PUBLIC_COLORS.linkHover,
           colorText: PUBLIC_COLORS.text,

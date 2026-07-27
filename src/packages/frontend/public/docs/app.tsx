@@ -48,7 +48,7 @@ function DocsIndex({ config }: { config?: PublicConfig }) {
             <Text
               strong
               style={{
-                color: PUBLIC_COLORS.brand,
+                color: PUBLIC_COLORS.brandActive,
                 textTransform: "uppercase",
                 fontSize: PUBLIC_TYPE.eyebrow,
                 letterSpacing: 0,

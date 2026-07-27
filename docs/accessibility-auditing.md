@@ -12,11 +12,12 @@ Start the local hub/launchpad stack, then run:
 pnpm -C src accessibility:audit
 ```
 
-The default matrix covers stable landing, product, account, and project views.
-The runner reads the active hub development environment, issues a local
-impersonation login URL, starts an isolated Chromium profile, and audits every
-route in `src/scripts/accessibility/pages.json`. Reports are written under
-`src/.local/accessibility/<timestamp>/`:
+The default matrix covers 30 stable routes across landing and product pages,
+feature documentation, support and news, account preferences, project files,
+and project settings. The runner reads the active hub development environment,
+issues a local impersonation login URL, starts an isolated Chromium profile,
+and audits every route in `src/scripts/accessibility/pages.json`. Reports are
+written under `src/.local/accessibility/<timestamp>/`:
 
 - `summary.md` gives the score and threshold for each page.
 - `summary.json` is suitable for scripts and CI artifacts.
@@ -61,6 +62,11 @@ Edit `src/scripts/accessibility/pages.json`. Each entry defines:
 Once a page reaches a higher score, raise its threshold in the matrix. This
 turns future accessibility regressions into deterministic test failures while
 retaining the full Lighthouse evidence needed to fix them.
+
+Prefer representative, stable routes over pages whose useful state depends on
+ephemeral production data. For stateful editors or dialogs, first add
+deterministic setup and a readiness selector, then include the route in the
+matrix.
 
 For a non-local authenticated site, pass an explicit one-time login URL with
 `--login-url`. The runner intentionally does not accept passwords or persist

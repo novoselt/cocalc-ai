@@ -105,7 +105,7 @@
 
 .cocalc-public-code-block .cocalc-slate-code-block .token.function,
 .cocalc-public-code-block .cocalc-slate-code-block .token.class-name {
-  color: var(--cocalc-slate-code-definition, #dd4a68);
+  color: var(--cocalc-slate-code-definition, #a61e4d);
 }
 
 .cocalc-public-code-block .cocalc-slate-code-block .token.regex,
