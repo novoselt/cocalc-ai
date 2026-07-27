@@ -1063,13 +1063,30 @@ Implementation result (2026-07-26):
   pass. The complete project-host suite passes (615 tests), and the monorepo
   TypeScript build passes.
 
-Remaining activation gate:
+Staging activation result (2026-07-27):
 
-- No Cloudflare record, setting change, staging deployment, or production
-  change was made during this phase. Before enabling the feature, configure its
-  one-level hostname domain and verify Cloudflare edge TLS plus project-host
-  origin-certificate coverage with a staging canary. The source-checkout command
-  and browser open flow remain Phase 4.
+- The feature is enabled on staging with
+  `project_hosts_app_private_hostname_domain=cocalc.ai`. No tunnel was created
+  or used. A canary app on `host2` received a proxied
+  `dev-6eaf31c77bf8e763.cocalc.ai` hostname.
+- Live owner requests returned HTTP 200, and an authenticated WebSocket upgrade
+  returned HTTP 101. A signed-out request returned HTTP 401 without reaching the
+  app. Non-collaborator denial and established-socket revocation remain covered
+  by focused tests rather than a second live staging identity.
+- The first staging pass found three integration defects that focused tests had
+  not exposed. The private-hostname methods were declared but absent from the
+  runtime Conat system registry; Cloudflare's managed Full SSL rule covered
+  `host-*` and `direct-check-*` origins but not `dev-*`; and app deletion from a
+  project identity could not forward the narrowly scoped hostname-release
+  method through its project host. Commits `900c2c676d`, `899d784011`, and
+  `4e3b55429f` close those gaps with regression coverage.
+- Both staging project hosts accepted the final project-host bundle through a
+  canary-first rollout. The hub, project-host, and project-bundle smoke suites
+  all pass. App deletion released the route and Cloudflare record, subsequent
+  hostname tracing returned `matched: false`, and the canary project was
+  deleted successfully.
+- Production configuration and deployments were not changed. The
+  source-checkout command and browser open flow remain Phase 4.
 
 Expected effort: 2 to 4 focused engineering days.
 
