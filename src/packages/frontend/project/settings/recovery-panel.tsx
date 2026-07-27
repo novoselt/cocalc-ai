@@ -16,6 +16,7 @@ import { COLORS } from "@cocalc/util/theme";
 
 import { Datastore } from "./datastore";
 import type { Project } from "./types";
+import { useProjectRuntimeCapabilities } from "../runtime-capabilities";
 
 const { Text } = Typography;
 
@@ -87,6 +88,7 @@ export function RecoveryPanel({
   showDatastore,
   datastoreReload,
 }: Props) {
+  const runtime = useProjectRuntimeCapabilities();
   const projectLastBackup = useProjectMapField(project_id, "last_backup");
   const lastBackup = projectLastBackup ?? project.get("last_backup");
 
@@ -96,38 +98,45 @@ export function RecoveryPanel({
       size={mode === "flyout" ? 10 : 14}
       style={{ width: "100%" }}
     >
-      <RecoveryAction
-        mode={mode}
-        icon="disk-snapshot"
-        title="Snapshots"
-        description="Fast point-in-time project filesystem checkpoints. Restore creates a safety snapshot before changing files."
-        actions={
-          <>
-            <CreateSnapshot />
-            <RestoreSnapshot />
-          </>
-        }
-      />
-      <RecoveryAction
-        mode={mode}
-        icon="cloud-upload"
-        title="Backups"
-        description={
-          <>
-            Host-independent archives for project files, rootfs state, and
-            TimeTravel history.
-            {lastBackup ? (
-              <>
-                {" "}
-                Last backup: <TimeAgo date={lastBackup as any} />.
-              </>
-            ) : (
-              <span style={{ color: COLORS.GRAY_M }}> No backup recorded.</span>
-            )}
-          </>
-        }
-        actions={<CreateBackup />}
-      />
+      {runtime.snapshots && (
+        <RecoveryAction
+          mode={mode}
+          icon="disk-snapshot"
+          title="Snapshots"
+          description="Fast point-in-time project filesystem checkpoints. Restore creates a safety snapshot before changing files."
+          actions={
+            <>
+              <CreateSnapshot />
+              <RestoreSnapshot />
+            </>
+          }
+        />
+      )}
+      {runtime.backups && (
+        <RecoveryAction
+          mode={mode}
+          icon="cloud-upload"
+          title="Backups"
+          description={
+            <>
+              Host-independent archives for project files, rootfs state, and
+              TimeTravel history.
+              {lastBackup ? (
+                <>
+                  {" "}
+                  Last backup: <TimeAgo date={lastBackup as any} />.
+                </>
+              ) : (
+                <span style={{ color: COLORS.GRAY_M }}>
+                  {" "}
+                  No backup recorded.
+                </span>
+              )}
+            </>
+          }
+          actions={<CreateBackup />}
+        />
+      )}
       <RecoveryAction
         mode={mode}
         icon="copy"

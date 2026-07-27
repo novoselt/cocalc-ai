@@ -71,3 +71,92 @@ export function projectRuntimeHomeRelativePath(
 export function isProjectRuntimeHomeAliasPath(rawPath: string): boolean {
   return projectRuntimeHomeRelativePath(rawPath) != null;
 }
+
+export type ProjectRuntimeMode = "external" | "workspace" | "podman";
+
+export type ProjectRuntimeIsolation =
+  | "project-host"
+  | "container"
+  | "trusted-workspace";
+
+export const PROJECT_RUNTIME_CAPABILITY_KEYS = [
+  "rootfs",
+  "host_placement",
+  "gpu",
+  "backups",
+  "snapshots",
+  "archive",
+  "move",
+  "ssh",
+  "resource_limits",
+  "cloud_hosts",
+] as const;
+
+export type ProjectRuntimeCapability =
+  (typeof PROJECT_RUNTIME_CAPABILITY_KEYS)[number];
+
+export type ProjectRuntimeCapabilities = Record<
+  ProjectRuntimeCapability,
+  boolean
+>;
+
+export interface ProjectRuntimeConfiguration extends ProjectRuntimeCapabilities {
+  mode: ProjectRuntimeMode;
+  isolation: ProjectRuntimeIsolation;
+  trusted: boolean;
+  label: string;
+}
+
+const FULL_CAPABILITIES: ProjectRuntimeCapabilities = {
+  rootfs: true,
+  host_placement: true,
+  gpu: true,
+  backups: true,
+  snapshots: true,
+  archive: true,
+  move: true,
+  ssh: true,
+  resource_limits: true,
+  cloud_hosts: true,
+};
+
+const WORKSPACE_CAPABILITIES: ProjectRuntimeCapabilities = {
+  rootfs: false,
+  host_placement: false,
+  gpu: false,
+  backups: false,
+  snapshots: false,
+  archive: false,
+  move: false,
+  ssh: false,
+  resource_limits: false,
+  cloud_hosts: false,
+};
+
+export function projectRuntimeConfiguration(
+  mode: ProjectRuntimeMode,
+): ProjectRuntimeConfiguration {
+  if (mode === "workspace") {
+    return {
+      mode,
+      isolation: "trusted-workspace",
+      trusted: true,
+      label: "Trusted workspace",
+      ...WORKSPACE_CAPABILITIES,
+    };
+  }
+  return {
+    mode,
+    isolation: mode === "podman" ? "container" : "project-host",
+    trusted: false,
+    label: mode === "podman" ? "Local container" : "Project host",
+    ...FULL_CAPABILITIES,
+  };
+}
+
+export function projectRuntimeCapabilityError(
+  runtime: ProjectRuntimeConfiguration,
+  capability: ProjectRuntimeCapability,
+): string {
+  return `${capability.replace(/_/g, " ")} is unsupported by the ${runtime.label.toLowerCase()} runtime (${runtime.mode})`;
+}

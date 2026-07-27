@@ -202,6 +202,16 @@ jest.mock("@cocalc/server/project-host/control", () => ({
 jest.mock("@cocalc/server/launchpad/project-runtime", () => ({
   __esModule: true,
   isWorkspaceProjectRuntime: () => mockWorkspaceProjectRuntime,
+  assertProjectRuntimeCapability: (capability: string) => {
+    if (
+      mockWorkspaceProjectRuntime &&
+      (capability === "host_placement" || capability === "rootfs")
+    ) {
+      throw new Error(
+        `${capability.replace(/_/g, " ")} is unsupported by the trusted workspace runtime (workspace)`,
+      );
+    }
+  },
 }));
 
 jest.mock("@cocalc/server/projects/project-secrets", () => ({
@@ -588,7 +598,6 @@ describe("projects.createProject clone routing", () => {
       title: "Workspace runtime project",
       description: "",
       account_id: ACCOUNT_ID,
-      rootfs_image: "cocalc.local/rootfs/base",
       start: false,
     });
 
@@ -596,6 +605,30 @@ describe("projects.createProject clone routing", () => {
     expect(ensurePlacementMock).not.toHaveBeenCalled();
     expect(hostControlCreateProjectMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["RootFS", { rootfs_image: "cocalc.local/rootfs/base" }, "rootfs"],
+    ["host", { host_id: HOST_ID }, "host placement"],
+  ])(
+    "rejects an explicit %s selection in workspace runtime",
+    async (_label, explicit, expected) => {
+      mockWorkspaceProjectRuntime = true;
+      const createProject = (await import("./create")).default;
+
+      await expect(
+        createProject({
+          title: "Unsupported workspace option",
+          description: "",
+          account_id: ACCOUNT_ID,
+          start: false,
+          ...explicit,
+        }),
+      ).rejects.toThrow(
+        `${expected} is unsupported by the trusted workspace runtime (workspace)`,
+      );
+      expect(queryMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("validates the cloned current RootFS state before copying files", async () => {
     queryMock = jest.fn(async (sql: string, params: any[]) => {

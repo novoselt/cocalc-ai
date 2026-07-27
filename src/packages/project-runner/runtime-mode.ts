@@ -3,9 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import type { ProjectRuntimeMode } from "@cocalc/util/project-runtime";
+
 export const PROJECT_RUNTIME_ENV = "COCALC_PROJECT_RUNTIME";
 
-export type ProjectRuntimeMode = "external" | "workspace" | "podman";
+export type { ProjectRuntimeMode } from "@cocalc/util/project-runtime";
 
 const VALID_PROJECT_RUNTIMES = new Set<ProjectRuntimeMode>([
   "external",

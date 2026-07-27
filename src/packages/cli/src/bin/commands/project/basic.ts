@@ -257,6 +257,27 @@ export function registerProjectBasicCommands(
       });
     });
 
+  project
+    .command("status")
+    .description("show project lifecycle and runtime capabilities")
+    .option("-w, --project <project>", "project id or name")
+    .action(async (opts: { project?: string }, command: Command) => {
+      await withContext(command, "project status", async (ctx) => {
+        const ws = await resolveProjectFromArgOrContext(ctx, opts.project);
+        const getStatus = ctx.hub.projects.status;
+        if (getStatus == null) {
+          throw new Error("project status is unavailable on this server");
+        }
+        const status = await getStatus({ project_id: ws.project_id });
+        return {
+          project_id: ws.project_id,
+          title: ws.title,
+          host_id: ws.host_id,
+          ...status,
+        };
+      });
+    });
+
   const label = project.command("label").description("manage project labels");
 
   label

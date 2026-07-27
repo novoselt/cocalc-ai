@@ -1,8 +1,11 @@
 import {
   DEFAULT_PROJECT_RUNTIME_HOME,
-  projectRuntimeRootfsContractLabels,
+  PROJECT_RUNTIME_CAPABILITY_KEYS,
   isProjectRuntimeHomeAliasPath,
+  projectRuntimeCapabilityError,
+  projectRuntimeConfiguration,
   projectRuntimeHomeRelativePath,
+  projectRuntimeRootfsContractLabels,
   rootfsLabelsSatisfyCurrentProjectRuntimeContract,
 } from "./project-runtime";
 
@@ -59,5 +62,35 @@ describe("project runtime home helpers", () => {
         "com.cocalc.rootfs.runtime_uid": "1000",
       }),
     ).toBe(false);
+  });
+});
+
+describe("project runtime capabilities", () => {
+  it.each(["external", "podman"] as const)(
+    "keeps every project-host feature enabled for %s",
+    (mode) => {
+      const runtime = projectRuntimeConfiguration(mode);
+      expect(runtime.mode).toBe(mode);
+      expect(runtime.trusted).toBe(false);
+      for (const capability of PROJECT_RUNTIME_CAPABILITY_KEYS) {
+        expect(runtime[capability]).toBe(true);
+      }
+    },
+  );
+
+  it("makes trusted workspace limitations explicit", () => {
+    const runtime = projectRuntimeConfiguration("workspace");
+    expect(runtime).toMatchObject({
+      mode: "workspace",
+      isolation: "trusted-workspace",
+      trusted: true,
+      label: "Trusted workspace",
+    });
+    for (const capability of PROJECT_RUNTIME_CAPABILITY_KEYS) {
+      expect(runtime[capability]).toBe(false);
+    }
+    expect(projectRuntimeCapabilityError(runtime, "host_placement")).toBe(
+      "host placement is unsupported by the trusted workspace runtime (workspace)",
+    );
   });
 });

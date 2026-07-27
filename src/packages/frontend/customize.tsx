@@ -36,6 +36,7 @@ import { deep_copy, dict } from "@cocalc/util/misc";
 import * as theme from "@cocalc/util/theme";
 import type { CustomAIModelPublic } from "@cocalc/util/types/ai";
 import { DefaultQuotaSetting, Upgrades } from "@cocalc/util/upgrades/quota";
+import type { ProjectRuntimeConfiguration } from "@cocalc/util/project-runtime";
 export { TermsOfService } from "@cocalc/frontend/customize/terms-of-service";
 import { delay } from "awaiting";
 import { init as initLite } from "./lite";
@@ -180,6 +181,7 @@ export interface CustomizeState {
   lite?: boolean;
   account_id?: string;
   project_id?: string;
+  project_runtime?: ProjectRuntimeConfiguration;
 }
 
 export class CustomizeStore extends Store<CustomizeState> {

@@ -23,6 +23,7 @@ import {
   type SnapshotRestoreMode,
 } from "@cocalc/conat/files/file-server";
 import type { ProjectState } from "@cocalc/util/db-schema/projects";
+import type { ProjectRuntimeConfiguration } from "@cocalc/util/project-runtime";
 import type {
   ProjectRootfsPublishLroRef,
   RootfsConfigExport,
@@ -2099,6 +2100,7 @@ export interface Projects {
     runtime_exit_reason?: ProjectState["runtime_exit_reason"];
   }) => Promise<void>;
   status?: (opts: { account_id?: string; project_id: string }) => Promise<{
+    runtime: ProjectRuntimeConfiguration;
     state?: string;
     http_port?: number;
     ssh_port?: number;

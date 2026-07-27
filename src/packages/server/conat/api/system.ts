@@ -32,6 +32,7 @@ import {
   getAccountNotificationIndexProjectionBacklogStatus,
 } from "@cocalc/database/postgres/account-notification-index-projector";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import { assertProjectRuntimeCapability } from "@cocalc/server/launchpad/project-runtime";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import { runBayDrainPreflight } from "@cocalc/server/bay-drain/preflight";
 import { recordBrowserAutomationAuditEvent } from "./browser-automation-audit";
@@ -5028,6 +5029,7 @@ export async function publishProjectRootfsImage(
     session_hash?: string | null;
   },
 ): Promise<ProjectRootfsPublishLroRef> {
+  assertProjectRuntimeCapability("rootfs");
   const { account_id, browser_id, session_hash, project_id, ...body } = opts;
   if (!account_id) {
     throw Error("user must be signed in");
@@ -5085,6 +5087,7 @@ export async function setProjectRootfsImage(opts: {
   image: string;
   image_id?: string;
 }): Promise<ProjectRootfsStateEntry[]> {
+  assertProjectRuntimeCapability("rootfs");
   const { account_id, project_id, image, image_id } = opts;
   if (!account_id) {
     throw Error("user must be signed in");

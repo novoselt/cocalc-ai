@@ -49,14 +49,28 @@ describe("Launchpad project runtime mode", () => {
   });
 
   it("allows an explicit Launchpad workspace runtime", async () => {
-    const { getProjectRuntimeMode, isWorkspaceProjectRuntime } = await loadMode(
-      {
-        product: "launchpad",
-        runtime: "workspace",
-      },
-    );
+    const {
+      assertProjectRuntimeCapability,
+      getProjectRuntimeConfiguration,
+      getProjectRuntimeMode,
+      isWorkspaceProjectRuntime,
+    } = await loadMode({
+      product: "launchpad",
+      runtime: "workspace",
+    });
     expect(getProjectRuntimeMode()).toBe("workspace");
     expect(isWorkspaceProjectRuntime()).toBe(true);
+    expect(getProjectRuntimeConfiguration()).toMatchObject({
+      mode: "workspace",
+      isolation: "trusted-workspace",
+      trusted: true,
+      rootfs: false,
+      host_placement: false,
+      ssh: false,
+    });
+    expect(() => assertProjectRuntimeCapability("rootfs")).toThrow(
+      "rootfs is unsupported by the trusted workspace runtime (workspace)",
+    );
   });
 
   it("rejects nested Podman inside Launchpad", async () => {

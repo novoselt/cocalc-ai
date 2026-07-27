@@ -20,6 +20,7 @@ import {
   type ManualSnapshotQuota,
 } from "@cocalc/server/projects/manual-snapshot-admission";
 import type { SnapshotSchedule } from "@cocalc/util/consts/snapshots";
+import { assertProjectRuntimeCapability } from "@cocalc/server/launchpad/project-runtime";
 
 // NOTES about snapshots:
 
@@ -31,6 +32,7 @@ async function projectClient(
   account_id?: string,
   timeout?: number,
 ) {
+  assertProjectRuntimeCapability("snapshots");
   return await getProjectFileServerClient({ project_id, account_id, timeout });
 }
 
@@ -259,6 +261,7 @@ export async function restoreSnapshot({
   service: string;
   stream_name: string;
 }> {
+  assertProjectRuntimeCapability("snapshots");
   await assertCollab({ account_id, project_id });
   await assertProjectOwnerCanIncreaseAccountStorage({ project_id });
   const restoreMode = mode ?? "both";

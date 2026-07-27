@@ -56,6 +56,10 @@ import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import {
+  assertProjectRuntimeCapability,
+  getProjectRuntimeConfiguration,
+} from "@cocalc/server/launchpad/project-runtime";
 import { resolveProjectCollabInviteDirectory } from "@cocalc/server/projects/collab-invite-directory";
 import { resolveOnPremHost } from "@cocalc/server/onprem";
 import { posix } from "path";
@@ -1451,6 +1455,7 @@ export async function getProjectRootfsPublishConfig({
   account_id: string;
   project_id: string;
 }): Promise<ProjectRootfsPublishConfig | null> {
+  assertProjectRuntimeCapability("rootfs");
   return (await getProjectReadDetailsAllowRemote({ account_id, project_id }))
     .rootfs_publish_config;
 }
@@ -1481,6 +1486,7 @@ export async function setProjectRootfsPublishConfig({
   project_id: string;
   config: ProjectRootfsPublishConfig | null;
 }): Promise<void> {
+  assertProjectRuntimeCapability("rootfs");
   const normalized = validateProjectRootfsPublishConfig(config);
   await assertCollab({ account_id, project_id });
   await withProjectRehomeWriteFence({
@@ -1537,6 +1543,7 @@ async function getProjectRootfsBuildClient({
   project_id: string;
   timeout?: number;
 }) {
+  assertProjectRuntimeCapability("rootfs");
   await assertCollabAllowRemoteProjectAccess({ account_id, project_id });
   const host_id = await getProjectHostId(project_id);
   const client = await getRoutedHostControlClient({
@@ -1706,6 +1713,7 @@ export async function listProjectRootfsBuilds({
   project_id,
   limit,
 }: ProjectRootfsBuildListRequest): Promise<ProjectRootfsBuildRecord[]> {
+  assertProjectRuntimeCapability("rootfs");
   await assertCollabAllowRemoteProjectAccess({ account_id, project_id });
   return await listProjectRootfsBuildRecords({ project_id, limit });
 }
@@ -1716,6 +1724,7 @@ export async function recordProjectRootfsBuildPublish({
   build_id,
   publish_op_id,
 }: ProjectRootfsBuildPublishRecordRequest): Promise<ProjectRootfsBuildPublishRecordResponse> {
+  assertProjectRuntimeCapability("rootfs");
   await assertCollabAllowRemoteProjectAccess({ account_id, project_id });
   const build = await getProjectRootfsBuildRecord({ project_id, build_id });
   if (!build) {
@@ -2684,6 +2693,7 @@ export async function generateProjectSshKeySecret({
   project_id: string;
   secret_name?: string;
 }): Promise<GenerateProjectSshKeySecretResult> {
+  assertProjectRuntimeCapability("ssh");
   const actor = requireAccountId(account_id);
   const authSession = await requireDangerousProjectMutationAuth({
     account_id: actor,
@@ -2723,6 +2733,7 @@ export async function getProjectSnapshotSchedule({
   account_id: string;
   project_id: string;
 }): Promise<ProjectSnapshotSchedule> {
+  assertProjectRuntimeCapability("snapshots");
   return (await getProjectReadDetailsAllowRemote({ account_id, project_id }))
     .snapshots;
 }
@@ -2734,6 +2745,7 @@ export async function getProjectBackupSchedule({
   account_id: string;
   project_id: string;
 }): Promise<ProjectBackupSchedule> {
+  assertProjectRuntimeCapability("backups");
   return (await getProjectReadDetailsAllowRemote({ account_id, project_id }))
     .backups;
 }
@@ -4383,6 +4395,7 @@ export async function resolveWorkspaceSshConnection({
   project_id: string;
   direct?: boolean;
 }): Promise<WorkspaceSshConnectionInfo> {
+  assertProjectRuntimeCapability("ssh");
   await assertCollab({ account_id, project_id });
   const row = await getAssignedProjectHostInfo(project_id);
   const metadata = row.metadata ?? {};
@@ -4502,6 +4515,7 @@ export async function startFromHost({
   service: string;
   stream_name: string;
 }> {
+  assertProjectRuntimeCapability("host_placement");
   await assertProjectAssignedToHostForStart({ host_id, project_id });
   return await runProjectStartLikeAction({
     kind: "start",
@@ -4883,6 +4897,7 @@ export async function archiveProject({
   account_id?: string;
   project_id: string;
 }): Promise<void> {
+  assertProjectRuntimeCapability("archive");
   await assertCanPerformDestructiveStorageAction({
     account_id,
     project_id,
@@ -5128,6 +5143,7 @@ export async function status({
       epoch: ownership.epoch,
     });
   return {
+    runtime: getProjectRuntimeConfiguration(),
     state: state.state,
     http_port: state.http_port,
     ssh_port: state.ssh_port,
@@ -5529,6 +5545,7 @@ export async function updateAuthorizedKeysOnHost({
   account_id: string;
   project_id: string;
 }): Promise<void> {
+  assertProjectRuntimeCapability("ssh");
   await assertCollab({ account_id, project_id });
   await updateAuthorizedKeysOnHostControl(project_id);
 }
@@ -5878,6 +5895,7 @@ export async function setProjectSshKey({
   creation_date?: number;
   last_use_date?: number;
 }): Promise<void> {
+  assertProjectRuntimeCapability("ssh");
   await requireDangerousProjectMutationAuth({
     account_id,
     browser_id,
@@ -5920,6 +5938,7 @@ export async function deleteProjectSshKey({
   project_id: string;
   fingerprint: string;
 }): Promise<void> {
+  assertProjectRuntimeCapability("ssh");
   await requireDangerousProjectMutationAuth({
     account_id,
     browser_id,
@@ -5967,6 +5986,7 @@ export async function moveProject({
   service: string;
   stream_name: string;
 }> {
+  assertProjectRuntimeCapability("move");
   const authSession = await requireDangerousProjectMutationAuth({
     account_id,
     browser_id,
@@ -6128,6 +6148,7 @@ export async function assignProjectHost({
   dest_host_id: string;
   skip_owner_route?: boolean;
 }): Promise<void> {
+  assertProjectRuntimeCapability("host_placement");
   if (!account_id) {
     throw new Error("user must be signed in");
   }

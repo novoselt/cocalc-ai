@@ -942,6 +942,33 @@ Exit gate:
 - the developer can distinguish a workspace project from a real project host;
 - ordinary project UX remains functional.
 
+Result (2026-07-26):
+
+- A shared runtime contract now describes the runtime mode, isolation boundary,
+  trust model, label, and capabilities for RootFS, snapshots, backups, move,
+  archive, SSH, GPU, resource limits, host placement, and cloud hosts. Existing
+  Podman and external project-host modes retain their complete capability set;
+  workspace mode explicitly disables the unsupported controls.
+- The hub publishes this contract in `/customize`, making it available before
+  any project starts. Project status also returns the same contract, and
+  `cocalc project status` exposes it to developers and operators.
+- Workspace project creation strips stale image and host selections, bypasses
+  automatic host assignment, and rejects explicit RootFS or host requests at
+  the server boundary.
+- Project creation and settings identify the trusted workspace runtime. The
+  UI removes RootFS, host placement, GPU, backup, snapshot, move, archive, SSH,
+  and resource-limit controls instead of allowing them to fail later. The
+  dedicated RootFS rail and flyout are also unavailable.
+- RootFS mutation/build/publish, backup/restore, snapshot/restore, host
+  assignment, move, archive, SSH endpoint/key mutation, and schedule APIs fail
+  synchronously with a runtime capability error in workspace mode. This avoids
+  queued operations that can never reach a project host.
+- The existing RootFS runtime-user/image contract remains intact alongside the
+  new capability contract. Focused runtime, configuration, CLI, package
+  typechecks, frontend lint, and the complete CLI test suite pass.
+- Activating `COCALC_PROJECT_RUNTIME=workspace` and browser/SSH-forward smoke
+  testing are deliberately left to the following configuration step.
+
 Expected effort: 1 to 2 focused engineering days.
 
 ### Phase 3: private hostname backend
