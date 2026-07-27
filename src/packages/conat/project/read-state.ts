@@ -67,6 +67,7 @@ interface ReadStateKV {
   getAll: () => Record<string, ProjectReadStateEntry>;
   set: (key: string, value: ProjectReadStateEntry) => void;
   delete: (key: string) => void;
+  isClosed?: () => boolean;
   close: () => void;
   on?: (event: string, listener: (event: any) => void) => void;
   off?: (event: string, listener: (event: any) => void) => void;
@@ -103,6 +104,7 @@ export interface ProjectReadStateStore {
     opts: { message_id: string; at?: Date },
   ) => ChatReadStateEntry;
   onChange: (listener: (path: string) => void) => () => void;
+  isClosed: () => boolean;
   close: () => void;
 }
 
@@ -137,7 +139,12 @@ export function createProjectReadStateStore({
   project_id: string;
   store: ReadStateKV;
 }): ProjectReadStateStore {
+  const isClosed = (): boolean => store.isClosed?.() ?? false;
+
   const get = (path: string): ProjectReadStateEntry | undefined => {
+    if (isClosed()) {
+      return undefined;
+    }
     const value = store.get(path);
     return value == null
       ? undefined
@@ -158,6 +165,9 @@ export function createProjectReadStateStore({
   }: {
     kind?: ProjectReadStateKind;
   } = {}): ProjectReadStateListEntry[] => {
+    if (isClosed()) {
+      return [];
+    }
     return Object.entries(store.getAll())
       .filter(
         ([, value]) => value != null && (kind == null || value.kind === kind),
@@ -271,6 +281,7 @@ export function createProjectReadStateStore({
     touchChatThread,
     markChatThreadRead,
     onChange,
+    isClosed,
     close: store.close,
   };
 }
