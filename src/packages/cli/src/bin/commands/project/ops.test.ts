@@ -8,6 +8,59 @@ import {
   getMovePlacementFallbackTimeoutMs,
   readProjectLogPage,
 } from "./ops";
+import {
+  buildManagedProjectSshConfigLines,
+  managedProjectSshOptionArgs,
+} from "./ssh-config";
+
+test("managed project ssh config accepts a first-use host key in batch mode", () => {
+  const lines = buildManagedProjectSshConfigLines({
+    alias: "project-id",
+    hostName: "ssh.example.com",
+    username: "project-id",
+    proxyCommand: "cloudflared access ssh --hostname %h",
+    identityFile: "/home/user/.ssh/id_ed25519",
+  });
+
+  assert.deepEqual(lines, [
+    "Host project-id",
+    "  HostName ssh.example.com",
+    "  User project-id",
+    "  ProxyCommand cloudflared access ssh --hostname %h",
+    "  StrictHostKeyChecking accept-new",
+    "  ServerAliveInterval 15",
+    "  ServerAliveCountMax 2",
+    "  IdentityFile /home/user/.ssh/id_ed25519",
+    "  IdentitiesOnly yes",
+    "  BatchMode yes",
+    "  PreferredAuthentications publickey",
+    "  PasswordAuthentication no",
+    "  KbdInteractiveAuthentication no",
+  ]);
+  assert.ok(
+    lines.indexOf("  StrictHostKeyChecking accept-new") <
+      lines.indexOf("  BatchMode yes"),
+  );
+});
+
+test("one-shot project ssh commands use the same noninteractive host-key policy", () => {
+  assert.deepEqual(managedProjectSshOptionArgs(), [
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=2",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "PreferredAuthentications=publickey",
+    "-o",
+    "PasswordAuthentication=no",
+    "-o",
+    "KbdInteractiveAuthentication=no",
+  ]);
+});
 
 test("getMovePlacementFallbackTimeoutMs preserves the full timeout for timed out move waits", () => {
   assert.equal(
