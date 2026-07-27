@@ -325,22 +325,27 @@ The focused suite currently passes 87 tests across six suites.
 
 ## Five Whys
 
-1. **Why did the destination appear empty?**  
+1. **Why did the destination appear empty?**
+
    The explicit backup restore never ran on the destination.
 
-2. **Why did the restore not run even though its LRO succeeded?**  
+2. **Why did the restore not run even though its LRO succeeded?**
+
    A recent cached `running` state caused the start path to return success
    before examining destination state or invoking the project host.
 
-3. **Why was there a recent `running` state during a move?**  
+3. **Why was there a recent `running` state during a move?**
+
    User traffic triggered autostart on the source while the final backup was
    running.
 
-4. **Why could autostart run during a move?**  
+4. **Why could autostart run during a move?**
+
    Project moves and project starts had separate serialization mechanisms and
    no shared project-level exclusion fence.
 
-5. **Why did tests and monitoring not catch this before the user?**  
+5. **Why did tests and monitoring not catch this before the user?**
+
    Tests covered overlapping start LROs and live destination state, but not an
    autostart completed during backup followed by a stale source-host runtime
    snapshot. Monitoring tracked terminal LRO status but did not require a
