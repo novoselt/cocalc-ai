@@ -72,15 +72,9 @@ overrides:
   tar@<=7.5.15: '>=7.5.16'
 
 patchedDependencies:
-  '@rc-component/portal@2.2.0':
-    hash: b6f877518e590497afc1bc08045e7388a098c2d276d59c861683811ebfb8da04
-    path: patches/@rc-component__portal@2.2.0.patch
-  fs-ext@2.1.1:
-    hash: 8de34bb8636073ff75cba28e1092a4e6bd4b0f9f8b2cc05b5fc95f80d978408b
-    path: patches/fs-ext@2.1.1.patch
-  slate-react@0.124.0:
-    hash: 480c324a03628679a405b79a110bbd6bd6802f7d1379a491163e19156c5d7c85
-    path: patches/slate-react@0.124.0.patch
+  '@rc-component/portal@2.2.0': b6f877518e590497afc1bc08045e7388a098c2d276d59c861683811ebfb8da04
+  fs-ext@2.1.1: 8de34bb8636073ff75cba28e1092a4e6bd4b0f9f8b2cc05b5fc95f80d978408b
+  slate-react@0.124.0: 480c324a03628679a405b79a110bbd6bd6802f7d1379a491163e19156c5d7c85
 
 importers:
 
@@ -1138,9 +1132,6 @@ importers:
       react:
         specifier: ^19.2.1
         version: 19.2.1
-      uglify-js:
-        specifier: ^3.14.1
-        version: 3.19.3
       validator:
         specifier: '>=13.15.22'
         version: 13.15.23
