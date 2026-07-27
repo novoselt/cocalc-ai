@@ -8,15 +8,19 @@ const {
   allocatePortPair,
   appSpec,
   assertProjectScopedAuthFresh,
+  browserUrl,
   environmentExports,
+  extractBootstrapRegistrationUrl,
   initSite,
   launchpadEnvironment,
+  localBootstrapRegistrationUrl,
   normalizeProjectId,
   normalizeSiteName,
   ordinaryAppUrl,
   parseArgs,
   parseCliJson,
   readConfig,
+  rebaseBootstrapRegistrationUrl,
 } = require("./workspace-site.js");
 
 test("workspace site names and outer project ids are strict", () => {
@@ -167,6 +171,65 @@ test("ordinary app URLs never expose an internal control-plane origin", () => {
     ordinaryAppUrl({ ...config, site_url: "https://cocalc.ai" }),
     "https://cocalc.ai/12345678-1234-4123-8123-123456789abc/apps/cocalc-dev-feature-a/",
   );
+});
+
+test("bootstrap registration URLs are extracted and rebased for each access mode", () => {
+  const logged =
+    "Started HUB! http://127.0.0.1:14000/auth/sign-up?registrationToken=secret-token&bootstrap=1";
+  const extracted = extractBootstrapRegistrationUrl("noise", logged);
+  assert.equal(
+    extracted,
+    "http://127.0.0.1:14000/auth/sign-up?registrationToken=secret-token&bootstrap=1",
+  );
+
+  const config = {
+    app_id: "cocalc-dev-feature-a",
+    outer_project_id: "12345678-1234-4123-8123-123456789abc",
+    site_url: "https://cocalc.ai",
+    base_port: 14_000,
+  };
+  assert.equal(
+    rebaseBootstrapRegistrationUrl(config, extracted),
+    "https://cocalc.ai/12345678-1234-4123-8123-123456789abc/apps/cocalc-dev-feature-a/auth/sign-up?registrationToken=secret-token&bootstrap=1",
+  );
+  assert.equal(
+    rebaseBootstrapRegistrationUrl(
+      { ...config, private_url: "https://dev-example.cocalc.ai/" },
+      extracted,
+    ),
+    "https://dev-example.cocalc.ai/auth/sign-up?registrationToken=secret-token&bootstrap=1",
+  );
+  assert.equal(
+    browserUrl({
+      app_id: "cocalc-dev-feature-a",
+      outer_project_id: null,
+      base_port: 14_000,
+    }),
+    "http://127.0.0.1:14000/",
+  );
+});
+
+test("local bootstrap registration ignores tokens from earlier process runs", () => {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "cocalc-workspace-bootstrap-"),
+  );
+  const stdoutLog = path.join(root, "launchpad.log");
+  const old =
+    "http://127.0.0.1:14000/auth/sign-up?registrationToken=old&bootstrap=1\n";
+  try {
+    fs.writeFileSync(stdoutLog, `${old}new startup without a token\n`);
+    assert.equal(
+      localBootstrapRegistrationUrl({
+        stdout_log: stdoutLog,
+        local_log_start_bytes: Buffer.byteLength(old),
+        base_port: 14_000,
+        outer_project_id: null,
+      }),
+      null,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("managed commands explain expired project-scoped authentication", () => {

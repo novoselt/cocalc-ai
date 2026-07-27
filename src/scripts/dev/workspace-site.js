@@ -553,6 +553,56 @@ function localUrl(config) {
   return `http://127.0.0.1:${config.base_port}/`;
 }
 
+function browserUrl(config) {
+  return config.private_url ?? ordinaryAppUrl(config) ?? localUrl(config);
+}
+
+function extractBootstrapRegistrationUrl(...values) {
+  const text = values
+    .flat(Infinity)
+    .filter((value) => typeof value === "string" || Buffer.isBuffer(value))
+    .map((value) => `${value}`)
+    .join("\n");
+  const candidates = text.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const candidate = candidates[i].replace(/[),.;]+$/, "");
+    try {
+      const url = new URL(candidate);
+      if (
+        url.pathname.endsWith("/auth/sign-up") &&
+        url.searchParams.has("registrationToken") &&
+        url.searchParams.get("bootstrap") === "1"
+      ) {
+        return url.toString();
+      }
+    } catch {
+      // Other log URLs are irrelevant.
+    }
+  }
+  return null;
+}
+
+function rebaseBootstrapRegistrationUrl(config, loggedUrl) {
+  if (!loggedUrl) return null;
+  const parsed = new URL(loggedUrl);
+  const relative = `${parsed.pathname.replace(/^\/+/, "")}${parsed.search}${parsed.hash}`;
+  return new URL(relative, browserUrl(config)).toString();
+}
+
+function localBootstrapRegistrationUrl(config) {
+  if (!existsSync(config.stdout_log)) return null;
+  const output = readFileSync(config.stdout_log);
+  const start = Math.max(
+    0,
+    Math.min(output.length, Number(config.local_log_start_bytes ?? 0) || 0),
+  );
+  const tail = output.subarray(Math.max(start, output.length - 1024 * 1024));
+  return rebaseBootstrapRegistrationUrl(
+    config,
+    extractBootstrapRegistrationUrl(tail),
+  );
+}
+
 function appSpec(config) {
   return {
     version: 1,
@@ -773,6 +823,10 @@ async function startLocal(config) {
     );
   }
   mkdirSync(dirname(config.stdout_log), { recursive: true });
+  config.local_log_start_bytes = existsSync(config.stdout_log)
+    ? statSync(config.stdout_log).size
+    : 0;
+  saveConfig(config);
   const logFd = openSync(config.stdout_log, "a", 0o600);
   const child = spawn(
     config.node_bin,
@@ -892,10 +946,36 @@ async function startSite(config) {
       "--timeout",
       "2m",
     ]);
-    return { supervisor: config.supervisor, build, runtime };
+    const logs = runCliJson(config, [
+      "project",
+      "app",
+      "logs",
+      config.app_id,
+      "--project",
+      config.outer_project_id,
+      "--tail",
+      "2000",
+    ]);
+    const admin_registration_url = rebaseBootstrapRegistrationUrl(
+      config,
+      extractBootstrapRegistrationUrl(logs.stdout, logs.stderr),
+    );
+    return {
+      supervisor: config.supervisor,
+      build,
+      runtime,
+      browser_url: browserUrl(config),
+      admin_registration_url,
+    };
   }
   const runtime = await startLocal(config);
-  return { supervisor: config.supervisor, build, runtime };
+  return {
+    supervisor: config.supervisor,
+    build,
+    runtime,
+    browser_url: browserUrl(config),
+    admin_registration_url: localBootstrapRegistrationUrl(config),
+  };
 }
 
 async function stopSite(config) {
@@ -916,6 +996,7 @@ async function stopSite(config) {
 
 async function statusSite(config) {
   let runtime;
+  let adminRegistrationUrl;
   if (config.supervisor === "project-app") {
     try {
       runtime = runCliJson(config, [
@@ -926,6 +1007,10 @@ async function statusSite(config) {
         "--project",
         config.outer_project_id,
       ]);
+      adminRegistrationUrl = rebaseBootstrapRegistrationUrl(
+        config,
+        extractBootstrapRegistrationUrl(runtime.stdout, runtime.stderr),
+      );
     } catch (err) {
       runtime = { state: "unknown", error: `${err?.message ?? err}` };
     }
@@ -936,6 +1021,7 @@ async function statusSite(config) {
       pid: pid ?? null,
       health: pid ? await httpReady(config) : { ready: false },
     };
+    adminRegistrationUrl = localBootstrapRegistrationUrl(config);
   }
   return {
     name: config.name,
@@ -964,6 +1050,7 @@ async function statusSite(config) {
       private_url: config.private_url,
       local_url: localUrl(config),
     },
+    admin_registration_url: adminRegistrationUrl ?? null,
     trust: {
       runtime: "workspace",
       isolation: "none",
@@ -1157,8 +1244,7 @@ function environmentExports(config) {
     COCALC_WORKSPACE_SITE_PORT: `${config.base_port}`,
     COCALC_WORKSPACE_SITE_LOCAL_URL: localUrl(config),
     COCALC_WORKSPACE_SITE_APP_ID: config.app_id,
-    COCALC_WORKSPACE_SITE_URL:
-      config.private_url ?? ordinaryAppUrl(config) ?? localUrl(config),
+    COCALC_WORKSPACE_SITE_URL: browserUrl(config),
   };
   if (config.outer_project_id) {
     values.COCALC_WORKSPACE_SITE_PROJECT_ID = config.outer_project_id;
@@ -1189,6 +1275,19 @@ function printHuman(command, value) {
     );
     return;
   }
+  if (command === "start" || command === "restart") {
+    console.log(`workspace site: ${value.runtime.state ?? "running"}`);
+    console.log(`supervisor:    ${value.supervisor}`);
+    console.log(`browser URL:   ${value.browser_url}`);
+    if (value.admin_registration_url) {
+      console.log(`admin signup:  ${value.admin_registration_url}`);
+    } else {
+      console.log(
+        "admin signup:  not present (an admin may already be registered)",
+      );
+    }
+    return;
+  }
   if (command === "status") {
     console.log(
       `workspace site '${value.name}': ${value.runtime.state ?? "unknown"}`,
@@ -1208,6 +1307,9 @@ function printHuman(command, value) {
     }
     if (value.app.private_url) {
       console.log(`private:    ${value.app.private_url}`);
+    }
+    if (value.admin_registration_url) {
+      console.log(`admin:      ${value.admin_registration_url}`);
     }
     console.log(`warning:    ${value.trust.warning}`);
     if (value.runtime.error) console.log(`error:      ${value.runtime.error}`);
@@ -1326,13 +1428,16 @@ module.exports = {
   allocatePortPair,
   appSpec,
   assertProjectScopedAuthFresh,
+  browserUrl,
   buildStatus,
   defaultSitesRoot,
   environmentExports,
+  extractBootstrapRegistrationUrl,
   hashName,
   initSite,
   isPathInside,
   launchpadEnvironment,
+  localBootstrapRegistrationUrl,
   normalizeProjectId,
   normalizeSiteName,
   ordinaryAppUrl,
@@ -1340,6 +1445,7 @@ module.exports = {
   parseCliJson,
   portPairAvailable,
   readConfig,
+  rebaseBootstrapRegistrationUrl,
   refreshPublicSiteUrl,
   siteDir,
   sitesRoot,

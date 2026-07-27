@@ -33,6 +33,14 @@ short-lived project token has expired, open a fresh project terminal or refresh
 the project session before rerunning the command; do not store a broad account
 session in the collaborative project merely to start the app.
 
+On a new site with no administrator, both `start` and `status` print an
+`admin signup` URL containing Launchpad's single-use bootstrap registration
+token. Open that URL to create the first administrator. The command rebases the
+Launchpad-generated URL onto the current local, managed-app, or random-hostname
+access path. Those paths are already protected by the outer project's
+collaborator authorization or the developer's SSH tunnel, so the inner
+registration token does not grant access to a non-collaborator.
+
 The random authenticated hostname flow is explicit:
 
 ```bash
