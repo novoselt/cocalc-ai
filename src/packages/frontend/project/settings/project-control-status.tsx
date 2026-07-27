@@ -148,6 +148,7 @@ function ArchiveControlStatusBanner({
           {phase.detail}
         </div>
         <Progress
+          aria-label="Project archive progress"
           percent={phase.percent}
           showInfo={false}
           size="small"

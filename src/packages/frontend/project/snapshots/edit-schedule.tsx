@@ -212,6 +212,7 @@ export default function EditSchedule() {
               <Flex style={{ marginBottom: "5px" }}>
                 <div style={{ flex: 0.5 }}>Every 15 minutes</div>
                 <InputNumber
+                  aria-label="Snapshots every 15 minutes"
                   suffix="snapshots"
                   precision={0}
                   style={{ flex: 0.5 }}
@@ -233,6 +234,7 @@ export default function EditSchedule() {
               <Flex style={{ marginBottom: "5px" }}>
                 <div style={{ flex: 0.5 }}>Daily</div>
                 <InputNumber
+                  aria-label="Daily snapshots"
                   suffix="snapshots"
                   style={{ flex: 0.5 }}
                   step={1}
@@ -253,6 +255,7 @@ export default function EditSchedule() {
               <Flex style={{ marginBottom: "5px" }}>
                 <div style={{ flex: 0.5 }}>Weekly</div>
                 <InputNumber
+                  aria-label="Weekly snapshots"
                   suffix="snapshots"
                   style={{ flex: 0.5 }}
                   step={1}
@@ -273,6 +276,7 @@ export default function EditSchedule() {
               <Flex>
                 <div style={{ flex: 0.5 }}>Monthly</div>
                 <InputNumber
+                  aria-label="Monthly snapshots"
                   suffix="snapshots"
                   style={{ flex: 0.5 }}
                   step={1}

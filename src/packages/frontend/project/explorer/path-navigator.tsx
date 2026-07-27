@@ -200,6 +200,7 @@ function LongPressButton({
   const button = (
     <Tooltip title={dropdownOpen ? "" : title}>
       <Button
+        aria-label={title}
         icon={icon}
         type="text"
         disabled={disabled}

@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 
 import { spawn, execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -12,6 +19,7 @@ import { createRequire } from "node:module";
 import lighthouse, { desktopConfig, generateReport } from "lighthouse";
 
 import {
+  createAxeSummary,
   createPageSummary,
   helpText,
   loadPageMatrix,
@@ -276,6 +284,19 @@ async function authenticate(page, loginUrl) {
     waitUntil: "domcontentloaded",
     timeout: 60_000,
   });
+  const continueImpersonation = page.getByRole("button", {
+    exact: true,
+    name: "Continue impersonation",
+  });
+  if (
+    await continueImpersonation.isVisible({ timeout: 5000 }).catch(() => false)
+  ) {
+    await continueImpersonation.click();
+    await page.waitForURL(
+      (url) => !url.pathname.startsWith("/auth/impersonate"),
+      { timeout: 60_000 },
+    );
+  }
   await page
     .waitForLoadState("networkidle", { timeout: 10_000 })
     .catch(() => undefined);
@@ -287,6 +308,14 @@ async function warmPage(page, pageConfig, url) {
     waitUntil: "domcontentloaded",
     timeout: 120_000,
   });
+  if (
+    pageConfig.authentication !== "none" &&
+    new URL(page.url()).pathname === "/"
+  ) {
+    throw new Error(
+      `authenticated route redirected to the landing page: ${url}`,
+    );
+  }
   if (pageConfig.readySelector) {
     await page.waitForSelector(pageConfig.readySelector, {
       state: "visible",
@@ -324,6 +353,156 @@ async function auditPage(chrome, pageConfig, url, verbose) {
   return result.lhr;
 }
 
+function actionLocator(page, action) {
+  if (action.selector) {
+    return page.locator(action.selector).first();
+  }
+  if (action.role) {
+    const name =
+      action.nameRegex != null
+        ? new RegExp(action.nameRegex, action.nameRegexFlags)
+        : action.name;
+    return page.getByRole(action.role, {
+      exact: action.exact ?? action.nameRegex == null,
+      name,
+    });
+  }
+  if (action.text) {
+    return page.getByText(action.text, { exact: action.exact ?? true });
+  }
+  throw new Error(
+    `${action.type} action needs selector, role, or text targeting`,
+  );
+}
+
+async function runScenarioActions(page, actions, remembered) {
+  for (const action of actions ?? []) {
+    const timeout = action.timeoutMs ?? 30_000;
+    switch (action.type) {
+      case "assertFocus": {
+        const element = remembered.get(action.key);
+        if (!element) {
+          throw new Error(`no remembered element named ${action.key}`);
+        }
+        const focused = await element.evaluate(
+          (node) => document.activeElement === node,
+        );
+        if (!focused) {
+          throw new Error(
+            `expected focus to return to remembered element ${action.key}`,
+          );
+        }
+        break;
+      }
+      case "assertFocusWithin": {
+        const locator = actionLocator(page, action);
+        await locator.waitFor({ state: "visible", timeout });
+        const focused = await locator.evaluate(
+          (node) =>
+            document.activeElement === node ||
+            node.contains(document.activeElement),
+        );
+        if (!focused) {
+          throw new Error(`expected focus within ${locator}`);
+        }
+        break;
+      }
+      case "assertHidden":
+        await actionLocator(page, action).waitFor({
+          state: "hidden",
+          timeout,
+        });
+        break;
+      case "click":
+        await actionLocator(page, action).click({ timeout });
+        break;
+      case "focus":
+        await actionLocator(page, action).focus({ timeout });
+        break;
+      case "press":
+        if (action.selector || action.role || action.text) {
+          await actionLocator(page, action).press(action.key, { timeout });
+        } else {
+          await page.keyboard.press(action.key);
+        }
+        break;
+      case "remember": {
+        const locator = actionLocator(page, action);
+        await locator.waitFor({ state: "visible", timeout });
+        const element = await locator.elementHandle();
+        if (!element) {
+          throw new Error(`unable to remember element ${action.key}`);
+        }
+        remembered.set(action.key, element);
+        break;
+      }
+      case "wait":
+        await actionLocator(page, action).waitFor({
+          state: action.state ?? "visible",
+          timeout,
+        });
+        break;
+      case "waitForTimeout":
+        await page.waitForTimeout(action.timeoutMs ?? 250);
+        break;
+      default:
+        throw new Error(`unsupported scenario action: ${action.type}`);
+    }
+  }
+}
+
+async function loadAxeSource() {
+  const require = createRequire(import.meta.url);
+  const entry = require.resolve("axe-core/axe.min.js", {
+    paths: [SRC_ROOT],
+  });
+  return await readFile(entry, "utf8");
+}
+
+async function auditScenario(page, pageConfig, url, axeSource) {
+  await warmPage(page, pageConfig, url);
+  const remembered = new Map();
+  await runScenarioActions(page, pageConfig.actions, remembered);
+  try {
+    await page.addScriptTag({ content: axeSource });
+    const result = await page.evaluate(async () => {
+      return await globalThis.axe.run(document, {
+        resultTypes: ["violations", "incomplete", "passes", "inapplicable"],
+        runOnly: {
+          type: "tag",
+          values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"],
+        },
+      });
+    });
+    for (const violation of result.violations ?? []) {
+      for (const node of violation.nodes ?? []) {
+        const selector = node.target?.[0];
+        if (typeof selector !== "string") continue;
+        node.debug = await page
+          .locator(selector)
+          .first()
+          .evaluate((element) => ({
+            accessibleText: element.textContent,
+            outerHTML: element.outerHTML,
+          }))
+          .catch(() => undefined);
+      }
+    }
+    return result;
+  } finally {
+    await runScenarioActions(page, pageConfig.cleanupActions, remembered).catch(
+      (error) => {
+        throw new Error(`scenario cleanup failed: ${error.message}`, {
+          cause: error,
+        });
+      },
+    );
+    for (const element of remembered.values()) {
+      await element.dispose();
+    }
+  }
+}
+
 function safeId(value) {
   return value.replace(/[^a-zA-Z0-9_-]+/g, "-");
 }
@@ -332,6 +511,85 @@ async function writePageReports(outputDir, pageId, lhr) {
   const prefix = join(outputDir, safeId(pageId));
   await writeFile(`${prefix}.json`, `${JSON.stringify(lhr, null, 2)}\n`);
   await writeFile(`${prefix}.html`, generateReport(lhr, "html"));
+}
+
+function escapeHtml(value) {
+  return `${value ?? ""}`
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function renderAxeReport(pageConfig, url, result) {
+  const violations = result.violations ?? [];
+  const violationHtml =
+    violations.length === 0
+      ? '<p class="pass">No WCAG 2.x violations detected.</p>'
+      : violations
+          .map(
+            (violation) => `<section>
+  <h2>${escapeHtml(violation.help)} <code>${escapeHtml(violation.id)}</code></h2>
+  <p><strong>Impact:</strong> ${escapeHtml(violation.impact ?? "unknown")}</p>
+  <p>${escapeHtml(violation.description)}</p>
+  <p><a href="${escapeHtml(violation.helpUrl)}">Rule documentation</a></p>
+  ${(violation.nodes ?? [])
+    .map(
+      (node) => `<article>
+    <h3>${escapeHtml(node.target?.join(", "))}</h3>
+    <pre>${escapeHtml(node.html)}</pre>
+    <pre>${escapeHtml(node.failureSummary)}</pre>
+  </article>`,
+    )
+    .join("\n")}
+</section>`,
+          )
+          .join("\n");
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(pageConfig.title)} accessibility report</title>
+  <style>
+    body { color: #1f2937; font: 16px/1.5 sans-serif; margin: 0 auto; max-width: 1100px; padding: 2rem; }
+    a { color: #075985; }
+    article, section { border-top: 1px solid #d1d5db; margin-top: 1.5rem; padding-top: 1rem; }
+    code, pre { background: #f3f4f6; border-radius: 4px; overflow-wrap: anywhere; padding: .25rem; white-space: pre-wrap; }
+    .pass { background: #dcfce7; border: 1px solid #16a34a; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(pageConfig.title)}</h1>
+  <p><a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p>
+  <p>${violations.length} violations, ${result.incomplete?.length ?? 0} incomplete checks, ${result.passes?.length ?? 0} passing rules.</p>
+  ${violationHtml}
+</body>
+</html>
+`;
+}
+
+async function writeAxeReports(outputDir, pageConfig, url, result) {
+  const prefix = join(outputDir, safeId(pageConfig.id));
+  await writeFile(`${prefix}.json`, `${JSON.stringify(result, null, 2)}\n`);
+  await writeFile(`${prefix}.html`, renderAxeReport(pageConfig, url, result));
+}
+
+async function writeFailureDiagnostics(outputDir, pageConfig, page) {
+  const prefix = join(outputDir, `${safeId(pageConfig.id)}-error`);
+  await page
+    .screenshot({ fullPage: true, path: `${prefix}.png` })
+    .catch(() => undefined);
+  const diagnostic = {
+    bodyText: await page
+      .locator("body")
+      .innerText({ timeout: 2000 })
+      .catch(() => undefined),
+    title: await page.title().catch(() => undefined),
+    url: page.url(),
+  };
+  await writeFile(`${prefix}.json`, `${JSON.stringify(diagnostic, null, 2)}\n`);
 }
 
 async function main() {
@@ -386,6 +644,9 @@ async function main() {
   }
 
   const chrome = await launchChromium(options);
+  const axeSource = pages.some(({ engine }) => engine === "axe")
+    ? await loadAxeSource()
+    : undefined;
   const summaries = [];
   try {
     process.stdout.write(
@@ -397,15 +658,35 @@ async function main() {
       const url = resolvePageUrl(pageConfig, baseUrl, projectId);
       process.stdout.write(`Auditing ${pageConfig.id}: ${url}\n`);
       try {
-        const lhr = await auditPage(chrome, pageConfig, url, options.verbose);
-        await writePageReports(outputDir, pageConfig.id, lhr);
-        const summary = createPageSummary(pageConfig, url, lhr);
+        let summary;
+        if (pageConfig.engine === "axe") {
+          const result = await auditScenario(
+            chrome.page,
+            pageConfig,
+            url,
+            axeSource,
+          );
+          await writeAxeReports(outputDir, pageConfig, url, result);
+          summary = createAxeSummary(pageConfig, url, result);
+        } else {
+          const lhr = await auditPage(chrome, pageConfig, url, options.verbose);
+          await writePageReports(outputDir, pageConfig.id, lhr);
+          summary = createPageSummary(pageConfig, url, lhr);
+        }
         summaries.push(summary);
+        const result =
+          summary.engine === "axe"
+            ? `${summary.violationCount} violations`
+            : `${Math.round(summary.score * 100)} (minimum ${Math.round(summary.minimumScore * 100)})`;
         process.stdout.write(
-          `  ${Math.round(summary.score * 100)} (minimum ${Math.round(summary.minimumScore * 100)}) ${summary.passed ? "PASS" : "FAIL"}\n`,
+          `  ${result} ${summary.passed ? "PASS" : "FAIL"}\n`,
         );
       } catch (error) {
+        await writeFailureDiagnostics(outputDir, pageConfig, chrome.page).catch(
+          () => undefined,
+        );
         summaries.push({
+          engine: pageConfig.engine,
           id: pageConfig.id,
           title: pageConfig.title,
           url,

@@ -96,6 +96,7 @@ export function LanguageSelector({
 
   return (
     <Select
+      aria-label="Language"
       value={value}
       onChange={onChange}
       options={options}

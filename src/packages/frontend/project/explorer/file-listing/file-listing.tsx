@@ -404,7 +404,7 @@ function VirtualDraggableRow({
   ctx: DndRowContextType;
   record: FileEntry;
 }) {
-  const { dragRef, dragListeners, dragAttributes, isDragging } = useFileDrag(
+  const { dragRef, dragListeners, isDragging } = useFileDrag(
     `explorer-row-${record.fullPath}`,
     ctx.getDragPaths(record),
     ctx.projectId,
@@ -436,7 +436,6 @@ function VirtualDraggableRow({
     <tr
       {...props}
       {...dragListeners}
-      {...dragAttributes}
       ref={mergedRef}
       onClick={rowProps.onClick}
       onMouseDown={(e) => {
@@ -1323,7 +1322,26 @@ export function FileListing({
                 minWidth: 0,
               }}
             >
-              {renderFileName(record)}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRowClick(record, e);
+                }}
+                style={{
+                  alignItems: "center",
+                  background: "transparent",
+                  border: 0,
+                  cursor: "pointer",
+                  display: "flex",
+                  font: "inherit",
+                  minWidth: 0,
+                  padding: 0,
+                  textAlign: "left",
+                }}
+              >
+                {renderFileName(record)}
+              </button>
               {record.name !== ".." && publicShareLabels.length > 0 && (
                 <PublicDirectoryShareIndicator
                   indicators={publicDirectoryShareIndicatorsForPath({
@@ -1404,6 +1422,7 @@ export function FileListing({
                 {record.name !== ".." &&
                   !student_project_functionality.disableActions && (
                     <Button
+                      aria-label={`Actions for ${record.name}`}
                       type="text"
                       size="small"
                       className="cc-explorer-hover-icon"

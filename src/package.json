@@ -68,6 +68,7 @@
     "lint": "cd packages && ./node_modules/.bin/oxlint --config .oxlintrc.jsonc frontend && ./node_modules/.bin/oxlint --config .oxlintrc.non-frontend.jsonc .",
     "qa:multibay-browser": "node ./scripts/dev/multibay-browser-qa.mjs",
     "accessibility:audit": "node ./scripts/accessibility/audit.mjs",
+    "accessibility:audit:interactive": "node ./scripts/accessibility/audit.mjs --config ./scripts/accessibility/scenarios.json",
     "accessibility:audit:public": "node ./scripts/accessibility/audit.mjs --public --no-auth",
     "accessibility:test": "node --test ./scripts/accessibility/*.test.mjs",
     "smoke:multibay-reconnect": "node ./scripts/dev/multibay-reconnect-smoke.mjs",
@@ -121,6 +122,7 @@
     "lru-cache": "^7.18.3"
   },
   "devDependencies": {
+    "axe-core": "^4.12.1",
     "lighthouse": "^13.4.1"
   }
 }

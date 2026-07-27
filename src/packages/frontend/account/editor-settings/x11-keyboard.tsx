@@ -33,6 +33,7 @@ export function EditorSettingsPhysicalKeyboard(
     return (
       <LabeledRow label={label}>
         <SelectorInput
+          ariaLabel={label}
           options={PHYSICAL_KEYBOARDS}
           selected={props.physical_keyboard}
           on_change={props.on_change}
@@ -65,6 +66,7 @@ export function EditorSettingsKeyboardVariant(
     return (
       <LabeledRow label={label}>
         <SelectorInput
+          ariaLabel={label}
           options={props.keyboard_variant_options}
           selected={props.keyboard_variant}
           on_change={props.on_change}

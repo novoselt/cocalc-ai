@@ -25,6 +25,7 @@ export function EditorSettingsFontSize(props: Props) {
       className="cc-account-prefs-font-size"
     >
       <InputNumber
+        aria-label="Default global font size"
         onChange={(n) => props.on_change("font_size", n ?? DEFAULT_FONT_SIZE)}
         min={5}
         max={32}

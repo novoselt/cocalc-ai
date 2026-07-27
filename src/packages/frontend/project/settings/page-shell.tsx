@@ -97,6 +97,7 @@ export function ProjectSettingsPageShell({
             </Paragraph>
             <div style={{ marginTop: 12 }}>
               <CopyToClipBoard
+                ariaLabel="Project ID"
                 value={project_id}
                 display={project_id}
                 size="small"

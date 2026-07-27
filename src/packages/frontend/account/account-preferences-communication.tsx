@@ -110,6 +110,7 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
       key: "delivery",
       render: (_, category) => (
         <Select
+          aria-label={`Delivery for ${category.label}`}
           value={notificationPreferences.email[category.key]}
           onChange={(mode) => setNotificationEmailMode(category.key, mode)}
           options={deliveryOptions(category)}

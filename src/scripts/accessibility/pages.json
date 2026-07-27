@@ -151,7 +151,6 @@
       "path": "/settings",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -160,7 +159,6 @@
       "path": "/settings/membership",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -169,7 +167,6 @@
       "path": "/settings/usage-limits",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -178,7 +175,6 @@
       "path": "/settings/profile",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -187,7 +183,6 @@
       "path": "/settings/appearance",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -196,7 +191,6 @@
       "path": "/settings/editor",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -205,7 +199,6 @@
       "path": "/settings/keyboard",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -214,7 +207,6 @@
       "path": "/settings/ai",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -223,7 +215,6 @@
       "path": "/settings/communication",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -232,7 +223,6 @@
       "path": "/settings/keys",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -241,7 +231,6 @@
       "path": "/settings/public-shares",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {
@@ -250,7 +239,6 @@
       "path": "/settings/support",
       "authentication": "account",
       "minimumScore": 1,
-      "readySelector": "main",
       "settleMs": 1500
     },
     {

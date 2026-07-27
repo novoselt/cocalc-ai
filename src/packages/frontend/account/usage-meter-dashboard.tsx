@@ -203,6 +203,7 @@ function UsageMeterRow({ meter }: { meter: AccountUsageMeter }): ReactElement {
       </Paragraph>
       {percent != null ? (
         <Progress
+          aria-label={`${meter.label}: ${usageText(meter)}`}
           percent={percent}
           showInfo={false}
           size="small"

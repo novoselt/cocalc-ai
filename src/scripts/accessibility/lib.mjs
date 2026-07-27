@@ -128,6 +128,16 @@ export async function loadPageMatrix(path) {
       throw new Error(`duplicate accessibility page id: ${page.id}`);
     }
     ids.add(page.id);
+    page.engine ??= "lighthouse";
+    if (page.engine !== "lighthouse" && page.engine !== "axe") {
+      throw new Error(`${page.id}.engine must be either lighthouse or axe`);
+    }
+    if (
+      page.engine === "axe" &&
+      (!Array.isArray(page.actions) || page.actions.length === 0)
+    ) {
+      throw new Error(`${page.id} axe scenario needs at least one action`);
+    }
     page.minimumScore = normalizeMinimumScore(
       page.minimumScore ?? 0.9,
       `${page.id}.minimumScore`,
@@ -214,6 +224,7 @@ export function createPageSummary(page, url, lhr) {
     );
   }
   return {
+    engine: "lighthouse",
     id: page.id,
     title: page.title,
     url,
@@ -221,6 +232,38 @@ export function createPageSummary(page, url, lhr) {
     minimumScore: page.minimumScore,
     passed: score >= page.minimumScore,
     audits: failedAccessibilityAudits(lhr),
+  };
+}
+
+export function createAxeSummary(page, url, result) {
+  const violations = Array.isArray(result?.violations) ? result.violations : [];
+  const audits = violations.map((violation) => ({
+    id: violation.id,
+    title: violation.help,
+    description: violation.description,
+    impact: violation.impact,
+    count: violation.nodes?.length ?? 0,
+    nodes: (violation.nodes ?? []).slice(0, 25).map((node) => ({
+      selector: node.target?.join(", "),
+      snippet: node.html,
+      explanation: node.failureSummary,
+    })),
+  }));
+  const score = violations.length === 0 ? 1 : 0;
+  return {
+    engine: "axe",
+    id: page.id,
+    title: page.title,
+    url,
+    score,
+    minimumScore: page.minimumScore,
+    passed: score >= page.minimumScore,
+    audits,
+    violationCount: violations.length,
+    affectedNodeCount: violations.reduce(
+      (total, violation) => total + (violation.nodes?.length ?? 0),
+      0,
+    ),
   };
 }
 
@@ -235,8 +278,15 @@ export function renderMarkdownSummary(summary) {
   ];
   for (const page of summary.pages) {
     const score =
-      typeof page.score === "number" ? Math.round(page.score * 100) : "ERROR";
-    const minimum = Math.round(page.minimumScore * 100);
+      page.engine === "axe" && typeof page.violationCount === "number"
+        ? `${page.violationCount} violations`
+        : typeof page.score === "number"
+          ? Math.round(page.score * 100)
+          : "ERROR";
+    const minimum =
+      page.engine === "axe"
+        ? "0 violations"
+        : Math.round(page.minimumScore * 100);
     lines.push(
       `| ${page.title} | ${score} | ${minimum} | ${page.passed ? "PASS" : "FAIL"} |`,
     );
@@ -258,7 +308,7 @@ export function renderMarkdownSummary(summary) {
 }
 
 export function helpText() {
-  return `Run Lighthouse accessibility audits with system Chromium.
+  return `Run Lighthouse and axe accessibility audits with system Chromium.
 
 Usage:
   pnpm -C src accessibility:audit -- [options]

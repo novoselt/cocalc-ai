@@ -239,6 +239,7 @@ function UsagePressureCard({
     <Card size="small" title={label} style={{ height: "100%" }}>
       <Space vertical size="small" style={{ width: "100%" }}>
         <Progress
+          aria-label={`${label}: ${formatUsagePercent(pressure.percent)} of limit used`}
           percent={Math.min(100, Math.max(0, pressure.percent))}
           status={severityProgressStatus(pressure.severity)}
         />
@@ -330,6 +331,7 @@ function renderInfoItems({
             {item.progress ? (
               <>
                 <Progress
+                  aria-label={`${item.label}: ${item.progress.caption}`}
                   percent={getProgressPercent(
                     item.progress.current,
                     item.progress.limit,

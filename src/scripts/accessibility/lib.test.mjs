@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createAxeSummary,
   createPageSummary,
   failedAccessibilityAudits,
   normalizeMinimumScore,
@@ -145,4 +146,43 @@ test("includes page runtime errors in the markdown summary", () => {
   });
   assert.match(markdown, /## Broken page/);
   assert.match(markdown, /Timed out waiting for main/);
+});
+
+test("summarizes axe violations and affected nodes", () => {
+  const page = createAxeSummary(
+    {
+      id: "dialog",
+      title: "Dialog",
+      minimumScore: 1,
+    },
+    "https://example.test/settings",
+    {
+      violations: [
+        {
+          id: "aria-dialog-name",
+          impact: "serious",
+          help: "ARIA dialog nodes should have an accessible name",
+          description: "Ensure dialogs have an accessible name.",
+          nodes: [
+            {
+              target: [".ant-modal"],
+              html: '<div role="dialog">',
+              failureSummary: "Fix the dialog name.",
+            },
+          ],
+        },
+      ],
+    },
+  );
+  assert.equal(page.engine, "axe");
+  assert.equal(page.passed, false);
+  assert.equal(page.violationCount, 1);
+  assert.equal(page.affectedNodeCount, 1);
+  assert.match(
+    renderMarkdownSummary({
+      generatedAt: "2026-07-27T00:00:00.000Z",
+      pages: [page],
+    }),
+    /1 violations/,
+  );
 });

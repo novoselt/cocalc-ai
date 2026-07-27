@@ -147,6 +147,7 @@ export function PublishPanel({
           }
         >
           <Button
+            aria-label="Publishing help"
             size="small"
             shape="circle"
             icon={<Icon name="question-circle" />}
