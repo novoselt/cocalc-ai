@@ -26,6 +26,7 @@ let setProjectBackupRegionMock: jest.Mock;
 let purgeProjectBackupsForRepoMock: jest.Mock;
 let conatPublishMock: jest.Mock;
 let getRoutedHostControlClientMock: jest.Mock;
+let stopProjectOnExplicitHostMock: jest.Mock;
 let invalidateBackupConfigMock: jest.Mock;
 let projectLogDstreamMock: jest.Mock;
 let acquireProjectMoveGuardMock: jest.Mock;
@@ -425,8 +426,10 @@ describe("moveProjectToHost", () => {
     }));
     conatPublishMock = jest.fn(async () => ({ bytes: 0, count: 1 }));
     invalidateBackupConfigMock = jest.fn(async () => ({ ok: true }));
+    stopProjectOnExplicitHostMock = jest.fn(async () => undefined);
     getRoutedHostControlClientMock = jest.fn(async () => ({
       invalidateBackupConfig: invalidateBackupConfigMock,
+      stopProject: stopProjectOnExplicitHostMock,
     }));
   });
 
@@ -865,10 +868,20 @@ describe("moveProjectToHost", () => {
     expect(savePlacementMock).toHaveBeenNthCalledWith(2, PROJECT_ID, {
       host_id: SOURCE_HOST_ID,
     });
+    expect(getRoutedHostControlClientMock).toHaveBeenCalledWith({
+      host_id: DEST_HOST_ID,
+      timeout: expect.any(Number),
+    });
+    expect(stopProjectOnExplicitHostMock).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+    });
     expect(deleteProjectDataOnHostMock).toHaveBeenCalledWith({
       project_id: PROJECT_ID,
       host_id: DEST_HOST_ID,
     });
+    expect(
+      stopProjectOnExplicitHostMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(deleteProjectDataOnHostMock.mock.invocationCallOrder[0]);
     expect(startProjectOnHostMock).not.toHaveBeenCalled();
   });
 

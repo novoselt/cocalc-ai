@@ -588,7 +588,17 @@ async function cleanupDestinationOnFailure(
   }
   progress({
     step: "cleanup-dest",
-    message: "removing destination data after failed move",
+    message: "stopping destination runtime after failed move",
+    detail: { dest_host_id: context.dest_host_id },
+  });
+  const client = await getRoutedHostControlClient({
+    host_id: context.dest_host_id,
+    timeout: MOVE_STOP_PROJECT_TIMEOUT_MS,
+  });
+  await client.stopProject({ project_id: context.project_id });
+  progress({
+    step: "cleanup-dest",
+    message: "destination runtime stopped",
     detail: { dest_host_id: context.dest_host_id },
   });
   await deleteProjectDataOnHost({
