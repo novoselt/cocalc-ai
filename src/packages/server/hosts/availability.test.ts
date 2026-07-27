@@ -358,6 +358,92 @@ describe("classifyHostAvailabilitySnapshot", () => {
     });
   });
 
+  it("classifies high project-host persistence RSS without affecting host pressure", () => {
+    const now = 2_000_000;
+    const row = _test.conatPersistAlertRow(
+      {
+        id: "persist-host",
+        status: "running",
+        metadata: { name: "asia-1" },
+        conat_persist: {
+          schema_version: 1,
+          collected_at: new Date(now - 30_000).toISOString(),
+          available: true,
+          ready: true,
+          pid: 123,
+          rss_bytes: 3 * 1024 ** 3,
+          open_streams: 500,
+        },
+      },
+      now,
+    );
+
+    expect(row).toMatchObject({
+      persist_level: "critical",
+    });
+    expect(row?.persist_reason).toContain("RSS 3.00 GiB");
+    expect(_test.formatConatPersistAlertBody([row!])).toContain(
+      "observational only",
+    );
+  });
+
+  it("classifies excessive persistence stream cardinality independently of RSS", () => {
+    const now = 2_000_000;
+    expect(
+      _test.conatPersistAlertRow(
+        {
+          id: "stream-heavy-host",
+          status: "running",
+          conat_persist: {
+            schema_version: 1,
+            collected_at: new Date(now - 30_000).toISOString(),
+            available: true,
+            rss_bytes: 200 * 1024 ** 2,
+            open_streams: 2_500,
+          },
+        },
+        now,
+      ),
+    ).toMatchObject({
+      persist_level: "warning",
+      persist_reason: expect.stringContaining("open streams 2500"),
+    });
+  });
+
+  it("ignores stale or unavailable persistence diagnostics", () => {
+    const now = 2_000_000;
+    expect(
+      _test.conatPersistAlertRow(
+        {
+          id: "stale-persist-host",
+          status: "running",
+          conat_persist: {
+            schema_version: 1,
+            collected_at: new Date(now - 10 * 60_000).toISOString(),
+            available: true,
+            rss_bytes: 3 * 1024 ** 3,
+          },
+        },
+        now,
+      ),
+    ).toBeUndefined();
+    expect(
+      _test.conatPersistAlertRow(
+        {
+          id: "unavailable-persist-host",
+          status: "running",
+          conat_persist: {
+            schema_version: 1,
+            collected_at: new Date(now).toISOString(),
+            available: false,
+            rss_bytes: 3 * 1024 ** 3,
+          },
+        },
+        now,
+      ),
+    ).toBeUndefined();
+  });
+
   it("ignores old unresolved pressure evaluations", () => {
     const now = 2_000_000;
     expect(

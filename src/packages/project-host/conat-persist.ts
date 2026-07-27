@@ -29,6 +29,11 @@ import {
   type PersistMaintenanceCoordinator,
 } from "@cocalc/backend/conat/persist-maintenance/coordinator";
 import { loadPersistMaintenanceConfig } from "@cocalc/backend/conat/persist-maintenance/config";
+import {
+  collectProjectHostPersistDiagnostics,
+  isLoopbackRemoteAddress,
+  PROJECT_HOST_PERSIST_DIAGNOSTICS_PATH,
+} from "./persist-diagnostics";
 
 const logger = getLogger("project-host:conat-persist");
 
@@ -224,6 +229,44 @@ export async function startStandaloneProjectHostConatPersist({
       return;
     }
     res.json(maintenance.status());
+  });
+  let maintenanceDiagnostics:
+    | ReturnType<PersistMaintenanceCoordinator["diagnostics"]>
+    | undefined;
+  let maintenanceDiagnosticsAt = 0;
+  const getMaintenanceDiagnostics = () => {
+    if (!maintenance) return undefined;
+    if (
+      maintenanceDiagnostics == null ||
+      Date.now() - maintenanceDiagnosticsAt >= 60_000
+    ) {
+      maintenanceDiagnostics = maintenance.diagnostics();
+      maintenanceDiagnosticsAt = Date.now();
+    }
+    return maintenanceDiagnostics;
+  };
+  app.get(PROJECT_HOST_PERSIST_DIAGNOSTICS_PATH, (req, res) => {
+    if (!isLoopbackRemoteAddress(req.socket.remoteAddress)) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    try {
+      res.setHeader("Cache-Control", "no-cache, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.json(
+        collectProjectHostPersistDiagnostics({
+          includePersistenceDetail: `${req.query.persistence ?? ""}` === "full",
+          maintenance: getMaintenanceDiagnostics(),
+          ready: persistReady,
+          serverId: id,
+        }),
+      );
+    } catch (err) {
+      logger.warn("failed collecting conat-persist diagnostics", {
+        err: `${err}`,
+      });
+      res.status(500).json({ error: "diagnostics unavailable" });
+    }
   });
   const httpServer = createHttpServer(app);
   httpServer.listen(bindPort, bindHost);

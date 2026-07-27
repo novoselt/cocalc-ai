@@ -301,7 +301,7 @@ export const EPHEMERAL_SQLITE_CACHE_KIB_ENV =
 
 type StreamStorageKind = "ephemeral" | "disk";
 
-interface CacheSizeSummary {
+export interface CacheSizeSummary {
   streams: number;
   min_kib?: number;
   max_kib?: number;
@@ -588,11 +588,17 @@ export class PersistentStream extends EventEmitter {
           | undefined
       )?.page_size ?? 0,
     );
+    const fileBytes = this.dbPath ? fileSize(this.dbPath) : 0;
+    const walBytes = this.dbPath ? fileSize(`${this.dbPath}-wal`) : 0;
+    const shmBytes = this.dbPath ? fileSize(`${this.dbPath}-shm`) : 0;
     return {
       kind: this.storageKind,
       page_bytes: pageCount * pageSize,
       live_page_bytes: Math.max(0, pageCount - freePageCount) * pageSize,
       freelist_bytes: freePageCount * pageSize,
+      file_bytes: fileBytes,
+      wal_bytes: walBytes,
+      shm_bytes: shmBytes,
       message_bytes: this.totalSize(),
       messages: this.length,
     };
@@ -1599,6 +1605,9 @@ export interface SqliteFootprintSummary {
   page_bytes: number;
   live_page_bytes: number;
   freelist_bytes: number;
+  file_bytes: number;
+  wal_bytes: number;
+  shm_bytes: number;
   message_bytes: number;
   messages: number;
   errors: number;
@@ -1610,6 +1619,9 @@ function emptySqliteFootprintSummary(): SqliteFootprintSummary {
     page_bytes: 0,
     live_page_bytes: 0,
     freelist_bytes: 0,
+    file_bytes: 0,
+    wal_bytes: 0,
+    shm_bytes: 0,
     message_bytes: 0,
     messages: 0,
     errors: 0,
@@ -1631,6 +1643,9 @@ export function getPersistentStreamSqliteDiagnostics() {
       summary.page_bytes += footprint.page_bytes;
       summary.live_page_bytes += footprint.live_page_bytes;
       summary.freelist_bytes += footprint.freelist_bytes;
+      summary.file_bytes += footprint.file_bytes;
+      summary.wal_bytes += footprint.wal_bytes;
+      summary.shm_bytes += footprint.shm_bytes;
       summary.message_bytes += footprint.message_bytes;
       summary.messages += footprint.messages;
     } catch {
@@ -1650,6 +1665,15 @@ export function pstream(
 function age(path: string) {
   try {
     return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function fileSize(path: string): number {
+  try {
+    const size = Number(statSync(path).size ?? 0);
+    return Number.isFinite(size) && size > 0 ? size : 0;
   } catch {
     return 0;
   }

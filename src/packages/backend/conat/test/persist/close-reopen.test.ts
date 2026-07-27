@@ -100,6 +100,9 @@ describe("persistent stream close lifecycle", () => {
     expect(sqlite.ephemeral.live_page_bytes).toBeGreaterThan(0);
     expect(sqlite.disk.databases).toBeGreaterThanOrEqual(1);
     expect(sqlite.disk.live_page_bytes).toBeGreaterThan(0);
+    expect(sqlite.disk.file_bytes).toBeGreaterThan(0);
+    expect(sqlite.disk.wal_bytes).toBeGreaterThanOrEqual(0);
+    expect(sqlite.disk.shm_bytes).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(sqlite)).not.toContain(dir);
 
     ephemeral.close();

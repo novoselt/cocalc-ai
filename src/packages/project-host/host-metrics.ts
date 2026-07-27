@@ -14,6 +14,7 @@ import { getActiveStorageReservationSummary } from "./storage-reservations";
 import { readProjectHostKernelSysctls } from "./host-sysctl";
 import { refreshResourcePressureMetrics } from "./resource-pressure";
 import { readIoContainmentMetrics } from "./io-metrics";
+import { readConatPersistMetrics } from "./conat-persist-metrics";
 
 const logger = getLogger("project-host:host-metrics");
 
@@ -163,6 +164,7 @@ async function collectSnapshot(
     kernel_sysctls,
     resource_pressure,
     io_containment,
+    conat_persist,
   ] = await Promise.all([
     readMeminfo(),
     readDiskMetrics(),
@@ -170,6 +172,7 @@ async function collectSnapshot(
     readProjectHostKernelSysctls(),
     refreshResourcePressureMetrics(),
     readIoContainmentMetrics(),
+    readConatPersistMetrics(),
   ]);
   const projects = readProjectCounts();
   const reservation_bytes = getActiveStorageReservationSummary().total_bytes;
@@ -194,6 +197,7 @@ async function collectSnapshot(
       kernel_sysctls,
       ...(resource_pressure ? { resource_pressure } : {}),
       io_containment,
+      ...(conat_persist ? { conat_persist } : {}),
     },
   };
 }

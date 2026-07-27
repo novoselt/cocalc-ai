@@ -776,6 +776,48 @@ export interface HostIoContainmentMetrics {
   last_reconcile_error?: string;
 }
 
+export interface HostConatPersistMetrics {
+  schema_version: number;
+  collected_at: string;
+  available: boolean;
+  ready?: boolean;
+  server_id?: string;
+  pid?: number;
+  uptime_seconds?: number;
+  rss_bytes?: number;
+  heap_total_bytes?: number;
+  heap_used_bytes?: number;
+  external_bytes?: number;
+  array_buffers_bytes?: number;
+  v8_heap_limit_bytes?: number;
+  v8_large_object_space_used_bytes?: number;
+  event_loop_utilization?: number;
+  local_client_subscriptions?: number;
+  opened_streams_total?: number;
+  closed_streams_total?: number;
+  open_streams?: number;
+  open_ephemeral_streams?: number;
+  open_disk_streams?: number;
+  cached_streams?: number;
+  cached_references?: number;
+  max_cached_references?: number;
+  maintenance_enabled?: boolean;
+  maintenance_catalog_healthy?: boolean;
+  maintenance_tracking_coverage?: boolean;
+  maintenance_open_paths?: number;
+  maintenance_present_databases?: number;
+  maintenance_missing_databases?: number;
+  maintenance_unverified_databases?: number;
+  maintenance_present_file_bytes?: number;
+  maintenance_present_wal_bytes?: number;
+  maintenance_last_scan_completed_at_ms?: number;
+  maintenance_scanned_files?: number;
+  maintenance_pause_reason?: string;
+  maintenance_last_error?: string;
+  diagnostics_duration_ms?: number;
+  error?: string;
+}
+
 export interface HostCurrentMetrics {
   collected_at?: string;
   cpu_percent?: number;
@@ -812,6 +854,7 @@ export interface HostCurrentMetrics {
   kernel_sysctls?: HostKernelSysctlSnapshot;
   resource_pressure?: HostResourcePressureMetrics;
   io_containment?: HostIoContainmentMetrics;
+  conat_persist?: HostConatPersistMetrics;
 }
 
 export type HostPressureZone = "normal" | "observe" | "pressure" | "emergency";
