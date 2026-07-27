@@ -2344,7 +2344,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     if (this._chatMarkerScanners[path] != null) return;
     const syncstring = (actions as any)._syncstring;
     if (syncstring == null) return;
-    const scan = () => {
+    const scan = (publishNewInvalidMarkers: boolean) => {
       if (this._state === ("closed" as any)) return;
       if (syncstring.get_state?.() !== "ready") return;
       let text: string;
@@ -2355,7 +2355,26 @@ export class Actions extends BaseActions<LatexEditorState> {
         return;
       }
       const markers = scanMarkers(text);
-      const invalidMarkers = scanInvalidMarkers(text);
+      const scannedInvalidMarkers = scanInvalidMarkers(text);
+      const previousInvalidMarkers = (this.store
+        .get("invalid_chat_markers")
+        ?.get(path)
+        ?.toJS() ?? []) as unknown as InvalidChatMarker[];
+      // Invalid diagnostics are deliberately slower than valid marker
+      // discovery. While the user is typing `% chat: subfile-123`, every
+      // short prefix is temporarily invalid; rendering a widget at that
+      // point interferes with the cursor. Existing diagnostics still clear
+      // promptly once their exact source text is fixed or deleted.
+      const invalidMarkers = publishNewInvalidMarkers
+        ? scannedInvalidMarkers
+        : scannedInvalidMarkers.filter((candidate) =>
+            previousInvalidMarkers.some(
+              (previous) =>
+                previous.line === candidate.line &&
+                previous.col === candidate.col &&
+                previous.text === candidate.text,
+            ),
+          );
       const bookmarks = scanBookmarks(text);
       const previousMarkers = (this.store
         .get("chat_markers")
@@ -2381,19 +2400,31 @@ export class Actions extends BaseActions<LatexEditorState> {
         this.updateTableOfContents();
       }
     };
-    const debounced = debounce(scan, 300, { leading: false, trailing: true });
-    syncstring.on("change", debounced);
-    const onReady = () => scan();
+    const debounced = debounce(() => scan(false), 300, {
+      leading: false,
+      trailing: true,
+    });
+    const debouncedInvalid = debounce(() => scan(true), 1200, {
+      leading: false,
+      trailing: true,
+    });
+    const onChange = () => {
+      debounced();
+      debouncedInvalid();
+    };
+    syncstring.on("change", onChange);
+    const onReady = () => scan(true);
     syncstring.once("ready", onReady);
     this._chatMarkerScanners[path] = {
       dispose: () => {
         debounced.cancel();
-        syncstring.removeListener("change", debounced);
+        debouncedInvalid.cancel();
+        syncstring.removeListener("change", onChange);
         syncstring.removeListener("ready", onReady);
       },
-      rescan: scan,
+      rescan: () => scan(true),
     };
-    scan();
+    scan(true);
     this._ensureChatGutterUI(path);
   }
 

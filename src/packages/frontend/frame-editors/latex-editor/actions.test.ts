@@ -312,3 +312,60 @@ describe("LaTeX TOC pane targeting", () => {
     );
   });
 });
+
+describe("LaTeX invalid chat marker timing", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("does not inject a new invalid diagnostic while an id is being typed", () => {
+    jest.useFakeTimers();
+    let text = "";
+    let state = Map();
+    const syncstring = new EventEmitter() as EventEmitter & {
+      get_state: () => string;
+      to_str: () => string;
+    };
+    syncstring.get_state = () => "ready";
+    syncstring.to_str = () => text;
+
+    const actions: any = Object.create(Actions.prototype);
+    actions._state = "open";
+    actions.path = "123.tex";
+    actions._syncstring = syncstring;
+    actions.store = { get: (key: string) => state.get(key) };
+    actions.setState = (updates: Record<string, unknown>) => {
+      for (const [key, value] of Object.entries(updates)) {
+        state = state.set(key, value);
+      }
+    };
+    actions._chatMarkerScanners = {};
+    actions._reconcileEmptyAnchorThread = jest.fn();
+    actions._updateChatGutters = jest.fn();
+    actions._refreshChatMarkerText = jest.fn();
+    actions._refreshCursorInsert = jest.fn();
+    actions._ensureChatGutterUI = jest.fn();
+    const invalidMarkers = () =>
+      state.get("invalid_chat_markers")?.get("123.tex") ?? List();
+
+    actions._attachChatMarkerScanner(actions, "123.tex");
+
+    text = "% chat: su";
+    syncstring.emit("change");
+    jest.advanceTimersByTime(300);
+    expect(invalidMarkers().size).toBe(0);
+
+    jest.advanceTimersByTime(900);
+    expect(invalidMarkers().toJS()).toEqual([{ text: "su", line: 0, col: 0 }]);
+
+    text = "% chat: subfile-123";
+    syncstring.emit("change");
+    jest.advanceTimersByTime(300);
+    expect(invalidMarkers().size).toBe(0);
+    expect(state.getIn(["chat_markers", "123.tex"]).toJS()).toEqual([
+      { hash: "subfile-123", line: 0, col: 0 },
+    ]);
+
+    actions._chatMarkerScanners["123.tex"].dispose();
+  });
+});
