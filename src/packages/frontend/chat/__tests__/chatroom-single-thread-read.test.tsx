@@ -18,6 +18,7 @@ let currentThread = {
   isPinned: false,
   isArchived: false,
 };
+let currentThreads = [currentThread];
 
 jest.mock("@cocalc/frontend/feature", () => ({
   IS_MOBILE: false,
@@ -41,7 +42,7 @@ jest.mock("@cocalc/frontend/app-framework", () => {
 
 jest.mock("../threads", () => ({
   useThreadSections: () => ({
-    threads: [currentThread],
+    threads: currentThreads.length === 1 ? [currentThread] : currentThreads,
     archivedThreads: [],
     threadSections: [],
   }),
@@ -148,6 +149,7 @@ describe("ChatPanel selected thread read tracking", () => {
       isPinned: false,
       isArchived: false,
     };
+    currentThreads = [currentThread];
   });
 
   function renderPanel() {
@@ -179,6 +181,29 @@ describe("ChatPanel selected thread read tracking", () => {
 
     expect(actions.markThreadRead).toHaveBeenCalledTimes(1);
     expect(actions.markThreadRead).toHaveBeenCalledWith("thread-1", 2);
+  });
+
+  it("does not mark another unread thread when opening the selected one", () => {
+    currentThreads = [
+      currentThread,
+      {
+        ...currentThread,
+        key: "thread-2",
+        label: "Thread 2",
+        displayLabel: "Thread 2",
+        messageCount: 4,
+        unreadCount: 2,
+      },
+    ];
+
+    const { actions } = renderPanel();
+
+    expect(actions.markThreadRead).toHaveBeenCalledTimes(1);
+    expect(actions.markThreadRead).toHaveBeenCalledWith("thread-1", 2);
+    expect(actions.markThreadRead).not.toHaveBeenCalledWith(
+      "thread-2",
+      expect.anything(),
+    );
   });
 
   it("marks the selected thread read again when unread state advances", () => {

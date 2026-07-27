@@ -2349,7 +2349,18 @@ export class Actions extends BaseActions<LatexEditorState> {
       if (syncstring.get_state?.() !== "ready") return;
       let text: string;
       try {
-        text = syncstring.to_str() ?? "";
+        // A local CodeMirror edit can move its gutter line handles before the
+        // corresponding syncstring snapshot catches up. Rescanning that stale
+        // snapshot briefly moves an already-correct icon back to its old line.
+        // Prefer the mounted editor buffer so decorations always match the
+        // source currently visible to the user.
+        const liveCm = Object.values(
+          ((actions as any)._cm ?? {}) as Record<string, CodeMirror.Editor>,
+        ).find((candidate) => {
+          const wrapper = candidate.getWrapperElement?.();
+          return wrapper == null || wrapper.isConnected;
+        });
+        text = liveCm?.getValue() ?? syncstring.to_str() ?? "";
       } catch {
         // syncstring not ready yet -- a later change event will rescan.
         return;

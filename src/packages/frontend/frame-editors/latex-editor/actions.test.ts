@@ -368,6 +368,45 @@ describe("LaTeX invalid chat marker timing", () => {
 
     actions._chatMarkerScanners["123.tex"].dispose();
   });
+
+  it("scans the mounted CodeMirror buffer instead of a stale syncstring", () => {
+    let state = Map();
+    const syncstring = new EventEmitter() as EventEmitter & {
+      get_state: () => string;
+      to_str: () => string;
+    };
+    syncstring.get_state = () => "ready";
+    syncstring.to_str = () => "% chat: stale-anchor";
+    const cm = {
+      getValue: () => "\n% chat: live-anchor",
+      getWrapperElement: () => ({ isConnected: true }),
+    };
+
+    const actions: any = Object.create(Actions.prototype);
+    actions._state = "open";
+    actions.path = "123.tex";
+    actions._syncstring = syncstring;
+    actions._cm = { "cm-1": cm };
+    actions.store = { get: (key: string) => state.get(key) };
+    actions.setState = (updates: Record<string, unknown>) => {
+      for (const [key, value] of Object.entries(updates)) {
+        state = state.set(key, value);
+      }
+    };
+    actions._chatMarkerScanners = {};
+    actions._reconcileEmptyAnchorThread = jest.fn();
+    actions._updateChatGutters = jest.fn();
+    actions._refreshChatMarkerText = jest.fn();
+    actions._refreshCursorInsert = jest.fn();
+    actions._ensureChatGutterUI = jest.fn();
+
+    actions._attachChatMarkerScanner(actions, "123.tex");
+
+    expect(state.getIn(["chat_markers", "123.tex"]).toJS()).toEqual([
+      { hash: "live-anchor", line: 1, col: 0 },
+    ]);
+    actions._chatMarkerScanners["123.tex"].dispose();
+  });
 });
 
 describe("LaTeX chat marker locking", () => {
