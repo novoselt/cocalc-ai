@@ -328,10 +328,33 @@ describe("ChatMessageCache message_id index", () => {
     const result = cache.applyPreviewRows(rows);
     expect(result.applied).toBe(true);
     expect(result.chatRows).toBe(1);
+    expect(cache.isHydrated()).toBe(false);
     expect(cache.getByMessageId("preview-1")?.sender_id).toBe("user-1");
     expect(cache.getThreadKeyByThreadId("preview-thread")).toBe(
       `${new Date(rows[0].date).valueOf()}`,
     );
+    cache.dispose();
+  });
+
+  it("becomes hydrated only after rebuilding the ready syncdb", async () => {
+    const row = {
+      event: "chat",
+      sender_id: "user-1",
+      date: "2026-01-05T00:00:00.000Z",
+      message_id: "live-1",
+      thread_id: "live-thread",
+      history: [],
+    };
+    const syncdb = new MockSyncdb([row], "loading");
+    const cache = new ChatMessageCache(syncdb as any);
+
+    expect(cache.isHydrated()).toBe(false);
+    syncdb.setSyncState("ready");
+    syncdb.emit("ready");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(cache.isHydrated()).toBe(true);
+    expect(cache.getThreadIndex().get("live-thread")?.messageCount).toBe(1);
     cache.dispose();
   });
 
@@ -472,6 +495,7 @@ describe("ChatMessageCache message_id index", () => {
     ]);
     const cache = new ChatMessageCache(syncdb as any);
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cache.isHydrated()).toBe(true);
     expect(cache.getByMessageId("old-message")).toBeDefined();
 
     syncdb.replaceRows([
@@ -487,6 +511,7 @@ describe("ChatMessageCache message_id index", () => {
     syncdb.emit("reload");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(cache.isHydrated()).toBe(true);
     expect(cache.getByMessageId("old-message")).toBeUndefined();
     expect(cache.getByMessageId("new-message")?.sender_id).toBe("user-2");
     expect(cache.getThreadIndex().get("thread-reload")?.messageCount).toBe(1);

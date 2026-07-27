@@ -43,6 +43,7 @@ export class ChatMessageCache extends EventEmitter {
     new Map();
   private version = 0;
   private disposed = false;
+  private hydrated = false;
   private lastEvent = "constructor";
   private lastEventAt = Date.now();
 
@@ -123,9 +124,14 @@ export class ChatMessageCache extends EventEmitter {
     return this.version;
   }
 
+  isHydrated(): boolean {
+    return this.hydrated;
+  }
+
   debugState() {
     return {
       disposed: this.disposed,
+      hydrated: this.hydrated,
       version: this.version,
       messagesByDate: this.messagesByDate.size,
       messagesById: this.messagesById.size,
@@ -151,6 +157,7 @@ export class ChatMessageCache extends EventEmitter {
     this.dateIndex = new Map();
     this.threadKeyByThreadId = new Map();
     this.threadConfigByThreadId = new Map();
+    this.hydrated = false;
     this.removeAllListeners();
   }
 
@@ -514,7 +521,10 @@ export class ChatMessageCache extends EventEmitter {
     return { applied, skipped };
   }
 
-  private applySnapshot(snapshot: ChatCacheSnapshot): void {
+  private applySnapshot(
+    snapshot: ChatCacheSnapshot,
+    { hydrated = false }: { hydrated?: boolean } = {},
+  ): void {
     const before = this.messagesByDate.size;
     this.messagesById = produce(snapshot.mapById, () => {});
     this.messagesByDate = produce(snapshot.mapByDate, () => {});
@@ -524,6 +534,9 @@ export class ChatMessageCache extends EventEmitter {
     // Keep this mutable; incremental change handling updates this map in-place.
     this.threadKeyByThreadId = new Map(snapshot.threadKeyByThreadId);
     this.threadConfigByThreadId = new Map(snapshot.threadConfigByThreadId);
+    if (hydrated) {
+      this.hydrated = true;
+    }
     this.noteEvent("snapshot");
     if (before > 0 && this.messagesByDate.size === 0) {
       syncdocDiagnosticLog("chat message cache cleared by snapshot", {
@@ -619,7 +632,7 @@ export class ChatMessageCache extends EventEmitter {
     const rows = this.syncdb.get() ?? [];
     log("rebuildFromDoc: got rows", rows);
     this.noteEvent("rebuildFromDoc");
-    this.applySnapshot(this.buildSnapshotFromRows(rows));
+    this.applySnapshot(this.buildSnapshotFromRows(rows), { hydrated: true });
   }
 
   // assumed is an => function (so bound)
@@ -707,6 +720,10 @@ export class ChatMessageCache extends EventEmitter {
 
   private handleReload = () => {
     this.noteEvent("reload");
+    if (this.hydrated) {
+      this.hydrated = false;
+      this.bumpVersion();
+    }
     void this.rebuildFromDoc();
   };
 }

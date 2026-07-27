@@ -6,7 +6,6 @@
 import {
   chooseAnchorThread,
   computeAnchoredThreads,
-  hasKnownThreadMessages,
   parseThreadAnchor,
   parseThreadResolved,
 } from "../anchors";
@@ -63,17 +62,20 @@ function fakeActions({
   index,
   readCounts = {},
   readStateReady = true,
+  messageCacheHydrated = true,
 }: {
   rows: any[];
   index: Map<string, { messageCount: number; newestTime: number }>;
   readCounts?: Record<string, number>;
   readStateReady?: boolean;
+  messageCacheHydrated?: boolean;
 }): any {
   return {
     listThreadConfigRows: () => rows,
     getThreadIndex: () => index,
     getThreadReadCount: (key: string) => readCounts[key] ?? 0,
     isProjectReadStateReady: () => readStateReady,
+    isMessageCacheHydrated: () => messageCacheHydrated,
   };
 }
 
@@ -196,53 +198,6 @@ describe("computeAnchoredThreads", () => {
     expect(info.threads[1].label).toBe("First");
   });
 
-  it("retains confirmed counts across a transient empty live cache", () => {
-    const liveRows = [{ thread_id: "stable-1", anchor: { id: "cell-stable" } }];
-    let rows = liveRows;
-    let index = new Map([["stable-1", { messageCount: 3, newestTime: 300 }]]);
-    const actions = fakeActions({
-      rows,
-      index,
-      readCounts: { "stable-1": 1 },
-    });
-    actions.listThreadConfigRows = () => rows;
-    actions.getThreadIndex = () => index;
-
-    const hydrated = computeAnchoredThreads({
-      actions,
-      anchorId: "cell-stable",
-      accountId: "acct",
-      resolved: false,
-    });
-    expect(hydrated.totalMessages).toBe(3);
-    expect(hydrated.totalUnread).toBe(2);
-    expect(hasKnownThreadMessages(actions, "stable-1")).toBe(true);
-
-    // The live syncdoc can briefly replace an optimistic preview with an
-    // empty index. The config row proves that the thread itself still exists.
-    index = new Map();
-    const transient = computeAnchoredThreads({
-      actions,
-      anchorId: "cell-stable",
-      accountId: "acct",
-      resolved: false,
-    });
-    expect(transient.totalMessages).toBe(3);
-    expect(transient.totalUnread).toBe(2);
-    expect(hasKnownThreadMessages(actions, "stable-1")).toBe(true);
-
-    // An authoritative thread deletion removes the config row too.
-    rows = [];
-    const deleted = computeAnchoredThreads({
-      actions,
-      anchorId: "cell-stable",
-      accountId: "acct",
-      resolved: false,
-    });
-    expect(deleted.totalMessages).toBe(0);
-    expect(deleted.threads).toEqual([]);
-  });
-
   it("never counts unread before read state is ready", () => {
     const info = computeAnchoredThreads({
       actions: fakeActions({ rows, index, readStateReady: false }),
@@ -250,6 +205,22 @@ describe("computeAnchoredThreads", () => {
       accountId: "acct",
       resolved: false,
     });
+    expect(info.totalUnread).toBe(0);
+  });
+
+  it("waits for the live message cache snapshot", () => {
+    const info = computeAnchoredThreads({
+      actions: fakeActions({
+        rows,
+        index,
+        messageCacheHydrated: false,
+      }),
+      anchorId: "cell-a",
+      accountId: "acct",
+      resolved: false,
+    });
+    expect(info.threads).toEqual([]);
+    expect(info.totalMessages).toBe(0);
     expect(info.totalUnread).toBe(0);
   });
 
