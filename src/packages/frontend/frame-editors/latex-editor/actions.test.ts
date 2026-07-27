@@ -548,6 +548,23 @@ describe("LaTeX chat tail tracking", () => {
       }),
     ).toBe(false);
   });
+
+  it("sweeps obsolete hosts even when decorations are otherwise reusable", () => {
+    const liveHost = { parentNode: { removeChild: jest.fn() } };
+    const staleParent = { removeChild: jest.fn() };
+    const staleHost = { parentNode: staleParent };
+    const cm = {
+      getWrapperElement: () => ({
+        querySelectorAll: () => [liveHost, staleHost],
+      }),
+    };
+    const actions: any = Object.create(Actions.prototype);
+
+    actions._sweepStaleChatTailHosts(cm, [{ host: liveHost }]);
+
+    expect(liveHost.parentNode.removeChild).not.toHaveBeenCalled();
+    expect(staleParent.removeChild).toHaveBeenCalledWith(staleHost);
+  });
 });
 
 describe("LaTeX chat gutter movement", () => {

@@ -175,6 +175,13 @@ export function ChatMarkerInlineTail({
         ? `${totalUnread} unread`
         : `${totalMessages} message${totalMessages === 1 ? "" : "s"}`;
 
+  // Before the first message the source marker is still editable, so it
+  // needs neither a count pill nor a resolve control. This also prevents a
+  // temporarily unhydrated obsolete host from showing as a naked checkmark.
+  if (pillText == null && !isStale) {
+    return null;
+  }
+
   return (
     <span
       style={{ display: "inline-flex", alignItems: "center", marginLeft: 4 }}

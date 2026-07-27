@@ -2969,6 +2969,22 @@ export class Actions extends BaseActions<LatexEditorState> {
     return true;
   }
 
+  private _sweepStaleChatTailHosts(
+    cm: CodeMirror.Editor,
+    liveTails: Array<{ host: HTMLElement }>,
+  ): void {
+    const wrapper = cm.getWrapperElement?.();
+    if (wrapper == null) return;
+    const liveHosts = new Set(liveTails.map(({ host }) => host));
+    wrapper
+      .querySelectorAll<HTMLElement>(".cc-chat-marker-tail-host")
+      .forEach((host) => {
+        if (!liveHosts.has(host)) {
+          host.parentNode?.removeChild(host);
+        }
+      });
+  }
+
   private _refreshChatMarkerText(path: string): void {
     const actions = this._actionsForChatPath(path);
     if (actions == null) return;
@@ -3020,6 +3036,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         // the edit. Preserve their React roots and unread state rather than
         // detaching every inline control on each debounced source rescan.
         this._syncChatTailPositions(path, cm);
+        this._sweepStaleChatTailHosts(cm, oldTails);
         continue;
       }
       for (const marker of existing) {
@@ -3107,17 +3124,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       // CodeMirror may leave a detached bookmark wrapper behind when a
       // marker changes identity during a rescan. Remove any tail host in
       // this pane that is not one of the hosts we just placed.
-      const wrapper = cm.getWrapperElement?.();
-      if (wrapper != null) {
-        const liveHosts = new Set(freshTails.map(({ host }) => host));
-        wrapper
-          .querySelectorAll<HTMLElement>(".cc-chat-marker-tail-host")
-          .forEach((host) => {
-            if (!liveHosts.has(host)) {
-              host.parentNode?.removeChild(host);
-            }
-          });
-      }
+      this._sweepStaleChatTailHosts(cm, freshTails);
     }
   }
 
