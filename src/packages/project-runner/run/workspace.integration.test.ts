@@ -19,6 +19,7 @@ import {
   init as createConatServer,
 } from "@cocalc/conat/core/server";
 import type { LocalPathFunction } from "@cocalc/conat/project/runner/types";
+import { DEFAULT_PROJECT_RUNTIME_HOME } from "@cocalc/util/project-runtime";
 import {
   sanitizeWorkspaceConfiguredEnvironment,
   WorkspaceRuntimeBackend,
@@ -144,6 +145,10 @@ describe("workspace runtime backend", () => {
           )}`,
         );
         expect(environ).toContain(`COCALC_USERNAME=${process.env.USER}`);
+        expect(environ).toContain(
+          `COCALC_RUNTIME_HOME=${DEFAULT_PROJECT_RUNTIME_HOME}`,
+        );
+        expect(environ).toContain(`HOME=${join(root, "projects", project_id)}`);
         expect(environ).toContain(`BASE_PATH=${basePath}`);
         expect(environ).not.toContain("COCALC_PROJECT_FS=");
       }

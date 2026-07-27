@@ -37,6 +37,7 @@ import { get as getProjectInfo } from "@cocalc/conat/project/project-info";
 import type { ProjectStatus } from "@cocalc/conat/project/runner/state";
 import type { Configuration } from "@cocalc/conat/project/runner/types";
 import { isValidUUID } from "@cocalc/util/misc";
+import { DEFAULT_PROJECT_RUNTIME_HOME } from "@cocalc/util/project-runtime";
 import { dataPath, secretTokenPath } from "./env";
 import type {
   ProjectRuntimeBackend,
@@ -766,6 +767,7 @@ export class WorkspaceRuntimeBackend implements ProjectRuntimeBackend {
       COCALC_PROJECT_ID: project_id,
       COCALC_PROXY_HOST: "127.0.0.1",
       COCALC_PROXY_PORT: `${httpPort}`,
+      COCALC_RUNTIME_HOME: DEFAULT_PROJECT_RUNTIME_HOME,
       COCALC_SECRET_TOKEN: secretTokenPath(home),
       COCALC_USERNAME: identity.username,
       CONAT_SERVER: this.conatServer,
