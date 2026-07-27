@@ -2138,6 +2138,10 @@ describe("moveProjectToHost", () => {
 
   it("preserves cancellation while waiting for destination start", async () => {
     process.env.COCALC_MOVE_CHILD_LRO_POLL_INTERVAL_MS = "1";
+    routedFsByHost = new Map([
+      [SOURCE_HOST_ID, new Map()],
+      [DEST_HOST_ID, new Map()],
+    ]);
     queryMock = jest.fn(async (sql: string) => {
       if (
         sql.includes("COALESCE(projects.owning_bay_id, $2)") &&
@@ -2279,6 +2283,8 @@ describe("moveProjectToHost", () => {
         ({ event }: any) => event?.event === "project_move_failed",
       ),
     ).toBe(false);
+    expect(hasMoveSentinel(routedFsByHost.get(SOURCE_HOST_ID))).toBe(false);
+    expect(hasMoveSentinel(routedFsByHost.get(DEST_HOST_ID))).toBe(false);
     expect(releaseProjectMoveGuardMock).toHaveBeenCalledWith({
       project_id: PROJECT_ID,
       move_id: "move-op-cancel-start-dest",

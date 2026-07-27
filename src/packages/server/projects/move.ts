@@ -2472,6 +2472,18 @@ export async function moveProjectToHost(
       fresh: true,
     });
   } catch (err) {
+    if ((err as any)?.code === MOVE_CANCELED_CODE) {
+      await handleCancel((err as any).stage ?? "unknown");
+      if (moveSentinel) {
+        await deleteMoveSentinelBestEffort({
+          project_id: context.project_id,
+          path: moveSentinel.path,
+          stage: "canceled-move-source-cleanup",
+        });
+        moveSentinel = undefined;
+      }
+      throw err;
+    }
     if (moveSentinel) {
       await deleteMoveSentinelBestEffort({
         project_id: context.project_id,
@@ -2479,10 +2491,6 @@ export async function moveProjectToHost(
         stage: "move-error-cleanup",
       });
       moveSentinel = undefined;
-    }
-    if ((err as any)?.code === MOVE_CANCELED_CODE) {
-      await handleCancel((err as any).stage ?? "unknown");
-      throw err;
     }
     const stagedError =
       err instanceof MoveDestinationVerificationError
