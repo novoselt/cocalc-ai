@@ -633,6 +633,13 @@ export class ChatMessageCache extends EventEmitter {
       previewRows != null &&
       previewRows.length > 0
     ) {
+      // Deliberate trade-off: this is a union, not a reconciliation, so it
+      // cannot honor a deletion that happened between the disk read and this
+      // rebuild. It is bounded to the single case where the first live
+      // snapshot claims the chat is entirely empty -- far more often a
+      // not-yet-streamed doc than a genuinely emptied one -- and it runs at
+      // most once, since initialPreviewRows is consumed above. Later reloads
+      // stay authoritative.
       const combined = this.buildSnapshotFromRows([...previewRows, ...rows]);
       if (combined.chatRows > 0) {
         snapshot = combined;

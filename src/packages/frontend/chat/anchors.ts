@@ -322,7 +322,12 @@ function sharedChatSubscription(actions: ChatActions): SharedChatSubscription {
         subscribedStore?.removeListener?.("change", notify);
         subscribedMessageCache?.removeListener?.("version", notify);
         subscribedSyncdb?.removeListener?.("close", notifyClose);
-        sharedChatSubscriptions.delete(actions);
+        // Only retract our own registration. A duplicated cleanup must not
+        // unregister a successor, which would keep that subscription's
+        // listeners attached while the next lookup builds a second set.
+        if (sharedChatSubscriptions.get(actions) === subscription) {
+          sharedChatSubscriptions.delete(actions);
+        }
       };
     },
   };

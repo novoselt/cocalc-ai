@@ -99,7 +99,11 @@ import {
   parseThreadAnchor,
   parseThreadResolved,
 } from "@cocalc/frontend/chat/anchors";
-import { ensureSideChatActions } from "@cocalc/frontend/chat/unread";
+import {
+  ensureSideChatActions,
+  getExistingSideChatActions,
+} from "@cocalc/frontend/chat/unread";
+import { syncdocDiagnosticLog } from "@cocalc/frontend/syncdoc-diagnostics";
 import { clean } from "./clean";
 import { KNITR_EXTS } from "./constants";
 import { count_words } from "./count_words";
@@ -2290,9 +2294,37 @@ export class Actions extends BaseActions<LatexEditorState> {
     };
   }
 
+  /**
+   * A subfile opened on its own briefly owns `<subfile>.sage-chat`. Threads
+   * anchored there before the master claimed the file stay in that file and
+   * are not reachable from the master's side chat afterwards. We deliberately
+   * do not migrate them, so surface the case in diagnostics instead of
+   * dropping it silently.
+   */
+  private _logAbandonedStandaloneChat(): void {
+    try {
+      const actions = getExistingSideChatActions(this.project_id, this.path);
+      if (actions == null) return;
+      const anchored = actions
+        .listThreadConfigRows()
+        .filter(
+          (row) => parseThreadAnchor((row as any)?.anchor) != null,
+        ).length;
+      if (anchored === 0) return;
+      syncdocDiagnosticLog("latex subfile yielded anchored chat threads", {
+        path: this.path,
+        parent_file: this.parent_file,
+        anchoredThreads: anchored,
+      });
+    } catch {
+      // diagnostics only -- never block yielding ownership.
+    }
+  }
+
   private _yieldChatMarkersToParent(): void {
     if (this._chatMarkersOwnedByParent) return;
     this._chatMarkersOwnedByParent = true;
+    this._logAbandonedStandaloneChat();
     for (const handle of Object.values(this._chatMarkerScanners)) {
       handle.dispose();
     }
