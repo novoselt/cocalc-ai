@@ -7,11 +7,14 @@ const path = require("node:path");
 const {
   allocatePortPair,
   appSpec,
+  applyConnectionOverrides,
+  attachLocalSiteToOuterProject,
   assertProjectScopedAuthFresh,
   browserUrl,
   environmentExports,
   extractBootstrapRegistrationUrl,
   initSite,
+  isInternalControlPlaneUrl,
   launchpadEnvironment,
   localBootstrapRegistrationUrl,
   normalizeProjectId,
@@ -21,6 +24,7 @@ const {
   parseCliJson,
   readConfig,
   rebaseBootstrapRegistrationUrl,
+  selectProfileForAmbientAccount,
 } = require("./workspace-site.js");
 
 test("workspace site names and outer project ids are strict", () => {
@@ -55,6 +59,31 @@ test("argument parsing supports value, equals, and explicit action flags", () =>
       },
     },
   );
+});
+
+test("internal project-host API URLs are not used for account CLI operations", () => {
+  assert.equal(
+    isInternalControlPlaneUrl("http://alpha.c.projecthosts.internal:9102"),
+    true,
+  );
+  assert.equal(isInternalControlPlaneUrl("https://staging.cocalc.ai"), false);
+});
+
+test("ambient account selects a unique matching CLI profile", () => {
+  const profiles = [
+    { profile: "_env", account_id: "account-a" },
+    { profile: "alpha", account_id: "account-a" },
+    { profile: "staging", account_id: "account-b" },
+  ];
+  assert.equal(selectProfileForAmbientAccount(profiles, "account-a"), "alpha");
+  assert.equal(
+    selectProfileForAmbientAccount(
+      [...profiles, { profile: "alpha-debug", account_id: "account-a" }],
+      "account-a",
+    ),
+    undefined,
+  );
+  assert.equal(selectProfileForAmbientAccount(profiles, "missing"), undefined);
 });
 
 test("port allocation rejects persisted collisions before checking sockets", async () => {
@@ -106,6 +135,134 @@ test("named initialization creates isolated persistent layouts and app specs", a
       "--name",
       "feature-a",
     ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("local initialization retains ambient outer project for private proxying", async () => {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "cocalc-workspace-sites-"),
+  );
+  const projectId = "12345678-1234-4123-8123-123456789abc";
+  const priorProjectId = process.env.COCALC_PROJECT_ID;
+  process.env.COCALC_PROJECT_ID = projectId;
+  try {
+    const initialized = await initSite({
+      name: "local-proxied",
+      sites_root: root,
+      local: true,
+    });
+    assert.equal(initialized.config.supervisor, "local");
+    assert.equal(initialized.config.outer_project_id, projectId);
+    const spec = appSpec(initialized.config);
+    assert.equal(spec.lifecycle.mode, "unmanaged");
+    assert.equal(spec.network.port, initialized.config.base_port);
+    assert.equal(spec.wake.enabled, false);
+  } finally {
+    if (priorProjectId == null) delete process.env.COCALC_PROJECT_ID;
+    else process.env.COCALC_PROJECT_ID = priorProjectId;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("hostname reservation can attach an existing local-only site in place", () => {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "cocalc-workspace-attach-"),
+  );
+  const config = {
+    version: 1,
+    name: "local-main",
+    updated_at: new Date(0).toISOString(),
+    site_dir: path.join(root, "local-main"),
+    app_spec_path: path.join(root, "local-main", "app-spec.json"),
+    src_dir: "/checkout/src",
+    sites_root: root,
+    app_id: "cocalc-dev-local-main",
+    node_bin: process.execPath,
+    base_port: 14_000,
+    supervisor: "local",
+    outer_project_id: null,
+    api_url: "http://old.internal",
+    site_url: null,
+    profile: null,
+  };
+  try {
+    const attached = attachLocalSiteToOuterProject(
+      config,
+      {},
+      {
+        COCALC_PROJECT_ID: "12345678-1234-4123-8123-123456789abc",
+        COCALC_API_URL: "https://staging.cocalc.ai",
+      },
+    );
+    assert.equal(attached, true);
+    assert.equal(config.supervisor, "local");
+    assert.equal(
+      config.outer_project_id,
+      "12345678-1234-4123-8123-123456789abc",
+    );
+    assert.equal(config.api_url, "https://staging.cocalc.ai");
+    assert.equal(
+      JSON.parse(fs.readFileSync(config.app_spec_path, "utf8")).lifecycle.mode,
+      "unmanaged",
+    );
+    assert.equal(
+      readConfig(root, "local-main").outer_project_id,
+      config.outer_project_id,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("attaching a local site requires an explicit or ambient outer project", () => {
+  assert.throws(
+    () =>
+      attachLocalSiteToOuterProject(
+        {
+          name: "local-main",
+          supervisor: "local",
+          outer_project_id: null,
+        },
+        {},
+        {},
+      ),
+    /rerun with --project/,
+  );
+});
+
+test("connection options update an existing site without reinitialization", () => {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "cocalc-workspace-connection-"),
+  );
+  const config = {
+    version: 1,
+    name: "local-main",
+    updated_at: new Date(0).toISOString(),
+    sites_root: root,
+    site_dir: path.join(root, "local-main"),
+    app_spec_path: path.join(root, "local-main", "app-spec.json"),
+    src_dir: "/checkout/src",
+    app_id: "cocalc-dev-local-main",
+    node_bin: process.execPath,
+    base_port: 14_000,
+    supervisor: "local",
+    profile: null,
+    api_url: "http://alpha.c.projecthosts.internal:9102",
+    site_url: null,
+  };
+  try {
+    assert.equal(
+      applyConnectionOverrides(config, {
+        profile: "staging",
+        site_url: "https://staging.cocalc.ai",
+      }),
+      true,
+    );
+    assert.equal(config.profile, "staging");
+    assert.equal(config.site_url, "https://staging.cocalc.ai");
+    assert.equal(readConfig(root, "local-main").profile, "staging");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

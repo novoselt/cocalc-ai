@@ -83,7 +83,7 @@ Init options:
   --api <url>            CoCalc API/site origin for CLI and ordinary app URL.
   --site-url <url>       Public browser origin when --api is an internal route.
   --profile <name>       CoCalc CLI profile used for app/hostname operations.
-  --local                Force a local PID-scoped daemon instead of app supervision.
+  --local                Use a local PID-scoped daemon; outer-project proxying remains available.
 
 Hostname/open options:
   --reserve              Explicitly allocate DNS before inspecting/opening.
@@ -464,10 +464,22 @@ function cliPath(config) {
   return join(config.src_dir, "packages", "cli", "dist", "bin", "cocalc.js");
 }
 
+function isInternalControlPlaneUrl(value) {
+  const raw = `${value ?? ""}`.trim();
+  if (!raw) return false;
+  try {
+    return new URL(raw).hostname.endsWith(".internal");
+  } catch {
+    return false;
+  }
+}
+
 function cliGlobalArgs(config) {
   const args = [];
   if (config.profile) args.push("--profile", config.profile);
-  if (config.api_url) args.push("--api", config.api_url);
+  if (config.api_url && !isInternalControlPlaneUrl(config.api_url)) {
+    args.push("--api", config.api_url);
+  }
   return args;
 }
 
@@ -528,6 +540,75 @@ function runCliInteractive(config, args) {
     cwd: config.src_dir,
     stdio: "inherit",
   });
+}
+
+function selectProfileForAmbientAccount(profiles, accountId) {
+  const normalized = `${accountId ?? ""}`.trim();
+  if (!normalized || !Array.isArray(profiles)) return undefined;
+  const matches = profiles.filter(
+    (entry) =>
+      `${entry?.account_id ?? ""}`.trim() === normalized &&
+      `${entry?.profile ?? ""}`.trim() &&
+      entry.profile !== "_env",
+  );
+  return matches.length === 1 ? `${matches[0].profile}` : undefined;
+}
+
+function selectAmbientAccountProfile(config, env = process.env) {
+  if (config.profile) return config.profile;
+  const accountId = `${env.COCALC_ACCOUNT_ID ?? ""}`.trim();
+  if (!accountId) return undefined;
+  try {
+    const output = run(
+      process.execPath,
+      [cliPath(config), "auth", "list", "--json"],
+      { cwd: config.src_dir },
+    );
+    const profile = selectProfileForAmbientAccount(
+      parseCliJson(output),
+      accountId,
+    );
+    if (!profile) return undefined;
+    config.profile = profile;
+    saveConfig(config);
+    return profile;
+  } catch {
+    return undefined;
+  }
+}
+
+function privateHostnamePolicy(config) {
+  let policy;
+  try {
+    policy = runCliJson(config, [
+      "project",
+      "app",
+      "private-hostname",
+      "policy",
+      "--project",
+      config.outer_project_id,
+    ]);
+  } catch (err) {
+    const message = `${err?.message ?? err}`;
+    if (
+      message.includes(
+        "unknown function 'system.getProjectAppPrivateHostnamePolicy'",
+      )
+    ) {
+      throw new Error(
+        `the private-hostname API is not deployed on the site selected by CLI profile '${config.profile ?? "current"}'; use an outer project on a site where private hostnames are enabled, or deploy the feature there first`,
+      );
+    }
+    throw err;
+  }
+  if (!policy.enabled) {
+    throw new Error(
+      `private hostnames are unavailable for outer project ${config.outer_project_id}: ${
+        policy.warnings?.join(" ") || "disabled by site policy"
+      }`,
+    );
+  }
+  return policy;
 }
 
 function ordinaryAppUrl(config) {
@@ -604,6 +685,7 @@ function localBootstrapRegistrationUrl(config) {
 }
 
 function appSpec(config) {
+  const locallySupervised = config.supervisor === "local";
   return {
     version: 1,
     id: config.app_id,
@@ -624,7 +706,7 @@ function appSpec(config) {
         COCALC_WORKSPACE_SITES_ROOT: config.sites_root,
       },
     },
-    lifecycle: { mode: "managed" },
+    lifecycle: { mode: locallySupervised ? "unmanaged" : "managed" },
     network: {
       listen_host: "127.0.0.1",
       port: config.base_port,
@@ -638,9 +720,9 @@ function appSpec(config) {
       readiness_timeout_s: 120,
     },
     wake: {
-      enabled: true,
-      keep_warm_s: 86_400,
-      startup_timeout_s: 120,
+      enabled: !locallySupervised,
+      keep_warm_s: locallySupervised ? 0 : 86_400,
+      startup_timeout_s: locallySupervised ? 0 : 120,
     },
   };
 }
@@ -684,9 +766,9 @@ async function initSite(opts) {
         `workspace data directory is already used by site '${collision.name}'`,
       );
     }
-    const outerProjectId = opts.local
-      ? undefined
-      : normalizeProjectId(opts.project ?? process.env.COCALC_PROJECT_ID);
+    const outerProjectId = normalizeProjectId(
+      opts.project ?? process.env.COCALC_PROJECT_ID,
+    );
     const source = currentSourceState();
     const now = new Date().toISOString();
     const config = {
@@ -711,7 +793,11 @@ async function initSite(opts) {
       base_port: basePort,
       sshd_port: basePort + 1,
       node_bin: process.execPath,
-      supervisor: outerProjectId ? "project-app" : "local",
+      supervisor: opts.local
+        ? "local"
+        : outerProjectId
+          ? "project-app"
+          : "local",
       outer_project_id: outerProjectId ?? null,
       api_url: `${opts.api ?? process.env.COCALC_API_URL ?? ""}`.trim() || null,
       site_url: `${opts.site_url ?? ""}`.trim() || null,
@@ -903,8 +989,59 @@ function requireManagedSite(config) {
   }
 }
 
+function attachLocalSiteToOuterProject(config, opts, env = process.env) {
+  if (config.outer_project_id) return false;
+  if (config.supervisor !== "local") {
+    throw new Error(
+      `site '${config.name}' has no outer project; reinitialize it with --project`,
+    );
+  }
+  const outerProjectId = normalizeProjectId(
+    opts.project ?? env.COCALC_PROJECT_ID,
+  );
+  if (!outerProjectId) {
+    throw new Error(
+      `site '${config.name}' is local-only; rerun with --project <outer-project-id> from inside the CoCalc project that should own its private hostname`,
+    );
+  }
+  config.outer_project_id = outerProjectId;
+  if (opts.api) config.api_url = `${opts.api}`.trim() || null;
+  else if (env.COCALC_API_URL) {
+    config.api_url = `${env.COCALC_API_URL}`.trim() || null;
+  }
+  if (opts.site_url) config.site_url = `${opts.site_url}`.trim() || null;
+  if (opts.profile) config.profile = `${opts.profile}`.trim() || null;
+  saveConfig(config);
+  return true;
+}
+
+function applyConnectionOverrides(config, opts) {
+  let changed = false;
+  for (const [option, field] of [
+    ["api", "api_url"],
+    ["site_url", "site_url"],
+    ["profile", "profile"],
+  ]) {
+    if (opts[option] == null) continue;
+    const value = `${opts[option]}`.trim() || null;
+    if (config[field] === value) continue;
+    config[field] = value;
+    changed = true;
+  }
+  if (changed) saveConfig(config);
+  return changed;
+}
+
+function requireOuterProject(config) {
+  if (!config.outer_project_id) {
+    throw new Error(
+      `site '${config.name}' is not attached to an outer CoCalc project`,
+    );
+  }
+}
+
 function syncManagedApp(config) {
-  requireManagedSite(config);
+  requireOuterProject(config);
   writeAppSpec(config);
   return runCliJson(config, [
     "project",
@@ -1171,10 +1308,14 @@ function updatePrivateHostname(config, hostname) {
 }
 
 function hostnameOperation(config, opts) {
-  requireManagedSite(config);
   if (opts.reserve && opts.release) {
     throw new Error("choose only one of --reserve or --release");
   }
+  applyConnectionOverrides(config, opts);
+  if (opts.reserve) attachLocalSiteToOuterProject(config, opts);
+  requireOuterProject(config);
+  selectAmbientAccountProfile(config);
+  refreshPublicSiteUrl(config);
   if (opts.release) {
     const result = runCliJson(config, [
       "project",
@@ -1189,6 +1330,7 @@ function hostnameOperation(config, opts) {
     return result;
   }
   if (opts.reserve) {
+    privateHostnamePolicy(config);
     syncManagedApp(config);
     const result = runCliJson(config, [
       "project",
@@ -1216,7 +1358,12 @@ function hostnameOperation(config, opts) {
 }
 
 function openPrivateHostname(config, opts) {
-  requireManagedSite(config);
+  applyConnectionOverrides(config, opts);
+  if (opts.reserve) attachLocalSiteToOuterProject(config, opts);
+  requireOuterProject(config);
+  selectAmbientAccountProfile(config);
+  refreshPublicSiteUrl(config);
+  privateHostnamePolicy(config);
   syncManagedApp(config);
   const args = [
     "project",
@@ -1427,7 +1574,9 @@ if (require.main === module) {
 module.exports = {
   allocatePortPair,
   appSpec,
+  applyConnectionOverrides,
   assertProjectScopedAuthFresh,
+  attachLocalSiteToOuterProject,
   browserUrl,
   buildStatus,
   defaultSitesRoot,
@@ -1435,6 +1584,7 @@ module.exports = {
   extractBootstrapRegistrationUrl,
   hashName,
   initSite,
+  isInternalControlPlaneUrl,
   isPathInside,
   launchpadEnvironment,
   localBootstrapRegistrationUrl,
@@ -1444,9 +1594,11 @@ module.exports = {
   parseArgs,
   parseCliJson,
   portPairAvailable,
+  privateHostnamePolicy,
   readConfig,
   rebaseBootstrapRegistrationUrl,
   refreshPublicSiteUrl,
+  selectProfileForAmbientAccount,
   siteDir,
   sitesRoot,
 };

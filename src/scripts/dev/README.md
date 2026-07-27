@@ -75,7 +75,8 @@ artifacts are stale. `start` builds only when required outputs are missing;
 use `dev:workspace:build` after source changes when a full development build is
 needed.
 
-For an SSH-forward-only site, force the PID-scoped local supervisor:
+To use the PID-scoped local supervisor, including during initial SSH-forward
+testing:
 
 ```bash
 pnpm -C src dev:workspace:init --name local-main --local
@@ -90,7 +91,24 @@ ssh -N -L <port>:127.0.0.1:<port> <development-host>
 ```
 
 Then open `http://127.0.0.1:<port>`. The stop command only signals the exact
-recorded process after verifying its command identity.
+recorded process after verifying its command identity. When initialized inside
+a CoCalc project, a local site retains the outer project identity. Reserving a
+private hostname registers the already-running fixed port as an unmanaged
+project app; it does not add a second process supervisor:
+
+```bash
+pnpm -C src dev:workspace:hostname --name local-main --reserve
+pnpm -C src dev:workspace:open --name local-main
+```
+
+For local sites initialized by an older version of this command, `--reserve`
+attaches the existing site to the ambient `COCALC_PROJECT_ID` in place. Its
+ports, data, inner projects, and accounts are preserved. Outside a CoCalc
+project, pass `--project <outer-project-id>` explicitly. Private-hostname
+operations use the current account CLI profile rather than a project-internal
+API hostname. Inside a CoCalc project, the command selects a unique CLI profile
+whose account matches `COCALC_ACCOUNT_ID`; otherwise it uses the selected
+profile. Pass `--profile staging` to resolve ambiguity explicitly.
 
 Parallel Git worktrees must use distinct names:
 
