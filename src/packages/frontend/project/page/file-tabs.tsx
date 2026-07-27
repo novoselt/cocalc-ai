@@ -595,7 +595,7 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
         }}
       >
         {renderToggle("Switch to file list")}
-        <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+        <div style={{ flex: "0 1 auto", minWidth: 0 }}>
           <SortableTabs
             items={keys}
             onDragStart={onDragStart}

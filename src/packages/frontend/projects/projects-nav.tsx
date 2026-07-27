@@ -770,7 +770,7 @@ export function ProjectsNav(props: ProjectsNavProps) {
               </Button>
             </Tooltip>
           </div>
-          <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+          <div style={{ flex: "0 1 auto", minWidth: 0 }}>
             {items.length > 0 && (
               <SortableTabs
                 onDragStart={onDragStart}
