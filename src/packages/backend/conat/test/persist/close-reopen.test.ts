@@ -7,6 +7,7 @@ import { DataEncoding } from "@cocalc/conat/core/client";
 import {
   EPHEMERAL_SQLITE_CACHE_KIB_ENV,
   getPersistentStreamDiagnostics,
+  getPersistentStreamSqliteDiagnostics,
   openPaths,
   resolveEphemeralSqliteCacheKiB,
 } from "@cocalc/conat/persist/storage";
@@ -94,6 +95,12 @@ describe("persistent stream close lifecycle", () => {
     expect(open.open_disk - before.open_disk).toBe(1);
     expect(open.opened_total - before.opened_total).toBe(2);
     expect(JSON.stringify(open)).not.toContain(dir);
+    const sqlite = getPersistentStreamSqliteDiagnostics();
+    expect(sqlite.ephemeral.databases).toBeGreaterThanOrEqual(1);
+    expect(sqlite.ephemeral.live_page_bytes).toBeGreaterThan(0);
+    expect(sqlite.disk.databases).toBeGreaterThanOrEqual(1);
+    expect(sqlite.disk.live_page_bytes).toBeGreaterThan(0);
+    expect(JSON.stringify(sqlite)).not.toContain(dir);
 
     ephemeral.close();
     disk.close();

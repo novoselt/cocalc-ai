@@ -5,7 +5,10 @@
 
 import getLogger from "@cocalc/backend/logger";
 import { numSubscriptions } from "@cocalc/conat/client";
-import { getConatPersistDiagnostics } from "@cocalc/server/conat";
+import {
+  getConatPersistDiagnostics,
+  getConatPersistSqliteDiagnostics,
+} from "@cocalc/server/conat";
 import { getRoutedClientCacheStats } from "@cocalc/server/conat/route-client";
 import {
   createServer,
@@ -71,7 +74,12 @@ function countActiveResources(): Record<string, number> {
   );
 }
 
-export function collectWorkerDiagnostics() {
+export function collectWorkerDiagnostics({
+  includePersistenceDetail = false,
+}: {
+  includePersistenceDetail?: boolean;
+} = {}) {
+  const persistence = getConatPersistDiagnostics();
   return {
     schema_version: 1,
     collected_at: new Date().toISOString(),
@@ -94,7 +102,12 @@ export function collectWorkerDiagnostics() {
     conat: {
       local_client_subscriptions: numSubscriptions(),
       routed_clients: getRoutedClientCacheStats(),
-      persistence: getConatPersistDiagnostics(),
+      persistence: {
+        ...persistence,
+        ...(includePersistenceDetail
+          ? { sqlite_detail: getConatPersistSqliteDiagnostics() }
+          : {}),
+      },
     },
   };
 }
@@ -115,13 +128,24 @@ function handleDiagnosticsRequest(
   request: IncomingMessage,
   response: ServerResponse,
 ): void {
-  const path = request.url?.split("?", 1)[0];
+  const url = new URL(
+    request.url ?? WORKER_DIAGNOSTICS_PATH,
+    `http://${WORKER_DIAGNOSTICS_HOST}`,
+  );
+  const path = url.pathname;
   if (request.method !== "GET" || path !== WORKER_DIAGNOSTICS_PATH) {
     sendJson(response, 404, { error: "not found" });
     return;
   }
   try {
-    sendJson(response, 200, collectWorkerDiagnostics());
+    sendJson(
+      response,
+      200,
+      collectWorkerDiagnostics({
+        includePersistenceDetail:
+          url.searchParams.get("persistence") === "full",
+      }),
+    );
   } catch (err) {
     logger.warn("failed collecting worker diagnostics", { err: `${err}` });
     sendJson(response, 500, { error: "diagnostics unavailable" });

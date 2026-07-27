@@ -323,6 +323,8 @@ const openCacheSizes = {
   disk: new Map<number, number>(),
 };
 
+const openStreams = new Map<PersistentStream, StreamStorageKind>();
+
 export function resolveEphemeralSqliteCacheKiB(
   env: NodeJS.ProcessEnv = process.env,
 ): number | undefined {
@@ -427,6 +429,7 @@ export class PersistentStream extends EventEmitter {
       this.initSchema();
       this.maintenanceDirty = false;
       recordStreamOpen(this.storageKind, this.sqliteCacheKiB);
+      openStreams.set(this, this.storageKind);
       this.diagnosticsRegistered = true;
     } catch (err) {
       openPaths.delete(options.path);
@@ -563,6 +566,38 @@ export class PersistentStream extends EventEmitter {
       : 0;
   };
 
+  diagnosticSqliteFootprint = () => {
+    const pageCount = Number(
+      (
+        this.db.prepare("PRAGMA page_count").get() as
+          | { page_count?: number }
+          | undefined
+      )?.page_count ?? 0,
+    );
+    const freePageCount = Number(
+      (
+        this.db.prepare("PRAGMA freelist_count").get() as
+          | { freelist_count?: number }
+          | undefined
+      )?.freelist_count ?? 0,
+    );
+    const pageSize = Number(
+      (
+        this.db.prepare("PRAGMA page_size").get() as
+          | { page_size?: number }
+          | undefined
+      )?.page_size ?? 0,
+    );
+    return {
+      kind: this.storageKind,
+      page_bytes: pageCount * pageSize,
+      live_page_bytes: Math.max(0, pageCount - freePageCount) * pageSize,
+      freelist_bytes: freePageCount * pageSize,
+      message_bytes: this.totalSize(),
+      messages: this.length,
+    };
+  };
+
   close = () => {
     const path = this.options?.path;
     if (path == null || this.closing) {
@@ -616,6 +651,7 @@ export class PersistentStream extends EventEmitter {
       this.maintenanceHandles.clear();
       openPaths.delete(path);
       if (this.diagnosticsRegistered) {
+        openStreams.delete(this);
         recordStreamClose(this.storageKind, this.sqliteCacheKiB);
         this.diagnosticsRegistered = false;
       }
@@ -1556,6 +1592,53 @@ export function getPersistentStreamDiagnostics() {
       ephemeral_override_kib: resolveEphemeralSqliteCacheKiB(),
     },
   };
+}
+
+export interface SqliteFootprintSummary {
+  databases: number;
+  page_bytes: number;
+  live_page_bytes: number;
+  freelist_bytes: number;
+  message_bytes: number;
+  messages: number;
+  errors: number;
+}
+
+function emptySqliteFootprintSummary(): SqliteFootprintSummary {
+  return {
+    databases: 0,
+    page_bytes: 0,
+    live_page_bytes: 0,
+    freelist_bytes: 0,
+    message_bytes: 0,
+    messages: 0,
+    errors: 0,
+  };
+}
+
+export function getPersistentStreamSqliteDiagnostics() {
+  const started = Date.now();
+  const result = {
+    ephemeral: emptySqliteFootprintSummary(),
+    disk: emptySqliteFootprintSummary(),
+    duration_ms: 0,
+  };
+  for (const [stream, kind] of openStreams) {
+    try {
+      const footprint = stream.diagnosticSqliteFootprint();
+      const summary = result[footprint.kind];
+      summary.databases += 1;
+      summary.page_bytes += footprint.page_bytes;
+      summary.live_page_bytes += footprint.live_page_bytes;
+      summary.freelist_bytes += footprint.freelist_bytes;
+      summary.message_bytes += footprint.message_bytes;
+      summary.messages += footprint.messages;
+    } catch {
+      result[kind].errors += 1;
+    }
+  }
+  result.duration_ms = Date.now() - started;
+  return result;
 }
 
 export function pstream(

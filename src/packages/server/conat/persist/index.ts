@@ -16,7 +16,10 @@ import {
   type PersistMaintenanceCoordinator,
 } from "@cocalc/backend/conat/persist-maintenance/coordinator";
 import { loadPersistMaintenanceConfig } from "@cocalc/backend/conat/persist-maintenance/config";
-import { getPersistentStreamDiagnostics } from "@cocalc/conat/persist/storage";
+import {
+  getPersistentStreamDiagnostics,
+  getPersistentStreamSqliteDiagnostics,
+} from "@cocalc/conat/persist/storage";
 
 const logger = getLogger("server:conat:persist");
 
@@ -36,6 +39,10 @@ export function getConatPersistDiagnostics(): {
     local_open_streams: local_streams.open_total,
     local_streams,
   };
+}
+
+export function getConatPersistSqliteDiagnostics() {
+  return getPersistentStreamSqliteDiagnostics();
 }
 
 export async function initConatPersist() {
