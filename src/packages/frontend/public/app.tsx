@@ -6,12 +6,18 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 
 import { Button, Typography } from "antd";
-import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { getControlPlaneAuthBootstrap } from "@cocalc/frontend/auth/api";
+import {
+  hasTrackingConsent,
+  onConsentChange,
+} from "@cocalc/frontend/cookie-consent";
+import { linkFirstPartyAnalyticsAccount } from "@cocalc/frontend/cookie-consent/analytics";
+import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
+import { joinUrlPath } from "@cocalc/util/url-path";
+
 import { getSiteName, type PublicConfig, PublicSectionShell } from "./common";
 import { PublicRouteHeadMetadata } from "./metadata";
 import type { PublicRoute } from "./routes";
-import { joinUrlPath } from "@cocalc/util/url-path";
 import { publicPath } from "./routes";
 
 const PublicAboutApp = lazy(() => import("./about/app"));
@@ -191,6 +197,19 @@ export default function PublicApp({
       cancelled = true;
     };
   }, [resolvedConfig]);
+
+  useEffect(() => {
+    if (
+      !resolvedConfig?.cookie_banner_enabled ||
+      !resolvedConfig.is_authenticated
+    ) {
+      return;
+    }
+    return onConsentChange(() => {
+      if (!hasTrackingConsent()) return;
+      void linkFirstPartyAnalyticsAccount();
+    });
+  }, [resolvedConfig?.cookie_banner_enabled, resolvedConfig?.is_authenticated]);
 
   useEffect(() => {
     if (initialRoute.section === "docs") {

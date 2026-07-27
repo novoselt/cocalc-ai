@@ -3,7 +3,16 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Alert, Button, Flex, Modal, Space, Spin, Typography } from "antd";
+import {
+  Alert,
+  Button,
+  Collapse,
+  Flex,
+  Modal,
+  Space,
+  Spin,
+  Typography,
+} from "antd";
 import { delay } from "awaiting";
 import dayjs from "dayjs";
 import { useEffect, useMemo, useState } from "react";
@@ -36,6 +45,7 @@ import {
   type BillingInterval,
   type MembershipPricingTier,
 } from "./membership-pricing-chooser";
+import { MembershipTierComparison } from "./membership-tier-details";
 import { MEMBERSHIP_CHANGE } from "@cocalc/util/db-schema/purchases";
 import { sortMembershipTiersByDisplayOrder } from "@cocalc/util/membership-tier-order";
 import { currency } from "@cocalc/util/misc";
@@ -570,20 +580,37 @@ function MembershipPurchaseModalInner({
             title={`No ${interval === "month" ? "monthly" : "annual"} membership tiers are currently available.`}
           />
         ) : (
-          <MembershipPricingTierGrid>
-            {visibleTiers.map((tier) => {
-              const current = isCurrentChoice(tier);
-              return (
-                <MembershipPricingTierTile
-                  billingInterval={interval}
-                  current={current}
-                  key={tier.id}
-                  onClick={current ? undefined : () => selectTier(tier)}
-                  tier={tier}
-                />
-              );
-            })}
-          </MembershipPricingTierGrid>
+          <>
+            <MembershipPricingTierGrid>
+              {visibleTiers.map((tier) => {
+                const current = isCurrentChoice(tier);
+                return (
+                  <MembershipPricingTierTile
+                    billingInterval={interval}
+                    current={current}
+                    key={tier.id}
+                    onClick={current ? undefined : () => selectTier(tier)}
+                    tier={tier}
+                  />
+                );
+              })}
+            </MembershipPricingTierGrid>
+            <Collapse
+              items={[
+                {
+                  children: (
+                    <MembershipTierComparison
+                      currentTierId={currentPersonalClass}
+                      showTitle={false}
+                      tiers={visibleTiers}
+                    />
+                  ),
+                  key: "exact-membership-details",
+                  label: "Compare exact limits and features",
+                },
+              ]}
+            />
+          </>
         )}
         <Flex justify="center">
           <Button
@@ -591,7 +618,7 @@ function MembershipPurchaseModalInner({
             rel="noreferrer"
             target="_blank"
           >
-            Compare membership details <Icon name="external-link" />
+            Open public pricing page <Icon name="external-link" />
           </Button>
         </Flex>
       </Space>

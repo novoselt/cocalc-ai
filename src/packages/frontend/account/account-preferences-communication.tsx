@@ -10,7 +10,9 @@ import { defineMessage } from "react-intl";
 import { redux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import { labels } from "@cocalc/frontend/i18n";
 import {
+  buildMarketingEmailConsentRecord,
   MARKETING_CONSENT_OTHER_SETTINGS_KEY,
+  MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY,
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_EMAIL_MODES,
   OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
@@ -72,7 +74,14 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
   }
 
   function setMarketingConsent(enabled: boolean): void {
-    on_change(MARKETING_CONSENT_OTHER_SETTINGS_KEY, enabled);
+    redux.getActions("account").set_other_settings_many({
+      [MARKETING_CONSENT_OTHER_SETTINGS_KEY]: enabled,
+      [MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY]:
+        buildMarketingEmailConsentRecord({
+          enabled,
+          source: "communication-settings",
+        }),
+    });
   }
 
   function deliveryOptions(category: NotificationCategoryRow) {
@@ -101,6 +110,7 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
       key: "delivery",
       render: (_, category) => (
         <Select
+          aria-label={`Delivery for ${category.label}`}
           value={notificationPreferences.email[category.key]}
           onChange={(mode) => setNotificationEmailMode(category.key, mode)}
           options={deliveryOptions(category)}
@@ -155,10 +165,10 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
 
   return (
     <Space vertical size="middle" style={{ width: "100%" }}>
+      {render_marketing_email_preferences()}
       <SettingsCard title="Notifications">
         {render_notification_email_preferences()}
       </SettingsCard>
-      {render_marketing_email_preferences()}
       <CookieConsentSettings />
     </Space>
   );

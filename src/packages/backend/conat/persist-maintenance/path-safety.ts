@@ -3,7 +3,7 @@
  *  License: MS-RSL - see LICENSE.md for details
  */
 
-import { lstatSync, realpathSync, type Stats } from "node:fs";
+import { lstatSync, type Stats } from "node:fs";
 import {
   dirname,
   isAbsolute,
@@ -88,12 +88,6 @@ export class PersistMaintenancePathSafety {
     if (!stat.isFile() || stat.isSymbolicLink()) {
       throw new Error(
         `persist maintenance candidate is not a regular file: ${path}`,
-      );
-    }
-    const real = realpathSync(path);
-    if (real !== path) {
-      throw new Error(
-        `persist maintenance candidate resolves elsewhere: ${path}`,
       );
     }
     this.assertNoSymlinkParents(path);

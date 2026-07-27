@@ -4,7 +4,7 @@
  */
 
 import { Button, Input, Modal } from "antd";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useIntl } from "react-intl";
 import { Icon } from "@cocalc/frontend/components";
 import { DocsLink } from "@cocalc/frontend/docs/link";
@@ -85,9 +85,10 @@ export default function SSHKeyAdder({
   const [keyValue, setKeyValue] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const buttonRef = useRef<HTMLAnchorElement | HTMLButtonElement>(null);
 
   const button = (
-    <Button size={size} onClick={() => setAdd(!add)}>
+    <Button ref={buttonRef} size={size} onClick={() => setAdd(!add)}>
       <Icon name="plus-circle" /> Add SSH Key...
     </Button>
   );
@@ -107,6 +108,7 @@ export default function SSHKeyAdder({
     setError("");
     setSubmitting(false);
     setAdd(false);
+    setTimeout(() => buttonRef.current?.focus(), 0);
   }
 
   async function submit_form(e?): Promise<void> {

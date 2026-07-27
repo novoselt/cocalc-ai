@@ -14,9 +14,10 @@ import {
   PublicPage,
   PublicSection,
 } from "@cocalc/frontend/public/layout/shell";
+import { PUBLIC_COLORS } from "@cocalc/frontend/public/theme";
 import { navigatePublic } from "../navigation";
 import type { PublicSupportRoute, SupportView } from "./routes";
-import { COLORS, HELP_EMAIL, SITE_NAME } from "@cocalc/util/theme";
+import { HELP_EMAIL, SITE_NAME } from "@cocalc/util/theme";
 
 const { Paragraph } = Typography;
 
@@ -83,7 +84,7 @@ function SupportCard({
   return (
     <PublicSection>
       <div style={{ fontWeight: 700, fontSize: "18px" }}>{title}</div>
-      <div style={{ color: COLORS.GRAY }}>{description}</div>
+      <div style={{ color: PUBLIC_COLORS.mutedText }}>{description}</div>
       <div>{children}</div>
     </PublicSection>
   );
@@ -116,7 +117,7 @@ function SupportIndex({
         </div>
         <div>
           Need more help?{" "}
-          <a href={`mailto:${helpEmail}`} style={{ color: COLORS.BLUE_D }}>
+          <a href={`mailto:${helpEmail}`} style={{ color: PUBLIC_COLORS.link }}>
             Contact {helpEmail}
           </a>
           .
@@ -157,7 +158,7 @@ function SupportIndex({
           >
             <a
               href={config.support_video_call}
-              style={{ color: COLORS.BLUE_D }}
+              style={{ color: PUBLIC_COLORS.link }}
             >
               Book a call
             </a>
@@ -175,7 +176,7 @@ function SupportIndex({
           description="Browse user and admin documentation."
           title="Documentation"
         >
-          <a href={appPath("/docs")} style={{ color: COLORS.BLUE_D }}>
+          <a href={appPath("/docs")} style={{ color: PUBLIC_COLORS.link }}>
             Read the docs
           </a>
         </SupportCard>
@@ -183,7 +184,7 @@ function SupportIndex({
           description="Reach the team directly by email."
           title="Email"
         >
-          <a href={`mailto:${helpEmail}`} style={{ color: COLORS.BLUE_D }}>
+          <a href={`mailto:${helpEmail}`} style={{ color: PUBLIC_COLORS.link }}>
             {helpEmail}
           </a>
         </SupportCard>
@@ -191,7 +192,7 @@ function SupportIndex({
           description="Review pricing and licensing options."
           title="Pricing and licensing"
         >
-          <a href={appPath("/pricing")} style={{ color: COLORS.BLUE_D }}>
+          <a href={appPath("/pricing")} style={{ color: PUBLIC_COLORS.link }}>
             Review pricing
           </a>
         </SupportCard>

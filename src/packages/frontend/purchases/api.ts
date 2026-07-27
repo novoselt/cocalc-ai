@@ -23,6 +23,7 @@ import type {
   SiteLicenseAffiliationReverificationSeat,
   SiteLicenseAffiliationReverificationUserStatus,
   SiteLicenseManagerRole,
+  SiteLicensePoolAccountSearchResult,
   SiteLicenseOverview,
   SiteLicensePoolConfig,
   SiteLicensePoolRequest,
@@ -558,6 +559,15 @@ export async function assignSiteLicensePoolSeat(opts: {
     ...opts,
     browser_id: webapp_client.browser_id,
   });
+}
+
+export async function searchSiteLicensePoolAccounts(opts: {
+  site_license_id: string;
+  package_id: string;
+  query: string;
+  limit?: number;
+}): Promise<SiteLicensePoolAccountSearchResult> {
+  return await (await getPurchasesHubRpc()).searchSiteLicensePoolAccounts(opts);
 }
 
 export async function getClaimableMembershipPackages(opts?: {

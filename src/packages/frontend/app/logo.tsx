@@ -34,6 +34,7 @@ export const AppLogo: React.FC<Props> = React.memo((props: Props) => {
 
   return (
     <A
+      aria-label="CoCalc home"
       href={appBasePath}
       style={{
         height: dimension,

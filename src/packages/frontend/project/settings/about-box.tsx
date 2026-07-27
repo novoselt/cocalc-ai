@@ -175,6 +175,7 @@ export const AboutBox: React.FC<Props> = (props: Readonly<Props>) => {
         >
           {!isFlyout ? (
             <CopyToClipBoard
+              ariaLabel={`${projectLabel} ID`}
               inputWidth={"330px"}
               value={project_id}
               style={{ display: "inline-block", width: "100%", margin: 0 }}

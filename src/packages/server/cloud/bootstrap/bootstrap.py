@@ -42,7 +42,7 @@ from typing import Any
 
 STATE_SCHEMA_VERSION = 1
 HELPER_SCHEMA_VERSION = "20260718-v14"
-RUNTIME_WRAPPER_VERSION = "20260714-v14"
+RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
 CLOUDFLARED_DEB_SHA256 = {
@@ -102,6 +102,554 @@ HOST_OWNED_DATA_FILES = (
 )
 HOST_OWNED_SQLITE_RE = re.compile(r"^(sqlite\.db|sync-fs\.sqlite)(?:-(?:wal|shm))?$")
 ENV_ASSIGNMENT_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+PROJECT_IO_POLICY_HELPER = r'''#!/usr/bin/env python3
+"""Resolve project I/O policy into concrete cgroup v2 device limits."""
+
+from __future__ import annotations
+
+import json
+import os
+import stat
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+GIB = 1024 * 1024 * 1024
+MIB = 1024 * 1024
+POLICY_VERSION = 1
+CAPACITY_VERSION = 1
+DYNAMIC_CAPACITY_MODE = "gcp-pd-balanced"
+CLASSES = ("standard", "member", "premium")
+METRICS = ("rbps", "wbps", "riops", "wiops")
+
+DEFAULTS = {
+    "version": POLICY_VERSION,
+    "mode": "disabled",
+    "mountpoint": "/mnt/cocalc",
+    "profile": "unconfigured",
+    "capacitySource": "unconfigured",
+    "capacity": {"mode": "static"},
+    "pool": {"rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
+    "leafClasses": {
+        "standard": {
+            "weight": 100,
+            "rbps": 0,
+            "wbps": 0,
+            "riops": 0,
+            "wiops": 0,
+        },
+        "member": {
+            "weight": 200,
+            "rbps": 0,
+            "wbps": 0,
+            "riops": 0,
+            "wiops": 0,
+        },
+        "premium": {
+            "weight": 400,
+            "rbps": 0,
+            "wbps": 0,
+            "riops": 0,
+            "wiops": 0,
+        },
+    },
+}
+
+
+def object_value(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    return value
+
+
+def load_object(path: str, *, missing_ok: bool = False) -> dict[str, Any]:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return object_value(json.load(handle), path)
+    except FileNotFoundError:
+        if missing_ok:
+            return {}
+        raise
+
+
+def merge(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    result = dict(left)
+    for key, value in right.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def clean_text(value: Any, fallback: str, name: str) -> str:
+    text = str(value or "").strip() or fallback
+    if any(char in text for char in ("\t", "\n", "\0")):
+        raise ValueError(f"invalid {name}")
+    return text
+
+
+def integer(
+    row: dict[str, Any], key: str, *, positive: bool = False
+) -> int:
+    value = row.get(key, 0)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"invalid {key}")
+    if positive and value <= 0:
+        raise ValueError(f"missing enforced {key}")
+    return value
+
+
+def normalize_policy(
+    policy_path: str, override_path: str, io_class: str
+) -> dict[str, Any]:
+    if io_class not in CLASSES:
+        io_class = "standard"
+    policy = merge(
+        merge(DEFAULTS, load_object(policy_path, missing_ok=True)),
+        load_object(override_path, missing_ok=True),
+    )
+    version = policy.get("version")
+    if isinstance(version, bool) or version != POLICY_VERSION:
+        raise ValueError("project I/O policy version must be 1")
+    mode = policy.get("mode")
+    if mode not in ("disabled", "observe", "enforce"):
+        raise ValueError("invalid project I/O policy mode")
+    mountpoint = clean_text(
+        policy.get("mountpoint"), "/mnt/cocalc", "project I/O mountpoint"
+    )
+    if not mountpoint.startswith("/"):
+        raise ValueError("invalid project I/O mountpoint")
+    capacity = object_value(policy.get("capacity") or {}, "capacity")
+    capacity_mode = capacity.get("mode") or "static"
+    if capacity_mode not in ("static", DYNAMIC_CAPACITY_MODE):
+        raise ValueError("invalid project I/O capacity mode")
+    pool = object_value(policy.get("pool") or {}, "pool")
+    leaf_classes = object_value(
+        policy.get("leafClasses") or {}, "leafClasses"
+    )
+    leaf = object_value(leaf_classes.get(io_class) or {}, io_class)
+    require_static = mode == "enforce" and capacity_mode == "static"
+    pool_values = {
+        key: integer(pool, key, positive=require_static) for key in METRICS
+    }
+    leaf_values = {
+        key: integer(leaf, key, positive=require_static) for key in METRICS
+    }
+    if require_static:
+        for key in METRICS:
+            if leaf_values[key] > pool_values[key]:
+                raise ValueError(f"leaf {key} exceeds pool {key}")
+    weight = integer(leaf, "weight", positive=True)
+    if weight > 10000:
+        raise ValueError("I/O weight exceeds 10000")
+    return {
+        "version": version,
+        "mode": mode,
+        "mountpoint": mountpoint,
+        "profile": clean_text(
+            policy.get("profile"), "unconfigured", "profile"
+        ),
+        "capacity_source": clean_text(
+            policy.get("capacitySource"),
+            "unconfigured",
+            "capacitySource",
+        ),
+        "capacity_mode": capacity_mode,
+        "pool": pool_values,
+        "leaf": {**leaf_values, "weight": weight},
+        "io_class": io_class,
+    }
+
+
+def policy_fields(policy: dict[str, Any]) -> str:
+    return "\t".join(
+        map(
+            str,
+            [
+                policy["mode"],
+                policy["mountpoint"],
+                *[policy["pool"][key] for key in METRICS],
+                *[policy["leaf"][key] for key in METRICS],
+                policy["leaf"]["weight"],
+                policy["io_class"],
+                policy["version"],
+                policy["profile"],
+                policy["capacity_source"],
+                policy["capacity_mode"],
+            ],
+        )
+    )
+
+
+def run_output(args: list[str]) -> str:
+    result = subprocess.run(
+        args,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+    )
+    if result.returncode:
+        raise ValueError(
+            f"{args[0]} failed ({result.returncode}): "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    return result.stdout.strip()
+
+
+def btrfs_devices(mountpoint: str) -> list[str]:
+    output = run_output(
+        ["/usr/bin/btrfs", "filesystem", "show", "--raw", mountpoint]
+    )
+    devices = []
+    for line in output.splitlines():
+        parts = line.split()
+        if parts and parts[0] == "devid":
+            devices.append(parts[-1])
+    return devices
+
+
+def mounted_device(mountpoint: str) -> list[str]:
+    source = run_output(
+        ["/usr/bin/findmnt", "-n", "-o", "SOURCE", "-T", mountpoint]
+    )
+    return [source] if source else []
+
+
+def capacity_targets(capacity_path: str) -> tuple[str, list[dict[str, Any]]]:
+    capacity = load_object(capacity_path)
+    version = capacity.get("version")
+    if isinstance(version, bool) or version != CAPACITY_VERSION:
+        raise ValueError("project I/O capacity version must be 1")
+    provider = clean_text(capacity.get("provider"), "unknown", "provider")
+    targets = capacity.get("targets")
+    if not isinstance(targets, list) or not targets:
+        raise ValueError("project I/O capacity targets must not be empty")
+    normalized = []
+    for index, value in enumerate(targets):
+        target = object_value(value, f"targets[{index}]")
+        mountpoint = clean_text(
+            target.get("mountpoint"), "", f"targets[{index}].mountpoint"
+        )
+        if not mountpoint.startswith("/"):
+            raise ValueError(f"invalid targets[{index}].mountpoint")
+        discovery = target.get("discovery")
+        if discovery not in ("btrfs", "mount"):
+            raise ValueError(f"invalid targets[{index}].discovery")
+        disk_type = clean_text(
+            target.get("disk_type"), "unknown", f"targets[{index}].disk_type"
+        )
+        required = target.get("required", True)
+        if not isinstance(required, bool):
+            raise ValueError(f"invalid targets[{index}].required")
+        normalized.append(
+            {
+                "mountpoint": mountpoint,
+                "discovery": discovery,
+                "disk_type": disk_type,
+                "required": required,
+            }
+        )
+    return provider, normalized
+
+
+def scheduler_for(device: str) -> str | None:
+    name = os.path.basename(os.path.realpath(device))
+    path = Path("/sys/class/block") / name / "queue" / "scheduler"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for value in text.split():
+        if value.startswith("[") and value.endswith("]"):
+            return value[1:-1]
+    return None
+
+
+def filesystem_for(mountpoint: str) -> str:
+    try:
+        return run_output(
+            ["/usr/bin/findmnt", "-n", "-o", "FSTYPE", "-T", mountpoint]
+        )
+    except ValueError:
+        return "unknown"
+
+
+def inspect_device(
+    device: str,
+    *,
+    provider: str,
+    disk_type: str,
+    mountpoint: str,
+) -> dict[str, Any]:
+    resolved = os.path.realpath(device)
+    device_stat = os.stat(resolved)
+    if not stat.S_ISBLK(device_stat.st_mode):
+        raise ValueError(f"project I/O device is not a block device: {device}")
+    size_text = run_output(["/usr/sbin/blockdev", "--getsize64", resolved])
+    size_bytes = int(size_text)
+    if size_bytes <= 0:
+        raise ValueError(f"project I/O device has invalid size: {device}")
+    return {
+        "device": resolved,
+        "major_minor": (
+            f"{os.major(device_stat.st_rdev)}:{os.minor(device_stat.st_rdev)}"
+        ),
+        "scheduler": scheduler_for(resolved),
+        "size_bytes": size_bytes,
+        "provider": provider,
+        "disk_type": disk_type,
+        "mountpoints": [mountpoint],
+        "filesystems": [filesystem_for(mountpoint)],
+    }
+
+
+def discover_devices(
+    policy: dict[str, Any], capacity_path: str
+) -> list[dict[str, Any]]:
+    if policy["capacity_mode"] == "static":
+        provider = "static"
+        targets = [
+            {
+                "mountpoint": policy["mountpoint"],
+                "discovery": "btrfs",
+                "disk_type": "static",
+                "required": True,
+            }
+        ]
+    else:
+        provider, targets = capacity_targets(capacity_path)
+    devices: dict[str, dict[str, Any]] = {}
+    for target in targets:
+        mountpoint = target["mountpoint"]
+        if target["discovery"] == "btrfs":
+            paths = btrfs_devices(mountpoint)
+        else:
+            paths = mounted_device(mountpoint)
+        if not paths and target["required"]:
+            raise ValueError(
+                f"no block devices discovered for required mountpoint {mountpoint}"
+            )
+        for path in paths:
+            row = inspect_device(
+                path,
+                provider=provider,
+                disk_type=target["disk_type"],
+                mountpoint=mountpoint,
+            )
+            existing = devices.get(row["major_minor"])
+            if existing is None:
+                devices[row["major_minor"]] = row
+                continue
+            if (
+                existing["provider"] != row["provider"]
+                or existing["disk_type"] != row["disk_type"]
+            ):
+                raise ValueError(
+                    f"conflicting capacity metadata for {row['major_minor']}"
+                )
+            existing["mountpoints"] = sorted(
+                set(existing["mountpoints"] + row["mountpoints"])
+            )
+            existing["filesystems"] = sorted(
+                set(existing["filesystems"] + row["filesystems"])
+            )
+    if not devices:
+        raise ValueError("no project-writable block devices discovered")
+    return sorted(devices.values(), key=lambda row: row["major_minor"])
+
+
+def dynamic_pool_limits(devices: list[dict[str, Any]]) -> dict[str, int]:
+    if any(
+        row["provider"] != "gcp" or row["disk_type"] != "balanced"
+        for row in devices
+    ):
+        raise ValueError(
+            "gcp-pd-balanced capacity requires GCP balanced disks only"
+        )
+    total_bytes = sum(row["size_bytes"] for row in devices)
+    count = len(devices)
+    physical_iops = min(15000, 3000 + (6 * total_bytes) // GIB)
+    size_throughput = (
+        140 * MIB + (28 * total_bytes * MIB) // (100 * GIB)
+    )
+    physical_read_bps = min(240 * MIB, size_throughput)
+    # 200 MiB/s is below the smallest documented pd-balanced write cap.
+    physical_write_bps = min(200 * MIB, size_throughput)
+    return {
+        "rbps": max(1, (physical_read_bps * 50) // (100 * count)),
+        "wbps": max(1, (physical_write_bps * 25) // (100 * count)),
+        "riops": max(1, (physical_iops * 50) // (100 * count)),
+        "wiops": max(1, (physical_iops * 25) // (100 * count)),
+    }
+
+
+def effective_limits(
+    policy: dict[str, Any],
+    devices: list[dict[str, Any]],
+    scope: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    if scope != "pool" and scope not in CLASSES:
+        raise ValueError("scope must be pool, standard, member, or premium")
+    if policy["capacity_mode"] == "static":
+        limits = policy["pool"] if scope == "pool" else policy["leaf"]
+        return [
+            {**row, "limits": {key: limits[key] for key in METRICS}}
+            for row in devices
+        ], None
+    pool = dynamic_pool_limits(devices)
+    factor = {
+        "pool": 100,
+        "standard": 25,
+        "member": 50,
+        "premium": 75,
+    }[scope]
+    rows = [
+        {
+            **row,
+            "limits": {
+                key: max(1, (pool[key] * factor) // 100)
+                for key in METRICS
+            },
+        }
+        for row in devices
+    ]
+    total_bytes = sum(row["size_bytes"] for row in devices)
+    physical_iops = min(15000, 3000 + (6 * total_bytes) // GIB)
+    size_throughput = (
+        140 * MIB + (28 * total_bytes * MIB) // (100 * GIB)
+    )
+    return rows, {
+        "total_bytes": total_bytes,
+        "device_count": len(devices),
+        "physical_read_bps": min(240 * MIB, size_throughput),
+        "physical_write_bps": min(200 * MIB, size_throughput),
+        "physical_iops": physical_iops,
+    }
+
+
+def limit_rows_tsv(rows: list[dict[str, Any]]) -> str:
+    lines = []
+    for row in rows:
+        limits = row["limits"]
+        lines.append(
+            "\t".join(
+                map(
+                    str,
+                    [
+                        row["major_minor"],
+                        *[limits[key] for key in METRICS],
+                        row["device"],
+                        row.get("scheduler") or "",
+                        row["size_bytes"],
+                        row["provider"],
+                        row["disk_type"],
+                        json.dumps(row["mountpoints"], separators=(",", ":")),
+                        json.dumps(row["filesystems"], separators=(",", ":")),
+                    ],
+                )
+            )
+        )
+    return "\n".join(lines)
+
+
+def policy_status(
+    policy: dict[str, Any], capacity_path: str
+) -> dict[str, Any]:
+    result = {
+        "policy_mode": policy["mode"],
+        "policy_version": policy["version"],
+        "policy_profile": policy["profile"],
+        "capacity_source": policy["capacity_source"],
+        "capacity_mode": policy["capacity_mode"],
+        "mountpoint": policy["mountpoint"],
+        "mountpoints": [policy["mountpoint"]],
+        "filesystem": "unknown",
+        "devices": [],
+    }
+    try:
+        devices = discover_devices(policy, capacity_path)
+        rows, capacity = effective_limits(policy, devices, "pool")
+        result["devices"] = [
+            {
+                key: row[key]
+                for key in (
+                    "device",
+                    "major_minor",
+                    "scheduler",
+                    "size_bytes",
+                    "provider",
+                    "disk_type",
+                    "mountpoints",
+                    "filesystems",
+                    "limits",
+                )
+                if row.get(key) is not None
+            }
+            for row in rows
+        ]
+        result["mountpoints"] = sorted(
+            {path for row in rows for path in row["mountpoints"]}
+        )
+        filesystems = sorted(
+            {value for row in rows for value in row["filesystems"]}
+        )
+        result["filesystem"] = (
+            filesystems[0] if len(filesystems) == 1 else ",".join(filesystems)
+        )
+        if capacity is not None:
+            result["derived_capacity"] = capacity
+    except Exception as exc:
+        result["discovery_error"] = str(exc)
+    return result
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        raise ValueError("missing command")
+    command = sys.argv[1]
+    if command == "fields" and len(sys.argv) == 5:
+        policy = normalize_policy(sys.argv[2], sys.argv[3], sys.argv[4])
+        print(policy_fields(policy))
+        return 0
+    if command in ("limits", "status") and len(sys.argv) == 7:
+        policy = normalize_policy(sys.argv[2], sys.argv[3], sys.argv[6])
+        if command == "status":
+            print(
+                json.dumps(
+                    policy_status(policy, sys.argv[4]),
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        devices = discover_devices(policy, sys.argv[4])
+        rows, _capacity = effective_limits(policy, devices, sys.argv[5])
+        print(limit_rows_tsv(rows))
+        return 0
+    if command == "calculate" and len(sys.argv) == 3:
+        devices = json.load(sys.stdin)
+        policy = {
+            "capacity_mode": DYNAMIC_CAPACITY_MODE,
+            "pool": {},
+            "leaf": {},
+        }
+        rows, capacity = effective_limits(policy, devices, sys.argv[2])
+        print(json.dumps({"rows": rows, "capacity": capacity}, separators=(",", ":")))
+        return 0
+    raise ValueError("invalid project I/O policy helper arguments")
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"project I/O policy error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+'''
 
 NVIDIA_CDI_NORMALIZER_SCRIPT = f"""#!/usr/bin/env python3
 import sys
@@ -214,6 +762,7 @@ class BootstrapConfig:
     shared_scratch_mount: str
     shared_scratch_project_mount: str
     shared_scratch_filesystem: str
+    project_io_capacity: dict[str, Any]
     apt_packages: list[str]
     has_gpu: bool
     ssh_user: str
@@ -256,6 +805,12 @@ def _ensure_list(value: Any, name: str) -> list[Any]:
     if isinstance(value, list):
         return value
     raise RuntimeError(f"{name} must be list")
+
+
+def _ensure_object(value: Any, name: str) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    raise RuntimeError(f"{name} must be object")
 
 
 def load_config(bootstrap_dir: str) -> BootstrapConfig:
@@ -345,6 +900,22 @@ def load_config(bootstrap_dir: str) -> BootstrapConfig:
         shared_scratch_filesystem=_ensure_str(
             shared_scratch.get("filesystem") or "ext4",
             "bootstrap-desired-state.shared_scratch.filesystem",
+        ),
+        project_io_capacity=_ensure_object(
+            desired.get("project_io_capacity")
+            or {
+                "version": 1,
+                "provider": "unknown",
+                "targets": [
+                    {
+                        "mountpoint": "/mnt/cocalc",
+                        "discovery": "btrfs",
+                        "disk_type": "unknown",
+                        "required": True,
+                    }
+                ],
+            },
+            "bootstrap-desired-state.project_io_capacity",
         ),
         apt_packages=[
             str(p)
@@ -892,6 +1463,7 @@ def build_desired_state(cfg: BootstrapConfig) -> dict[str, Any]:
             "project_mount": cfg.shared_scratch_project_mount,
             "filesystem": cfg.shared_scratch_filesystem,
         },
+        "project_io_capacity": cfg.project_io_capacity,
         "runtime_user_contract": expected_runtime_user_contract(cfg),
         "bootstrap_connection": build_bootstrap_connection(cfg),
         "project_host_bundle": {
@@ -1309,31 +1881,88 @@ RSYSLOG_LOGROTATE_CONTENT = """/var/log/syslog
 }
 """
 
+RSYSLOG_EMERGENCY_WALL_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<rule>\*\.emerg[ \t]+:omusrmsg:\*[ \t]*(?:#.*)?)$",
+    re.MULTILINE,
+)
+RSYSLOG_CONSOLE_OUTPUT_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<rule>[^#\s][^\n]*[ \t]+-?/dev/console[ \t]*(?:#.*)?)$",
+    re.MULTILINE,
+)
+RSYSLOG_HEADLESS_OUTPUT_COMMENT = (
+    "# CoCalc headless hosts retain emergency messages in syslog and journald."
+)
+
+
+def disable_rsyslog_headless_outputs(config_dir: Path) -> bool:
+    changed = False
+    for config_path in sorted(config_dir.glob("*.conf")):
+        changed = disable_rsyslog_headless_outputs_in_file(config_path) or changed
+    return changed
+
+
+def disable_rsyslog_headless_outputs_in_file(config_path: Path) -> bool:
+    try:
+        content = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    def comment_rule(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        rule = match.group("rule").rstrip()
+        return (
+            f"{indent}{RSYSLOG_HEADLESS_OUTPUT_COMMENT}\n"
+            f"{indent}# {rule}"
+        )
+
+    updated, wall_count = RSYSLOG_EMERGENCY_WALL_RE.subn(comment_rule, content)
+    updated, console_count = RSYSLOG_CONSOLE_OUTPUT_RE.subn(
+        comment_rule, updated
+    )
+    if wall_count + console_count == 0:
+        return False
+    config_path.write_text(updated, encoding="utf-8")
+    return True
+
 
 def configure_rsyslog_limits(
     cfg: BootstrapConfig,
     *,
     logrotate_path: Path = Path("/etc/logrotate.d/rsyslog"),
+    rsyslog_config_dir: Path = Path("/etc/rsyslog.d"),
 ) -> None:
     if not logrotate_path.parent.exists():
         return
     log_line(cfg, "bootstrap: configuring classic system log limits")
     try:
-        changed = (
+        logrotate_changed = (
             logrotate_path.read_text(encoding="utf-8")
             != RSYSLOG_LOGROTATE_CONTENT
         )
     except OSError:
-        changed = True
-    if not changed:
+        logrotate_changed = True
+    if logrotate_changed:
+        logrotate_path.write_text(RSYSLOG_LOGROTATE_CONTENT, encoding="utf-8")
+    headless_outputs_changed = disable_rsyslog_headless_outputs(
+        rsyslog_config_dir
+    )
+    if not logrotate_changed and not headless_outputs_changed:
         log_line(cfg, "bootstrap: classic system log limits already current")
         return
-    logrotate_path.write_text(RSYSLOG_LOGROTATE_CONTENT, encoding="utf-8")
-    if shutil.which("systemctl") is not None:
+    if shutil.which("systemctl") is None:
+        return
+    if logrotate_changed:
         run_best_effort(
             cfg,
             ["systemctl", "start", "--no-block", "logrotate.service"],
             "queue classic system log rotation",
+            timeout=15,
+        )
+    if headless_outputs_changed:
+        run_best_effort(
+            cfg,
+            ["systemctl", "restart", "--no-block", "rsyslog.service"],
+            "queue rsyslog restart after disabling interactive delivery",
             timeout=15,
         )
 
@@ -2563,6 +3192,8 @@ BEES_CGROUP_PIDS_MAX="64"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_IO_POLICY_DEFAULT="/etc/cocalc/project-io-policy.json"
 PROJECT_IO_POLICY_OVERRIDE_DEFAULT="/etc/cocalc/project-io-policy.override.json"
+PROJECT_IO_CAPACITY_DEFAULT="/etc/cocalc/project-io-capacity.json"
+PROJECT_IO_POLICY_HELPER="/usr/local/libexec/cocalc-project-io-policy"
 # This state is needed when cgroups are reconstructed at boot, before each
 # project has necessarily restarted and reported its authoritative class.
 PROJECT_IO_CLASS_STATE_DIR="/var/lib/cocalc/project-io-classes"
@@ -2660,114 +3291,29 @@ project_io_policy_fields() {
     standard|member|premium) ;;
     *) io_class="standard" ;;
   esac
-  /usr/bin/python3 - "$PROJECT_IO_POLICY_DEFAULT" "$PROJECT_IO_POLICY_OVERRIDE_DEFAULT" "$io_class" <<'PY'
-import json
-import os
-import sys
-
-base_path, override_path, io_class = sys.argv[1:]
-defaults = {
-    "version": 1,
-    "mode": "disabled",
-    "mountpoint": "/mnt/cocalc",
-    "pool": {"rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
-    "leafClasses": {
-        "standard": {"weight": 100, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
-        "member": {"weight": 200, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
-        "premium": {"weight": 400, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
-    },
+  "$PROJECT_IO_POLICY_HELPER" fields \
+    "$PROJECT_IO_POLICY_DEFAULT" \
+    "$PROJECT_IO_POLICY_OVERRIDE_DEFAULT" \
+    "$io_class"
 }
 
-def load(path):
-    try:
-        with open(path, encoding="utf-8") as handle:
-            value = json.load(handle)
-        if not isinstance(value, dict):
-            raise ValueError("root must be an object")
-        return value
-    except FileNotFoundError:
-        return {}
-
-def merge(left, right):
-    result = dict(left)
-    for key, value in right.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = merge(result[key], value)
-        else:
-            result[key] = value
-    return result
-
-policy = merge(merge(defaults, load(base_path)), load(override_path))
-version = policy.get("version")
-if isinstance(version, bool) or version != 1:
-    raise ValueError("project I/O policy version must be 1")
-mode = policy.get("mode")
-if mode not in ("disabled", "observe", "enforce"):
-    raise ValueError("invalid project I/O policy mode")
-mountpoint = str(policy.get("mountpoint") or "").strip() or "/mnt/cocalc"
-if not mountpoint.startswith("/") or "\\t" in mountpoint or "\\n" in mountpoint or "\\0" in mountpoint:
-    raise ValueError("invalid project I/O mountpoint")
-pool = policy.get("pool") or {}
-leaf = (policy.get("leafClasses") or {}).get(io_class) or {}
-
-def integer(row, key, *, positive=False):
-    value = row.get(key, 0)
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f"invalid {key}")
-    if positive and value <= 0:
-        raise ValueError(f"missing enforced {key}")
-    return value
-
-require = mode == "enforce"
-pool_values = [integer(pool, key, positive=require) for key in ("rbps", "wbps", "riops", "wiops")]
-leaf_values = [integer(leaf, key, positive=require) for key in ("rbps", "wbps", "riops", "wiops")]
-if require:
-    for key, leaf_value, pool_value in zip(
-        ("rbps", "wbps", "riops", "wiops"), leaf_values, pool_values
-    ):
-        if leaf_value > pool_value:
-            raise ValueError(f"leaf {key} exceeds pool {key}")
-weight = integer(leaf, "weight", positive=True)
-if weight > 10000:
-    raise ValueError("I/O weight exceeds 10000")
-profile = str(policy.get("profile") or "").strip() or "unconfigured"
-capacity_source = str(policy.get("capacitySource") or "").strip() or "unconfigured"
-for name, value in (("profile", profile), ("capacitySource", capacity_source)):
-    if "\\t" in value or "\\n" in value or "\\0" in value:
-        raise ValueError(f"invalid {name}")
-print("\\t".join(map(str, [
-    mode,
-    mountpoint,
-    *pool_values,
-    *leaf_values,
-    weight,
-    io_class,
-    policy["version"],
-    profile,
-    capacity_source,
-])))
-PY
+project_io_limit_rows() {
+  local scope="$1" io_class="${2:-standard}"
+  "$PROJECT_IO_POLICY_HELPER" limits \
+    "$PROJECT_IO_POLICY_DEFAULT" \
+    "$PROJECT_IO_POLICY_OVERRIDE_DEFAULT" \
+    "$PROJECT_IO_CAPACITY_DEFAULT" \
+    "$scope" \
+    "$io_class"
 }
 
-project_io_devices() {
-  project_io_device_rows "$1" | cut -f2
-}
-
-project_io_device_rows() {
-  local mountpoint="$1" device resolved name scheduler major_hex minor_hex major minor
-  while IFS= read -r device; do
-    [ -b "$device" ] || continue
-    read -r major_hex minor_hex < <(stat -Lc '%t %T' "$device")
-    major="$((16#$major_hex))"
-    minor="$((16#$minor_hex))"
-    resolved="$(readlink -f "$device")"
-    name="$(basename "$resolved")"
-    scheduler=""
-    if [ -r "/sys/class/block/${name}/queue/scheduler" ]; then
-      scheduler="$(sed -n 's/.*\\[\\([^]]*\\)\\].*/\\1/p' "/sys/class/block/${name}/queue/scheduler")"
-    fi
-    printf '%s\t%s:%s\t%s\n' "$device" "$major" "$minor" "$scheduler"
-  done < <(/usr/bin/btrfs filesystem show --raw "$mountpoint" 2>/dev/null | awk '$1 == "devid" {print $NF}')
+project_io_policy_status() {
+  "$PROJECT_IO_POLICY_HELPER" status \
+    "$PROJECT_IO_POLICY_DEFAULT" \
+    "$PROJECT_IO_POLICY_OVERRIDE_DEFAULT" \
+    "$PROJECT_IO_CAPACITY_DEFAULT" \
+    "pool" \
+    "standard"
 }
 
 clear_stale_io_max() {
@@ -2783,53 +3329,61 @@ clear_stale_io_max() {
 }
 
 apply_io_max() {
-  local cgroup="$1" mountpoint="$2" rbps="$3" wbps="$4" riops="$5" wiops="$6"
-  local mode="$7" devices device line
+  local cgroup="$1" scope="$2" mode="$3" io_class="${4:-standard}"
+  local rows devices device rbps wbps riops wiops line snapshot
   if [ ! -w "$cgroup/io.max" ]; then
     [ "$mode" = "enforce" ] && deny "project-io-max-unavailable" "$cgroup"
     return 0
   fi
-  devices="$(project_io_devices "$mountpoint")"
-  if [ -z "$devices" ]; then
-    [ "$mode" = "enforce" ] && deny "project-io-device-unavailable" "$mountpoint"
+  if [ "$mode" != "enforce" ]; then
+    # Disabling containment must not depend on storage discovery succeeding.
+    # Clear every existing device cap, including devices removed from the
+    # current capacity manifest.
+    snapshot="$(cat "$cgroup/io.max")"
+    while read -r device _rest; do
+      [ -n "$device" ] || continue
+      printf '%s rbps=max wbps=max riops=max wiops=max\n' "$device" > "$cgroup/io.max"
+    done <<< "$snapshot"
     return 0
   fi
+  if ! rows="$(project_io_limit_rows "$scope" "$io_class")"; then
+    deny "project-io-device-unavailable" "$scope"
+  fi
+  devices="$(cut -f1 <<< "$rows")"
+  [ -n "$devices" ] || {
+    deny "project-io-device-unavailable" "$scope"
+  }
   clear_stale_io_max "$cgroup" "$devices"
-  while IFS= read -r device; do
+  while IFS=$'\t' read -r device rbps wbps riops wiops _rest; do
     [ -n "$device" ] || continue
-    # Observe calculates and reports policy without enforcing it. It must also
-    # remove limits left by an earlier enforce policy, just like disabled mode.
-    if [ "$mode" != "enforce" ]; then
-      line="$device rbps=max wbps=max riops=max wiops=max"
-    else
-      line="$device rbps=$rbps wbps=$wbps riops=$riops wiops=$wiops"
-    fi
+    line="$device rbps=$rbps wbps=$wbps riops=$riops wiops=$wiops"
     printf '%s\n' "$line" > "$cgroup/io.max"
-  done <<< "$devices"
+  done <<< "$rows"
 }
 
 verify_io_max() {
-  local cgroup="$1" mountpoint="$2" rbps="$3" wbps="$4" riops="$5" wiops="$6"
-  local devices device line
+  local cgroup="$1" scope="$2" io_class="${3:-standard}"
+  local rows device rbps wbps riops wiops line
   [ -r "$cgroup/io.max" ] || deny "project-io-max-unavailable" "$cgroup"
-  devices="$(project_io_devices "$mountpoint")"
-  [ -n "$devices" ] || deny "project-io-device-unavailable" "$mountpoint"
-  while IFS= read -r device; do
+  rows="$(project_io_limit_rows "$scope" "$io_class")" ||
+    deny "project-io-device-unavailable" "$scope"
+  [ -n "$rows" ] || deny "project-io-device-unavailable" "$scope"
+  while IFS=$'\t' read -r device rbps wbps riops wiops _rest; do
     [ -n "$device" ] || continue
     line="$(awk -v device="$device" '$1 == device {print; exit}' "$cgroup/io.max")"
     for expected in "rbps=$rbps" "wbps=$wbps" "riops=$riops" "wiops=$wiops"; do
       grep -qw "$expected" <<< "$line" || deny "project-io-limit-mismatch" "cgroup=$cgroup,device=$device,expected=$expected,actual=${line:-missing}"
     done
-  done <<< "$devices"
+  done <<< "$rows"
 }
 
 apply_project_pool_io_policy() {
-  local fields mode mountpoint rbps wbps riops wiops
+  local fields mode
   fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
-  IFS=$'\t' read -r mode mountpoint rbps wbps riops wiops _rest <<< "$fields"
-  apply_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$mountpoint" "$rbps" "$wbps" "$riops" "$wiops" "$mode"
+  IFS=$'\t' read -r mode _rest <<< "$fields"
+  apply_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool" "$mode"
   if [ "$mode" = "enforce" ]; then
-    verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$mountpoint" "$rbps" "$wbps" "$riops" "$wiops"
+    verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
   fi
 }
 
@@ -2846,13 +3400,13 @@ apply_existing_project_io_policy() {
     printf '%s\n' "$io_class" > "${PROJECT_IO_CLASS_STATE_DIR}/${project_id}"
   fi
   fields="$(project_io_policy_fields "$io_class")" || deny "project-io-policy-invalid" "$io_class"
-  IFS=$'\t' read -r mode mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops weight _class _policy_version _policy_profile _capacity_source <<< "$fields"
+  IFS=$'\t' read -r mode mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops weight _class _policy_version _policy_profile _capacity_source _capacity_mode <<< "$fields"
   if [ -w "$cgroup/io.weight" ]; then
     printf 'default %s\n' "$weight" > "$cgroup/io.weight"
   fi
-  apply_io_max "$cgroup" "$mountpoint" "$rbps" "$wbps" "$riops" "$wiops" "$mode"
+  apply_io_max "$cgroup" "$io_class" "$mode" "$io_class"
   if [ "$mode" = "enforce" ]; then
-    verify_io_max "$cgroup" "$mountpoint" "$rbps" "$wbps" "$riops" "$wiops"
+    verify_io_max "$cgroup" "$io_class" "$io_class"
   fi
 }
 
@@ -2873,6 +3427,20 @@ normalize_project_io_class_state() {
     esac
     printf '%s\n' "$io_class" > "$state_file"
   done
+}
+
+reconcile_project_io_policy() {
+  local pool project_id
+  acquire_project_cgroup_lock
+  normalize_project_io_class_state
+  configure_project_pool_hierarchy
+  for pool in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
+    [ -d "$pool" ] || continue
+    project_id="${pool##*/project-}"
+    is_project_uuid "$project_id" || continue
+    apply_existing_project_io_policy "$pool" "$project_id"
+  done
+  release_project_lock
 }
 
 enable_cgroup_controllers() {
@@ -2981,9 +3549,9 @@ configure_project_cgroup() {
   if [ -w "$cgroup/io.weight" ]; then
     printf 'default %s\n' "$io_weight" > "$cgroup/io.weight"
   fi
-  apply_io_max "$cgroup" "$io_mountpoint" "$rbps" "$wbps" "$riops" "$wiops" "$io_mode"
+  apply_io_max "$cgroup" "$io_class" "$io_mode" "$io_class"
   if [ "$io_mode" = "enforce" ]; then
-    verify_io_max "$cgroup" "$io_mountpoint" "$rbps" "$wbps" "$riops" "$wiops"
+    verify_io_max "$cgroup" "$io_class" "$io_class"
   fi
   mkdir -p "$PROJECT_IO_CLASS_STATE_DIR"
   chmod 0755 "$PROJECT_IO_CLASS_STATE_DIR"
@@ -3862,10 +4430,10 @@ case "$cmd" in
       exit 2
     fi
     fields="$(project_io_policy_fields "$2")" || deny "project-io-policy-invalid" "$2"
-    IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops _weight _class _policy_version _policy_profile _capacity_source <<< "$fields"
+    IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops _weight io_class _policy_version _policy_profile _capacity_source _capacity_mode <<< "$fields"
     if [ "$io_mode" = "enforce" ]; then
-      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$_pool_rbps" "$_pool_wbps" "$_pool_riops" "$_pool_wiops"
-      verify_io_max "$(project_cgroup "$1")" "$io_mountpoint" "$rbps" "$wbps" "$riops" "$wiops"
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+      verify_io_max "$(project_cgroup "$1")" "$io_class" "$io_class"
     fi
     ;;
   verify-project-io-policy)
@@ -3874,9 +4442,9 @@ case "$cmd" in
       exit 2
     fi
     fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
-    IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _leaf_rbps _leaf_wbps _leaf_riops _leaf_wiops _weight _class policy_version policy_profile capacity_source <<< "$fields"
+    IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _leaf_rbps _leaf_wbps _leaf_riops _leaf_wiops _weight _class policy_version policy_profile capacity_source capacity_mode <<< "$fields"
     if [ "$io_mode" = "enforce" ]; then
-      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$pool_rbps" "$pool_wbps" "$pool_riops" "$pool_wiops"
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
     fi
     ;;
   project-io-status)
@@ -3886,41 +4454,28 @@ case "$cmd" in
     fi
     fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "status"
     IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _rest <<< "$fields"
+    policy_status="$(project_io_policy_status)" || deny "project-io-policy-invalid" "status"
     if [ "$io_mode" = "enforce" ]; then
-      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$io_mountpoint" "$pool_rbps" "$pool_wbps" "$pool_riops" "$pool_wiops"
-    fi
-    device_rows="$(project_io_device_rows "$io_mountpoint")"
-    io_filesystem="$(findmnt -n -o FSTYPE -T "$io_mountpoint" 2>/dev/null || true)"
-    io_filesystem="${io_filesystem:-unknown}"
-    io_capability="available"
-    io_capability_reason=""
-    if [ -z "$device_rows" ]; then
-      io_capability="unsupported"
-      io_capability_reason="no Btrfs backing block devices discovered"
-    elif [ "$io_mode" = "enforce" ]; then
-      io_capability="validated"
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
     fi
     pool_io_max="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.max" 2>/dev/null || true)"
     pool_pressure="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.pressure" 2>/dev/null || true)"
     legacy_processes="$(cat "$(project_legacy_cgroup)/cgroup.procs" 2>/dev/null || true)"
     pool_io_weight="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)"
-    /usr/bin/python3 - "$fields" "$device_rows" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" "$io_filesystem" "$io_capability" "$io_capability_reason" <<'PY'
+    /usr/bin/python3 - "$policy_status" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" <<'PY'
 import json
 import sys
 
-fields, rows, io_max, io_weight, pressure, legacy, filesystem, capability, capability_reason = sys.argv[1:]
-parts = fields.split("\t")
-mode, mountpoint = parts[:2]
-policy_version = int(parts[12])
-policy_profile = parts[13]
-capacity_source = parts[14]
-devices = []
-for row in rows.splitlines():
-    device, major_minor, scheduler = (row.split("\t") + [""])[:3]
-    item = {"device": device, "major_minor": major_minor}
-    if scheduler:
-        item["scheduler"] = scheduler
-    devices.append(item)
+status_json, io_max, io_weight, pressure, legacy = sys.argv[1:]
+result = json.loads(status_json)
+discovery_error = result.pop("discovery_error", None)
+if discovery_error:
+    result["capability"] = "unsupported"
+    result["capability_reason"] = discovery_error
+elif result["policy_mode"] == "enforce":
+    result["capability"] = "validated"
+else:
+    result["capability"] = "available"
 
 pressure_values = {}
 for row in pressure.splitlines():
@@ -3934,23 +4489,13 @@ for row in pressure.splitlines():
     if "total" in values:
         pressure_values[f"pressure_{kind}_total"] = int(values["total"])
 
-result = {
-    "policy_mode": mode,
-    "policy_version": policy_version,
-    "policy_profile": policy_profile,
-    "capacity_source": capacity_source,
-    "mountpoint": mountpoint,
-    "filesystem": filesystem,
-    "capability": capability,
+result.update({
     "pool_cgroup": "/sys/fs/cgroup/cocalc-project-pool",
     "pool_io_max": io_max.strip(),
     "pool_io_weight": io_weight.strip(),
-    "devices": devices,
     "legacy_process_count": len(legacy.split()),
     **pressure_values,
-}
-if capability_reason:
-    result["capability_reason"] = capability_reason
+})
 print(json.dumps(result, separators=(",", ":")))
 PY
     ;;
@@ -3959,16 +4504,7 @@ PY
       echo "usage: cocalc-runtime-storage reconcile-project-io-policy" >&2
       exit 2
     fi
-    acquire_project_cgroup_lock
-    normalize_project_io_class_state
-    configure_project_pool_hierarchy
-    for pool in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
-      [ -d "$pool" ] || continue
-      project_id="${pool##*/project-}"
-      is_project_uuid "$project_id" || continue
-      apply_existing_project_io_policy "$pool" "$project_id"
-    done
-    release_project_lock
+    reconcile_project_io_policy
     ;;
   verify-project-network-limits)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then
@@ -5073,7 +5609,8 @@ PY' bash "$tree"
     if [ "$#" -eq 1 ] && ! echo "$1" | grep -Eq '^[0-9]+$'; then
       deny "grow-btrfs-bad-args" "non-numeric-argument"
     fi
-    exec /usr/local/sbin/cocalc-grow-btrfs "$@"
+    /usr/local/sbin/cocalc-grow-btrfs "$@"
+    reconcile_project_io_policy
     ;;
   grow-shared-scratch)
     if [ "$#" -gt 1 ]; then
@@ -5137,6 +5674,7 @@ PY' bash "$tree"
       fi
     fi
     chmod 1777 "$scratch_mount"
+    reconcile_project_io_policy
     ;;
   unmount-shared-scratch)
     if [ "$#" -ne 0 ]; then
@@ -5220,6 +5758,7 @@ esac
     storage_wrapper = storage_wrapper.replace("__RUNTIME_USER__", cfg.ssh_user)
     wrappers = {
         "/usr/local/libexec/cocalc-runtime-storage-path-helper": RUNTIME_STORAGE_PATH_HELPER,
+        "/usr/local/libexec/cocalc-project-io-policy": PROJECT_IO_POLICY_HELPER,
         "/usr/local/sbin/cocalc-runtime-storage": storage_wrapper,
         "/usr/local/sbin/cocalc-mount-data": mount_wrapper,
         "/usr/local/sbin/cocalc-cloudflared-ctl": cloud_ctl_wrapper,
@@ -5239,6 +5778,7 @@ esac
             "mountpoint": "/mnt/cocalc",
             "profile": "unconfigured",
             "capacitySource": "unconfigured",
+            "capacity": {"mode": "static"},
             "pool": {"rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
             "leafClasses": {
                 "standard": {"weight": 100, "rbps": 0, "wbps": 0, "riops": 0, "wiops": 0},
@@ -5259,6 +5799,14 @@ esac
     if override_path.exists():
         os.chown(override_path, 0, 0)
         override_path.chmod(0o600)
+    capacity_path = Path("/etc/cocalc/project-io-capacity.json")
+    text_write_atomic(
+        capacity_path,
+        json.dumps(cfg.project_io_capacity, indent=2, sort_keys=True) + "\n",
+        default_mode=0o644,
+    )
+    os.chown(capacity_path, 0, 0)
+    capacity_path.chmod(0o644)
 
 
 def reconcile_bees_runtime_policy(cfg: BootstrapConfig) -> None:
@@ -5283,6 +5831,30 @@ def reconcile_project_network_limits(cfg: BootstrapConfig) -> None:
         "reconcile per-project network containment",
         timeout=60,
     )
+
+
+def reconcile_project_io_policy(cfg: BootstrapConfig) -> None:
+    run_cmd(
+        cfg,
+        [
+            "/usr/local/sbin/cocalc-runtime-storage",
+            "reconcile-project-io-policy",
+        ],
+        "reconcile per-project I/O containment",
+        timeout=120,
+    )
+
+
+def reconcile_storage_and_containment(cfg: BootstrapConfig) -> None:
+    # Network reconciliation creates the project-pool hierarchy, which also
+    # applies io.max. Establish every required writable mount before that
+    # fail-closed policy can inspect the capacity manifest.
+    ensure_cocalc_mount(cfg)
+    setup_shared_scratch(cfg)
+    ensure_btrfs_data(cfg)
+    reconcile_bees_runtime_policy(cfg)
+    reconcile_project_network_limits(cfg)
+    reconcile_project_io_policy(cfg)
 
 
 def ensure_btrfs_data(cfg: BootstrapConfig) -> None:
@@ -7908,11 +8480,7 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         image_size_gb = compute_image_size(cfg)
         install_btrfs_helper(cfg)
         install_privileged_wrappers(cfg)
-        reconcile_project_network_limits(cfg)
-        ensure_cocalc_mount(cfg)
-        reconcile_bees_runtime_policy(cfg)
-        setup_shared_scratch(cfg)
-        ensure_btrfs_data(cfg)
+        reconcile_storage_and_containment(cfg)
         ensure_subuids(cfg)
         ensure_runtime_user_manager(cfg)
         configure_podman(cfg)
@@ -7953,10 +8521,12 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
     try:
         ensure_runtime_user(cfg)
         ensure_bootstrap_paths(cfg)
+        configure_rsyslog_limits(cfg)
         install_privileged_wrappers(cfg)
         configure_runtime_sudoers(cfg)
         verify_runtime_sudoers(cfg)
         reconcile_project_network_limits(cfg)
+        reconcile_project_io_policy(cfg)
         configure_cloudflared_with_options(cfg, install_package=False)
         record_operation_success(cfg, "reconcile")
         report_bootstrap_status(cfg, "done", "Privileged host helpers reconciled")

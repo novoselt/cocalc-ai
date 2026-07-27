@@ -35,6 +35,18 @@ def make_cfg(tmpdir: str) -> bootstrap.BootstrapConfig:
         shared_scratch_mount="/mnt/cocalc-scratch",
         shared_scratch_project_mount="/scratch",
         shared_scratch_filesystem="ext4",
+        project_io_capacity={
+            "version": 1,
+            "provider": "gcp",
+            "targets": [
+                {
+                    "mountpoint": "/mnt/cocalc",
+                    "discovery": "btrfs",
+                    "disk_type": "balanced",
+                    "required": True,
+                }
+            ],
+        },
         apt_packages=[],
         has_gpu=False,
         ssh_user="missing-runtime-user",
@@ -140,6 +152,38 @@ class ProjectHostStartTest(unittest.TestCase):
 
 
 class BootstrapSharedScratchTest(unittest.TestCase):
+    def test_reconcile_mounts_scratch_before_containment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = replace(make_cfg(tmpdir), shared_scratch_enabled=True)
+            events: list[str] = []
+            originals = {}
+
+            def patch(name: str) -> None:
+                originals[name] = getattr(bootstrap, name)
+                setattr(
+                    bootstrap,
+                    name,
+                    lambda _cfg, name=name: events.append(name),
+                )
+
+            names = [
+                "ensure_cocalc_mount",
+                "setup_shared_scratch",
+                "ensure_btrfs_data",
+                "reconcile_bees_runtime_policy",
+                "reconcile_project_network_limits",
+                "reconcile_project_io_policy",
+            ]
+            try:
+                for name in names:
+                    patch(name)
+                bootstrap.reconcile_storage_and_containment(cfg)
+            finally:
+                for name, original in originals.items():
+                    setattr(bootstrap, name, original)
+
+            self.assertEqual(events, names)
+
     def test_setup_shared_scratch_formats_mounts_and_records_fstab(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             device = Path(tmpdir) / "scratch-device"
@@ -582,6 +626,13 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
                 bootstrap.RSYSLOG_LOGROTATE_CONTENT,
                 encoding="utf-8",
             )
+            rsyslog_config_dir = Path(tmpdir) / "rsyslog.d"
+            rsyslog_config_dir.mkdir()
+            (rsyslog_config_dir / "50-default.conf").write_text(
+                f"{bootstrap.RSYSLOG_HEADLESS_OUTPUT_COMMENT}\n"
+                "# *.emerg :omusrmsg:*\n",
+                encoding="utf-8",
+            )
             calls = []
             original_run_best_effort = bootstrap.run_best_effort
             try:
@@ -591,6 +642,7 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
                 bootstrap.configure_rsyslog_limits(
                     cfg,
                     logrotate_path=logrotate_path,
+                    rsyslog_config_dir=rsyslog_config_dir,
                 )
             finally:
                 bootstrap.run_best_effort = original_run_best_effort
@@ -602,6 +654,7 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
             cfg = make_cfg(tmpdir)
             logrotate_path = Path(tmpdir) / "logrotate.d" / "rsyslog"
             logrotate_path.parent.mkdir()
+            rsyslog_config_dir = Path(tmpdir) / "rsyslog.d"
             calls = []
             original_run_best_effort = bootstrap.run_best_effort
             original_which = bootstrap.shutil.which
@@ -613,6 +666,7 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
                 bootstrap.configure_rsyslog_limits(
                     cfg,
                     logrotate_path=logrotate_path,
+                    rsyslog_config_dir=rsyslog_config_dir,
                 )
             finally:
                 bootstrap.run_best_effort = original_run_best_effort
@@ -635,6 +689,75 @@ class BootstrapRsyslogLimitsTest(unittest.TestCase):
                                 "logrotate.service",
                             ],
                             "queue classic system log rotation",
+                        ),
+                        {"timeout": 15},
+                    )
+                ],
+            )
+
+    def test_disables_headless_interactive_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            logrotate_path = Path(tmpdir) / "logrotate.d" / "rsyslog"
+            logrotate_path.parent.mkdir()
+            logrotate_path.write_text(
+                bootstrap.RSYSLOG_LOGROTATE_CONTENT,
+                encoding="utf-8",
+            )
+            rsyslog_config_dir = Path(tmpdir) / "rsyslog.d"
+            rsyslog_config_dir.mkdir()
+            default_config_path = rsyslog_config_dir / "50-default.conf"
+            default_config_path.write_text(
+                "auth,authpriv.* /var/log/auth.log\n"
+                "*.emerg                 :omusrmsg:*\n",
+                encoding="utf-8",
+            )
+            google_config_path = rsyslog_config_dir / "90-google.conf"
+            google_config_path.write_text(
+                "daemon,kern.* /dev/console\n",
+                encoding="utf-8",
+            )
+            calls = []
+            original_run_best_effort = bootstrap.run_best_effort
+            original_which = bootstrap.shutil.which
+            try:
+                bootstrap.run_best_effort = lambda *args, **kwargs: calls.append(
+                    (args, kwargs)
+                )
+                bootstrap.shutil.which = lambda _name: "/usr/bin/systemctl"
+                bootstrap.configure_rsyslog_limits(
+                    cfg,
+                    logrotate_path=logrotate_path,
+                    rsyslog_config_dir=rsyslog_config_dir,
+                )
+            finally:
+                bootstrap.run_best_effort = original_run_best_effort
+                bootstrap.shutil.which = original_which
+
+            self.assertEqual(
+                default_config_path.read_text(encoding="utf-8"),
+                "auth,authpriv.* /var/log/auth.log\n"
+                f"{bootstrap.RSYSLOG_HEADLESS_OUTPUT_COMMENT}\n"
+                "# *.emerg                 :omusrmsg:*\n",
+            )
+            self.assertEqual(
+                google_config_path.read_text(encoding="utf-8"),
+                f"{bootstrap.RSYSLOG_HEADLESS_OUTPUT_COMMENT}\n"
+                "# daemon,kern.* /dev/console\n",
+            )
+            self.assertEqual(
+                calls,
+                [
+                    (
+                        (
+                            cfg,
+                            [
+                                "systemctl",
+                                "restart",
+                                "--no-block",
+                                "rsyslog.service",
+                            ],
+                            "queue rsyslog restart after disabling interactive delivery",
                         ),
                         {"timeout": 15},
                     )
@@ -1369,6 +1492,132 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
             )
 
 
+class ProjectIoPolicyHelperTest(unittest.TestCase):
+    def run_calculation(
+        self, devices: list[dict[str, object]], scope: str
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            helper = Path(tmpdir) / "cocalc-project-io-policy"
+            helper.write_text(
+                bootstrap.PROJECT_IO_POLICY_HELPER, encoding="utf-8"
+            )
+            return subprocess.run(
+                [sys.executable, str(helper), "calculate", scope],
+                input=json.dumps(devices),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+    def test_balanced_capacity_tracks_all_project_writable_devices(self) -> None:
+        devices = [
+            {
+                "device": "/dev/sdb",
+                "major_minor": "8:16",
+                "size_bytes": 150 * 1024**3,
+                "provider": "gcp",
+                "disk_type": "balanced",
+                "mountpoints": ["/mnt/cocalc"],
+                "filesystems": ["btrfs"],
+            },
+            {
+                "device": "/dev/sdc",
+                "major_minor": "8:32",
+                "size_bytes": 500 * 1024**3,
+                "provider": "gcp",
+                "disk_type": "balanced",
+                "mountpoints": ["/mnt/cocalc-scratch"],
+                "filesystems": ["ext4"],
+            },
+        ]
+        result = self.run_calculation(devices, "pool")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calculated = json.loads(result.stdout)
+        self.assertEqual(
+            calculated["capacity"],
+            {
+                "total_bytes": 650 * 1024**3,
+                "device_count": 2,
+                "physical_read_bps": 240 * 1024**2,
+                "physical_write_bps": 200 * 1024**2,
+                "physical_iops": 6900,
+            },
+        )
+        for row in calculated["rows"]:
+            self.assertEqual(
+                row["limits"],
+                {
+                    "rbps": 60 * 1024**2,
+                    "wbps": 25 * 1024**2,
+                    "riops": 1725,
+                    "wiops": 862,
+                },
+            )
+
+        premium = self.run_calculation(devices, "premium")
+        self.assertEqual(premium.returncode, 0, premium.stderr)
+        for row in json.loads(premium.stdout)["rows"]:
+            self.assertEqual(row["limits"]["rbps"], 45 * 1024**2)
+            self.assertEqual(row["limits"]["wbps"], 19_660_800)
+            self.assertEqual(row["limits"]["riops"], 1293)
+            self.assertEqual(row["limits"]["wiops"], 646)
+
+    def test_dynamic_capacity_rejects_unmodeled_storage(self) -> None:
+        result = self.run_calculation(
+            [
+                {
+                    "device": "/dev/nvme0n1",
+                    "major_minor": "259:0",
+                    "size_bytes": 500 * 1024**3,
+                    "provider": "gcp",
+                    "disk_type": "ssd",
+                    "mountpoints": ["/mnt/cocalc"],
+                    "filesystems": ["btrfs"],
+                }
+            ],
+            "pool",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "gcp-pd-balanced capacity requires GCP balanced disks only",
+            result.stderr,
+        )
+
+    def test_dynamic_policy_does_not_require_static_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            helper = Path(tmpdir) / "cocalc-project-io-policy"
+            helper.write_text(
+                bootstrap.PROJECT_IO_POLICY_HELPER, encoding="utf-8"
+            )
+            policy_path = Path(tmpdir) / "policy.json"
+            override_path = Path(tmpdir) / "override.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "mode": "enforce",
+                        "capacity": {"mode": "gcp-pd-balanced"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            override_path.write_text("{}\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "fields",
+                    str(policy_path),
+                    str(override_path),
+                    "standard",
+                ],
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(result.stdout.strip().split("\t")[-1], "gcp-pd-balanced")
+
+
 class BootstrapWrapperScriptTest(unittest.TestCase):
     def test_storage_wrapper_uses_xattr_overlay_mounts_and_project_rustic_commands(
         self,
@@ -1402,10 +1651,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            policy_parser = script.split(
-                "<<'PY'\n", 1
-            )[1].split("\nPY\n", 1)[0]
-            compile(policy_parser, "embedded-project-io-policy.py", "exec")
+            policy_helper = captured[
+                "/usr/local/libexec/cocalc-project-io-policy"
+            ]
+            compile(policy_helper, "cocalc-project-io-policy.py", "exec")
             policy_path = Path(tmpdir) / "io-policy.json"
             override_path = Path(tmpdir) / "io-policy-override.json"
             override_path.write_text("{}\n", encoding="utf-8")
@@ -1431,11 +1680,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-",
+                    "fields",
                     str(policy_path),
                     str(override_path),
                     "standard",
                 ],
-                input=policy_parser,
+                input=policy_helper,
                 text=True,
                 capture_output=True,
             )
@@ -1446,11 +1696,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-",
+                    "fields",
                     str(policy_path),
                     str(override_path),
                     "standard",
                 ],
-                input=policy_parser,
+                input=policy_helper,
                 text=True,
                 capture_output=True,
             )
@@ -1521,15 +1772,24 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("verify-project-io-limits)", script)
             self.assertIn("verify-project-io-policy)", script)
             self.assertIn("project-io-status)", script)
-            self.assertIn('io_capability="validated"', script)
+            self.assertIn('result["capability"] = "validated"', script)
             self.assertIn(
-                'io_capability_reason="no Btrfs backing block devices discovered"',
+                'PROJECT_IO_CAPACITY_DEFAULT="/etc/cocalc/project-io-capacity.json"',
                 script,
             )
-            self.assertIn('if [ "$mode" != "enforce" ]; then', script)
+            self.assertIn(
+                'PROJECT_IO_POLICY_HELPER="/usr/local/libexec/cocalc-project-io-policy"',
+                script,
+            )
+            self.assertIn(
+                "Disabling containment must not depend on storage discovery",
+                script,
+            )
             self.assertNotIn('if [ "$mode" = "observe" ]; then', script)
-            self.assertIn('"policy_profile": policy_profile', script)
-            self.assertIn('"capacity_source": capacity_source', script)
+            self.assertIn('"policy_profile": policy["profile"]', policy_helper)
+            self.assertIn(
+                '"capacity_source": policy["capacity_source"]', policy_helper
+            )
             self.assertIn('"pool_io_weight": io_weight.strip()', script)
             self.assertIn(
                 "io_class _policy_version _policy_profile _capacity_source",
@@ -3210,6 +3470,7 @@ class BootstrapModesTest(unittest.TestCase):
                 "configure_runtime_sudoers",
                 "verify_runtime_sudoers",
                 "reconcile_project_network_limits",
+                "reconcile_project_io_policy",
             ):
                 patch(name, lambda _cfg, name=name: events.append(name))
             patch(
@@ -3255,6 +3516,7 @@ class BootstrapModesTest(unittest.TestCase):
                     "configure_runtime_sudoers",
                     "verify_runtime_sudoers",
                     "reconcile_project_network_limits",
+                    "reconcile_project_io_policy",
                     "configure_cloudflared:False",
                     "success:reconcile",
                 ],
@@ -3351,6 +3613,7 @@ class BootstrapModesTest(unittest.TestCase):
             patch("install_btrfs_helper", lambda _cfg: None)
             patch("install_privileged_wrappers", lambda _cfg: None)
             patch("reconcile_project_network_limits", lambda _cfg: None)
+            patch("reconcile_project_io_policy", lambda _cfg: None)
             patch("ensure_cocalc_mount", lambda _cfg: None)
             patch("ensure_btrfs_data", lambda _cfg: None)
             patch("ensure_subuids", lambda _cfg: None)

@@ -27,6 +27,7 @@ import {
   TabsProps as AntdTabsProps,
   Space,
 } from "antd";
+import { useId } from "react";
 import type { MouseEventHandler } from "react";
 
 import { inDarkMode } from "@cocalc/frontend/account/dark-mode";
@@ -131,6 +132,7 @@ function parse_bsStyle(props: {
 }
 
 export const Button = (props: {
+  "aria-label"?: string;
   bsStyle?: ButtonStyle;
   bsSize?: ButtonSize;
   style?: React.CSSProperties;
@@ -166,6 +168,7 @@ export const Button = (props: {
   }
   const btn = (
     <AntdButton
+      aria-label={props["aria-label"]}
       onClick={props.onClick}
       type={type}
       disabled={props.disabled}
@@ -289,6 +292,8 @@ export function Switch(props: {
   labelStyle?: CSS;
   children?: any;
 }) {
+  const labelId = useId();
+
   // Default font weight for label
   const labelStyle: CSS = {
     fontWeight: 400,
@@ -314,11 +319,13 @@ export function Switch(props: {
         }}
       >
         <AntdSwitch
+          aria-labelledby={labelId}
           checked={props.checked}
           onChange={handleChange}
           disabled={props.disabled}
         />
         <span
+          id={labelId}
           onClick={() => !props.disabled && handleChange(!props.checked)}
           style={labelStyle}
         >

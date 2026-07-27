@@ -54,6 +54,16 @@ jest.mock("antd", () => {
           {children}
         </button>
       ),
+    Collapse: ({ items }: any) => (
+      <div>
+        {items.map((item: any) => (
+          <section key={item.key}>
+            <div>{item.label}</div>
+            {item.children}
+          </section>
+        ))}
+      </div>
+    ),
     Flex: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
     Modal: ({ children, open, title }: any) =>
       open ? (
@@ -170,6 +180,12 @@ jest.mock("./membership-pricing-chooser", () => ({
   membershipPriceValue: (value: unknown) => Number(value),
 }));
 
+jest.mock("./membership-tier-details", () => ({
+  MembershipTierComparison: ({ tiers }: any) => (
+    <div>Exact comparison for {tiers.length} tiers</div>
+  ),
+}));
+
 describe("MembershipPurchaseModal", () => {
   let currentMembership: any;
 
@@ -232,6 +248,18 @@ describe("MembershipPurchaseModal", () => {
     ).toBeTruthy();
     expect(screen.queryByText("billing selector")).toBeNull();
     expect(api).not.toHaveBeenCalled();
+  });
+
+  it("shows exact tier details in the membership chooser", async () => {
+    render(<MembershipPurchaseModal open onClose={jest.fn()} />);
+
+    expect(
+      await screen.findByText("Compare exact limits and features"),
+    ).toBeTruthy();
+    expect(screen.getByText("Exact comparison for 2 tiers")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Open public pricing page" }),
+    ).toHaveAttribute("target", "_blank");
   });
 
   it("blocks every membership change entry point while renewal is pending", async () => {

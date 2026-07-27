@@ -793,6 +793,11 @@ export interface SiteLicenseAccountDetails {
   email_address?: string;
 }
 
+export interface SiteLicensePoolAccountSearchResult {
+  accounts: SiteLicenseAccountDetails[];
+  query_kind: "account_id" | "email" | "text";
+}
+
 export interface SiteLicenseOverview {
   site_license: SiteLicenseRecord;
   pools: SiteLicensePoolSummary[];
@@ -1541,6 +1546,13 @@ export interface Purchases {
     target_account_id?: string;
     grant_expires_at?: Date | string | null;
   }) => Promise<MembershipPackageAssignment>;
+  searchSiteLicensePoolAccounts: (opts?: {
+    account_id?: string;
+    site_license_id?: string;
+    package_id?: string;
+    query?: string;
+    limit?: number;
+  }) => Promise<SiteLicensePoolAccountSearchResult>;
   getClaimableMembershipPackages: (opts?: {
     account_id?: string;
     include_claimed_site_license_pools?: boolean;
@@ -1797,6 +1809,7 @@ export const purchases = {
   assignMembershipPackageSeat: authFirst,
   revokeMembershipPackageSeat: authFirst,
   assignSiteLicensePoolSeat: authFirst,
+  searchSiteLicensePoolAccounts: authFirst,
   getClaimableMembershipPackages: authFirst,
   claimMembershipPackageSeat: authFirst,
   adminProvisionSiteLicense: authFirst,

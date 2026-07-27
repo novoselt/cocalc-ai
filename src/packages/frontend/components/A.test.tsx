@@ -12,3 +12,16 @@ test("A opens in a new tab at the right URL", () => {
   // @ts-ignore
   expect(link).toHaveAttribute("rel", "noopener");
 });
+
+test("A forwards accessible names to the anchor", () => {
+  render(
+    <A aria-label="CoCalc home" href="/">
+      <span aria-hidden="true" />
+    </A>,
+  );
+
+  expect(screen.getByRole("link", { name: "CoCalc home" })).toHaveAttribute(
+    "href",
+    "/",
+  );
+});

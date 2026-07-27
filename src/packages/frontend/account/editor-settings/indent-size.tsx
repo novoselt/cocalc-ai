@@ -23,6 +23,7 @@ export function EditorSettingsIndentSize(props: Props): React.JSX.Element {
       })}
     >
       <InputNumber
+        aria-label="Indent size"
         onChange={(n) => props.on_change("tab_size", n ?? 10)}
         min={2}
         max={32}

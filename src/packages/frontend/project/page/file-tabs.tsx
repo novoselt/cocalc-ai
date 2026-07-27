@@ -51,19 +51,44 @@ function Label({ path, project_id, label, onClose }) {
   const { width } = useItemContext();
   const { active } = useSortable({ id: project_id });
   return (
-    <FileTab
-      key={path}
-      project_id={project_id}
-      path={path}
-      label={label}
-      noPopover={active != null}
+    <div
       style={{
-        ...(width != null
-          ? { width: Math.max(MIN_WIDTH, width + 15), marginRight: "-10px" }
-          : undefined),
+        alignItems: "center",
+        display: "flex",
+        minWidth: 0,
+        width: "100%",
       }}
-      onClose={onClose}
-    />
+    >
+      <FileTab
+        key={path}
+        project_id={project_id}
+        path={path}
+        label={label}
+        noPopover={active != null}
+        style={{
+          ...(width != null
+            ? { width: Math.max(MIN_WIDTH, width + 15), marginRight: "-10px" }
+            : undefined),
+        }}
+        onClose={onClose}
+      />
+      <span
+        aria-hidden="true"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onClose(path);
+        }}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        style={{ cursor: "pointer", flex: "0 0 auto" }}
+        title={`Close ${path}`}
+      >
+        <Icon name="times" />
+      </span>
+    </div>
   );
 }
 
@@ -207,6 +232,7 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
   const items: TabsProps["items"] = [];
   for (let index = 0; index < labelsForPaths.length; index++) {
     items.push({
+      closable: false,
       key: pathToKey(paths[index]),
       label: (
         <Label
@@ -304,6 +330,12 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
       case "End":
         nextIndex = keys.length - 1;
         break;
+      case "Delete":
+        event.preventDefault();
+        event.stopPropagation();
+        closeVisibleTab(keyToPath(keys[currentIndex]));
+        focusTabStripSoon();
+        return;
       default:
         return;
     }
@@ -577,7 +609,7 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
                 items={items}
                 activeKey={activeKey}
                 type={"editable-card"}
-                hideAdd={viewer}
+                hideAdd
                 onChange={(key) => {
                   if (actions == null || !key) return;
                   actions.set_active_tab(path_to_tab(keyToPath(key)));
@@ -587,6 +619,17 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
             </div>
           </SortableTabs>
         </div>
+        {!viewer && (
+          <Tooltip title="Create a new file">
+            <Button
+              aria-label="Create file"
+              icon={<Icon name="plus" />}
+              onClick={() => onEdit("", "add")}
+              size="small"
+              style={{ flex: "0 0 auto" }}
+            />
+          </Tooltip>
+        )}
       </div>
     );
   }

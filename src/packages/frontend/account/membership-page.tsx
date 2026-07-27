@@ -3,15 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import {
-  Alert,
-  Button,
-  Modal,
-  Space,
-  Tag,
-  Table,
-  Typography,
-} from "antd";
+import { Alert, Button, Modal, Space, Tag, Table, Typography } from "antd";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { defineMessage } from "react-intl";
 
@@ -38,6 +30,7 @@ import {
   useMembershipSettingsData,
 } from "./membership-settings-data";
 import MembershipPurchaseModal from "./membership-purchase-modal";
+import { MembershipTierDetails } from "./membership-tier-details";
 import { SettingsCard } from "./settings-card";
 import type { SettingsPageDefinition } from "./settings-page";
 import { openAccountSettings } from "./settings-routing";
@@ -100,6 +93,7 @@ function MembershipSettingsContent() {
   const [purchaseCurrentInterval, setPurchaseCurrentInterval] = useState<
     BillingInterval | undefined
   >(undefined);
+  const [tierDetailsOpen, setTierDetailsOpen] = useState<boolean>(false);
   const [siteLicenseManageOpen, setSiteLicenseManageOpen] =
     useState<boolean>(false);
   const [siteLicenseManageSource, setSiteLicenseManageSource] =
@@ -272,6 +266,30 @@ function MembershipSettingsContent() {
               }
             />
           ) : null}
+          <Space wrap>
+            <Tooltip
+              title={
+                personalMembershipRenewing
+                  ? "Your membership renewal is being processed. Membership changes will be available when it finishes."
+                  : undefined
+              }
+            >
+              <span>
+                <Button
+                  disabled={personalMembershipRenewing}
+                  onClick={openPersonalMembershipManage}
+                  type="primary"
+                >
+                  Compare or change personal membership
+                </Button>
+              </span>
+            </Tooltip>
+            {tier ? (
+              <Button onClick={() => setTierDetailsOpen(true)}>
+                View full {tier.label ?? tier.id} details
+              </Button>
+            ) : null}
+          </Space>
         </Space>
       </SettingsCard>
 
@@ -418,6 +436,18 @@ function MembershipSettingsContent() {
         onClose={closePurchase}
         onChanged={refreshMembership}
       />
+      {tier ? (
+        <Modal
+          destroyOnHidden
+          footer={null}
+          onCancel={() => setTierDetailsOpen(false)}
+          open={tierDetailsOpen}
+          title={`${tier.label ?? tier.id} membership details`}
+          width={960}
+        >
+          <MembershipTierDetails tier={tier} />
+        </Modal>
+      ) : null}
     </Space>
   );
 }

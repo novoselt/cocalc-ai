@@ -496,6 +496,16 @@ export type BootstrapScripts = {
   sharedScratchDiskDevices: string;
   sharedScratchHostMount: string;
   sharedScratchProjectMount: string;
+  projectIoCapacity: {
+    version: 1;
+    provider: string;
+    targets: Array<{
+      mountpoint: string;
+      discovery: "btrfs" | "mount";
+      disk_type: string;
+      required: boolean;
+    }>;
+  };
   envFile: string;
   envLines: string[];
   nodeVersion: string;
@@ -535,6 +545,41 @@ export type BootstrapScripts = {
     gracePeriodSeconds?: number;
   };
 };
+
+export function buildProjectIoCapacity({
+  providerId,
+  diskType,
+  sharedScratchEnabled,
+  sharedScratchDiskType,
+}: {
+  providerId?: string;
+  diskType?: string;
+  sharedScratchEnabled: boolean;
+  sharedScratchDiskType?: string;
+}): BootstrapScripts["projectIoCapacity"] {
+  return {
+    version: 1,
+    provider: providerId ?? "unknown",
+    targets: [
+      {
+        mountpoint: "/mnt/cocalc",
+        discovery: "btrfs",
+        disk_type: diskType ?? "unknown",
+        required: true,
+      },
+      ...(sharedScratchEnabled
+        ? [
+            {
+              mountpoint: "/mnt/cocalc-scratch",
+              discovery: "mount" as const,
+              disk_type: sharedScratchDiskType ?? diskType ?? "unknown",
+              required: true,
+            },
+          ]
+        : []),
+    ],
+  };
+}
 
 async function loadBootstrapArtifactDesiredVersions(
   host_id: string,
@@ -969,6 +1014,12 @@ export async function buildBootstrapScripts(
     : "";
   const sharedScratchHostMount = "/mnt/cocalc-scratch";
   const sharedScratchProjectMount = "/scratch";
+  const projectIoCapacity = buildProjectIoCapacity({
+    providerId,
+    diskType: spec.disk_type,
+    sharedScratchEnabled,
+    sharedScratchDiskType: spec.shared_disk_type,
+  });
   const imageSizeGb = resolveBootstrapImageSizeGb({
     providerId,
     isSelfHost,
@@ -1200,6 +1251,7 @@ export async function buildBootstrapScripts(
     sharedScratchDiskDevices,
     sharedScratchHostMount,
     sharedScratchProjectMount,
+    projectIoCapacity,
     envFile,
     envLines,
     nodeVersion,
@@ -1413,6 +1465,7 @@ cat <<EOF_COCALC_BOOTSTRAP_DESIRED_STATE > "$BOOTSTRAP_DIR/bootstrap-desired-sta
     "project_mount": "${scripts.sharedScratchProjectMount}",
     "filesystem": "ext4"
   },
+  "project_io_capacity": ${JSON.stringify(scripts.projectIoCapacity)},
   "bootstrap": {
     "selector": "${scripts.bootstrapSelector}",
     "url": "${scripts.bootstrapPyUrl}"

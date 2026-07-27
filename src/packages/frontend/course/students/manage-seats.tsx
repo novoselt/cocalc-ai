@@ -24,6 +24,7 @@ import type {
 } from "@cocalc/conat/hub/api/purchases";
 import {
   FreshAuthModal,
+  isFreshAuthRequiredError,
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
 import { Icon, TimeAgo } from "@cocalc/frontend/components";
@@ -101,7 +102,7 @@ export function getNextManageSeatsPagination({
   };
 }
 
-async function runWithConcurrency<T>(
+export async function runSeatChangesWithConcurrency<T>(
   items: T[],
   concurrency: number,
   f: (item: T) => Promise<void>,
@@ -123,7 +124,15 @@ async function runWithConcurrency<T>(
       }
     }),
   );
+  throwFreshAuthFailure(failures);
   return failures;
+}
+
+function throwFreshAuthFailure(failures: unknown[]): void {
+  const failure = failures.find(isFreshAuthRequiredError);
+  if (failure != null) {
+    throw failure;
+  }
 }
 
 export function ManageSeats({
@@ -239,8 +248,9 @@ export function ManageSeats({
     setCompleted(0);
     setTotal(targetRows.length);
     try {
-      await runFreshAuthAction(async () => {
-        const failures = await runWithConcurrency(
+      const actionCompleted = await runFreshAuthAction(async () => {
+        setCompleted(0);
+        const failures = await runSeatChangesWithConcurrency(
           targetRows,
           4,
           async (student) => {
@@ -274,6 +284,9 @@ export function ManageSeats({
           );
         }
       });
+      if (!actionCompleted) {
+        return;
+      }
       await onRefresh();
       setSelectedStudentIds([]);
     } catch (err) {

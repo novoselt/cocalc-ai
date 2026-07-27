@@ -99,7 +99,6 @@ function ProductsOverviewPage({ config }: { config?: PublicConfig }) {
     {
       bestFit:
         "Individuals and teams that want managed hosted projects without running infrastructure.",
-      actionLabel: "Pricing and licensing",
       href: appPath("pricing"),
       icon: "cloud",
       runs: "Hosted service operated by CoCalc",
@@ -108,7 +107,6 @@ function ProductsOverviewPage({ config }: { config?: PublicConfig }) {
     {
       bestFit:
         "Individual users who want local control or a self-directed evaluation on Linux or Mac.",
-      actionLabel: "View CoCalc Plus",
       href: publicPath("products/cocalc-plus"),
       icon: "laptop",
       runs: "Local runtime operated by the user",
@@ -117,7 +115,6 @@ function ProductsOverviewPage({ config }: { config?: PublicConfig }) {
     {
       bestFit:
         "Users or small teams that want a shared CoCalc instance on one public Ubuntu VM.",
-      actionLabel: "View CoCalc Star",
       href: publicPath("products/cocalc-star"),
       icon: "star",
       runs: "Single-VM appliance operated by the user or customer",
@@ -126,7 +123,6 @@ function ProductsOverviewPage({ config }: { config?: PublicConfig }) {
     {
       bestFit:
         "Pilots, labs, workshops, small teams, and departments that need a customer-operated private environment.",
-      actionLabel: "View CoCalc Launchpad",
       href: publicPath("products/cocalc-launchpad"),
       icon: "servers",
       runs: "Lightweight private deployment operated by the customer",
@@ -135,14 +131,12 @@ function ProductsOverviewPage({ config }: { config?: PublicConfig }) {
     {
       bestFit:
         "Institutions and enterprises planning a broader customer-operated private-cloud deployment.",
-      actionLabel: "View CoCalc Rocket",
       href: publicPath("products/cocalc-rocket"),
       icon: "rocket",
       runs: "Enterprise private-cloud path operated by the customer",
       title: "CoCalc Rocket",
     },
   ] satisfies {
-    actionLabel: string;
     bestFit: string;
     href: string;
     icon: IconName;
@@ -180,6 +174,11 @@ function ProductsOverviewPage({ config }: { config?: PublicConfig }) {
             />
           </Popover>
         </Flex>
+        <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
+          Every path runs the same core model: a persistent computer where
+          people and agents share a Linux project. Choose who should operate it
+          and where it should run.
+        </Paragraph>
         <Flex gap={12} wrap>
           <LinkButton href={appPath("pricing")}>
             Pricing and licensing
@@ -198,7 +197,6 @@ function ProductsOverviewPage({ config }: { config?: PublicConfig }) {
           {paths.map((path, index) => (
             <div key={path.title} role="listitem" style={{ display: "flex" }}>
               <a
-                aria-label={path.actionLabel}
                 className="cocalc-public-products-path-card"
                 href={path.href}
                 style={{
@@ -508,7 +506,10 @@ function CocalcRocketPage() {
           Runs as a customer-operated private-cloud path, available as a VM
           deployment or on Kubernetes depending on the organization's
           infrastructure. It is exactly the same as the hosted service{" "}
-          <a href="https://cocalc.ai">https://cocalc.ai</a>.
+          <a href="https://cocalc.ai" style={{ textDecoration: "underline" }}>
+            https://cocalc.ai
+          </a>
+          .
         </>
       ),
       icon: "servers",

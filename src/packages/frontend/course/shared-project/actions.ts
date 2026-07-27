@@ -13,6 +13,7 @@ import { CourseActions } from "../actions";
 import { CourseStore } from "../store";
 import { delay } from "awaiting";
 import { WORKSPACE_LABEL } from "@cocalc/util/i18n/terminology";
+import { configureNewCourseSshTarget } from "../configuration/course-ssh-service";
 
 export class SharedProjectActions {
   private actions: CourseActions;
@@ -207,6 +208,22 @@ export class SharedProjectActions {
     // calling configure (which relies on the store being updated).
     await delay(10);
     await this.configure();
+    if (store.getIn(["settings", "ssh_to_student_projects"]) === true) {
+      try {
+        await configureNewCourseSshTarget({
+          course_project_id: store.get("course_project_id"),
+          target_project_id: project_id,
+          account_id: store.getIn([
+            "settings",
+            "ssh_to_student_projects_account_id",
+          ]),
+        });
+      } catch (err) {
+        this.actions.set_error(
+          `Shared project created, but course SSH setup requires synchronization in Course Configuration - ${err}`,
+        );
+      }
+    }
   };
 
   // Delete the shared project, removing students too.

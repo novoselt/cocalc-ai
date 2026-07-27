@@ -17,7 +17,13 @@ jest.mock("antd", () => {
   Radio.Group = ({ children }: any) => <div>{children}</div>;
   return {
     __esModule: true,
-    Alert: ({ children }: any) => <div>{children}</div>,
+    Alert: ({ children, description, message }: any) => (
+      <div>
+        {message}
+        {description}
+        {children}
+      </div>
+    ),
     Button: ({ children, onClick }: any) => (
       <button onClick={onClick}>{children}</button>
     ),
@@ -147,7 +153,7 @@ describe("CodexConfigButton", () => {
       />,
     );
 
-    expect(screen.getByText(/Workspace write/)).not.toBeNull();
+    expect(screen.queryByTitle("Change Codex access mode")).toBeNull();
 
     rerender(
       <CodexConfigButton
@@ -165,9 +171,9 @@ describe("CodexConfigButton", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/gpt-5.4/)).not.toBeNull();
-      expect(screen.getByText(/Full access/)).not.toBeNull();
       expect(screen.getByText(/High/)).not.toBeNull();
     });
+    expect(screen.queryByText(/Full access/)).toBeNull();
   });
 
   it("does not overwrite the open dialog when thread config refreshes", async () => {
@@ -281,7 +287,7 @@ describe("CodexConfigButton", () => {
     );
   });
 
-  it("changes access mode from the compact pill without opening settings", async () => {
+  it("hides cloud access mode controls and explains full access", async () => {
     const actions = {
       getCodexConfig: jest.fn(() => undefined),
       setCodexConfig: jest.fn(),
@@ -301,23 +307,19 @@ describe("CodexConfigButton", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Workspace write")).not.toBeNull();
+      expect(screen.getByText("gpt-5.4")).not.toBeNull();
     });
 
-    fireEvent.click(screen.getByTitle("Change Codex access mode"));
-    expect(screen.queryByText("Codex configuration for this chat")).toBeNull();
-    fireEvent.click(screen.getByText("Read only"));
+    expect(screen.queryByTitle("Change Codex access mode")).toBeNull();
+    expect(screen.queryByText("Workspace write")).toBeNull();
+    expect(screen.queryByText("Read only")).toBeNull();
 
-    expect(actions.setCodexConfig).toHaveBeenCalledWith(
-      "thread-1",
-      expect.objectContaining({
-        allowWrite: false,
-        model: "gpt-5.4",
-        reasoning: "medium",
-        sessionMode: "read-only",
-      }),
+    fireEvent.click(screen.getByText("Codex"));
+    expect(document.body.textContent).toContain(
+      "Codex has full access to this project",
     );
-    expect(screen.queryByText("Codex configuration for this chat")).toBeNull();
+    expect(screen.queryByText("Read only")).toBeNull();
+    expect(actions.setCodexConfig).not.toHaveBeenCalled();
   });
 
   it("uses separate compact-mode targets for settings and expanding controls", async () => {
@@ -362,8 +364,9 @@ describe("CodexConfigButton", () => {
     fireEvent.click(screen.getByLabelText("Expand Codex controls"));
 
     await waitFor(() => {
-      expect(screen.getByText("Workspace write")).toBeTruthy();
+      expect(screen.getByText("gpt-5.4")).toBeTruthy();
     });
+    expect(screen.queryByTitle("Change Codex access mode")).toBeNull();
   });
 
   it("collapses expanded controls from the in-pill chevron without opening settings", async () => {
@@ -386,7 +389,7 @@ describe("CodexConfigButton", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Workspace write")).toBeTruthy();
+      expect(screen.getByText("gpt-5.4")).toBeTruthy();
     });
 
     fireEvent.click(screen.getByLabelText("Hide Codex controls"));

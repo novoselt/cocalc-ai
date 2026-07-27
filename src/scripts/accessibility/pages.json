@@ -1,0 +1,265 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "id": "landing",
+      "title": "Landing page",
+      "path": "/",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "about",
+      "title": "About",
+      "path": "/about",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "pricing",
+      "title": "Pricing",
+      "path": "/pricing",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "features",
+      "title": "Features",
+      "path": "/features",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "products",
+      "title": "Products",
+      "path": "/products",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "product-launchpad",
+      "title": "CoCalc Launchpad product",
+      "path": "/products/cocalc-launchpad",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "product-rocket",
+      "title": "CoCalc Rocket product",
+      "path": "/products/cocalc-rocket",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "feature-jupyter",
+      "title": "Jupyter Notebook feature",
+      "path": "/features/jupyter-notebook",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "feature-terminal",
+      "title": "Terminal feature",
+      "path": "/features/terminal",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "feature-ai",
+      "title": "AI feature",
+      "path": "/features/ai",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "feature-teaching",
+      "title": "Teaching feature",
+      "path": "/features/teaching",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "docs",
+      "title": "Documentation",
+      "path": "/docs",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "guides",
+      "title": "Guides",
+      "path": "/guides",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "news",
+      "title": "News",
+      "path": "/news",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "support",
+      "title": "Support",
+      "path": "/support",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "rootfs",
+      "title": "Runtime images",
+      "path": "/rootfs",
+      "authentication": "none",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000
+    },
+    {
+      "id": "account",
+      "title": "Account settings",
+      "path": "/settings",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "membership",
+      "title": "Membership settings",
+      "path": "/settings/membership",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "usage-limits",
+      "title": "Usage limits",
+      "path": "/settings/usage-limits",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "profile",
+      "title": "Profile settings",
+      "path": "/settings/profile",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "appearance",
+      "title": "Appearance settings",
+      "path": "/settings/appearance",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "editor",
+      "title": "Editor settings",
+      "path": "/settings/editor",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "keyboard",
+      "title": "Keyboard settings",
+      "path": "/settings/keyboard",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "ai-settings",
+      "title": "AI settings",
+      "path": "/settings/ai",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "communication",
+      "title": "Communication settings",
+      "path": "/settings/communication",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "ssh-keys",
+      "title": "SSH keys",
+      "path": "/settings/keys",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "public-shares",
+      "title": "Public shares",
+      "path": "/settings/public-shares",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "account-support",
+      "title": "Account support",
+      "path": "/settings/support",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 1500
+    },
+    {
+      "id": "project-files",
+      "title": "Project files",
+      "path": "/projects/{project_id}/files/",
+      "authentication": "account",
+      "requiresProject": true,
+      "minimumScore": 1,
+      "readySelector": ".smc-vfill",
+      "settleMs": 2000
+    },
+    {
+      "id": "project-settings",
+      "title": "Project settings",
+      "path": "/projects/{project_id}/settings",
+      "authentication": "account",
+      "requiresProject": true,
+      "minimumScore": 1,
+      "readySelector": ".smc-vfill",
+      "settleMs": 2000
+    }
+  ]
+}

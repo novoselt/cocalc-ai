@@ -614,10 +614,17 @@ export function detectSignupRegionHint(req: Request): string | undefined {
 
 export async function isAllowedBrowserOrigin(
   origin: string | undefined,
+  req?: Request,
+  opts: { requestOriginOnly?: boolean } = {},
 ): Promise<boolean> {
   const normalized = normalizeOrigin(origin);
   if (!normalized) return false;
-  const site = await getSitePublicOrigin();
+  if (opts.requestOriginOnly) {
+    return !!req && normalized === detectRequestOrigin(req);
+  }
+  const site = req
+    ? await getSitePublicOriginForRequest(req)
+    : await getSitePublicOrigin();
   if (site && normalized === site) return true;
   const cluster = await getClusterBayPublicOrigins();
   return Object.values(cluster).includes(normalized);
@@ -626,9 +633,10 @@ export async function isAllowedBrowserOrigin(
 export async function applyBrowserCors(
   req: Request,
   res: Response,
+  opts: { requestOriginOnly?: boolean } = {},
 ): Promise<void> {
   const origin = trim(req.headers.origin);
-  if (!(await isAllowedBrowserOrigin(origin))) {
+  if (!(await isAllowedBrowserOrigin(origin, req, opts))) {
     return;
   }
   res.setHeader("Access-Control-Allow-Origin", origin);

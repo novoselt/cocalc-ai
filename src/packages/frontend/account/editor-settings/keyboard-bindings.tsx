@@ -26,6 +26,7 @@ export function EditorSettingsKeyboardBindings(
   return (
     <LabeledRow label={label}>
       <SelectorInput
+        ariaLabel={label}
         options={EDITOR_BINDINGS}
         selected={props.bindings}
         on_change={props.on_change}

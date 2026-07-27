@@ -15,10 +15,12 @@ import {
 import {
   enableForceConsent,
   hasEssentialConsent,
+  hasTrackingConsent,
   onConsentChange,
   restoreConsentCookieFromSnapshot,
   type ConsentSnapshot,
 } from "@cocalc/frontend/cookie-consent";
+import { linkFirstPartyAnalyticsAccount } from "@cocalc/frontend/cookie-consent/analytics";
 import { initCookieConsent } from "@cocalc/frontend/cookie-consent/init";
 import {
   LOCALIZATIONS,
@@ -142,6 +144,14 @@ function CocalcApp({ children }) {
         return;
       }
       redux.getActions("account").set_other_settings("cookie_consent", snap);
+    });
+  }, [cookieBannerEnabled, isLoggedIn]);
+
+  useEffect(() => {
+    if (!cookieBannerEnabled || !isLoggedIn) return;
+    return onConsentChange(() => {
+      if (!hasTrackingConsent()) return;
+      void linkFirstPartyAnalyticsAccount();
     });
   }, [cookieBannerEnabled, isLoggedIn]);
 

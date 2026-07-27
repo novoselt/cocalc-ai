@@ -310,6 +310,7 @@ export function AccountPreferencesAppearance() {
           }
         >
           <Select
+            aria-label="File tab accent colors"
             size="small"
             style={{ minWidth: 200 }}
             value={tabAccentMode}

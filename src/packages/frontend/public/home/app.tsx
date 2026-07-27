@@ -283,10 +283,10 @@ const PRODUCT_OPTIONS = [
   title: string;
 }>;
 
-const CODEX_DEFINITION_CARDS = [
+const AGENT_DEFINITION_CARDS = [
   {
     accent: COLORS.AI_ASSISTANT_FONT,
-    body: "Codex runs on CoCalc's compute with the project context nearby — not on your laptop and not in a disconnected coding tool.",
+    body: "Agents run on the same persistent computer as your files, notebooks, terminals, and services instead of in a disconnected coding tool.",
     icon: "robot",
     title: "Runs where your work lives",
   },
@@ -298,9 +298,9 @@ const CODEX_DEFINITION_CARDS = [
   },
   {
     accent: COLORS.ANTD_LINK_BLUE_DARK,
-    body: "Connect Codex with your own OpenAI API key or subscription. Other shell-capable agents run in the project terminal too.",
-    icon: "cloud",
-    title: "Powered by OpenAI",
+    body: "Use the integrated Codex experience, Claude Code in a terminal, or other shell-capable agents without moving the project somewhere else.",
+    icon: "terminal",
+    title: "Bring the agent you use",
   },
 ] satisfies Array<{
   accent: string;
@@ -431,6 +431,15 @@ function alpha(hexColor: string, opacity: number): string {
   return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
 }
 
+function accessibleAccentTextColor(accent: string): string {
+  if (accent === COLORS.RUN) return COLORS.ANTD_GREEN_D;
+  if (accent === COLORS.AI_ASSISTANT_FONT || accent === PUBLIC_COLORS.warning) {
+    return COLORS.BRWN;
+  }
+  if (accent === PUBLIC_COLORS.link) return PUBLIC_COLORS.linkHover;
+  return accent;
+}
+
 function appPath(path: string): string {
   return joinUrlPath(appBasePath, path);
 }
@@ -440,7 +449,7 @@ function Eyebrow({ children }: { children: ReactNode }) {
     <Text
       strong
       style={{
-        color: PUBLIC_COLORS.link,
+        color: PUBLIC_COLORS.linkHover,
         display: "block",
         fontSize: 12,
         letterSpacing: 0,
@@ -538,7 +547,7 @@ function Hero({
       }}
     >
       <Flex vertical gap={20}>
-        <Eyebrow>AI-Native Technical Workspace</Eyebrow>
+        <Eyebrow>Shared Linux Workspace</Eyebrow>
         <div>
           <Title
             className="cocalc-public-home-hero-title"
@@ -552,7 +561,7 @@ function Hero({
               maxWidth: 620,
             }}
           >
-            Shared Projects for Research Teams
+            A persistent shared computer for technical work.
           </Title>
           <Paragraph
             style={{
@@ -563,8 +572,9 @@ function Hero({
               maxWidth: 590,
             }}
           >
-            CoCalc gives collaborators one shared place to work, review changes,
-            and move forward without rebuilding context.
+            People and AI agents work in the same Linux project with shared
+            files, notebooks, terminals, services, and history. The computer is
+            ready whenever the work continues.
           </Paragraph>
         </div>
         <Flex className="cocalc-public-home-actions" gap={12} wrap>
@@ -586,7 +596,7 @@ function Hero({
         </Flex>
       </Flex>
       <img
-        alt="CoCalc-AI collaborative project overview"
+        alt="A persistent CoCalc project shared by people and AI agents"
         className="cocalc-public-home-hero-image"
         decoding="async"
         src={HERO_IMAGE_URL}
@@ -601,13 +611,16 @@ function Hero({
   );
 }
 
-function CodexDefinitionSection() {
+function AgentDefinitionSection() {
   return (
-    <section aria-label="Codex in CoCalc" style={{ padding: "22px 0 24px" }}>
+    <section
+      aria-label="AI agents in CoCalc"
+      style={{ padding: "22px 0 24px" }}
+    >
       <SectionIntro
-        body="Ask Codex to work with your files, notebooks, terminals, and documents, then review its changes where your team is already working."
-        eyebrow="Your Agent Assistant"
-        title="Codex helps inside the project."
+        body="Use Codex, Claude Code, or another shell-capable agent with the files, tools, and running services your collaborators already use."
+        eyebrow="Agent-ready by design"
+        title="Agents work where your project lives."
       />
       <div
         className="cocalc-public-home-codex-grid"
@@ -618,7 +631,7 @@ function CodexDefinitionSection() {
           marginTop: 22,
         }}
       >
-        {CODEX_DEFINITION_CARDS.map((card) => (
+        {AGENT_DEFINITION_CARDS.map((card) => (
           <div
             key={card.title}
             style={{
@@ -715,9 +728,9 @@ function WorkflowsSection() {
         action={
           <Button href={appPath("features")}>Browse feature workflows</Button>
         }
-        body="Use notebooks, documents, terminals, agents, courses, slide decks, and more without switching products."
+        body="Use notebooks, documents, terminals, agents, courses, slide decks, and more inside the same persistent Linux environment."
         eyebrow="Core workflows"
-        title="Keep everything in one project."
+        title="One computer, many workflows."
       />
       <div
         className="cocalc-public-home-workflow-layout"
@@ -908,7 +921,7 @@ function ProductsSection() {
                     alignSelf: "flex-start",
                     background: alpha(option.accent, 0.08),
                     borderColor: alpha(option.accent, 0.2),
-                    color: option.accent,
+                    color: accessibleAccentTextColor(option.accent),
                     marginInlineEnd: 0,
                   }}
                 >
@@ -954,13 +967,12 @@ function DifferenceSection() {
           <div>
             <Eyebrow>Why CoCalc is different</Eyebrow>
             <Title level={2} style={{ margin: "8px 0 10px" }}>
-              A workspace built around the project.
+              The project is the computer.
             </Title>
             <Paragraph style={{ margin: 0 }}>
-              A project is more than a place to store files. CoCalc gives it
-              enough structure to hold collaboration, history, recovery, and
-              operating choices alongside the documents and output people need
-              to understand.
+              Every CoCalc project is a persistent Linux environment for files,
+              computation, services, collaboration, history, and recovery. The
+              people and agents working there share the same state.
             </Paragraph>
           </div>
           <div
@@ -1017,7 +1029,7 @@ function DifferenceSection() {
                   <Text
                     strong
                     style={{
-                      color: item.accent,
+                      color: accessibleAccentTextColor(item.accent),
                       display: "block",
                       fontSize: 12,
                       textTransform: "uppercase",
@@ -1183,7 +1195,7 @@ export default function PublicHomeApp({ config }: { config?: HomeConfig }) {
         }}
       >
         <Hero authenticated={authenticated} siteName={siteName} />
-        <CodexDefinitionSection />
+        <AgentDefinitionSection />
         <AudienceRoutesSection />
         <WorkflowsSection />
         <ProductsSection />

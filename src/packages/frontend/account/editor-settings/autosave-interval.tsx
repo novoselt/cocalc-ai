@@ -25,6 +25,7 @@ export function EditorSettingsAutosaveInterval(
       })}
     >
       <InputNumber
+        aria-label="Autosave interval"
         onChange={(n) => props.on_change("autosave", n)}
         min={15}
         max={900}

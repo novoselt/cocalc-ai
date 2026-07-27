@@ -431,6 +431,7 @@ describe("PublicAuthApp", () => {
     expect(
       screen.getByText(/By creating an account, you agree/),
     ).not.toBeNull();
+    expect(screen.queryByText(/Send me occasional platform tips/)).toBeNull();
   });
 
   it("shows policy notice before Google sign-up without disabling SSO", async () => {
@@ -517,6 +518,7 @@ describe("PublicAuthApp", () => {
           endpoint: "auth/sign-up",
           body: expect.objectContaining({
             displayName: "New User",
+            marketing_consent: false,
             terms: true,
           }),
         }),
@@ -627,6 +629,47 @@ describe("PublicAuthApp", () => {
 
     expect(screen.getByRole("link", { name: "Projects" })).not.toBeNull();
     expect(screen.getByRole("link", { name: "Settings" })).not.toBeNull();
+  });
+
+  it("replaces sign-up with signed-in account actions after auth bootstrap", async () => {
+    mockedGetControlPlaneAuthBootstrap.mockResolvedValueOnce({
+      account_id: "acct-alice",
+      display_name: "Alice Example",
+      email_address: "alice@example.com",
+      signed_in: true,
+    });
+    mockedSignOutAuthSession.mockResolvedValueOnce(undefined);
+
+    render(
+      <PublicAuthApp
+        config={config({ is_authenticated: false })}
+        initialRoute={{ kind: "auth-form", view: "sign-up" }}
+      />,
+    );
+
+    expect(await screen.findByText("You are already signed in")).not.toBeNull();
+    expect(
+      screen.getByText("Alice Example (alice@example.com)"),
+    ).not.toBeNull();
+    expect(screen.queryByPlaceholderText("you@example.com")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create account" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Open projects" })).toHaveAttribute(
+      "href",
+      "/projects",
+    );
+
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {
+      // jsdom does not implement full-page reloads.
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Sign out to create another account",
+      }),
+    );
+    await waitFor(() =>
+      expect(mockedSignOutAuthSession).toHaveBeenCalledWith(),
+    );
+    consoleError.mockRestore();
   });
 
   it("routes domain-managed sign-in to the required SSO provider", async () => {

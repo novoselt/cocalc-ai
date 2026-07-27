@@ -48,8 +48,12 @@ you intentionally want to keep that system service around.
 The host bootstrap also installs conservative OS logging limits for Rocket bay
 hosts: journald is capped at 1GB with 7-day retention, and the Ubuntu rsyslog
 logrotate stanza for `/var/log/syslog` gets `maxsize 512M` so spammy service
-logs rotate early instead of filling the root disk. Use `--skip-system-logging`
-only if the VM has an externally managed logging policy.
+logs rotate early instead of filling the root disk. Because bay hosts are
+headless, emergency messages remain in syslog and journald but are not sent to
+Ubuntu `omusrmsg` or GCP `/dev/console` actions, which otherwise retry forever
+when the `syslog` user cannot write `/dev/console`. Use
+`--skip-system-logging` only if the VM has an externally managed logging
+policy.
 
 2. Install the shared site master key before starting bay services:
 

@@ -14,11 +14,14 @@ import {
 
 const useTypedRedux = jest.fn();
 const setOtherSettings = jest.fn();
+const setOtherSettingsMany = jest.fn();
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
   redux: {
     getActions: () => ({
       set_other_settings: (...args: unknown[]) => setOtherSettings(...args),
+      set_other_settings_many: (...args: unknown[]) =>
+        setOtherSettingsMany(...args),
     }),
   },
   useTypedRedux: (...args: unknown[]) => useTypedRedux(...args),
@@ -170,7 +173,14 @@ describe("AccountPreferencesCommunication", () => {
   it("renders category-based notification email preferences", () => {
     render(<AccountPreferencesCommunication />);
 
-    expect(screen.getByText("Notifications")).toBeTruthy();
+    const marketingHeading = screen.getByText(
+      "Onboarding and marketing emails",
+    );
+    const notificationsHeading = screen.getByText("Notifications");
+    expect(
+      marketingHeading.compareDocumentPosition(notificationsHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(screen.getByText("Billing")).toBeTruthy();
     expect(screen.getByText("Security")).toBeTruthy();
     expect(screen.getByText("Membership requests")).toBeTruthy();
@@ -178,7 +188,6 @@ describe("AccountPreferencesCommunication", () => {
     expect(screen.getByText("Mentions")).toBeTruthy();
     expect(screen.getByText("Chat replies")).toBeTruthy();
     expect(screen.getByText("AI activity")).toBeTruthy();
-    expect(screen.getByText("Onboarding and marketing emails")).toBeTruthy();
     expect(screen.queryByText("project invitations")).toBeNull();
     expect(screen.queryByText("Required immediate email")).toBeNull();
     expect(screen.queryByText("Show Announcement Banner")).toBeNull();
@@ -325,9 +334,15 @@ describe("AccountPreferencesCommunication", () => {
       screen.getByLabelText("Allow optional onboarding and marketing emails"),
     );
 
-    expect(setOtherSettings).toHaveBeenCalledWith(
-      MARKETING_CONSENT_OTHER_SETTINGS_KEY,
-      true,
+    expect(setOtherSettingsMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        [MARKETING_CONSENT_OTHER_SETTINGS_KEY]: true,
+        marketing_email_consent_record: expect.objectContaining({
+          version: 1,
+          enabled: true,
+          source: "communication-settings",
+        }),
+      }),
     );
   });
 

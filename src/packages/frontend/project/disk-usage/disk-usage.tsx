@@ -1038,6 +1038,7 @@ export default function DiskUsage({
           <>
             {quotaSizeKnown ? (
               <Progress
+                aria-label={`Project storage usage: ${percent}%`}
                 style={{
                   width: compact ? "40px" : "60px",
                   marginBottom: 0,
@@ -1261,6 +1262,7 @@ export default function DiskUsage({
                 <>
                   <div style={{ textAlign: "center" }}>
                     <Progress
+                      aria-label={`Project storage usage: ${percent}%`}
                       type="circle"
                       percent={percent}
                       status={quotaStatus}
@@ -1406,6 +1408,7 @@ export default function DiskUsage({
                       }}
                     >
                       <Progress
+                        aria-label={`Shared scratch storage usage: ${scratchPercent}%`}
                         style={{ flex: 1, marginBottom: 0 }}
                         percent={scratchPercent}
                         showInfo={false}
@@ -1504,6 +1507,10 @@ export default function DiskUsage({
                         <Text strong>{relativeLabel(bucket)}</Text>
                       </div>
                       <Progress
+                        aria-label={`${relativeLabel(bucket)} storage usage: ${bucketPercent(
+                          bucket.summaryBytes,
+                          visibleTotal,
+                        )}%`}
                         style={{ flex: 1, marginBottom: 0 }}
                         percent={bucketPercent(
                           bucket.summaryBytes,
@@ -1671,6 +1678,10 @@ export default function DiskUsage({
                                 )}
                               </div>
                               <Progress
+                                aria-label={`${absolutePath} storage usage: ${bucketPercent(
+                                  bytes,
+                                  Math.max(drillUsage.bytes, 1),
+                                )}%`}
                                 percent={bucketPercent(
                                   bytes,
                                   Math.max(drillUsage.bytes, 1),

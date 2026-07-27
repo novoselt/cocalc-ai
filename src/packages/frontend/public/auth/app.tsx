@@ -5,12 +5,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { Alert, Button, Flex } from "antd";
+
 import type { AuthView } from "@cocalc/frontend/auth/types";
-import { getControlPlaneAuthBootstrap } from "@cocalc/frontend/auth/api";
+import {
+  getControlPlaneAuthBootstrap,
+  signOutAuthSession,
+} from "@cocalc/frontend/auth/api";
 import { enableForceConsent } from "@cocalc/frontend/cookie-consent";
 import { PublicPage } from "@cocalc/frontend/public/layout/shell";
 import type { PublicTopNavActiveKey } from "@cocalc/frontend/public/layout/top-nav";
-import { getSiteName, type PublicConfig } from "../common";
+import { appPath, getSiteName, type PublicConfig } from "../common";
 import { navigatePublic } from "../navigation";
 
 import {
@@ -157,6 +162,68 @@ function topNavActiveForRoute(route: PublicAuthRoute): PublicTopNavActiveKey {
   }
 }
 
+function SignedInSignUpView({
+  accountDisplayName,
+  accountEmailAddress,
+}: {
+  accountDisplayName?: string;
+  accountEmailAddress?: string;
+}) {
+  const [signingOut, setSigningOut] = useState(false);
+  const [error, setError] = useState("");
+  const displayName = accountDisplayName?.trim();
+  const emailAddress = accountEmailAddress?.trim();
+  const accountLabel =
+    displayName && emailAddress
+      ? `${displayName} (${emailAddress})`
+      : displayName || emailAddress || "a CoCalc account";
+
+  async function signOut(): Promise<void> {
+    setSigningOut(true);
+    setError("");
+    try {
+      await signOutAuthSession();
+      window.location.reload();
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
+  return (
+    <Flex vertical gap={16}>
+      <Alert
+        showIcon
+        type="info"
+        title="You are already signed in"
+        description={
+          <>
+            This browser is signed in as <strong>{accountLabel}</strong>. Open
+            your projects, or sign out before creating another account.
+          </>
+        }
+      />
+      {error ? (
+        <Alert
+          showIcon
+          type="error"
+          title="Sign out failed"
+          description={error}
+        />
+      ) : null}
+      <Flex gap={12} wrap>
+        <Button href={appPath("projects")} type="primary">
+          Open projects
+        </Button>
+        <Button loading={signingOut} onClick={signOut}>
+          Sign out to create another account
+        </Button>
+      </Flex>
+    </Flex>
+  );
+}
+
 export { getPublicAuthRouteFromPath };
 
 export default function PublicAuthApp({
@@ -270,17 +337,26 @@ export default function PublicAuthApp({
           />
         )}
         {route.kind === "auth-form" && route.view === "sign-up" && (
-          <PublicSignUpForm
-            cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
-            initialEmail={authNavigateOptions.initialEmail}
-            initialSSOStrategies={ssoStrategies}
-            legacySignUpPrompt={!!authNavigateOptions.legacySignUpPrompt}
-            onNavigate={onNavigate}
-            redirectToPath={redirectToPath}
-            signupEmailDomainPolicy={
-              resolvedConfig?.signup_email_domain_public_policy
-            }
-          />
+          <>
+            {resolvedConfig?.is_authenticated ? (
+              <SignedInSignUpView
+                accountDisplayName={resolvedConfig.account_display_name}
+                accountEmailAddress={resolvedConfig.account_email_address}
+              />
+            ) : (
+              <PublicSignUpForm
+                cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+                initialEmail={authNavigateOptions.initialEmail}
+                initialSSOStrategies={ssoStrategies}
+                legacySignUpPrompt={!!authNavigateOptions.legacySignUpPrompt}
+                onNavigate={onNavigate}
+                redirectToPath={redirectToPath}
+                signupEmailDomainPolicy={
+                  resolvedConfig?.signup_email_domain_public_policy
+                }
+              />
+            )}
+          </>
         )}
         {route.kind === "auth-form" && route.view === "password-reset" && (
           <PublicPasswordResetForm onNavigate={onNavigate} />

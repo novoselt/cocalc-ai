@@ -28,14 +28,14 @@ export default function GlobalSSHKeys() {
           <Paragraph>
             <FormattedMessage
               id="account.global-ssh-keys.help"
-              defaultMessage={`To SSH into a {projectLabel}, use the following
-          <code>username@host: [project-id-without-dashes]@ssh.cocalc.ai</code>
-          The {projectLabel} id without dashes can be found in the part of {projectLabel} settings about SSH keys.
-          To SSH between {projectsLabel}, use <code>[project-id-without-dashes]@ssh</code>`}
+              defaultMessage={`To connect, open the target {projectLabel}'s
+          SSH settings and use the CoCalc CLI command shown there. The CLI
+          writes the correct managed route to your SSH config. For SSH between
+          {projectsLabel}, use the project-to-project setup in the target
+          {projectLabel}'s SSH settings.`}
               values={{
                 projectLabel: projectLabelLower,
                 projectsLabel: projectsLabelLower,
-                code: (c) => <Paragraph code>{c}</Paragraph>,
               }}
             />
           </Paragraph>
@@ -58,8 +58,8 @@ export default function GlobalSSHKeys() {
               i: (c) => <i>{c}</i>,
               A: (c) => (
                 <DocsLink
-                  href="/app-docs/account/settings"
-                  slug="account/settings"
+                  href="/docs/terminal/ssh-access"
+                  slug="terminal/ssh-access"
                 >
                   {c}
                 </DocsLink>

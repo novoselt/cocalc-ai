@@ -298,7 +298,7 @@ function FooterBrand({ config }: { config?: PublicConfig }) {
           maxWidth: "34ch",
         }}
       >
-        AI-native workspace for research, teaching, and technical teams.
+        Persistent shared computers for research, teaching, and technical teams.
       </Paragraph>
       {defaultBrand ? (
         <Text style={{ color: PUBLIC_COLORS.footerText }}>
@@ -398,6 +398,11 @@ export function PublicPage({
   return (
     <ConfigProvider
       theme={{
+        components: {
+          Menu: {
+            itemSelectedColor: PUBLIC_COLORS.brandActive,
+          },
+        },
         token: {
           borderRadius: 8,
           colorBgLayout: PUBLIC_COLORS.pageBackground,
@@ -407,10 +412,11 @@ export function PublicPage({
           colorLink: PUBLIC_COLORS.link,
           colorLinkActive: PUBLIC_COLORS.brandActive,
           colorLinkHover: PUBLIC_COLORS.linkHover,
-          colorPrimary: PUBLIC_COLORS.brand,
+          colorPrimary: PUBLIC_COLORS.brandActive,
           colorPrimaryActive: PUBLIC_COLORS.brandActive,
           colorPrimaryHover: PUBLIC_COLORS.linkHover,
           colorText: PUBLIC_COLORS.text,
+          colorTextDescription: PUBLIC_COLORS.mutedText,
           colorTextHeading: PUBLIC_COLORS.heading,
           colorTextSecondary: PUBLIC_COLORS.mutedText,
         },

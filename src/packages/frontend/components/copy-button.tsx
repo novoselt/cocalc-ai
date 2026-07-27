@@ -119,6 +119,9 @@ export default function CopyButton({
 
   return (
     <Button
+      aria-label={
+        noText ? (copied ? "Copied" : "Copy to clipboard") : undefined
+      }
       block={block}
       size={size}
       type="text"

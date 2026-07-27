@@ -22,6 +22,8 @@ import {
   saveCodexNewChatDefaults,
   type CodexNewChatDefaults,
 } from "@cocalc/frontend/chat/codex-defaults";
+import { CodexFullAccessNotice } from "@cocalc/frontend/chat/codex-full-access";
+import { lite } from "@cocalc/frontend/lite";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -57,7 +59,7 @@ export function CodexDefaultsPanel({ other_settings }: Readonly<Props>) {
 
   return (
     <div style={{ marginTop: 16, marginBottom: 16 }}>
-      <Title level={5} style={{ marginBottom: 8 }}>
+      <Title level={2} style={{ marginBottom: 8, fontSize: 18 }}>
         New Codex chat defaults
       </Title>
       <Paragraph type="secondary" style={{ marginBottom: 12 }}>
@@ -77,6 +79,7 @@ export function CodexDefaultsPanel({ other_settings }: Readonly<Props>) {
             <Text type="secondary">Model</Text>
           </div>
           <Select
+            aria-label="Default Codex model"
             value={draft.model}
             style={{ width: "100%" }}
             options={DEFAULT_CODEX_MODELS.map((model) => ({
@@ -98,6 +101,7 @@ export function CodexDefaultsPanel({ other_settings }: Readonly<Props>) {
             <Text type="secondary">Reasoning</Text>
           </div>
           <Select
+            aria-label="Default Codex reasoning level"
             value={draft.reasoning}
             style={{ width: "100%" }}
             options={reasoningOptions}
@@ -111,25 +115,33 @@ export function CodexDefaultsPanel({ other_settings }: Readonly<Props>) {
             }
           />
         </div>
-        <div>
-          <div style={{ marginBottom: 4 }}>
-            <Text type="secondary">Execution mode</Text>
+        {lite ? (
+          <div>
+            <div style={{ marginBottom: 4 }}>
+              <Text type="secondary">Execution mode</Text>
+            </div>
+            <Select
+              aria-label="Default Codex execution mode"
+              value={draft.sessionMode}
+              style={{ width: "100%" }}
+              options={getCodexNewChatModeOptions()}
+              onChange={(value) =>
+                setDraft(
+                  normalizeCodexNewChatDefaults({
+                    ...draft,
+                    sessionMode: value as CodexSessionMode,
+                  }),
+                )
+              }
+            />
           </div>
-          <Select
-            value={draft.sessionMode}
-            style={{ width: "100%" }}
-            options={getCodexNewChatModeOptions()}
-            onChange={(value) =>
-              setDraft(
-                normalizeCodexNewChatDefaults({
-                  ...draft,
-                  sessionMode: value as CodexSessionMode,
-                }),
-              )
-            }
-          />
-        </div>
+        ) : null}
       </div>
+      {!lite ? (
+        <div style={{ marginBottom: 12 }}>
+          <CodexFullAccessNotice />
+        </div>
+      ) : null}
       <Space>
         <Button
           type="primary"

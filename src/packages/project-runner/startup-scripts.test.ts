@@ -44,7 +44,7 @@ describe("writeStartupScripts", () => {
     expect(script).toContain('DROPBEAR="$(command -v dropbear || true)"');
     expect(script).toContain("[ -x /opt/cocalc/bin2/dropbear ]");
     expect(script).toContain(
-      '"$DROPBEAR" -p ${COCALC_SSHD_PORT:=22} -e -s -a -R',
+      '"$DROPBEAR" -p ${COCALC_SSHD_PORT:=22} -e -s -a -R -W 2097152',
     );
     expect(script).not.toContain(" -D ");
 

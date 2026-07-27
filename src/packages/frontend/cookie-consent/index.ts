@@ -10,7 +10,13 @@ import * as CookieConsent from "vanilla-cookieconsent";
 import { COLORS } from "@cocalc/util/theme";
 
 import { COOKIE_CATEGORIES, type CookieCategoryKey } from "./categories";
-import { BANNER_STATE_EVENT, isBannerActive, isBannerDecided } from "./state";
+import {
+  BANNER_READY_EVENT,
+  BANNER_STATE_EVENT,
+  isBannerActive,
+  isBannerDecided,
+  isBannerReady,
+} from "./state";
 
 export { COOKIE_CATEGORIES };
 export type { CookieCategoryKey };
@@ -90,17 +96,16 @@ function removeForceConsentOverlay(): void {
 }
 
 export function enableForceConsent(): () => void {
-  if (typeof window === "undefined") return () => {};
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return () => {};
+  }
   if (isBannerDecided() && !isBannerActive()) return () => {};
   if (hasEssentialConsent()) return () => {};
   const html = document.documentElement;
   forceConsentCount += 1;
-  html.classList.add("disable--interaction");
-  ensureForceConsentOverlay();
-  showConsentModal();
 
   let removed = false;
-  const remove = () => {
+  function remove() {
     if (removed) return;
     removed = true;
     forceConsentCount = Math.max(0, forceConsentCount - 1);
@@ -110,9 +115,27 @@ export function enableForceConsent(): () => void {
     }
     window.removeEventListener("cc:onConsent", remove);
     window.removeEventListener("cc:onChange", remove);
-  };
+    window.removeEventListener(BANNER_READY_EVENT, activate);
+  }
+
+  function activate() {
+    if (removed) return;
+    if (hasEssentialConsent()) {
+      remove();
+      return;
+    }
+    html.classList.add("disable--interaction");
+    ensureForceConsentOverlay();
+    showConsentModal();
+  }
+
   window.addEventListener("cc:onConsent", remove);
   window.addEventListener("cc:onChange", remove);
+  if (isBannerReady()) {
+    activate();
+  } else {
+    window.addEventListener(BANNER_READY_EVENT, activate);
+  }
   return remove;
 }
 

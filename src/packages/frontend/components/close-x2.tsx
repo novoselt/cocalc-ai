@@ -35,6 +35,7 @@ export const CloseX2: React.FC<Props> = React.memo((props: Props) => {
   } else {
     return (
       <button
+        aria-label="Close"
         type="button"
         className={"lighten"}
         style={{

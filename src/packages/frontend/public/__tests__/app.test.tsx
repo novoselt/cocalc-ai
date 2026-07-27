@@ -224,7 +224,7 @@ describe("PublicApp", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Meet the People Behind CoCalc",
+        name: "About CoCalc",
       }),
     ).not.toBeNull();
   });
@@ -257,13 +257,22 @@ describe("PublicApp", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: "Meet the People Behind CoCalc" }),
+      screen.getByRole("heading", { name: "About CoCalc" }),
     ).not.toBeNull();
-    expect(screen.getByText("William Stein, Founder and CEO")).not.toBeNull();
     expect(
-      screen.getByText(/founder of CoCalc and SageMath, Inc\./),
+      screen.getByRole("heading", {
+        name: /Make serious computational work easy to share/i,
+      }),
     ).not.toBeNull();
-    expect(screen.queryByText("Team")).toBeNull();
+    expect(
+      screen.getByText("SageMath, Inc. · The company behind CoCalc"),
+    ).not.toBeNull();
+    expect(screen.getByText("Incorporated 2016")).not.toBeNull();
+    expect(screen.getByText("SOC 2")).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Leadership and team" }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Upcoming events")).toBeNull();
   });
 
   it("renders and updates managed public-route head metadata", async () => {
@@ -292,7 +301,7 @@ describe("PublicApp", () => {
       expect(canonicalHref()).toBe("https://cocalc.ai/about"),
     );
     expect(headMeta('meta[name="description"]')).toContain(
-      "people and company behind CoCalc",
+      "mission, history, people, and operating principles behind CoCalc",
     );
   });
 
@@ -421,6 +430,8 @@ describe("PublicApp", () => {
               memory: 2000,
             },
             usage_limits: {
+              cpu_5h_seconds: 3_600,
+              egress_5h_bytes: 1_000_000_000,
               shared_compute_priority: 1,
             },
             store_description: "Start exploring CoCalc.",
@@ -441,6 +452,8 @@ describe("PublicApp", () => {
             },
             usage_limits: {
               credit_spend_limit_7d_usd: 1000,
+              cpu_5h_seconds: 18_000,
+              egress_5h_bytes: 12_000_000_000,
               max_sponsored_running_projects: 3,
               project_max_collaborators_and_pending_invites: 50,
               shared_compute_priority: 2,
@@ -467,6 +480,8 @@ describe("PublicApp", () => {
             },
             usage_limits: {
               credit_spend_limit_7d_usd: 1000,
+              cpu_5h_seconds: 252_000,
+              egress_5h_bytes: 125_000_000_000,
               shared_compute_priority: 8,
             },
             store_description: "For demanding projects.",
@@ -523,8 +538,30 @@ describe("PublicApp", () => {
     expect(screen.getByText("8 GB")).not.toBeNull();
     expect(screen.getAllByText("10 GB").length).toBe(2);
     expect(screen.getByText("125 GB")).not.toBeNull();
-    expect(screen.queryByText("Collaborators")).toBeNull();
-    expect(screen.queryByText("Included AI usage")).toBeNull();
+    expect(screen.queryByText("Managed CPU, rolling 5 hours")).toBeNull();
+
+    fireEvent.click(screen.getByText("Compare exact limits and features"));
+
+    expect(
+      await screen.findByText("Managed CPU, rolling 5 hours"),
+    ).not.toBeNull();
+    expect(screen.getByText("Compute and projects")).not.toBeNull();
+    expect(screen.getByText("Network transfer")).not.toBeNull();
+    expect(screen.getByText("Storage and backups")).not.toBeNull();
+    expect(screen.getByText("AI and Codex automation")).not.toBeNull();
+    expect(screen.getByText("Collaboration and courses")).not.toBeNull();
+    expect(screen.getByText("5 CPU-hours")).not.toBeNull();
+    expect(screen.getByText("12 GB")).not.toBeNull();
+    expect(
+      screen.getByText("Project collaborators and pending invitations"),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("Included AI usage, rolling 5 hours"),
+    ).not.toBeNull();
+    expect(screen.getByText("Rent dedicated project hosts")).not.toBeNull();
+    expect(
+      screen.getByText(/These are the current membership parameters/),
+    ).not.toBeNull();
     expect(screen.queryByText("Launchpad license")).toBeNull();
     expect(screen.getByRole("link", { name: /Member/ })).toHaveAttribute(
       "href",
@@ -1025,6 +1062,14 @@ describe("PublicApp", () => {
       screen.getByRole("heading", { name: "Ways to Run CoCalc" }),
     ).not.toBeNull();
     expect(screen.getByText("Which path fits?")).not.toBeNull();
+    const productChooser = screen.getByRole("list", {
+      name: "CoCalc product path chooser",
+    });
+    expect(
+      within(productChooser).getByRole("link", {
+        name: /CoCalc Launchpad.*customer-operated private environment/,
+      }),
+    ).toHaveAttribute("href", "/products/cocalc-launchpad");
   });
 
   it("renders the cocalc launchpad page", async () => {

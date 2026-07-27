@@ -78,7 +78,9 @@ import { buildMarketingConsentOtherSettings } from "@cocalc/util/notification-pr
 
 import getAccountId from "@cocalc/http-api/lib/account/get-account";
 import { apiRoute, apiRouteOperation } from "@cocalc/http-api/lib/api";
-import assertTrusted from "@cocalc/http-api/lib/api/assert-trusted";
+import assertTrusted, {
+  TRUST_ERROR_MESSAGE,
+} from "@cocalc/http-api/lib/api/assert-trusted";
 import getParams from "@cocalc/http-api/lib/api/get-params";
 import {
   SignUpInputSchema,
@@ -100,6 +102,8 @@ const logger = getLogger("auth:sign-up");
 
 const ACCOUNT_CREATION_EMAIL_POLICY_MESSAGE =
   "We can’t create an account with this email address. Contact support if you think this is a mistake.";
+export const SIGNED_IN_ACCOUNT_CREATION_MESSAGE =
+  "You are already signed in to a CoCalc account. Sign out before creating another account.";
 
 export async function signUp(req, res) {
   let {
@@ -157,15 +161,17 @@ export async function signUp(req, res) {
 
   const owner_id = await getAccountId(req);
   if (owner_id) {
-    // no captcha required -- api access
-    // We ONLY allow creation without checking the captcha
-    // for trusted users.
+    // Signed-in admins may create accounts without captcha. Ordinary signed-in
+    // users must sign out before using the public account-creation flow.
     try {
       await assertTrusted(owner_id);
     } catch (err) {
       res.json({
         issues: {
-          api: `${err}`,
+          api:
+            err instanceof Error && err.message === TRUST_ERROR_MESSAGE
+              ? SIGNED_IN_ACCOUNT_CREATION_MESSAGE
+              : `${err}`,
         },
       });
       return;

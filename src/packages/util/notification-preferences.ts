@@ -240,6 +240,37 @@ export function getNotificationCategoryDefinition(
 }
 
 export const MARKETING_CONSENT_OTHER_SETTINGS_KEY = "newsletter";
+export const MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY =
+  "marketing_email_consent_record";
+export const MARKETING_EMAIL_CONSENT_RECORD_VERSION = 1;
+
+export type MarketingEmailConsentSource =
+  | "communication-settings"
+  | "first-project-open";
+
+export interface MarketingEmailConsentRecord {
+  version: typeof MARKETING_EMAIL_CONSENT_RECORD_VERSION;
+  enabled: boolean;
+  source: MarketingEmailConsentSource;
+  recorded_at: string;
+}
+
+export function buildMarketingEmailConsentRecord({
+  enabled,
+  source,
+  recordedAt = new Date(),
+}: {
+  enabled: boolean;
+  source: MarketingEmailConsentSource;
+  recordedAt?: Date;
+}): MarketingEmailConsentRecord {
+  return {
+    version: MARKETING_EMAIL_CONSENT_RECORD_VERSION,
+    enabled,
+    source,
+    recorded_at: recordedAt.toISOString(),
+  };
+}
 
 export function setProductMarketingEmailMode(
   raw: unknown,

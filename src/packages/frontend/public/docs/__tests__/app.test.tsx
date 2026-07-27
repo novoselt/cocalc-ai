@@ -62,6 +62,9 @@ describe("public/docs", () => {
     const terminal = getDocsEntry("terminal.use-terminal");
     expect(terminal?.image?.src).toBe("/public/docs/terminal-56905fa2.webp");
     expect(terminal?.image?.presentation).toBe("icon");
+    expect(getDocsEntry("terminal.ssh-access")?.image?.src).toBe(
+      "/public/docs/ssh-access-32a43270.webp",
+    );
     expect(
       searchDocsEntries("browser notebook cli automation").map(
         (entry) => entry.id,

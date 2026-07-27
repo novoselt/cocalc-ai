@@ -120,6 +120,10 @@ export function OtherSettings(props: Readonly<Props>): React.JSX.Element {
       >
         <div>
           <SelectorInput
+            ariaLabel={intl.formatMessage({
+              id: "account.other-settings.filename_generator.label",
+              defaultMessage: "Filename generator",
+            })}
             selected={selected}
             options={NewFilenameFamilies}
             on_change={(value) => on_change(NEW_FILENAMES, value)}

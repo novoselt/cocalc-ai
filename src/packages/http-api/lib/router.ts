@@ -19,6 +19,7 @@ import {
 import { getLaunchpadApiV2Routes } from "./launchpad-routes";
 
 export interface ApiV2RouterOptions {
+  browserCors?: "configured" | "request-origin";
   includeDocs?: boolean;
   routes?: ApiV2RouteEntry[];
   // Deprecated compatibility alias.
@@ -77,7 +78,9 @@ export default function createApiV2Router(
   const router = express.Router();
 
   router.use(async (req, res, next) => {
-    await applyBrowserCors(req, res);
+    await applyBrowserCors(req, res, {
+      requestOriginOnly: opts.browserCors === "request-origin",
+    });
     if (req.method === "OPTIONS") {
       res.status(204).end();
       return;

@@ -146,7 +146,7 @@ const PUBLIC_IMAGE_DIMENSIONS: Record<string, PublicImageDimensions> = {
 };
 
 export const PUBLIC_SITE_DESCRIPTION =
-  "CoCalc is a shared project workspace for research, teaching, and technical teams, keeping collaboration, AI assistance, history, and recovery close to the work.";
+  "CoCalc is a persistent shared computer for technical work, where people and AI agents collaborate in the same Linux project with files, notebooks, terminals, history, and recovery.";
 
 const PRODUCT_SITEMAP_PATHS = [
   "products",
@@ -630,7 +630,7 @@ function featureRouteMetadata(
   return {
     canonicalPath: publicPath("features", options),
     description:
-      "Explore CoCalc features for collaborative notebooks, Linux terminals, technical documents, whiteboards, teaching workflows, automation, and AI agents.",
+      "Explore the notebooks, Linux terminals, technical documents, teaching workflows, automation, and AI agents that share one persistent CoCalc project.",
     imagePath: publicPath(FEATURE_SOCIAL_IMAGE, options),
     // A slug was given but no such feature page exists.
     notFound: !!route?.slug,
@@ -762,7 +762,7 @@ function aboutRouteMetadata(
       return {
         canonicalPath: publicPath("about", options),
         description:
-          "Learn about the people and company behind CoCalc, the collaborative computing platform from SageMath, Inc.",
+          "Learn about SageMath, Inc., the mission, history, people, and operating principles behind CoCalc.",
         imagePath: publicPath(DEFAULT_SOCIAL_IMAGE, options),
         title: pageTitle(`About ${siteName}`, siteName),
       };

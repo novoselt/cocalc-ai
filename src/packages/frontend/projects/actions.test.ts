@@ -25,6 +25,7 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
           setProjectMetadata: jest.fn(async () => undefined),
           setProjectSshKey: jest.fn(async () => undefined),
           deleteProjectSshKey: jest.fn(async () => undefined),
+          updateAuthorizedKeysOnHost: jest.fn(async () => undefined),
         },
       },
       projectApi: jest.fn(() => ({
@@ -586,6 +587,24 @@ describe("ProjectsActions project metadata updates", () => {
         "fp-1",
       ]),
     ).toBeUndefined();
+  });
+
+  it("pushes SSH keys to project-host projects in the opened state", async () => {
+    mockedStore.get_state.mockReturnValue("opened");
+    const { actions } = makeActions();
+
+    await actions.updateAuthorizedKeys(project_id);
+
+    expect(
+      mockedWebappClient.conat_client.hub.projects.updateAuthorizedKeysOnHost,
+    ).toHaveBeenCalledWith({ project_id });
+    expect(mockedWebappClient.conat_client.projectApi).toHaveBeenCalledWith({
+      project_id,
+    });
+    const projectApi = (
+      mockedWebappClient.conat_client.projectApi as jest.Mock
+    ).mock.results.at(-1)?.value;
+    expect(projectApi.system.updateSshKeys).toHaveBeenCalled();
   });
 
   it("returns the created project once the local feed catches up", async () => {

@@ -66,6 +66,7 @@ export function TerminalSettings() {
           {intl.formatMessage(labels.reset)}
         </Button>
         <SelectorInput
+          ariaLabel={label}
           style={{ width: "250px" }}
           selected={color_scheme}
           options={theme_desc}

@@ -2017,6 +2017,101 @@ export function registerHostCommand(
     );
 
   host
+    .command("projects-count")
+    .description("count running projects across visible running hosts")
+    .option("--parallel <n>", "parallel host summary requests", "4")
+    .option("--by-host", "show the per-host project counts")
+    .action(
+      async (
+        opts: {
+          parallel?: string;
+          byHost?: boolean;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "host projects-count", async (ctx) => {
+          const parallel = Math.min(
+            32,
+            parseOptionalPositiveInteger(opts.parallel, "--parallel") ?? 4,
+          );
+          const hosts = (
+            await listHosts(ctx, {
+              include_deleted: false,
+              admin_view: true,
+            })
+          ).filter((host: any) => {
+            const status = `${host.status ?? ""}`.trim().toLowerCase();
+            return status === "running" || status === "active";
+          });
+          const rows: Array<Record<string, unknown>> = new Array(hosts.length);
+          let nextIndex = 0;
+          const workerCount = Math.min(parallel, hosts.length);
+          await Promise.all(
+            Array.from({ length: workerCount }, async () => {
+              while (true) {
+                const index = nextIndex++;
+                if (index >= hosts.length) {
+                  return;
+                }
+                const host = hosts[index];
+                const result = await ctx.hub.hosts.listHostProjects({
+                  id: host.id,
+                  limit: 1,
+                  state_filter: "running",
+                });
+                const running = Number(result.summary?.running ?? 0);
+                if (!Number.isFinite(running) || running < 0) {
+                  throw new Error(
+                    `host '${host.id}' returned an invalid running project count`,
+                  );
+                }
+                rows[index] = {
+                  host_id: host.id,
+                  name: host.name ?? "",
+                  status: host.status ?? "",
+                  funding_mode: host.funding_mode ?? "",
+                  running_projects: running,
+                };
+              }
+            }),
+          );
+          rows.sort((a, b) => {
+            const countDifference =
+              Number(b.running_projects ?? 0) - Number(a.running_projects ?? 0);
+            if (countDifference !== 0) {
+              return countDifference;
+            }
+            return `${a.name || a.host_id}`.localeCompare(
+              `${b.name || b.host_id}`,
+            );
+          });
+          const runningProjects = rows.reduce(
+            (total, row) => total + Number(row.running_projects ?? 0),
+            0,
+          );
+          if (!ctx.globals.json && ctx.globals.output !== "json") {
+            console.log(
+              `Running projects: ${runningProjects.toLocaleString("en-US")}`,
+            );
+            console.log(
+              `Running hosts: ${rows.length.toLocaleString("en-US")}`,
+            );
+            if (opts.byHost) {
+              console.log("");
+              printNamedSection("Hosts", rows);
+            }
+            return null;
+          }
+          return {
+            running_projects: runningProjects,
+            running_hosts: rows.length,
+            hosts: rows,
+          };
+        });
+      },
+    );
+
+  host
     .command("projects <host>")
     .description("list projects assigned to a host (running only by default)")
     .option("--limit <limit>", "max rows to return", "50")

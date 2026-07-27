@@ -21,6 +21,7 @@ export default function HomePageButton({ project_id, active, width }) {
 
   return (
     <Button
+      aria-label="Project home"
       size="large"
       type="text"
       style={{

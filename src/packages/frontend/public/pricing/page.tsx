@@ -3,16 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import {
-  type CSSProperties,
-  Fragment,
-  type ReactNode,
-  useEffect,
-  useState,
-} from "react";
+import { useEffect, useState } from "react";
 
-import { Alert, Button, Flex, Space, theme, Typography } from "antd";
+import { Alert, Button, Collapse, Flex, Space, Typography } from "antd";
 
+import { MembershipTierComparison } from "@cocalc/frontend/account/membership-tier-details";
 import {
   filterMembershipTiersForBillingInterval,
   MembershipBillingSelector,
@@ -22,13 +17,14 @@ import {
   type MembershipPricingTier,
 } from "@cocalc/frontend/account/membership-pricing-chooser";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
-import { PublicGrid, PublicSection } from "../layout/shell";
-import { publicPath } from "../routes";
 import { sortMembershipTiersByDisplayOrder } from "@cocalc/util/membership-tier-order";
-import { humanSize, round2 } from "@cocalc/util/misc";
 import { joinUrlPath } from "@cocalc/util/url-path";
 
-const { Paragraph, Text, Title } = Typography;
+import { PublicGrid, PublicSection } from "../layout/shell";
+import { publicPath } from "../routes";
+import { MembershipOverviewTable } from "./membership-overview-table";
+
+const { Paragraph, Title } = Typography;
 
 type PublicMembershipTier = MembershipPricingTier;
 
@@ -58,352 +54,6 @@ async function loadMembershipTiers(): Promise<
   } catch {
     return undefined;
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value != null && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function asNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === "string" && value.trim() !== "") {
-    const numberValue = Number(value);
-    return Number.isFinite(numberValue) ? numberValue : undefined;
-  }
-  return undefined;
-}
-
-const EMPTY_COMPARISON_VALUE = <Text type="secondary">—</Text>;
-
-type ComparisonRow = {
-  label: string;
-  value: (context: {
-    tier: PublicMembershipTier;
-    tiers: readonly PublicMembershipTier[];
-  }) => ReactNode;
-};
-
-type ComparisonGroup = {
-  rows: ComparisonRow[];
-  title: string;
-};
-
-function formatNumberValue(value: unknown): ReactNode {
-  const numberValue = asNumber(value);
-  return numberValue == null ? EMPTY_COMPARISON_VALUE : `${numberValue}`;
-}
-
-function formatMbValue(value: unknown): ReactNode {
-  const numberValue = asNumber(value);
-  if (numberValue == null) return EMPTY_COMPARISON_VALUE;
-  if (numberValue >= 1000) {
-    const gb = numberValue / 1000;
-    return `${Number.isInteger(gb) ? gb : round2(gb)} GB`;
-  }
-  return `${numberValue} MB`;
-}
-
-function formatBytesValue(value: unknown): ReactNode {
-  const numberValue = asNumber(value);
-  return numberValue == null ? EMPTY_COMPARISON_VALUE : humanSize(numberValue);
-}
-
-function formatCpuPriority(value: unknown): ReactNode {
-  const priority = asNumber(value);
-  if (priority == null || priority <= 1) return "Low";
-  if (priority <= 2) return "Medium";
-  if (priority < 8) return "High";
-  return "Highest";
-}
-
-function formatBooleanValue(value: unknown): ReactNode {
-  return value === true ? (
-    <Text aria-label="Yes">✓</Text>
-  ) : (
-    <Text aria-label="No" type="secondary">
-      —
-    </Text>
-  );
-}
-
-// Hidden on June 15, 2026: restore with the Included AI usage row if public
-// pricing should compare included AI qualitatively again.
-// function positiveComparisonValues(values: readonly unknown[]): number[] {
-//   return Array.from(
-//     new Set(
-//       values
-//         .map(asNumber)
-//         .filter((value): value is number => value != null && value > 0),
-//     ),
-//   ).sort((a, b) => a - b);
-// }
-//
-// function formatComparativeNumberValue({
-//   standardValue,
-//   value,
-//   values,
-// }: {
-//   standardValue?: unknown;
-//   value: unknown;
-//   values: readonly unknown[];
-// }): ReactNode {
-//   const numberValue = asNumber(value);
-//   if (numberValue == null || numberValue <= 0) return "None";
-//
-//   const positiveValues = positiveComparisonValues([...values, numberValue]);
-//   const standardNumber = asNumber(standardValue);
-//   const effectiveStandard =
-//     standardNumber != null && standardNumber > 0
-//       ? standardNumber
-//       : positiveValues[Math.floor((positiveValues.length - 1) / 2)];
-//
-//   if (effectiveStandard == null) return "None";
-//   if (numberValue === effectiveStandard) return "Standard";
-//   if (numberValue > effectiveStandard) return "Expanded";
-//   return numberValue === positiveValues[0] ? "Minimal" : "Light";
-// }
-
-function hasPositiveUsageLimit(
-  tier: PublicMembershipTier,
-  firstKey: string,
-  secondKey: string,
-): boolean {
-  const limits = usageLimits(tier);
-  return [firstKey, secondKey].some((key) => {
-    const limit = asNumber(limits[key]);
-    return limit != null && limit > 0;
-  });
-}
-
-// Hidden on June 15, 2026: restore with the Included AI usage row if public
-// pricing should compare included AI qualitatively again.
-// function getAiUsageComparisonValue(
-//   tier: PublicMembershipTier,
-// ): number | undefined {
-//   const aiLimits = asRecord(tier.ai_limits);
-//   return (
-//     asNumber(aiLimits.units_7d ?? aiLimits.limit_7d) ??
-//     asNumber(aiLimits.units_5h ?? aiLimits.limit_5h)
-//   );
-// }
-//
-// function getStandardTierComparisonValue(
-//   tiers: readonly PublicMembershipTier[],
-//   value: (tier: PublicMembershipTier) => number | undefined,
-// ): number | undefined {
-//   const standardTier = tiers.find(
-//     (tier) =>
-//       tier.id === "standard" ||
-//       (tier.label ?? "").toLowerCase() === "standard",
-//   );
-//   return standardTier == null ? undefined : value(standardTier);
-// }
-
-function projectDefaults(tier: PublicMembershipTier): Record<string, unknown> {
-  return asRecord(tier.project_defaults);
-}
-
-function usageLimits(tier: PublicMembershipTier): Record<string, unknown> {
-  return asRecord(tier.usage_limits);
-}
-
-function tierFeatures(tier: PublicMembershipTier): Record<string, unknown> {
-  return asRecord(tier.features);
-}
-
-const COMPARISON_GROUPS: ComparisonGroup[] = [
-  {
-    title: "Limits Per Project",
-    rows: [
-      {
-        label: "CPU priority",
-        value: ({ tier }) =>
-          formatCpuPriority(usageLimits(tier).shared_compute_priority),
-      },
-      {
-        label: "RAM",
-        value: ({ tier }) => formatMbValue(projectDefaults(tier).memory),
-      },
-      {
-        label: "Disk",
-        value: ({ tier }) => formatMbValue(projectDefaults(tier).disk_quota),
-      },
-      // Hidden on June 15, 2026: collaborators are not expected to be a
-      // meaningful public differentiator while limits are intentionally loose.
-      // {
-      //   label: "Collaborators",
-      //   value: ({ tier }) =>
-      //     formatNumberValue(
-      //       usageLimits(tier).project_max_collaborators_and_pending_invites,
-      //     ),
-      // },
-    ],
-  },
-  {
-    title: "Global Limits Across All Projects",
-    rows: [
-      {
-        label: "Owned Projects",
-        value: ({ tier }) => formatNumberValue(usageLimits(tier).max_projects),
-      },
-      {
-        label: "Running Projects",
-        value: ({ tier }) =>
-          formatNumberValue(usageLimits(tier).max_sponsored_running_projects),
-      },
-      {
-        label: "Total disk",
-        value: ({ tier }) => {
-          const limits = usageLimits(tier);
-          return formatBytesValue(
-            limits.total_storage_hard_bytes ?? limits.total_storage_soft_bytes,
-          );
-        },
-      },
-      // Hidden on June 15, 2026: included AI is not part of the public
-      // comparison until the product language is finalized.
-      // {
-      //   label: "Included AI usage",
-      //   value: ({ tier, tiers }) =>
-      //     formatComparativeNumberValue({
-      //       value: getAiUsageComparisonValue(tier),
-      //       values: tiers.map(getAiUsageComparisonValue),
-      //       standardValue: getStandardTierComparisonValue(
-      //         tiers,
-      //         getAiUsageComparisonValue,
-      //       ),
-      //     }),
-      // },
-    ],
-  },
-  {
-    title: "Functionality",
-    rows: [
-      {
-        label:
-          "Dedicated Project Host VM with much larger RAM, CPU, and Disk (pay as you go)",
-        value: ({ tier }) =>
-          formatBooleanValue(tierFeatures(tier).create_hosts),
-      },
-      {
-        label: "Pay at the end of the month for dedicated project host",
-        value: ({ tier }) =>
-          formatBooleanValue(
-            hasPositiveUsageLimit(
-              tier,
-              "credit_spend_limit_5h_usd",
-              "credit_spend_limit_7d_usd",
-            ),
-          ),
-      },
-      // Hidden on June 15, 2026: Launchpad licensing is not developed enough
-      // for the public membership comparison yet.
-      // {
-      //   label: "Launchpad license",
-      //   value: ({ tier }) =>
-      //     formatBooleanValue(
-      //       tierFeatures(tier).launchpad_license === true ||
-      //         tier.id === "pro",
-      //     ),
-      // },
-    ],
-  },
-];
-
-function PricingComparisonTable({ tiers }: { tiers: PublicMembershipTier[] }) {
-  const { token } = theme.useToken();
-  const tableStyle: CSSProperties = {
-    borderCollapse: "collapse",
-    minWidth: "100%",
-  };
-  const headerCellStyle: CSSProperties = {
-    borderBottom: `1px solid ${token.colorBorderSecondary}`,
-    paddingBlock: token.paddingSM,
-    paddingInline: token.padding,
-    textAlign: "center",
-    whiteSpace: "nowrap",
-  };
-  const rowHeaderStyle: CSSProperties = {
-    borderBottom: `1px solid ${token.colorBorderSecondary}`,
-    paddingBlock: token.paddingSM,
-    paddingInline: token.padding,
-    textAlign: "left",
-    whiteSpace: "nowrap",
-  };
-  const valueCellStyle: CSSProperties = {
-    borderBottom: `1px solid ${token.colorBorderSecondary}`,
-    paddingBlock: token.paddingSM,
-    paddingInline: token.padding,
-    textAlign: "center",
-    whiteSpace: "nowrap",
-  };
-  const groupCellStyle: CSSProperties = {
-    background: token.colorFillAlter,
-    borderBottom: `1px solid ${token.colorBorderSecondary}`,
-    paddingBlock: token.paddingSM,
-    paddingInline: token.padding,
-    textAlign: "left",
-  };
-
-  return (
-    <PublicSection>
-      <Title level={2} style={{ margin: 0 }}>
-        Compare Memberships
-      </Title>
-      <div style={{ overflowX: "auto" }}>
-        <table aria-label="Membership comparison" style={tableStyle}>
-          <thead>
-            <tr>
-              <th style={headerCellStyle} />
-              {tiers.map((tier) => (
-                <th key={tier.id} scope="col" style={headerCellStyle}>
-                  <Text strong style={{ fontSize: 20, lineHeight: "28px" }}>
-                    {tier.label ?? tier.id}
-                  </Text>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {COMPARISON_GROUPS.map((group) => (
-              <Fragment key={group.title}>
-                <tr>
-                  <th
-                    colSpan={tiers.length + 1}
-                    scope="colgroup"
-                    style={groupCellStyle}
-                  >
-                    <Text strong style={{ fontSize: 20, lineHeight: "28px" }}>
-                      {group.title}
-                    </Text>
-                  </th>
-                </tr>
-                {group.rows.map((row) => (
-                  <tr key={`${group.title}-${row.label}`}>
-                    <th scope="row" style={rowHeaderStyle}>
-                      <Text>{row.label}</Text>
-                    </th>
-                    {tiers.map((tier) => (
-                      <td
-                        key={`${row.label}-${tier.id}`}
-                        style={valueCellStyle}
-                      >
-                        {row.value({ tier, tiers })}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </PublicSection>
-  );
 }
 
 export default function PricingPage({
@@ -485,7 +135,24 @@ export default function PricingPage({
                   />
                 ))}
               </MembershipPricingTierGrid>
-              <PricingComparisonTable tiers={visibleTiers} />
+              <MembershipOverviewTable tiers={visibleTiers} />
+              <PublicSection>
+                <Collapse
+                  destroyOnHidden
+                  items={[
+                    {
+                      children: (
+                        <MembershipTierComparison
+                          showTitle={false}
+                          tiers={visibleTiers}
+                        />
+                      ),
+                      key: "exact-membership-details",
+                      label: "Compare exact limits and features",
+                    },
+                  ]}
+                />
+              </PublicSection>
             </>
           ) : (
             <PublicSection>

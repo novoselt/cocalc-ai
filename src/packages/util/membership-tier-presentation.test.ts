@@ -38,6 +38,47 @@ describe("buildMembershipTierPresentation", () => {
     expect(presentation.billing).toContain(
       "$1,800.00 per year (about 25% less than monthly)",
     );
+    expect(presentation.detailGroups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "compute-projects",
+          details: expect.arrayContaining([
+            expect.objectContaining({
+              key: "project_memory",
+              value: "16 GB",
+            }),
+            expect.objectContaining({
+              key: "shared_compute_priority",
+              value: "4",
+            }),
+          ]),
+        }),
+        expect.objectContaining({
+          key: "ai-automation",
+          details: expect.arrayContaining([
+            expect.objectContaining({ key: "ai_units_5h" }),
+            expect.objectContaining({ key: "ai_units_7d" }),
+          ]),
+        }),
+        expect.objectContaining({
+          key: "collaboration",
+          details: expect.arrayContaining([
+            expect.objectContaining({
+              key: "project_max_collaborators_and_pending_invites",
+            }),
+          ]),
+        }),
+        expect.objectContaining({
+          key: "dedicated-hosts",
+          details: expect.arrayContaining([
+            expect.objectContaining({
+              key: "create_hosts",
+              value: "Yes",
+            }),
+          ]),
+        }),
+      ]),
+    );
   });
 
   it("includes course-specific terms for course-visible tiers", () => {
@@ -82,5 +123,50 @@ describe("buildMembershipTierPresentation", () => {
       ]),
     );
     expect(presentation.limits).toContain("Project RAM: 2 GB");
+  });
+
+  it("formats exact rolling usage limits for user-facing comparisons", () => {
+    const presentation = buildMembershipTierPresentation({
+      id: "measured",
+      ai_limits: { units_5h: 12.5, units_7d: 50 },
+      project_defaults: { disk_quota: 25_000, memory: 12_000 },
+      usage_limits: {
+        cpu_5h_seconds: 18_000,
+        cpu_7d_seconds: 252_000,
+        egress_5h_bytes: 12_000_000_000,
+        egress_7d_bytes: 125_000_000_000,
+        total_storage_hard_bytes: 250_000_000_000,
+      },
+    });
+    const details = presentation.detailGroups.flatMap((group) => group.details);
+
+    expect(details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "cpu_5h_seconds",
+          value: "5 CPU-hours",
+        }),
+        expect.objectContaining({
+          key: "cpu_7d_seconds",
+          value: "70 CPU-hours",
+        }),
+        expect.objectContaining({
+          key: "egress_5h_bytes",
+          value: "12 GB",
+        }),
+        expect.objectContaining({
+          key: "egress_7d_bytes",
+          value: "125 GB",
+        }),
+        expect.objectContaining({
+          key: "total_storage_hard_bytes",
+          value: "250 GB",
+        }),
+        expect.objectContaining({
+          key: "ai_units_5h",
+          value: "12.5 units",
+        }),
+      ]),
+    );
   });
 });

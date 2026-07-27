@@ -17,13 +17,15 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { cloneElement, useEffect, useMemo, useState } from "react";
+import type { ReactElement } from "react";
 import { defineMessage } from "react-intl";
 
 import type { PublicDirectoryShareSummary } from "@cocalc/conat/hub/api/public-directory-shares";
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
 import {
   FreshAuthModal,
+  isFreshAuthRequiredError,
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
 import { Loading, TimeAgo, Tooltip } from "@cocalc/frontend/components";
@@ -283,6 +285,7 @@ function PublicSharesPage() {
     const failures: string[] = [];
     try {
       const completed = await runFreshAuthAction(async () => {
+        failures.length = 0;
         for (const share of shares) {
           try {
             await webapp_client.conat_client.hub.publicDirectoryShares.update({
@@ -290,6 +293,9 @@ function PublicSharesPage() {
               ...updateForShare(share),
             });
           } catch (err) {
+            if (isFreshAuthRequiredError(err)) {
+              throw err;
+            }
             failures.push(
               `${share.slug}: ${normalizeUserFacingError(err).message}`,
             );
@@ -491,6 +497,13 @@ function PublicSharesPage() {
               pagination={{ defaultPageSize: 25, showSizeChanger: true }}
               rowSelection={{
                 selectedRowKeys: selectedShareIds,
+                renderCell: (_checked, share, _index, checkbox) =>
+                  cloneElement(
+                    checkbox as ReactElement<{ "aria-label"?: string }>,
+                    {
+                      "aria-label": `Select share ${share.slug}`,
+                    },
+                  ),
                 onChange: (keys) =>
                   setSelectedShareIds(keys.map((key) => `${key}`)),
               }}

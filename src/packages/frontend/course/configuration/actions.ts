@@ -199,6 +199,19 @@ export class ConfigurationActions {
     });
   };
 
+  set_course_ssh_enabled = (
+    ssh_to_student_projects: boolean,
+    ssh_to_student_projects_account_id?: string,
+  ): void => {
+    this.set({
+      ssh_to_student_projects,
+      ssh_to_student_projects_account_id: ssh_to_student_projects
+        ? ssh_to_student_projects_account_id
+        : "",
+      table: "settings",
+    });
+  };
+
   configure_nbgrader_grade_project = async (
     project_id?: string,
   ): Promise<void> => {

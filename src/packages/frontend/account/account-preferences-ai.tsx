@@ -40,7 +40,7 @@ export function AccountPreferencesAI() {
   const [codexSessionsOpen, setCodexSessionsOpen] = useState(false);
   const codexSessionsSection = (
     <div style={{ marginTop: 24, marginBottom: 8 }}>
-      <Typography.Title level={5} style={{ marginBottom: 6 }}>
+      <Typography.Title level={2} style={{ marginBottom: 6, fontSize: 18 }}>
         Codex sessions
       </Typography.Title>
       <Typography.Paragraph type="secondary" style={{ marginBottom: 10 }}>
@@ -94,7 +94,7 @@ export function AccountPreferencesAI() {
         }
         mode="ai"
       />
-      <Typography.Title level={5} style={{ marginBottom: 8 }}>
+      <Typography.Title level={2} style={{ marginBottom: 8, fontSize: 18 }}>
         AI usage
       </Typography.Title>
       <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>

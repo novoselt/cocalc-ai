@@ -259,32 +259,40 @@ export class AccountActions extends Actions<AccountState> {
   }
 
   public set_other_settings(name: string, value: any): void {
-    void this.setOtherSettingsAndWaitForProjection(name, value).catch((err) => {
+    this.set_other_settings_many({ [name]: value });
+  }
+
+  public set_other_settings_many(values: Record<string, any>): void {
+    void this.setOtherSettingsAndWaitForProjection(values).catch((err) => {
+      const names = Object.keys(values).join(", ");
       console.warn("error setting account other_settings", {
-        name,
+        names,
         err: `${err}`,
       });
       alert_message({
         type: "error",
-        message: `Error saving account setting '${name}' -- ${err}`,
+        message: `Error saving account setting '${names}' -- ${err}`,
       });
     });
   }
 
   private async setOtherSettingsAndWaitForProjection(
-    name: string,
-    value: any,
+    values: Record<string, any>,
   ): Promise<void> {
     const current =
       this.redux.getStore("account")?.get("other_settings")?.toJS?.() ?? {};
+    const names = Object.keys(values);
     await writeAndWaitForProjection({
       consumer: "account",
-      name: `account.other_settings.${name}`,
+      name: `account.other_settings.${names.join("+")}`,
       write: () =>
         this.redux
           .getTable("account")
-          .set({ other_settings: { ...current, [name]: value } }, "shallow"),
-      matchesProjection: () => this.otherSettingProjectionMatches(name, value),
+          .set({ other_settings: { ...current, ...values } }, "shallow"),
+      matchesProjection: () =>
+        names.every((name) =>
+          this.otherSettingProjectionMatches(name, values[name]),
+        ),
       repair: () => refreshAccountSnapshot("write-ack"),
       timeout_ms: 2_500,
     });

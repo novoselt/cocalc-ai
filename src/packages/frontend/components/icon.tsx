@@ -714,6 +714,7 @@ export type IconRotation = "45" | "90" | "135" | "180" | "225" | "270" | "315";
 interface Props {
   name?: IconName;
   unicode?: number; // (optional) set a hex 16 bit charcode to render a unicode char, e.g. 0x2620
+  "aria-label"?: string;
   className?: string;
   size?: "lg" | "2x" | "3x" | "4x" | "5x";
   rotate?: IconRotation;
@@ -763,10 +764,26 @@ export const Icon: React.FC<Props> = (props: Props) => {
         : flipTransform;
     }
 
-    return <span style={style}>{String.fromCharCode(props.unicode!)}</span>;
+    return (
+      <span
+        aria-hidden={props["aria-label"] == null}
+        aria-label={props["aria-label"]}
+        style={style}
+      >
+        {String.fromCharCode(props.unicode!)}
+      </span>
+    );
   }
 
   let name: IconName = props.name ?? "square";
+  const {
+    name: _name,
+    unicode: _unicode,
+    ["aria-label"]: ariaLabel,
+    ...iconProps
+  } = props;
+  const accessibilityProps =
+    ariaLabel == null ? { "aria-hidden": true } : { "aria-label": ariaLabel };
   let C;
   C = IconSpec[name];
   if (C == null && name.endsWith("-o")) {
@@ -780,9 +797,15 @@ export const Icon: React.FC<Props> = (props: Props) => {
       if (IconFont == null) {
         return <span>(IconFonts not available)</span>;
       }
-      return <IconFont type={"icon-" + C.IconFont} {...props} alt={name} />;
+      return (
+        <IconFont
+          type={"icon-" + C.IconFont}
+          {...iconProps}
+          {...accessibilityProps}
+        />
+      );
     }
-    return <C {...props} alt={name} />;
+    return <C {...iconProps} {...accessibilityProps} />;
   }
 
   // this is when the icon is broken.
@@ -801,14 +824,14 @@ export const Icon: React.FC<Props> = (props: Props) => {
         title={`Icon "${props.name}" is not defined -- fix this in components/icon.tsx.`}
       >
         {/* @ts-ignore */}
-        <BugOutlined {...props} alt={name} />
+        <BugOutlined {...iconProps} {...accessibilityProps} />
       </span>
     );
   } else {
     // In production, just show a very generic icon so the user
     // doesn't realize we messed up.
     // @ts-ignore
-    return <BorderOutlined {...props} alt={name} />;
+    return <BorderOutlined {...iconProps} {...accessibilityProps} />;
   }
 };
 
