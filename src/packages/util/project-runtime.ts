@@ -72,6 +72,37 @@ export function isProjectRuntimeHomeAliasPath(rawPath: string): boolean {
   return projectRuntimeHomeRelativePath(rawPath) != null;
 }
 
+export function projectRuntimePathForProcess(
+  rawPath: string | undefined,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | undefined {
+  if (rawPath == null || !path.isAbsolute(rawPath)) {
+    return rawPath;
+  }
+  const runtimeHomeRaw = `${env.COCALC_RUNTIME_HOME ?? ""}`.trim();
+  const processHomeRaw = `${env.HOME ?? ""}`.trim();
+  if (
+    !runtimeHomeRaw ||
+    !processHomeRaw ||
+    !path.isAbsolute(runtimeHomeRaw) ||
+    !path.isAbsolute(processHomeRaw)
+  ) {
+    return rawPath;
+  }
+  const runtimeHome = path.resolve(runtimeHomeRaw);
+  const normalized = path.resolve(rawPath);
+  if (
+    normalized !== runtimeHome &&
+    !normalized.startsWith(`${runtimeHome}${path.sep}`)
+  ) {
+    return rawPath;
+  }
+  const relative = path.relative(runtimeHome, normalized);
+  return relative
+    ? path.join(path.resolve(processHomeRaw), relative)
+    : path.resolve(processHomeRaw);
+}
+
 export type ProjectRuntimeMode = "external" | "workspace" | "podman";
 
 export type ProjectRuntimeIsolation =

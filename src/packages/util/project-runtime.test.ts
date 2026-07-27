@@ -5,6 +5,7 @@ import {
   projectRuntimeCapabilityError,
   projectRuntimeConfiguration,
   projectRuntimeHomeRelativePath,
+  projectRuntimePathForProcess,
   projectRuntimeRootfsContractLabels,
   rootfsLabelsSatisfyCurrentProjectRuntimeContract,
 } from "./project-runtime";
@@ -38,6 +39,36 @@ describe("project runtime home helpers", () => {
     ).toBeUndefined();
     expect(projectRuntimeHomeRelativePath("/etc/passwd")).toBeUndefined();
     expect(isProjectRuntimeHomeAliasPath("/scratch/data.txt")).toBe(false);
+  });
+
+  it("maps canonical client paths to a workspace process home", () => {
+    const env = {
+      COCALC_RUNTIME_HOME: "/home/user",
+      HOME: "/srv/workspaces/project-id",
+    };
+    expect(projectRuntimePathForProcess("/home/user", env)).toBe(
+      "/srv/workspaces/project-id",
+    );
+    expect(projectRuntimePathForProcess("/home/user/src/index.ts", env)).toBe(
+      "/srv/workspaces/project-id/src/index.ts",
+    );
+    expect(projectRuntimePathForProcess("src/index.ts", env)).toBe(
+      "src/index.ts",
+    );
+  });
+
+  it("does not map paths outside the configured runtime home", () => {
+    const env = {
+      COCALC_RUNTIME_HOME: "/home/user",
+      HOME: "/srv/workspaces/project-id",
+    };
+    expect(projectRuntimePathForProcess("/home/user2/file", env)).toBe(
+      "/home/user2/file",
+    );
+    expect(projectRuntimePathForProcess("/home/user/../shared", env)).toBe(
+      "/home/user/../shared",
+    );
+    expect(projectRuntimePathForProcess("/tmp/file", env)).toBe("/tmp/file");
   });
 
   it("exposes stable RootFS runtime-contract labels", () => {
