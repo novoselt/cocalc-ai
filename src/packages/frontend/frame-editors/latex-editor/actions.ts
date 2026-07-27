@@ -2878,10 +2878,12 @@ export class Actions extends BaseActions<LatexEditorState> {
 
   private _createInvalidChatTextMarker({
     cm,
+    text,
     from,
     to,
   }: {
     cm: CodeMirror.Editor;
+    text: string;
     from: CodeMirror.Position;
     to: CodeMirror.Position;
   }): CodeMirror.TextMarker {
@@ -2895,7 +2897,52 @@ export class Actions extends BaseActions<LatexEditorState> {
       },
     });
     (marker as any).invalidChatMarker = true;
+    (marker as any).invalidChatText = text;
     return marker;
+  }
+
+  private _canReuseChatTextDecorations({
+    existing,
+    markers,
+    invalidMarkers,
+    path,
+  }: {
+    existing: CodeMirror.TextMarker[];
+    markers: ChatMarker[];
+    invalidMarkers: InvalidChatMarker[];
+    path: string;
+  }): boolean {
+    if (existing.length !== markers.length + invalidMarkers.length) {
+      return false;
+    }
+    for (let i = 0; i < markers.length; i++) {
+      const decoration: any = existing[i];
+      const range = decoration.find?.();
+      if (
+        range == null ||
+        !("from" in range) ||
+        (range.from.line === range.to.line && range.from.ch === range.to.ch) ||
+        decoration.chatHash !== markers[i].hash ||
+        decoration.chatPath !== path ||
+        decoration.chatLocked !== this._anchorHasMessages(markers[i].hash)
+      ) {
+        return false;
+      }
+    }
+    for (let i = 0; i < invalidMarkers.length; i++) {
+      const decoration: any = existing[markers.length + i];
+      const range = decoration.find?.();
+      if (
+        range == null ||
+        !("from" in range) ||
+        (range.from.line === range.to.line && range.from.ch === range.to.ch) ||
+        decoration.invalidChatMarker !== true ||
+        decoration.invalidChatText !== invalidMarkers[i].text
+      ) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private _refreshChatMarkerText(path: string): void {
@@ -2934,11 +2981,27 @@ export class Actions extends BaseActions<LatexEditorState> {
       ?.get(path)
       ?.toJS() ?? []) as unknown as InvalidChatMarker[];
     for (const cm of cms) {
-      for (const marker of perCm.get(cm) ?? []) {
+      const existing = perCm.get(cm) ?? [];
+      const oldTails = tailsPerCm.get(cm) ?? [];
+      if (
+        oldTails.length === markers.length + invalidMarkers.length &&
+        this._canReuseChatTextDecorations({
+          existing,
+          markers,
+          invalidMarkers,
+          path,
+        })
+      ) {
+        // CodeMirror has already moved both TextMarkers and bookmarks with
+        // the edit. Preserve their React roots and unread state rather than
+        // detaching every inline control on each debounced source rescan.
+        this._syncChatTailPositions(path, cm);
+        continue;
+      }
+      for (const marker of existing) {
         marker.clear();
       }
       const fresh: CodeMirror.TextMarker[] = [];
-      const oldTails = tailsPerCm.get(cm) ?? [];
       const freshTails: Array<{
         bookmark: CodeMirror.TextMarker;
         host: HTMLElement;
@@ -2990,6 +3053,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         fresh.push(
           this._createInvalidChatTextMarker({
             cm,
+            text: marker.text,
             from: { line: marker.line, ch: marker.col },
             to: { line: marker.line, ch: lineText.length },
           }),

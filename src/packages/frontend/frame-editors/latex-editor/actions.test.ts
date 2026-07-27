@@ -465,4 +465,48 @@ describe("LaTeX chat tail tracking", () => {
       3,
     );
   });
+
+  it("reuses decorations when typing only moves unchanged markers", () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions._anchorHasMessages = jest.fn(() => true);
+    const existing = [
+      {
+        chatHash: "20260727-abcdefgh",
+        chatPath: "123.tex",
+        chatLocked: true,
+        find: () => ({
+          from: { line: 20, ch: 0 },
+          to: { line: 20, ch: 29 },
+        }),
+      },
+      {
+        invalidChatMarker: true,
+        invalidChatText: "bad id",
+        find: () => ({
+          from: { line: 24, ch: 0 },
+          to: { line: 24, ch: 14 },
+        }),
+      },
+    ];
+
+    expect(
+      actions._canReuseChatTextDecorations({
+        existing,
+        // Scanned line numbers changed after inserting text above, but the
+        // live TextMarkers have already tracked those movements.
+        markers: [{ hash: "20260727-abcdefgh", line: 20, col: 0 }],
+        invalidMarkers: [{ text: "bad id", line: 24, col: 0 }],
+        path: "123.tex",
+      }),
+    ).toBe(true);
+
+    expect(
+      actions._canReuseChatTextDecorations({
+        existing,
+        markers: [{ hash: "20260727-abcdefgh", line: 20, col: 0 }],
+        invalidMarkers: [{ text: "different id", line: 24, col: 0 }],
+        path: "123.tex",
+      }),
+    ).toBe(false);
+  });
 });
