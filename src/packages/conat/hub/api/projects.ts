@@ -1170,6 +1170,7 @@ export const projects = {
   start: authFirstRequireAccount,
   startFromHost: authFirstRequireHost,
   stop: authFirstRequireAccount,
+  status: authFirstRequireAccount,
   restart: authFirstRequireAccount,
   archiveProject: authFirstRequireAccount,
   getProjectState: authFirstRequireAccount,

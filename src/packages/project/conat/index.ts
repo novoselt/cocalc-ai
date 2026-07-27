@@ -8,6 +8,7 @@ import { init as initAPI } from "./api";
 import { init as initWebsocketApi } from "./browser-websocket-api";
 import { init as initRead } from "./files/read";
 import { init as initWrite } from "./files/write";
+import { init as initLocalFilesystem } from "./files/fs";
 import { init as initProjectStatus } from "@cocalc/project/project-status/server";
 import { init as initUsageInfo } from "@cocalc/project/usage-info";
 import { init as initJupyter } from "./jupyter";
@@ -37,6 +38,9 @@ export default async function init(opts?: {
   await initAPI(opts);
   await initJupyter(opts);
   initWebsocketApi(opts);
+  if (process.env.COCALC_PROJECT_FS === "local") {
+    await initLocalFilesystem();
+  }
   await initRead(opts);
   await initWrite(opts);
   if (enableProjectInfo) {

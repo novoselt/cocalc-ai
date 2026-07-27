@@ -235,7 +235,10 @@ async function updateIndex(
       )} ON ${quoteField(table)} ${query}`,
     );
   } else if (action == "delete") {
-    await db.query(`DROP INDEX CONCURRENTLY IF EXISTS ${quoteField(name)}`);
+    // PGlite does not support PostgreSQL's concurrent index teardown reliably.
+    const concurrently =
+      process.env.COCALC_DB === "pglite" ? "" : " CONCURRENTLY";
+    await db.query(`DROP INDEX${concurrently} IF EXISTS ${quoteField(name)}`);
   } else {
     // typescript would catch this, but just in case:
     throw Error(`BUG: unknown action ${name}`);

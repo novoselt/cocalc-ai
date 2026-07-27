@@ -33,6 +33,10 @@ export function getProjectRuntimeCapabilities(): ProjectRuntimeConfiguration {
   );
 }
 
+export function usesHubProjectRuntime(): boolean {
+  return getProjectRuntimeCapabilities().mode === "workspace";
+}
+
 export function useProjectRuntimeCapabilities(): ProjectRuntimeConfiguration {
   const configured = useTypedRedux("customize", "project_runtime");
   return (

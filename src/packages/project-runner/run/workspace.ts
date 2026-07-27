@@ -30,6 +30,7 @@ import {
 } from "node:path";
 import getPort from "@cocalc/backend/get-port";
 import getLogger from "@cocalc/backend/logger";
+import basePath from "@cocalc/backend/base-path";
 import { conatServer } from "@cocalc/backend/data";
 import type { Client } from "@cocalc/conat/core/client";
 import { get as getProjectInfo } from "@cocalc/conat/project/project-info";
@@ -747,7 +748,9 @@ export class WorkspaceRuntimeBackend implements ProjectRuntimeBackend {
     env.PATH ??= "/usr/local/bin:/usr/bin:/bin";
     const extra = {
       ...sanitizeWorkspaceConfiguredEnvironment(configured),
+      BASE_PATH: basePath,
       COCALC_PROJECT_ID: project_id,
+      COCALC_PROJECT_FS: "local",
       COCALC_PROJECT_INFO_SCOPE: "owned",
       COCALC_SECRET_TOKEN: secretTokenPath(home),
       COCALC_USERNAME: identity.username,
@@ -759,10 +762,14 @@ export class WorkspaceRuntimeBackend implements ProjectRuntimeBackend {
     };
     return {
       ...env,
+      BASE_PATH: basePath,
       COCALC_EXTRA_ENV: Buffer.from(JSON.stringify(extra)).toString("base64"),
       COCALC_PROJECT_ID: project_id,
+      COCALC_PROJECT_FS: "local",
       COCALC_PROXY_HOST: "127.0.0.1",
       COCALC_PROXY_PORT: `${httpPort}`,
+      COCALC_SECRET_TOKEN: secretTokenPath(home),
+      COCALC_USERNAME: identity.username,
       CONAT_SERVER: this.conatServer,
       DATA: data,
       DEBUG: process.env.COCALC_PROJECT_DEBUG ?? "",
@@ -1052,10 +1059,7 @@ export class WorkspaceRuntimeBackend implements ProjectRuntimeBackend {
     await this.writeJsonAtomic(this.recordPath(record.project_id), record);
   }
 
-  private async writeJsonAtomic(
-    path: string,
-    value: unknown,
-  ): Promise<void> {
+  private async writeJsonAtomic(path: string, value: unknown): Promise<void> {
     const temporary = join(
       dirname(path),
       `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`,

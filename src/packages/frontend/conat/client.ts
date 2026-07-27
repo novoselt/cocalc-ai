@@ -104,6 +104,7 @@ import {
   isViewerProjectRole,
 } from "@cocalc/frontend/project/realtime-access";
 import { isPublicDirectoryShareHost } from "@cocalc/frontend/projects/host-info";
+import { usesHubProjectRuntime } from "@cocalc/frontend/project/runtime-capabilities";
 
 export interface ConatConnectionStatus {
   state: "connected" | "connecting" | "disconnected";
@@ -1282,7 +1283,7 @@ export class ConatClient extends EventEmitter {
   private getProjectRoutingInfo(
     project_id: string,
   ): HostRoutingInfo | undefined {
-    if (lite) {
+    if (lite || usesHubProjectRuntime()) {
       return;
     }
     const publicShareRouting =
@@ -1320,7 +1321,7 @@ export class ConatClient extends EventEmitter {
   }
 
   private getProjectHostId(project_id: string): string | undefined {
-    if (lite) {
+    if (lite || usesHubProjectRuntime()) {
       return;
     }
     const project_map = redux.getStore("projects")?.get("project_map");
@@ -1344,7 +1345,7 @@ export class ConatClient extends EventEmitter {
   private ensureProjectRoutingInfo = async (
     project_id: string,
   ): Promise<HostRoutingInfo | undefined> => {
-    if (lite) {
+    if (lite || usesHubProjectRuntime()) {
       return;
     }
     const project_map = redux.getStore("projects")?.get("project_map");
@@ -3133,7 +3134,7 @@ export class ConatClient extends EventEmitter {
     if (!isValidUUID(project_id)) {
       throw Error(`project_id = '${project_id}' must be a valid uuid`);
     }
-    if (lite) {
+    if (lite || usesHubProjectRuntime()) {
       return this.conat();
     }
     const routing = await this.ensureProjectRoutingInfo(project_id);
@@ -3171,7 +3172,7 @@ export class ConatClient extends EventEmitter {
     if (!isValidUUID(project_id)) {
       throw Error(`project_id = '${project_id}' must be a valid uuid`);
     }
-    if (lite) {
+    if (lite || usesHubProjectRuntime()) {
       return this.conat();
     }
     const routing = this.getProjectRoutingInfo(project_id);
@@ -3216,6 +3217,7 @@ export class ConatClient extends EventEmitter {
     const subject = `hub.account.${account_id}.${service}`;
     const routeToProjectHost =
       !lite &&
+      !usesHubProjectRuntime() &&
       !!project_id &&
       PROJECT_HOST_ROUTED_HUB_METHODS.has(name) &&
       isValidUUID(project_id);
@@ -3322,7 +3324,7 @@ export class ConatClient extends EventEmitter {
     if (!isValidUUID(project_id)) {
       throw Error(`project_id='${project_id}' must be a valid uuid`);
     }
-    if (lite) {
+    if (lite || usesHubProjectRuntime()) {
       try {
         const { bytes, count } = await this.conat().publish(subject, mesg, {
           timeout,

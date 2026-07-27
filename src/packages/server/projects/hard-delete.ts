@@ -200,10 +200,10 @@ async function ensureDeletedProjectsSchema(): Promise<void> {
         "CREATE INDEX IF NOT EXISTS deleted_projects_deleted_by_idx ON deleted_projects(deleted_by)",
       );
       await pool().query(
-        "CREATE INDEX IF NOT EXISTS deleted_projects_owner_idx ON deleted_projects(owner_account_id)",
+        "CREATE INDEX IF NOT EXISTS deleted_projects_owner_account_id_idx ON deleted_projects(owner_account_id)",
       );
       await pool().query(
-        "CREATE INDEX IF NOT EXISTS deleted_projects_backup_due_idx ON deleted_projects(backup_purge_due_at)",
+        "CREATE INDEX IF NOT EXISTS deleted_projects_backup_purge_due_at_idx ON deleted_projects(backup_purge_due_at)",
       );
     })().catch((err) => {
       deletedProjectsSchemaReady = undefined;

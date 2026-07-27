@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import basePath from "@cocalc/backend/base-path";
 import getPort from "@cocalc/backend/get-port";
 import { Client as ConatClient } from "@cocalc/conat/core/client";
 import {
@@ -121,6 +122,31 @@ describe("workspace runtime backend", () => {
       expect(a).toMatchObject({ state: "running", ssh_port: 0 });
       expect(b).toMatchObject({ state: "running", ssh_port: 0 });
       expect(a.http_port).not.toBe(b.http_port);
+      for (const project_id of [PROJECT_A, PROJECT_B]) {
+        const record: WorkspaceRuntimeRecord = JSON.parse(
+          await readFile(
+            join(root, "runtime", "projects", `${project_id}.json`),
+            "utf8",
+          ),
+        );
+        const environ = (
+          await readFile(`/proc/${record.pid}/environ`, "utf8")
+        ).split("\0");
+        expect(environ).toContain(
+          `COCALC_SECRET_TOKEN=${join(
+            root,
+            "projects",
+            project_id,
+            ".cache",
+            "cocalc",
+            "project",
+            "secret-token",
+          )}`,
+        );
+        expect(environ).toContain(`COCALC_USERNAME=${process.env.USER}`);
+        expect(environ).toContain(`BASE_PATH=${basePath}`);
+        expect(environ).toContain("COCALC_PROJECT_FS=local");
+      }
 
       const second = new WorkspaceRuntimeBackend({
         ...options,

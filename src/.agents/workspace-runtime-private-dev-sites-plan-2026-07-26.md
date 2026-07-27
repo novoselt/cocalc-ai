@@ -966,8 +966,21 @@ Result (2026-07-26):
 - The existing RootFS runtime-user/image contract remains intact alongside the
   new capability contract. Focused runtime, configuration, CLI, package
   typechecks, frontend lint, and the complete CLI test suite pass.
-- Activating `COCALC_PROJECT_RUNTIME=workspace` and browser/SSH-forward smoke
-  testing are deliberately left to the following configuration step.
+- Manual activation on 2026-07-27 found and closed the remaining hostless data
+  path assumption. Workspace browsers now use the site's authenticated Conat
+  connection instead of project-host routing, and workspace project processes
+  explicitly start the existing project-local filesystem service. File listing,
+  file reads, terminal RPC, and notebook import/save all pass through a
+  loopback-only Launchpad reached as an SSH-forwarded site.
+- Workspace child startup now provides the project secret, username, and root
+  base path before module initialization, then restores the complete sanitized
+  environment after project startup cleanup. This avoids both early Conat
+  authentication failure and project-style cookie names on the root-hosted
+  Launchpad site.
+- Repeated startup against the same PGlite database also exposed schema-sync
+  assumptions that only hold for PostgreSQL. PGlite now uses non-concurrent
+  conditional index replacement, and the deleted-project indexes use their
+  canonical names, so an isolated workspace site restarts cleanly.
 
 Expected effort: 1 to 2 focused engineering days.
 
