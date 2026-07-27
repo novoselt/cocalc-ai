@@ -478,7 +478,13 @@ export class SyncFsService extends EventEmitter {
     const entry = this.watchers.get(dir);
     if (!entry) return;
     entry.stopTrackingWatcher?.();
-    entry.watcher.close();
+    const close = entry.watcher.close();
+    // Chokidar removes every listener synchronously in close(), but filesystem
+    // work already queued by its NodeFsHandler can still emit an error. Keep a
+    // terminal sink on the closed watcher so that a late error cannot become an
+    // uncaught EventEmitter "error" and terminate the project-host process.
+    entry.watcher.on("error", () => undefined);
+    void close.catch((err) => this.emit("error", err));
     this.watchers.delete(dir);
     this.counters.watcherStops += 1;
     if (process.env.SYNC_FS_DEBUG) {
@@ -1108,6 +1114,8 @@ export class SyncFsService extends EventEmitter {
       const watcher = chokidarWatch(dir, {
         depth: 0,
         ignoreInitial: true,
+        followSymlinks: false,
+        ignorePermissionErrors: true,
         awaitWriteFinish: {
           stabilityThreshold: 200,
           pollInterval: 100,
