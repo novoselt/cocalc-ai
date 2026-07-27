@@ -968,10 +968,12 @@ Result (2026-07-26):
   typechecks, frontend lint, and the complete CLI test suite pass.
 - Manual activation on 2026-07-27 found and closed the remaining hostless data
   path assumption. Workspace browsers now use the site's authenticated Conat
-  connection instead of project-host routing, and workspace project processes
-  explicitly start the existing project-local filesystem service. File listing,
-  file reads, terminal RPC, and notebook import/save all pass through a
-  loopback-only Launchpad reached as an SSH-forwarded site.
+  connection instead of project-host routing. An always-on, safe-mode
+  filesystem service in Launchpad serves each workspace root independently,
+  including while its compute process is stopped; `/home/user` is an explicit
+  virtual alias for that root. File listing, file reads, terminal RPC, and
+  notebook import/save all pass through a loopback-only Launchpad reached as an
+  SSH-forwarded site.
 - Workspace child startup now provides the project secret, username, and root
   base path before module initialization, then restores the complete sanitized
   environment after project startup cleanup. This avoids both early Conat

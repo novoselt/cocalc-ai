@@ -10,14 +10,22 @@ import { init as initProjectRunner } from "@cocalc/project-runner/run";
 import { loadConatConfiguration } from "../configuration";
 import { conat } from "@cocalc/backend/conat";
 import getLogger from "@cocalc/backend/logger";
+import { isWorkspaceProjectRuntime } from "@cocalc/project-runner/runtime-mode";
+import { startWorkspaceFilesystem } from "./workspace-filesystem";
 
 const logger = getLogger("server:conat:project:run");
 
 const servers: any[] = [];
+let workspaceFilesystem: Awaited<
+  ReturnType<typeof startWorkspaceFilesystem>
+> | null = null;
 export async function init(count: number = 1) {
   logger.debug("init project runner(s)", { count });
   await loadConatConfiguration();
   const client = conat();
+  if (isWorkspaceProjectRuntime() && workspaceFilesystem == null) {
+    workspaceFilesystem = await startWorkspaceFilesystem({ client });
+  }
   for (let i = 0; i < count; i++) {
     const server = await initProjectRunner({ client, id: `${i}` });
     servers.push(server);
@@ -29,4 +37,6 @@ export function close() {
     void server.close();
   }
   servers.length = 0;
+  workspaceFilesystem?.close();
+  workspaceFilesystem = null;
 }

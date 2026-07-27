@@ -145,7 +145,7 @@ describe("workspace runtime backend", () => {
         );
         expect(environ).toContain(`COCALC_USERNAME=${process.env.USER}`);
         expect(environ).toContain(`BASE_PATH=${basePath}`);
-        expect(environ).toContain("COCALC_PROJECT_FS=local");
+        expect(environ).not.toContain("COCALC_PROJECT_FS=");
       }
 
       const second = new WorkspaceRuntimeBackend({

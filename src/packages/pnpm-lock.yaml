@@ -1604,6 +1604,9 @@ importers:
       '@cocalc/gcloud-pricing-calculator':
         specifier: ^1.17.0
         version: 1.17.0
+      '@cocalc/jupyter':
+        specifier: workspace:*
+        version: link:../jupyter
       '@cocalc/project-runner':
         specifier: workspace:*
         version: link:../project-runner
