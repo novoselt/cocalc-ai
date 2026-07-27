@@ -741,6 +741,28 @@ export function buildPrivateHostnameBootstrapUrl(
   return parsed.toString();
 }
 
+export function buildPrivateHostnameBrowserHandoffUrl({
+  appId,
+  browserOrigin,
+  projectId,
+}: {
+  appId: string;
+  browserOrigin?: string;
+  projectId: string;
+}): string {
+  const origin = `${browserOrigin ?? ""}`.trim();
+  if (!origin) {
+    throw new Error(
+      "the private-hostname policy did not provide a public browser origin",
+    );
+  }
+  const url = new URL(origin);
+  url.pathname = `/projects/${projectId}/private-app/${encodeURIComponent(appId)}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
 export function registerProjectAppCommands(
   project: Command,
   deps: ProjectCommandDeps,
@@ -760,6 +782,22 @@ export function registerProjectAppCommands(
   const app = project
     .command("app")
     .description("project app server specs and lifecycle");
+
+  async function resolvePrivateHostnameProject(
+    ctx: any,
+    projectIdentifier?: string,
+  ) {
+    const requested = `${projectIdentifier ?? ""}`.trim();
+    const current = `${ctx.remote?.user?.project_id ?? ""}`.trim();
+    if (current && (!requested || requested === current)) {
+      return {
+        project_id: current,
+        title: current,
+        host_id: null,
+      };
+    }
+    return await resolveProjectFromArgOrContext(ctx, projectIdentifier);
+  }
 
   app
     .command("list")
@@ -1651,7 +1689,7 @@ export function registerProjectAppCommands(
         command,
         "project app private-hostname policy",
         async (ctx) => {
-          const ws = await resolveProjectFromArgOrContext(ctx, opts.project);
+          const ws = await resolvePrivateHostnameProject(ctx, opts.project);
           const policy =
             await ctx.hub.system.getProjectAppPrivateHostnamePolicy({
               project_id: ws.project_id,
@@ -1673,7 +1711,7 @@ export function registerProjectAppCommands(
         command,
         "project app private-hostname list",
         async (ctx) => {
-          const ws = await resolveProjectFromArgOrContext(ctx, opts.project);
+          const ws = await resolvePrivateHostnameProject(ctx, opts.project);
           const items = await ctx.hub.system.listProjectAppPrivateHostnames({
             project_id: ws.project_id,
           });
@@ -1755,7 +1793,7 @@ export function registerProjectAppCommands(
           command,
           "project app private-hostname release",
           async (ctx) => {
-            const ws = await resolveProjectFromArgOrContext(ctx, opts.project);
+            const ws = await resolvePrivateHostnameProject(ctx, opts.project);
             const result =
               await ctx.hub.system.releaseProjectAppPrivateHostname({
                 project_id: ws.project_id,
@@ -1809,6 +1847,26 @@ export function registerProjectAppCommands(
               throw new Error(
                 `app '${appId}' has no private hostname; run private-hostname reserve first`,
               );
+            }
+            if (
+              `${ctx.remote?.user?.project_id ?? ""}`.trim() === ws.project_id
+            ) {
+              const policy =
+                await ctx.hub.system.getProjectAppPrivateHostnamePolicy({
+                  project_id: ws.project_id,
+                });
+              return {
+                project_id: ws.project_id,
+                app_id: appId,
+                url: hostname.url,
+                bootstrap_url: buildPrivateHostnameBrowserHandoffUrl({
+                  appId,
+                  browserOrigin: policy.browser_origin,
+                  projectId: ws.project_id,
+                }),
+                bootstrap_expires_at: null,
+                note: "Open bootstrap_url while signed in to CoCalc. The browser verifies collaborator access, issues its own short-lived project-host token, and redirects to the private hostname.",
+              };
             }
             const host_id = `${ws.host_id ?? ""}`.trim();
             if (!host_id) {

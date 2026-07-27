@@ -122,6 +122,29 @@ export async function getProjectAppOpenUrl({
   });
 }
 
+export async function getPrivateProjectAppOpenUrl({
+  app_id,
+  project_id,
+}: {
+  app_id: string;
+  project_id: string;
+}): Promise<string> {
+  const hostname =
+    await webapp_client.conat_client.hub.system.inspectProjectAppPrivateHostname(
+      {
+        project_id,
+        app_id,
+      },
+    );
+  if (!hostname?.url) {
+    throw new Error(`Private hostname for app '${app_id}' is not reserved.`);
+  }
+  return await webapp_client.conat_client.addProjectHostAuthToUrl({
+    project_id,
+    url: hostname.url,
+  });
+}
+
 export async function openProjectAppStatus(opts: {
   getSpec?: (id: string) => Promise<AppSpec>;
   project_id: string;

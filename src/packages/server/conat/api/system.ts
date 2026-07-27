@@ -6891,33 +6891,39 @@ export async function releaseProjectAppPublicSubdomain({
 
 export async function getProjectAppPrivateHostnamePolicy({
   account_id,
+  host_id,
   project_id,
 }: {
   account_id?: string;
+  host_id?: string;
   project_id: string;
 }) {
-  if (!account_id) throw new Error("must be signed in");
   const resolvedProjectId = await resolveProjectContext({
     account_id,
+    host_id,
     project_id,
   });
+  if (!account_id && !host_id) throw new Error("must be signed in");
   return await getProjectAppPrivateHostnamePolicyRaw(resolvedProjectId);
 }
 
 export async function inspectProjectAppPrivateHostname({
   account_id,
+  host_id,
   project_id,
   app_id,
 }: {
   account_id?: string;
+  host_id?: string;
   project_id: string;
   app_id: string;
 }) {
-  if (!account_id) throw new Error("must be signed in");
   const resolvedProjectId = await resolveProjectContext({
     account_id,
+    host_id,
     project_id,
   });
+  if (!account_id && !host_id) throw new Error("must be signed in");
   return await inspectProjectAppPrivateHostnameRaw({
     project_id: resolvedProjectId,
     app_id,
@@ -6926,16 +6932,19 @@ export async function inspectProjectAppPrivateHostname({
 
 export async function listProjectAppPrivateHostnames({
   account_id,
+  host_id,
   project_id,
 }: {
   account_id?: string;
+  host_id?: string;
   project_id: string;
 }) {
-  if (!account_id) throw new Error("must be signed in");
   const resolvedProjectId = await resolveProjectContext({
     account_id,
+    host_id,
     project_id,
   });
+  if (!account_id && !host_id) throw new Error("must be signed in");
   return await listProjectAppPrivateHostnamesRaw({
     project_id: resolvedProjectId,
   });
@@ -6979,27 +6988,46 @@ export async function tracePrivateAppHostname({
 
 export async function reserveProjectAppPrivateHostname({
   account_id,
+  host_id,
   project_id,
   app_id,
 }: {
   account_id?: string;
+  host_id?: string;
   project_id: string;
   app_id: string;
 }) {
-  if (!account_id) throw new Error("must be signed in");
   const resolvedProjectId = await resolveProjectContext({
     account_id,
+    host_id,
     project_id,
   });
-  await assertProjectOwnerOrAdmin(account_id, resolvedProjectId);
-  await assertAccountTrustedForProductAccess(
-    account_id,
-    "create private project app hostnames",
-  );
+  let createdBy = account_id;
+  if (account_id) {
+    await assertProjectOwnerOrAdmin(account_id, resolvedProjectId);
+    await assertAccountTrustedForProductAccess(
+      account_id,
+      "create private project app hostnames",
+    );
+  } else if (host_id) {
+    const owners = await getProjectOwnerAccountIds(resolvedProjectId);
+    if (owners.length === 0) {
+      throw new Error("project has no owner account");
+    }
+    for (const owner of owners) {
+      await assertAccountTrustedForProductAccess(
+        owner,
+        "create private project app hostnames",
+      );
+    }
+    createdBy = owners[0];
+  } else {
+    throw new Error("must be signed in");
+  }
   return await reserveProjectAppPrivateHostnameRaw({
     project_id: resolvedProjectId,
     app_id,
-    created_by: account_id,
+    created_by: createdBy!,
   });
 }
 

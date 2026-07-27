@@ -1041,6 +1041,7 @@ export interface ReserveProjectAppPublicSubdomainResult {
 
 export interface ProjectAppPrivateHostnamePolicy {
   enabled: boolean;
+  browser_origin?: string;
   site_hostname?: string;
   host_hostname?: string;
   dns_target?: string;
@@ -2885,17 +2886,20 @@ export interface System {
 
   getProjectAppPrivateHostnamePolicy: (opts: {
     account_id?: string;
+    host_id?: string;
     project_id: string;
   }) => Promise<ProjectAppPrivateHostnamePolicy>;
 
   inspectProjectAppPrivateHostname: (opts: {
     account_id?: string;
+    host_id?: string;
     project_id: string;
     app_id: string;
   }) => Promise<ProjectAppPrivateHostnameRecord | undefined>;
 
   listProjectAppPrivateHostnames: (opts: {
     account_id?: string;
+    host_id?: string;
     project_id: string;
   }) => Promise<ProjectAppPrivateHostnameRecord[]>;
 
@@ -2907,12 +2911,14 @@ export interface System {
 
   reserveProjectAppPrivateHostname: (opts: {
     account_id?: string;
+    host_id?: string;
     project_id: string;
     app_id: string;
   }) => Promise<ProjectAppPrivateHostnameRecord>;
 
   releaseProjectAppPrivateHostname: (opts: {
     account_id?: string;
+    host_id?: string;
     project_id: string;
     app_id: string;
   }) => Promise<{ released: boolean }>;

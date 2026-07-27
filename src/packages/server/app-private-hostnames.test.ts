@@ -315,6 +315,12 @@ describe("private app hostnames", () => {
     });
 
     expect(reserved.hostname).toMatch(/^dev-[0-9a-f]{16}\.cocalc\.dev$/);
+    await expect(
+      getProjectAppPrivateHostnamePolicy(PROJECT_ID),
+    ).resolves.toMatchObject({
+      browser_origin: "https://staging.cocalc.ai",
+      site_hostname: "cocalc.dev",
+    });
   });
 
   it("bounds DNS allocations per project", async () => {

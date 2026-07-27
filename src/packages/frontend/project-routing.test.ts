@@ -103,5 +103,13 @@ describe("project-routing", () => {
       kind: "app",
       path: "jupyter/lab",
     });
+    expect(
+      parseProjectTarget("private-app/cocalc-dev-main", {
+        decodeDirectoryPath,
+      }),
+    ).toEqual({
+      kind: "private-app",
+      appId: "cocalc-dev-main",
+    });
   });
 });

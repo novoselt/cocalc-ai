@@ -48,16 +48,17 @@ pnpm -C src dev:workspace:hostname --name main --reserve
 pnpm -C src dev:workspace:open --name main
 ```
 
-`open` prints a short-lived bootstrap URL. Opening it once establishes the
-project-host session cookie and removes the token from the browser URL.
-Reserving, opening, and releasing hostnames require owner/admin account CLI
-authentication. They do not require Cloudflare credentials in the developer
-project.
+`open` prints a browser handoff URL. Open it while signed in to the outer CoCalc
+site. The browser verifies collaborator access, issues its own short-lived
+project-host token, redirects to the private hostname, and removes the token
+from the browser URL. Project-scoped credentials may inspect, reserve, and
+release hostnames only for their own project. No account session or Cloudflare
+credential is stored in the developer project.
 
 As of July 27, 2026, private random app hostnames are enabled on staging and
 disabled on production. Test this flow from a source checkout in a staging
-project, with an authenticated staging CLI profile. The ordinary managed app
-URL and SSH-forward flow remain available without enabling random hostnames.
+project. The ordinary managed app URL and SSH-forward flow remain available
+without enabling random hostnames.
 
 Useful lifecycle commands:
 
@@ -105,10 +106,9 @@ For local sites initialized by an older version of this command, `--reserve`
 attaches the existing site to the ambient `COCALC_PROJECT_ID` in place. Its
 ports, data, inner projects, and accounts are preserved. Outside a CoCalc
 project, pass `--project <outer-project-id>` explicitly. Private-hostname
-operations use the current account CLI profile rather than a project-internal
-API hostname. Inside a CoCalc project, the command selects a unique CLI profile
-whose account matches `COCALC_ACCOUNT_ID`; otherwise it uses the selected
-profile. Pass `--profile staging` to resolve ambiguity explicitly.
+operations use the narrow project-scoped API when the target is the current
+project. Outside that project, they use the selected account CLI profile; pass
+`--profile staging` to resolve ambiguity explicitly.
 
 Parallel Git worktrees must use distinct names:
 

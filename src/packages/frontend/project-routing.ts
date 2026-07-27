@@ -20,7 +20,8 @@ export type ParsedProjectTarget =
   | { kind: "new"; path: string }
   | { kind: "search"; path: string }
   | { kind: "tab"; tab: ProjectFixedRouteTab }
-  | { kind: "app"; path: string };
+  | { kind: "app"; path: string }
+  | { kind: "private-app"; appId: string };
 
 type PathEncoder = {
   encodeRelativePath: (path: string) => string;
@@ -136,6 +137,16 @@ export function parseProjectTarget(
         kind: "app",
         path: segments.slice(1).join("/"),
       };
+
+    case "private-app": {
+      const encoded = segments.slice(1).join("/");
+      if (!encoded) return undefined;
+      try {
+        return { kind: "private-app", appId: decodeURIComponent(encoded) };
+      } catch {
+        return undefined;
+      }
+    }
 
     default:
       return undefined;

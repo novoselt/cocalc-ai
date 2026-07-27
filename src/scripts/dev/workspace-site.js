@@ -608,6 +608,10 @@ function privateHostnamePolicy(config) {
       }`,
     );
   }
+  if (!config.site_url && policy.browser_origin) {
+    config.site_url = policy.browser_origin;
+    saveConfig(config);
+  }
   return policy;
 }
 

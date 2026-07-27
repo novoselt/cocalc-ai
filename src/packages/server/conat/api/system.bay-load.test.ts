@@ -23,6 +23,7 @@ let reserveProjectAppPublicSubdomainMock: jest.Mock;
 let assertProjectCollaboratorAccessAllowRemoteMock: jest.Mock;
 let getPrivateAppRouteByHostnameMock: jest.Mock;
 let reserveProjectAppPrivateHostnameMock: jest.Mock;
+let getAssignedProjectHostInfoMock: jest.Mock;
 
 jest.mock("@cocalc/backend/logger", () => ({
   __esModule: true,
@@ -177,6 +178,11 @@ jest.mock("@cocalc/server/app-public-subdomains", () => ({
 jest.mock("@cocalc/server/conat/project-remote-access", () => ({
   assertProjectCollaboratorAccessAllowRemote: (...args: any[]) =>
     assertProjectCollaboratorAccessAllowRemoteMock(...args),
+}));
+
+jest.mock("@cocalc/server/conat/project-host-assignment", () => ({
+  getAssignedProjectHostInfo: (...args: any[]) =>
+    getAssignedProjectHostInfoMock(...args),
 }));
 
 jest.mock("@cocalc/server/app-private-hostnames", () => ({
@@ -799,6 +805,9 @@ describe("project public sharing product-access gate", () => {
     );
     getPrivateAppRouteByHostnameMock = jest.fn();
     reserveProjectAppPrivateHostnameMock = jest.fn();
+    getAssignedProjectHostInfoMock = jest.fn(async () => ({
+      host_id: "00000000-1000-4000-8000-000000000099",
+    }));
     reserveProjectAppPublicSubdomainMock = jest.fn(async () => ({
       hostname: "host.example.com",
       label: "demo",
@@ -880,6 +889,9 @@ describe("private project app hostname authorization", () => {
       app_id: "workspace-dev",
       hostname: "dev-1234.cocalc.ai",
     }));
+    getAssignedProjectHostInfoMock = jest.fn(async () => ({
+      host_id: "00000000-1000-4000-8000-000000000099",
+    }));
   });
 
   it("allows a project owner to reserve a private hostname", async () => {
@@ -910,6 +922,30 @@ describe("private project app hostname authorization", () => {
       OWNER_ID,
       "create private project app hostnames",
     );
+  });
+
+  it("allows the assigned host to reserve for its project after checking owners", async () => {
+    const { reserveProjectAppPrivateHostname } = await import("./system");
+
+    await expect(
+      reserveProjectAppPrivateHostname({
+        host_id: "00000000-1000-4000-8000-000000000099",
+        project_id: PROJECT_ID,
+        app_id: "workspace-dev",
+      }),
+    ).resolves.toMatchObject({
+      hostname: "dev-1234.cocalc.ai",
+    });
+
+    expect(assertAccountTrustedForProductAccessMock).toHaveBeenCalledWith(
+      OWNER_ID,
+      "create private project app hostnames",
+    );
+    expect(reserveProjectAppPrivateHostnameMock).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+      app_id: "workspace-dev",
+      created_by: OWNER_ID,
+    });
   });
 
   it("denies a collaborator who is not an owner or administrator", async () => {

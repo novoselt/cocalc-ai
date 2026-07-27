@@ -38,6 +38,7 @@ export interface PrivateAppRouteTarget {
 
 export interface ProjectAppPrivateHostnamePolicy {
   enabled: boolean;
+  browser_origin?: string;
   site_hostname?: string;
   host_hostname?: string;
   dns_target?: string;
@@ -148,6 +149,14 @@ async function getSiteHostname(): Promise<string | undefined> {
   }
 }
 
+async function getBrowserOrigin(): Promise<string | undefined> {
+  try {
+    return new URL(await siteUrl()).origin;
+  } catch {
+    return;
+  }
+}
+
 interface ProjectHostPublicRoute {
   host_id: string;
   hostname: string;
@@ -199,6 +208,7 @@ export async function getProjectAppPrivateHostnamePolicy(
   const warnings: string[] = [];
   const enabledBySetting = await privateHostnamesEnabled();
   const dnsConfigured = await hasDns();
+  const browser_origin = await getBrowserOrigin();
   const site_hostname = await getSiteHostname();
   const host_hostname = (await getProjectHostPublicRoute(project_id))?.hostname;
 
@@ -231,6 +241,7 @@ export async function getProjectAppPrivateHostnamePolicy(
       !!site_hostname &&
       !!host_hostname &&
       !!dns_target,
+    browser_origin,
     site_hostname,
     host_hostname,
     dns_target,

@@ -2,6 +2,16 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
     conat_client: {
       addProjectHostAuthToUrl: jest.fn(async ({ url }) => url),
+      hub: {
+        system: {
+          inspectProjectAppPrivateHostname: jest.fn(
+            async ({ app_id }: { app_id: string }) =>
+              app_id === "cocalc-dev-main"
+                ? { url: "https://dev-example.cocalc.ai" }
+                : undefined,
+          ),
+        },
+      },
     },
   },
 }));
@@ -12,7 +22,10 @@ jest.mock("./host-url", () => ({
 }));
 
 import type { AppSpec, ManagedAppStatus } from "@cocalc/conat/project/api/apps";
-import { getProjectAppOpenUrl } from "./app-server-open";
+import {
+  getPrivateProjectAppOpenUrl,
+  getProjectAppOpenUrl,
+} from "./app-server-open";
 
 describe("getProjectAppOpenUrl", () => {
   it("opens port-mode service apps at the translated port URL", async () => {
@@ -116,5 +129,25 @@ describe("getProjectAppOpenUrl", () => {
         status,
       }),
     ).resolves.toBe("https://host.example/project-1/proxy/6006/");
+  });
+});
+
+describe("getPrivateProjectAppOpenUrl", () => {
+  it("adds current collaborator authentication to the private hostname", async () => {
+    await expect(
+      getPrivateProjectAppOpenUrl({
+        project_id: "project-1",
+        app_id: "cocalc-dev-main",
+      }),
+    ).resolves.toBe("https://dev-example.cocalc.ai");
+  });
+
+  it("rejects an app without a reserved private hostname", async () => {
+    await expect(
+      getPrivateProjectAppOpenUrl({
+        project_id: "project-1",
+        app_id: "missing",
+      }),
+    ).rejects.toThrow("is not reserved");
   });
 });
