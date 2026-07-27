@@ -1,5 +1,19 @@
 #!/usr/bin/env node
 
+const privateLibDir = process.env.COCALC_CLI_PRIVATE_LIB_DIR;
+if (privateLibDir) {
+  const remainingLibraryPath = `${process.env.LD_LIBRARY_PATH ?? ""}`
+    .split(":")
+    .filter((path) => path && path !== privateLibDir)
+    .join(":");
+  if (remainingLibraryPath) {
+    process.env.LD_LIBRARY_PATH = remainingLibraryPath;
+  } else {
+    delete process.env.LD_LIBRARY_PATH;
+  }
+  delete process.env.COCALC_CLI_PRIVATE_LIB_DIR;
+}
+
 const cliVerboseFlag = process.argv.includes("--verbose");
 const cliDebugEnabled =
   cliVerboseFlag ||

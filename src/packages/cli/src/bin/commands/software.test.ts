@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -207,7 +209,9 @@ function makeDeps({
           "cli",
           "build",
           "sea",
-          `cocalc-cli-${artifactId}-${machine}-${os}`,
+          `cocalc-cli-${artifactId}-${machine}-${os}${
+            os === "linux" ? ".tar.gz" : ""
+          }`,
         );
       } else if (
         command === "pnpm" &&
@@ -886,7 +890,9 @@ test("software build cli uses the software artifact id as the SEA version", asyn
   const program = createProgram(makeDeps({ localStore, runs, cwd: dir }));
   const artifactId = "20260614T235912Z-e882d124-cli-test";
   const { machine, os } = testSeaSuffix();
-  const artifactName = `cocalc-cli-${artifactId}-${machine}-${os}`;
+  const artifactName = `cocalc-cli-${artifactId}-${machine}-${os}${
+    os === "linux" ? ".tar.gz" : ""
+  }`;
 
   await program.parseAsync([
     "node",
@@ -4339,6 +4345,113 @@ test("software smoke cli validates public release channel artifact", async () =>
 
   assert.deepEqual(fetched, [manifestUrl, artifactUrl]);
   assert.equal(versionRun.args[0], "--version");
+});
+
+test("software smoke cli extracts a runtime bundle with private libraries", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-smoke-cli-bundle-"));
+  const artifactId = "20260727T000000Z-abcdef12-cli";
+  const fixtureDir = join(dir, "fixture");
+  const executable = join(fixtureDir, "cocalc");
+  const privateLib = join(fixtureDir, "lib", "libatomic.so.1");
+  const artifactPath = join(dir, "cocalc-cli-runtime.tar.gz");
+  mkdirSync(join(fixtureDir, "lib"), { recursive: true });
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env bash
+set -Eeuo pipefail
+libdir="\${LD_LIBRARY_PATH%%:*}"
+test -f "\$libdir/libatomic.so.1"
+echo "${artifactId}"
+`,
+  );
+  chmodSync(executable, 0o755);
+  writeFileSync(privateLib, "fixture libatomic\n");
+  const packed = spawnSync(
+    "tar",
+    ["-czf", artifactPath, "-C", fixtureDir, "cocalc", "lib/libatomic.so.1"],
+    { encoding: "utf8" },
+  );
+  assert.equal(packed.status, 0, packed.stderr);
+
+  const artifact = readFileSync(artifactPath);
+  const artifactSha256 = createHash("sha256").update(artifact).digest("hex");
+  const os = process.platform === "darwin" ? "darwin" : "linux";
+  const arch = process.arch === "arm64" ? "arm64" : "amd64";
+  const manifestUrl = `https://software.example.test/software/cocalc/candidate-${os}-${arch}.json`;
+  const artifactUrl =
+    "https://software.example.test/software/artifacts/cli/runtime.tar.gz";
+  const deps = makeDeps({
+    localStore: join(dir, "store"),
+    env: {
+      COCALC_SOFTWARE_PUBLIC_BASE_URL: "https://software.example.test",
+    },
+    fetch: async (input) => {
+      const url = `${input}`;
+      if (url === manifestUrl) {
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () =>
+            arrayBufferForBuffer(
+              Buffer.from(
+                JSON.stringify({
+                  schema: "cocalc-software-release-channel-v1",
+                  product: "cocalc",
+                  component: "cli",
+                  channel: "candidate",
+                  artifact_id: artifactId,
+                  tag: "cli",
+                  created_at: "2026-07-27T00:00:00.000Z",
+                  published_at: "2026-07-27T00:00:00.000Z",
+                  git: {
+                    commit: "abcdef123456",
+                    short: "abcdef12",
+                    dirty: false,
+                  },
+                  os,
+                  arch,
+                  filename: "cocalc-cli-runtime.tar.gz",
+                  size_bytes: artifact.length,
+                  sha256: artifactSha256,
+                  url: artifactUrl,
+                  version: artifactId,
+                }),
+              ),
+            ),
+        } as Response;
+      }
+      if (url === artifactUrl) {
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => arrayBufferForBuffer(artifact),
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    },
+  });
+  deps.runCommandOutput = async (command, args, options) => {
+    const result = spawnSync(command, args, {
+      encoding: "utf8",
+      env: options?.env,
+    });
+    return {
+      code: result.status ?? 1,
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+    };
+  };
+  const program = createProgram(deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "--quiet",
+    "software",
+    "smoke",
+    "cli",
+    "candidate",
+  ]);
 });
 
 test("software smoke gives release downloads a size-aware timeout", async () => {
