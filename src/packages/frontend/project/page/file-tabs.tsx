@@ -77,11 +77,12 @@ function Label({ path, project_id, label, onClose }) {
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          onClose(path);
         }}
         onPointerDown={(event) => {
+          if (event.button !== 0) return;
           event.preventDefault();
           event.stopPropagation();
+          onClose(path);
         }}
         style={{ cursor: "pointer", flex: "0 0 auto" }}
         title={`Close ${path}`}
