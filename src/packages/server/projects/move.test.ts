@@ -2193,6 +2193,7 @@ describe("moveProjectToHost", () => {
       scope_id: PROJECT_ID,
       status: "running",
     });
+    let cancellationObserved = false;
 
     try {
       const { MOVE_CANCELED_CODE, moveProjectToHost } = await import("./move");
@@ -2205,7 +2206,19 @@ describe("moveProjectToHost", () => {
           },
           {
             op_id: "move-op-cancel-start-dest",
-            shouldCancel: async () => cancelNow,
+            shouldCancel: async () => {
+              if (cancelNow && !cancellationObserved) {
+                cancellationObserved = true;
+                lroSummaryByOpId.set("start-op-parent-cancel", {
+                  op_id: "start-op-parent-cancel",
+                  scope_type: "project",
+                  scope_id: PROJECT_ID,
+                  status: "succeeded",
+                  result: {},
+                });
+              }
+              return cancelNow;
+            },
           },
         ),
       ).rejects.toMatchObject({
@@ -2216,11 +2229,13 @@ describe("moveProjectToHost", () => {
       delete process.env.COCALC_MOVE_CHILD_LRO_POLL_INTERVAL_MS;
     }
 
-    expect(updateLroMock).toHaveBeenCalledWith({
-      op_id: "start-op-parent-cancel",
-      status: "canceled",
-      error: "parent move canceled during start-dest",
-    });
+    expect(cancellationObserved).toBe(true);
+    expect(updateLroMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        op_id: "start-op-parent-cancel",
+        status: "canceled",
+      }),
+    );
     expect(savePlacementMock).toHaveBeenNthCalledWith(1, PROJECT_ID, {
       host_id: DEST_HOST_ID,
     });

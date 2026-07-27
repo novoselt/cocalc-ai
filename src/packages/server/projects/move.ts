@@ -1010,6 +1010,7 @@ async function waitForChildLroCompletion({
   onSummary,
   shouldCancel,
   cancelStage,
+  deferParentCancelUntilChildFinishes = false,
 }: {
   op_id: string;
   scope_type: "project" | "account" | "host" | "hub";
@@ -1019,6 +1020,7 @@ async function waitForChildLroCompletion({
   onSummary?: (summary: LroSummary) => void;
   shouldCancel?: () => Promise<boolean>;
   cancelStage?: string;
+  deferParentCancelUntilChildFinishes?: boolean;
 }): Promise<LroSummary> {
   const stream = await openChildLroStreamWithTimeout({
     op_id,
@@ -1028,6 +1030,7 @@ async function waitForChildLroCompletion({
 
   let done = false;
   let lastIndex = 0;
+  let parentCancelRequested = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let pollId: ReturnType<typeof setInterval> | undefined;
 
@@ -1048,6 +1051,10 @@ async function waitForChildLroCompletion({
 
     const finish = (summary: LroSummary) => {
       if (done) return;
+      if (parentCancelRequested) {
+        fail(new MoveCanceledError(cancelStage ?? "child-lro"));
+        return;
+      }
       done = true;
       cleanup();
       resolve(summary);
@@ -1098,13 +1105,17 @@ async function waitForChildLroCompletion({
     const pollSummary = async () => {
       if (done) return;
       try {
-        if (shouldCancel && (await shouldCancel())) {
-          await cancelChildLro({
-            op_id,
-            error: `parent move canceled${cancelStage ? ` during ${cancelStage}` : ""}`,
-          });
-          fail(new MoveCanceledError(cancelStage ?? "child-lro"));
-          return;
+        if (!parentCancelRequested && shouldCancel && (await shouldCancel())) {
+          if (deferParentCancelUntilChildFinishes) {
+            parentCancelRequested = true;
+          } else {
+            await cancelChildLro({
+              op_id,
+              error: `parent move canceled${cancelStage ? ` during ${cancelStage}` : ""}`,
+            });
+            fail(new MoveCanceledError(cancelStage ?? "child-lro"));
+            return;
+          }
         }
         const summary = await getLro(op_id);
         if (!summary) return;
@@ -2121,6 +2132,10 @@ export async function moveProjectToHost(
                 },
                 shouldCancel,
                 cancelStage: "start-dest",
+                // Canceling the durable LRO does not interrupt the underlying
+                // restore RPC. Let it settle before deleting destination data
+                // or restarting the source, otherwise rollback races startup.
+                deferParentCancelUntilChildFinishes: true,
               });
             } catch (err) {
               if ((err as any)?.code === MOVE_CANCELED_CODE) {
