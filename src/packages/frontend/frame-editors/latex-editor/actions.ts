@@ -3209,11 +3209,23 @@ export class Actions extends BaseActions<LatexEditorState> {
       150,
       { leading: true, trailing: true },
     );
-    store.on("change", refresh);
+    let subscribedMessageCache = chatActions.messageCache;
+    const bindCurrentMessageCache = () => {
+      const next = chatActions.messageCache;
+      if (next === subscribedMessageCache) return;
+      subscribedMessageCache?.removeListener?.("version", refresh);
+      subscribedMessageCache = next;
+      subscribedMessageCache?.on?.("version", refresh);
+    };
+    const onStoreChange = () => {
+      bindCurrentMessageCache();
+      refresh();
+    };
+    store.on("change", onStoreChange);
     // Remote messages update the shared message cache without necessarily
     // changing the Redux chat store.  Lock marker text as soon as that cache
     // publishes its new thread count.
-    chatActions.messageCache?.on?.("version", refresh);
+    subscribedMessageCache?.on?.("version", refresh);
     const reconnect = () => {
       this._chatStoreDispose?.();
       this._chatStoreDispose = undefined;
@@ -3221,8 +3233,8 @@ export class Actions extends BaseActions<LatexEditorState> {
     };
     chatActions.syncdb?.once?.("close", reconnect);
     this._chatStoreDispose = () => {
-      store.removeListener("change", refresh);
-      chatActions.messageCache?.removeListener?.("version", refresh);
+      store.removeListener("change", onStoreChange);
+      subscribedMessageCache?.removeListener?.("version", refresh);
       chatActions.syncdb?.removeListener?.("close", reconnect);
       refresh.cancel();
     };

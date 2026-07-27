@@ -140,4 +140,39 @@ describe("useAnchoredThreads reconnect", () => {
 
     await waitFor(() => expect(latest?.totalMessages).toBe(1));
   });
+
+  it("rebinds when the actions object replaces its message cache", async () => {
+    const actions: any = makeFakeActions();
+    let messageCount = 1;
+    actions.listThreadConfigRows = () => [
+      {
+        event: "chat-thread-config",
+        thread_id: "thread-1",
+        anchor: { id: "hash1234" },
+      },
+    ];
+    actions.getThreadIndex = () =>
+      new Map([
+        ["thread-1", { key: "thread-1", messageCount, newestTime: Date.now() }],
+      ]);
+    ensureSideChatActions.mockReturnValue(actions);
+
+    let latest: any;
+    render(<Probe onInfo={(info) => (latest = info)} />);
+    await waitFor(() => expect(latest?.totalMessages).toBe(1));
+
+    const replacementCache = new EventEmitter();
+    act(() => {
+      actions.messageCache = replacementCache;
+      messageCount = 0;
+      actions.store.emit("change");
+    });
+    await waitFor(() => expect(latest?.totalMessages).toBe(0));
+
+    act(() => {
+      messageCount = 2;
+      replacementCache.emit("version", 1);
+    });
+    await waitFor(() => expect(latest?.totalMessages).toBe(2));
+  });
 });
