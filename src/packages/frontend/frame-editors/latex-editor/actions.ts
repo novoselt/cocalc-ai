@@ -2499,11 +2499,24 @@ export class Actions extends BaseActions<LatexEditorState> {
       seenChatLines.add(marker.line);
       chatTargets.push({ line: marker.line, hash: marker.hash });
     }
+    const seenBookmarkLines = new Set<number>();
+    const bookmarkTargets: Array<{ line: number; text: string }> = [];
+    for (const bookmark of bookmarks) {
+      if (seenBookmarkLines.has(bookmark.line)) continue;
+      seenBookmarkLines.add(bookmark.line);
+      bookmarkTargets.push({ line: bookmark.line, text: bookmark.text });
+    }
+    const occupiedGutterLines = new Set([
+      ...seenChatLines,
+      ...seenBookmarkLines,
+    ]);
+    this._bookmarkLines[path] = seenBookmarkLines;
     this._updateNativeGutterHosts({
       path,
       cms,
       targets: chatTargets,
       cache: this._chatGutterHosts,
+      protectedLines: occupiedGutterLines,
       render: (root, target) => {
         root.render(
           React.createElement(ChatMarkerGutter, {
@@ -2518,20 +2531,12 @@ export class Actions extends BaseActions<LatexEditorState> {
         );
       },
     });
-
-    const seenBookmarkLines = new Set<number>();
-    const bookmarkTargets: Array<{ line: number; text: string }> = [];
-    for (const bookmark of bookmarks) {
-      if (seenBookmarkLines.has(bookmark.line)) continue;
-      seenBookmarkLines.add(bookmark.line);
-      bookmarkTargets.push({ line: bookmark.line, text: bookmark.text });
-    }
-    this._bookmarkLines[path] = seenBookmarkLines;
     this._updateNativeGutterHosts({
       path,
       cms,
       targets: bookmarkTargets,
       cache: this._bookmarkGutterHosts,
+      protectedLines: occupiedGutterLines,
       render: (root, target) => {
         root.render(React.createElement(BookmarkGutter, { text: target.text }));
       },
@@ -2556,6 +2561,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     cms,
     targets,
     cache,
+    protectedLines,
     render,
   }: {
     path: string;
@@ -2567,6 +2573,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         Array<{ host: HTMLElement; root: Root; line: number }>
       >;
     };
+    protectedLines: ReadonlySet<number>;
     render: (root: Root, target: T) => void;
   }): void {
     const perCm = cache[path] ?? (cache[path] = new globalThis.Map());
@@ -2587,7 +2594,11 @@ export class Actions extends BaseActions<LatexEditorState> {
         const host = reused?.host ?? document.createElement("span");
         const root = reused?.root ?? createRoot(host);
         render(root, target);
-        if (reused != null && reused.line !== target.line) {
+        if (
+          reused != null &&
+          reused.line !== target.line &&
+          !protectedLines.has(reused.line)
+        ) {
           cm.setGutterMarker(reused.line, CHAT_GUTTER_ID, null);
         }
         cm.setGutterMarker(target.line, CHAT_GUTTER_ID, host);
@@ -2595,7 +2606,9 @@ export class Actions extends BaseActions<LatexEditorState> {
       }
       for (let i = targets.length; i < existing.length; i++) {
         const entry = existing[i];
-        cm.setGutterMarker(entry.line, CHAT_GUTTER_ID, null);
+        if (!protectedLines.has(entry.line)) {
+          cm.setGutterMarker(entry.line, CHAT_GUTTER_ID, null);
+        }
         entry.root.unmount();
       }
       perCm.set(cm, fresh);
@@ -3101,22 +3114,36 @@ export class Actions extends BaseActions<LatexEditorState> {
     for (const [path, perCm] of Object.entries(this._chatTextMarkers)) {
       for (const [cm, existing] of perCm) {
         const fresh: CodeMirror.TextMarker[] = [];
-        for (const marker of existing) {
-          if ((marker as any).invalidChatMarker === true) {
-            fresh.push(marker);
-            continue;
-          }
+        const tails = this._chatTailHosts[path]?.get(cm) ?? [];
+        const freshTails: typeof tails = [];
+        for (let i = 0; i < existing.length; i++) {
+          const marker = existing[i];
+          const tail = tails[i];
           const range = marker.find() as
             | { from: CodeMirror.Position; to: CodeMirror.Position }
             | undefined;
-          const hash = (marker as any).chatHash as string | undefined;
-          if (range == null || hash == null || !("from" in range)) {
+          if (range == null || !("from" in range)) {
             marker.clear();
+            tail?.bookmark.clear();
+            tail?.root.unmount();
+            continue;
+          }
+          if ((marker as any).invalidChatMarker === true) {
+            fresh.push(marker);
+            if (tail != null) freshTails.push(tail);
+            continue;
+          }
+          const hash = (marker as any).chatHash as string | undefined;
+          if (hash == null) {
+            marker.clear();
+            tail?.bookmark.clear();
+            tail?.root.unmount();
             continue;
           }
           const locked = this._anchorHasMessages(hash);
           if ((marker as any).chatLocked === locked) {
             fresh.push(marker);
+            if (tail != null) freshTails.push(tail);
             continue;
           }
           marker.clear();
@@ -3130,8 +3157,10 @@ export class Actions extends BaseActions<LatexEditorState> {
               locked,
             }),
           );
+          if (tail != null) freshTails.push(tail);
         }
         perCm.set(cm, fresh);
+        this._chatTailHosts[path]?.set(cm, freshTails);
       }
     }
   }
@@ -3461,6 +3490,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     const target = this._activeSourceTarget(requested);
     if (target == null) return undefined;
     const { cm, actions, path, frameId } = target;
+    const before = cm.getValue();
     const cur = cm.getCursor();
     const lineText = cm.getLine(cur.line) ?? "";
     if (inline != null && lineHasTexContent(lineText)) {
@@ -3477,6 +3507,12 @@ export class Actions extends BaseActions<LatexEditorState> {
         line: cur.line,
         ch: lineText.length,
       });
+    }
+    // CodeMirror silently cancels edits that touch an atomic/read-only
+    // marker. Do not create a config-only chat thread (or report a bookmark
+    // insertion) unless the source buffer actually changed.
+    if (cm.getValue() === before) {
+      return undefined;
     }
     actions.set_syncstring_to_codemirror(frameId);
     actions.syncstring_commit();

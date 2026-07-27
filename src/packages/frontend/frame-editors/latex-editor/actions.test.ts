@@ -510,3 +510,126 @@ describe("LaTeX chat tail tracking", () => {
     ).toBe(false);
   });
 });
+
+describe("LaTeX chat gutter movement", () => {
+  it("does not clear a line that already received a moved surviving icon", () => {
+    const host1 = {};
+    const host2 = {};
+    const root1 = { render: jest.fn(), unmount: jest.fn() };
+    const root2 = { render: jest.fn(), unmount: jest.fn() };
+    const cm = { setGutterMarker: jest.fn() };
+    const cache = {
+      "123.tex": new globalThis.Map([
+        [
+          cm,
+          [
+            { host: host1, root: root1, line: 5 },
+            { host: host2, root: root2, line: 10 },
+          ],
+        ],
+      ]),
+    };
+    const actions: any = Object.create(Actions.prototype);
+
+    actions._updateNativeGutterHosts({
+      path: "123.tex",
+      cms: [cm],
+      targets: [{ line: 10 }, { line: 15 }],
+      cache,
+      protectedLines: new Set([10, 15]),
+      render: jest.fn(),
+    });
+
+    expect(cm.setGutterMarker).toHaveBeenCalledWith(
+      5,
+      "CodeMirror-latex-chat",
+      null,
+    );
+    expect(cm.setGutterMarker).not.toHaveBeenCalledWith(
+      10,
+      "CodeMirror-latex-chat",
+      null,
+    );
+    expect(cm.setGutterMarker).toHaveBeenCalledWith(
+      10,
+      "CodeMirror-latex-chat",
+      host1,
+    );
+    expect(cm.setGutterMarker).toHaveBeenCalledWith(
+      15,
+      "CodeMirror-latex-chat",
+      host2,
+    );
+  });
+});
+
+describe("LaTeX marker insertion", () => {
+  it("does not report success when CodeMirror rejects a read-only edit", () => {
+    const ownerActions = {
+      set_syncstring_to_codemirror: jest.fn(),
+      syncstring_commit: jest.fn(),
+    };
+    const cm = {
+      getValue: jest.fn(() => "% chat: locked-anchor"),
+      getCursor: jest.fn(() => ({ line: 0, ch: 0 })),
+      getLine: jest.fn(() => "% chat: locked-anchor"),
+      replaceRange: jest.fn(),
+    };
+    const actions: any = Object.create(Actions.prototype);
+    actions._activeSourceTarget = jest.fn(() => ({
+      cm,
+      actions: ownerActions,
+      path: "123.tex",
+      frameId: "cm-1",
+    }));
+
+    expect(
+      actions._insertMarkerText("% chat: new-anchor", "  % chat: new-anchor"),
+    ).toBeUndefined();
+    expect(cm.replaceRange).toHaveBeenCalled();
+    expect(ownerActions.set_syncstring_to_codemirror).not.toHaveBeenCalled();
+    expect(ownerActions.syncstring_commit).not.toHaveBeenCalled();
+  });
+});
+
+describe("LaTeX marker/tail pairing", () => {
+  it("drops the paired inline tail when a TextMarker auto-clears", () => {
+    const deadMarker = {
+      find: jest.fn(() => undefined),
+      clear: jest.fn(),
+    };
+    const liveMarker = {
+      invalidChatMarker: true,
+      find: jest.fn(() => ({
+        from: { line: 2, ch: 0 },
+        to: { line: 2, ch: 12 },
+      })),
+      clear: jest.fn(),
+    };
+    const deadTail = {
+      bookmark: { clear: jest.fn() },
+      root: { unmount: jest.fn() },
+      host: {},
+    };
+    const liveTail = {
+      bookmark: { clear: jest.fn() },
+      root: { unmount: jest.fn() },
+      host: {},
+    };
+    const cm = {};
+    const markerMap = new globalThis.Map([[cm, [deadMarker, liveMarker]]]);
+    const tailMap = new globalThis.Map([[cm, [deadTail, liveTail]]]);
+    const actions: any = Object.create(Actions.prototype);
+    actions._chatTextMarkers = { "123.tex": markerMap };
+    actions._chatTailHosts = { "123.tex": tailMap };
+
+    actions._refreshChatMarkerLocks();
+
+    expect(markerMap.get(cm)).toEqual([liveMarker]);
+    expect(tailMap.get(cm)).toEqual([liveTail]);
+    expect(deadMarker.clear).toHaveBeenCalled();
+    expect(deadTail.bookmark.clear).toHaveBeenCalled();
+    expect(deadTail.root.unmount).toHaveBeenCalled();
+    expect(liveTail.bookmark.clear).not.toHaveBeenCalled();
+  });
+});

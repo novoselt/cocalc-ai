@@ -4210,10 +4210,7 @@ export class BaseEditorActions<
   private async waitForSideChatActions(
     generation: number,
   ): Promise<ReturnType<typeof getSideChatActions> | undefined> {
-    for (const d of [1, 10, 50, 200, 500, 1000, 2000, 4000]) {
-      if (generation !== this._openAnchorChatGeneration || this.isClosed()) {
-        return undefined;
-      }
+    const getReadyActions = () => {
       const actions = getSideChatActions({
         project_id: this.project_id,
         path: this.path,
@@ -4221,15 +4218,27 @@ export class BaseEditorActions<
       if (
         actions?.syncdb != null &&
         actions.frameTreeActions != null &&
-        // wait for hydration: anchor lookups need the thread-config rows,
-        // otherwise a stale hash could be revived as a fresh thread
+        // Anchor lookups need hydrated thread-config rows; otherwise a stale
+        // hash could be revived as a fresh thread.
         actions.syncdb.get_state?.() === "ready"
       ) {
         return actions;
       }
+      return undefined;
+    };
+    for (const d of [1, 10, 50, 200, 500, 1000, 2000, 4000]) {
+      if (generation !== this._openAnchorChatGeneration || this.isClosed()) {
+        return undefined;
+      }
+      const actions = getReadyActions();
+      if (actions != null) return actions;
       await delay(d);
     }
-    return undefined;
+    if (generation !== this._openAnchorChatGeneration || this.isClosed()) {
+      return undefined;
+    }
+    // The final delay is also a polling window, not merely a timeout.
+    return getReadyActions();
   }
 
   // Open the side chat showing the newest thread anchored to anchorId,
