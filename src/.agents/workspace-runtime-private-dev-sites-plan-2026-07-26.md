@@ -1118,6 +1118,40 @@ Exit gate:
 - Blaec can run at least two sites concurrently;
 - neither developer project contains cloud credentials.
 
+Result (2026-07-27):
+
+- `scripts/dev/workspace-site.js` and the `dev:workspace:*` package scripts
+  provide named init, build, start, stop, restart, status, logs, env,
+  hostname, and open operations.
+- A global registry outside the checkout assigns each name independent PGlite,
+  project, runtime, log, app-spec, PID, and port state. It rejects duplicate
+  names, data directories, and persisted or live port collisions across Git
+  worktrees.
+- CoCalc projects use the existing managed app supervisor. An exact
+  PID/command-identity local daemon remains available for SSH-forward testing
+  and development outside a CoCalc project.
+- Launchpad receives a small allowlisted environment. Outer bearer tokens,
+  project-host Conat routes, and project credentials are deliberately not
+  inherited by the inner site.
+- `cocalc project app private-hostname` now exposes policy, list, inspect,
+  reserve, release, and authenticated browser-open commands. The open command
+  issues a short-lived project-host token whose query parameter is consumed
+  into an HttpOnly session cookie.
+- The control-plane API origin and public browser origin are separate. Managed
+  startup discovers the configured public site URL when the API uses an
+  internal hostname.
+- Automated tests cover naming, CLI parsing, port conflicts, independent
+  layouts, app specs, credential removal, URL generation, and CLI result
+  parsing. A real local test ran two Launchpads concurrently, verified
+  independent PGlite/project/runtime/log state and HTTP readiness, stopped one
+  without affecting the other, then restarted it from persisted state.
+- The command sequence, SSH-forward fallback, random-hostname flow, build
+  behavior, and parallel Git worktree usage are documented in
+  `scripts/dev/README.md`.
+- The source implementation exit gate is complete. Human acceptance using two
+  developer projects and the staging random hostname remains part of Phase 5;
+  production private-hostname configuration is still intentionally disabled.
+
 Expected effort: 1 to 3 focused engineering days.
 
 ### Phase 5: end-to-end validation
