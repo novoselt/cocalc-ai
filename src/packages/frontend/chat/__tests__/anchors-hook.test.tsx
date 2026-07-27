@@ -48,7 +48,6 @@ function makeFakeActions() {
     getThreadIndex: () => new Map(),
     getThreadReadCount: () => 0,
     isProjectReadStateReady: () => true,
-    isMessageCacheHydrated: () => true,
   };
 }
 
@@ -177,31 +176,28 @@ describe("useAnchoredThreads reconnect", () => {
     await waitFor(() => expect(latest?.totalMessages).toBe(2));
   });
 
-  it("waits for the live message cache to finish hydrating", async () => {
+  it("multiplexes many marker roots through one physical listener", async () => {
     const actions: any = makeFakeActions();
-    let hydrated = false;
-    actions.isMessageCacheHydrated = () => hydrated;
-    actions.listThreadConfigRows = () => [
-      {
-        event: "chat-thread-config",
-        thread_id: "thread-1",
-        anchor: { id: "hash1234" },
-      },
-    ];
-    actions.getThreadIndex = () =>
-      new Map([
-        ["thread-1", { key: "thread-1", messageCount: 2, newestTime: 10 }],
-      ]);
     ensureSideChatActions.mockReturnValue(actions);
 
-    let latest: any;
-    render(<Probe onInfo={(info) => (latest = info)} />);
-    await waitFor(() => expect(latest?.totalMessages).toBe(0));
+    const rendered = render(
+      <>
+        {Array.from({ length: 12 }, (_, index) => (
+          <Probe key={index} onInfo={() => {}} />
+        ))}
+      </>,
+    );
+    await waitFor(() =>
+      expect(ensureSideChatActions).toHaveBeenCalledTimes(12),
+    );
 
-    act(() => {
-      hydrated = true;
-      actions.messageCache.emit("version", 1);
-    });
-    await waitFor(() => expect(latest?.totalMessages).toBe(2));
+    expect(actions.store.listenerCount("change")).toBe(1);
+    expect(actions.messageCache.listenerCount("version")).toBe(1);
+    expect(actions.syncdb.listenerCount("close")).toBe(1);
+
+    rendered.unmount();
+    expect(actions.store.listenerCount("change")).toBe(0);
+    expect(actions.messageCache.listenerCount("version")).toBe(0);
+    expect(actions.syncdb.listenerCount("close")).toBe(0);
   });
 });

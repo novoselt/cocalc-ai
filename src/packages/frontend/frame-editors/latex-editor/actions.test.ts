@@ -49,6 +49,31 @@ describe("LaTeX persisted source change builds", () => {
   });
 });
 
+describe("LaTeX included-file chat ownership", () => {
+  it("yields standalone marker rendering to the parent editor", () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "chapter.tex";
+    actions.parent_file = undefined;
+    actions._chatMarkersOwnedByParent = false;
+    actions._yieldChatMarkersToParent = jest.fn();
+
+    actions.set_parent_file("master.tex");
+
+    expect(actions.parent_file).toBe("master.tex");
+    expect(actions._yieldChatMarkersToParent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps marker ownership when the file is its own parent", () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "master.tex";
+    actions._yieldChatMarkersToParent = jest.fn();
+
+    actions.set_parent_file("master.tex");
+
+    expect(actions._yieldChatMarkersToParent).not.toHaveBeenCalled();
+  });
+});
+
 describe("LaTeX initial build", () => {
   it("saves explicit build command changes to the aux syncdb file", () => {
     const syncdb = {

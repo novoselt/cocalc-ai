@@ -202,7 +202,7 @@ export function computeAnchoredThreads({
     chatActions: actions,
   };
   const id = `${anchorId ?? ""}`.trim();
-  if (!actions || !id || !actions.isMessageCacheHydrated?.()) {
+  if (!actions || !id) {
     return info;
   }
   const readStateReady = actions.isProjectReadStateReady?.() ?? false;
@@ -250,6 +250,86 @@ export function computeAnchoredThreads({
   return info;
 }
 
+interface SharedChatSubscription {
+  subscribe: (callback: () => void, onClose: () => void) => () => void;
+}
+
+// A LaTeX document can render several React roots per marker (gutter, inline
+// tail, and TOC). Multiplex them through one store/cache listener per actions
+// instance instead of attaching dozens of identical EventEmitter listeners.
+const sharedChatSubscriptions = new WeakMap<
+  ChatActions,
+  SharedChatSubscription
+>();
+
+function sharedChatSubscription(actions: ChatActions): SharedChatSubscription {
+  const existing = sharedChatSubscriptions.get(actions);
+  if (existing != null) return existing;
+
+  const callbacks = new Map<() => void, () => void>();
+  let subscribedStore = actions.store;
+  let subscribedMessageCache = actions.messageCache;
+  let subscribedSyncdb = actions.syncdb;
+
+  function bindCurrentSources() {
+    const nextStore = actions.store;
+    if (nextStore !== subscribedStore) {
+      subscribedStore?.removeListener?.("change", notify);
+      subscribedStore = nextStore;
+      subscribedStore?.on?.("change", notify);
+    }
+    const nextCache = actions.messageCache;
+    if (nextCache !== subscribedMessageCache) {
+      subscribedMessageCache?.removeListener?.("version", notify);
+      subscribedMessageCache = nextCache;
+      subscribedMessageCache?.on?.("version", notify);
+    }
+    const nextSyncdb = actions.syncdb;
+    if (nextSyncdb !== subscribedSyncdb) {
+      subscribedSyncdb?.removeListener?.("close", notifyClose);
+      subscribedSyncdb = nextSyncdb;
+      subscribedSyncdb?.on?.("close", notifyClose);
+    }
+  }
+
+  function notify() {
+    bindCurrentSources();
+    for (const callback of [...callbacks.keys()]) {
+      callback();
+    }
+  }
+
+  function notifyClose() {
+    for (const onClose of [...callbacks.values()]) {
+      onClose();
+    }
+  }
+
+  subscribedStore?.on?.("change", notify);
+  subscribedMessageCache?.on?.("version", notify);
+  subscribedSyncdb?.on?.("close", notifyClose);
+
+  const subscription: SharedChatSubscription = {
+    subscribe(callback, onClose) {
+      callbacks.set(callback, onClose);
+      bindCurrentSources();
+      if (subscribedSyncdb?.get_state?.() === "closed") {
+        onClose();
+      }
+      return () => {
+        callbacks.delete(callback);
+        if (callbacks.size > 0) return;
+        subscribedStore?.removeListener?.("change", notify);
+        subscribedMessageCache?.removeListener?.("version", notify);
+        subscribedSyncdb?.removeListener?.("close", notifyClose);
+        sharedChatSubscriptions.delete(actions);
+      };
+    },
+  };
+  sharedChatSubscriptions.set(actions, subscription);
+  return subscription;
+}
+
 function useSideChatActions(
   project_id: string,
   path: string,
@@ -290,62 +370,26 @@ function useSideChatActions(
     };
   }, [project_id, path, acquireToken]);
 
-  // If the chat syncdb closes (e.g. the file is closed then reopened),
-  // re-run the acquisition effect (which retries on failure) rather
-  // than staying bound to a dead actions object.
-  useEffect(() => {
-    if (!chatActions || !project_id || !path || isChatPath(path)) {
-      return;
-    }
-    const syncdb = (chatActions as any)?.syncdb;
-    let cancelled = false;
-    const reconnect = () => {
-      if (cancelled) return;
-      setAcquireToken((token) => token + 1);
-    };
-    if (syncdb?.get_state?.() === "closed") {
-      reconnect();
-      return;
-    }
-    syncdb?.once?.("close", reconnect);
-    return () => {
-      cancelled = true;
-      syncdb?.removeListener?.("close", reconnect);
-    };
-  }, [chatActions, project_id, path]);
-
   useEffect(() => {
     if (!chatActions) {
       return;
     }
-    const actions = chatActions;
-    const store = actions.store;
-    if (!store) {
-      return;
-    }
-    let subscribedMessageCache = actions.messageCache;
-    function bindCurrentMessageCache() {
-      const next = actions.messageCache;
-      if (next === subscribedMessageCache) return;
-      subscribedMessageCache?.removeListener?.("version", refresh);
-      subscribedMessageCache = next;
-      subscribedMessageCache?.on?.("version", refresh);
-    }
-    function refresh() {
-      bindCurrentMessageCache();
+    const refresh = () => {
       setChatVersion((value) => value + 1);
-    }
-    store.on("change", refresh);
+    };
     // Incoming chat rows update the shared message cache directly.  They do
     // not necessarily mutate the Redux chat store, so listen to its version
-    // event as well or remote unread/message counts can remain stale until
-    // some unrelated store change (such as closing and reopening chat).
-    subscribedMessageCache?.on?.("version", refresh);
-    refresh();
-    return () => {
-      store.removeListener("change", refresh);
-      subscribedMessageCache?.removeListener?.("version", refresh);
+    // event as well. The shared subscription keeps this at one physical
+    // listener even when every marker has multiple detached React roots.
+    const reconnect = () => {
+      setAcquireToken((token) => token + 1);
     };
+    const unsubscribe = sharedChatSubscription(chatActions).subscribe(
+      refresh,
+      reconnect,
+    );
+    refresh();
+    return unsubscribe;
   }, [chatActions]);
 
   return { chatActions, chatVersion };

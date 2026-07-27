@@ -62,20 +62,17 @@ function fakeActions({
   index,
   readCounts = {},
   readStateReady = true,
-  messageCacheHydrated = true,
 }: {
   rows: any[];
   index: Map<string, { messageCount: number; newestTime: number }>;
   readCounts?: Record<string, number>;
   readStateReady?: boolean;
-  messageCacheHydrated?: boolean;
 }): any {
   return {
     listThreadConfigRows: () => rows,
     getThreadIndex: () => index,
     getThreadReadCount: (key: string) => readCounts[key] ?? 0,
     isProjectReadStateReady: () => readStateReady,
-    isMessageCacheHydrated: () => messageCacheHydrated,
   };
 }
 
@@ -205,22 +202,6 @@ describe("computeAnchoredThreads", () => {
       accountId: "acct",
       resolved: false,
     });
-    expect(info.totalUnread).toBe(0);
-  });
-
-  it("waits for the live message cache snapshot", () => {
-    const info = computeAnchoredThreads({
-      actions: fakeActions({
-        rows,
-        index,
-        messageCacheHydrated: false,
-      }),
-      anchorId: "cell-a",
-      accountId: "acct",
-      resolved: false,
-    });
-    expect(info.threads).toEqual([]);
-    expect(info.totalMessages).toBe(0);
     expect(info.totalUnread).toBe(0);
   });
 

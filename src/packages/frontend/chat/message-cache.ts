@@ -41,9 +41,12 @@ export class ChatMessageCache extends EventEmitter {
   private threadKeyByThreadId: Map<string, string> = new Map();
   private threadConfigByThreadId: Map<string, Record<string, unknown>> =
     new Map();
+  // Disk preview rows bridge the period before the live syncdb connects.
+  // Keep them until the first live rebuild so an empty initial snapshot
+  // cannot withdraw already-confirmed chat history.
+  private initialPreviewRows?: unknown[];
   private version = 0;
   private disposed = false;
-  private hydrated = false;
   private lastEvent = "constructor";
   private lastEventAt = Date.now();
 
@@ -124,14 +127,9 @@ export class ChatMessageCache extends EventEmitter {
     return this.version;
   }
 
-  isHydrated(): boolean {
-    return this.hydrated;
-  }
-
   debugState() {
     return {
       disposed: this.disposed,
-      hydrated: this.hydrated,
       version: this.version,
       messagesByDate: this.messagesByDate.size,
       messagesById: this.messagesById.size,
@@ -157,7 +155,7 @@ export class ChatMessageCache extends EventEmitter {
     this.dateIndex = new Map();
     this.threadKeyByThreadId = new Map();
     this.threadConfigByThreadId = new Map();
-    this.hydrated = false;
+    this.initialPreviewRows = undefined;
     this.removeAllListeners();
   }
 
@@ -432,6 +430,7 @@ export class ChatMessageCache extends EventEmitter {
     if (this.syncdb.get_state() === "ready") {
       return { applied: false, chatRows: 0 };
     }
+    this.initialPreviewRows = Array.isArray(rows) ? [...rows] : [];
     const snapshot = this.buildSnapshotFromRows(rows);
     this.applySnapshot(snapshot);
     this.noteEvent("preview");
@@ -521,10 +520,7 @@ export class ChatMessageCache extends EventEmitter {
     return { applied, skipped };
   }
 
-  private applySnapshot(
-    snapshot: ChatCacheSnapshot,
-    { hydrated = false }: { hydrated?: boolean } = {},
-  ): void {
+  private applySnapshot(snapshot: ChatCacheSnapshot): void {
     const before = this.messagesByDate.size;
     this.messagesById = produce(snapshot.mapById, () => {});
     this.messagesByDate = produce(snapshot.mapByDate, () => {});
@@ -534,9 +530,6 @@ export class ChatMessageCache extends EventEmitter {
     // Keep this mutable; incremental change handling updates this map in-place.
     this.threadKeyByThreadId = new Map(snapshot.threadKeyByThreadId);
     this.threadConfigByThreadId = new Map(snapshot.threadConfigByThreadId);
-    if (hydrated) {
-      this.hydrated = true;
-    }
     this.noteEvent("snapshot");
     if (before > 0 && this.messagesByDate.size === 0) {
       syncdocDiagnosticLog("chat message cache cleared by snapshot", {
@@ -632,7 +625,25 @@ export class ChatMessageCache extends EventEmitter {
     const rows = this.syncdb.get() ?? [];
     log("rebuildFromDoc: got rows", rows);
     this.noteEvent("rebuildFromDoc");
-    this.applySnapshot(this.buildSnapshotFromRows(rows), { hydrated: true });
+    let snapshot = this.buildSnapshotFromRows(rows);
+    const previewRows = this.initialPreviewRows;
+    this.initialPreviewRows = undefined;
+    if (
+      snapshot.chatRows === 0 &&
+      previewRows != null &&
+      previewRows.length > 0
+    ) {
+      const combined = this.buildSnapshotFromRows([...previewRows, ...rows]);
+      if (combined.chatRows > 0) {
+        snapshot = combined;
+        syncdocDiagnosticLog("chat message cache retained initial preview", {
+          liveRows: rows.length,
+          previewRows: previewRows.length,
+          chatRows: combined.chatRows,
+        });
+      }
+    }
+    this.applySnapshot(snapshot);
   }
 
   // assumed is an => function (so bound)
@@ -720,10 +731,6 @@ export class ChatMessageCache extends EventEmitter {
 
   private handleReload = () => {
     this.noteEvent("reload");
-    if (this.hydrated) {
-      this.hydrated = false;
-      this.bumpVersion();
-    }
     void this.rebuildFromDoc();
   };
 }

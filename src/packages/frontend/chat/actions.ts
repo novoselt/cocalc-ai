@@ -551,10 +551,6 @@ export class ChatActions extends Actions<ChatState> {
     return new Map();
   };
 
-  isMessageCacheHydrated = (): boolean => {
-    return this.messageCache?.isHydrated?.() ?? false;
-  };
-
   getMessageById = (messageId?: string): ChatMessageTyped | undefined => {
     if (!messageId || !this.messageCache) return;
     return this.messageCache.getByMessageId(messageId) as ChatMessageTyped;

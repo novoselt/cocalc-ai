@@ -813,6 +813,8 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
     this._chatMarkerScanners = {};
     this._disposeChatGutterUI();
+    this._chatMarkerStoreDispose?.();
+    this._chatMarkerStoreDispose = undefined;
     this._chatStoreDispose?.();
     this._chatStoreDispose = undefined;
     super.close();
@@ -2261,23 +2263,56 @@ export class Actions extends BaseActions<LatexEditorState> {
   } = {};
 
   private _chatStoreDispose?: () => void;
+  private _chatMarkerStoreDispose?: () => void;
+  private _chatMarkersOwnedByParent = false;
 
   private _initChatMarkers(): void {
+    if (this.parent_file != null && this.parent_file !== this.path) {
+      this._chatMarkersOwnedByParent = true;
+      return;
+    }
     this._attachChatMarkerScanner(this, this.path);
     this._initChatAnchorLockListener();
     // Sub-files get picked up whenever the build discovers dependencies
     // (set_switch_to_files) or the store otherwise changes.
-    this.store.on(
-      "change",
-      debounce(
-        () => {
-          if (this._state === ("closed" as any)) return;
-          this._refreshChatMarkerScanners();
-        },
-        1000,
-        { leading: false, trailing: true },
-      ),
+    const refreshScanners = debounce(
+      () => {
+        if (this._state === ("closed" as any)) return;
+        this._refreshChatMarkerScanners();
+      },
+      1000,
+      { leading: false, trailing: true },
     );
+    this.store.on("change", refreshScanners);
+    this._chatMarkerStoreDispose = () => {
+      this.store.removeListener("change", refreshScanners);
+      refreshScanners.cancel();
+    };
+  }
+
+  private _yieldChatMarkersToParent(): void {
+    if (this._chatMarkersOwnedByParent) return;
+    this._chatMarkersOwnedByParent = true;
+    for (const handle of Object.values(this._chatMarkerScanners)) {
+      handle.dispose();
+    }
+    this._chatMarkerScanners = {};
+    this._disposeChatGutterUI();
+    this._chatMarkerStoreDispose?.();
+    this._chatMarkerStoreDispose = undefined;
+    this._chatStoreDispose?.();
+    this._chatStoreDispose = undefined;
+  }
+
+  public set_parent_file(path: string): void {
+    super.set_parent_file(path);
+    if (path !== this.path) {
+      // The parent editor scans and decorates all included files using the
+      // master's side chat. Stop this file's standalone scanner first so two
+      // owners cannot alternate between `.master.sage-chat` and an empty
+      // `.subfile.sage-chat` as their async rescans finish.
+      this._yieldChatMarkersToParent();
+    }
   }
 
   private _refreshChatMarkerScanners(): void {
@@ -2848,7 +2883,6 @@ export class Actions extends BaseActions<LatexEditorState> {
   private _anchorHasMessages(hash: string): boolean {
     try {
       const actions = ensureSideChatActions(this.project_id, this.path);
-      if (!actions.isMessageCacheHydrated?.()) return false;
       const threadIndex = actions.getThreadIndex();
       return actions
         .listAnchoredThreadKeys(hash)
@@ -3185,7 +3219,9 @@ export class Actions extends BaseActions<LatexEditorState> {
   }
 
   private _initChatAnchorLockListener(retries = 40): void {
-    if (this._state === ("closed" as any)) return;
+    if (this._state === ("closed" as any) || this._chatMarkersOwnedByParent) {
+      return;
+    }
     let chatActions;
     try {
       chatActions = ensureSideChatActions(this.project_id, this.path);
