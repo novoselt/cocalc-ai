@@ -637,13 +637,27 @@ export function registerProjectBasicCommands(
     .command("start")
     .description("start a project (defaults to context)")
     .option("-w, --project <project>", "project id or name")
+    .option(
+      "--restore-backup-id <id>",
+      "atomically restore this backup before starting",
+    )
     .option("--wait", "wait for completion")
     .action(
-      async (opts: { project?: string; wait?: boolean }, command: Command) => {
+      async (
+        opts: {
+          project?: string;
+          restoreBackupId?: string;
+          wait?: boolean;
+        },
+        command: Command,
+      ) => {
         await withContext(command, "project start", async (ctx) => {
           const ws = await resolveProjectFromArgOrContext(ctx, opts.project);
           const op = await ctx.hub.projects.start({
             project_id: ws.project_id,
+            ...(opts.restoreBackupId
+              ? { restore_backup_id: opts.restoreBackupId }
+              : {}),
             wait: false,
           });
 

@@ -543,7 +543,7 @@ test("project exec waits for an async job to complete", async () => {
   assert.equal(returned?.stdout, "done\n");
 });
 
-test("project start --wait accepts running as successful start state", async () => {
+test("project start passes an explicit backup and accepts running as successful wait state", async () => {
   let startOpts: any;
   let waitedOpId: string | undefined;
   let returned: any;
@@ -589,11 +589,14 @@ test("project start --wait accepts running as successful start state", async () 
     "start",
     "--project",
     "project-id",
+    "--restore-backup-id",
+    "backup-1",
     "--wait",
   ]);
 
   assert.deepEqual(startOpts, {
     project_id: "project-id",
+    restore_backup_id: "backup-1",
     wait: false,
   });
   assert.equal(waitedOpId, "start-op-1");
