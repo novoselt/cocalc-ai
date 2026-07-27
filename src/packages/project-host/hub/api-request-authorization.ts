@@ -33,6 +33,7 @@ export const PROJECT_PROJECT_HOST_HUB_METHODS = new Set([
   "system.getProjectAppPublicPolicy",
   "system.reserveProjectAppPublicSubdomain",
   "system.releaseProjectAppPublicSubdomain",
+  "system.releaseProjectAppPrivateHostname",
   "system.getManagedProjectEgressPolicy",
   "system.recordManagedProjectEgress",
   "system.recordServiceAdmissionDenial",
