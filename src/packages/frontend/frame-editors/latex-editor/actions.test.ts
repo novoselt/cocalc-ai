@@ -369,3 +369,61 @@ describe("LaTeX invalid chat marker timing", () => {
     actions._chatMarkerScanners["123.tex"].dispose();
   });
 });
+
+describe("LaTeX chat marker locking", () => {
+  it("protects both marker boundaries after the thread has messages", () => {
+    const textMarker = {};
+    const cm = {
+      markText: jest.fn(() => textMarker),
+    };
+    const actions: any = Object.create(Actions.prototype);
+
+    const result = actions._createChatTextMarker({
+      cm,
+      hash: "20260727-abcdefgh",
+      path: "123.tex",
+      from: { line: 4, ch: 0 },
+      to: { line: 4, ch: 29 },
+      locked: true,
+    });
+
+    expect(result).toBe(textMarker);
+    expect(cm.markText).toHaveBeenCalledWith(
+      { line: 4, ch: 0 },
+      { line: 4, ch: 29 },
+      expect.objectContaining({
+        readOnly: true,
+        atomic: true,
+        inclusiveLeft: true,
+        inclusiveRight: true,
+      }),
+    );
+  });
+
+  it("leaves both boundaries editable before the first message", () => {
+    const cm = {
+      markText: jest.fn(() => ({})),
+    };
+    const actions: any = Object.create(Actions.prototype);
+
+    actions._createChatTextMarker({
+      cm,
+      hash: "draft-anchor",
+      path: "123.tex",
+      from: { line: 4, ch: 0 },
+      to: { line: 4, ch: 20 },
+      locked: false,
+    });
+
+    expect(cm.markText).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        readOnly: false,
+        atomic: false,
+        inclusiveLeft: false,
+        inclusiveRight: false,
+      }),
+    );
+  });
+});
