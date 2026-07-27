@@ -53,7 +53,7 @@ cat > "$tmpdir/software/cocalc/latest-linux-$arch.json" <<EOF
 }
 EOF
 
-"$CONTAINER_ENGINE" run --rm \
+"$CONTAINER_ENGINE" run --rm -i \
   --platform "linux/$arch" \
   -v "$tmpdir:/fixture:ro" \
   "$IMAGE" \
@@ -84,4 +84,6 @@ test -x "$runtime_root/cocalc"
 test -f "$runtime_root/lib/libatomic.so.1"
 LD_LIBRARY_PATH="$runtime_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   "$runtime_root/cocalc" --version
+
+echo "CoCalc CLI container smoke test passed."
 EOF
