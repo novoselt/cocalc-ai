@@ -176,8 +176,18 @@ describe("FileTabs keyboard navigation", () => {
     };
     const { rerender } = render(<FileTabs {...props} />);
 
-    fireEvent.click(screen.getByTitle("Close a.ts"));
+    const close = screen.getByTitle("Close a.ts");
+    fireEvent(
+      close,
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        cancelable: true,
+      }),
+    );
+    fireEvent.click(close);
     expect(mockActions.close_tab).toHaveBeenCalledWith("a.ts");
+    expect(mockActions.close_tab).toHaveBeenCalledTimes(1);
 
     mockActions.close_tab.mockReset();
     rerender(<FileTabs {...props} />);

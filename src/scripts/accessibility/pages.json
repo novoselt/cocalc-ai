@@ -154,6 +154,14 @@
       "settleMs": 1500
     },
     {
+      "id": "projects",
+      "title": "Projects",
+      "path": "/projects",
+      "authentication": "account",
+      "minimumScore": 1,
+      "settleMs": 2000
+    },
+    {
       "id": "membership",
       "title": "Membership settings",
       "path": "/settings/membership",
