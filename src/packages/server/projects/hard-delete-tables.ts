@@ -32,6 +32,7 @@ export const PROJECT_HARD_DELETE_PROJECT_ID_TABLES = [
   "project_events_outbox",
   "project_labels",
   "project_rootfs_builds",
+  "project_app_private_hostnames",
   "account_project_index",
   "account_notification_index",
 ] as const;

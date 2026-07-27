@@ -38,6 +38,7 @@ import type {
 } from "@cocalc/conat/hub/api/public-directory-shares";
 import { getMasterConatClient } from "./master-status";
 import { isProjectViewerRole } from "@cocalc/util/project-access";
+import { PRIVATE_APP_HOST_HEADER } from "./private-app-hostname";
 
 const collaboratorCache = new TTL<string, boolean>({
   max: 50_000,
@@ -110,6 +111,7 @@ export type AuthorizedAccountContext = {
   account_id: string;
   issued_at_s: number;
   actor: "account" | "hub";
+  revalidate_collaborator?: boolean;
 };
 
 function setAuthContext(
@@ -424,6 +426,9 @@ export function createProjectHostHttpProxyAuth({
     socket: Socket | Duplex;
     account_id: string;
     issued_at_s: number;
+    project_id?: string;
+    actor: "account" | "hub";
+    revalidate_collaborator: boolean;
   }>();
 
   const verifyClaimsAndGetAccountId = (
@@ -739,6 +744,12 @@ export function createProjectHostHttpProxyAuth({
     }
     const { token, source } = readBearerToken(req);
     if (!token) {
+      if (req.headers[PRIVATE_APP_HOST_HEADER]) {
+        throw new HttpAuthError(
+          401,
+          "This private development site must be opened from its CoCalc project.",
+        );
+      }
       const allowedPublic = await authorizePublicAppPath({
         project_id,
         url: req.url,
@@ -791,6 +802,7 @@ export function createProjectHostHttpProxyAuth({
         account_id: accountFromBrowserSession.account_id,
         issued_at_s: accountFromBrowserSession.iat_s,
         actor: "account" as const,
+        revalidate_collaborator: !!req.headers[PRIVATE_APP_HOST_HEADER],
       };
       setAuthContext(req, context);
       stripQueryToken(req);
@@ -810,6 +822,7 @@ export function createProjectHostHttpProxyAuth({
         account_id: accountFromSession.account_id,
         issued_at_s: accountFromSession.iat_s,
         actor: "account" as const,
+        revalidate_collaborator: !!req.headers[PRIVATE_APP_HOST_HEADER],
       };
       setAuthContext(req, context);
       stripQueryToken(req);
@@ -817,6 +830,12 @@ export function createProjectHostHttpProxyAuth({
     }
     const { token, source } = readBearerToken(req);
     if (!token) {
+      if (req.headers[PRIVATE_APP_HOST_HEADER]) {
+        throw new HttpAuthError(
+          401,
+          "This private development site must be opened from its CoCalc project.",
+        );
+      }
       const allowedPublic = await authorizePublicAppPath({
         project_id,
         url: req.url,
@@ -842,6 +861,7 @@ export function createProjectHostHttpProxyAuth({
       account_id,
       issued_at_s: claims.iat,
       actor: (claims.act ?? "account") === "account" ? "account" : "hub",
+      revalidate_collaborator: !!req.headers[PRIVATE_APP_HOST_HEADER],
     };
     setAuthContext(req, context);
     if (source === "header") {
@@ -863,6 +883,9 @@ export function createProjectHostHttpProxyAuth({
       socket,
       account_id: context.account_id,
       issued_at_s: context.issued_at_s,
+      project_id: req.url?.split("/")[1],
+      actor: context.actor,
+      revalidate_collaborator: context.revalidate_collaborator === true,
     };
     trackedUpgradeSockets.add(entry);
     const remove = () => trackedUpgradeSockets.delete(entry);
@@ -883,6 +906,20 @@ export function createProjectHostHttpProxyAuth({
           account_id: entry.account_id,
           issued_at_s: entry.issued_at_s,
         });
+        if (
+          entry.revalidate_collaborator &&
+          entry.actor === "account" &&
+          entry.project_id &&
+          !isProjectCollaboratorLocal({
+            account_id: entry.account_id,
+            project_id: entry.project_id,
+          })
+        ) {
+          throw new HttpAuthError(
+            403,
+            "permission denied: account is not a collaborator on this project",
+          );
+        }
       } catch {
         kicked += 1;
         trackedUpgradeSockets.delete(entry);

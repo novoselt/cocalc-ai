@@ -69,6 +69,10 @@ import {
 import { wireHostsApi } from "./hub/hosts";
 import { wireNotificationsApi } from "./hub/notifications";
 import { wireSystemApi } from "./hub/system";
+import {
+  createPrivateAppHostnameRequestRewriter,
+  PRIVATE_APP_HOST_HEADER,
+} from "./private-app-hostname";
 import { startMasterRegistration } from "./master";
 import { startProvisionedInventoryReporter } from "./master-status";
 import { startReconciler } from "./reconcile";
@@ -217,6 +221,10 @@ const ACP_STARTUP_REHYDRATE_CONCURRENCY = Math.max(
 const PUBLIC_APP_ROUTE_CACHE_MS = Math.max(
   1000,
   Number(process.env.COCALC_PROJECT_HOST_PUBLIC_APP_ROUTE_CACHE_MS ?? 30_000),
+);
+const PRIVATE_APP_ROUTE_CACHE_MS = Math.max(
+  1000,
+  Number(process.env.COCALC_PROJECT_HOST_PRIVATE_APP_ROUTE_CACHE_MS ?? 30_000),
 );
 
 function formatManagedEgressCategory(category: string): string {
@@ -1152,6 +1160,18 @@ export async function main(
     max: 20_000,
     ttl: PUBLIC_APP_ROUTE_CACHE_MS,
   });
+  const maybeRewritePrivateHostnameRequest =
+    createPrivateAppHostnameRequestRewriter({
+      cacheMs: PRIVATE_APP_ROUTE_CACHE_MS,
+      trace: async (hostname) =>
+        await hubApi.system.tracePrivateAppHostname({ hostname }),
+      onTraceError: (hostname, err) => {
+        logger.debug("private hostname trace failed", {
+          hostname,
+          err: `${err}`,
+        });
+      },
+    });
   const maybeRewritePublicHostnameRequest = async (req: IncomingMessage) => {
     const currentUrl = `${req.url ?? ""}`;
     if (!currentUrl || currentUrl.startsWith(`/${hostId}/`)) {
@@ -1198,10 +1218,15 @@ export async function main(
     });
     req.headers[PUBLIC_APP_HOST_HEADER] = hostname;
   };
+  const maybeRewriteAppHostnameRequest = async (req: IncomingMessage) => {
+    await maybeRewritePrivateHostnameRequest(req);
+    if (req.headers[PRIVATE_APP_HOST_HEADER]) return;
+    await maybeRewritePublicHostnameRequest(req);
+  };
   attachProjectProxy({
     httpServers: [httpServer],
     app,
-    rewriteRequest: maybeRewritePublicHostnameRequest,
+    rewriteRequest: maybeRewriteAppHostnameRequest,
     noteUpstreamHttpBytes: ({ req, bytes }) => {
       noteManagedBoundaryClassifiedBytes({
         req,
@@ -1385,6 +1410,8 @@ export async function main(
       }
       const publicAppHost =
         `${req.headers[PUBLIC_APP_HOST_HEADER] ?? ""}`.trim();
+      const privateAppHost =
+        `${req.headers[PRIVATE_APP_HOST_HEADER] ?? ""}`.trim();
       const isManagedHttpRoute =
         !!res && isManagedProjectHttpEgressRequest(req, project_id);
       const isManagedWsRoute =
@@ -1437,10 +1464,11 @@ export async function main(
           exposure_mode: publicAppHost ? "public" : "private",
         });
       }
-      if (publicAppHost) {
-        req.headers.host = publicAppHost;
+      if (publicAppHost || privateAppHost) {
+        req.headers.host = publicAppHost || privateAppHost;
       }
       delete req.headers[PUBLIC_APP_HOST_HEADER];
+      delete req.headers[PRIVATE_APP_HOST_HEADER];
       if (res) {
         const match = await matchAppRequest({
           project_id,

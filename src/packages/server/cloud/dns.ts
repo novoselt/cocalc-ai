@@ -627,6 +627,7 @@ export async function ensureHostnameCnameDns(opts: {
   hostname: string;
   target_hostname: string;
   record_id?: string;
+  adopt_existing?: boolean;
 }): Promise<{ record_id: string }> {
   const hostname = `${opts.hostname ?? ""}`.trim().toLowerCase();
   const target = `${opts.target_hostname ?? ""}`.trim().toLowerCase();
@@ -688,6 +689,18 @@ export async function ensureHostnameCnameDns(opts: {
     }
   }
   if (!record_id) {
+    if (opts.adopt_existing === false) {
+      const existingRecords = await listDnsRecordsByName(
+        token,
+        zoneId,
+        hostname,
+      );
+      if (existingRecords.length > 0) {
+        throw new Error(
+          `refusing to replace existing DNS record for '${hostname}'`,
+        );
+      }
+    }
     if (!recordIds.length) {
       await deleteAddressRecordsConflictingWithCname({
         token,
@@ -729,6 +742,7 @@ export async function ensureAppSubdomainDns(opts: {
   hostname: string;
   target_hostname: string;
   record_id?: string;
+  adopt_existing?: boolean;
 }): Promise<{ record_id: string }> {
   return await ensureHostnameCnameDns(opts);
 }

@@ -9,6 +9,7 @@ import { ConatError } from "@cocalc/conat/core/client";
 import getPool from "@cocalc/database/pool";
 import { publishProjectRemoveFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
 import { releaseProjectAppPublicSubdomainsForProject } from "@cocalc/server/app-public-subdomains";
+import { releaseProjectAppPrivateHostnamesForProject } from "@cocalc/server/app-private-hostnames";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
@@ -956,6 +957,12 @@ export async function hardDeleteProject({
     );
     if (publicSubdomains.released > 0) {
       seedPurgedTables.push("project_app_public_subdomains");
+    }
+    const privateHostnames = await releaseProjectAppPrivateHostnamesForProject({
+      project_id: project.project_id,
+    });
+    if (privateHostnames.released > 0) {
+      seedPurgedTables.push("project_app_private_hostnames");
     }
     const purged_tables = await purgeProjectRows({
       project,

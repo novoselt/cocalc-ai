@@ -45,6 +45,7 @@ import type {
   HostEffectiveAccessRole,
 } from "@cocalc/conat/hub/api/hosts";
 import { applyHostRuntimePolicyToRunQuota } from "./run-quota";
+import { reconcileProjectAppPrivateHostnamesForProject } from "@cocalc/server/app-private-hostnames";
 
 const log = getLogger("server:project-host:control");
 // Project starts can include large restores, so allow a long RPC timeout.
@@ -703,6 +704,20 @@ export async function savePlacement(
     project_id,
     host_id: placement.host_id,
   });
+  try {
+    const result = await reconcileProjectAppPrivateHostnamesForProject({
+      project_id,
+    });
+    if (result.errors.length > 0) {
+      log.warn("private app hostname placement reconcile incomplete", result);
+    }
+  } catch (err) {
+    log.warn("private app hostname placement reconcile failed", {
+      project_id,
+      host_id: placement.host_id,
+      err: `${err}`,
+    });
+  }
 }
 
 export async function ensurePlacement(

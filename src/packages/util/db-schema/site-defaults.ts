@@ -127,6 +127,8 @@ export type SiteSettingsKeys =
   | "project_hosts_nebius_surcharge_percent"
   | "cloudflare_mode"
   | "project_hosts_app_public_subdomain_suffix"
+  | "project_hosts_app_private_hostnames_enabled"
+  | "project_hosts_app_private_hostname_domain"
   | "launcher_default_quick_create"
   | "project_rootfs_default_image"
   | "project_rootfs_default_image_gpu"
@@ -1110,6 +1112,30 @@ export const site_settings_conf: SiteSettings = {
     group: "Compute / Project Hosts",
     subgroup: "Domain",
     show: (conf) => (conf.cloudflare_mode ?? "none") === "self",
+  },
+  project_hosts_app_private_hostnames_enabled: {
+    name: "Project Hosts: Private App Hostnames",
+    desc: "Enable authenticated, server-generated dev-* hostnames for private project apps. This requires Cloudflare DNS automation, direct project-host routes, and compatible wildcard TLS on project hosts.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Project Hosts", "Cloud", "Cloudflare"],
+    group: "Compute / Project Hosts",
+    subgroup: "Domain",
+    show: (conf) => (conf.cloudflare_mode ?? "none") === "self",
+  },
+  project_hosts_app_private_hostname_domain: {
+    name: "Project Hosts: Private App Hostname Domain",
+    desc: "DNS domain under which one-level private app hostnames are created, e.g. cocalc.ai. Leave blank to use the public site hostname. The domain must have Cloudflare edge and project-host origin TLS coverage.",
+    default: "",
+    valid: valid_dns_name_or_empty,
+    to_val: to_trimmed_str,
+    tags: ["Project Hosts", "Cloud", "Cloudflare"],
+    group: "Compute / Project Hosts",
+    subgroup: "Domain",
+    show: (conf) =>
+      (conf.cloudflare_mode ?? "none") === "self" &&
+      to_bool(conf.project_hosts_app_private_hostnames_enabled),
   },
   launcher_default_quick_create: {
     name: "Launcher: Quick Create",

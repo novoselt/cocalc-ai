@@ -1202,6 +1202,11 @@ export async function deleteApp(
   } catch {
     await unexposeAppState(id);
   }
+  const hub = hubApi(getProjectConatClient());
+  await hub.system.releaseProjectAppPrivateHostname({
+    project_id,
+    app_id: id,
+  });
   const result = await deleteAppSpec(id);
   deleteAppMetrics(id);
   invalidateRouteCache();

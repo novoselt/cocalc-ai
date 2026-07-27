@@ -1024,6 +1024,53 @@ Exit gate:
 - no tunnel is created or used.
 - edge-to-origin TLS succeeds without weakening the current TLS mode.
 
+Implementation result (2026-07-26):
+
+- A separate owning-bay `project_app_private_hostnames` table now stores one
+  server-generated `dev-<64-bit-random>` hostname per project app. Reservation,
+  inspection, listing, release, lookup, and reconciliation are exposed through
+  typed Conat hub APIs. Routing is disabled by default through
+  `project_hosts_app_private_hostnames_enabled`.
+- Reservation requires a trusted signed-in project owner or administrator and
+  is capped at 32 hostnames per project. Collaborators may inspect and use
+  routes but cannot allocate or release them. The hostname domain is explicitly
+  configurable so staging can use a one-level TLS-covered domain such as
+  `cocalc.dev` instead of accidentally creating
+  `dev-*.staging.cocalc.ai`.
+- DNS creation uses proxied CNAME records with explicit record ownership.
+  Allocation refuses to adopt or replace an existing unowned record. If
+  Cloudflare creates a record but PostgreSQL cannot persist its ID, compensating
+  deletion runs immediately and any cleanup failure is retained in the route
+  error state. Tunnel-backed project hosts are rejected; this feature requires
+  a direct project-host route and never creates a tunnel.
+- Both the owning-bay route cache and each project-host route cache are bounded
+  at 20,000 entries with a 30-second TTL. Hostname-root HTTP and WebSocket
+  requests are rewritten directly to the canonical private app path on the
+  project host. An internal marker prevents private requests from ever falling
+  through to public-app authorization.
+- Existing project-host bearer/browser-session authentication is reused.
+  Signed-out and non-collaborator requests fail closed. Private WebSocket
+  sessions are revalidated during the existing revocation sweep so collaborator
+  removal disconnects established sockets without imposing that extra check on
+  unrelated project-host sockets.
+- App deletion and project hard deletion release DNS before deleting route
+  state. DNS failure preserves retryable state and blocks destructive cleanup.
+  Project placement changes reconcile all private CNAME targets, while disabled
+  sites avoid schema, database, and DNS work on ordinary placement updates.
+  Cross-bay rehome records the table as non-portable until a DNS handoff
+  protocol exists.
+- Focused DNS, authorization, cleanup, lifecycle, and ephemeral-database tests
+  pass. The complete project-host suite passes (615 tests), and the monorepo
+  TypeScript build passes.
+
+Remaining activation gate:
+
+- No Cloudflare record, setting change, staging deployment, or production
+  change was made during this phase. Before enabling the feature, configure its
+  one-level hostname domain and verify Cloudflare edge TLS plus project-host
+  origin-certificate coverage with a staging canary. The source-checkout command
+  and browser open flow remain Phase 4.
+
 Expected effort: 2 to 4 focused engineering days.
 
 ### Phase 4: source-checkout developer command

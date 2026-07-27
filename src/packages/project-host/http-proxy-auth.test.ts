@@ -33,12 +33,15 @@ jest.mock("./master-status", () => ({
 }));
 
 import {
+  clearProjectHostHttpProxyAuthCaches,
   createProjectHostHttpProxyAuth,
   createProjectHostHttpSessionToken,
   resolveProjectHostHttpSessionFromCookieHeader,
 } from "./http-proxy-auth";
+import { EventEmitter } from "node:events";
 import { createProjectHostBrowserSessionToken } from "./browser-session";
 import { PROJECT_HOST_HTTP_AUTH_QUERY_PARAM } from "@cocalc/conat/auth/project-host-http";
+import { PRIVATE_APP_HOST_HEADER } from "./private-app-hostname";
 
 function createResponse() {
   const headers = new Map<string, string | string[]>();
@@ -56,6 +59,7 @@ describe("project-host HTTP session cookie", () => {
   const account_id = "00000000-1000-4000-8000-000000000001";
 
   beforeEach(() => {
+    clearProjectHostHttpProxyAuthCaches();
     getRowMock.mockReset();
     getRowMock.mockReturnValue({
       users: {
@@ -250,6 +254,122 @@ describe("project-host HTTP session cookie", () => {
     ).resolves.toMatchObject({
       account_id,
     });
+  });
+
+  it("never falls through to public HTTP authorization for a private hostname", async () => {
+    const auth = createProjectHostHttpProxyAuth({
+      host_id: "00000000-1000-4000-8000-000000000099",
+    });
+    const req = {
+      headers: {
+        [PRIVATE_APP_HOST_HEADER]: "dev-abc.example.com",
+      },
+      socket: {},
+      url: `/${project_id}/apps/python-hello/`,
+    } as any;
+
+    await expect(
+      auth.authorizeHttpRequest(req, createResponse(), project_id),
+    ).rejects.toThrow(
+      "This private development site must be opened from its CoCalc project.",
+    );
+  });
+
+  it("authorizes a collaborator on a private hostname", async () => {
+    const auth = createProjectHostHttpProxyAuth({
+      host_id: "00000000-1000-4000-8000-000000000099",
+    });
+    const browserSession = createProjectHostBrowserSessionToken({
+      account_id,
+      now_ms: Date.now(),
+    });
+    const req = {
+      headers: {
+        cookie: `cocalc_project_host_session=${encodeURIComponent(browserSession)}`,
+        [PRIVATE_APP_HOST_HEADER]: "dev-abc.example.com",
+      },
+      socket: {},
+      url: `/${project_id}/apps/python-hello/`,
+    } as any;
+
+    await expect(
+      auth.authorizeHttpRequest(req, createResponse(), project_id),
+    ).resolves.toBeUndefined();
+  });
+
+  it("never falls through to public websocket authorization for a private hostname", async () => {
+    const auth = createProjectHostHttpProxyAuth({
+      host_id: "00000000-1000-4000-8000-000000000099",
+    });
+    const req = {
+      headers: {
+        [PRIVATE_APP_HOST_HEADER]: "dev-abc.example.com",
+      },
+      socket: {},
+      url: `/${project_id}/apps/python-hello/`,
+    } as any;
+
+    await expect(auth.authorizeUpgradeRequest(req, project_id)).rejects.toThrow(
+      "This private development site must be opened from its CoCalc project.",
+    );
+  });
+
+  it("denies a signed-in non-collaborator on a private hostname", async () => {
+    const auth = createProjectHostHttpProxyAuth({
+      host_id: "00000000-1000-4000-8000-000000000099",
+    });
+    const browserSession = createProjectHostBrowserSessionToken({
+      account_id,
+      now_ms: Date.now(),
+    });
+    getRowMock.mockReturnValue({ users: {} });
+    const req = {
+      headers: {
+        cookie: `cocalc_project_host_session=${encodeURIComponent(browserSession)}`,
+        [PRIVATE_APP_HOST_HEADER]: "dev-abc.example.com",
+      },
+      socket: {},
+      url: `/${project_id}/apps/python-hello/`,
+    } as any;
+
+    await expect(
+      auth.authorizeHttpRequest(req, createResponse(), project_id),
+    ).rejects.toThrow(
+      "permission denied: account is not a collaborator on this project",
+    );
+  });
+
+  it("disconnects an upgraded collaborator socket after access is removed", async () => {
+    const auth = createProjectHostHttpProxyAuth({
+      host_id: "00000000-1000-4000-8000-000000000099",
+    });
+    const browserSession = createProjectHostBrowserSessionToken({
+      account_id,
+      now_ms: Date.now(),
+    });
+    const req = {
+      headers: {
+        cookie: `cocalc_project_host_session=${encodeURIComponent(browserSession)}`,
+        [PRIVATE_APP_HOST_HEADER]: "dev-abc.example.com",
+      },
+      socket: {},
+      url: `/${project_id}/apps/python-hello/socket`,
+    } as any;
+    await auth.authorizeUpgradeRequest(req, project_id);
+
+    const socket = new EventEmitter() as any;
+    socket.destroyed = false;
+    socket.destroy = jest.fn(() => {
+      socket.destroyed = true;
+    });
+    auth.trackUpgradedSocket(req, socket);
+
+    getRowMock.mockReturnValue({ users: {} });
+    auth.clearCaches();
+    const stop = auth.startUpgradeRevocationKickLoop();
+    stop();
+
+    expect(socket.destroy).toHaveBeenCalled();
   });
 
   it("strips bearer query tokens from websocket upgrade urls authorized by browser session cookie", async () => {

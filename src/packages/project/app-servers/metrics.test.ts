@@ -7,6 +7,20 @@ import { join } from "node:path";
 import { PROJECT_PROXY_AUTH_HEADER } from "@cocalc/backend/auth/project-proxy-auth";
 import { APP_PROXY_EXPOSURE_HEADER } from "@cocalc/backend/auth/app-proxy";
 
+jest.mock("@cocalc/project/conat/hub", () => ({
+  hubApi: jest.fn(() => ({
+    system: {
+      releaseProjectAppPrivateHostname: jest.fn(async () => ({
+        released: false,
+      })),
+    },
+  })),
+}));
+
+jest.mock("@cocalc/project/conat/runtime-client", () => ({
+  getProjectConatClient: jest.fn(() => ({})),
+}));
+
 const SERVICE_SCRIPT = `
 const http = require("http");
 const host = process.env.HOST || "127.0.0.1";

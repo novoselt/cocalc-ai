@@ -617,6 +617,46 @@ describe("cloud dns", () => {
     expect(record.content).toBe("host-abc.example.com");
   });
 
+  it("does not adopt or replace an unowned app hostname record", async () => {
+    fetchMock.mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/zones?")) {
+        return zoneResponse;
+      }
+      if (init?.method === "GET" && url.includes("/dns_records?")) {
+        if (url.includes("type=CNAME")) {
+          return responseWith([]);
+        }
+        return responseWith([
+          {
+            id: "unowned-record",
+            name: "dev-private.example.com",
+            type: "A",
+            content: "203.0.113.19",
+          },
+        ]);
+      }
+      return responseWith({});
+    });
+
+    const { ensureAppSubdomainDns } = await import("./dns");
+    await expect(
+      ensureAppSubdomainDns({
+        hostname: "dev-private.example.com",
+        target_hostname: "host-abc.example.com",
+        adopt_existing: false,
+      }),
+    ).rejects.toThrow(
+      "refusing to replace existing DNS record for 'dev-private.example.com'",
+    );
+
+    expect(
+      fetchMock.mock.calls.filter(([, init]) =>
+        ["POST", "PUT", "DELETE"].includes(`${init?.method ?? ""}`),
+      ),
+    ).toHaveLength(0);
+  });
+
   it("points the public viewer hostname directly at the tunnel target", async () => {
     mockedSettings = {
       project_hosts_cloudflare_tunnel_api_token: "token",

@@ -145,6 +145,24 @@ export function wireSystemApi(): void {
     ]);
   };
 
+  hubApi.system.tracePrivateAppHostname = async (opts: {
+    account_id?: string;
+    host_id?: string;
+    hostname: string;
+  }) => {
+    return await forwardSystem("system.tracePrivateAppHostname", [opts]);
+  };
+
+  hubApi.system.releaseProjectAppPrivateHostname = async (opts: {
+    account_id?: string;
+    project_id: string;
+    app_id: string;
+  }) => {
+    return await forwardSystem("system.releaseProjectAppPrivateHostname", [
+      opts,
+    ]);
+  };
+
   hubApi.hosts.getManagedRootfsReleaseArtifact = async (opts: {
     host_id?: string;
     image: string;
