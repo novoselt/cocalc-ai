@@ -18,6 +18,7 @@ import {
   selectActiveHost,
   deleteProjectDataOnHost,
   savePlacement,
+  startProjectOnHost,
   stopProjectOnHost,
 } from "../project-host/control";
 import { getRoutedHostControlClient } from "../project-host/client";
@@ -598,6 +599,57 @@ async function cleanupDestinationOnFailure(
     step: "cleanup-dest",
     message: "destination data removed",
     detail: { dest_host_id: context.dest_host_id },
+  });
+}
+
+function sourceRuntimeWasActive(context: MoveProjectContext): boolean {
+  return (
+    context.project_state === "running" ||
+    context.project_state === "starting" ||
+    context.project_state === "pending"
+  );
+}
+
+async function reconcileSourceRuntimeAfterMoveAbort(
+  context: MoveProjectContext,
+  progress: (update: MoveProjectProgressUpdate) => void,
+  managed_egress_override?: ManagedBackupEgressOverride,
+) {
+  if (
+    !context.project_host_id ||
+    context.project_host_id === context.dest_host_id ||
+    !isSourceHostAvailable(context)
+  ) {
+    return;
+  }
+  progress({
+    step: "revert-placement",
+    message: "reconciling source runtime after move abort",
+    detail: { source_host_id: context.project_host_id },
+  });
+  // Destination startup can leave a recent global "running" snapshot after
+  // placement is reverted. Stop is idempotent and resets that snapshot to the
+  // source host's actual state before deciding whether to restart it.
+  await stopProjectOnHost(context.project_id, {
+    timeout_ms: MOVE_STOP_PROJECT_TIMEOUT_MS,
+  });
+  if (!sourceRuntimeWasActive(context)) {
+    progress({
+      step: "revert-placement",
+      message: "source runtime reconciled in stopped state",
+      detail: { source_host_id: context.project_host_id },
+    });
+    return;
+  }
+  await startProjectOnHost(context.project_id, {
+    account_id: context.account_id,
+    ignore_recent_state_snapshot: true,
+    ...(managed_egress_override ? { managed_egress_override } : {}),
+  });
+  progress({
+    step: "revert-placement",
+    message: "source runtime restarted after move abort",
+    detail: { source_host_id: context.project_host_id },
   });
 }
 
@@ -1605,8 +1657,10 @@ export async function moveProjectToHost(
       stage,
     });
     if (placementUpdated) {
+      let sourcePlacementRestored = false;
       try {
         await revertPlacementIfPossible(context, progress);
+        sourcePlacementRestored = true;
       } catch (err) {
         log.warn("moveProjectToHost cancel placement revert failed", {
           project_id: context.project_id,
@@ -1635,6 +1689,29 @@ export async function moveProjectToHost(
             error: `${cleanupErr}`,
           },
         });
+      }
+      if (sourcePlacementRestored) {
+        try {
+          await reconcileSourceRuntimeAfterMoveAbort(
+            context,
+            progress,
+            input.managed_egress_override,
+          );
+        } catch (reconcileErr) {
+          log.warn("moveProjectToHost cancel source recovery failed", {
+            project_id: context.project_id,
+            source_host_id: context.project_host_id,
+            err: reconcileErr,
+          });
+          progress({
+            step: "revert-placement",
+            message: "source runtime recovery failed",
+            detail: {
+              source_host_id: context.project_host_id,
+              error: `${reconcileErr}`,
+            },
+          });
+        }
       }
     }
     progress({
@@ -2203,8 +2280,10 @@ export async function moveProjectToHost(
           message: "destination start failed",
           detail: { dest_host_id: context.dest_host_id, error: `${err}` },
         });
+        let sourcePlacementRestored = false;
         try {
           await revertPlacementIfPossible(context, progress);
+          sourcePlacementRestored = true;
         } catch (revertErr) {
           log.warn("moveProjectToHost placement revert failed", {
             project_id: context.project_id,
@@ -2236,6 +2315,29 @@ export async function moveProjectToHost(
               error: `${cleanupErr}`,
             },
           });
+        }
+        if (sourcePlacementRestored) {
+          try {
+            await reconcileSourceRuntimeAfterMoveAbort(
+              context,
+              progress,
+              input.managed_egress_override,
+            );
+          } catch (reconcileErr) {
+            log.warn("moveProjectToHost source recovery failed", {
+              project_id: context.project_id,
+              source_host_id: context.project_host_id,
+              err: reconcileErr,
+            });
+            progress({
+              step: "revert-placement",
+              message: "source runtime recovery failed",
+              detail: {
+                source_host_id: context.project_host_id,
+                error: `${reconcileErr}`,
+              },
+            });
+          }
         }
         if (moveSentinel) {
           await deleteMoveSentinelBestEffort({

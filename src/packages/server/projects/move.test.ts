@@ -8,6 +8,7 @@ let loadHostFromRegistryMock: jest.Mock;
 let selectActiveHostMock: jest.Mock;
 let deleteProjectDataOnHostMock: jest.Mock;
 let savePlacementMock: jest.Mock;
+let startProjectOnHostMock: jest.Mock;
 let stopProjectOnHostMock: jest.Mock;
 let startProjectLroMock: jest.Mock;
 let createBackupLroMock: jest.Mock;
@@ -69,6 +70,7 @@ jest.mock("../project-host/control", () => ({
   deleteProjectDataOnHost: (...args: any[]) =>
     deleteProjectDataOnHostMock(...args),
   savePlacement: (...args: any[]) => savePlacementMock(...args),
+  startProjectOnHost: (...args: any[]) => startProjectOnHostMock(...args),
   stopProjectOnHost: (...args: any[]) => stopProjectOnHostMock(...args),
 }));
 
@@ -260,6 +262,7 @@ describe("moveProjectToHost", () => {
     savePlacementMock = jest.fn(async (_project_id, { host_id }: any) => {
       currentRoutedHostId = host_id;
     });
+    startProjectOnHostMock = jest.fn(async () => undefined);
     stopProjectOnHostMock = jest.fn(async () => {
       moveCallOrder.push("stop-source");
     });
@@ -866,6 +869,7 @@ describe("moveProjectToHost", () => {
       project_id: PROJECT_ID,
       host_id: DEST_HOST_ID,
     });
+    expect(startProjectOnHostMock).not.toHaveBeenCalled();
   });
 
   it("allows a move to a host in another bay", async () => {
@@ -1311,6 +1315,10 @@ describe("moveProjectToHost", () => {
     expect(deleteProjectDataOnHostMock).toHaveBeenCalledWith({
       project_id: PROJECT_ID,
       host_id: DEST_HOST_ID,
+    });
+    expect(startProjectOnHostMock).toHaveBeenCalledWith(PROJECT_ID, {
+      account_id: "account-id",
+      ignore_recent_state_snapshot: true,
     });
   });
 
@@ -2222,6 +2230,10 @@ describe("moveProjectToHost", () => {
     expect(deleteProjectDataOnHostMock).toHaveBeenCalledWith({
       project_id: PROJECT_ID,
       host_id: DEST_HOST_ID,
+    });
+    expect(startProjectOnHostMock).toHaveBeenCalledWith(PROJECT_ID, {
+      account_id: "account-id",
+      ignore_recent_state_snapshot: true,
     });
     expect(projectLogRows).toEqual(
       expect.arrayContaining([
