@@ -2115,6 +2115,136 @@ describe("moveProjectToHost", () => {
     });
   });
 
+  it("preserves cancellation while waiting for destination start", async () => {
+    process.env.COCALC_MOVE_CHILD_LRO_POLL_INTERVAL_MS = "1";
+    queryMock = jest.fn(async (sql: string) => {
+      if (
+        sql.includes("COALESCE(projects.owning_bay_id, $2)") &&
+        sql.includes("COALESCE(project_hosts.bay_id, $2)")
+      ) {
+        return {
+          rows: [
+            {
+              project_id: PROJECT_ID,
+              host_id: SOURCE_HOST_ID,
+              region: "wnam",
+              project_state: "running",
+              provisioned: true,
+              last_backup: null,
+              last_edited: null,
+              project_owning_bay_id: "bay-0",
+              host_bay_id: "bay-0",
+            },
+          ],
+        };
+      }
+      if (
+        sql.includes(
+          "SELECT status, deleted, last_seen, name FROM project_hosts",
+        )
+      ) {
+        return {
+          rows: [
+            {
+              status: "running",
+              deleted: null,
+              last_seen: new Date(),
+              name: SOURCE_HOST_NAME,
+            },
+          ],
+        };
+      }
+      if (sql.includes("SELECT host_id, state->>'state' AS project_state")) {
+        return {
+          rows: [{ host_id: DEST_HOST_ID, project_state: "starting" }],
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    let cancelNow = false;
+    startProjectLroMock = jest.fn(async () => {
+      cancelNow = true;
+      return {
+        op_id: "start-op-parent-cancel",
+        scope_type: "project",
+        scope_id: PROJECT_ID,
+      };
+    });
+    getLroStreamMock = jest.fn(async () => {
+      const stream = new EventEmitter() as EventEmitter & {
+        getAll: () => any[];
+        close: () => void;
+      };
+      stream.getAll = () => [];
+      stream.close = () => {};
+      return stream;
+    });
+    lroSummaryByOpId.set("start-op-parent-cancel", {
+      op_id: "start-op-parent-cancel",
+      scope_type: "project",
+      scope_id: PROJECT_ID,
+      status: "running",
+    });
+
+    try {
+      const { MOVE_CANCELED_CODE, moveProjectToHost } = await import("./move");
+      await expect(
+        moveProjectToHost(
+          {
+            project_id: PROJECT_ID,
+            dest_host_id: DEST_HOST_ID,
+            account_id: "account-id",
+          },
+          {
+            op_id: "move-op-cancel-start-dest",
+            shouldCancel: async () => cancelNow,
+          },
+        ),
+      ).rejects.toMatchObject({
+        code: MOVE_CANCELED_CODE,
+        stage: "start-dest",
+      });
+    } finally {
+      delete process.env.COCALC_MOVE_CHILD_LRO_POLL_INTERVAL_MS;
+    }
+
+    expect(updateLroMock).toHaveBeenCalledWith({
+      op_id: "start-op-parent-cancel",
+      status: "canceled",
+      error: "parent move canceled during start-dest",
+    });
+    expect(savePlacementMock).toHaveBeenNthCalledWith(1, PROJECT_ID, {
+      host_id: DEST_HOST_ID,
+    });
+    expect(savePlacementMock).toHaveBeenNthCalledWith(2, PROJECT_ID, {
+      host_id: SOURCE_HOST_ID,
+    });
+    expect(deleteProjectDataOnHostMock).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+      host_id: DEST_HOST_ID,
+    });
+    expect(projectLogRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "project-move:move-op-cancel-start-dest:project_move_canceled",
+          event: expect.objectContaining({
+            event: "project_move_canceled",
+            stage: "start-dest",
+          }),
+        }),
+      ]),
+    );
+    expect(
+      projectLogRows.some(
+        ({ event }: any) => event?.event === "project_move_failed",
+      ),
+    ).toBe(false);
+    expect(releaseProjectMoveGuardMock).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+      move_id: "move-op-cancel-start-dest",
+    });
+  });
+
   it("retries destination start once after a transient parse failure", async () => {
     queryMock = jest.fn(async (sql: string) => {
       if (

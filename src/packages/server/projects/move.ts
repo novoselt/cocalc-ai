@@ -2046,6 +2046,9 @@ export async function moveProjectToHost(
                 cancelStage: "start-dest",
               });
             } catch (err) {
+              if ((err as any)?.code === MOVE_CANCELED_CODE) {
+                throw err;
+              }
               const snapshot = await loadProjectPlacementState(
                 context.project_id,
               );
