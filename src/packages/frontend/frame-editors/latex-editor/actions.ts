@@ -96,6 +96,7 @@ import {
 // Side-effect import: registers the Insert-menu chat marker/bookmark commands.
 import "./chat-marker-command";
 import {
+  hasKnownThreadMessages,
   parseThreadAnchor,
   parseThreadResolved,
 } from "@cocalc/frontend/chat/anchors";
@@ -2848,12 +2849,9 @@ export class Actions extends BaseActions<LatexEditorState> {
   private _anchorHasMessages(hash: string): boolean {
     try {
       const actions = ensureSideChatActions(this.project_id, this.path);
-      const threadIndex = actions.getThreadIndex();
       return actions
         .listAnchoredThreadKeys(hash)
-        .some(
-          (threadKey) => (threadIndex.get(threadKey)?.messageCount ?? 0) > 0,
-        );
+        .some((threadKey) => hasKnownThreadMessages(actions, threadKey));
     } catch {
       return false;
     }

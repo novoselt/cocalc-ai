@@ -184,6 +184,64 @@ export interface AnchoredThreadsInfo {
   chatActions?: ChatActions;
 }
 
+interface KnownThreadActivity {
+  messageCount: number;
+  newestTime: number;
+  unreadByAccount: Map<string, number>;
+}
+
+// The optimistic file preview can hydrate before the live chat syncdoc.  On
+// some connections the first live snapshot is temporarily empty, even though
+// the collaborative thread-config rows and the messages on disk still exist.
+// Keep the last confirmed activity on the actions instance so anchored UI and
+// marker locks do not blink out (or stay gone after a CodeMirror rescan).
+//
+// A deleted thread also deletes its config row, so callers stop consulting
+// this cache as soon as the deletion is authoritative.
+const knownThreadActivity = new WeakMap<
+  ChatActions,
+  Map<string, KnownThreadActivity>
+>();
+
+function stableThreadActivity(
+  actions: ChatActions,
+  threadId: string,
+): {
+  activity: KnownThreadActivity | undefined;
+  currentlyHydrated: boolean;
+} {
+  const entry = actions.getThreadIndex?.().get?.(threadId);
+  const currentlyHydrated = (entry?.messageCount ?? 0) > 0;
+  let perThread = knownThreadActivity.get(actions);
+  if (currentlyHydrated) {
+    if (perThread == null) {
+      perThread = new Map();
+      knownThreadActivity.set(actions, perThread);
+    }
+    const previous = perThread.get(threadId);
+    const activity: KnownThreadActivity = {
+      messageCount: entry!.messageCount,
+      newestTime: entry!.newestTime,
+      unreadByAccount: previous?.unreadByAccount ?? new Map(),
+    };
+    perThread.set(threadId, activity);
+    return { activity, currentlyHydrated: true };
+  }
+  return {
+    activity: perThread?.get(threadId),
+    currentlyHydrated: false,
+  };
+}
+
+export function hasKnownThreadMessages(
+  actions: ChatActions,
+  threadId: string,
+): boolean {
+  return (
+    (stableThreadActivity(actions, threadId).activity?.messageCount ?? 0) > 0
+  );
+}
+
 export function computeAnchoredThreads({
   actions,
   anchorId,
@@ -206,7 +264,6 @@ export function computeAnchoredThreads({
     return info;
   }
   const readStateReady = actions.isProjectReadStateReady?.() ?? false;
-  const threadIndex = actions.getThreadIndex?.();
   for (const row of actions.listThreadConfigRows?.() ?? []) {
     const threadId = `${(row as any)?.thread_id ?? ""}`.trim();
     if (!threadId) continue;
@@ -217,15 +274,23 @@ export function computeAnchoredThreads({
       ? rowResolved?.anchorId === id
       : rowResolved == null && !rowArchived && rowAnchor?.id === id;
     if (!matches) continue;
-    const entry = threadIndex?.get?.(threadId);
-    const messageCount = entry?.messageCount ?? 0;
+    const { activity, currentlyHydrated } = stableThreadActivity(
+      actions,
+      threadId,
+    );
+    const messageCount = activity?.messageCount ?? 0;
     let unreadCount = 0;
     if (!resolved && readStateReady && accountId && messageCount > 0) {
-      const readCount = Math.max(
-        0,
-        actions.getThreadReadCount?.(threadId, accountId) ?? 0,
-      );
-      unreadCount = Math.max(messageCount - readCount, 0);
+      if (currentlyHydrated) {
+        const readCount = Math.max(
+          0,
+          actions.getThreadReadCount?.(threadId, accountId) ?? 0,
+        );
+        unreadCount = Math.max(messageCount - readCount, 0);
+        activity?.unreadByAccount.set(accountId, unreadCount);
+      } else {
+        unreadCount = activity?.unreadByAccount.get(accountId) ?? 0;
+      }
     }
     const name = parseNonemptyString((row as any)?.name);
     // Config-only threads have no messages yet; fall back to the config
@@ -237,7 +302,7 @@ export function computeAnchoredThreads({
       messageCount,
       unreadCount,
       newestTime: Math.max(
-        entry?.newestTime ?? 0,
+        activity?.newestTime ?? 0,
         Number.isFinite(updatedAt) ? updatedAt : 0,
       ),
       anchor: rowAnchor,

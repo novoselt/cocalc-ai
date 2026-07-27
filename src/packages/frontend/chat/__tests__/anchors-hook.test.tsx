@@ -167,7 +167,7 @@ describe("useAnchoredThreads reconnect", () => {
       messageCount = 0;
       actions.store.emit("change");
     });
-    await waitFor(() => expect(latest?.totalMessages).toBe(0));
+    await waitFor(() => expect(latest?.totalMessages).toBe(1));
 
     act(() => {
       messageCount = 2;
