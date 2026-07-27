@@ -2,8 +2,8 @@
 
 Date: 2026-07-27
 
-Status: recovery complete; preventive code implemented locally and awaiting
-staging/prod rollout
+Status: recovery complete; preventive changes validated on staging; production
+rollout pending
 
 Affected project: `165d0097-24ab-440c-a70e-4c7fb5199ff8`
 
@@ -46,6 +46,13 @@ network, region, or host-capacity failure.
   minutes later, and support sent confirmation at 15:01 UTC.
 - No project data was lost.
 - The final pre-move backup and the source-host data were preserved.
+
+Although this was a same-region move, project data is stored on host-local
+volumes. A successful move eventually removes the old source-host copy after
+the destination restore and sentinel verification succeed. "Same region"
+selects the backup repository and eligible hosts; it does not make the source
+and destination share one project volume. In this incident, verification
+failed before that source cleanup stage.
 
 The previous 30 days contain 80 move LRO attempts across 52 distinct projects.
 Six distinct projects had a destination-verification failure under several code
@@ -210,8 +217,8 @@ verification failure.
 
 ## Immediate Corrective Changes
 
-The following changes are implemented locally and covered by focused tests.
-They are not yet deployed at the time of this RCA.
+The following changes are implemented, covered by focused tests, and validated
+on staging. They have not yet been deployed to production.
 
 ### Durable move fence
 
@@ -255,6 +262,20 @@ They are not yet deployed at the time of this RCA.
 - Do not allow a stale crash row to grant former hosts continuing backup
   authority.
 
+### Cancellation and rollback safety
+
+- Preserve cancellation as the parent move's terminal classification rather
+  than wrapping it as a generic move failure.
+- During destination startup, wait for the durable child operation to
+  physically settle before rollback. Canceling the child LRO record does not
+  interrupt an already-running restore RPC.
+- Revert placement to the source before reconciling the source runtime.
+- Explicitly stop the destination runtime before deleting destination data so
+  no overlay mount can retain paths under a removed project home.
+- Restore the source runtime to its pre-move state after rollback.
+- Remove the operation-specific sentinel from the source only after placement
+  and source runtime recovery are complete.
+
 ### Regression coverage
 
 Focused tests now cover:
@@ -266,32 +287,84 @@ Focused tests now cover:
 - a second source stop after backup;
 - guard propagation by the move controller;
 - explicit restore with a recent cached `running` state;
-- active move backup authorization expiry.
+- active move backup authorization expiry;
+- cancellation while the destination restore is queued or running;
+- waiting for the destination child before rollback;
+- stopping the destination before deleting its data;
+- recovering the source runtime after rollback;
+- operation-specific sentinel cleanup on both hosts.
 
-The focused suite currently passes 87 tests across six suites.
+The focused project-move suite passes all 31 tests. The broader start,
+authorization, and guard suites also passed during the initial implementation.
 
 ## Rollout and Verification Plan
 
-1. Deploy the hub/server change to staging.
-2. Start a disposable project and generate continuous browser/file traffic that
-   would normally trigger autostart.
-3. Move it between two staging hosts while traffic continues.
-4. Verify ordinary starts receive the temporary move-in-progress error.
-5. Verify the final backup completes and the second source stop occurs.
-6. Verify the destination child start reports a nontrivial
-   `runner_start.restore_backup` duration.
-7. Verify the exact requested backup ID is restored and the sentinel passes.
-8. Verify the move fence is removed on success, failure, and cancellation.
-9. Kill a staging move worker and verify the stale fence expires.
-10. Run a second successful canary move without concurrent traffic.
-11. Deploy to production and run one low-impact canary move.
-12. Monitor all project-move and child-start LROs for at least 24 hours.
+### Staging verification completed
+
+Staging validation completed on 2026-07-27 using disposable project
+`bf37d9f5-0830-437e-a60d-1740361b8974` and two hosts in `us-south1`.
+
+The final validated staging artifact was
+`20260727T181814Z-4ed3ddb1-project-move-sentinel-cleanup-staging-20260727`,
+SHA-256
+`424f019d7c6d771ff6d89e1d9b63d3e1b1a1dbea9d9d4e406b9fec0a0ae7dc55`,
+deployed as hub release `20260727181943-hub`. All four hub workers became
+healthy, and the hub smoke test passed the homepage, static shell, favicon, and
+all four worker-to-project-host routes.
+
+The staging canaries established:
+
+- A quiet move completed in 20.122 seconds. Its exact backup ID was restored,
+  immutable marker and 64 MiB payload hashes matched, the sentinel passed, and
+  no move fence remained.
+- A concurrent-traffic move completed in 13.509 seconds. Of 59 ordinary start
+  attempts, 14 attempts made during the move were rejected with
+  `ProjectMoveInProgressError`; attempts outside the move were accepted. The
+  exact backup restore took 6.110 seconds, both hashes matched, and no fence
+  remained.
+- Cancellation during destination startup waited for the already-admitted
+  child restore to physically complete, then rolled back safely. Move
+  `7c821c40-23be-4727-a652-5d101f8577a7` restored exact backup
+  `d8d6ffa8e85b6226ea3e936b5b767ea52999d1188568da3467d7386237f0d980`;
+  its restore runner took 7.767 seconds. After rollback, the source project was
+  running and directly reachable, both hashes matched, the destination project
+  home and overlay were absent, the operation sentinel was absent, and the
+  move-fence count was zero.
+- A synthetic fence with a 12-second expiry rejected an ordinary start before
+  expiry and allowed the same start after 13 seconds. The exact synthetic row
+  was then removed. This directly exercised the production expiry query
+  without intentionally killing a staging hub worker.
+
+The rollout itself exposed cancellation-path defects that the original
+incident tests did not cover: cancellation classification was lost, rollback
+raced an admitted restore RPC, destination data could be removed before its
+runtime was stopped, and sentinel cleanup could route to the wrong host. These
+were fixed and retested on staging before any production deployment.
+
+One observability limitation remains: the final source-stop completion is not
+separately durable in the terminal parent LRO result because terminal progress
+collapses to `{phase: "done"}`. The successful restore, sentinel, hashes, host
+cleanup, and fence checks still verify the end-to-end invariant.
+
+### Remaining production rollout
+
+1. Review the final corrective commits and this RCA.
+2. Deploy the exact validated hub change set during a low-traffic production
+   window.
+3. Verify all hub workers, the homepage/static smoke checks, and every
+   worker-to-project-host route.
+4. Run one low-impact production canary move without forced cancellation and
+   verify its exact restore ID, runner timing, sentinel, placement, hashes, and
+   fence cleanup.
+5. Monitor project-move and child-start LROs, destination-verification errors,
+   and move-fence rows for at least 24 hours.
 
 ## Follow-up Actions
 
 ### P0: before broad production moves
 
-- Deploy and validate the immediate corrective changes.
+- Deploy the staging-validated corrective changes to production and run the
+  low-impact production canary.
 - Add an alert for any destination-verification failure.
 - Add a monitor for a restore child LRO that succeeds without runner restore
   timings or in an implausibly short duration.
