@@ -27,8 +27,10 @@ export {
   shouldAutoRestoreInterruptedSpotHost,
   type ReconcileRunResult,
   classifyCloudOrphanInstances,
+  ensureHostReadyVerificationWork,
   hasPendingRestoreBlockingWork,
   listCloudOrphanInstances,
+  runtimeSshServerForProviderReconcile,
   type CloudOrphanInstance,
   bumpReconcile,
 } from "./reconcile";

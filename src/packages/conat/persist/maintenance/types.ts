@@ -115,6 +115,8 @@ export interface PersistMaintenanceStatus {
   presentDatabases: number;
   missingDatabases: number;
   unverifiedDatabases: number;
+  presentFileBytes: number;
+  presentWalBytes: number;
   eligibleCandidates: number;
   estimatedReclaimableBytes: number;
   scanRoots: string[];

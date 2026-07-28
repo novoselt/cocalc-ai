@@ -9,6 +9,7 @@ import { ConatError } from "@cocalc/conat/core/client";
 import getPool from "@cocalc/database/pool";
 import { publishProjectRemoveFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
 import { releaseProjectAppPublicSubdomainsForProject } from "@cocalc/server/app-public-subdomains";
+import { releaseProjectAppPrivateHostnamesForProject } from "@cocalc/server/app-private-hostnames";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
@@ -200,10 +201,10 @@ async function ensureDeletedProjectsSchema(): Promise<void> {
         "CREATE INDEX IF NOT EXISTS deleted_projects_deleted_by_idx ON deleted_projects(deleted_by)",
       );
       await pool().query(
-        "CREATE INDEX IF NOT EXISTS deleted_projects_owner_idx ON deleted_projects(owner_account_id)",
+        "CREATE INDEX IF NOT EXISTS deleted_projects_owner_account_id_idx ON deleted_projects(owner_account_id)",
       );
       await pool().query(
-        "CREATE INDEX IF NOT EXISTS deleted_projects_backup_due_idx ON deleted_projects(backup_purge_due_at)",
+        "CREATE INDEX IF NOT EXISTS deleted_projects_backup_purge_due_at_idx ON deleted_projects(backup_purge_due_at)",
       );
     })().catch((err) => {
       deletedProjectsSchemaReady = undefined;
@@ -956,6 +957,12 @@ export async function hardDeleteProject({
     );
     if (publicSubdomains.released > 0) {
       seedPurgedTables.push("project_app_public_subdomains");
+    }
+    const privateHostnames = await releaseProjectAppPrivateHostnamesForProject({
+      project_id: project.project_id,
+    });
+    if (privateHostnames.released > 0) {
+      seedPurgedTables.push("project_app_private_hostnames");
     }
     const purged_tables = await purgeProjectRows({
       project,

@@ -16,6 +16,7 @@ import {
   PROJECT_SECRETS_ENV,
   PROJECT_SECRETS_MOUNT_PATH,
 } from "@cocalc/util/project-secrets";
+import { projectRuntimePathForProcess } from "@cocalc/util/project-runtime";
 
 const logger = getLogger("project:conat:terminal-server");
 
@@ -42,6 +43,13 @@ export function projectScopedCliEnv(): Record<string, string> {
     COCALC_SECRET_TOKEN: join(data, "secret-token"),
     [PROJECT_SECRETS_ENV]: PROJECT_SECRETS_MOUNT_PATH,
   };
+}
+
+export function applyTerminalRuntimeCwd(
+  options: Options,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  options.cwd = projectRuntimePathForProcess(options.cwd, env);
 }
 
 export async function applyTerminalInitFile({
@@ -88,6 +96,7 @@ async function preHook(hook: {
   options: Options;
 }) {
   const { command, args, options } = hook;
+  applyTerminalRuntimeCwd(options);
   options.env0 = {
     ...projectScopedCliEnv(),
     ...(options.env0 ?? {}),

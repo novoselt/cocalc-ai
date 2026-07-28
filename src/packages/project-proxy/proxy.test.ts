@@ -19,9 +19,82 @@ async function closeServer(server: Server | http.Server): Promise<void> {
 }
 
 describe("project proxy upstream boundary metering", () => {
+  it("supports an early host-first dispatcher for reserved outer paths", async () => {
+    const upstream = http.createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ source: "private-app", url: req.url }));
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    const app = express();
+    let earlyHandler:
+      | ((
+          req: http.IncomingMessage,
+          res: http.ServerResponse,
+          next: express.NextFunction,
+        ) => Promise<void>)
+      | undefined;
+    app.use((req, res, next) => {
+      if (req.headers.host !== "dev.example.com" || !earlyHandler) {
+        return next();
+      }
+      req.url = `/${PROJECT_ID}/apps/dev-site${req.url}`;
+      void earlyHandler(req, res, next);
+    });
+    app.get("/healthz", (_req, res) => {
+      res.json({ source: "outer-project-host" });
+    });
+    const server = http.createServer(app);
+    const handlers = attachProjectProxy({
+      httpServer: server,
+      app,
+      resolveTarget: async () => ({
+        handled: true,
+        target: { host: "127.0.0.1", port: upstreamPort },
+      }),
+    });
+    earlyHandler = handlers.handleRequest;
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const proxyPort = (server.address() as AddressInfo).port;
+
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        http
+          .get(
+            {
+              host: "127.0.0.1",
+              port: proxyPort,
+              path: "/healthz",
+              headers: { host: "dev.example.com" },
+            },
+            (res) => {
+              const chunks: Buffer[] = [];
+              res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+              res.on("end", () =>
+                resolve(Buffer.concat(chunks).toString("utf8")),
+              );
+            },
+          )
+          .on("error", reject);
+      });
+      expect(JSON.parse(body)).toEqual({
+        source: "private-app",
+        url: `/${PROJECT_ID}/apps/dev-site/healthz`,
+      });
+    } finally {
+      await closeServer(server);
+      await closeServer(upstream);
+    }
+  });
+
   it("attaches websocket upgrades to every ingress listener", async () => {
+    const upstreamCookies: Array<string | undefined> = [];
     const upstream = http.createServer();
-    upstream.on("upgrade", (_req, socket) => {
+    upstream.on("upgrade", (req, socket) => {
+      upstreamCookies.push(req.headers.cookie);
       socket.end(
         "HTTP/1.1 101 Switching Protocols\r\n" +
           "Upgrade: websocket\r\n" +
@@ -58,12 +131,17 @@ describe("project proxy upstream boundary metering", () => {
             "Connection: Upgrade\r\n" +
             "Upgrade: websocket\r\n" +
             "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n" +
-            "Sec-WebSocket-Version: 13\r\n\r\n",
+            "Sec-WebSocket-Version: 13\r\n" +
+            "Cookie: cocalc_project_host_session=edge-secret; app_session=keep-me\r\n\r\n",
         );
         const [chunk] = (await once(client, "data")) as [Buffer];
         expect(chunk.toString("utf8")).toContain("101 Switching Protocols");
         client.destroy();
       }
+      expect(upstreamCookies).toEqual([
+        "app_session=keep-me",
+        "app_session=keep-me",
+      ]);
     } finally {
       for (const server of servers) await closeServer(server);
       await closeServer(upstream);
@@ -226,6 +304,8 @@ describe("project proxy upstream boundary metering", () => {
 
     const client = connect({ host: "127.0.0.1", port: proxyPort });
     await once(client, "connect");
+    const received: Buffer[] = [];
+    client.on("data", (chunk) => received.push(Buffer.from(chunk)));
     const callbackDone = new Promise<void>((resolve) => {
       noteUpstreamWsBytes.mockImplementation(() => resolve());
     });
@@ -238,11 +318,10 @@ describe("project proxy upstream boundary metering", () => {
         "Sec-WebSocket-Version: 13\r\n" +
         "\r\n",
     );
-    await once(client, "data");
     await callbackDone;
-    client.destroy();
     await once(client, "close");
 
+    expect(Buffer.concat(received).includes(payload)).toBe(true);
     expect(noteUpstreamWsBytes).toHaveBeenCalledWith(
       expect.objectContaining({
         bytes: payload.length,
@@ -365,6 +444,66 @@ describe("project proxy forwarded app redirects", () => {
     expect(location).toBe(
       "https://host-example.cocalc.ai/11111111-1111-4111-8111-111111111111/proxy/6006/unsupported_browser.htm",
     );
+
+    await closeServer(server);
+    await closeServer(upstream);
+  });
+
+  it("applies caller-specific response rewriting after normalization", async () => {
+    const upstream = http.createServer((_req, res) => {
+      res.writeHead(302, {
+        Location:
+          "https://host-example.cocalc.ai:80/11111111-1111-4111-8111-111111111111/apps/dev-site/",
+      });
+      res.end("");
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    const app = express();
+    const server = http.createServer(app);
+    const normalizedLocations: Array<string | undefined> = [];
+    const rewriteResponse = jest.fn((proxyRes: http.IncomingMessage) => {
+      normalizedLocations.push(proxyRes.headers.location);
+      proxyRes.headers.location = "/rewritten";
+    });
+    attachProjectProxy({
+      httpServer: server,
+      app,
+      resolveTarget: async () => ({
+        handled: true,
+        target: { host: "127.0.0.1", port: upstreamPort },
+      }),
+      rewriteResponse,
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const proxyPort = (server.address() as AddressInfo).port;
+
+    const location = await new Promise<string | undefined>(
+      (resolve, reject) => {
+        http
+          .get(
+            {
+              host: "127.0.0.1",
+              port: proxyPort,
+              path: `/${PROJECT_ID}/apps/dev-site/`,
+            },
+            (res) => {
+              res.resume();
+              res.on("end", () => resolve(res.headers.location));
+            },
+          )
+          .on("error", reject);
+      },
+    );
+
+    expect(rewriteResponse).toHaveBeenCalledTimes(1);
+    expect(normalizedLocations).toEqual([
+      "https://host-example.cocalc.ai/11111111-1111-4111-8111-111111111111/apps/dev-site/",
+    ]);
+    expect(location).toBe("/rewritten");
 
     await closeServer(server);
     await closeServer(upstream);

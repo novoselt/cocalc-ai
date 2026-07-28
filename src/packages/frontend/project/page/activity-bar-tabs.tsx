@@ -37,6 +37,7 @@ import {
 import { labels } from "@cocalc/frontend/i18n";
 import { useProjectContext } from "@cocalc/frontend/project/context";
 import { confirmRemoveMyselfFromProject } from "@cocalc/frontend/projects/remove-myself";
+import { useProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
 
 import { tab_to_path } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
@@ -144,15 +145,18 @@ function filterTabsForProjectAccess({
   agentAIEnabled,
   liteMode,
   names,
+  rootfsEnabled = true,
   viewer,
 }: {
   agentAIEnabled: boolean;
   liteMode: boolean;
   names: readonly FixedTab[];
+  rootfsEnabled?: boolean;
   viewer: boolean;
 }): FixedTab[] {
   return names.filter((name) => {
     if (!agentAIEnabled && name === "agents") return false;
+    if (!rootfsEnabled && name === "rootfs") return false;
     if (liteMode && FIXED_PROJECT_TABS[name].noLite) return false;
     if (viewer && !VIEWER_FIXED_TABS.has(name)) return false;
     return true;
@@ -166,6 +170,7 @@ function preserveUnavailableTabs(opts: {
   nextHidden: FixedTab[];
   nextOrder: FixedTab[];
   originalOrder: readonly FixedTab[];
+  rootfsEnabled: boolean;
   viewer: boolean;
 }): { hidden: FixedTab[]; order: FixedTab[] } {
   const available = new Set(
@@ -173,6 +178,7 @@ function preserveUnavailableTabs(opts: {
       agentAIEnabled: opts.agentAIEnabled,
       liteMode: opts.liteMode,
       names: opts.originalOrder,
+      rootfsEnabled: opts.rootfsEnabled,
       viewer: opts.viewer,
     }),
   );
@@ -273,6 +279,7 @@ export function VerticalFixedTabs({
   const account_id = useTypedRedux("account", "account_id");
   const active_flyout = useTypedRedux({ project_id }, "flyout");
   const viewer = projectAccess?.role === "viewer";
+  const runtime = useProjectRuntimeCapabilities();
   const rootfsTheme = useRootfsFixedTabTheme(!viewer && !lite);
   const parent = useRef<HTMLDivElement>(null);
   const gap = useRef<HTMLDivElement>(null);
@@ -291,16 +298,18 @@ export function VerticalFixedTabs({
       agentAIEnabled,
       liteMode: lite,
       names: tabOrder,
+      rootfsEnabled: runtime.rootfs,
       viewer,
     });
     const filteredHidden = filterTabsForProjectAccess({
       agentAIEnabled,
       liteMode: lite,
       names: hiddenTabs,
+      rootfsEnabled: runtime.rootfs,
       viewer,
     });
     return splitRailTabs(filteredOrder, filteredHidden);
-  }, [agentAIEnabled, hiddenTabs, tabOrder, viewer]);
+  }, [agentAIEnabled, hiddenTabs, runtime.rootfs, tabOrder, viewer]);
 
   const calcCondensed = throttle(
     () => {
@@ -621,6 +630,7 @@ export function VerticalFixedTabs({
             nextHidden,
             nextOrder,
             originalOrder: tabOrder,
+            rootfsEnabled: runtime.rootfs,
             viewer,
           });
           setActivityBarTabOrder(preserved.order, { liteMode: lite });
@@ -631,6 +641,7 @@ export function VerticalFixedTabs({
           agentAIEnabled,
           liteMode: lite,
           names: tabOrder,
+          rootfsEnabled: runtime.rootfs,
           viewer,
         })}
       />
@@ -646,6 +657,7 @@ export function HiddenActivityBarLauncher() {
   const { showActBarLabels } = useAppContext();
   const account_id = useTypedRedux("account", "account_id");
   const viewer = projectAccess?.role === "viewer";
+  const runtime = useProjectRuntimeCapabilities();
   const rootfsTheme = useRootfsFixedTabTheme(!viewer && !lite);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showCustomize, setShowCustomize] = useState(false);
@@ -661,6 +673,7 @@ export function HiddenActivityBarLauncher() {
       agentAIEnabled,
       liteMode: lite,
       names: tabOrder,
+      rootfsEnabled: runtime.rootfs,
       viewer,
     }),
     onCustomize: () => setShowCustomize(true),
@@ -755,6 +768,7 @@ export function HiddenActivityBarLauncher() {
             nextHidden,
             nextOrder,
             originalOrder: tabOrder,
+            rootfsEnabled: runtime.rootfs,
             viewer,
           });
           setActivityBarTabOrder(preserved.order, { liteMode: lite });
@@ -765,6 +779,7 @@ export function HiddenActivityBarLauncher() {
           agentAIEnabled,
           liteMode: lite,
           names: tabOrder,
+          rootfsEnabled: runtime.rootfs,
           viewer,
         })}
       />

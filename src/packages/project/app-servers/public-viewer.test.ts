@@ -11,6 +11,20 @@ import { join } from "node:path";
 import { APP_PROXY_EXPOSURE_HEADER } from "@cocalc/backend/auth/app-proxy";
 import { PROJECT_PROXY_AUTH_HEADER } from "@cocalc/backend/auth/project-proxy-auth";
 
+jest.mock("@cocalc/project/conat/hub", () => ({
+  hubApi: jest.fn(() => ({
+    system: {
+      releaseProjectAppPrivateHostname: jest.fn(async () => ({
+        released: false,
+      })),
+    },
+  })),
+}));
+
+jest.mock("@cocalc/project/conat/runtime-client", () => ({
+  getProjectConatClient: jest.fn(() => ({})),
+}));
+
 function appId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 }

@@ -30,6 +30,7 @@
     { "path": "../database" },
     { "path": "../cloud" },
     { "path": "../file-server" },
+    { "path": "../jupyter" },
     { "path": "../project-runner" },
     { "path": "../project-proxy" },
     { "path": "../util" }

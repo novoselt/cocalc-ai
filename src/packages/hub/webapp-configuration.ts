@@ -31,6 +31,7 @@ import {
   isRocketProduct,
 } from "@cocalc/server/launchpad/mode";
 import { getLaunchpadCloudflaredStatus } from "@cocalc/server/launchpad/onprem-sshd";
+import { getProjectRuntimeConfiguration } from "@cocalc/server/launchpad/project-runtime";
 
 const logger = getLogger("hub:webapp-config");
 
@@ -278,6 +279,7 @@ export class WebappConfiguration {
         cocalc_product: getCocalcProduct(),
         is_launchpad: isLaunchpadProduct(),
         is_rocket: isRocketProduct(),
+        project_runtime: getProjectRuntimeConfiguration(),
         launchpad_cloudflare_tunnel_status: cloudflareStatus,
       },
     };

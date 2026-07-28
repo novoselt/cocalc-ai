@@ -1,6 +1,8 @@
 import {
   classifyCloudOrphanInstances,
+  ensureHostReadyVerificationWork,
   hasPendingRestoreBlockingWork,
+  runtimeSshServerForProviderReconcile,
   runReconcileOnce,
 } from "@cocalc/server/cloud";
 import { before, after, getPool } from "@cocalc/server/test";
@@ -142,6 +144,32 @@ describe("cloud reconcile state gating", () => {
   });
 });
 
+describe("cloud runtime endpoint reconciliation", () => {
+  it("keeps a GCP SSH endpoint aligned with the observed public IP", () => {
+    expect(
+      runtimeSshServerForProviderReconcile(
+        { metadata: { machine: { cloud: "gcp" } } },
+        { public_ip: "34.106.236.181" },
+      ),
+    ).toBe("34.106.236.181:2222");
+  });
+
+  it("does not invent endpoints for missing IPs or other providers", () => {
+    expect(
+      runtimeSshServerForProviderReconcile(
+        { metadata: { machine: { cloud: "gcp" } } },
+        { public_ip: undefined },
+      ),
+    ).toBeUndefined();
+    expect(
+      runtimeSshServerForProviderReconcile(
+        { metadata: { machine: { cloud: "nebius" } } },
+        { public_ip: "203.0.113.10" },
+      ),
+    ).toBeUndefined();
+  });
+});
+
 describe("restore-blocking cloud work", () => {
   it("does not let auxiliary work block spot restore", async () => {
     const hostId = "7f79055e-bd4d-4c6e-af83-93cfd8d97d3c";
@@ -170,6 +198,100 @@ describe("restore-blocking cloud work", () => {
     );
 
     await expect(hasPendingRestoreBlockingWork(hostId)).resolves.toBe(true);
+  });
+});
+
+describe("host readiness verification recovery", () => {
+  const hostId = "d89ad12b-85ac-45c6-a87f-e9bad590370c";
+  const startedAt = "2026-07-26T18:15:15.484Z";
+  const deadlineAt = "2026-07-26T18:25:15.484Z";
+  const row = {
+    id: hostId,
+    status: "running",
+    metadata: {
+      spot_recovery_state: {
+        phase: "retrying_spot",
+        verification_started_at: startedAt,
+        verification_deadline_at: deadlineAt,
+      },
+    },
+  };
+
+  it("restores missing verification work for a running provider VM", async () => {
+    await expect(
+      ensureHostReadyVerificationWork({
+        provider: "gcp",
+        row,
+        provider_status: "running",
+      }),
+    ).resolves.toBe(true);
+
+    const { rows } = await getPool().query(
+      `
+        SELECT action, state, payload
+        FROM cloud_vm_work
+        WHERE vm_id=$1
+      `,
+      [hostId],
+    );
+    expect(rows).toEqual([
+      {
+        action: "verify_host_ready",
+        state: "queued",
+        payload: {
+          provider: "gcp",
+          started_at: startedAt,
+          deadline_at: deadlineAt,
+        },
+      },
+    ]);
+  });
+
+  it("does not duplicate pending verification work", async () => {
+    const opts = {
+      provider: "gcp" as const,
+      row,
+      provider_status: "running",
+    };
+    await expect(ensureHostReadyVerificationWork(opts)).resolves.toBe(true);
+    await expect(ensureHostReadyVerificationWork(opts)).resolves.toBe(false);
+
+    const { rows } = await getPool().query(
+      "SELECT id FROM cloud_vm_work WHERE vm_id=$1",
+      [hostId],
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it("ignores inactive recovery state and non-running provider VMs", async () => {
+    await expect(
+      ensureHostReadyVerificationWork({
+        provider: "gcp",
+        row: {
+          ...row,
+          metadata: {
+            spot_recovery_state: {
+              ...row.metadata.spot_recovery_state,
+              phase: "idle",
+            },
+          },
+        },
+        provider_status: "running",
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      ensureHostReadyVerificationWork({
+        provider: "gcp",
+        row,
+        provider_status: "off",
+      }),
+    ).resolves.toBe(false);
+
+    const { rows } = await getPool().query(
+      "SELECT id FROM cloud_vm_work WHERE vm_id=$1",
+      [hostId],
+    );
+    expect(rows).toHaveLength(0);
   });
 });
 

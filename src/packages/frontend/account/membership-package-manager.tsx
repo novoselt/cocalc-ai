@@ -90,6 +90,7 @@ import type {
   TeamLicenseQuote,
 } from "@cocalc/conat/hub/api/purchases";
 import { TEAM_LICENSE_CHANGE } from "@cocalc/util/db-schema/purchases";
+import { formatTeamLicenseCreditPurchaseDescription } from "@cocalc/util/purchases/descriptions";
 import {
   capitalize,
   currency,
@@ -5251,7 +5252,9 @@ function TeamPackagePurchaseModal({
         </Button>
         <StripePayment
           disabled={disabled}
-          description="Team license"
+          description={formatTeamLicenseCreditPurchaseDescription(
+            TEAM_LICENSE_CHANGE,
+          )}
           lineItems={lineItems}
           purpose={TEAM_LICENSE_CHANGE}
           title={null}

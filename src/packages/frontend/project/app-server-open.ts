@@ -4,6 +4,7 @@
  */
 
 import type { AppSpec, ManagedAppStatus } from "@cocalc/conat/project/api/apps";
+import type { ProjectAppPrivateHostnameRecord } from "@cocalc/conat/hub/api/system";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { withProjectHostBase } from "./host-url";
 
@@ -65,31 +66,76 @@ function translateServiceOpenUrl(
   return localUrl;
 }
 
+export function buildPrivateHostnameOpenUrl({
+  privateHostnameUrl,
+  spec,
+  status,
+}: {
+  privateHostnameUrl: string;
+  spec?: AppSpec;
+  status: ManagedAppStatus;
+}): string {
+  if (
+    spec?.kind !== "service" ||
+    spec.proxy?.open_mode !== "port" ||
+    !status.url
+  ) {
+    return privateHostnameUrl;
+  }
+  const localUrl = translateServiceOpenUrl(status.url, "port");
+  if (!localUrl) return privateHostnameUrl;
+  const privateUrl = new URL(privateHostnameUrl);
+  const local = new URL(localUrl, "https://project-host.invalid");
+  privateUrl.pathname = local.pathname;
+  privateUrl.search = local.search;
+  privateUrl.hash = local.hash;
+  return privateUrl.toString();
+}
+
 export async function getProjectAppOpenUrl({
   getSpec,
+  privateHostname,
   project_id,
   publicAppPolicy,
   spec,
   status,
 }: {
   getSpec?: (id: string) => Promise<AppSpec>;
+  privateHostname?: ProjectAppPrivateHostnameRecord;
   project_id: string;
   publicAppPolicy?: PublicAppPolicy;
   spec?: AppSpec;
   status: ManagedAppStatus;
 }): Promise<string | undefined> {
-  const publicUrl = buildPublicUrlFromExposure(status, publicAppPolicy);
-  if (publicUrl) return publicUrl;
-
   let resolvedSpec = spec;
-  if (!resolvedSpec && getSpec) {
+  const resolveSpec = async (): Promise<void> => {
+    if (resolvedSpec || !getSpec) return;
     try {
       resolvedSpec = await getSpec(status.id);
     } catch {
       // Fall back to the app status URL below.
     }
+  };
+
+  if (privateHostname?.url) {
+    await resolveSpec();
   }
 
+  if (privateHostname?.url) {
+    return await webapp_client.conat_client.addProjectHostAuthToUrl({
+      project_id,
+      url: buildPrivateHostnameOpenUrl({
+        privateHostnameUrl: privateHostname.url,
+        spec: resolvedSpec,
+        status,
+      }),
+    });
+  }
+
+  const publicUrl = buildPublicUrlFromExposure(status, publicAppPolicy);
+  if (publicUrl) return publicUrl;
+
+  await resolveSpec();
   const declaredBasePath = `${resolvedSpec?.proxy?.base_path ?? ""}`.trim();
   const unmanagedBasePath =
     status.lifecycle_mode === "unmanaged" ? `/apps/${status.id}/` : "";
@@ -122,8 +168,32 @@ export async function getProjectAppOpenUrl({
   });
 }
 
+export async function getPrivateProjectAppOpenUrl({
+  app_id,
+  project_id,
+}: {
+  app_id: string;
+  project_id: string;
+}): Promise<string> {
+  const hostname =
+    await webapp_client.conat_client.hub.system.inspectProjectAppPrivateHostname(
+      {
+        project_id,
+        app_id,
+      },
+    );
+  if (!hostname?.url) {
+    throw new Error(`Private hostname for app '${app_id}' is not reserved.`);
+  }
+  return await webapp_client.conat_client.addProjectHostAuthToUrl({
+    project_id,
+    url: hostname.url,
+  });
+}
+
 export async function openProjectAppStatus(opts: {
   getSpec?: (id: string) => Promise<AppSpec>;
+  privateHostname?: ProjectAppPrivateHostnameRecord;
   project_id: string;
   publicAppPolicy?: PublicAppPolicy;
   spec?: AppSpec;

@@ -122,6 +122,33 @@ describe("SyncFsService", () => {
     svc.close();
   }, 10_000);
 
+  it("absorbs watcher errors queued after close", async () => {
+    const svc = new SyncFsService();
+    const errors: Error[] = [];
+    svc.on("error", (err) => errors.push(err));
+    const watcher = Object.assign(new EventEmitter(), {
+      close: jest.fn(function (this: EventEmitter) {
+        // This is what Chokidar does synchronously before its pending
+        // filesystem work has necessarily stopped emitting events.
+        this.removeAllListeners();
+        return Promise.resolve();
+      }),
+    });
+    (svc as any).watchers.set(dir, {
+      watcher,
+      paths: new Set([join(dir, "file.txt")]),
+    });
+
+    (svc as any).closeWatcher(dir, "test");
+
+    expect(() =>
+      watcher.emit("error", new Error("late watcher error")),
+    ).not.toThrow();
+    expect(errors).toEqual([]);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    svc.close();
+  });
+
   it("releases cached patch writers when active=false", async () => {
     const path = join(dir, "release.txt");
     writeFileSync(path, "keep");

@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "description": "CoCalc Project Runner",
   "exports": {
+    "./runtime-mode": "./dist/runtime-mode.js",
     "./run": "./dist/run/index.js",
     "./run/*": "./dist/run/*.js"
   },

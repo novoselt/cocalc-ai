@@ -170,6 +170,13 @@ export const system = {
   tracePublicAppHostname: authFirst,
   reserveProjectAppPublicSubdomain: authFirst,
   releaseProjectAppPublicSubdomain: authFirst,
+  getProjectAppPrivateHostnamePolicy: authFirst,
+  inspectProjectAppPrivateHostname: authFirst,
+  listProjectAppPrivateHostnames: authFirst,
+  tracePrivateAppHostname: authFirst,
+  reserveProjectAppPrivateHostname: authFirst,
+  releaseProjectAppPrivateHostname: authFirst,
+  reconcileProjectAppPrivateHostnames: authFirst,
   recordManagedProjectEgress: authFirstRequireProjectOrHost,
   getManagedProjectEgressPolicy: authFirstRequireProjectOrHost,
   recordManagedProjectCpuUsage: authFirstRequireProjectOrHost,
@@ -1032,6 +1039,43 @@ export interface ReserveProjectAppPublicSubdomainResult {
   warnings: string[];
 }
 
+export interface ProjectAppPrivateHostnamePolicy {
+  enabled: boolean;
+  can_reserve: boolean;
+  current_private_hostnames: number;
+  max_private_hostnames: number;
+  current_bay_private_hostnames: number;
+  max_bay_private_hostnames: number;
+  membership_class?: string;
+  browser_origin?: string;
+  site_hostname?: string;
+  host_hostname?: string;
+  dns_target?: string;
+  warnings: string[];
+}
+
+export interface ProjectAppPrivateHostnameRecord {
+  project_id: string;
+  app_id: string;
+  label: string;
+  hostname: string;
+  base_path: string;
+  url: string;
+  dns_record_id?: string;
+  dns_target?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  last_dns_error?: string;
+}
+
+export interface ReconcileProjectAppPrivateHostnamesResult {
+  project_id: string;
+  checked: number;
+  updated: number;
+  errors: Array<{ app_id: string; error: string }>;
+}
+
 export interface BayInfo {
   bay_id: string;
   label: string;
@@ -1879,6 +1923,14 @@ export interface PublicAppHostnameTrace {
   dns_target?: string;
   metered_egress?: boolean;
   warnings?: string[];
+}
+
+export interface PrivateAppHostnameTrace {
+  matched: boolean;
+  hostname: string;
+  project_id?: string;
+  app_id?: string;
+  base_path?: string;
 }
 
 export interface System {
@@ -2837,6 +2889,50 @@ export interface System {
     project_id?: string;
     app_id: string;
   }) => Promise<{ released: boolean }>;
+
+  getProjectAppPrivateHostnamePolicy: (opts: {
+    account_id?: string;
+    host_id?: string;
+    project_id: string;
+  }) => Promise<ProjectAppPrivateHostnamePolicy>;
+
+  inspectProjectAppPrivateHostname: (opts: {
+    account_id?: string;
+    host_id?: string;
+    project_id: string;
+    app_id: string;
+  }) => Promise<ProjectAppPrivateHostnameRecord | undefined>;
+
+  listProjectAppPrivateHostnames: (opts: {
+    account_id?: string;
+    host_id?: string;
+    project_id: string;
+  }) => Promise<ProjectAppPrivateHostnameRecord[]>;
+
+  tracePrivateAppHostname: (opts: {
+    account_id?: string;
+    host_id?: string;
+    hostname: string;
+  }) => Promise<PrivateAppHostnameTrace>;
+
+  reserveProjectAppPrivateHostname: (opts: {
+    account_id?: string;
+    host_id?: string;
+    project_id: string;
+    app_id: string;
+  }) => Promise<ProjectAppPrivateHostnameRecord>;
+
+  releaseProjectAppPrivateHostname: (opts: {
+    account_id?: string;
+    host_id?: string;
+    project_id: string;
+    app_id: string;
+  }) => Promise<{ released: boolean }>;
+
+  reconcileProjectAppPrivateHostnames: (opts: {
+    account_id?: string;
+    project_id: string;
+  }) => Promise<ReconcileProjectAppPrivateHostnamesResult>;
 
   recordManagedProjectEgress: (opts: {
     account_id?: string;

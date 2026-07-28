@@ -12,14 +12,7 @@ import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import { init as initFilesystem, localPath, sshServers } from "./filesystem";
 import getLogger from "@cocalc/backend/logger";
 import { initConatClient } from "./conat-client";
-import {
-  cleanupStaleProjectContainers,
-  cleanupStaleProjectSecretsHostPaths,
-  start,
-  stop,
-  status,
-  save,
-} from "./podman";
+import { createProjectRuntimeBackend } from "./runtime-backend";
 
 const logger = getLogger("project-runner:run");
 
@@ -33,19 +26,33 @@ export async function init(opts: { id?: string; client?: ConatClient } = {}) {
   client = opts.client ?? conat();
   initConatClient(client);
   initFilesystem({ client });
-  await cleanupStaleProjectContainers();
-  await cleanupStaleProjectSecretsHostPaths();
-  return await projectRunnerServer({
+  const backend = await createProjectRuntimeBackend({ client });
+  const initialProjects = await backend.init();
+  logger.info("starting project runner backend", {
+    id,
+    backend: backend.name,
+    recovered_projects: initialProjects.length,
+  });
+  const server = await projectRunnerServer({
     id,
     client,
-    start: reuseInFlight(start),
-    stop: reuseInFlight(stop),
-    status: reuseInFlight(status),
-    save: reuseInFlight(save),
+    start: reuseInFlight((opts) => backend.start(opts)),
+    stop: reuseInFlight((opts) => backend.stop(opts)),
+    status: reuseInFlight((opts) => backend.status(opts)),
+    save: reuseInFlight((opts) => backend.save(opts)),
     move: async () => {
-      throw new Error("project move is not implemented yet");
+      throw new Error(
+        `project move is unsupported by the ${backend.name} runtime`,
+      );
     },
     localPath,
     sshServers,
+    initialProjects,
   });
+  return {
+    close: async () => {
+      server.close();
+      await backend.close?.();
+    },
+  };
 }

@@ -72,18 +72,10 @@ overrides:
   tar@<=7.5.15: '>=7.5.16'
 
 patchedDependencies:
-  '@rc-component/portal@2.2.0':
-    hash: b6f877518e590497afc1bc08045e7388a098c2d276d59c861683811ebfb8da04
-    path: patches/@rc-component__portal@2.2.0.patch
-  '@rc-component/tabs@1.7.0':
-    hash: 012320e45fed87a7ebc8585e9bff0595e697985e698f0b21fece4ab202a0bee5
-    path: patches/@rc-component__tabs@1.7.0.patch
-  fs-ext@2.1.1:
-    hash: 8de34bb8636073ff75cba28e1092a4e6bd4b0f9f8b2cc05b5fc95f80d978408b
-    path: patches/fs-ext@2.1.1.patch
-  slate-react@0.124.0:
-    hash: 480c324a03628679a405b79a110bbd6bd6802f7d1379a491163e19156c5d7c85
-    path: patches/slate-react@0.124.0.patch
+  '@rc-component/portal@2.2.0': b6f877518e590497afc1bc08045e7388a098c2d276d59c861683811ebfb8da04
+  '@rc-component/tabs@1.7.0': 012320e45fed87a7ebc8585e9bff0595e697985e698f0b21fece4ab202a0bee5
+  fs-ext@2.1.1: 8de34bb8636073ff75cba28e1092a4e6bd4b0f9f8b2cc05b5fc95f80d978408b
+  slate-react@0.124.0: 480c324a03628679a405b79a110bbd6bd6802f7d1379a491163e19156c5d7c85
 
 importers:
 
@@ -702,6 +694,9 @@ importers:
       '@playwright/test':
         specifier: ^1.57.0
         version: 1.57.0
+      '@rc-component/tabs':
+        specifier: 1.7.0
+        version: 1.7.0(patch_hash=012320e45fed87a7ebc8585e9bff0595e697985e698f0b21fece4ab202a0bee5)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@react-hook/mouse-position':
         specifier: ^4.1.3
         version: 4.1.3(react@19.2.1)
@@ -1141,9 +1136,6 @@ importers:
       react:
         specifier: ^19.2.1
         version: 19.2.1
-      uglify-js:
-        specifier: ^3.14.1
-        version: 3.19.3
       validator:
         specifier: '>=13.15.22'
         version: 13.15.23
@@ -1517,6 +1509,9 @@ importers:
       '@cocalc/backend':
         specifier: workspace:*
         version: link:../backend
+      '@cocalc/conat':
+        specifier: workspace:*
+        version: link:../conat
       '@cocalc/util':
         specifier: workspace:*
         version: link:../util
@@ -1607,6 +1602,9 @@ importers:
       '@cocalc/gcloud-pricing-calculator':
         specifier: ^1.17.0
         version: 1.17.0
+      '@cocalc/jupyter':
+        specifier: workspace:*
+        version: link:../jupyter
       '@cocalc/project-runner':
         specifier: workspace:*
         version: link:../project-runner

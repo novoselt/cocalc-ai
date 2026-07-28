@@ -8,6 +8,7 @@ import {
   collectWorkerDiagnostics,
   createWorkerDiagnosticsServer,
   resolveWorkerDiagnosticsPort,
+  setWorkerStartupPhase,
   WORKER_DIAGNOSTICS_HOST,
   WORKER_DIAGNOSTICS_PATH,
 } from "./worker-diagnostics";
@@ -29,6 +30,22 @@ jest.mock("@cocalc/server/conat", () => ({
     configured_servers: 1,
     child_processes: 0,
     local_open_streams: 11,
+    local_streams: {
+      open_total: 11,
+      open_ephemeral: 9,
+      open_disk: 2,
+    },
+  })),
+  getConatPersistSqliteDiagnostics: jest.fn(() => ({
+    ephemeral: {
+      databases: 9,
+      page_bytes: 1234,
+    },
+    disk: {
+      databases: 2,
+      page_bytes: 5678,
+    },
+    duration_ms: 4,
   })),
 }));
 
@@ -60,9 +77,17 @@ describe("hub worker diagnostics", () => {
   });
 
   it("collects aggregate process, V8, Conat, and persistence data", () => {
+    setWorkerStartupPhase("test-phase");
     const diagnostics = collectWorkerDiagnostics();
     expect(diagnostics.schema_version).toBe(1);
     expect(diagnostics.process.pid).toBe(process.pid);
+    expect(diagnostics.process.startup).toEqual(
+      expect.objectContaining({
+        phase: "test-phase",
+        changed_at: expect.any(String),
+        elapsed_ms: expect.any(Number),
+      }),
+    );
     expect(diagnostics.process.memory.rss).toBeGreaterThan(0);
     expect(diagnostics.v8.heap.heap_size_limit).toBeGreaterThan(0);
     expect(diagnostics.v8.heap_spaces.length).toBeGreaterThan(0);
@@ -71,6 +96,19 @@ describe("hub worker diagnostics", () => {
       expect.objectContaining({ hub_clients: 3, account_clients: 5 }),
     );
     expect(diagnostics.conat.persistence.local_open_streams).toBe(11);
+    expect(diagnostics.conat.persistence.local_streams).toEqual(
+      expect.objectContaining({ open_ephemeral: 9, open_disk: 2 }),
+    );
+    expect(diagnostics.conat.persistence).not.toHaveProperty("sqlite_detail");
+    const detailed = collectWorkerDiagnostics({
+      includePersistenceDetail: true,
+    });
+    expect(detailed.conat.persistence.sqlite_detail).toEqual(
+      expect.objectContaining({
+        ephemeral: expect.objectContaining({ databases: 9 }),
+        disk: expect.objectContaining({ databases: 2 }),
+      }),
+    );
   });
 
   it("serves diagnostics without exposing any other route", async () => {
@@ -86,6 +124,14 @@ describe("hub worker diagnostics", () => {
       expect(diagnostics.status).toBe(200);
       expect(diagnostics.headers.get("cache-control")).toContain("no-store");
       expect((await diagnostics.json()).schema_version).toBe(1);
+
+      const detailed = await fetch(
+        `http://127.0.0.1:${port}${WORKER_DIAGNOSTICS_PATH}?persistence=full`,
+      );
+      expect(detailed.status).toBe(200);
+      expect(
+        ((await detailed.json()) as any).conat.persistence.sqlite_detail,
+      ).toEqual(expect.objectContaining({ duration_ms: 4 }));
 
       const missing = await fetch(`http://127.0.0.1:${port}/`);
       expect(missing.status).toBe(404);

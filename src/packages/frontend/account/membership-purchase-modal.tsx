@@ -50,6 +50,7 @@ import { MEMBERSHIP_CHANGE } from "@cocalc/util/db-schema/purchases";
 import { sortMembershipTiersByDisplayOrder } from "@cocalc/util/membership-tier-order";
 import { currency } from "@cocalc/util/misc";
 import { moneyRound2Up, toDecimal, type MoneyValue } from "@cocalc/util/money";
+import { formatMembershipCreditPurchaseDescription } from "@cocalc/util/purchases/descriptions";
 import type { LineItem } from "@cocalc/util/stripe/types";
 import type {
   MembershipDetails,
@@ -82,10 +83,6 @@ interface MembershipTiersResponse {
 interface MembershipSnapshot {
   details?: MembershipDetails | null;
   membership: MembershipResolution;
-}
-
-function billingAdjective(interval: BillingInterval): string {
-  return interval === "year" ? "annual" : "monthly";
 }
 
 function billingDescription(interval: BillingInterval): string {
@@ -374,7 +371,10 @@ function MembershipPurchaseModalInner({
 
   const lineItems: LineItem[] = [];
   if (quote && selectedTier && chargeAmountValue.gt(0)) {
-    const targetLineDescription = `${selectedLabel} membership, ${billingAdjective(interval)}`;
+    const targetLineDescription = formatMembershipCreditPurchaseDescription({
+      interval,
+      membershipLabel: selectedLabel,
+    });
     lineItems.push({
       description: targetLineDescription,
       amount: moneyRound2Up(
@@ -695,9 +695,10 @@ function MembershipPurchaseModalInner({
           <StripePayment
             disabled={actionLoading}
             lineItems={lineItems}
-            description={`${selectedLabel} membership, ${billingAdjective(
+            description={formatMembershipCreditPurchaseDescription({
               interval,
-            )}`}
+              membershipLabel: selectedLabel,
+            })}
             purpose={MEMBERSHIP_CHANGE}
             summaryMode={showFullPaymentSummary ? "full" : "total-only"}
             title={null}

@@ -8,14 +8,11 @@ import { getLogger } from "@cocalc/backend/logger";
 import { isValidUUID } from "@cocalc/util/misc";
 import TTLCache from "@isaacs/ttlcache";
 import listen from "@cocalc/backend/misc/async-server-listen";
+import { stripProjectHostProxyAuthCookies } from "@cocalc/conat/auth/project-host-proxy-boundary";
 
 const logger = getLogger("project-proxy:http");
 
 const CACHE_TTL = 1000;
-const PROJECT_HOST_HTTP_AUTH_COOKIE_NAME = "cocalc_project_host_http_bearer";
-const PROJECT_HOST_HTTP_SESSION_COOKIE_NAME =
-  "cocalc_project_host_http_session";
-const PROJECT_HOST_BROWSER_SESSION_COOKIE_NAME = "cocalc_project_host_session";
 const cache = new TTLCache<string, { proxy?: number; err? }>({
   max: 100000,
   ttl: CACHE_TTL,
@@ -49,36 +46,7 @@ interface StartOptions {
   noteUpstreamWsBytes?: NoteProxyBoundaryBytesFn;
 }
 
-export function stripProjectHostProxyAuthCookies(
-  cookieHeader: string | string[] | undefined,
-  {
-    preserveCookieNames = [],
-  }: {
-    preserveCookieNames?: string[];
-  } = {},
-): string | undefined {
-  if (cookieHeader == null) return undefined;
-  const preserved = new Set(preserveCookieNames);
-  const raw = Array.isArray(cookieHeader)
-    ? cookieHeader.join(";")
-    : cookieHeader;
-  const kept = raw
-    .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .filter((part) => {
-      const idx = part.indexOf("=");
-      const name = idx === -1 ? part : part.slice(0, idx).trim();
-      return (
-        (name !== PROJECT_HOST_HTTP_AUTH_COOKIE_NAME || preserved.has(name)) &&
-        (name !== PROJECT_HOST_HTTP_SESSION_COOKIE_NAME ||
-          preserved.has(name)) &&
-        (name !== PROJECT_HOST_BROWSER_SESSION_COOKIE_NAME ||
-          preserved.has(name))
-      );
-    });
-  return kept.length > 0 ? kept.join("; ") : undefined;
-}
+export { stripProjectHostProxyAuthCookies };
 
 function parseProjectId(url: string | undefined): string | null {
   if (!url || !url.startsWith("/")) return null;
@@ -96,6 +64,34 @@ function getChunkByteLength(chunk: unknown): number {
   if (chunk instanceof ArrayBuffer) return chunk.byteLength;
   if (ArrayBuffer.isView(chunk)) return chunk.byteLength;
   return 0;
+}
+
+function observeUpstreamWebSocketBytes({
+  proxyReq,
+  req,
+  noteUpstreamWsBytes,
+}: {
+  proxyReq: ClientRequest;
+  req: http.IncomingMessage;
+  noteUpstreamWsBytes: NoteProxyBoundaryBytesFn;
+}): void {
+  // http-proxy-3 registers its upgrade listener after proxyReqWs handlers
+  // return. Register ours in a microtask so its pipe sees the upgrade head
+  // before any metering listener can put the upstream socket in flowing mode.
+  queueMicrotask(() => {
+    proxyReq.once("upgrade", (_proxyRes, proxySocket, proxyHead) => {
+      const headBytes = getChunkByteLength(proxyHead);
+      if (headBytes > 0) {
+        noteUpstreamWsBytes({ req, bytes: headBytes });
+      }
+      proxySocket.on("data", (chunk) => {
+        const bytes = getChunkByteLength(chunk);
+        if (bytes > 0) {
+          noteUpstreamWsBytes({ req, bytes });
+        }
+      });
+    });
+  });
 }
 
 function firstHeaderValue(value: string | string[] | undefined): string {
@@ -315,13 +311,10 @@ export function createProxyHandlers({
       origin: req.headers?.origin,
     });
     if (noteUpstreamWsBytes) {
-      proxyReq.once("upgrade", (_proxyRes, proxySocket) => {
-        proxySocket.on("data", (chunk) => {
-          const bytes = getChunkByteLength(chunk);
-          if (bytes > 0) {
-            noteUpstreamWsBytes({ req, bytes });
-          }
-        });
+      observeUpstreamWebSocketBytes({
+        proxyReq,
+        req,
+        noteUpstreamWsBytes,
       });
     }
   });
@@ -402,6 +395,7 @@ export function attachProjectProxy({
   resolveTarget = defaultResolveTarget,
   onUpgradeAuthorized,
   rewriteRequest,
+  rewriteResponse,
   noteUpstreamHttpBytes,
   noteUpstreamWsBytes,
 }: {
@@ -414,6 +408,10 @@ export function attachProjectProxy({
     socket: Socket | Duplex,
   ) => void;
   rewriteRequest?: (req: http.IncomingMessage) => Promise<void> | void;
+  rewriteResponse?: (
+    proxyRes: http.IncomingMessage,
+    req: http.IncomingMessage,
+  ) => void;
   noteUpstreamHttpBytes?: NoteProxyBoundaryBytesFn;
   noteUpstreamWsBytes?: NoteProxyBoundaryBytesFn;
 }) {
@@ -456,19 +454,17 @@ export function attachProjectProxy({
       origin: req.headers?.origin,
     });
     if (noteUpstreamWsBytes) {
-      _proxyReq.once("upgrade", (_proxyRes, proxySocket) => {
-        proxySocket.on("data", (chunk) => {
-          const bytes = getChunkByteLength(chunk);
-          if (bytes > 0) {
-            noteUpstreamWsBytes({ req, bytes });
-          }
-        });
+      observeUpstreamWebSocketBytes({
+        proxyReq: _proxyReq,
+        req,
+        noteUpstreamWsBytes,
       });
     }
   });
 
   proxy.on("proxyRes", (proxyRes, req) => {
     normalizeProxyRedirectHeaders(proxyRes, req);
+    rewriteResponse?.(proxyRes, req);
     if (noteUpstreamHttpBytes) {
       proxyRes.on("data", (chunk) => {
         const bytes = getChunkByteLength(chunk);
@@ -479,7 +475,7 @@ export function attachProjectProxy({
     }
   });
 
-  app.use(async (req, res, next) => {
+  const handleRequest = async (req, res, next) => {
     await rewriteRequest?.(req);
     // Only proxy URLs that start with a project UUID segment.
     if (!parseProjectId(req.url)) return next();
@@ -499,37 +495,41 @@ export function attachProjectProxy({
       }
       res.end(`${(err as any)?.message ?? "Bad Gateway"}\n`);
     }
-  });
+  };
+  app.use(handleRequest);
 
-  for (const ingressServer of ingressServers) {
-    ingressServer.prependListener("upgrade", async (req, socket, head) => {
-      await rewriteRequest?.(req);
-      // Only proxy project-scoped websocket upgrades.
-      if (!parseProjectId(req.url)) return;
-      try {
-        const { target, handled } = await resolveTarget(req);
-        if (!handled || !target) {
-          return;
-        }
-        onUpgradeAuthorized?.(req, socket);
-        proxy.ws(req, socket, head, { target, prependPath: false });
-      } catch (err: any) {
-        const statusCode = Number.isInteger(err?.statusCode)
-          ? err.statusCode
-          : 502;
-        const statusText =
-          statusCode === 401
-            ? "Unauthorized"
-            : statusCode === 403
-              ? "Forbidden"
-              : statusCode === 429
-                ? "Too Many Requests"
-                : "Bad Gateway";
-        socket.write(
-          `HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`,
-        );
-        socket.destroy();
+  const handleUpgrade = async (req, socket, head) => {
+    await rewriteRequest?.(req);
+    // Only proxy project-scoped websocket upgrades.
+    if (!parseProjectId(req.url)) return;
+    try {
+      const { target, handled } = await resolveTarget(req);
+      if (!handled || !target) {
+        return;
       }
-    });
+      onUpgradeAuthorized?.(req, socket);
+      proxy.ws(req, socket, head, { target, prependPath: false });
+    } catch (err: any) {
+      const statusCode = Number.isInteger(err?.statusCode)
+        ? err.statusCode
+        : 502;
+      const statusText =
+        statusCode === 401
+          ? "Unauthorized"
+          : statusCode === 403
+            ? "Forbidden"
+            : statusCode === 429
+              ? "Too Many Requests"
+              : "Bad Gateway";
+      socket.write(
+        `HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`,
+      );
+      socket.destroy();
+    }
+  };
+  for (const ingressServer of ingressServers) {
+    ingressServer.prependListener("upgrade", handleUpgrade);
   }
+
+  return { handleRequest, handleUpgrade };
 }

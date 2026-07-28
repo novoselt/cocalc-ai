@@ -36,6 +36,7 @@ import { EnvironmentFeatureGroups } from "./environment-feature-groups";
 import { ProjectCapabilities } from "./project-capabilites";
 import { RootFilesystemImageModal } from "./root-filesystem-image";
 import type { Project } from "./types";
+import { useProjectRuntimeCapabilities } from "../runtime-capabilities";
 
 type Mode = "project" | "flyout";
 
@@ -284,7 +285,7 @@ function EnvironmentStatusHeader({
 }: {
   envCount: number;
   featureCount: number;
-  runtimeImage: string;
+  runtimeImage?: string;
   secretCount: number;
 }) {
   return (
@@ -314,17 +315,19 @@ function EnvironmentStatusHeader({
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <Typography.Text strong>Environment</Typography.Text>
-          <div
-            style={{
-              color: COLORS.GRAY_D,
-              fontSize: 12,
-              overflowWrap: "anywhere",
-              wordBreak: "break-word",
-            }}
-            title={runtimeImage}
-          >
-            Runtime image: {runtimeImage}
-          </div>
+          {runtimeImage != null && (
+            <div
+              style={{
+                color: COLORS.GRAY_D,
+                fontSize: 12,
+                overflowWrap: "anywhere",
+                wordBreak: "break-word",
+              }}
+              title={runtimeImage}
+            >
+              Runtime image: {runtimeImage}
+            </div>
+          )}
           <Space size={[6, 6]} wrap style={{ marginTop: 6 }}>
             <Tag color="blue" style={{ marginInlineEnd: 0 }}>
               {featureCount} features
@@ -450,6 +453,7 @@ export function EnvironmentOverview({
   project_id,
   mode = "project",
 }: Props) {
+  const runtime = useProjectRuntimeCapabilities();
   const isFlyout = mode === "flyout";
   const [activeKeys, setActiveKeys] = useState<string[]>([]);
   const [activeDetailKeys, setActiveDetailKeys] = useState<string[]>([]);
@@ -597,21 +601,25 @@ export function EnvironmentOverview({
       ]
     : detailItems;
   const summaryItems: SummaryCardProps[] = [
-    {
-      icon: "disk-drive",
-      title: "Image",
-      value: runtimeImage,
-      subtitle: "Base software environment",
-      action: (
-        <Button
-          size="small"
-          type="link"
-          onClick={() => setRuntimeImageOpen(true)}
-        >
-          Details
-        </Button>
-      ),
-    },
+    ...(runtime.rootfs
+      ? [
+          {
+            icon: "disk-drive",
+            title: "Image",
+            value: runtimeImage,
+            subtitle: "Base software environment",
+            action: (
+              <Button
+                size="small"
+                type="link"
+                onClick={() => setRuntimeImageOpen(true)}
+              >
+                Details
+              </Button>
+            ),
+          },
+        ]
+      : []),
     {
       icon: "clipboard-check",
       title: "Available Features",
@@ -635,7 +643,7 @@ export function EnvironmentOverview({
         <EnvironmentStatusHeader
           envCount={envCount}
           featureCount={features.availableCount}
-          runtimeImage={runtimeImage}
+          runtimeImage={runtime.rootfs ? runtimeImage : undefined}
           secretCount={secretCount}
         />
       ) : null}
@@ -682,10 +690,12 @@ export function EnvironmentOverview({
         }
         items={collapseItems}
       />
-      <RootFilesystemImageModal
-        open={runtimeImageOpen}
-        onClose={() => setRuntimeImageOpen(false)}
-      />
+      {runtime.rootfs && (
+        <RootFilesystemImageModal
+          open={runtimeImageOpen}
+          onClose={() => setRuntimeImageOpen(false)}
+        />
+      )}
     </Space>
   );
 }

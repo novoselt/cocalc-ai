@@ -28,7 +28,7 @@ export async function proxyConatWebsocket(
   head,
   opts: ProxyConatOptions,
 ) {
-  const target = randomServer(opts) + extractConatPath(req.url);
+  const target = randomServer(opts);
   logger.debug(`conat proxy -- proxying a WEBSOCKET connection to ${target}`);
   const proxy = createConatProxy(target);
   proxy.on("error", (err) => {
@@ -38,8 +38,7 @@ export async function proxyConatWebsocket(
 }
 
 export async function proxyConatRequest(req, res, opts: ProxyConatOptions) {
-  const target =
-    randomServer(opts) + extractConatPath(req.originalUrl ?? req.url);
+  const target = randomServer(opts);
   logger.debug(`conat proxy -- proxying an HTTP request to ${target}`);
   const proxy = createConatProxy(target);
   proxy.on("error", (err) => {
@@ -81,15 +80,6 @@ function createConatProxy(target: string): ProxyServer {
 
 function localConatServerAddress(): string {
   return `http://localhost:${conatClusterPort}${basePath.length > 1 ? basePath : ""}`;
-}
-
-function extractConatPath(rawUrl: string | undefined): string {
-  const url = `${rawUrl ?? "/"}`;
-  const i = url.lastIndexOf("/conat");
-  if (i === -1) {
-    throw new Error(`invalid conat proxy path: ${url}`);
-  }
-  return url.slice(i);
 }
 
 async function addressUpdateLoop() {

@@ -319,8 +319,9 @@ export async function getPoolClient(
   return await pool.connect();
 }
 
-// Session advisory locks belong to one PostgreSQL connection, not to a pool.
-// Keep that client checked out until the protected work and unlock complete.
+// Session advisory locks can be held for the entire duration of a maintenance
+// pass. Use a dedicated connection so concurrent leaders cannot exhaust the
+// bounded application pool and deadlock unrelated startup/request queries.
 export async function withSessionAdvisoryLock<T>({
   lockKey,
   fn,
@@ -328,13 +329,17 @@ export async function withSessionAdvisoryLock<T>({
   lockKey: string;
   fn: () => Promise<T>;
 }): Promise<T | undefined> {
-  const client = await getPoolClient();
+  const client = getClient();
+  await client.connect();
   let locked = false;
+  let lockUnavailable = false;
   let result!: T;
   let workFailed = false;
   let workError: unknown;
   let unlockFailed = false;
   let unlockError: unknown;
+  let closeFailed = false;
+  let closeError: unknown;
   try {
     const { rows } = await client.query<{ locked: boolean }>(
       "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
@@ -342,35 +347,40 @@ export async function withSessionAdvisoryLock<T>({
     );
     locked = rows[0]?.locked === true;
     if (!locked) {
-      return undefined;
-    }
+      lockUnavailable = true;
+    } else {
+      try {
+        result = await fn();
+      } catch (err) {
+        workFailed = true;
+        workError = err;
+      }
 
-    try {
-      result = await fn();
-    } catch (err) {
-      workFailed = true;
-      workError = err;
-    }
-
-    try {
-      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]);
-    } catch (err) {
-      unlockFailed = true;
-      unlockError = err;
+      try {
+        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]);
+      } catch (err) {
+        unlockFailed = true;
+        unlockError = err;
+      }
     }
   } finally {
-    // Never return a connection that may still hold the session lock.
-    client.release(unlockFailed);
+    try {
+      await client.end();
+    } catch (err) {
+      closeFailed = true;
+      closeError = err;
+    }
   }
 
   if (workFailed) {
-    if (unlockFailed) {
+    if (unlockFailed || closeFailed) {
       L.error(
-        "failed to unlock PostgreSQL session after protected work failed",
+        "failed to clean up PostgreSQL session after protected work failed",
         {
           lockKey,
           workError,
           unlockError,
+          closeError,
         },
       );
     }
@@ -378,6 +388,12 @@ export async function withSessionAdvisoryLock<T>({
   }
   if (unlockFailed) {
     throw unlockError;
+  }
+  if (closeFailed) {
+    throw closeError;
+  }
+  if (lockUnavailable) {
+    return undefined;
   }
   return result;
 }

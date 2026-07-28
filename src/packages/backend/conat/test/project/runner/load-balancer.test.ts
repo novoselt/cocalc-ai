@@ -116,6 +116,21 @@ describe("create basic mocked project runner service and test", () => {
       state: "opened",
     });
   });
+
+  it("rejects move when the runtime disables it", async () => {
+    await lbServer({
+      client: client1,
+      subject: "workspace.*.run",
+      allowMove: false,
+    });
+    const lbc = lbClient({
+      subject: `workspace.${uuid()}.run`,
+      client: client2,
+    });
+    await expect(lbc.move()).rejects.toThrow(
+      "project move is unsupported by this project runtime",
+    );
+  });
 });
 
 afterAll(after);

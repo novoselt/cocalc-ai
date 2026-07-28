@@ -6,7 +6,6 @@ import {
   DatePicker,
   Flex,
   Input,
-  Modal,
   Popover,
   Space,
   Spin,
@@ -15,32 +14,40 @@ import {
 } from "antd";
 import {
   CSSProperties,
+  type ReactNode,
   useEffect,
   useMemo,
   useRef,
   useState,
   MutableRefObject,
 } from "react";
-import { useIntl } from "react-intl";
 import { Avatar } from "@cocalc/frontend/account/avatar/avatar";
+import { useMembershipTiers } from "@cocalc/frontend/account/membership-tiers";
 import { useTypedRedux, redux } from "@cocalc/frontend/app-framework";
 import { Tooltip } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
 import { Icon } from "@cocalc/frontend/components/icon";
 import { TimeAgo } from "@cocalc/frontend/components/time-ago";
-import { labels } from "@cocalc/frontend/i18n";
 import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
 import { load_target } from "@cocalc/frontend/history";
 import { open_new_tab } from "@cocalc/frontend/misc/open-browser-tab";
 import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
 import getSupportURL from "@cocalc/frontend/support/url";
 import { isLanguageModelService } from "@cocalc/util/db-schema/ai-models";
-import { type Service } from "@cocalc/util/db-schema/purchase-quotas";
+import {
+  serviceToDisplay,
+  type Service,
+} from "@cocalc/util/db-schema/purchase-quotas";
 import type { Purchase } from "@cocalc/util/db-schema/purchases";
 import { getAmountStyle } from "@cocalc/util/db-schema/purchases";
 import {
+  formatMembershipDebitPurchaseDescription,
+  formatTeamLicenseDebitPurchaseDescription,
+  membershipTierLabel,
+  type MembershipTierLabels,
+} from "@cocalc/util/purchases/descriptions";
+import {
   capitalize,
-  cmp,
   field_cmp,
   currency,
   hoursToTimeIntervalHuman,
@@ -55,20 +62,20 @@ import {
 import AdminRefund, { isRefundable } from "./admin-refund";
 import * as api from "./api";
 import EmailStatement from "./email-statement";
-import Export from "./export";
+import Export, { type PrintColumn } from "./export";
 import DynamicallyUpdatingCost from "./pay-as-you-go/dynamically-updating-cost";
 import Refresh from "./refresh";
 import ServiceTag from "./service";
-import { LineItemsButton } from "./line-items";
-import { describeNumberOf, SectionDivider } from "./util";
-import PurchasesPlot from "./purchases-plot";
+import { LineItemsTable, moneyToString } from "./line-items";
 import { getInvoiceUrlOrNull } from "./invoice-url";
 import searchFilter from "@cocalc/frontend/search/filter";
-import { debounce } from "lodash";
 import dayjs from "dayjs";
+import type { Dayjs } from "dayjs";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
+import "./purchases.css";
 
 const DEFAULT_LIMIT = 10;
+const MAX_RELATED_PURCHASE_LOADS = 5;
 
 interface Props {
   project_id?: string; // if given, restrict to only purchases that are for things in this project
@@ -91,90 +98,95 @@ function Purchases0({
   account_id,
   noTitle,
 }: Props) {
-  const intl = useIntl();
-  const projectLabel = intl.formatMessage(labels.project);
-  const projectLabelLower = projectLabel.toLowerCase();
   const [group, setGroup] = useState<boolean>(!!group0);
-  const [cutoff, setCutoff] = useState<Date | undefined>(undefined);
-
-  return (
-    <div>
-      <Card
-        title={
-          noTitle ? undefined : (
-            <>
-              {account_id && (
-                <Avatar
-                  account_id={account_id}
-                  style={{ marginRight: "15px" }}
-                />
-              )}
-              {project_id ? (
-                <span>
-                  {project_id ? (
-                    <a onClick={() => load_target("settings/purchases")}>
-                      Purchases
-                    </a>
-                  ) : (
-                    "Purchases"
-                  )}{" "}
-                  in <ProjectTitle project_id={project_id} trunc={30} />
-                </span>
-              ) : (
-                <span>
-                  <Icon name="credit-card" /> Purchases
-                </span>
-              )}
-            </>
-          )
-        }
-      >
-        <Flex style={{ alignItems: "center" }}>
-          <div style={{ flex: 1 }} />
-          <div>
-            <Tooltip
-              title={`Aggregate transactions by service and ${projectLabelLower} so you can see how much you are spending on each service in each ${projectLabelLower}. Pay-as-you-go in progress purchases are not included.`}
-            >
-              <Checkbox
-                checked={group}
-                onChange={(e) => {
-                  setGroup(e.target.checked);
-                }}
-              >
-                Group by service and {projectLabelLower}
-              </Checkbox>
-            </Tooltip>
-          </div>
-          {group && (
-            <div style={{ marginLeft: "30px" }}>
-              Starting{" "}
-              <DatePicker
-                changeOnBlur
-                allowClear
-                value={cutoff}
-                onChange={(date) => setCutoff(date ?? undefined)}
-                disabledDate={(current) => current >= dayjs().startOf("day")}
-              />
-            </div>
-          )}
-        </Flex>
-        <PurchasesTable
-          project_id={project_id}
-          account_id={account_id}
-          group={group}
-          day_statement_id={day_statement_id}
-          month_statement_id={month_statement_id}
-          showBalance
-          showTotal
-          cutoff={group ? cutoff : undefined}
-        />
-      </Card>
-    </div>
+  const [fromDate, setFromDate] = useState<Dayjs | null>(null);
+  const [toDate, setToDate] = useState<Dayjs | null>(null);
+  const title = noTitle ? undefined : (
+    <>
+      {account_id && (
+        <Avatar account_id={account_id} style={{ marginRight: "15px" }} />
+      )}
+      {project_id ? (
+        <span>
+          {project_id ? (
+            <a onClick={() => load_target("settings/purchases")}>Purchases</a>
+          ) : (
+            "Purchases"
+          )}{" "}
+          in <ProjectTitle project_id={project_id} trunc={30} />
+        </span>
+      ) : (
+        <span>
+          <Icon name="credit-card" /> Purchases
+        </span>
+      )}
+    </>
   );
+
+  const viewControls = (
+    <>
+      <Tooltip title="Aggregate transactions by service so you can see how much you are spending on each service. Pay-as-you-go in progress purchases are not included.">
+        <Checkbox
+          checked={group}
+          onChange={(e) => {
+            setGroup(e.target.checked);
+          }}
+        >
+          Group by service
+        </Checkbox>
+      </Tooltip>
+      <Space>
+        <span>From</span>
+        <DatePicker
+          changeOnBlur
+          allowClear
+          value={fromDate}
+          onChange={setFromDate}
+          disabledDate={(current) =>
+            current > dayjs().endOf("day") ||
+            (toDate != null && current > toDate.endOf("day"))
+          }
+        />
+      </Space>
+      <Space>
+        <span>To</span>
+        <DatePicker
+          changeOnBlur
+          allowClear
+          value={toDate}
+          onChange={setToDate}
+          disabledDate={(current) =>
+            current > dayjs().endOf("day") ||
+            (fromDate != null && current < fromDate.startOf("day"))
+          }
+        />
+      </Space>
+    </>
+  );
+
+  const content = (
+    <PurchasesTable
+      project_id={project_id}
+      account_id={account_id}
+      group={group}
+      day_statement_id={day_statement_id}
+      month_statement_id={month_statement_id}
+      cutoff={fromDate?.startOf("day").toDate()}
+      cutoffEnd={toDate?.endOf("day").toDate()}
+      viewControls={viewControls}
+    />
+  );
+
+  return title ? <Card title={title}>{content}</Card> : content;
 }
 
 type PurchaseItem = Partial<
-  Purchase & { sum?: number; filter?: string; balance?: MoneyValue }
+  Purchase & {
+    sum?: number;
+    filter?: string;
+    balance?: MoneyValue;
+    count?: number;
+  }
 >;
 
 export function PurchasesTable({
@@ -183,30 +195,26 @@ export function PurchasesTable({
   group,
   thisMonth,
   cutoff,
+  cutoffEnd,
   day_statement_id,
   month_statement_id,
   noStatement,
-  showBalance,
-  showTotal,
-  showRefresh,
   style,
   filename,
   activeOnly,
   refreshRef,
+  viewControls,
 }: Props & {
   thisMonth?: boolean;
   cutoff?: Date;
+  cutoffEnd?: Date;
   noStatement?: boolean;
-  showBalance?: boolean;
-  showTotal?: boolean;
-  showRefresh?: boolean;
   style?: CSSProperties;
   filename?: string;
   activeOnly?: boolean;
   refreshRef?;
+  viewControls?: ReactNode;
 }) {
-  const intl = useIntl();
-  const projectLabel = intl.formatMessage(labels.project);
   const [loading, setLoading] = useState<boolean>(false);
   const [purchaseRecords, setPurchaseRecords] = useState<PurchaseItem[] | null>(
     null,
@@ -220,7 +228,6 @@ export function PurchasesTable({
   >(null);
   const [error, setError] = useState<string>("");
   const [offset, setOffset] = useState<number>(0);
-  const [total, setTotal] = useState<number | null>(null);
   const [service /*, setService*/] = useState<Service | undefined>(undefined);
   const [balance, setBalance] = useState<MoneyValue | null | undefined>(
     undefined,
@@ -228,19 +235,78 @@ export function PurchasesTable({
   const [hasMore, setHasMore] = useState<boolean>(true); // todo
   const [limit, setLimit] = useState<number>(DEFAULT_LIMIT);
   const [filter, setFilter] = useState<string>("");
+  const { tiers: membershipTiers } = useMembershipTiers();
+  const membershipTierLabels = useMemo(
+    () =>
+      membershipTiers.reduce((labels, tier) => {
+        labels[tier.id] = tier.label || tier.id;
+        return labels;
+      }, {} as MembershipTierLabels),
+    [membershipTiers],
+  );
   const searchFilterRef = useRef<any>(null) as MutableRefObject<
     (string) => Promise<PurchaseItem[]> | null
   >;
+
+  const fetchPurchasesPage = async ({
+    limit0,
+    offset0,
+    paginated,
+  }: {
+    limit0: number;
+    offset0: number;
+    paginated: boolean;
+  }) => {
+    const opts = {
+      cutoff,
+      cutoff_end: cutoffEnd,
+      day_statement_id,
+      month_statement_id,
+      group,
+      no_statement: noStatement,
+      project_id,
+      service,
+      thisMonth,
+      ...(paginated ? { limit: limit0 + 1, offset: offset0 } : {}),
+    };
+    let { purchases: x, balance } = account_id
+      ? await api.getPurchasesAdmin({ ...opts, account_id })
+      : await api.getPurchases(opts);
+    const rawLength = x.length;
+    x = x.filter((purchase) => !isLanguageModelService(purchase.service));
+    for (const purchase of x) {
+      getFilter(purchase);
+    }
+    const pageHasMore = paginated ? rawLength == limit0 + 1 : false;
+    return {
+      balance,
+      hasMore: pageHasMore,
+      purchases: paginated ? x.slice(0, limit0) : x,
+    };
+  };
+
+  const mergePurchaseRecords = (
+    records: PurchaseItem[],
+    newRecords: PurchaseItem[],
+  ) => {
+    const merged: { [id: string]: PurchaseItem } = {};
+    for (const purchase of records.concat(newRecords)) {
+      merged[(purchase as any).id] = purchase;
+    }
+    const nextRecords = Object.values(merged);
+    nextRecords.sort(field_cmp("id"));
+    nextRecords.reverse();
+    return nextRecords;
+  };
 
   const loadMore = async ({ init }: { init? } = {}) => {
     try {
       setError("");
       setLoading(true);
 
-      let limit0;
-      if (group) {
-        limit0 = 300;
-      } else {
+      const paginated = !group;
+      let limit0 = DEFAULT_LIMIT;
+      if (paginated) {
         if (purchaseRecords == null) {
           limit0 = DEFAULT_LIMIT;
         } else if (init) {
@@ -253,47 +319,33 @@ export function PurchasesTable({
         }
       }
 
-      const opts = {
-        cutoff,
-        day_statement_id,
-        month_statement_id,
-        group,
-        limit: limit0 + 1,
-        no_statement: noStatement,
-        offset: init ? 0 : offset,
-        project_id,
-        service,
-        thisMonth,
-      };
-      let { purchases: x, balance } = account_id
-        ? await api.getPurchasesAdmin({ ...opts, account_id })
-        : await api.getPurchases(opts);
-      const rawLength = x.length;
-      x = x.filter((purchase) => !isLanguageModelService(purchase.service));
+      const {
+        balance,
+        hasMore: pageHasMore,
+        purchases: x,
+      } = await fetchPurchasesPage({
+        limit0,
+        offset0: init ? 0 : offset,
+        paginated,
+      });
       setBalance(balance);
-      for (const purchase of x) {
-        getFilter(purchase);
+
+      if (paginated) {
+        // TODO: need getPurchases to tell if there are more or not.
+        setHasMore(pageHasMore);
+      } else {
+        setHasMore(false);
       }
 
-      // TODO: need getPurchases to tell if there are more or not.
-      setHasMore(rawLength == limit0 + 1);
-      x = x.slice(0, limit0);
-
-      if (init) {
-        setOffset(DEFAULT_LIMIT);
+      if (init || group) {
+        setOffset(group ? 0 : DEFAULT_LIMIT);
         searchFilterRef.current = await searchFilter({
           data: x,
           toString: getFilter,
         });
         setPurchaseRecords(x); // put after creating filter so will update view
       } else {
-        const v: { [id: string]: any } = {};
-        for (const z of (purchaseRecords ?? []).concat(x)) {
-          v[(z as any).id] = z;
-        }
-        const v2 = Object.values(v);
-        v2.sort(field_cmp("id"));
-        v2.reverse();
+        const v2 = mergePurchaseRecords(purchaseRecords ?? [], x);
         // for next time:
         setOffset(v2.length);
         searchFilterRef.current = await searchFilter<PurchaseItem>({
@@ -310,19 +362,82 @@ export function PurchasesTable({
     }
   };
 
-  useMemo(() => {
-    if (
-      searchFilterRef.current == null ||
-      !filter?.trim() ||
-      purchases == null
-    ) {
-      setFilteredPurchases(purchases);
+  const loadUntilPurchase = async (id: number) => {
+    if (group || purchaseRecords == null || !hasMore) {
       return;
     }
+    if (purchaseRecords.some((purchase) => purchase.id === id)) {
+      return;
+    }
+    try {
+      setError("");
+      setLoading(true);
+      let nextRecords = purchaseRecords;
+      let nextOffset = offset;
+      let nextHasMore: boolean = hasMore;
+      for (
+        let i = 0;
+        i < MAX_RELATED_PURCHASE_LOADS &&
+        nextHasMore &&
+        !nextRecords.some((purchase) => purchase.id === id);
+        i += 1
+      ) {
+        const {
+          balance,
+          hasMore: pageHasMore,
+          purchases: pagePurchases,
+        } = await fetchPurchasesPage({
+          limit0: limit,
+          offset0: nextOffset,
+          paginated: true,
+        });
+        setBalance(balance);
+        nextHasMore = pageHasMore;
+        nextRecords = mergePurchaseRecords(nextRecords, pagePurchases);
+        nextOffset = nextRecords.length;
+        setHasMore(nextHasMore);
+        setOffset(nextOffset);
+        searchFilterRef.current = await searchFilter<PurchaseItem>({
+          data: nextRecords,
+          toString: getFilter,
+        });
+        setPurchaseRecords(nextRecords);
+      }
+      if (!nextRecords.some((purchase) => purchase.id === id)) {
+        setError(`Transaction ${id} is not available in the current view.`);
+      }
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let canceled = false;
+    const search = searchFilterRef.current;
+    if (search == null || !filter?.trim() || purchases == null) {
+      setFilteredPurchases(purchases);
+      return () => {
+        canceled = true;
+      };
+    }
     (async () => {
-      setFilteredPurchases(await searchFilterRef.current(filter));
+      const filteredPurchases = await search(filter);
+      if (!canceled) {
+        setFilteredPurchases(filteredPurchases);
+      }
     })();
+    return () => {
+      canceled = true;
+    };
   }, [filter, purchases]);
+
+  useEffect(() => {
+    if (group && filter) {
+      setFilter("");
+    }
+  }, [group, filter]);
 
   const refreshRecords = async () => {
     // [ ] TODO: this needs to instead get only recent records (that could have possibly
@@ -335,7 +450,7 @@ export function PurchasesTable({
 
   useEffect(() => {
     loadMore({ init: true });
-  }, [cutoff]);
+  }, [cutoff, cutoffEnd]);
 
   useEffect(() => {
     refreshRecords();
@@ -346,10 +461,7 @@ export function PurchasesTable({
       return;
     }
 
-    setTotal(null);
-
     let b = balance != null ? toDecimal(balance) : null;
-    let t = toDecimal(0);
     const purchases: PurchaseItem[] = [];
     for (const row of purchaseRecords) {
       if (activeOnly && row.cost != null) {
@@ -364,143 +476,408 @@ export function PurchasesTable({
       }
 
       if (row.pending) {
-        // pending transactions are not include in the total
-        // or the balance
+        // Pending transactions are not included in the balance.
         continue;
       }
       if (b != null) {
         b = b.add(cost);
       }
-
-      // Compute total cost
-      t = t.add(cost);
     }
 
     if (group) {
-      purchases.sort(field_cmp("service"));
+      setPurchases(null);
       setGroupedPurchases(purchases);
     } else {
+      setGroupedPurchases(null);
       setPurchases(purchases);
     }
-    setTotal(t.toNumber());
-  }, [balance, purchaseRecords, activeOnly]);
+  }, [balance, purchaseRecords, activeOnly, group]);
 
-  //const download = (format: "csv" | "json") => {};
+  const filterText = filter.trim();
+  const visiblePurchases = group ? groupedPurchases : filteredPurchases;
+  const loadedCount = purchases?.length ?? 0;
+  const visibleCount = visiblePurchases?.length;
+  const hasDateCriteria = cutoff != null || cutoffEnd != null;
+  const hasFilterCriteria = !group && !!filterText;
+  const hasCriteria = hasDateCriteria || hasFilterCriteria;
+  const purchaseLabel =
+    visibleCount == null ? "purchases" : plural(visibleCount, "purchase");
+  const groupLabel =
+    visibleCount == null
+      ? "service groups"
+      : plural(visibleCount, "service group");
+  const summary =
+    visibleCount == null
+      ? "Purchases"
+      : group
+        ? `All ${hasCriteria ? "matching " : ""}${groupLabel}`
+        : `${hasMore ? "Most recent" : "All"} ${visibleCount} ${
+            hasCriteria ? "matching " : ""
+          }${purchaseLabel}`;
+  const filterInfo =
+    hasFilterCriteria && visibleCount != null && purchases != null
+      ? `Showing ${visibleCount} matching ${purchaseLabel} from ${loadedCount} loaded.`
+      : "";
+  const clearFilterOnSelectPurchase = (id: number) => {
+    if (filter) {
+      setFilter("");
+    }
+    loadUntilPurchase(id);
+  };
+  const print = visiblePurchases
+    ? {
+        title: getPrintTitle({
+          cutoff,
+          cutoffEnd,
+          filterText,
+          group: !!group,
+          hasMore,
+          noStatement,
+          thisMonth,
+        }),
+        columns: group
+          ? GROUPED_PRINT_COLUMNS
+          : getDetailedPrintColumns({
+              membershipTierLabels,
+              showBalance: visiblePurchases.some(
+                ({ balance }) => balance != null,
+              ),
+            }),
+      }
+    : undefined;
 
   return (
     <div style={style}>
-      <SectionDivider
-        loading={loading}
-        onRefresh={() => loadMore({ init: true })}
-      >
-        <Tooltip title="These are transactions made within CoCalc, which includes all purchases and credits resulting from payments.">
-          {group ? (
-            <>
-              All Your Purchases Grouped by Service and {projectLabel}
-              {cutoff && (
-                <>
-                  {" "}
-                  starting <TimeAgo date={cutoff} />
-                </>
-              )}
-            </>
-          ) : (
-            describeNumberOf({
-              n: purchases?.length,
-              hasMore,
-              loadMore,
-              loading,
-              type: "purchase",
-            })
-          )}
-        </Tooltip>
-      </SectionDivider>
       <ShowError error={error} setError={setError} />
-      <Flex>
+      <Space wrap style={{ marginBottom: "8px" }}>
+        {viewControls}
         {!group && (
           <>
             <Input.Search
               allowClear
               placeholder="Filter purchases..."
-              style={{ maxWidth: "400px" }}
-              onChange={debounce((e) => setFilter(e.target.value ?? ""), 250)}
+              style={{ width: 320, maxWidth: "100%" }}
+              value={filter}
+              onChange={(e) => setFilter(e.target.value ?? "")}
             />
-            {filter?.trim() &&
-              filteredPurchases != null &&
-              purchases != null &&
-              filteredPurchases.length != purchases.length && (
-                <Alert
-                  style={{ margin: "-5px 0 0 15px" }}
-                  showIcon
-                  type="warning"
-                  title={`Showing ${filteredPurchases.length} matching ${plural(filteredPurchases.length, "purchase")} and hiding ${purchases.length - filteredPurchases.length} ${plural(purchases.length - filteredPurchases.length, "purchase")}.`}
-                />
-              )}
+            {!!filterInfo && (
+              <Alert
+                showIcon
+                type="info"
+                title={filterInfo}
+                style={{ padding: "4px 12px" }}
+              />
+            )}
           </>
         )}
-        <div style={{ flex: 1 }} />
-        <Export
-          style={{ margin: "-8px" }}
-          name={
-            filename ??
-            getFilename({ thisMonth, cutoff, limit, offset, noStatement })
-          }
-          data={purchases}
-        />
-        {showRefresh && (
-          <Refresh
-            handleRefresh={refreshRecords}
-            style={{ marginRight: "8px" }}
+      </Space>
+      <Flex justify="space-between" align="center" wrap gap="small">
+        <Tooltip title="These are transactions made within CoCalc, which includes all purchases and credits resulting from payments.">
+          <Space>
+            <span>{summary}</span>
+            {!group && hasMore && (
+              <Button disabled={loading} onClick={() => loadMore()}>
+                Load more
+              </Button>
+            )}
+            {loading && <Spin />}
+          </Space>
+        </Tooltip>
+        <Space wrap>
+          {(day_statement_id != null || month_statement_id != null) && (
+            <EmailStatement
+              statement_id={(day_statement_id ?? month_statement_id) as number}
+            />
+          )}
+          <Export
+            name={
+              filename ??
+              getFilename({
+                thisMonth,
+                cutoff,
+                cutoffEnd,
+                filter: group ? "" : filterText,
+                group,
+                limit: group ? undefined : limit,
+                offset: group ? undefined : offset,
+                noStatement,
+              })
+            }
+            data={visiblePurchases}
+            print={print}
           />
-        )}
+          <Refresh handleRefresh={refreshRecords} style={{ marginRight: 0 }} />
+        </Space>
       </Flex>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          alignItems: "center",
-        }}
-      >
-        {(day_statement_id != null || month_statement_id != null) && (
-          <EmailStatement
-            style={{ marginLeft: "8px" }}
-            statement_id={(day_statement_id ?? month_statement_id) as number}
-          />
-        )}
-      </div>
       <div style={{ textAlign: "center", marginTop: "15px" }}>
         {group ? (
           <GroupedPurchaseTable purchases={groupedPurchases} />
         ) : (
           <DetailedPurchaseTable
+            membershipTierLabels={membershipTierLabels}
             purchases={filteredPurchases}
             admin={!!account_id}
             refresh={refreshRecords}
-            style={{ maxHeight: "70vh", overflow: "auto" }}
+            onSelectPurchase={clearFilterOnSelectPurchase}
           />
         )}
       </div>
-      <div
-        style={{
-          fontSize: "12pt",
-          marginTop: "15px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        {showTotal && total != null && !filter?.trim() && (
-          <span>Total of Displayed Costs: {currency(-total)}</span>
-        )}
-        {showBalance && balance != null && !filter?.trim() && (
-          <span>
-            Current Balance: {currency(moneyRound2Down(balance).toNumber())}
-          </span>
-        )}
-      </div>
-      {!group && purchases != null && <PurchasesPlot purchases={purchases} />}
     </div>
   );
+}
+
+const GROUPED_PRINT_COLUMNS: PrintColumn<PurchaseItem>[] = [
+  {
+    title: "Service",
+    align: "center",
+    render: ({ service }) =>
+      service != null ? serviceToDisplay(service as Service) : "",
+  },
+  {
+    title: "Amount",
+    align: "right",
+    render: formatAmountForPrint,
+  },
+  {
+    title: "Items",
+    align: "center",
+    render: ({ count }) => count ?? "",
+  },
+];
+
+function getDetailedPrintColumns({
+  membershipTierLabels,
+  showBalance,
+}: {
+  membershipTierLabels: MembershipTierLabels;
+  showBalance: boolean;
+}): PrintColumn<PurchaseItem>[] {
+  const columns: PrintColumn<PurchaseItem>[] = [
+    {
+      title: "Id",
+      align: "right",
+      render: ({ id }) => id ?? "",
+    },
+    {
+      title: "Service",
+      align: "center",
+      render: ({ service }) =>
+        service != null ? serviceToDisplay(service as Service) : "",
+    },
+    {
+      title: "Description",
+      render: (purchase) =>
+        purchaseDescriptionLinesForPrint({
+          membershipTierLabels,
+          purchase,
+        }),
+    },
+    {
+      title: "Time",
+      render: ({ time }) => formatPrintDateTime(time),
+    },
+    {
+      title: "Period",
+      render: formatPeriodForPrint,
+    },
+    {
+      title: "Amount",
+      align: "right",
+      render: formatAmountForPrint,
+    },
+  ];
+  if (showBalance) {
+    columns.push({
+      title: "Balance",
+      align: "right",
+      render: ({ balance }) =>
+        balance == null
+          ? ""
+          : currency(moneyRound2Down(toDecimal(balance)).toNumber(), 2),
+    });
+  }
+  return columns;
+}
+
+function getPrintTitle({
+  cutoff,
+  cutoffEnd,
+  filterText,
+  group,
+  hasMore,
+  noStatement,
+  thisMonth,
+}: {
+  cutoff?: Date;
+  cutoffEnd?: Date;
+  filterText: string;
+  group: boolean;
+  hasMore: boolean;
+  noStatement?: boolean;
+  thisMonth?: boolean;
+}) {
+  const phrases = [hasMore && !group ? "Most recent purchases" : "Purchases"];
+  if (group) {
+    phrases.push("grouped by service");
+  }
+  if (thisMonth) {
+    phrases.push("since last statement");
+  }
+  if (noStatement) {
+    phrases.push("not on a statement");
+  }
+  if (cutoff && cutoffEnd) {
+    phrases.push(
+      `from ${formatPrintDate(cutoff)} to ${formatPrintDate(cutoffEnd)}`,
+    );
+  } else if (cutoff) {
+    phrases.push(`from ${formatPrintDate(cutoff)}`);
+  } else if (cutoffEnd) {
+    phrases.push(`through ${formatPrintDate(cutoffEnd)}`);
+  }
+  if (filterText.trim()) {
+    phrases.push(`containing ${quoteFilter(filterText)}`);
+  }
+  return phrases.join(" ");
+}
+
+function quoteFilter(filterText: string) {
+  return filterText.includes("'") ? `"${filterText}"` : `'${filterText}'`;
+}
+
+function purchaseDescriptionLinesForPrint({
+  membershipTierLabels,
+  purchase: { description, notes, service },
+}: {
+  membershipTierLabels: MembershipTierLabels;
+  purchase: PurchaseItem;
+}) {
+  const descriptionAny = description as any;
+  const lines = [
+    descriptionTextForPrint({ description, membershipTierLabels, service }),
+  ].filter(Boolean);
+  if (descriptionAny?.credit_id != null) {
+    lines.push(`Credit Id: ${descriptionAny.credit_id}`);
+  }
+  if (descriptionAny?.refund_purchase_id != null) {
+    lines.push(`REFUNDED: Transaction ${descriptionAny.refund_purchase_id}`);
+  }
+  const lineItems = Array.isArray(descriptionAny?.line_items)
+    ? descriptionAny.line_items
+    : [];
+  if (lineItems.length > 1) {
+    for (const { amount, description } of lineItems) {
+      lines.push(`  ${description}: ${moneyToString(amount)}`);
+    }
+  }
+  if (notes) {
+    lines.push(`Notes: ${notes}`);
+  }
+  return lines;
+}
+
+function descriptionTextForPrint({
+  description,
+  membershipTierLabels,
+  service,
+}: Pick<PurchaseItem, "description" | "service"> & {
+  membershipTierLabels: MembershipTierLabels;
+}) {
+  if (description == null || typeof service !== "string") {
+    return "";
+  }
+  const descriptionAny = description as any;
+  if (service === "student-pay") {
+    return "Course fee";
+  }
+  if (service === "membership") {
+    const teamLicenseLabel =
+      formatTeamLicenseDebitPurchaseDescription(descriptionAny);
+    if (teamLicenseLabel) {
+      return teamLicenseLabel;
+    }
+    if (descriptionAny.type === "membership-package") {
+      const kindLabel =
+        descriptionAny.kind === "course"
+          ? "Course membership"
+          : descriptionAny.kind === "team"
+            ? "Team membership package"
+            : descriptionAny.kind === "site"
+              ? "Site membership package"
+              : "Membership package";
+      const courseLabel =
+        descriptionAny.kind === "course"
+          ? `${descriptionAny.metadata?.course_title ?? descriptionAny.metadata?.course_path ?? ""}`.trim()
+          : "";
+      const seatLabel =
+        descriptionAny.seat_count != null && descriptionAny.seat_count !== 1
+          ? ` (${descriptionAny.seat_count} seats)`
+          : "";
+      return `${kindLabel}: ${membershipTierLabel(
+        descriptionAny.membership_class,
+        membershipTierLabels,
+      )}${seatLabel}${
+        courseLabel ? ` for ${courseLabel}` : ""
+      }${descriptionAny.expanded_existing_package ? " expanded" : ""}`;
+    }
+    return `${formatMembershipDebitPurchaseDescription({
+      description: descriptionAny,
+      labels: membershipTierLabels,
+    })}${
+      descriptionAny.admin_assigned
+        ? ` admin assigned${descriptionAny.assigned_by ? ` by ${descriptionAny.assigned_by}` : ""}`
+        : ""
+    }`;
+  }
+  if (service === "credit") {
+    return descriptionAny.description ?? "Credit";
+  }
+  if (service === "refund") {
+    return `Refund Transaction ${descriptionAny.purchase_id}; Reason: ${capitalize(
+      descriptionAny.reason.replace(/_/g, " "),
+    )}${descriptionAny.notes ? `; Notes: ${descriptionAny.notes}` : ""}`;
+  }
+  return capitalize(service);
+}
+
+function formatAmountForPrint(record: PurchaseItem) {
+  const { cost } = record;
+  if (cost == null) {
+    if (record.period_start && record.cost_per_hour) {
+      return `${currency(toDecimal(record.cost_per_hour).toNumber(), 2)}/h`;
+    }
+    if (record.period_start && record.cost_so_far != null) {
+      return currency(toDecimal(record.cost_so_far).neg().toNumber(), 2);
+    }
+    return "-";
+  }
+  return currency(toDecimal(cost).neg().toNumber(), 2);
+}
+
+function formatPeriodForPrint(record: PurchaseItem) {
+  if (!record.period_start) {
+    return "";
+  }
+  const hours = periodLengthInHours(record);
+  const duration =
+    hours > 0 && hours < 24 ? ` (${hoursToTimeIntervalHuman(hours)})` : "";
+  if (!record.period_end) {
+    return `${formatPrintDateTime(record.period_start)} - now${duration}`;
+  }
+  return `${formatPrintDateTime(record.period_start)} - ${formatPrintDateTime(
+    record.period_end,
+  )}${duration}`;
+}
+
+function formatPrintDateTime(date?: Date | string | number) {
+  if (!date) {
+    return "";
+  }
+  return dayjs(date).format("MMMM D, YYYY h:mm A");
+}
+
+function formatPrintDate(date: Date) {
+  return dayjs(date).format("MMMM D, YYYY");
 }
 
 export function GroupedPurchaseTable({
@@ -512,97 +889,89 @@ export function GroupedPurchaseTable({
   hideColumns?: Set<string>;
   style?;
 }) {
-  const intl = useIntl();
-  const projectLabel = intl.formatMessage(labels.project);
   if (purchases == null) {
     return <Spin size="large" />;
   }
   return (
-    <div style={{ overflow: "auto", ...style }}>
-      <div style={{ minWidth: "600px" }}>
-        <Table
-          pagination={false}
-          dataSource={purchases}
-          rowKey={({ service, project_id }) => `${service}-${project_id}`}
-          columns={[
-            {
-              hidden: hideColumns?.has("service"),
-              title: "Service",
-              dataIndex: "service",
-              key: "service",
-              sorter: (a, b) =>
-                (a.service ?? "").localeCompare(b.service ?? "") ?? -1,
-              sortDirections: ["ascend", "descend"],
-              render: (service) => <ServiceTag service={service} />,
-            },
-            {
-              hidden: hideColumns?.has("amount"),
-              title: "Amount (USD)",
-              dataIndex: "cost",
-              key: "cost",
-              align: "right" as "right",
-              render: (cost) => <Amount record={{ cost }} />,
-              sorter: (a: any, b: any) =>
-                toDecimal(a.cost ?? 0).comparedTo(b.cost ?? 0),
-              sortDirections: ["ascend", "descend"],
-            },
+    <div style={style}>
+      <Table
+        size="small"
+        pagination={false}
+        scroll={{ x: "max-content" }}
+        dataSource={purchases}
+        rowKey={({ service }) => service ?? ""}
+        columns={[
+          {
+            hidden: hideColumns?.has("service"),
+            title: "Service",
+            dataIndex: "service",
+            key: "service",
+            align: "center" as "center",
+            sorter: (a, b) =>
+              (a.service ?? "").localeCompare(b.service ?? "") ?? -1,
+            sortDirections: ["ascend", "descend"],
+            render: (service) => <ServiceTag service={service} />,
+          },
+          {
+            hidden: hideColumns?.has("amount"),
+            title: "Amount",
+            dataIndex: "cost",
+            key: "cost",
+            align: "right" as "right",
+            render: (cost) => <Amount record={{ cost }} />,
+            sorter: (a: any, b: any) =>
+              toDecimal(a.cost ?? 0).comparedTo(b.cost ?? 0),
+            sortDirections: ["ascend", "descend"],
+          },
 
-            {
-              hidden: hideColumns?.has("items"),
-              title: "Items",
-              dataIndex: "count",
-              key: "count",
-              align: "center" as "center",
-              sorter: (a: any, b: any) => (a.count ?? 0) - (b.count ?? 0),
-              sortDirections: ["ascend", "descend"],
-            },
-            {
-              hidden: hideColumns?.has("project"),
-              title: projectLabel,
-              dataIndex: "project_id",
-              key: "project_id",
-              sorter: (a: any, b: any) => {
-                const title_a = a.project_id
-                  ? redux.getStore("projects").get_title(a.project_id)
-                  : "";
-                const title_b = a.project_id
-                  ? redux.getStore("projects").get_title(b.project_id)
-                  : "";
-                return cmp(title_a, title_b);
-              },
-              sortDirections: ["ascend", "descend"],
-              render: (project_id) =>
-                project_id ? (
-                  <ProjectTitle project_id={project_id} trunc={30} />
-                ) : (
-                  "-"
-                ),
-            },
-          ]}
-        />
-      </div>
+          {
+            hidden: hideColumns?.has("items"),
+            title: "Items",
+            dataIndex: "count",
+            key: "count",
+            align: "center" as "center",
+            sorter: (a: any, b: any) => (a.count ?? 0) - (b.count ?? 0),
+            sortDirections: ["ascend", "descend"],
+          },
+        ]}
+      />
     </div>
   );
 }
 
 export function DetailedPurchaseTable({
+  membershipTierLabels = {},
   purchases,
   admin,
   refresh,
   hideColumns,
-  style,
+  onSelectPurchase,
 }: {
+  membershipTierLabels?: MembershipTierLabels;
   purchases: PurchaseItem[] | null;
   admin?: boolean;
   refresh?;
   hideColumns?: Set<string>;
-  style?;
+  onSelectPurchase?: (id: number) => void;
 }) {
-  const intl = useIntl();
-  const projectLabel = intl.formatMessage(labels.project);
-  const [current, setCurrent] = useState<PurchaseItem | undefined>(undefined);
   const fragment = useTypedRedux("account", "fragment");
+  const tableRef = useRef<HTMLDivElement | null>(null);
   const [hideBalance, setHideBalance] = useState<boolean>(false);
+  const [highlightedPurchaseId, setHighlightedPurchaseId] = useState<
+    number | undefined
+  >(undefined);
+
+  const selectPurchase = (id: number) => {
+    if (!Number.isFinite(id)) {
+      return;
+    }
+    onSelectPurchase?.(id);
+    setHighlightedPurchaseId(id);
+    const nextFragment = { id: `${id}` };
+    redux.getActions("account").setFragment(nextFragment);
+    Fragment.set(nextFragment);
+  };
+
   useEffect(() => {
     if (purchases == null) {
       return;
@@ -615,154 +984,141 @@ export function DetailedPurchaseTable({
       }
     }
     setHideBalance(hideBalance);
-    const id = parseInt(fragment?.get("id") ?? Fragment.get()?.id ?? "-1");
-    if (id == -1) {
+    const id = parseInt(fragment?.get("id") ?? Fragment.get()?.id ?? "");
+    if (!Number.isFinite(id)) {
+      setHighlightedPurchaseId(undefined);
       return;
     }
     for (const purchase of purchases) {
       if (purchase.id == id) {
-        setCurrent(purchase);
+        setHighlightedPurchaseId(id);
         return;
       }
     }
   }, [fragment, purchases]);
 
+  useEffect(() => {
+    if (highlightedPurchaseId == null) {
+      return;
+    }
+    const timeout = setTimeout(() => {
+      tableRef.current
+        ?.querySelector<HTMLElement>(
+          `[data-purchase-id="${highlightedPurchaseId}"]`,
+        )
+        ?.scrollIntoView({ block: "center", inline: "nearest" });
+    }, 0);
+    return () => clearTimeout(timeout);
+  }, [highlightedPurchaseId, purchases]);
+
   if (purchases == null) {
     return <Spin size="large" />;
   }
   return (
-    <div style={{ overflow: "auto", ...style }}>
-      <div style={{ minWidth: "1000px" }}>
-        <Table
-          pagination={false}
-          dataSource={purchases}
-          rowKey="id"
-          columns={[
-            {
-              render: (_, purchase) => {
-                return (
-                  <Button onClick={() => setCurrent(purchase)}>
-                    <Icon name="expand" />
-                  </Button>
-                );
-              },
+    <div ref={tableRef}>
+      <Table
+        className="cocalc-purchases-table"
+        size="small"
+        pagination={false}
+        dataSource={purchases}
+        rowKey="id"
+        rowClassName={(purchase) =>
+          purchase.id === highlightedPurchaseId ? "ant-table-row-selected" : ""
+        }
+        onRow={(purchase) =>
+          ({
+            "data-purchase-id": purchase.id,
+          }) as any
+        }
+        columns={[
+          {
+            title: "Id",
+            dataIndex: "id",
+            key: "id",
+            align: "right" as "right",
+            sorter: (a, b) => (a.id ?? 0) - (b.id ?? 0),
+            sortDirections: ["ascend", "descend"],
+          },
+          {
+            hidden: hideColumns?.has("service"),
+            title: "Service",
+            dataIndex: "service",
+            key: "service",
+            align: "center" as "center",
+            sorter: (a, b) => (a.service ?? "").localeCompare(b.service ?? ""),
+            sortDirections: ["ascend", "descend"],
+            render: (service) => <ServiceTag service={service} />,
+          },
+          {
+            hidden: hideColumns?.has("description"),
+            title: "Description",
+            dataIndex: "description",
+            key: "description",
+            render: (_, purchase) => (
+              <PurchaseDescription
+                {...(purchase as any)}
+                admin={admin}
+                membershipTierLabels={membershipTierLabels}
+                refresh={refresh}
+                onSelectPurchase={selectPurchase}
+              />
+            ),
+          },
+          {
+            hidden: hideColumns?.has("time"),
+            title: "Time",
+            dataIndex: "time",
+            key: "time",
+            minWidth: 110,
+            render: (text) => {
+              return <TimeAgo date={text} />;
             },
-            {
-              width: "100px",
-              title: "Id",
-              dataIndex: "id",
-              key: "id",
-              sorter: (a, b) => (a.id ?? 0) - (b.id ?? 0),
-              sortDirections: ["ascend", "descend"],
-            },
-            {
-              hidden: hideColumns?.has("description"),
-              title: "Description",
-              dataIndex: "description",
-              key: "description",
-              width: "35%",
-              render: (_, purchase) => (
-                <PurchaseDescription
-                  {...(purchase as any)}
-                  admin={admin}
-                  refresh={refresh}
-                />
-              ),
-            },
-            {
-              hidden: hideColumns?.has("time"),
-              title: "Time",
-              dataIndex: "time",
-              key: "time",
-              render: (text) => {
-                return <TimeAgo date={text} />;
-              },
-              sorter: (a, b) =>
-                new Date(a.time ?? 0).getTime() -
-                new Date(b.time ?? 0).getTime(),
-              sortDirections: ["ascend", "descend"],
-            },
-            {
-              hidden: hideColumns?.has("period_start"),
-              title: "Period",
-              dataIndex: "period_start",
-              key: "period",
-              render: (_, record) => (
-                <>
-                  <Active record={record} />
-                  <Period record={record} />
-                </>
-              ),
-              sorter: (a, b) =>
-                new Date(a.period_start ?? 0).getTime() -
-                new Date(b.period_start ?? 0).getTime(),
-              sortDirections: ["ascend", "descend"],
-            },
-            {
-              hidden: hideColumns?.has("project"),
-              title: projectLabel,
-              dataIndex: "project_id",
-              key: "project_id",
-              render: (project_id) =>
-                project_id ? (
-                  <ProjectTitle project_id={project_id} trunc={20} />
-                ) : null,
-            },
-
-            {
-              hidden: hideColumns?.has("service"),
-              title: "Service",
-              dataIndex: "service",
-              key: "service",
-              sorter: (a, b) =>
-                (a.service ?? "").localeCompare(b.service ?? ""),
-              sortDirections: ["ascend", "descend"],
-              render: (service) => <ServiceTag service={service} />,
-            },
-            {
-              hidden: hideColumns?.has("amount"),
-              title: "Amount (USD)",
-              align: "right" as "right",
-              dataIndex: "cost",
-              key: "cost",
-              render: (_, record) => (
-                <>
-                  <Amount record={record} />
-                </>
-              ),
-              sorter: (a, b) => toDecimal(a.cost ?? 0).comparedTo(b.cost ?? 0),
-              sortDirections: ["ascend", "descend"],
-            },
-            {
-              hidden: hideBalance || hideColumns?.has("balance"),
-              title: "Balance (USD)",
-              align: "right" as "right",
-              dataIndex: "balance",
-              key: "balance",
-              render: (_, { balance }) =>
-                balance != undefined ? <Balance balance={balance} /> : null,
-            },
-          ]}
-        />
-      </div>
-      {current != null && (
-        <PurchaseModal
-          admin={admin}
-          purchase={current}
-          onClose={() => {
-            console.log("calling on close and clearing all fragments");
-            redux.getActions("account").setFragment(undefined);
-            Fragment.clear();
-            // have to setCurrent *after* the above stuff happens,
-            // since it updates 'fragment' via useTypedRedux, and if
-            // we don't wait, then when current because undefined we'll
-            // just pop this up again since fragment is still set.
-            setTimeout(() => {
-              setCurrent(undefined);
-            }, 1);
-          }}
-        />
-      )}
+            sorter: (a, b) =>
+              new Date(a.time ?? 0).getTime() - new Date(b.time ?? 0).getTime(),
+            sortDirections: ["ascend", "descend"],
+          },
+          {
+            hidden: hideColumns?.has("period_start"),
+            title: "Period",
+            dataIndex: "period_start",
+            key: "period",
+            minWidth: 110,
+            render: (_, record) => (
+              <>
+                <Active record={record} />
+                <Period record={record} />
+              </>
+            ),
+            sorter: (a, b) =>
+              new Date(a.period_start ?? 0).getTime() -
+              new Date(b.period_start ?? 0).getTime(),
+            sortDirections: ["ascend", "descend"],
+          },
+          {
+            hidden: hideColumns?.has("amount"),
+            title: "Amount",
+            align: "right" as "right",
+            dataIndex: "cost",
+            key: "cost",
+            render: (_, record) => (
+              <>
+                <Amount record={record} />
+              </>
+            ),
+            sorter: (a, b) => toDecimal(a.cost ?? 0).comparedTo(b.cost ?? 0),
+            sortDirections: ["ascend", "descend"],
+          },
+          {
+            hidden: hideBalance || hideColumns?.has("balance"),
+            title: "Balance",
+            align: "right" as "right",
+            dataIndex: "balance",
+            key: "balance",
+            render: (_, { balance }) =>
+              balance != undefined ? <Balance balance={balance} /> : null,
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -771,44 +1127,63 @@ function PurchaseDescription({
   id,
   description,
   invoice_id,
+  membershipTierLabels,
   notes,
   service,
   admin,
   cost,
   refresh,
+  onSelectPurchase,
 }) {
+  const [showLineItems, setShowLineItems] = useState<boolean>(false);
+  const lineItems = Array.isArray(description?.line_items)
+    ? description.line_items
+    : [];
+  const showLineItemsToggle = lineItems.length > 1;
+  const showCreditLink = description?.credit_id != null;
+  const showRefundedMarker = description?.refund_purchase_id != null;
+  const showAdminRefund =
+    admin &&
+    description?.refund_purchase_id == null &&
+    id != null &&
+    isRefundable(service, cost);
+  const showInvoiceActions = invoice_id != null;
+  const showActions =
+    showCreditLink ||
+    showRefundedMarker ||
+    showAdminRefund ||
+    showInvoiceActions ||
+    showLineItemsToggle;
   return (
-    <div>
-      <Description service={service} description={description} />
-      {description?.credit_id != null && (
-        <div>
-          <a
-            onClick={() => {
-              redux
-                .getActions("account")
-                .setFragment({ id: description.credit_id });
-            }}
-          >
-            Credit Id: {description.credit_id}
-          </a>
-        </div>
-      )}
-      <Flex wrap style={{ marginLeft: "-8px" }}>
-        {description?.["line_items"] != null && (
-          <LineItemsButton
-            lineItems={description["line_items"]}
-            style={{ marginBottom: "15px" }}
-          />
-        )}
-        {description?.refund_purchase_id && (
-          <b style={{ marginLeft: "8px" }}>
-            REFUNDED: Transaction {description.refund_purchase_id}
-          </b>
-        )}
-        {admin &&
-          description?.refund_purchase_id == null &&
-          id != null &&
-          isRefundable(service, cost) && (
+    <Space vertical size={0}>
+      <Description
+        service={service}
+        description={description}
+        membershipTierLabels={membershipTierLabels}
+        onSelectPurchase={onSelectPurchase}
+      />
+      {showActions && (
+        <Space wrap>
+          {showCreditLink && (
+            <RelatedPurchaseLink
+              purchaseId={description.credit_id}
+              onSelectPurchase={onSelectPurchase}
+            >
+              Credit Id: {description.credit_id}
+            </RelatedPurchaseLink>
+          )}
+          {showRefundedMarker && (
+            <span>
+              Refunded:{" "}
+              <RelatedPurchaseLink
+                purchaseId={description.refund_purchase_id}
+                onSelectPurchase={onSelectPurchase}
+              >
+                Transaction {description.refund_purchase_id}
+              </RelatedPurchaseLink>
+            </span>
+          )}
+          {showAdminRefund && (
             <AdminRefund
               purchase_id={id}
               service={service}
@@ -817,86 +1192,68 @@ function PurchaseDescription({
               refresh={refresh}
             />
           )}
-        {invoice_id && (
-          <Space>
-            {!admin && !description?.refund_purchase_id && (
-              <Button
-                size="small"
-                type="link"
-                target="_blank"
-                href={getSupportURL({
-                  body: `I would like to request a full refund for transaction ${id}.\n\nEXPLAIN WHAT HAPPENED.  THANKS!`,
-                  subject: `Refund Request: Transaction ${id}`,
-                  type: "purchase",
-                  hideExtra: true,
-                })}
-              >
-                <Icon name="external-link" /> Refund
-              </Button>
-            )}
-            <InvoiceLink invoice_id={invoice_id} />
-          </Space>
-        )}
-      </Flex>
-      {notes && (
-        <StaticMarkdown
-          style={{ marginTop: "8px" }}
-          value={`**Notes:** ${notes}`}
-        />
-      )}
-    </div>
-  );
-}
-
-function PurchaseModal({ purchase, onClose, admin }) {
-  const intl = useIntl();
-  const projectLabel = intl.formatMessage(labels.project);
-  useEffect(() => {
-    Fragment.set({ id: purchase.id });
-  }, [purchase.id]);
-  return (
-    <Modal
-      width={800}
-      open
-      onOk={onClose}
-      onCancel={onClose}
-      title={<>Purchase Id={purchase.id}</>}
-    >
-      <Space orientation="vertical">
-        <PurchaseDescription {...purchase} admin={admin} />
-        <div>
-          Time: <TimeAgo date={purchase.text} />
-        </div>
-        <div>
-          <Active record={purchase} />
-          <Period record={purchase} />
-        </div>
-        <div>
-          {purchase.project_id ? (
+          {showInvoiceActions && (
             <>
-              {projectLabel}: <ProjectTitle project_id={purchase.project_id} />
+              {!admin && !description?.refund_purchase_id && (
+                <Button
+                  size="small"
+                  type="link"
+                  target="_blank"
+                  href={getSupportURL({
+                    body: `I would like to request a full refund for transaction ${id}.\n\nEXPLAIN WHAT HAPPENED.  THANKS!`,
+                    subject: `Refund Request: Transaction ${id}`,
+                    type: "purchase",
+                    hideExtra: true,
+                  })}
+                >
+                  <Icon name="support" /> Request refund
+                </Button>
+              )}
+              <InvoiceLink invoice_id={invoice_id} />
             </>
-          ) : undefined}
-        </div>
-        <div>
-          Service: <ServiceTag service={purchase.service} />
-        </div>
-        <div>
-          Amount: <Amount record={purchase} />
-        </div>
-        {purchase.balance != null && (
-          <div>
-            Balance: <Balance balance={purchase.balance} />
-          </div>
-        )}
-      </Space>
-    </Modal>
+          )}
+          {showLineItemsToggle && (
+            <Button
+              size="small"
+              type="link"
+              onClick={() => setShowLineItems(!showLineItems)}
+            >
+              {showLineItems
+                ? "Hide line items"
+                : `Show ${lineItems.length} ${plural(lineItems.length, "line item")}`}
+            </Button>
+          )}
+        </Space>
+      )}
+      {showLineItems && (
+        <LineItemsTable lineItems={lineItems} style={{ marginTop: "8px" }} />
+      )}
+      {notes && <StaticMarkdown value={`**Notes:** ${notes}`} />}
+    </Space>
   );
 }
 
 // "credit" | "openai-gpt-4" | "membership", etc.
 
-function Description({ description, service }) {
+function RelatedPurchaseLink({ children, onSelectPurchase, purchaseId }) {
+  const id = Number(purchaseId);
+  if (!Number.isFinite(id)) {
+    return <>{children}</>;
+  }
+  return <a onClick={() => onSelectPurchase?.(id)}>{children}</a>;
+}
+
+function Description({
+  description,
+  membershipTierLabels,
+  service,
+  onSelectPurchase,
+}: {
+  description: any;
+  membershipTierLabels: MembershipTierLabels;
+  service: any;
+  onSelectPurchase?;
+}) {
   if (description == null) {
     return null;
   }
@@ -911,6 +1268,11 @@ function Description({ description, service }) {
     return <>Course fee</>;
   }
   if (service === "membership") {
+    const teamLicenseLabel =
+      formatTeamLicenseDebitPurchaseDescription(description);
+    if (teamLicenseLabel) {
+      return <>{teamLicenseLabel}</>;
+    }
     if (description?.type === "membership-package") {
       const {
         expanded_existing_package,
@@ -933,7 +1295,8 @@ function Description({ description, service }) {
           : "";
       return (
         <>
-          {kindLabel}: {membership_class ?? "unknown"}
+          {kindLabel}:{" "}
+          {membershipTierLabel(membership_class, membershipTierLabels)}
           {seat_count != null && seat_count !== 1
             ? ` (${seat_count} seats)`
             : ""}
@@ -947,52 +1310,42 @@ function Description({ description, service }) {
         </>
       );
     }
-    const {
-      admin_assigned,
-      assigned_by,
-      class: membershipClass,
-      interval,
-      subscription_id,
-    } = description;
+    const { admin_assigned, assigned_by } = description;
     return (
       <>
-        Membership: {membershipClass ?? "unknown"} ({interval ?? "unknown"})
+        {formatMembershipDebitPurchaseDescription({
+          description,
+          labels: membershipTierLabels,
+        })}
         {admin_assigned ? (
           <>
             {" "}
             <Tag color="blue">admin assigned</Tag>
             {assigned_by ? ` by ${assigned_by}` : ""}
           </>
-        ) : subscription_id != null ? (
-          <> (subscription {subscription_id})</>
         ) : null}
       </>
     );
   }
   if (service === "credit") {
-    return (
-      <Space>
-        <Tooltip title="Thank you!">
-          {description?.description ?? "Credit"}
-        </Tooltip>
-      </Space>
-    );
+    return <>{description?.description ?? "Credit"}</>;
   }
   if (service === "refund") {
     const { notes, reason, purchase_id } = description;
     return (
-      <div>
-        Refund Transaction {purchase_id}
-        <div>
-          Reason: {capitalize(reason.replace(/_/g, " "))}
-          {!!notes && (
-            <>
-              <br />
-              Notes: {notes}
-            </>
-          )}
-        </div>
-      </div>
+      <Space vertical size={0}>
+        <span>
+          Refund{" "}
+          <RelatedPurchaseLink
+            purchaseId={purchase_id}
+            onSelectPurchase={onSelectPurchase}
+          >
+            Transaction {purchase_id}
+          </RelatedPurchaseLink>
+        </span>
+        <span>Reason: {capitalize(reason.replace(/_/g, " "))}</span>
+        {!!notes && <span>Notes: {notes}</span>}
+      </Space>
     );
   }
 
@@ -1060,21 +1413,14 @@ function Amount({ record }) {
     const amountValue = toDecimal(cost).neg();
     const amount = amountValue.toNumber();
     return (
-      <Tooltip
-        title={` (USD): ${currency(
-          amountValue.toDecimalPlaces(4).toNumber(),
-          4,
-        )}`}
+      <span
+        style={{
+          ...getAmountStyle(amount),
+          ...(record.pending ? { color: "#999" } : undefined),
+        }}
       >
-        <span
-          style={{
-            ...getAmountStyle(amount),
-            ...(record.pending ? { color: "#999" } : undefined),
-          }}
-        >
-          {currency(amount, 2)}
-        </span>
-      </Tooltip>
+        {currency(amount, 2)}
+      </span>
     );
   }
   return <>-</>;
@@ -1084,22 +1430,24 @@ function Balance({ balance }) {
   if (balance != null) {
     const balanceValue = toDecimal(balance);
     return (
-      <Tooltip
-        title={` (USD): ${currency(
-          balanceValue.toDecimalPlaces(4).toNumber(),
-          4,
-        )}`}
-      >
-        <span style={getAmountStyle(balanceValue.toNumber())}>
-          {currency(moneyRound2Down(balanceValue).toNumber(), 2)}
-        </span>
-      </Tooltip>
+      <span style={getAmountStyle(balanceValue.toNumber())}>
+        {currency(moneyRound2Down(balanceValue).toNumber(), 2)}
+      </span>
     );
   }
   return <>-</>;
 }
 
-function getFilename({ thisMonth, cutoff, limit, offset, noStatement }) {
+function getFilename({
+  thisMonth,
+  cutoff,
+  cutoffEnd,
+  filter,
+  group,
+  limit,
+  offset,
+  noStatement,
+}) {
   const v: string[] = [];
   if (thisMonth) {
     v.push("since_last_statement");
@@ -1108,13 +1456,24 @@ function getFilename({ thisMonth, cutoff, limit, offset, noStatement }) {
     v.push("not_on_statement");
   }
   if (cutoff) {
-    v.push(new Date(cutoff).toISOString().split("T")[0]);
+    v.push(`from-${new Date(cutoff).toISOString().split("T")[0]}`);
   }
-  if (limit) {
-    v.push(`limit${limit}`);
+  if (cutoffEnd) {
+    v.push(`to-${new Date(cutoffEnd).toISOString().split("T")[0]}`);
   }
-  if (offset) {
-    v.push(`offset${offset}`);
+  if (group) {
+    v.push("grouped");
+  }
+  if (filter) {
+    v.push("filtered");
+  }
+  if (!group) {
+    if (limit) {
+      v.push(`limit${limit}`);
+    }
+    if (offset) {
+      v.push(`offset${offset}`);
+    }
   }
   return v.join("-");
 }
@@ -1212,22 +1571,16 @@ function Period({ record }) {
           {hoursToTimeIntervalHuman(hours)}
         </div>
       ) : null;
-    if (!record.period_end) {
-      return (
-        <div>
-          <TimeAgo date={record.period_start} /> - now
-          {duration}
-        </div>
-      );
-    } else {
-      return (
-        <div>
-          <TimeAgo date={record.period_start} /> -{" "}
-          <TimeAgo date={record.period_end} />
-          {duration}
-        </div>
-      );
-    }
+    return (
+      <div>
+        <Space wrap size={[4, 0]}>
+          <TimeAgo date={record.period_start} />
+          <span>to</span>
+          {record.period_end ? <TimeAgo date={record.period_end} /> : "now"}
+        </Space>
+        {duration}
+      </div>
+    );
   }
   return null;
 }

@@ -296,15 +296,106 @@ export interface StorageOptions {
   compression?: Compression;
 }
 
+export const EPHEMERAL_SQLITE_CACHE_KIB_ENV =
+  "CONAT_PERSIST_EPHEMERAL_SQLITE_CACHE_KIB";
+
+type StreamStorageKind = "ephemeral" | "disk";
+
+export interface CacheSizeSummary {
+  streams: number;
+  min_kib?: number;
+  max_kib?: number;
+}
+
+const streamLifecycle = {
+  opened_total: 0,
+  closed_total: 0,
+  opened_ephemeral_total: 0,
+  closed_ephemeral_total: 0,
+  opened_disk_total: 0,
+  closed_disk_total: 0,
+  open_ephemeral: 0,
+  open_disk: 0,
+};
+
+const openCacheSizes = {
+  ephemeral: new Map<number, number>(),
+  disk: new Map<number, number>(),
+};
+
+const openStreams = new Map<PersistentStream, StreamStorageKind>();
+
+export function resolveEphemeralSqliteCacheKiB(
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const raw = `${env[EPHEMERAL_SQLITE_CACHE_KIB_ENV] ?? ""}`.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${EPHEMERAL_SQLITE_CACHE_KIB_ENV} must be an integer`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 1_048_576) {
+    throw new Error(
+      `${EPHEMERAL_SQLITE_CACHE_KIB_ENV} must be between 1 and 1048576`,
+    );
+  }
+  return value;
+}
+
+function updateCacheSizeCount(
+  kind: StreamStorageKind,
+  cacheKiB: number,
+  delta: 1 | -1,
+): void {
+  const counts = openCacheSizes[kind];
+  const next = (counts.get(cacheKiB) ?? 0) + delta;
+  if (next > 0) {
+    counts.set(cacheKiB, next);
+  } else {
+    counts.delete(cacheKiB);
+  }
+}
+
+function recordStreamOpen(kind: StreamStorageKind, cacheKiB: number): void {
+  streamLifecycle.opened_total += 1;
+  streamLifecycle[`opened_${kind}_total`] += 1;
+  streamLifecycle[`open_${kind}`] += 1;
+  updateCacheSizeCount(kind, cacheKiB, 1);
+}
+
+function recordStreamClose(kind: StreamStorageKind, cacheKiB: number): void {
+  streamLifecycle.closed_total += 1;
+  streamLifecycle[`closed_${kind}_total`] += 1;
+  streamLifecycle[`open_${kind}`] -= 1;
+  updateCacheSizeCount(kind, cacheKiB, -1);
+}
+
+function summarizeCacheSizes(kind: StreamStorageKind): CacheSizeSummary {
+  let streams = 0;
+  let min_kib: number | undefined;
+  let max_kib: number | undefined;
+  for (const [cacheKiB, count] of openCacheSizes[kind]) {
+    streams += count;
+    min_kib = min_kib == null ? cacheKiB : Math.min(min_kib, cacheKiB);
+    max_kib = max_kib == null ? cacheKiB : Math.max(max_kib, cacheKiB);
+  }
+  return { streams, min_kib, max_kib };
+}
+
 // persistence for stream of messages with subject
 export class PersistentStream extends EventEmitter {
   private readonly options: StorageOptions;
   private readonly db: Database;
   private readonly dbPath?: string;
+  private readonly storageKind: StreamStorageKind;
+  private readonly sqliteCacheKiB: number;
   private readonly msgIDs = new TTL({ ttl: 2 * 60 * 1000 });
   private conf: Configuration;
   private throttledBackup?;
   private closing = false;
+  private diagnosticsRegistered = false;
   private maintenanceDirty = false;
   private readonly maintenanceHandles = new Map<
     string,
@@ -319,6 +410,7 @@ export class PersistentStream extends EventEmitter {
       this.setMaxListeners(1000);
       options = { compression: DEFAULT_COMPRESSION, ...options };
       this.options = options;
+      this.storageKind = this.options.ephemeral ? "ephemeral" : "disk";
       const location = this.options.ephemeral
         ? ":memory:"
         : this.options.path + ".db";
@@ -327,8 +419,18 @@ export class PersistentStream extends EventEmitter {
       }
       this.initArchive();
       this.db = createDatabase(location);
+      const configuredCacheKiB = this.options.ephemeral
+        ? resolveEphemeralSqliteCacheKiB()
+        : undefined;
+      if (configuredCacheKiB != null) {
+        this.db.exec(`PRAGMA cache_size=-${configuredCacheKiB}`);
+      }
+      this.sqliteCacheKiB = this.readSqliteCacheKiB();
       this.initSchema();
       this.maintenanceDirty = false;
+      recordStreamOpen(this.storageKind, this.sqliteCacheKiB);
+      openStreams.set(this, this.storageKind);
+      this.diagnosticsRegistered = true;
     } catch (err) {
       openPaths.delete(options.path);
       throw err;
@@ -444,6 +546,64 @@ export class PersistentStream extends EventEmitter {
     this.conf = this.config();
   };
 
+  private readSqliteCacheKiB = (): number => {
+    const cacheRow = this.db.prepare("PRAGMA cache_size").get() as
+      | { cache_size?: number }
+      | undefined;
+    const cacheSize = Number(cacheRow?.cache_size);
+    if (!Number.isFinite(cacheSize)) {
+      return 0;
+    }
+    if (cacheSize <= 0) {
+      return Math.abs(cacheSize);
+    }
+    const pageRow = this.db.prepare("PRAGMA page_size").get() as
+      | { page_size?: number }
+      | undefined;
+    const pageSize = Number(pageRow?.page_size);
+    return Number.isFinite(pageSize)
+      ? Math.ceil((cacheSize * pageSize) / 1024)
+      : 0;
+  };
+
+  diagnosticSqliteFootprint = () => {
+    const pageCount = Number(
+      (
+        this.db.prepare("PRAGMA page_count").get() as
+          | { page_count?: number }
+          | undefined
+      )?.page_count ?? 0,
+    );
+    const freePageCount = Number(
+      (
+        this.db.prepare("PRAGMA freelist_count").get() as
+          | { freelist_count?: number }
+          | undefined
+      )?.freelist_count ?? 0,
+    );
+    const pageSize = Number(
+      (
+        this.db.prepare("PRAGMA page_size").get() as
+          | { page_size?: number }
+          | undefined
+      )?.page_size ?? 0,
+    );
+    const fileBytes = this.dbPath ? fileSize(this.dbPath) : 0;
+    const walBytes = this.dbPath ? fileSize(`${this.dbPath}-wal`) : 0;
+    const shmBytes = this.dbPath ? fileSize(`${this.dbPath}-shm`) : 0;
+    return {
+      kind: this.storageKind,
+      page_bytes: pageCount * pageSize,
+      live_page_bytes: Math.max(0, pageCount - freePageCount) * pageSize,
+      freelist_bytes: freePageCount * pageSize,
+      file_bytes: fileBytes,
+      wal_bytes: walBytes,
+      shm_bytes: shmBytes,
+      message_bytes: this.totalSize(),
+      messages: this.length,
+    };
+  };
+
   close = () => {
     const path = this.options?.path;
     if (path == null || this.closing) {
@@ -496,6 +656,11 @@ export class PersistentStream extends EventEmitter {
       delete this.msgIDs;
       this.maintenanceHandles.clear();
       openPaths.delete(path);
+      if (this.diagnosticsRegistered) {
+        openStreams.delete(this);
+        recordStreamClose(this.storageKind, this.sqliteCacheKiB);
+        this.diagnosticsRegistered = false;
+      }
     }
   };
 
@@ -1417,6 +1582,80 @@ export const cache = refCacheSync<CreateOptions, PersistentStream>({
   },
 });
 
+export function getPersistentStreamDiagnostics() {
+  const cacheInfo = cache.info();
+  const referenceCounts = Object.values(cacheInfo.count);
+  return {
+    ...streamLifecycle,
+    open_total: streamLifecycle.open_ephemeral + streamLifecycle.open_disk,
+    open_paths: openPaths.size,
+    cached_streams: referenceCounts.length,
+    cached_references: referenceCounts.reduce((sum, count) => sum + count, 0),
+    max_cached_references: Math.max(0, ...referenceCounts),
+    sqlite_cache: {
+      ephemeral: summarizeCacheSizes("ephemeral"),
+      disk: summarizeCacheSizes("disk"),
+      ephemeral_override_kib: resolveEphemeralSqliteCacheKiB(),
+    },
+  };
+}
+
+export interface SqliteFootprintSummary {
+  databases: number;
+  page_bytes: number;
+  live_page_bytes: number;
+  freelist_bytes: number;
+  file_bytes: number;
+  wal_bytes: number;
+  shm_bytes: number;
+  message_bytes: number;
+  messages: number;
+  errors: number;
+}
+
+function emptySqliteFootprintSummary(): SqliteFootprintSummary {
+  return {
+    databases: 0,
+    page_bytes: 0,
+    live_page_bytes: 0,
+    freelist_bytes: 0,
+    file_bytes: 0,
+    wal_bytes: 0,
+    shm_bytes: 0,
+    message_bytes: 0,
+    messages: 0,
+    errors: 0,
+  };
+}
+
+export function getPersistentStreamSqliteDiagnostics() {
+  const started = Date.now();
+  const result = {
+    ephemeral: emptySqliteFootprintSummary(),
+    disk: emptySqliteFootprintSummary(),
+    duration_ms: 0,
+  };
+  for (const [stream, kind] of openStreams) {
+    try {
+      const footprint = stream.diagnosticSqliteFootprint();
+      const summary = result[footprint.kind];
+      summary.databases += 1;
+      summary.page_bytes += footprint.page_bytes;
+      summary.live_page_bytes += footprint.live_page_bytes;
+      summary.freelist_bytes += footprint.freelist_bytes;
+      summary.file_bytes += footprint.file_bytes;
+      summary.wal_bytes += footprint.wal_bytes;
+      summary.shm_bytes += footprint.shm_bytes;
+      summary.message_bytes += footprint.message_bytes;
+      summary.messages += footprint.messages;
+    } catch {
+      result[kind].errors += 1;
+    }
+  }
+  result.duration_ms = Date.now() - started;
+  return result;
+}
+
 export function pstream(
   options: StorageOptions & { noCache?: boolean },
 ): PersistentStream {
@@ -1426,6 +1665,15 @@ export function pstream(
 function age(path: string) {
   try {
     return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function fileSize(path: string): number {
+  try {
+    const size = Number(statSync(path).size ?? 0);
+    return Number.isFinite(size) && size > 0 ? size : 0;
   } catch {
     return 0;
   }

@@ -161,9 +161,21 @@ describe("cloud dns", () => {
 
     expect(staging).toBe(prod);
     expect(prod).toContain('starts_with(http.host, "host-")');
+    expect(prod).toContain('starts_with(http.host, "dev-")');
     expect(prod).toContain('ends_with(http.host, ".cocalc.ai")');
     expect(prod).not.toContain("cocalc-prod");
     expect(prod).not.toContain("cocalc-staging");
+
+    const separatePrivateDomain = projectHostSslRuleExpression({
+      hostname:
+        "host-99838afd-80f3-4e5b-96b8-7aff05ba9452-cocalc-staging.cocalc.ai",
+      hostId: "99838afd-80f3-4e5b-96b8-7aff05ba9452",
+      zoneHostname: "cocalc.dev",
+    });
+    expect(separatePrivateDomain).toContain('starts_with(http.host, "dev-")');
+    expect(separatePrivateDomain).toContain(
+      'ends_with(http.host, ".cocalc.dev")',
+    );
   });
 
   it("adds the v2 Full SSL rule without replacing legacy or unrelated rules", async () => {
@@ -237,6 +249,7 @@ describe("cloud dns", () => {
     expect(result.expression).toContain(
       'starts_with(http.host, "direct-check-")',
     );
+    expect(result.expression).toContain('starts_with(http.host, "dev-")');
     expect(rules[0]?.id).toBe("unrelated-rule");
     expect(rules[1]?.id).toBe("legacy-project-host-rule");
     expect(rules[1]?.expression).toContain("cocalc-staging.cocalc.ai");
@@ -313,7 +326,7 @@ describe("cloud dns", () => {
 
   it("does not rewrite an exact v2 SSL rule", async () => {
     const expression =
-      '((starts_with(http.host, "host-") and ends_with(http.host, ".example.com")) or (starts_with(http.host, "direct-check-") and ends_with(http.host, ".example.com")))';
+      '((starts_with(http.host, "host-") and ends_with(http.host, ".example.com")) or (starts_with(http.host, "direct-check-") and ends_with(http.host, ".example.com")) or (starts_with(http.host, "dev-") and ends_with(http.host, ".example.com")))';
     const managedRule = {
       id: "project-host-rule",
       ref: "cocalc_project_host_direct_tls_v2",
@@ -615,6 +628,46 @@ describe("cloud dns", () => {
     expect(record.type).toBe("CNAME");
     expect(record.name).toBe("demo-app.example.com");
     expect(record.content).toBe("host-abc.example.com");
+  });
+
+  it("does not adopt or replace an unowned app hostname record", async () => {
+    fetchMock.mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/zones?")) {
+        return zoneResponse;
+      }
+      if (init?.method === "GET" && url.includes("/dns_records?")) {
+        if (url.includes("type=CNAME")) {
+          return responseWith([]);
+        }
+        return responseWith([
+          {
+            id: "unowned-record",
+            name: "dev-private.example.com",
+            type: "A",
+            content: "203.0.113.19",
+          },
+        ]);
+      }
+      return responseWith({});
+    });
+
+    const { ensureAppSubdomainDns } = await import("./dns");
+    await expect(
+      ensureAppSubdomainDns({
+        hostname: "dev-private.example.com",
+        target_hostname: "host-abc.example.com",
+        adopt_existing: false,
+      }),
+    ).rejects.toThrow(
+      "refusing to replace existing DNS record for 'dev-private.example.com'",
+    );
+
+    expect(
+      fetchMock.mock.calls.filter(([, init]) =>
+        ["POST", "PUT", "DELETE"].includes(`${init?.method ?? ""}`),
+      ),
+    ).toHaveLength(0);
   });
 
   it("points the public viewer hostname directly at the tunnel target", async () => {

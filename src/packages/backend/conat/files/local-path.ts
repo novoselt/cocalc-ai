@@ -21,6 +21,7 @@ export async function localPathFileserver({
   project_id,
   unsafeMode,
   rootfs,
+  homeAliases,
   allowSafeModeHardlink,
   allowSafeModeSymlink,
   disableOpenAt2,
@@ -38,6 +39,7 @@ export async function localPathFileserver({
   path?: string;
   unsafeMode?: boolean;
   rootfs?: string;
+  homeAliases?: string[];
   allowSafeModeHardlink?: boolean;
   allowSafeModeSymlink?: boolean;
   disableOpenAt2?: boolean;
@@ -54,6 +56,7 @@ export async function localPathFileserver({
     unsafeMode,
     path,
     rootfs,
+    homeAliases,
     allowSafeModeHardlink,
     allowSafeModeSymlink,
     disableOpenAt2,
@@ -94,6 +97,7 @@ export async function localPathFileserver({
         // In unsafe mode (e.g. lite / local dev), default to true absolute
         // path resolution from filesystem root unless explicitly overridden.
         rootfs: rootfs ?? (unsafeMode ? "/" : undefined),
+        homeAliases,
         allowSafeModeHardlink,
         allowSafeModeSymlink,
         disableOpenAt2,

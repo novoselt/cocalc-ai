@@ -249,6 +249,9 @@ describe("project-backup", () => {
       if (sql.includes("CREATE TABLE IF NOT EXISTS project_moves")) {
         return { rows: [] };
       }
+      if (sql.includes("ALTER TABLE project_moves")) {
+        return { rows: [] };
+      }
       if (sql.includes("project_copies")) {
         return { rows: [] };
       }
@@ -801,6 +804,11 @@ describe("project-backup", () => {
         project_id: PROJECT_ID,
       }),
     ).rejects.toThrow("project not assigned to host");
+    expect(
+      queryMock.mock.calls.find(([sql]) =>
+        sql.includes("FROM project_moves"),
+      )?.[0],
+    ).toContain("expires_at > now()");
   });
 
   it("accepts delegated host context when the owning bay does not have a local host row", async () => {

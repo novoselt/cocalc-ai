@@ -74,6 +74,7 @@ import {
 } from "../../app-servers/public-viewer";
 import { renderPublicViewerFile } from "../../app-servers/public-viewer-render";
 import { getProjectHubApi } from "../../conat/hub";
+import { sanitizeAppUpstreamRequest } from "./upstream-auth-boundary";
 
 const logger = getLogger("project:servers:proxy");
 const STATIC_CACHE_CONTROL_DEFAULT = "public, max-age=300";
@@ -1576,13 +1577,13 @@ ${entries}
     }
   });
 
-  proxy.on("proxyReq", (proxyReq) => {
+  proxy.on("proxyReq", (proxyReq, req) => {
     proxyReq.setHeader("X-Proxy-By", "cocalc-lite-proxy");
-    proxyReq.removeHeader(APP_PROXY_EXPOSURE_HEADER);
+    sanitizeAppUpstreamRequest(proxyReq, req);
   });
 
-  proxy.on("proxyReqWs", (proxyReq) => {
-    proxyReq.removeHeader(APP_PROXY_EXPOSURE_HEADER);
+  proxy.on("proxyReqWs", (proxyReq, req) => {
+    sanitizeAppUpstreamRequest(proxyReq, req);
   });
 
   proxy.on("proxyRes", (proxyRes, req) => {
