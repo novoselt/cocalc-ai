@@ -649,7 +649,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     id: string,
     patch: JupyterRuntimeCellState,
   ): void => {
-    if (!id) {
+    if (!id || this.is_closed()) {
       return;
     }
     const key = jupyterRuntimeCellKey(id);
@@ -673,7 +673,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
   };
 
   public clear_runtime_cell_state = (id: string): void => {
-    if (!id) {
+    if (!id || this.is_closed()) {
       return;
     }
     this.deleteRuntimeRecord(jupyterRuntimeCellKey(id));
@@ -1683,9 +1683,11 @@ export class JupyterActions extends Actions<JupyterStoreState> {
   }
 
   public studentProjectFunctionality() {
-    return this.redux
-      .getStore("projects")
-      .get_student_project_functionality(this.project_id);
+    return (
+      this.redux
+        .getStore("projects")
+        ?.get_student_project_functionality(this.project_id) ?? {}
+    );
   }
 
   public requireToggleReadonly(): void {

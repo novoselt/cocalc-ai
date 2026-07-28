@@ -2306,10 +2306,12 @@ export class JupyterActions extends JupyterActions0 {
   }
 
   private updateContentsNow = () => {
-    if (this._state == "closed") return;
-    const cells = this.store.get("cells");
+    if (this.isClosed()) return;
+    const store = this.store;
+    if (store == null) return;
+    const cells = store.get("cells");
     if (cells == null) return;
-    const cell_list = this.store.get("cell_list");
+    const cell_list = store.get("cell_list");
     if (cell_list == null) return;
     const contents = fromJS(parseHeadings(cells, cell_list));
     this.setState({ contents });
