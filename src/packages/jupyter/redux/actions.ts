@@ -1683,9 +1683,11 @@ export class JupyterActions extends Actions<JupyterStoreState> {
   }
 
   public studentProjectFunctionality() {
-    return this.redux
-      .getStore("projects")
-      .get_student_project_functionality(this.project_id);
+    return (
+      this.redux
+        .getStore("projects")
+        ?.get_student_project_functionality(this.project_id) ?? {}
+    );
   }
 
   public requireToggleReadonly(): void {

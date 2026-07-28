@@ -57,4 +57,16 @@ describe("Jupyter runtime nbconvert state", () => {
       actions.clear_runtime_cell_state("cell-id");
     }).not.toThrow();
   });
+
+  it("defaults student project restrictions while project metadata loads", () => {
+    const actions = new JupyterActions("student-functionality-test", {
+      getStore: () => ({
+        get_student_project_functionality: () => undefined,
+      }),
+    } as any) as any;
+    actions.project_id = "project-id";
+
+    expect(actions.studentProjectFunctionality()).toEqual({});
+    expect(() => actions.requireToggleReadonly()).not.toThrow();
+  });
 });
