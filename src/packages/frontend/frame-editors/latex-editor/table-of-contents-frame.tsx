@@ -24,6 +24,7 @@ import {
   type TableOfContentsEntryMap,
 } from "@cocalc/frontend/components";
 import { COLORS } from "@cocalc/util/theme";
+import { Fragment } from "react";
 
 import type { Actions as LatexActions } from "./actions";
 
@@ -100,17 +101,23 @@ export function LatexTOCBody({
               kind?: string;
               hash?: string;
               path?: string;
+              tocGroupPath?: string;
+              tocGroupBoundary?: string;
             }
           | undefined;
-        const field = (key: "kind" | "hash" | "path") =>
-          typeof extra?.get === "function" ? extra.get(key) : extra?.[key];
+        const field = (
+          key: "kind" | "hash" | "path" | "tocGroupPath" | "tocGroupBoundary",
+        ) => (typeof extra?.get === "function" ? extra.get(key) : extra?.[key]);
         const kind = field("kind");
         const hash = field("hash");
+        const tocGroupPath = field("tocGroupPath");
+        const tocGroupBoundary = field("tocGroupBoundary");
+        const key = entry.get("id");
+        let row: React.ReactNode;
         if (kind === "chat" && typeof hash === "string") {
           const sourcePath = field("path");
-          return (
+          row = (
             <ChatRow
-              key={entry.get("id")}
               entry={entry}
               hash={hash}
               project_id={project_id}
@@ -129,13 +136,33 @@ export function LatexTOCBody({
               }
             />
           );
+        } else {
+          row = (
+            <PlainRow entry={entry} onClick={() => scrollTo(entry.toJS())} />
+          );
         }
+        if (typeof tocGroupPath !== "string") {
+          return <Fragment key={key}>{row}</Fragment>;
+        }
+        const starts =
+          tocGroupBoundary === "start" || tocGroupBoundary === "both";
+        const ends = tocGroupBoundary === "end" || tocGroupBoundary === "both";
         return (
-          <PlainRow
-            key={entry.get("id")}
-            entry={entry}
-            onClick={() => scrollTo(entry.toJS())}
-          />
+          <div
+            key={key}
+            title={`Included file: ${tocGroupPath}`}
+            style={{
+              marginLeft: 4,
+              marginTop: starts ? 5 : undefined,
+              marginBottom: ends ? 5 : undefined,
+              paddingLeft: 2,
+              borderLeft: `2px solid ${COLORS.GRAY_L}`,
+              borderTop: starts ? `1px solid ${COLORS.GRAY_L}` : undefined,
+              borderBottom: ends ? `1px solid ${COLORS.GRAY_L}` : undefined,
+            }}
+          >
+            {row}
+          </div>
         );
       })}
     </div>

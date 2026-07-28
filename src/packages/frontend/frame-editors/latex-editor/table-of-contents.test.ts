@@ -118,6 +118,11 @@ describe("interleaveSubfileTocEntries", () => {
       "after-include",
       "After",
     ]);
+    const subfileRows = result.filter(
+      ({ extra }) => extra?.tocGroupPath === "latex/123.tex",
+    );
+    expect(subfileRows[0].extra?.tocGroupBoundary).toBe("start");
+    expect(subfileRows[1].extra?.tocGroupBoundary).toBe("end");
   });
 
   it("matches input paths with explicit extensions", () => {
@@ -144,7 +149,7 @@ describe("interleaveSubfileTocEntries", () => {
     ]);
   });
 
-  it("appends unmatched groups and inserts a repeated include only once", () => {
+  it("repeats groups at repeated includes and appends unmatched groups", () => {
     const masterLatex = [
       "\\include{123}",
       "\\include{123}",
@@ -167,8 +172,14 @@ describe("interleaveSubfileTocEntries", () => {
     });
     expect(result.map(({ value }) => value)).toEqual([
       "**123.tex**",
+      "**123.tex**",
       "After",
       "**unmatched.tex**",
     ]);
+    const repeated = result.filter(({ value }) => value === "**123.tex**");
+    expect(new Set(repeated.map(({ id }) => id)).size).toBe(2);
+    expect(
+      repeated.every(({ extra }) => extra?.tocGroupBoundary === "both"),
+    ).toBe(true);
   });
 });

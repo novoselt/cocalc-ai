@@ -95,9 +95,32 @@ function resolveIncludePath({
   return candidates.get(relative) ?? candidates.get(direct);
 }
 
-// Insert each known subfile group at the master's first matching
-// \include/\input directive. Groups whose directive cannot be resolved stay
-// visible at the end as a fallback.
+function instantiateSubfileGroup(
+  group: SubfileTocGroup,
+  occurrence: number,
+): Entry[] {
+  const last = group.entries.length - 1;
+  return group.entries.map((entry, index) => ({
+    ...entry,
+    id: `${entry.id}:instance-${occurrence}`,
+    extra: {
+      ...(entry.extra ?? {}),
+      tocGroupPath: group.path,
+      tocGroupBoundary:
+        index === 0 && index === last
+          ? "both"
+          : index === 0
+            ? "start"
+            : index === last
+              ? "end"
+              : undefined,
+    },
+  }));
+}
+
+// Insert each known subfile group at every matching \include/\input directive.
+// Groups whose directive cannot be resolved stay visible at the end as a
+// fallback.
 export function interleaveSubfileTocEntries({
   masterEntries,
   masterLatex,
@@ -114,24 +137,30 @@ export function interleaveSubfileTocEntries({
     groups.map(({ path }) => [normalizeTocPath(path), path]),
   );
   const groupByPath = new Map(groups.map((group) => [group.path, group]));
-  const used = new Set<string>();
-  const placements: Array<{ line: number; group: SubfileTocGroup }> = [];
+  const placedPaths = new Set<string>();
+  const occurrenceByPath = new Map<string, number>();
+  const placements: Array<{ line: number; entries: Entry[] }> = [];
   for (const directive of scanIncludeDirectives(masterLatex)) {
     const path = resolveIncludePath({
       target: directive.target,
       masterPath,
       candidates,
     });
-    if (!path || used.has(path)) continue;
+    if (!path) continue;
     const group = groupByPath.get(path);
     if (group == null) continue;
-    used.add(path);
-    placements.push({ line: directive.line, group });
+    placedPaths.add(path);
+    const occurrence = (occurrenceByPath.get(path) ?? 0) + 1;
+    occurrenceByPath.set(path, occurrence);
+    placements.push({
+      line: directive.line,
+      entries: instantiateSubfileGroup(group, occurrence),
+    });
   }
 
   const result: Entry[] = [];
   let masterIndex = 0;
-  for (const { line, group } of placements) {
+  for (const { line, entries } of placements) {
     while (
       masterIndex < masterEntries.length &&
       parseInt(masterEntries[masterIndex].id) <= line
@@ -139,14 +168,14 @@ export function interleaveSubfileTocEntries({
       result.push(masterEntries[masterIndex]);
       masterIndex += 1;
     }
-    result.push(...group.entries);
+    result.push(...entries);
   }
   result.push(...masterEntries.slice(masterIndex));
   for (const group of [...groups].sort((a, b) =>
     a.path.localeCompare(b.path),
   )) {
-    if (!used.has(group.path)) {
-      result.push(...group.entries);
+    if (!placedPaths.has(group.path)) {
+      result.push(...instantiateSubfileGroup(group, 1));
     }
   }
   return result;
