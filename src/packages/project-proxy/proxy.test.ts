@@ -91,8 +91,10 @@ describe("project proxy upstream boundary metering", () => {
   });
 
   it("attaches websocket upgrades to every ingress listener", async () => {
+    const upstreamCookies: Array<string | undefined> = [];
     const upstream = http.createServer();
-    upstream.on("upgrade", (_req, socket) => {
+    upstream.on("upgrade", (req, socket) => {
+      upstreamCookies.push(req.headers.cookie);
       socket.end(
         "HTTP/1.1 101 Switching Protocols\r\n" +
           "Upgrade: websocket\r\n" +
@@ -129,12 +131,17 @@ describe("project proxy upstream boundary metering", () => {
             "Connection: Upgrade\r\n" +
             "Upgrade: websocket\r\n" +
             "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n" +
-            "Sec-WebSocket-Version: 13\r\n\r\n",
+            "Sec-WebSocket-Version: 13\r\n" +
+            "Cookie: cocalc_project_host_session=edge-secret; app_session=keep-me\r\n\r\n",
         );
         const [chunk] = (await once(client, "data")) as [Buffer];
         expect(chunk.toString("utf8")).toContain("101 Switching Protocols");
         client.destroy();
       }
+      expect(upstreamCookies).toEqual([
+        "app_session=keep-me",
+        "app_session=keep-me",
+      ]);
     } finally {
       for (const server of servers) await closeServer(server);
       await closeServer(upstream);

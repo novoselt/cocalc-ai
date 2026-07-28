@@ -8,14 +8,11 @@ import { getLogger } from "@cocalc/backend/logger";
 import { isValidUUID } from "@cocalc/util/misc";
 import TTLCache from "@isaacs/ttlcache";
 import listen from "@cocalc/backend/misc/async-server-listen";
+import { stripProjectHostProxyAuthCookies } from "@cocalc/conat/auth/project-host-proxy-boundary";
 
 const logger = getLogger("project-proxy:http");
 
 const CACHE_TTL = 1000;
-const PROJECT_HOST_HTTP_AUTH_COOKIE_NAME = "cocalc_project_host_http_bearer";
-const PROJECT_HOST_HTTP_SESSION_COOKIE_NAME =
-  "cocalc_project_host_http_session";
-const PROJECT_HOST_BROWSER_SESSION_COOKIE_NAME = "cocalc_project_host_session";
 const cache = new TTLCache<string, { proxy?: number; err? }>({
   max: 100000,
   ttl: CACHE_TTL,
@@ -49,36 +46,7 @@ interface StartOptions {
   noteUpstreamWsBytes?: NoteProxyBoundaryBytesFn;
 }
 
-export function stripProjectHostProxyAuthCookies(
-  cookieHeader: string | string[] | undefined,
-  {
-    preserveCookieNames = [],
-  }: {
-    preserveCookieNames?: string[];
-  } = {},
-): string | undefined {
-  if (cookieHeader == null) return undefined;
-  const preserved = new Set(preserveCookieNames);
-  const raw = Array.isArray(cookieHeader)
-    ? cookieHeader.join(";")
-    : cookieHeader;
-  const kept = raw
-    .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .filter((part) => {
-      const idx = part.indexOf("=");
-      const name = idx === -1 ? part : part.slice(0, idx).trim();
-      return (
-        (name !== PROJECT_HOST_HTTP_AUTH_COOKIE_NAME || preserved.has(name)) &&
-        (name !== PROJECT_HOST_HTTP_SESSION_COOKIE_NAME ||
-          preserved.has(name)) &&
-        (name !== PROJECT_HOST_BROWSER_SESSION_COOKIE_NAME ||
-          preserved.has(name))
-      );
-    });
-  return kept.length > 0 ? kept.join("; ") : undefined;
-}
+export { stripProjectHostProxyAuthCookies };
 
 function parseProjectId(url: string | undefined): string | null {
   if (!url || !url.startsWith("/")) return null;

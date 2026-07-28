@@ -1514,6 +1514,9 @@ importers:
       '@cocalc/backend':
         specifier: workspace:*
         version: link:../backend
+      '@cocalc/conat':
+        specifier: workspace:*
+        version: link:../conat
       '@cocalc/util':
         specifier: workspace:*
         version: link:../util

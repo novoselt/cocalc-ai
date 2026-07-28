@@ -31,9 +31,13 @@ interface PrivateAppHostnameRequestContext {
 const PRIVATE_APP_HOSTNAME_REQUEST_CONTEXT = Symbol(
   "cocalc-private-app-hostname-request-context",
 );
+const PRIVATE_APP_HOSTNAME_REWRITE_PROMISE = Symbol(
+  "cocalc-private-app-hostname-rewrite-promise",
+);
 
 type PrivateAppHostnameRequest = IncomingMessage & {
   [PRIVATE_APP_HOSTNAME_REQUEST_CONTEXT]?: PrivateAppHostnameRequestContext;
+  [PRIVATE_APP_HOSTNAME_REWRITE_PROMISE]?: Promise<void>;
 };
 
 function normalizePrefix(value: string): string {
@@ -126,7 +130,7 @@ export function createPrivateAppHostnameRequestRewriter({
     ttl: Math.max(1_000, cacheMs),
   });
 
-  return async (req: IncomingMessage): Promise<void> => {
+  const rewrite = async (req: IncomingMessage): Promise<void> => {
     const currentUrl = `${req.url ?? ""}`;
     if (!currentUrl) return;
     const parsed = new URL(currentUrl, "http://project-host.local");
@@ -169,5 +173,15 @@ export function createPrivateAppHostnameRequestRewriter({
       route,
     });
     req.headers[PRIVATE_APP_HOST_HEADER] = hostname;
+  };
+
+  return (req: IncomingMessage): Promise<void> => {
+    const privateReq = req as PrivateAppHostnameRequest;
+    if (privateReq[PRIVATE_APP_HOSTNAME_REWRITE_PROMISE]) {
+      return privateReq[PRIVATE_APP_HOSTNAME_REWRITE_PROMISE];
+    }
+    const promise = rewrite(req);
+    privateReq[PRIVATE_APP_HOSTNAME_REWRITE_PROMISE] = promise;
+    return promise;
   };
 }

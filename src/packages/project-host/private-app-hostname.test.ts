@@ -80,6 +80,33 @@ describe("private app hostname routing", () => {
     );
   });
 
+  it("shares an in-flight hostname trace across upgrade listeners", async () => {
+    let resolveTrace!: (value: { matched: true } & typeof route) => void;
+    const trace = jest.fn(
+      async () =>
+        await new Promise<{ matched: true } & typeof route>((resolve) => {
+          resolveTrace = resolve;
+        }),
+    );
+    const rewrite = createPrivateAppHostnameRequestRewriter({ trace });
+    const req = {
+      headers: { host: "dev-1234.example.com" },
+      url: "/conat/?EIO=4&transport=websocket",
+    } as any;
+
+    const projectProxyRewrite = rewrite(req);
+    const outerConatRewrite = rewrite(req);
+
+    expect(trace).toHaveBeenCalledTimes(1);
+    resolveTrace({ matched: true, ...route });
+    await Promise.all([projectProxyRewrite, outerConatRewrite]);
+
+    expect(req.url).toBe(
+      `/${route.project_id}/apps/dev-site/conat/?EIO=4&transport=websocket`,
+    );
+    expect(req.headers[PRIVATE_APP_HOST_HEADER]).toBe("dev-1234.example.com");
+  });
+
   it("leaves canonical project-host routes unchanged", async () => {
     const trace = jest.fn();
     const rewrite = createPrivateAppHostnameRequestRewriter({ trace });
