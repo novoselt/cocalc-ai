@@ -66,6 +66,32 @@ function translateServiceOpenUrl(
   return localUrl;
 }
 
+export function buildPrivateHostnameOpenUrl({
+  privateHostnameUrl,
+  spec,
+  status,
+}: {
+  privateHostnameUrl: string;
+  spec?: AppSpec;
+  status: ManagedAppStatus;
+}): string {
+  if (
+    spec?.kind !== "service" ||
+    spec.proxy?.open_mode !== "port" ||
+    !status.url
+  ) {
+    return privateHostnameUrl;
+  }
+  const localUrl = translateServiceOpenUrl(status.url, "port");
+  if (!localUrl) return privateHostnameUrl;
+  const privateUrl = new URL(privateHostnameUrl);
+  const local = new URL(localUrl, "https://project-host.invalid");
+  privateUrl.pathname = local.pathname;
+  privateUrl.search = local.search;
+  privateUrl.hash = local.hash;
+  return privateUrl.toString();
+}
+
 export async function getProjectAppOpenUrl({
   getSpec,
   privateHostname,
@@ -81,25 +107,35 @@ export async function getProjectAppOpenUrl({
   spec?: AppSpec;
   status: ManagedAppStatus;
 }): Promise<string | undefined> {
+  let resolvedSpec = spec;
+  const resolveSpec = async (): Promise<void> => {
+    if (resolvedSpec || !getSpec) return;
+    try {
+      resolvedSpec = await getSpec(status.id);
+    } catch {
+      // Fall back to the app status URL below.
+    }
+  };
+
+  if (privateHostname?.url) {
+    await resolveSpec();
+  }
+
   if (privateHostname?.url) {
     return await webapp_client.conat_client.addProjectHostAuthToUrl({
       project_id,
-      url: privateHostname.url,
+      url: buildPrivateHostnameOpenUrl({
+        privateHostnameUrl: privateHostname.url,
+        spec: resolvedSpec,
+        status,
+      }),
     });
   }
 
   const publicUrl = buildPublicUrlFromExposure(status, publicAppPolicy);
   if (publicUrl) return publicUrl;
 
-  let resolvedSpec = spec;
-  if (!resolvedSpec && getSpec) {
-    try {
-      resolvedSpec = await getSpec(status.id);
-    } catch {
-      // Fall back to the app status URL below.
-    }
-  }
-
+  await resolveSpec();
   const declaredBasePath = `${resolvedSpec?.proxy?.base_path ?? ""}`.trim();
   const unmanagedBasePath =
     status.lifecycle_mode === "unmanaged" ? `/apps/${status.id}/` : "";

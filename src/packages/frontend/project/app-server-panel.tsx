@@ -69,6 +69,7 @@ import {
   type AppServiceOpenMode,
 } from "./app-template-catalog";
 import {
+  buildPrivateHostnameOpenUrl,
   buildPublicHostnameFromExposure,
   buildPublicUrlFromExposure,
   openProjectAppStatus,
@@ -572,11 +573,13 @@ function isPublicExposure(status: ManagedAppStatus): boolean {
 function PrivateHostnameRow({
   busy,
   hostname,
+  openUrl,
   onConfigure,
   onOpen,
 }: {
   busy?: boolean;
   hostname?: ProjectAppPrivateHostnameRecord;
+  openUrl?: string;
   onConfigure?: () => void;
   onOpen: () => void;
 }) {
@@ -625,14 +628,14 @@ function PrivateHostnameRow({
       </Typography.Text>
       <Icon name="lock" />
       <Typography.Link
-        href={hostname.url}
+        href={openUrl ?? hostname.url}
         onClick={(event) => {
           event.preventDefault();
           onOpen();
         }}
         style={{ overflowWrap: "anywhere" }}
       >
-        {hostname.url}
+        {openUrl ?? hostname.url}
       </Typography.Link>
       <Tag color="blue" style={{ marginInlineEnd: 0 }}>
         collaborators only
@@ -3249,6 +3252,15 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
                         rowAction.action === "reserve-private-hostname"
                       }
                       hostname={privateHostname}
+                      openUrl={
+                        privateHostname
+                          ? buildPrivateHostnameOpenUrl({
+                              privateHostnameUrl: privateHostname.url,
+                              spec: specById[row.id],
+                              status: row,
+                            })
+                          : undefined
+                      }
                       onConfigure={
                         privateHostnamePolicy?.enabled
                           ? () => void onReservePrivateHostname(row.id)
@@ -4331,6 +4343,15 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
                         rowAction.action === "reserve-private-hostname"
                       }
                       hostname={privateHostname}
+                      openUrl={
+                        privateHostname
+                          ? buildPrivateHostnameOpenUrl({
+                              privateHostnameUrl: privateHostname.url,
+                              spec,
+                              status: row,
+                            })
+                          : undefined
+                      }
                       onConfigure={
                         privateHostnamePolicy?.enabled
                           ? () => void onReservePrivateHostname(row.id)

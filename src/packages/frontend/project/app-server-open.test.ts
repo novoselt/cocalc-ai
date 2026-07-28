@@ -23,12 +23,13 @@ jest.mock("./host-url", () => ({
 
 import type { AppSpec, ManagedAppStatus } from "@cocalc/conat/project/api/apps";
 import {
+  buildPrivateHostnameOpenUrl,
   getPrivateProjectAppOpenUrl,
   getProjectAppOpenUrl,
 } from "./app-server-open";
 
 describe("getProjectAppOpenUrl", () => {
-  it("prefers a reserved private hostname over public and proxy URLs", async () => {
+  it("prefers a reserved private hostname root for proxy-mode apps", async () => {
     const status: ManagedAppStatus = {
       id: "cocalc-dev-main",
       kind: "service",
@@ -58,6 +59,43 @@ describe("getProjectAppOpenUrl", () => {
         status,
       }),
     ).resolves.toBe("https://dev-example.cocalc.ai");
+  });
+
+  it("preserves the runtime base path for private port-mode apps", async () => {
+    const spec: AppSpec = {
+      version: 1,
+      id: "jupyterlab",
+      kind: "service",
+      proxy: {
+        base_path: "/apps/jupyterlab",
+        open_mode: "port",
+      },
+    };
+    const status: ManagedAppStatus = {
+      id: "jupyterlab",
+      kind: "service",
+      state: "running",
+      url: "/project-1/proxy/6002/",
+    };
+
+    await expect(
+      getProjectAppOpenUrl({
+        privateHostname: {
+          project_id: "project-1",
+          app_id: "jupyterlab",
+          label: "dev-jupyter",
+          hostname: "dev-jupyter.cocalc.ai",
+          base_path: "/apps/jupyterlab",
+          url: "https://dev-jupyter.cocalc.ai",
+          created_by: "account-1",
+          created_at: "2026-07-28T00:00:00.000Z",
+          updated_at: "2026-07-28T00:00:00.000Z",
+        },
+        project_id: "project-1",
+        spec,
+        status,
+      }),
+    ).resolves.toBe("https://dev-jupyter.cocalc.ai/project-1/port/6002/");
   });
 
   it("opens port-mode service apps at the translated port URL", async () => {
@@ -161,6 +199,45 @@ describe("getProjectAppOpenUrl", () => {
         status,
       }),
     ).resolves.toBe("https://host.example/project-1/proxy/6006/");
+  });
+});
+
+describe("buildPrivateHostnameOpenUrl", () => {
+  const status: ManagedAppStatus = {
+    id: "app",
+    kind: "service",
+    state: "running",
+    url: "/project-1/proxy/6002/",
+  };
+
+  it("keeps proxy-mode apps at the private hostname root", () => {
+    expect(
+      buildPrivateHostnameOpenUrl({
+        privateHostnameUrl: "https://dev-app.cocalc.ai",
+        spec: {
+          version: 1,
+          id: "app",
+          kind: "service",
+          proxy: { open_mode: "proxy" },
+        },
+        status,
+      }),
+    ).toBe("https://dev-app.cocalc.ai");
+  });
+
+  it("rebases port-mode paths onto the private hostname", () => {
+    expect(
+      buildPrivateHostnameOpenUrl({
+        privateHostnameUrl: "https://dev-app.cocalc.ai",
+        spec: {
+          version: 1,
+          id: "app",
+          kind: "service",
+          proxy: { open_mode: "port" },
+        },
+        status,
+      }),
+    ).toBe("https://dev-app.cocalc.ai/project-1/port/6002/");
   });
 });
 
