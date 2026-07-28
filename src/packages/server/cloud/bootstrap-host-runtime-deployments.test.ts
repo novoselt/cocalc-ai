@@ -112,17 +112,22 @@ describe("bootstrap-host promoted artifact defaults", () => {
     await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
     const address = server.address() as AddressInfo;
     softwareBaseUrl = `http://${testHost}:${address.port}/software`;
-  });
+    process.env.MASTER_CONAT_SERVER = "http://master.example.test";
+    process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE = "disabled";
+    await import("./bootstrap-host");
+  }, 30_000);
 
   afterAll(async () => {
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),
     );
+    delete process.env.MASTER_CONAT_SERVER;
+    delete process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE;
   });
 
   beforeEach(() => {
-    jest.resetModules();
     process.env.MASTER_CONAT_SERVER = "http://master.example.test";
+    process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE = "disabled";
     getServerSettingsMock = jest.fn(async () => ({
       project_hosts_software_base_url: softwareBaseUrl,
       project_hosts_bootstrap_channel: "latest",
@@ -137,6 +142,7 @@ describe("bootstrap-host promoted artifact defaults", () => {
 
   afterEach(() => {
     delete process.env.MASTER_CONAT_SERVER;
+    delete process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE;
   });
 
   async function loadBootstrapHost() {

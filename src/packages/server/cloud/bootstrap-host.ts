@@ -192,13 +192,22 @@ async function resolveMasterConatServer({
   const address = `${configuredAddress ?? ""}`.trim();
   if (!address) return undefined;
   if (providerId !== "gcp") return address;
+  const internalMode =
+    `${process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE ?? ""}`
+      .trim()
+      .toLowerCase();
+  if (
+    ["0", "false", "off", "never", "disable", "disabled"].includes(internalMode)
+  ) {
+    return address;
+  }
   const internalHostname = await getCurrentGcpInternalHostname();
   if (!internalHostname) return address;
   if (
     !shouldUseGcpInternalConatUrl({
       currentAddress: address,
       bayInternalHostname: internalHostname,
-      mode: process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE,
+      mode: internalMode,
     })
   ) {
     return address;

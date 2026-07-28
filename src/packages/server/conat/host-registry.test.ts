@@ -158,8 +158,11 @@ function handleAvailabilityQuery(sql: string) {
 }
 
 describe("host-registry automatic convergence retry", () => {
+  beforeAll(async () => {
+    await import("./host-registry");
+  }, 30_000);
+
   beforeEach(() => {
-    jest.resetModules();
     publishMock = jest.fn(async () => undefined);
     connectMock = jest.fn(() => {
       throw new Error("unexpected db connection");
