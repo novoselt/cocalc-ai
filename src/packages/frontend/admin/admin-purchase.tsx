@@ -54,6 +54,78 @@ interface MembershipTier extends MembershipTierWithPresentation {
   priority?: number;
 }
 
+const DEFAULT_BALANCE_DESCRIPTION = "Balance adjustment";
+const INTERNAL_BALANCE_NOTE_PLACEHOLDER =
+  "Support ticket, reason, or internal context. Not shown to the user.";
+
+function BalanceAdjustmentFields({
+  amount,
+  adminNote,
+  onAdminNoteChange,
+  onAmountChange,
+  onUserNoteChange,
+  showTitle,
+  userNote,
+}: {
+  amount: number;
+  adminNote?: string;
+  onAdminNoteChange?: (value: string) => void;
+  onAmountChange: (value: number) => void;
+  onUserNoteChange: (value: string) => void;
+  showTitle?: boolean;
+  userNote: string;
+}) {
+  return (
+    <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+      {showTitle ? <Text strong>Balance adjustment</Text> : null}
+      <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+        Add or remove account credit with an audited ledger entry. This does not
+        create a Stripe payment.
+      </Paragraph>
+      <Space align="center" wrap>
+        <Text>Amount:</Text>
+        <Space.Compact>
+          <Button disabled tabIndex={-1}>
+            $
+          </Button>
+          <InputNumber
+            max={MAX_COST}
+            min={-MAX_COST}
+            precision={2}
+            step={5}
+            value={amount}
+            onChange={(value) => {
+              if (typeof value === "number") {
+                onAmountChange(value);
+              }
+            }}
+          />
+        </Space.Compact>
+        <Text type="secondary">use negative to remove credit</Text>
+      </Space>
+      <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+        <Text>User-visible description</Text>
+        <Input
+          placeholder={DEFAULT_BALANCE_DESCRIPTION}
+          value={userNote}
+          onChange={(e) => onUserNoteChange(e.target.value)}
+        />
+      </Space>
+      {onAdminNoteChange != null ? (
+        <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+          <Text>Internal admin note</Text>
+          <Input.TextArea
+            placeholder={INTERNAL_BALANCE_NOTE_PLACEHOLDER}
+            rows={3}
+            value={adminNote}
+            onChange={(e) => onAdminNoteChange(e.target.value)}
+          />
+        </Space>
+      ) : null}
+    </Space>
+  );
+}
+
 export function AdminPurchaseAdmin() {
   const [product, setProduct] = useState<Product>("membership");
   const [targetQuery, setTargetQuery] = useState<string>("");
@@ -66,9 +138,9 @@ export function AdminPurchaseAdmin() {
   const [membershipClass, setMembershipClass] = useState<string>("");
   const [interval, setInterval] = useState<"month" | "year">("month");
 
-  const [balanceAdjustment, setBalanceAdjustment] = useState<number>(25);
+  const [balanceAdjustment, setBalanceAdjustment] = useState<number>(0);
   const [balanceUserNote, setBalanceUserNote] = useState<string>(
-    "Admin balance adjustment",
+    DEFAULT_BALANCE_DESCRIPTION,
   );
 
   const [discountPercent, setDiscountPercent] = useState<number>(0);
@@ -431,36 +503,15 @@ export function AdminPurchaseAdmin() {
         )}
 
         {product === "balance" && (
-          <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-            <Text strong>Balance adjustment</Text>
-            <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              Positive amounts add account credit. Negative amounts remove
-              account credit. This creates an audited ledger entry, not a Stripe
-              payment.
-            </Paragraph>
-            <Space.Compact>
-              <Button disabled tabIndex={-1}>
-                $
-              </Button>
-              <InputNumber
-                max={MAX_COST}
-                min={-MAX_COST}
-                precision={2}
-                step={5}
-                value={balanceAdjustment}
-                onChange={(value) =>
-                  setBalanceAdjustment(
-                    typeof value === "number" ? value : balanceAdjustment,
-                  )
-                }
-              />
-            </Space.Compact>
-            <Input
-              placeholder="User-visible note"
-              value={balanceUserNote}
-              onChange={(e) => setBalanceUserNote(e.target.value)}
-            />
-          </Space>
+          <BalanceAdjustmentFields
+            adminNote={comment}
+            amount={balanceAdjustment}
+            onAdminNoteChange={setComment}
+            onAmountChange={setBalanceAdjustment}
+            onUserNoteChange={setBalanceUserNote}
+            showTitle
+            userNote={balanceUserNote}
+          />
         )}
 
         {product !== "balance" && <Divider style={{ margin: "8px 0" }} />}
@@ -527,16 +578,17 @@ export function AdminPurchaseAdmin() {
           </Space>
         )}
 
-        <Input.TextArea
-          placeholder={
-            product === "balance"
-              ? "Admin-only note or support ticket reference"
-              : "Admin comment or manual invoice reference"
-          }
-          rows={3}
-          value={comment}
-          onChange={(e) => setComment(e.target.value)}
-        />
+        {product !== "balance" && (
+          <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+            <Text>Admin comment</Text>
+            <Input.TextArea
+              placeholder="Admin comment or manual invoice reference"
+              rows={3}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+            />
+          </Space>
+        )}
 
         {actionError && <Alert title={actionError} type="error" />}
         {resultMessage && <Alert title={resultMessage} type="success" />}
@@ -563,8 +615,8 @@ export function AdminBalanceAdjustment({
   account_id: string;
   onAdjusted?: () => void;
 }) {
-  const [amount, setAmount] = useState<number>(25);
-  const [userNote, setUserNote] = useState<string>("Admin balance adjustment");
+  const [amount, setAmount] = useState<number>(0);
+  const [userNote, setUserNote] = useState<string>(DEFAULT_BALANCE_DESCRIPTION);
   const [adminNote, setAdminNote] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
@@ -602,35 +654,13 @@ export function AdminBalanceAdjustment({
   return (
     <Card size="small" title="Admin balance adjustment">
       <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          Add or remove prepaid account credit with an audited ledger entry.
-          Positive amounts add credit; negative amounts remove credit.
-        </Paragraph>
-        <Space.Compact>
-          <Button disabled tabIndex={-1}>
-            $
-          </Button>
-          <InputNumber
-            max={MAX_COST}
-            min={-MAX_COST}
-            precision={2}
-            step={5}
-            value={amount}
-            onChange={(value) =>
-              setAmount(typeof value === "number" ? value : amount)
-            }
-          />
-        </Space.Compact>
-        <Input
-          placeholder="User-visible note"
-          value={userNote}
-          onChange={(e) => setUserNote(e.target.value)}
-        />
-        <Input.TextArea
-          placeholder="Admin-only note or support ticket reference"
-          rows={3}
-          value={adminNote}
-          onChange={(e) => setAdminNote(e.target.value)}
+        <BalanceAdjustmentFields
+          adminNote={adminNote}
+          amount={amount}
+          onAdminNoteChange={setAdminNote}
+          onAmountChange={setAmount}
+          onUserNoteChange={setUserNote}
+          userNote={userNote}
         />
         {error ? <Alert title={error} type="error" /> : null}
         {success ? <Alert title={success} type="success" /> : null}
