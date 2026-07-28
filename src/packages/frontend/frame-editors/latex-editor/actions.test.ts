@@ -74,6 +74,44 @@ describe("LaTeX included-file chat ownership", () => {
   });
 });
 
+describe("LaTeX included-file table of contents", () => {
+  it("lists build-discovered subfiles even without headings or annotations", () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "/home/user/project/main.tex";
+    actions.project_id = "project-1";
+    actions.canonical_paths = {};
+    actions.store = Map({
+      switch_to_files: List([
+        "/home/user/project/main.tex",
+        "/home/user/project/123.tex",
+        "/home/user/project/456.tex",
+      ]),
+    });
+    actions.redux = {
+      getEditorActions: jest.fn(() => undefined),
+    };
+    const entries: any[] = [{ id: "2", value: "After", level: 1 }];
+
+    actions._appendSubfileTocEntries(
+      entries,
+      "\\include{123}\n\\section{After}",
+    );
+
+    expect(entries.map(({ value }) => value)).toEqual([
+      "**123.tex**",
+      "After",
+      "**456.tex**",
+    ]);
+    expect(entries[0].extra).toEqual(
+      expect.objectContaining({
+        kind: "line",
+        path: "/home/user/project/123.tex",
+        line: 0,
+      }),
+    );
+  });
+});
+
 describe("LaTeX initial build", () => {
   it("saves explicit build command changes to the aux syncdb file", () => {
     const syncdb = {

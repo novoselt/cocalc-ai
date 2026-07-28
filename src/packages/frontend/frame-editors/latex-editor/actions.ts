@@ -1384,6 +1384,10 @@ export class Actions extends BaseActions<LatexEditorState> {
     this.setState({
       switch_to_files: Array.from(new Set(switch_to_files)).sort(),
     });
+    // Dependency path resolution is asynchronous, so the build's other TOC
+    // refreshes can run before switch_to_files contains the discovered
+    // subfiles. Refresh again once the canonical file list is published.
+    this.updateTableOfContents(true);
   }
 
   private _update_pdf(time: number, force: boolean): void {
@@ -2084,15 +2088,18 @@ export class Actions extends BaseActions<LatexEditorState> {
   // Add TOC content from included files: their section headings, chat
   // markers, and bookmarks (the master's are already overlaid by
   // parseTableOfContents). A known \include/\input position determines where
-  // the file group is inserted; unmatched open subfiles remain visible at
-  // the end. Markers/bookmarks are deduped against the master.
+  // the file group is inserted; unmatched build-known/open subfiles remain
+  // visible at the end. Markers/bookmarks are deduped against the master.
   private _appendSubfileTocEntries(
     entries: TableOfContentsEntry[],
     masterLatex: string,
   ): void {
     const chatMarkers = this.store.get("chat_markers");
     const chatBookmarks = this.store.get("chat_bookmarks");
-    if (chatMarkers == null && chatBookmarks == null) return;
+    const switchToFiles = this.store.get("switch_to_files");
+    if (chatMarkers == null && chatBookmarks == null && switchToFiles == null) {
+      return;
+    }
     const seenHashes = new Set<string>();
     for (const e of entries) {
       const extra = (e as any)?.extra;
@@ -2106,6 +2113,9 @@ export class Actions extends BaseActions<LatexEditorState> {
       ),
     );
     const subPaths = new Set<string>([
+      ...((switchToFiles?.toJS() ?? []) as string[]).filter((path) =>
+        path.toLowerCase().endsWith(".tex"),
+      ),
       ...((chatMarkers?.keySeq().toJS() ?? []) as string[]),
       ...((chatBookmarks?.keySeq().toJS() ?? []) as string[]),
     ]);
@@ -2166,7 +2176,6 @@ export class Actions extends BaseActions<LatexEditorState> {
         });
       }
 
-      if (group.length === 0) continue;
       // Keep each file's entries in document order.
       group.sort(
         (a, b) =>
