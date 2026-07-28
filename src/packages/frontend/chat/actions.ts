@@ -711,7 +711,10 @@ export class ChatActions extends Actions<ChatState> {
     }
     const key = `${project_id}:${account_id}`;
     if (this.projectReadStateKey === key && this.projectReadState != null) {
-      return this.projectReadState;
+      if (!this.projectReadState.isClosed?.()) {
+        return this.projectReadState;
+      }
+      this.clearProjectReadState();
     }
     if (this.projectReadStateKey === key && this.projectReadStateInit != null) {
       return undefined;

@@ -885,7 +885,7 @@ function releaseFilePlatform({
       `release channel file for ${component} must start with ${prefix}: ${fileName}`,
     );
   }
-  const withoutArchive = fileName.replace(/\.tar\.xz$|\.xz$/, "");
+  const withoutArchive = fileName.replace(/\.tar\.(?:gz|xz)$|\.(?:gz|xz)$/, "");
   const parts = withoutArchive.slice(prefix.length).split("-");
   const os = component === "tools-minimal" ? parts.at(-2) : parts.at(-1);
   const arch = normalizeReleaseMachine(
