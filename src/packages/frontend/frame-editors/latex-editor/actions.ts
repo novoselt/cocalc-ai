@@ -2112,12 +2112,38 @@ export class Actions extends BaseActions<LatexEditorState> {
         (b) => b.text,
       ),
     );
+    // Thread configs sync with the master's side chat even when this client
+    // has never opened the anchored subfile. Use them as a provisional TOC
+    // source until that file's scanner can provide the actual marker line.
+    const unloadedAnchors = new Map<string, Set<string>>();
+    const loadedMarkerPaths = new Set<string>(
+      (chatMarkers?.keySeq().toJS() ?? []) as string[],
+    );
+    for (const row of this._getAnchoredThreadRows()) {
+      if (parseThreadResolved(row?.resolved) != null) continue;
+      const anchor = parseThreadAnchor(row?.anchor);
+      if (anchor == null) continue;
+      const path =
+        anchor.path == null
+          ? undefined
+          : (this.canonical_paths[path_normalize(anchor.path)] ?? anchor.path);
+      if (path == null || path === this.path || loadedMarkerPaths.has(path)) {
+        continue;
+      }
+      let hashes = unloadedAnchors.get(path);
+      if (hashes == null) {
+        hashes = new Set();
+        unloadedAnchors.set(path, hashes);
+      }
+      hashes.add(anchor.id);
+    }
     const subPaths = new Set<string>([
       ...((switchToFiles?.toJS() ?? []) as string[]).filter((path) =>
         path.toLowerCase().endsWith(".tex"),
       ),
       ...((chatMarkers?.keySeq().toJS() ?? []) as string[]),
       ...((chatBookmarks?.keySeq().toJS() ?? []) as string[]),
+      ...unloadedAnchors.keys(),
     ]);
     subPaths.delete(this.path);
     const groups: SubfileTocGroup[] = [];
@@ -2162,6 +2188,25 @@ export class Actions extends BaseActions<LatexEditorState> {
           extra: { kind: "chat", hash: m.hash, path, line: m.line },
         });
       }
+      for (const hash of [...(unloadedAnchors.get(path) ?? [])].sort()) {
+        if (seenHashes.has(hash)) continue;
+        seenHashes.add(hash);
+        group.push({
+          id: `sub:${path}:unloaded-chat-${hash}`,
+          value: `Chat ${hash}`,
+          level: 6,
+          icon: "comment",
+          // The source has not been loaded, so its line is unknown. Put the
+          // provisional row last; jumpToAnchor opens/scans the file and then
+          // navigates to the marker's real position.
+          extra: {
+            kind: "chat",
+            hash,
+            path,
+            line: Number.MAX_SAFE_INTEGER,
+          },
+        });
+      }
       const bookmarks = (chatBookmarks?.get(path)?.toJS() ??
         []) as unknown as BookmarkMarker[];
       for (const b of bookmarks) {
@@ -2203,6 +2248,21 @@ export class Actions extends BaseActions<LatexEditorState> {
       canonicalPaths: this.canonical_paths,
     });
     entries.splice(0, entries.length, ...ordered);
+  }
+
+  private _getAnchoredThreadRows(): any[] {
+    try {
+      return (
+        getExistingSideChatActions(
+          this.project_id,
+          this.path,
+        )?.listThreadConfigRows() ?? []
+      );
+    } catch {
+      // Side chat can be between syncdb instances during reconnect. Its next
+      // store/cache event will recompute the TOC.
+      return [];
+    }
   }
 
   public async scrollToHeading(entry: TableOfContentsEntry): Promise<void> {
@@ -3302,6 +3362,10 @@ export class Actions extends BaseActions<LatexEditorState> {
       () => {
         if (this._state === ("closed" as any)) return;
         this._refreshChatMarkerLocks();
+        // A remote thread config can identify a marker in an unopened
+        // subfile. Recompute the TOC as well as the locks so that provisional
+        // row appears without requiring the source file to be opened first.
+        this.updateTableOfContents();
       },
       150,
       { leading: true, trailing: true },

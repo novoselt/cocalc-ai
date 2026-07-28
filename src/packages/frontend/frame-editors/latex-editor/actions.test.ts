@@ -110,6 +110,83 @@ describe("LaTeX included-file table of contents", () => {
       }),
     );
   });
+
+  it("lists a remote anchored chat before its subfile is opened", () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "/home/user/project/main.tex";
+    actions.project_id = "project-1";
+    actions.canonical_paths = {};
+    actions.store = Map({
+      switch_to_files: List([
+        "/home/user/project/main.tex",
+        "/home/user/project/123.tex",
+      ]),
+    });
+    actions.redux = {
+      getEditorActions: jest.fn(() => undefined),
+    };
+    actions._getAnchoredThreadRows = () => [
+      {
+        thread_id: "thread-1",
+        anchor: {
+          id: "remote-chat",
+          path: "/home/user/project/123.tex",
+        },
+      },
+    ];
+    const entries: any[] = [{ id: "2", value: "After", level: 1 }];
+
+    actions._appendSubfileTocEntries(
+      entries,
+      "\\include{123}\n\\section{After}",
+    );
+
+    expect(entries.map(({ value }) => value)).toEqual([
+      "**123.tex**",
+      "Chat remote-chat",
+      "After",
+    ]);
+    expect(entries[1].extra).toEqual(
+      expect.objectContaining({
+        kind: "chat",
+        hash: "remote-chat",
+        path: "/home/user/project/123.tex",
+      }),
+    );
+  });
+
+  it("trusts a loaded subfile scan over remote thread metadata", () => {
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "/home/user/project/main.tex";
+    actions.project_id = "project-1";
+    actions.canonical_paths = {};
+    actions.store = Map({
+      switch_to_files: List([
+        "/home/user/project/main.tex",
+        "/home/user/project/123.tex",
+      ]),
+      chat_markers: Map({
+        "/home/user/project/123.tex": List(),
+      }),
+    });
+    actions.redux = {
+      getEditorActions: jest.fn(() => undefined),
+    };
+    actions._getAnchoredThreadRows = () => [
+      {
+        thread_id: "thread-1",
+        anchor: {
+          id: "removed-chat",
+          path: "/home/user/project/123.tex",
+        },
+      },
+    ];
+    const entries: any[] = [];
+
+    actions._appendSubfileTocEntries(entries, "\\include{123}");
+
+    expect(entries.map(({ value }) => value)).toEqual(["**123.tex**"]);
+  });
 });
 
 describe("LaTeX initial build", () => {
