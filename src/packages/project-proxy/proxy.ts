@@ -485,7 +485,7 @@ export function attachProjectProxy({
     }
   });
 
-  app.use(async (req, res, next) => {
+  const handleRequest = async (req, res, next) => {
     await rewriteRequest?.(req);
     // Only proxy URLs that start with a project UUID segment.
     if (!parseProjectId(req.url)) return next();
@@ -505,37 +505,41 @@ export function attachProjectProxy({
       }
       res.end(`${(err as any)?.message ?? "Bad Gateway"}\n`);
     }
-  });
+  };
+  app.use(handleRequest);
 
-  for (const ingressServer of ingressServers) {
-    ingressServer.prependListener("upgrade", async (req, socket, head) => {
-      await rewriteRequest?.(req);
-      // Only proxy project-scoped websocket upgrades.
-      if (!parseProjectId(req.url)) return;
-      try {
-        const { target, handled } = await resolveTarget(req);
-        if (!handled || !target) {
-          return;
-        }
-        onUpgradeAuthorized?.(req, socket);
-        proxy.ws(req, socket, head, { target, prependPath: false });
-      } catch (err: any) {
-        const statusCode = Number.isInteger(err?.statusCode)
-          ? err.statusCode
-          : 502;
-        const statusText =
-          statusCode === 401
-            ? "Unauthorized"
-            : statusCode === 403
-              ? "Forbidden"
-              : statusCode === 429
-                ? "Too Many Requests"
-                : "Bad Gateway";
-        socket.write(
-          `HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`,
-        );
-        socket.destroy();
+  const handleUpgrade = async (req, socket, head) => {
+    await rewriteRequest?.(req);
+    // Only proxy project-scoped websocket upgrades.
+    if (!parseProjectId(req.url)) return;
+    try {
+      const { target, handled } = await resolveTarget(req);
+      if (!handled || !target) {
+        return;
       }
-    });
+      onUpgradeAuthorized?.(req, socket);
+      proxy.ws(req, socket, head, { target, prependPath: false });
+    } catch (err: any) {
+      const statusCode = Number.isInteger(err?.statusCode)
+        ? err.statusCode
+        : 502;
+      const statusText =
+        statusCode === 401
+          ? "Unauthorized"
+          : statusCode === 403
+            ? "Forbidden"
+            : statusCode === 429
+              ? "Too Many Requests"
+              : "Bad Gateway";
+      socket.write(
+        `HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`,
+      );
+      socket.destroy();
+    }
+  };
+  for (const ingressServer of ingressServers) {
+    ingressServer.prependListener("upgrade", handleUpgrade);
   }
+
+  return { handleRequest, handleUpgrade };
 }

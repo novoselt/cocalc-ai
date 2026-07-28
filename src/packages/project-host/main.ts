@@ -12,7 +12,7 @@ import { once } from "node:events";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { URL } from "node:url";
-import express from "express";
+import express, { type NextFunction } from "express";
 import TTL from "@isaacs/ttlcache";
 import getPort from "@cocalc/backend/get-port";
 import getLogger from "@cocalc/backend/logger";
@@ -504,6 +504,21 @@ export async function main(
 
   // 1) HTTP + conat server
   const app = express();
+  let handlePrivateAppHttpRequest:
+    | ((
+        req: IncomingMessage,
+        res: ServerResponse,
+        next: NextFunction,
+      ) => Promise<void>)
+    | undefined;
+  // Private hostnames own their complete URL namespace, including paths such
+  // as /healthz and /conat that the project-host itself also serves.
+  app.use((req, res, next) => {
+    if (!handlePrivateAppHttpRequest) {
+      return next();
+    }
+    void handlePrivateAppHttpRequest(req, res, next).catch(next);
+  });
   app.use(express.json());
   const { httpServer } = await startHttpListener(app, port, host, tls);
   app.get("/healthz", (_req, res) =>
@@ -516,11 +531,6 @@ export async function main(
     }),
   );
   const conatRouterUrl = resolveProjectHostConatRouterUrl();
-  attachProjectHostConatRouterProxy({
-    app,
-    httpServer,
-    target: conatRouterUrl,
-  });
   const conatClient: ConatClient = connectToConat({
     address: conatRouterUrl,
     systemAccountPassword: localConatPassword,
@@ -1224,7 +1234,13 @@ export async function main(
     if (req.headers[PRIVATE_APP_HOST_HEADER]) return;
     await maybeRewritePublicHostnameRequest(req);
   };
-  attachProjectProxy({
+  attachProjectHostConatRouterProxy({
+    app,
+    httpServer,
+    target: conatRouterUrl,
+    rewriteIngressRequest: maybeRewriteAppHostnameRequest,
+  });
+  const projectProxyHandlers = attachProjectProxy({
     httpServers: [httpServer],
     app,
     rewriteRequest: maybeRewriteAppHostnameRequest,
@@ -1525,6 +1541,13 @@ export async function main(
       return { handled: true, target: { host: "127.0.0.1", port: http_port } };
     },
   });
+  handlePrivateAppHttpRequest = async (req, res, next) => {
+    await maybeRewritePrivateHostnameRequest(req);
+    if (!req.headers[PRIVATE_APP_HOST_HEADER]) {
+      return next();
+    }
+    await projectProxyHandlers.handleRequest(req, res, next);
+  };
 
   logger.info(
     "Serve per-project files via the fs.* conat service, mounting from the local file-server.",

@@ -44,32 +44,22 @@ describe("Conat proxy", () => {
     mockCreateProxyServer.mockClear();
   });
 
-  it("rewrites the public alias once and targets the canonical server origin", async () => {
-    const priorPath = process.env.COCALC_CONAT_PATH_COMPONENT;
-    process.env.COCALC_CONAT_PATH_COMPONENT = "workspace-conat";
-    try {
-      const { proxyConatRequest } = await import("./proxy-conat");
-      const req: any = {
-        originalUrl: "/workspace-conat/?EIO=4&transport=polling",
-        url: "/workspace-conat/?EIO=4&transport=polling",
-      };
-      const res: any = {};
+  it("targets the server origin without duplicating the request path", async () => {
+    const { proxyConatRequest } = await import("./proxy-conat");
+    const req: any = {
+      originalUrl: "/conat/?EIO=4&transport=polling",
+      url: "/conat/?EIO=4&transport=polling",
+    };
+    const res: any = {};
 
-      await proxyConatRequest(req, res, { localConatServer: true });
+    await proxyConatRequest(req, res, { localConatServer: true });
 
-      expect(req.url).toBe("/conat/?EIO=4&transport=polling");
-      expect(mockCreateProxyServer).toHaveBeenCalledWith({
-        ws: true,
-        secure: false,
-        target: "http://localhost:9002",
-      });
-      expect(mockProxyWeb).toHaveBeenCalledWith(req, res);
-    } finally {
-      if (priorPath == null) {
-        delete process.env.COCALC_CONAT_PATH_COMPONENT;
-      } else {
-        process.env.COCALC_CONAT_PATH_COMPONENT = priorPath;
-      }
-    }
+    expect(req.url).toBe("/conat/?EIO=4&transport=polling");
+    expect(mockCreateProxyServer).toHaveBeenCalledWith({
+      ws: true,
+      secure: false,
+      target: "http://localhost:9002",
+    });
+    expect(mockProxyWeb).toHaveBeenCalledWith(req, res);
   });
 });

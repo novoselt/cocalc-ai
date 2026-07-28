@@ -318,8 +318,7 @@ interface Options {
   //
   //   http://localhost:4043/3fa218e5-7196-4020-8b30-e2127847cc4f/port/5002
   //
-  // The socket.io path defaults to /conat after the base URL. Set path only
-  // when an embedding proxy requires a nonstandard endpoint.
+  // The socketio path is always /conat (after the base url) and is set automatically.
   //
   address?: string;
   inboxPrefix?: string;
@@ -670,10 +669,9 @@ export class Client extends EventEmitter {
     this.on("disconnected", this.recoveryScheduler.noteTransportDisconnected);
 
     // for socket.io the address has no base url
-    const { address, path: defaultPath } = cocalcServerToSocketioAddress(
+    const { address, path } = cocalcServerToSocketioAddress(
       this.options.address!,
     );
-    const path = options.path ?? defaultPath;
     logger.debug(`Conat: Connecting to ${this.getAddressForLog()}...`);
     //     if (options.extraHeaders == null) {
     //       console.trace("WARNING: no auth set");

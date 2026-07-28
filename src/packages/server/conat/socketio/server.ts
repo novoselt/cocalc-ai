@@ -33,6 +33,7 @@ Then in another terminal, make a client connected to each:
 */
 
 import { hostname } from "node:os";
+import { join } from "node:path";
 
 import basePath from "@cocalc/backend/base-path";
 import "@cocalc/backend/conat";
@@ -48,7 +49,6 @@ import {
 import { getLogger } from "@cocalc/backend/logger";
 import { secureRandomString } from "@cocalc/backend/misc";
 import port from "@cocalc/backend/port";
-import { conatPathForBase } from "@cocalc/util/conat-path";
 import type { ConatServer } from "@cocalc/conat/core/server";
 import {
   init as createConatServer,
@@ -149,9 +149,7 @@ export async function init(
     isAllowed,
     systemAccountPassword:
       options.systemAccountPassword ?? (await secureRandomString(64)),
-    // Alternate public paths are rewritten by the Hub proxy. Keep the
-    // standalone server canonical so backend and project clients stay local.
-    path: conatPathForBase(basePath),
+    path: join(basePath, "conat"),
     port,
     clusterName,
     ...options,

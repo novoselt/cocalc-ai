@@ -2,7 +2,6 @@ import {
   inferAppBasePath,
   inferBasePathFromBaseElement,
   inferBasePathFromMetaElement,
-  inferConatPathFromMetaElement,
 } from "./app-base-path";
 
 describe("inferAppBasePath", () => {
@@ -109,26 +108,5 @@ describe("inferBasePathFromBaseElement", () => {
 
     document.head.innerHTML = '<base href="/somewhere/else/">';
     expect(inferBasePathFromBaseElement()).toBeUndefined();
-  });
-});
-
-describe("inferConatPathFromMetaElement", () => {
-  afterEach(() => {
-    document.head.innerHTML = "";
-  });
-
-  it("joins an alternate Conat endpoint to the browser-visible base path", () => {
-    document.head.innerHTML =
-      '<meta name="cocalc-conat-path-component" content="workspace-conat">';
-    expect(inferConatPathFromMetaElement("/outer/apps/dev")).toBe(
-      "/outer/apps/dev/workspace-conat",
-    );
-  });
-
-  it("ignores absent or malformed components", () => {
-    expect(inferConatPathFromMetaElement("/base")).toBeUndefined();
-    document.head.innerHTML =
-      '<meta name="cocalc-conat-path-component" content="../conat">';
-    expect(inferConatPathFromMetaElement("/base")).toBeUndefined();
   });
 });

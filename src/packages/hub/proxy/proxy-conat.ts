@@ -13,7 +13,6 @@ import basePath from "@cocalc/backend/base-path";
 import { conat } from "@cocalc/backend/conat";
 import { type Client } from "@cocalc/conat/core/client";
 import { delay } from "awaiting";
-import { canonicalConatProxyPath } from "@cocalc/util/conat-path";
 
 const logger = getLogger("hub:proxy-conat");
 
@@ -29,10 +28,6 @@ export async function proxyConatWebsocket(
   head,
   opts: ProxyConatOptions,
 ) {
-  req.url = canonicalConatProxyPath(
-    req.url,
-    process.env.COCALC_CONAT_PATH_COMPONENT,
-  );
   const target = randomServer(opts);
   logger.debug(`conat proxy -- proxying a WEBSOCKET connection to ${target}`);
   const proxy = createConatProxy(target);
@@ -43,10 +38,6 @@ export async function proxyConatWebsocket(
 }
 
 export async function proxyConatRequest(req, res, opts: ProxyConatOptions) {
-  req.url = canonicalConatProxyPath(
-    req.originalUrl ?? req.url,
-    process.env.COCALC_CONAT_PATH_COMPONENT,
-  );
   const target = randomServer(opts);
   logger.debug(`conat proxy -- proxying an HTTP request to ${target}`);
   const proxy = createConatProxy(target);

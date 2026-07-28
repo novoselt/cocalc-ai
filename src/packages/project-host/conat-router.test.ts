@@ -160,6 +160,61 @@ describe("project-host conat router helpers", () => {
     expect(
       rewriteProjectHostConatProxyUrl("/host/base/conat/socket"),
     ).toBeUndefined();
+    expect(
+      rewriteProjectHostConatProxyUrl(
+        "/11111111-1111-4111-8111-111111111111/apps/dev-site/conat/",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("lets a host-routed app own its native Conat path", async () => {
+    const conatApp = express();
+    conatApp.get("/conat/", (_req, res) => {
+      res.json({ source: "outer-conat" });
+    });
+    const conatServer = http.createServer(conatApp);
+    conatServer.listen(0, "127.0.0.1");
+    await once(conatServer, "listening");
+    const conatPort = (conatServer.address() as AddressInfo).port;
+
+    const ingressApp = express();
+    const ingressServer = http.createServer(ingressApp);
+    attachProjectHostConatRouterProxy({
+      app: ingressApp,
+      httpServer: ingressServer,
+      target: `http://127.0.0.1:${conatPort}`,
+      rewriteIngressRequest: async (req) => {
+        if (req.headers.host === "dev.example.com") {
+          req.url = `/11111111-1111-4111-8111-111111111111/apps/dev-site${req.url}`;
+        }
+      },
+    });
+    ingressApp.use((req, res) => {
+      res.json({ source: "private-app", url: req.url });
+    });
+    ingressServer.listen(0, "127.0.0.1");
+    await once(ingressServer, "listening");
+    const ingressPort = (ingressServer.address() as AddressInfo).port;
+
+    try {
+      expect(
+        await requestJson({
+          url: `http://127.0.0.1:${ingressPort}/conat/`,
+          headers: { host: "dev.example.com" },
+        }),
+      ).toEqual({
+        statusCode: 200,
+        body: {
+          source: "private-app",
+          url: "/11111111-1111-4111-8111-111111111111/apps/dev-site/conat/",
+        },
+      });
+    } finally {
+      await new Promise<void>((resolve) =>
+        ingressServer.close(() => resolve()),
+      );
+      await new Promise<void>((resolve) => conatServer.close(() => resolve()));
+    }
   });
 
   it("attaches conat upgrades to every ingress listener", () => {

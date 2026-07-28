@@ -19,6 +19,77 @@ async function closeServer(server: Server | http.Server): Promise<void> {
 }
 
 describe("project proxy upstream boundary metering", () => {
+  it("supports an early host-first dispatcher for reserved outer paths", async () => {
+    const upstream = http.createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ source: "private-app", url: req.url }));
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    const app = express();
+    let earlyHandler:
+      | ((
+          req: http.IncomingMessage,
+          res: http.ServerResponse,
+          next: express.NextFunction,
+        ) => Promise<void>)
+      | undefined;
+    app.use((req, res, next) => {
+      if (req.headers.host !== "dev.example.com" || !earlyHandler) {
+        return next();
+      }
+      req.url = `/${PROJECT_ID}/apps/dev-site${req.url}`;
+      void earlyHandler(req, res, next);
+    });
+    app.get("/healthz", (_req, res) => {
+      res.json({ source: "outer-project-host" });
+    });
+    const server = http.createServer(app);
+    const handlers = attachProjectProxy({
+      httpServer: server,
+      app,
+      resolveTarget: async () => ({
+        handled: true,
+        target: { host: "127.0.0.1", port: upstreamPort },
+      }),
+    });
+    earlyHandler = handlers.handleRequest;
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const proxyPort = (server.address() as AddressInfo).port;
+
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        http
+          .get(
+            {
+              host: "127.0.0.1",
+              port: proxyPort,
+              path: "/healthz",
+              headers: { host: "dev.example.com" },
+            },
+            (res) => {
+              const chunks: Buffer[] = [];
+              res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+              res.on("end", () =>
+                resolve(Buffer.concat(chunks).toString("utf8")),
+              );
+            },
+          )
+          .on("error", reject);
+      });
+      expect(JSON.parse(body)).toEqual({
+        source: "private-app",
+        url: `/${PROJECT_ID}/apps/dev-site/healthz`,
+      });
+    } finally {
+      await closeServer(server);
+      await closeServer(upstream);
+    }
+  });
+
   it("attaches websocket upgrades to every ingress listener", async () => {
     const upstream = http.createServer();
     upstream.on("upgrade", (_req, socket) => {

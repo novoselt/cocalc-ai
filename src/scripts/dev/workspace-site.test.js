@@ -291,7 +291,6 @@ test("launchpad environment discards ambient project credentials", () => {
     assert.equal(env.COCALC_DATA_DIR, "/tmp/workspace-data");
     assert.equal(env.PORT, "14000");
     assert.equal(env.CONAT_CLUSTER_PORT, "14002");
-    assert.equal(env.COCALC_CONAT_PATH_COMPONENT, "workspace-conat");
   } finally {
     if (priorBearer == null) delete process.env.COCALC_BEARER_TOKEN;
     else process.env.COCALC_BEARER_TOKEN = priorBearer;

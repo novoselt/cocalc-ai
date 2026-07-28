@@ -1259,7 +1259,6 @@ function launchpadEnvironment(config) {
     COCALC_HTTP_PORT: `${config.base_port}`,
     COCALC_SSHD_PORT: `${config.sshd_port}`,
     CONAT_CLUSTER_PORT: `${config.conat_port ?? Number(config.base_port) + 2}`,
-    COCALC_CONAT_PATH_COMPONENT: "workspace-conat",
     COCALC_SOURCE_COMMIT: currentSourceState().commit ?? "",
     COCALC_OPEN_BROWSER: "0",
     COCALC_ALLOW_INSECURE_HTTP_MODE: "true",

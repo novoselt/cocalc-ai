@@ -160,7 +160,7 @@ dev-a1b2c3d4e5.cocalc.ai
     v
 Outer project's existing project host
     |
-    | collaborator authorization and private hostname rewrite
+    | resolve hostname, authorize collaborator, then dispatch the full origin
     v
 Outer project app proxy
     |
@@ -179,6 +179,12 @@ Workspace runtime
 The hub authorizes and provides routing metadata. Steady-state browser traffic
 flows directly to the outer project's project host, consistent with
 `scalable-architecture.md`.
+
+Once a request is recognized as a private app hostname, that hostname owns its
+complete URL namespace. Project-host routes such as `/healthz`, `/conat`,
+`/.cocalc/*`, and any future reserved path must not intercept the request.
+Rewriting to `/<project-id>/apps/<app-id>/...` is an internal routing detail;
+the browser and proxied application continue to see a root-hosted origin.
 
 ## Current repository facts
 
@@ -336,6 +342,8 @@ collaborator. The site must present a persistent admin warning:
     pretending to enforce quotas.
 14. Route deletion and collaborator removal revoke future access.
 15. WebSocket authorization receives the same treatment as HTTP.
+16. A recognized private hostname owns every HTTP and WebSocket path after
+    authorization; the project host cannot reserve application-visible paths.
 
 ## Runtime configuration
 
@@ -658,24 +666,21 @@ Opening a private hostname should use:
 1. The main frontend confirms that the account can access the outer project.
 2. The frontend obtains the existing short-lived bearer scoped to the outer
    project host.
-3. The frontend sends an authenticated cross-origin POST to:
-
-   ```text
-   https://dev-a1b2c3d4e5.cocalc.ai/.cocalc/project-host/session
-   ```
-
-4. The project host verifies the bearer and sets its existing HttpOnly
-   browser-session cookie for that exact hostname.
-5. The frontend navigates to the private hostname.
-6. The project host resolves the hostname to `(outer project, app, base path)`.
-7. The normal HTTP or WebSocket authorizer verifies the browser session and
+3. The frontend navigates to the private hostname with the bearer in the
+   existing one-time project-host authentication query parameter.
+4. The project host consumes the bearer, removes it from the browser URL, and
+   establishes an HttpOnly session cookie for that exact hostname.
+5. The project host resolves the hostname to `(outer project, app, base path)`.
+6. The normal HTTP or WebSocket authorizer verifies the browser session and
    current collaborator access.
-8. Only after authorization does the project host rewrite to the app route and
+7. Only after authorization does the project host rewrite to the app route and
    proxy to the outer project's local app.
 
 The hostname rewrite must not set the existing public-app marker or invoke the
 public-app authorization bypass. Introduce an explicit private-hostname request
-context if the proxy needs to preserve the original `Host` header.
+context if the proxy needs to preserve the original `Host` header. The ordinary
+project-host origin may retain its browser-session bootstrap endpoint, but the
+same path on a private app hostname belongs to the app.
 
 ### Direct navigation
 
@@ -1045,9 +1050,12 @@ Implementation result (2026-07-26):
   a direct project-host route and never creates a tunnel.
 - Both the owning-bay route cache and each project-host route cache are bounded
   at 20,000 entries with a 30-second TTL. Hostname-root HTTP and WebSocket
-  requests are rewritten directly to the canonical private app path on the
-  project host. An internal marker prevents private requests from ever falling
-  through to public-app authorization.
+  requests are dispatched before all project-host path-specific routes and
+  rewritten internally to the canonical private app path. The app therefore
+  owns root paths such as `/healthz`, `/conat`, `/socket.io`, and
+  `/.cocalc/project-host/session` without modification. An internal marker
+  prevents private requests from ever falling through to public-app
+  authorization.
 - Existing project-host bearer/browser-session authentication is reused.
   Signed-out and non-collaborator requests fail closed. Private WebSocket
   sessions are revalidated during the existing revocation sweep so collaborator
