@@ -56,6 +56,7 @@ describe("project-host conat router helpers", () => {
     delete process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOST;
     delete process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT;
     delete process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME;
+    delete process.env.PROJECT_HOST_INTERNAL_URL;
     delete process.env.PROJECT_HOST_PUBLIC_URL;
   });
 
@@ -171,6 +172,8 @@ describe("project-host conat router helpers", () => {
   it("routes only custom DNS hostnames through the app ingress", () => {
     process.env.PROJECT_HOST_PUBLIC_URL =
       "https://host-123.example.com/ignored";
+    process.env.PROJECT_HOST_INTERNAL_URL =
+      "http://host-123.projecthosts.internal:9002";
     const request = (host: string) => ({ headers: { host } });
 
     expect(
@@ -182,6 +185,11 @@ describe("project-host conat router helpers", () => {
     expect(
       shouldRouteProjectHostIngressToApp(request("dev-123.example.com")),
     ).toBe(true);
+    expect(
+      shouldRouteProjectHostIngressToApp(
+        request("host-123.projecthosts.internal:9002"),
+      ),
+    ).toBe(false);
     expect(shouldRouteProjectHostIngressToApp(request("localhost:9002"))).toBe(
       false,
     );

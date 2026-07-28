@@ -473,6 +473,14 @@ function normalizeHostname(value: unknown): string {
   }
 }
 
+function hostnameFromUrl(value: unknown): string {
+  try {
+    return normalizeHostname(new URL(`${value ?? ""}`).host);
+  } catch {
+    return "";
+  }
+}
+
 export function shouldRouteProjectHostIngressToApp(
   req: Pick<IncomingMessage, "headers">,
 ): boolean {
@@ -484,15 +492,15 @@ export function shouldRouteProjectHostIngressToApp(
   ) {
     return false;
   }
-  let projectHostHostname = "";
-  try {
-    projectHostHostname = normalizeHostname(
-      new URL(`${process.env.PROJECT_HOST_PUBLIC_URL ?? ""}`).host,
-    );
-  } catch {
+  const publicHostname = hostnameFromUrl(process.env.PROJECT_HOST_PUBLIC_URL);
+  if (!publicHostname) {
     return false;
   }
-  return !!projectHostHostname && requestHostname !== projectHostHostname;
+  const infrastructureHostnames = new Set([
+    publicHostname,
+    hostnameFromUrl(process.env.PROJECT_HOST_INTERNAL_URL),
+  ]);
+  return !infrastructureHostnames.has(requestHostname);
 }
 
 export function attachProjectHostConatRouterProxy({
