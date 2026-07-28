@@ -129,6 +129,7 @@ export type SiteSettingsKeys =
   | "project_hosts_app_public_subdomain_suffix"
   | "project_hosts_app_private_hostnames_enabled"
   | "project_hosts_app_private_hostname_domain"
+  | "project_hosts_app_private_hostname_bay_limit"
   | "launcher_default_quick_create"
   | "project_rootfs_default_image"
   | "project_rootfs_default_image_gpu"
@@ -1130,6 +1131,19 @@ export const site_settings_conf: SiteSettings = {
     default: "",
     valid: valid_dns_name_or_empty,
     to_val: to_trimmed_str,
+    tags: ["Project Hosts", "Cloud", "Cloudflare"],
+    group: "Compute / Project Hosts",
+    subgroup: "Domain",
+    show: (conf) =>
+      (conf.cloudflare_mode ?? "none") === "self" &&
+      to_bool(conf.project_hosts_app_private_hostnames_enabled),
+  },
+  project_hosts_app_private_hostname_bay_limit: {
+    name: "Project Hosts: Private App Hostname Per-Bay Limit",
+    desc: "Safety ceiling for platform-managed private app DNS records in this bay. Keep this below the Cloudflare zone record quota. This is not a cluster-wide counter in multibay deployments and becomes unnecessary when private app routing uses a wildcard edge route.",
+    default: "3000",
+    valid: only_nonneg_int,
+    to_val: to_int,
     tags: ["Project Hosts", "Cloud", "Cloudflare"],
     group: "Compute / Project Hosts",
     subgroup: "Domain",

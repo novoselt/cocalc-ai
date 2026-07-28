@@ -597,10 +597,31 @@ Advantages:
 - simple deletion and reconciliation;
 - only three initial developers and a small number of parallel sites.
 
-The 3,500-record Pro-plan limit is not relevant to the prototype. If this later
-becomes a broad product, evaluate wildcard-per-host namespaces, a dedicated
-authenticated edge router, or a Cloudflare plan upgrade based on measured
-usage. Do not complicate the prototype for that future scale.
+The 3,500-record Pro-plan limit is acceptable only for the prototype. The
+one-record-per-app implementation has a configurable per-bay safety ceiling of
+3,000 records and membership-tier project limits, but it must not be enabled as
+a broad production feature. The ceiling is deliberately not described as a
+cluster-wide Cloudflare quota: separate bay databases cannot enforce that
+without a centralized allocation service.
+
+Before broad release, replace per-app DNS records with one wildcard DNS record
+and a wildcard Cloudflare Worker route on a dedicated app namespace with
+matching wildcard TLS coverage. The Worker should map the random hostname to
+the current project-host origin using a scalable hostname directory. Reserving,
+releasing, or moving an app updates that directory; it does not create or
+delete DNS records.
+
+A wildcard per project host is not sufficient. DNS can select only one target
+for a wildcard, cannot dynamically choose among project hosts, and a nested
+`<app>.<host>.cocalc.ai` namespace needs additional wildcard certificate
+coverage. It also binds stable app URLs to mutable host placement. The edge
+router preserves stable app hostnames while keeping the project host as the
+authenticated data-plane boundary.
+
+The Worker is routing infrastructure, not an authorization shortcut. The
+project host must still authenticate collaborator access and consume all outer
+CoCalc credentials before proxying to the arbitrary app. No outer cookie,
+bearer, bootstrap token, or project identifier may be forwarded upstream.
 
 Use a one-level hostname under `cocalc.ai` initially so existing wildcard TLS
 coverage can apply. A nested name such as `x.dev.cocalc.ai` may require
@@ -1036,11 +1057,13 @@ Implementation result (2026-07-26):
   inspection, listing, release, lookup, and reconciliation are exposed through
   typed Conat hub APIs. Routing is disabled by default through
   `project_hosts_app_private_hostnames_enabled`.
-- Reservation requires a trusted signed-in project owner or administrator and
-  is capped at 32 hostnames per project. Collaborators may inspect and use
-  routes but cannot allocate or release them. The hostname domain is explicitly
-  configurable so staging can use a one-level TLS-covered domain such as
-  `cocalc.dev` instead of accidentally creating
+- Reservation requires a trusted signed-in project owner or administrator.
+  Allocation is serialized and capped by the project usage account's
+  `private_app_hostnames_per_project` membership feature, with a hard maximum
+  of 30 and a configurable per-bay safety ceiling of 3,000. Collaborators may
+  inspect and use routes but cannot allocate or release them. The hostname
+  domain is explicitly configurable so staging can use a one-level TLS-covered
+  domain such as `cocalc.dev` instead of accidentally creating
   `dev-*.staging.cocalc.ai`.
 - DNS creation uses proxied CNAME records with explicit record ownership.
   Allocation refuses to adopt or replace an existing unowned record. If

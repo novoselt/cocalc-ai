@@ -576,12 +576,14 @@ function PrivateHostnameRow({
   openUrl,
   onConfigure,
   onOpen,
+  onRelease,
 }: {
   busy?: boolean;
   hostname?: ProjectAppPrivateHostnameRecord;
   openUrl?: string;
   onConfigure?: () => void;
   onOpen: () => void;
+  onRelease?: () => void;
 }) {
   if (!hostname) {
     if (!onConfigure) return null;
@@ -648,6 +650,18 @@ function PrivateHostnameRow({
         >
           DNS issue
         </Tag>
+      ) : null}
+      {onRelease ? (
+        <Button
+          danger
+          type="link"
+          size="small"
+          loading={busy}
+          onClick={onRelease}
+          style={{ height: "auto", padding: 0 }}
+        >
+          Release
+        </Button>
       ) : null}
     </div>
   );
@@ -1479,6 +1493,15 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
       attention,
     };
   }, [privateHostnamesById, startupFailures, userVisibleRows]);
+  const privateHostnameUiVisible =
+    privateHostnamePolicy?.can_reserve === true ||
+    summaryCounts.privateHostnames > 0;
+
+  useEffect(() => {
+    if (!privateHostnameUiVisible && rowFilter === "private") {
+      setRowFilter("all");
+    }
+  }, [privateHostnameUiVisible, rowFilter]);
   const siteOrigin = useMemo(() => {
     if (typeof window === "undefined" || !window.location?.origin) return "";
     return window.location.origin.replace(/\/+$/, "");
@@ -2151,6 +2174,16 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
       setSubmitting(false);
       setRowAction(null);
     }
+  }
+
+  function confirmReleasePrivateHostname(id: string) {
+    Modal.confirm({
+      title: "Release private URL?",
+      content: `Release the private hostname for '${id}' and remove its DNS record.`,
+      okText: "Release",
+      okButtonProps: { danger: true },
+      onOk: async () => onReleasePrivateHostname(id),
+    });
   }
 
   function buildSpec() {
@@ -2900,13 +2933,7 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
         void onReservePrivateHostname(row.id);
         return;
       case "release-private-hostname":
-        Modal.confirm({
-          title: "Release private URL?",
-          content: `Release the private hostname for '${row.id}' and remove its DNS record.`,
-          okText: "Release",
-          okButtonProps: { danger: true },
-          onOk: async () => onReleasePrivateHostname(row.id),
-        });
+        confirmReleasePrivateHostname(row.id);
         return;
       case "logs":
         void onLogs(row.id);
@@ -3121,11 +3148,14 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
             <Tag color={summaryCounts.exposed > 0 ? "gold" : "default"}>
               public {summaryCounts.exposed}
             </Tag>
-            <Tag
-              color={summaryCounts.privateHostnames > 0 ? "blue" : "default"}
-            >
-              private URLs {summaryCounts.privateHostnames}
-            </Tag>
+            {privateHostnameUiVisible ? (
+              <Tag
+                color={summaryCounts.privateHostnames > 0 ? "blue" : "default"}
+              >
+                private URLs {summaryCounts.privateHostnames}/
+                {privateHostnamePolicy?.max_private_hostnames ?? "?"}
+              </Tag>
+            ) : null}
             <Tag color={summaryCounts.attention > 0 ? "red" : "default"}>
               attention {summaryCounts.attention}
             </Tag>
@@ -3249,7 +3279,8 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
                     <PrivateHostnameRow
                       busy={
                         rowAction?.appId === row.id &&
-                        rowAction.action === "reserve-private-hostname"
+                        (rowAction.action === "reserve-private-hostname" ||
+                          rowAction.action === "release-private-hostname")
                       }
                       hostname={privateHostname}
                       openUrl={
@@ -3262,11 +3293,16 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
                           : undefined
                       }
                       onConfigure={
-                        privateHostnamePolicy?.enabled
+                        privateHostnamePolicy?.can_reserve
                           ? () => void onReservePrivateHostname(row.id)
                           : undefined
                       }
                       onOpen={() => void openStatus(row)}
+                      onRelease={
+                        privateHostname
+                          ? () => confirmReleasePrivateHostname(row.id)
+                          : undefined
+                      }
                     />
                     <Space wrap>
                       <Button
@@ -4182,7 +4218,9 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
                   { value: "stopped", label: "Stopped" },
                   { value: "error", label: "Needs attention" },
                   { value: "public", label: "Public" },
-                  { value: "private", label: "Private URL" },
+                  ...(privateHostnameUiVisible
+                    ? [{ value: "private" as const, label: "Private URL" }]
+                    : []),
                 ]}
               />
             </Space>
@@ -4265,7 +4303,7 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
                       danger: true,
                     },
                   ]
-                : privateHostnamePolicy?.enabled
+                : privateHostnamePolicy?.can_reserve
                   ? [
                       {
                         key: "reserve-private-hostname",
@@ -4340,7 +4378,8 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
                     <PrivateHostnameRow
                       busy={
                         rowAction?.appId === row.id &&
-                        rowAction.action === "reserve-private-hostname"
+                        (rowAction.action === "reserve-private-hostname" ||
+                          rowAction.action === "release-private-hostname")
                       }
                       hostname={privateHostname}
                       openUrl={
@@ -4353,11 +4392,16 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
                           : undefined
                       }
                       onConfigure={
-                        privateHostnamePolicy?.enabled
+                        privateHostnamePolicy?.can_reserve
                           ? () => void onReservePrivateHostname(row.id)
                           : undefined
                       }
                       onOpen={() => void openStatus(row)}
+                      onRelease={
+                        privateHostname
+                          ? () => confirmReleasePrivateHostname(row.id)
+                          : undefined
+                      }
                     />
                   </div>
                   <Space wrap>

@@ -6,9 +6,12 @@
 import { randomBytes } from "node:crypto";
 import LRU from "lru-cache";
 import getLogger from "@cocalc/backend/logger";
+import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
 import getPool from "@cocalc/database/pool";
 import siteUrl from "@cocalc/database/settings/site-url";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
+import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import { resolveAccountHomeBay } from "@cocalc/server/bay-directory";
 import {
   deleteAppSubdomainDns,
   ensureAppSubdomainDns,
@@ -17,12 +20,18 @@ import {
   hasDns,
 } from "@cocalc/server/cloud/dns";
 import { normalizeCloudflareHostname } from "@cocalc/server/cloud/derived-domains";
+import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
+import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
+import { getProjectUsageAccountId } from "@cocalc/server/membership/project-usage";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 
 const logger = getLogger("server:app-private-hostnames");
 const TABLE = "project_app_private_hostnames";
 const HOST_CACHE_TTL_MS = 30_000;
-const MAX_PRIVATE_HOSTNAMES_PER_PROJECT = 32;
+const PRIVATE_HOSTNAME_LIMIT_FEATURE =
+  "private_app_hostnames_per_project" as const;
+const MAX_PRIVATE_HOSTNAMES_PER_PROJECT = 30;
+const DEFAULT_BAY_PRIVATE_HOSTNAME_LIMIT = 3_000;
 const APP_ID_RE = /^[a-z0-9](?:[a-z0-9._-]{0,63})$/i;
 
 const hostCache = new LRU<string, PrivateAppRouteTarget | null>({
@@ -38,6 +47,12 @@ export interface PrivateAppRouteTarget {
 
 export interface ProjectAppPrivateHostnamePolicy {
   enabled: boolean;
+  can_reserve: boolean;
+  current_private_hostnames: number;
+  max_private_hostnames: number;
+  current_bay_private_hostnames: number;
+  max_bay_private_hostnames: number;
+  membership_class?: string;
   browser_origin?: string;
   site_hostname?: string;
   host_hostname?: string;
@@ -124,6 +139,18 @@ async function privateHostnamesEnabled(): Promise<boolean> {
   return settingEnabled(settings.project_hosts_app_private_hostnames_enabled);
 }
 
+async function getBayPrivateHostnameLimit(): Promise<number> {
+  const settings = await getServerSettings();
+  const value = Number(
+    settings.project_hosts_app_private_hostname_bay_limit ??
+      DEFAULT_BAY_PRIVATE_HOSTNAME_LIMIT,
+  );
+  if (!Number.isFinite(value) || value < 0) {
+    return DEFAULT_BAY_PRIVATE_HOSTNAME_LIMIT;
+  }
+  return Math.floor(value);
+}
+
 async function getSiteHostname(): Promise<string | undefined> {
   const settings = await getServerSettings();
   const configured = normalizeCloudflareHostname(
@@ -202,15 +229,81 @@ async function resolveDnsTarget(hostname: string): Promise<string> {
   return hostname;
 }
 
+function normalizePrivateHostnameLimit(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return Math.min(MAX_PRIVATE_HOSTNAMES_PER_PROJECT, Math.floor(value));
+}
+
+async function getUsageAccountMembership(account_id: string) {
+  const location = await resolveAccountHomeBay({
+    account_id,
+    user_account_id: account_id,
+  });
+  const homeBay =
+    `${location.home_bay_id ?? ""}`.trim() || getConfiguredBayId();
+  if (homeBay === getConfiguredBayId()) {
+    return await resolveMembershipForAccount(account_id);
+  }
+  return await createInterBayAccountLocalClient({
+    client: getInterBayFabricClient(),
+    dest_bay: homeBay,
+  }).getMembership({ account_id });
+}
+
+async function getProjectPrivateHostnameLimit(project_id: string): Promise<{
+  max_private_hostnames: number;
+  membership_class?: string;
+}> {
+  const account_id = await getProjectUsageAccountId(project_id);
+  if (!account_id) {
+    return { max_private_hostnames: 0 };
+  }
+  const membership = await getUsageAccountMembership(account_id);
+  return {
+    max_private_hostnames: normalizePrivateHostnameLimit(
+      membership.entitlements.features?.[PRIVATE_HOSTNAME_LIMIT_FEATURE],
+    ),
+    membership_class: membership.class,
+  };
+}
+
 export async function getProjectAppPrivateHostnamePolicy(
   project_id: string,
 ): Promise<ProjectAppPrivateHostnamePolicy> {
+  await ensureSchema();
   const warnings: string[] = [];
   const enabledBySetting = await privateHostnamesEnabled();
-  const dnsConfigured = await hasDns();
-  const browser_origin = await getBrowserOrigin();
-  const site_hostname = await getSiteHostname();
-  const host_hostname = (await getProjectHostPublicRoute(project_id))?.hostname;
+  const [
+    dnsConfigured,
+    browser_origin,
+    site_hostname,
+    route,
+    limit,
+    projectCountResult,
+    bayCountResult,
+    max_bay_private_hostnames,
+  ] = await Promise.all([
+    hasDns(),
+    getBrowserOrigin(),
+    getSiteHostname(),
+    getProjectHostPublicRoute(project_id),
+    getProjectPrivateHostnameLimit(project_id),
+    getPool().query(
+      `SELECT COUNT(*)::int AS count FROM ${TABLE} WHERE project_id=$1`,
+      [project_id],
+    ),
+    getPool().query(`SELECT COUNT(*)::int AS count FROM ${TABLE}`),
+    getBayPrivateHostnameLimit(),
+  ]);
+  const host_hostname = route?.hostname;
+  const current_private_hostnames = Number(
+    projectCountResult.rows[0]?.count ?? 0,
+  );
+  const current_bay_private_hostnames = Number(
+    bayCountResult.rows[0]?.count ?? 0,
+  );
 
   if (!enabledBySetting) {
     warnings.push("Private project app hostnames are disabled by site policy.");
@@ -224,6 +317,18 @@ export async function getProjectAppPrivateHostnamePolicy(
   if (!host_hostname) {
     warnings.push("The project has no assigned public project-host hostname.");
   }
+  if (limit.max_private_hostnames <= 0) {
+    warnings.push(
+      "The project membership does not include private app hostnames.",
+    );
+  } else if (current_private_hostnames >= limit.max_private_hostnames) {
+    warnings.push(
+      `The project has reached its limit of ${limit.max_private_hostnames} private app hostnames.`,
+    );
+  }
+  if (current_bay_private_hostnames >= max_bay_private_hostnames) {
+    warnings.push("This bay has reached its private app hostname capacity.");
+  }
 
   let dns_target: string | undefined;
   if (host_hostname && dnsConfigured) {
@@ -234,13 +339,23 @@ export async function getProjectAppPrivateHostnamePolicy(
     }
   }
 
+  const enabled =
+    enabledBySetting &&
+    dnsConfigured &&
+    !!site_hostname &&
+    !!host_hostname &&
+    !!dns_target;
   return {
-    enabled:
-      enabledBySetting &&
-      dnsConfigured &&
-      !!site_hostname &&
-      !!host_hostname &&
-      !!dns_target,
+    enabled,
+    can_reserve:
+      enabled &&
+      limit.max_private_hostnames > current_private_hostnames &&
+      current_bay_private_hostnames < max_bay_private_hostnames,
+    current_private_hostnames,
+    max_private_hostnames: limit.max_private_hostnames,
+    current_bay_private_hostnames,
+    max_bay_private_hostnames,
+    membership_class: limit.membership_class,
     browser_origin,
     site_hostname,
     host_hostname,
@@ -312,6 +427,15 @@ export async function reserveProjectAppPrivateHostname(opts: {
       policy.warnings[0] ?? "Private project app hostnames are unavailable.",
     );
   }
+  const existingBeforeReservation = await inspectProjectAppPrivateHostname({
+    project_id,
+    app_id,
+  });
+  if (!existingBeforeReservation && !policy.can_reserve) {
+    throw new Error(
+      policy.warnings[0] ?? "Private app hostname capacity has been reached.",
+    );
+  }
 
   const route = await getProjectHostPublicRoute(project_id);
   if (!route || route.hostname !== policy.host_hostname) {
@@ -326,52 +450,89 @@ export async function reserveProjectAppPrivateHostname(opts: {
   });
 
   const pool = getPool();
-  const existing = await inspectProjectAppPrivateHostname({
-    project_id,
-    app_id,
-  });
-  if (!existing) {
-    const { rows } = await pool.query(
-      `
-        SELECT COUNT(*)::int AS count
-        FROM ${TABLE}
-        WHERE project_id=$1
-      `,
-      [project_id],
-    );
-    if (Number(rows[0]?.count ?? 0) >= MAX_PRIVATE_HOSTNAMES_PER_PROJECT) {
-      throw new Error(
-        `a project may have at most ${MAX_PRIVATE_HOSTNAMES_PER_PROJECT} private app hostnames`,
-      );
-    }
-  }
-
   let row: any;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const label = existing?.label ?? randomLabel();
-    const hostname = existing?.hostname ?? `${label}.${policy.site_hostname}`;
-    try {
-      const result = await pool.query(
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+      [TABLE, "bay"],
+    );
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+      [TABLE, project_id],
+    );
+    const existingResult = await client.query(
+      `SELECT * FROM ${TABLE} WHERE project_id=$1 AND app_id=$2 LIMIT 1`,
+      [project_id, app_id],
+    );
+    const existing = existingResult.rows[0];
+    if (existing) {
+      const result = await client.query(
         `
-          INSERT INTO ${TABLE}
-            (project_id, app_id, label, hostname, base_path, created_by)
-          VALUES ($1, $2, $3, $4, $5, $6)
-          ON CONFLICT (project_id, app_id) DO UPDATE
-          SET base_path=EXCLUDED.base_path, updated_at=NOW()
+          UPDATE ${TABLE}
+          SET base_path=$3, updated_at=NOW()
+          WHERE project_id=$1 AND app_id=$2
           RETURNING *
         `,
-        [project_id, app_id, label, hostname, appBasePath(app_id), created_by],
+        [project_id, app_id, appBasePath(app_id)],
       );
       row = result.rows[0];
-      break;
-    } catch (err: any) {
-      if (err?.code !== "23505" || attempt === 4) {
-        throw err;
+    } else {
+      const { rows } = await client.query(
+        `SELECT COUNT(*)::int AS count FROM ${TABLE} WHERE project_id=$1`,
+        [project_id],
+      );
+      if (Number(rows[0]?.count ?? 0) >= policy.max_private_hostnames) {
+        throw new Error(
+          `this project's membership allows at most ${policy.max_private_hostnames} private app hostnames`,
+        );
+      }
+      const bayCount = await client.query(
+        `SELECT COUNT(*)::int AS count FROM ${TABLE}`,
+      );
+      if (
+        Number(bayCount.rows[0]?.count ?? 0) >= policy.max_bay_private_hostnames
+      ) {
+        throw new Error(
+          `this bay allows at most ${policy.max_bay_private_hostnames} private app hostnames`,
+        );
+      }
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const label = randomLabel();
+        const hostname = `${label}.${policy.site_hostname}`;
+        const result = await client.query(
+          `
+            INSERT INTO ${TABLE}
+              (project_id, app_id, label, hostname, base_path, created_by)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT DO NOTHING
+            RETURNING *
+          `,
+          [
+            project_id,
+            app_id,
+            label,
+            hostname,
+            appBasePath(app_id),
+            created_by,
+          ],
+        );
+        if (result.rows[0]) {
+          row = result.rows[0];
+          break;
+        }
       }
     }
-  }
-  if (!row) {
-    throw new Error("unable to allocate a unique private app hostname");
+    if (!row) {
+      throw new Error("unable to allocate a unique private app hostname");
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
   }
 
   let ensuredRecordId: string | undefined;

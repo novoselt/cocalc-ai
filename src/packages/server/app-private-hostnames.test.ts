@@ -20,6 +20,31 @@ const getServerSettings = jest.fn(async () => ({
   project_hosts_app_private_hostnames_enabled: true,
 }));
 const siteUrl = jest.fn(async () => "https://cocalc.ai");
+const getProjectUsageAccountId = jest.fn(
+  async () => "22222222-2222-4222-8222-222222222222",
+);
+const resolveMembershipForAccount = jest.fn(async () => ({
+  class: "pro",
+  source: "subscription",
+  entitlements: {
+    features: { private_app_hostnames_per_project: 30 },
+  },
+}));
+const getConfiguredBayId = jest.fn(() => "bay-1");
+const resolveAccountHomeBay = jest.fn(async () => ({
+  home_bay_id: "bay-1",
+}));
+const getInterBayFabricClient = jest.fn(() => ({ id: "fabric-client" }));
+const remoteGetMembership = jest.fn(async () => ({
+  class: "standard",
+  source: "subscription",
+  entitlements: {
+    features: { private_app_hostnames_per_project: 5 },
+  },
+}));
+const createInterBayAccountLocalClient = jest.fn(() => ({
+  getMembership: (...args: any[]) => remoteGetMembership(...args),
+}));
 
 type Row = {
   project_id: string;
@@ -45,6 +70,14 @@ function key(project_id: string, app_id: string): string {
 const query = jest.fn(async (sqlRaw: string, params: any[] = []) => {
   const sql = sqlRaw.replace(/\s+/g, " ").trim();
   if (sql.startsWith("CREATE TABLE")) {
+    return { rows: [], rowCount: 0 };
+  }
+  if (
+    sql === "BEGIN" ||
+    sql === "COMMIT" ||
+    sql === "ROLLBACK" ||
+    sql.startsWith("SELECT pg_advisory_xact_lock")
+  ) {
     return { rows: [], rowCount: 0 };
   }
   if (sql.includes("FROM projects") && sql.includes("project_hosts")) {
@@ -98,6 +131,16 @@ const query = jest.fn(async (sqlRaw: string, params: any[] = []) => {
   }
   if (
     sql.startsWith("UPDATE project_app_private_hostnames") &&
+    sql.includes("SET base_path=$3")
+  ) {
+    const [project_id, app_id, base_path] = params;
+    const row = rows.get(key(project_id, app_id))!;
+    row.base_path = base_path;
+    row.updated_at = new Date();
+    return { rows: [{ ...row }], rowCount: 1 };
+  }
+  if (
+    sql.startsWith("UPDATE project_app_private_hostnames") &&
     sql.includes("last_dns_error=$3")
   ) {
     const [project_id, app_id, error, dns_record_id] = params;
@@ -132,12 +175,14 @@ const query = jest.fn(async (sqlRaw: string, params: any[] = []) => {
     sql.startsWith("SELECT COUNT(*)::int AS count") &&
     sql.includes("FROM project_app_private_hostnames")
   ) {
+    const selected =
+      params.length === 0
+        ? [...rows.values()]
+        : [...rows.values()].filter((row) => row.project_id === params[0]);
     return {
       rows: [
         {
-          count: [...rows.values()].filter(
-            (row) => row.project_id === params[0],
-          ).length,
+          count: selected.length,
         },
       ],
       rowCount: 1,
@@ -163,7 +208,10 @@ const query = jest.fn(async (sqlRaw: string, params: any[] = []) => {
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
-  default: () => ({ query }),
+  default: () => ({
+    query,
+    connect: async () => ({ query, release: jest.fn() }),
+  }),
 }));
 
 jest.mock("@cocalc/database/settings/server-settings", () => ({
@@ -175,6 +223,23 @@ jest.mock("@cocalc/database/settings/site-url", () => ({
   default: (...args: any[]) => siteUrl(...args),
 }));
 
+jest.mock("@cocalc/conat/inter-bay/api", () => ({
+  createInterBayAccountLocalClient: (...args: any[]) =>
+    createInterBayAccountLocalClient(...args),
+}));
+
+jest.mock("@cocalc/server/bay-config", () => ({
+  getConfiguredBayId: (...args: any[]) => getConfiguredBayId(...args),
+}));
+
+jest.mock("@cocalc/server/bay-directory", () => ({
+  resolveAccountHomeBay: (...args: any[]) => resolveAccountHomeBay(...args),
+}));
+
+jest.mock("@cocalc/server/inter-bay/fabric", () => ({
+  getInterBayFabricClient: (...args: any[]) => getInterBayFabricClient(...args),
+}));
+
 jest.mock("@cocalc/server/cloud/dns", () => ({
   hasDns: (...args: any[]) => hasDns(...args),
   ensureAppSubdomainDns: (...args: any[]) => ensureAppSubdomainDns(...args),
@@ -183,6 +248,16 @@ jest.mock("@cocalc/server/cloud/dns", () => ({
   deleteAppSubdomainDns: (...args: any[]) => deleteAppSubdomainDns(...args),
   getCnameTargetForHostname: (...args: any[]) =>
     getCnameTargetForHostname(...args),
+}));
+
+jest.mock("@cocalc/server/membership/project-usage", () => ({
+  getProjectUsageAccountId: (...args: any[]) =>
+    getProjectUsageAccountId(...args),
+}));
+
+jest.mock("@cocalc/server/membership/resolve", () => ({
+  resolveMembershipForAccount: (...args: any[]) =>
+    resolveMembershipForAccount(...args),
 }));
 
 import {
@@ -209,6 +284,16 @@ describe("private app hostnames", () => {
     });
     siteUrl.mockResolvedValue("https://cocalc.ai");
     getCnameTargetForHostname.mockResolvedValue(undefined);
+    getProjectUsageAccountId.mockResolvedValue(ACCOUNT_ID);
+    getConfiguredBayId.mockReturnValue("bay-1");
+    resolveAccountHomeBay.mockResolvedValue({ home_bay_id: "bay-1" });
+    resolveMembershipForAccount.mockResolvedValue({
+      class: "pro",
+      source: "subscription",
+      entitlements: {
+        features: { private_app_hostnames_per_project: 30 },
+      },
+    });
     ensureAppSubdomainDns.mockImplementation(async ({ record_id }) => ({
       record_id: record_id ?? "dns-record-1",
     }));
@@ -323,8 +408,15 @@ describe("private app hostnames", () => {
     });
   });
 
-  it("bounds DNS allocations per project", async () => {
-    for (let i = 0; i < 32; i += 1) {
+  it("bounds DNS allocations using the project's membership", async () => {
+    resolveMembershipForAccount.mockResolvedValue({
+      class: "standard",
+      source: "subscription",
+      entitlements: {
+        features: { private_app_hostnames_per_project: 5 },
+      },
+    });
+    for (let i = 0; i < 5; i += 1) {
       const app_id = `app-${i}`;
       rows.set(key(PROJECT_ID, app_id), {
         project_id: PROJECT_ID,
@@ -344,7 +436,87 @@ describe("private app hostnames", () => {
         app_id: "one-too-many",
         created_by: ACCOUNT_ID,
       }),
-    ).rejects.toThrow("at most 32 private app hostnames");
+    ).rejects.toThrow("reached its limit of 5 private app hostnames");
+    expect(ensureAppSubdomainDns).not.toHaveBeenCalled();
+  });
+
+  it("resolves the project sponsor's membership on its home bay", async () => {
+    resolveAccountHomeBay.mockResolvedValue({ home_bay_id: "bay-2" });
+
+    await expect(
+      getProjectAppPrivateHostnamePolicy(PROJECT_ID),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        max_private_hostnames: 5,
+        membership_class: "standard",
+      }),
+    );
+    expect(resolveMembershipForAccount).not.toHaveBeenCalled();
+    expect(createInterBayAccountLocalClient).toHaveBeenCalledWith({
+      client: { id: "fabric-client" },
+      dest_bay: "bay-2",
+    });
+    expect(remoteGetMembership).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+    });
+  });
+
+  it("disables new hostnames when the membership limit is zero", async () => {
+    resolveMembershipForAccount.mockResolvedValue({
+      class: "free",
+      source: "free",
+      entitlements: {
+        features: { private_app_hostnames_per_project: 0 },
+      },
+    });
+
+    await expect(
+      getProjectAppPrivateHostnamePolicy(PROJECT_ID),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        enabled: true,
+        can_reserve: false,
+        current_private_hostnames: 0,
+        max_private_hostnames: 0,
+        current_bay_private_hostnames: 0,
+        max_bay_private_hostnames: 3000,
+        membership_class: "free",
+      }),
+    );
+    await expect(
+      reserveProjectAppPrivateHostname({
+        project_id: PROJECT_ID,
+        app_id: "free-app",
+        created_by: ACCOUNT_ID,
+      }),
+    ).rejects.toThrow("membership does not include private app hostnames");
+    expect(ensureAppSubdomainDns).not.toHaveBeenCalled();
+    expect(ensureCloudflareProjectHostSslRule).not.toHaveBeenCalled();
+  });
+
+  it("enforces the configured per-bay DNS safety ceiling", async () => {
+    getServerSettings.mockResolvedValue({
+      project_hosts_app_private_hostnames_enabled: true,
+      project_hosts_app_private_hostname_bay_limit: 1,
+    });
+    rows.set(key("44444444-4444-4444-8444-444444444444", "existing-app"), {
+      project_id: "44444444-4444-4444-8444-444444444444",
+      app_id: "existing-app",
+      label: "dev-existing",
+      hostname: "dev-existing.cocalc.ai",
+      base_path: "/apps/existing-app",
+      created_by: ACCOUNT_ID,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+
+    await expect(
+      reserveProjectAppPrivateHostname({
+        project_id: PROJECT_ID,
+        app_id: "one-too-many-in-this-bay",
+        created_by: ACCOUNT_ID,
+      }),
+    ).rejects.toThrow("bay has reached its private app hostname capacity");
     expect(ensureAppSubdomainDns).not.toHaveBeenCalled();
   });
 

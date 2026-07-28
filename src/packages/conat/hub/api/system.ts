@@ -1041,6 +1041,12 @@ export interface ReserveProjectAppPublicSubdomainResult {
 
 export interface ProjectAppPrivateHostnamePolicy {
   enabled: boolean;
+  can_reserve: boolean;
+  current_private_hostnames: number;
+  max_private_hostnames: number;
+  current_bay_private_hostnames: number;
+  max_bay_private_hostnames: number;
+  membership_class?: string;
   browser_origin?: string;
   site_hostname?: string;
   host_hostname?: string;
