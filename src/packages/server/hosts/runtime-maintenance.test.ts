@@ -381,6 +381,8 @@ describe("project-host runtime maintenance policy", () => {
       result: {
         public_url: "https://host.example.test",
         origin: "https://cocalc.example.test",
+        expected_host_id: row.id,
+        health_host_id: row.id,
         health_status: 200,
         preflight_status: 204,
         session_status: 401,
@@ -410,6 +412,8 @@ describe("project-host runtime maintenance policy", () => {
       result: {
         public_url: "https://host.example.test",
         origin: "https://cocalc.example.test",
+        expected_host_id: row.id,
+        health_host_id: row.id,
         health_status: 200,
         preflight_status: 204,
         session_status: 401,

@@ -527,6 +527,7 @@ export async function main(
     res.json({
       ok: true,
       ready: healthState.ready,
+      host_id: hostId,
       pid: process.pid,
       activity: getProjectHostActivitySnapshot(),
       event_loop: getProjectHostEventLoopStallStatus(),

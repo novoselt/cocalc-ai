@@ -1122,6 +1122,7 @@ async function executePublicRouteProbe({
     const result = await probeProjectHostPublicRoute({
       public_url: `${row.public_url}`,
       origin,
+      expected_host_id: row.id,
       timeout_ms: PUBLIC_ROUTE_PROBE_REQUEST_TIMEOUT_MS,
       websocket_attempts: PUBLIC_ROUTE_PROBE_WEBSOCKET_ATTEMPTS,
     });

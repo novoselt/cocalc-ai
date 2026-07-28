@@ -143,12 +143,14 @@ function directProbeHostname(stableHostname: string): string {
 async function probeCloudflareRoute({
   hostname,
   origin,
+  expected_host_id,
   deadlineMs = PROBE_DEADLINE_MS,
   requiredSuccesses = 1,
   confirmationMs = 0,
 }: {
   hostname: string;
   origin: string;
+  expected_host_id: string;
   deadlineMs?: number;
   requiredSuccesses?: number;
   confirmationMs?: number;
@@ -162,6 +164,7 @@ async function probeCloudflareRoute({
       const result = await probeProjectHostPublicRoute({
         public_url: `https://${hostname}`,
         origin,
+        expected_host_id,
         timeout_ms: PROBE_TIMEOUT_MS,
       });
       const now = Date.now();
@@ -200,7 +203,11 @@ async function ensureTunnelRoute({
     throw new Error("Cloudflare Tunnel is not configured for this host");
   }
   await setMetadataField(row.id, "cloudflare_tunnel", tunnel);
-  await probeCloudflareRoute({ hostname: tunnel.hostname, origin });
+  await probeCloudflareRoute({
+    hostname: tunnel.hostname,
+    origin,
+    expected_host_id: row.id,
+  });
   return tunnel;
 }
 
@@ -332,7 +339,11 @@ async function prepareDirectRoute({
     });
     probeRecordId = probeDns.record_id;
     try {
-      await probeCloudflareRoute({ hostname: probeHostname, origin });
+      await probeCloudflareRoute({
+        hostname: probeHostname,
+        origin,
+        expected_host_id: row.id,
+      });
     } catch (err) {
       throw new Error(
         `${err}; provider ingress diagnostics: ${JSON.stringify(publicIngress ?? null)}; Cloudflare origin diagnostics: ${JSON.stringify(cloudflareOrigin)}`,
@@ -369,6 +380,7 @@ async function prepareDirectRoute({
   await probeCloudflareRoute({
     hostname: stableHostname,
     origin,
+    expected_host_id: row.id,
     requiredSuccesses: STABLE_ROUTE_REQUIRED_SUCCESSES,
     confirmationMs: STABLE_ROUTE_CONFIRMATION_MS,
   });

@@ -179,6 +179,7 @@ describe("project-host public route migration", () => {
       public_url:
         "https://host-37782b66-190d-41c3-a7e5-f5662e34cd4a-staging.example.com",
       origin: "https://staging.example.com",
+      expected_host_id: row.id,
       timeout_ms: 10_000,
     });
     expect(row.metadata.public_route).toMatchObject({

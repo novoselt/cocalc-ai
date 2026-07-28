@@ -39,9 +39,11 @@ export type ProjectHostPublicRouteProbeDiagnostic = {
   stage: ProjectHostPublicRouteProbeStage;
   public_url: string;
   origin: string;
+  expected_host_id: string;
   health_status?: number;
   health_ok?: boolean;
   health_ready?: boolean;
+  health_host_id?: string;
   preflight_status?: number;
   session_status?: number;
   edge_server?: string;
@@ -55,6 +57,8 @@ export type ProjectHostPublicRouteProbeDiagnostic = {
 export type ProjectHostPublicRouteProbeResult = {
   public_url: string;
   origin: string;
+  expected_host_id: string;
+  health_host_id: string;
   health_status: number;
   preflight_status: number;
   session_status: number;
@@ -157,7 +161,7 @@ async function discardBody(response: Response): Promise<void> {
 
 async function readHealthState(
   response: Response,
-): Promise<{ ok?: boolean; ready?: boolean }> {
+): Promise<{ ok?: boolean; ready?: boolean; host_id?: string }> {
   try {
     const value = await response.json();
     if (value == null || typeof value !== "object") return {};
@@ -165,6 +169,7 @@ async function readHealthState(
     return {
       ...(typeof body.ok === "boolean" ? { ok: body.ok } : {}),
       ...(typeof body.ready === "boolean" ? { ready: body.ready } : {}),
+      ...(typeof body.host_id === "string" ? { host_id: body.host_id } : {}),
     };
   } catch {
     return {};
@@ -313,6 +318,7 @@ async function probeWebSocketUpgrade({
 export async function probeProjectHostPublicRoute({
   public_url,
   origin,
+  expected_host_id,
   fetchImpl = fetch,
   websocketProbeImpl = probeWebSocketUpgrade,
   websocket_attempts = DEFAULT_WEBSOCKET_ATTEMPTS,
@@ -320,6 +326,7 @@ export async function probeProjectHostPublicRoute({
 }: {
   public_url: string;
   origin: string;
+  expected_host_id: string;
   fetchImpl?: FetchLike;
   websocketProbeImpl?: WebSocketUpgradeProbe;
   websocket_attempts?: number;
@@ -327,10 +334,15 @@ export async function probeProjectHostPublicRoute({
 }): Promise<ProjectHostPublicRouteProbeResult> {
   const baseUrl = normalizedBaseUrl(public_url);
   const normalizedSiteOrigin = normalizedOrigin(origin);
+  const normalizedExpectedHostId = expected_host_id.trim();
+  if (!normalizedExpectedHostId) {
+    throw new Error("expected project-host ID must not be empty");
+  }
   const diagnostic: ProjectHostPublicRouteProbeDiagnostic = {
     stage: "health",
     public_url: baseUrl.origin,
     origin: normalizedSiteOrigin,
+    expected_host_id: normalizedExpectedHostId,
   };
   const fail = (message: string): never => {
     throw new ProjectHostPublicRouteProbeError(message, {
@@ -367,11 +379,25 @@ export async function probeProjectHostPublicRoute({
   const healthState = await readHealthState(health);
   diagnostic.health_ok = healthState.ok;
   diagnostic.health_ready = healthState.ready;
+  diagnostic.health_host_id = healthState.host_id;
   if (healthState.ok === false) {
     fail("public project-host health check reported ok=false");
   }
   if (healthState.ready === false) {
     fail("public project-host health check reported ready=false");
+  }
+  const healthHostId =
+    healthState.host_id ??
+    fail("public project-host health check did not report host_id");
+  if (!healthHostId) {
+    fail("public project-host health check did not report host_id");
+  }
+  if (healthHostId !== normalizedExpectedHostId) {
+    fail(
+      `public project-host health check reached host ${JSON.stringify(
+        healthHostId,
+      )}; expected ${JSON.stringify(normalizedExpectedHostId)}`,
+    );
   }
 
   const sessionUrl = new URL(
@@ -500,6 +526,8 @@ export async function probeProjectHostPublicRoute({
   return {
     public_url: baseUrl.origin,
     origin: normalizedSiteOrigin,
+    expected_host_id: normalizedExpectedHostId,
+    health_host_id: healthHostId,
     health_status: health.status,
     preflight_status: preflight.status,
     session_status: session.status,
