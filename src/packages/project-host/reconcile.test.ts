@@ -404,7 +404,7 @@ describe("reconcileOnce", () => {
     });
   });
 
-  it("recovers a running container whose project daemon heartbeat is stale", async () => {
+  it("preserves a running container whose project daemon heartbeat is stale", async () => {
     process.env.COCALC_PROJECT_HOST_RECONCILE_STALE_HEARTBEAT_CYCLES = "2";
     upsertProject({
       project_id,
@@ -416,40 +416,11 @@ describe("reconcileOnce", () => {
     mockPodmanPs(
       `project-${project_id}|running|127.0.0.1:32803->22/tcp, 127.0.0.1:33167->8080/tcp\n`,
     );
-    const recoverStaleRuntime = jest.fn(async () => "opened");
 
-    await reconcileOnce({ recoverStaleRuntime });
-    expect(recoverStaleRuntime).not.toHaveBeenCalled();
+    await reconcileOnce();
+    await reconcileOnce();
+    await reconcileOnce();
 
-    await reconcileOnce({ recoverStaleRuntime });
-
-    expect(recoverStaleRuntime).toHaveBeenCalledWith(project_id);
-    expect(getProject(project_id)).toMatchObject({
-      project_id,
-      state: "opened",
-      runtime_exit_reason: "container_missing",
-      http_port: null,
-      ssh_port: null,
-    });
-  });
-
-  it("does not report runtime loss until forced cleanup reaches opened", async () => {
-    process.env.COCALC_PROJECT_HOST_RECONCILE_STALE_HEARTBEAT_CYCLES = "1";
-    upsertProject({
-      project_id,
-      state: "running",
-      http_port: 12345,
-      ssh_port: 23456,
-    });
-    writeProjectHeartbeat(5 * 60_000);
-    mockPodmanPs(
-      `project-${project_id}|running|127.0.0.1:32803->22/tcp, 127.0.0.1:33167->8080/tcp\n`,
-    );
-    const recoverStaleRuntime = jest.fn(async () => "running");
-
-    await reconcileOnce({ recoverStaleRuntime });
-
-    expect(recoverStaleRuntime).toHaveBeenCalledWith(project_id);
     expect(getProject(project_id)).toMatchObject({
       project_id,
       state: "running",
@@ -463,15 +434,13 @@ describe("reconcileOnce", () => {
     upsertProject({ project_id, state: "running" });
     writeProjectHeartbeat(5 * 60_000);
     mockPodmanPs(`project-${project_id}|running|\n`);
-    const recoverStaleRuntime = jest.fn(async () => "opened");
 
-    await reconcileOnce({ recoverStaleRuntime });
+    await reconcileOnce();
     writeProjectHeartbeat();
-    await reconcileOnce({ recoverStaleRuntime });
+    await reconcileOnce();
     writeProjectHeartbeat(5 * 60_000);
-    await reconcileOnce({ recoverStaleRuntime });
+    await reconcileOnce();
 
-    expect(recoverStaleRuntime).not.toHaveBeenCalled();
     expect(getProject(project_id)).toMatchObject({
       project_id,
       state: "running",

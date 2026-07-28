@@ -13,9 +13,26 @@ type HostRuntimePolicy = {
   metadata?: any;
 };
 
+const PRIVATE_HOST_RAM_RESERVE_MB = 3 * 1024;
+
 function positiveFiniteNumber(value: unknown): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function privateHostDefaultMemoryLimitMb(metadata: any): number | undefined {
+  const hostRamMb =
+    positiveFiniteNumber(metadata.host_ram_mb) ??
+    (positiveFiniteNumber(metadata.host_ram_gb) != null
+      ? positiveFiniteNumber(metadata.host_ram_gb)! * 1024
+      : undefined) ??
+    (positiveFiniteNumber(metadata.machine?.metadata?.ram_gb) != null
+      ? positiveFiniteNumber(metadata.machine.metadata.ram_gb)! * 1024
+      : undefined);
+  if (hostRamMb == null) {
+    return undefined;
+  }
+  return Math.max(500, Math.floor(hostRamMb - PRIVATE_HOST_RAM_RESERVE_MB));
 }
 
 export function applyHostRuntimePolicy({
@@ -41,19 +58,20 @@ export function applyHostRuntimePolicy({
   const hostMemory = positiveFiniteNumber(
     metadata.resources?.project_ram_limit_mb,
   );
-  if (hostMemory != null) {
-    if (host.tier == null) {
-      // A private host is itself the paid resource. Its owner-selected project
-      // limit replaces membership RAM instead of merely capping it downward.
-      quota.memory_limit = hostMemory;
-    } else {
-      // Shared-pool hosts must never grant RAM beyond project entitlement.
-      const projectMemory = positiveFiniteNumber(quota.memory_limit);
-      quota.memory_limit =
-        projectMemory == null
-          ? hostMemory
-          : Math.min(projectMemory, hostMemory);
+  if (host.tier == null) {
+    // A private host is itself the paid resource. An explicit cap wins;
+    // otherwise projects receive the maximum safe host capacity instead of
+    // being constrained by the user's unrelated shared-host membership.
+    const privateHostMemory =
+      hostMemory ?? privateHostDefaultMemoryLimitMb(metadata);
+    if (privateHostMemory != null) {
+      quota.memory_limit = privateHostMemory;
     }
+  } else if (hostMemory != null) {
+    // Shared-pool hosts must never grant RAM beyond project entitlement.
+    const projectMemory = positiveFiniteNumber(quota.memory_limit);
+    quota.memory_limit =
+      projectMemory == null ? hostMemory : Math.min(projectMemory, hostMemory);
   }
   return quota;
 }

@@ -1575,13 +1575,6 @@ export async function main(
         force,
       }),
     reconcileProjectNetworkLimits,
-    recoverStaleRuntime: async (project_id) => {
-      const stopped = await runnerApi.stop({ project_id, force: true });
-      if (stopped?.state === "opened") {
-        return stopped.state;
-      }
-      return (await runnerApi.status({ project_id }))?.state;
-    },
   });
   const stopDataPermissionHardener = startDataPermissionHardener(dataDir);
 
