@@ -694,6 +694,9 @@ importers:
       '@playwright/test':
         specifier: ^1.57.0
         version: 1.57.0
+      '@rc-component/tabs':
+        specifier: 1.7.0
+        version: 1.7.0(patch_hash=012320e45fed87a7ebc8585e9bff0595e697985e698f0b21fece4ab202a0bee5)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@react-hook/mouse-position':
         specifier: ^4.1.3
         version: 4.1.3(react@19.2.1)
