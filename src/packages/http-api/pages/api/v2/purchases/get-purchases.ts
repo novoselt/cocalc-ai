@@ -36,6 +36,7 @@ async function get(req) {
     project_id,
     group,
     cutoff,
+    cutoff_end,
     thisMonth,
     day_statement_id,
     month_statement_id,
@@ -47,6 +48,7 @@ async function get(req) {
   });
   return await getPurchases({
     cutoff,
+    cutoff_end,
     thisMonth,
     limit,
     offset,

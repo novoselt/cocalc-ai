@@ -56,15 +56,14 @@ export default function ExportPurchases({ name, data, style }: Props) {
         }}
         title={
           <>
-            <Icon name="cloud-download" style={{ marginRight: "8px" }} />{" "}
-            Download {data.length} {plural(data.length, "Transaction")} as CSV
-            or JSON
+            <Icon name="cloud-download" style={{ marginRight: "8px" }} /> Export{" "}
+            {data.length} {plural(data.length, "Transaction")} as CSV or JSON
           </>
         }
         trigger="click"
       >
-        <Button disabled={data == null} type="link">
-          <Icon name="cloud-download" /> Download
+        <Button disabled={data == null}>
+          <Icon name="cloud-download" /> Export
         </Button>
       </Popover>
     </div>
