@@ -28,6 +28,27 @@ const logger = getLogger("hub:worker-diagnostics");
 export const WORKER_DIAGNOSTICS_HOST = "127.0.0.1";
 export const WORKER_DIAGNOSTICS_PATH = "/diagnostics";
 const WORKER_DIAGNOSTICS_PORT_OFFSET = 2_000;
+const startupStartedAt = Date.now();
+
+interface WorkerStartupState {
+  phase: string;
+  changed_at: string;
+  elapsed_ms: number;
+}
+
+let startupState: WorkerStartupState = {
+  phase: "module-loaded",
+  changed_at: new Date(startupStartedAt).toISOString(),
+  elapsed_ms: 0,
+};
+
+export function setWorkerStartupPhase(phase: string): void {
+  startupState = {
+    phase,
+    changed_at: new Date().toISOString(),
+    elapsed_ms: Date.now() - startupStartedAt,
+  };
+}
 
 function parsePort(value: string, name: string): number {
   if (!/^\d+$/.test(value)) {
@@ -88,6 +109,7 @@ export function collectWorkerDiagnostics({
       worker_id: process.env.COCALC_BAY_WORKER_ID ?? null,
       node_version: process.version,
       uptime_seconds: process.uptime(),
+      startup: startupState,
       memory: process.memoryUsage(),
       cpu: process.cpuUsage(),
       resource_usage: process.resourceUsage(),

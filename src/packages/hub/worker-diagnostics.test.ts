@@ -8,6 +8,7 @@ import {
   collectWorkerDiagnostics,
   createWorkerDiagnosticsServer,
   resolveWorkerDiagnosticsPort,
+  setWorkerStartupPhase,
   WORKER_DIAGNOSTICS_HOST,
   WORKER_DIAGNOSTICS_PATH,
 } from "./worker-diagnostics";
@@ -76,9 +77,17 @@ describe("hub worker diagnostics", () => {
   });
 
   it("collects aggregate process, V8, Conat, and persistence data", () => {
+    setWorkerStartupPhase("test-phase");
     const diagnostics = collectWorkerDiagnostics();
     expect(diagnostics.schema_version).toBe(1);
     expect(diagnostics.process.pid).toBe(process.pid);
+    expect(diagnostics.process.startup).toEqual(
+      expect.objectContaining({
+        phase: "test-phase",
+        changed_at: expect.any(String),
+        elapsed_ms: expect.any(Number),
+      }),
+    );
     expect(diagnostics.process.memory.rss).toBeGreaterThan(0);
     expect(diagnostics.v8.heap.heap_size_limit).toBeGreaterThan(0);
     expect(diagnostics.v8.heap_spaces.length).toBeGreaterThan(0);
