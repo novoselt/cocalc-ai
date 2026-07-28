@@ -693,14 +693,14 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
 
   languageModelGetLanguage(): string {
     return (
-      this.jupyter_actions.store?.getIn(["kernel_info", "language"]) ?? "py"
+      this.jupyter_actions?.store?.getIn(["kernel_info", "language"]) ?? "py"
     );
   }
 
   // used to add extra context like ", which is a Jupyter notebook using the Python 3 kernel"
   languageModelExtraFileInfo(): string {
     const kernel =
-      this.jupyter_actions.store.getIn(["kernel_info", "display_name"]) ?? "";
+      this.jupyter_actions?.store?.getIn(["kernel_info", "display_name"]) ?? "";
     return `Jupyter notebook using the ${kernel} kernel`;
   }
 
@@ -717,7 +717,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
 
   codexCodeDescription(): string {
     const kernel =
-      this.jupyter_actions.store.getIn(["kernel_info", "display_name"]) ?? "";
+      this.jupyter_actions?.store?.getIn(["kernel_info", "display_name"]) ?? "";
     return `Jupyter notebook using the ${kernel} kernel`;
   }
 

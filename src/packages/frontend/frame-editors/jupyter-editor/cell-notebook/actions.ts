@@ -470,9 +470,10 @@ export class NotebookFrameActions {
 
   // Set which cell is currently the cursor.
   public set_cur_id(cur_id: string | undefined): void {
-    if (cur_id == null) return;
+    if (cur_id == null || this.is_closed()) return;
     this.validate({ id: cur_id });
-    const store = this.jupyter_actions.store;
+    const store = this.jupyter_actions?.store;
+    if (store == null || this.store == null) return;
     if (
       store.getIn(["cells", cur_id, "cell_type"]) === "markdown" &&
       this.store.get("mode") === "edit"
@@ -501,9 +502,11 @@ export class NotebookFrameActions {
       clearSelection?: boolean;
     },
   ): void {
+    if (this.is_closed()) return;
     this.validate({ id });
     const { clearSelection = false } = opts;
-    const store = this.jupyter_actions.store;
+    const store = this.jupyter_actions?.store;
+    if (store == null || this.store == null) return;
     if (store.get("read_only") && opts.mode === "edit") {
       return;
     }
@@ -562,7 +565,8 @@ export class NotebookFrameActions {
   }
 
   get_cell_by_id(id: string): Cell | undefined {
-    const cells = this.jupyter_actions.store.get("cells");
+    if (this.is_closed()) return;
+    const cells = this.jupyter_actions?.store?.get("cells");
     if (cells == null) return;
     return cells.get(id);
   }

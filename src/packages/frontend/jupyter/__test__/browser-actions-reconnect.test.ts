@@ -215,6 +215,17 @@ describe("JupyterActions reconnect coordination", () => {
     expect(actions.setState).not.toHaveBeenCalled();
   });
 
+  it("stops a debounced contents update after the Jupyter store is removed", () => {
+    const actions: any = new JupyterActions("jupyter-test", {
+      getStore: jest.fn(),
+      removeActions: jest.fn(),
+    } as any);
+    actions._state = "closed";
+    actions.store = undefined;
+
+    expect(() => actions.updateContentsNow()).not.toThrow();
+  });
+
   it("stops kernel selection after Jupyter resources are removed", async () => {
     const actions: any = new JupyterActions("jupyter-test", {
       getStore: jest.fn(),
