@@ -16,11 +16,13 @@ import {
   CSSProperties,
   type ReactNode,
   useEffect,
+  useMemo,
   useRef,
   useState,
   MutableRefObject,
 } from "react";
 import { Avatar } from "@cocalc/frontend/account/avatar/avatar";
+import { useMembershipTiers } from "@cocalc/frontend/account/membership-tiers";
 import { useTypedRedux, redux } from "@cocalc/frontend/app-framework";
 import { Tooltip } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
@@ -58,14 +60,16 @@ import Export, { type PrintColumn } from "./export";
 import DynamicallyUpdatingCost from "./pay-as-you-go/dynamically-updating-cost";
 import Refresh from "./refresh";
 import ServiceTag from "./service";
-import { LineItemsButton, moneyToString } from "./line-items";
+import { LineItemsTable, moneyToString } from "./line-items";
 import { getInvoiceUrlOrNull } from "./invoice-url";
 import searchFilter from "@cocalc/frontend/search/filter";
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
+import "./purchases.css";
 
 const DEFAULT_LIMIT = 10;
+const MAX_RELATED_PURCHASE_LOADS = 5;
 
 interface Props {
   project_id?: string; // if given, restrict to only purchases that are for things in this project
@@ -179,6 +183,16 @@ type PurchaseItem = Partial<
   }
 >;
 
+type MembershipTierLabels = Record<string, string>;
+
+function membershipTierLabel(
+  membershipClass: unknown,
+  labels: MembershipTierLabels,
+) {
+  const id = typeof membershipClass === "string" ? membershipClass : "";
+  return id ? (labels[id] ?? id) : "unknown";
+}
+
 export function PurchasesTable({
   account_id,
   project_id,
@@ -225,9 +239,69 @@ export function PurchasesTable({
   const [hasMore, setHasMore] = useState<boolean>(true); // todo
   const [limit, setLimit] = useState<number>(DEFAULT_LIMIT);
   const [filter, setFilter] = useState<string>("");
+  const { tiers: membershipTiers } = useMembershipTiers();
+  const membershipTierLabels = useMemo(
+    () =>
+      membershipTiers.reduce((labels, tier) => {
+        labels[tier.id] = tier.label || tier.id;
+        return labels;
+      }, {} as MembershipTierLabels),
+    [membershipTiers],
+  );
   const searchFilterRef = useRef<any>(null) as MutableRefObject<
     (string) => Promise<PurchaseItem[]> | null
   >;
+
+  const fetchPurchasesPage = async ({
+    limit0,
+    offset0,
+    paginated,
+  }: {
+    limit0: number;
+    offset0: number;
+    paginated: boolean;
+  }) => {
+    const opts = {
+      cutoff,
+      cutoff_end: cutoffEnd,
+      day_statement_id,
+      month_statement_id,
+      group,
+      no_statement: noStatement,
+      project_id,
+      service,
+      thisMonth,
+      ...(paginated ? { limit: limit0 + 1, offset: offset0 } : {}),
+    };
+    let { purchases: x, balance } = account_id
+      ? await api.getPurchasesAdmin({ ...opts, account_id })
+      : await api.getPurchases(opts);
+    const rawLength = x.length;
+    x = x.filter((purchase) => !isLanguageModelService(purchase.service));
+    for (const purchase of x) {
+      getFilter(purchase);
+    }
+    const pageHasMore = paginated ? rawLength == limit0 + 1 : false;
+    return {
+      balance,
+      hasMore: pageHasMore,
+      purchases: paginated ? x.slice(0, limit0) : x,
+    };
+  };
+
+  const mergePurchaseRecords = (
+    records: PurchaseItem[],
+    newRecords: PurchaseItem[],
+  ) => {
+    const merged: { [id: string]: PurchaseItem } = {};
+    for (const purchase of records.concat(newRecords)) {
+      merged[(purchase as any).id] = purchase;
+    }
+    const nextRecords = Object.values(merged);
+    nextRecords.sort(field_cmp("id"));
+    nextRecords.reverse();
+    return nextRecords;
+  };
 
   const loadMore = async ({ init }: { init? } = {}) => {
     try {
@@ -249,32 +323,20 @@ export function PurchasesTable({
         }
       }
 
-      const opts = {
-        cutoff,
-        cutoff_end: cutoffEnd,
-        day_statement_id,
-        month_statement_id,
-        group,
-        no_statement: noStatement,
-        project_id,
-        service,
-        thisMonth,
-        ...(paginated ? { limit: limit0 + 1, offset: init ? 0 : offset } : {}),
-      };
-      let { purchases: x, balance } = account_id
-        ? await api.getPurchasesAdmin({ ...opts, account_id })
-        : await api.getPurchases(opts);
-      const rawLength = x.length;
-      x = x.filter((purchase) => !isLanguageModelService(purchase.service));
+      const {
+        balance,
+        hasMore: pageHasMore,
+        purchases: x,
+      } = await fetchPurchasesPage({
+        limit0,
+        offset0: init ? 0 : offset,
+        paginated,
+      });
       setBalance(balance);
-      for (const purchase of x) {
-        getFilter(purchase);
-      }
 
       if (paginated) {
         // TODO: need getPurchases to tell if there are more or not.
-        setHasMore(rawLength == limit0 + 1);
-        x = x.slice(0, limit0);
+        setHasMore(pageHasMore);
       } else {
         setHasMore(false);
       }
@@ -287,13 +349,7 @@ export function PurchasesTable({
         });
         setPurchaseRecords(x); // put after creating filter so will update view
       } else {
-        const v: { [id: string]: any } = {};
-        for (const z of (purchaseRecords ?? []).concat(x)) {
-          v[(z as any).id] = z;
-        }
-        const v2 = Object.values(v);
-        v2.sort(field_cmp("id"));
-        v2.reverse();
+        const v2 = mergePurchaseRecords(purchaseRecords ?? [], x);
         // for next time:
         setOffset(v2.length);
         searchFilterRef.current = await searchFilter<PurchaseItem>({
@@ -303,6 +359,57 @@ export function PurchasesTable({
         setPurchaseRecords(v2); // put after creating filter so will update view
       }
       setLimit(100);
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadUntilPurchase = async (id: number) => {
+    if (group || purchaseRecords == null || !hasMore) {
+      return;
+    }
+    if (purchaseRecords.some((purchase) => purchase.id === id)) {
+      return;
+    }
+    try {
+      setError("");
+      setLoading(true);
+      let nextRecords = purchaseRecords;
+      let nextOffset = offset;
+      let nextHasMore: boolean = hasMore;
+      for (
+        let i = 0;
+        i < MAX_RELATED_PURCHASE_LOADS &&
+        nextHasMore &&
+        !nextRecords.some((purchase) => purchase.id === id);
+        i += 1
+      ) {
+        const {
+          balance,
+          hasMore: pageHasMore,
+          purchases: pagePurchases,
+        } = await fetchPurchasesPage({
+          limit0: limit,
+          offset0: nextOffset,
+          paginated: true,
+        });
+        setBalance(balance);
+        nextHasMore = pageHasMore;
+        nextRecords = mergePurchaseRecords(nextRecords, pagePurchases);
+        nextOffset = nextRecords.length;
+        setHasMore(nextHasMore);
+        setOffset(nextOffset);
+        searchFilterRef.current = await searchFilter<PurchaseItem>({
+          data: nextRecords,
+          toString: getFilter,
+        });
+        setPurchaseRecords(nextRecords);
+      }
+      if (!nextRecords.some((purchase) => purchase.id === id)) {
+        setError(`Transaction ${id} is not available in the current view.`);
+      }
     } catch (err) {
       setError(`${err}`);
     } finally {
@@ -415,6 +522,12 @@ export function PurchasesTable({
     hasFilterCriteria && visibleCount != null && purchases != null
       ? `Showing ${visibleCount} matching ${purchaseLabel} from ${loadedCount} loaded.`
       : "";
+  const clearFilterOnSelectPurchase = (id: number) => {
+    if (filter) {
+      setFilter("");
+    }
+    loadUntilPurchase(id);
+  };
   const print = visiblePurchases
     ? {
         title: getPrintTitle({
@@ -429,6 +542,7 @@ export function PurchasesTable({
         columns: group
           ? GROUPED_PRINT_COLUMNS
           : getDetailedPrintColumns({
+              membershipTierLabels,
               showBalance: visiblePurchases.some(
                 ({ balance }) => balance != null,
               ),
@@ -504,9 +618,11 @@ export function PurchasesTable({
           <GroupedPurchaseTable purchases={groupedPurchases} />
         ) : (
           <DetailedPurchaseTable
+            membershipTierLabels={membershipTierLabels}
             purchases={filteredPurchases}
             admin={!!account_id}
             refresh={refreshRecords}
+            onSelectPurchase={clearFilterOnSelectPurchase}
           />
         )}
       </div>
@@ -534,8 +650,10 @@ const GROUPED_PRINT_COLUMNS: PrintColumn<PurchaseItem>[] = [
 ];
 
 function getDetailedPrintColumns({
+  membershipTierLabels,
   showBalance,
 }: {
+  membershipTierLabels: MembershipTierLabels;
   showBalance: boolean;
 }): PrintColumn<PurchaseItem>[] {
   const columns: PrintColumn<PurchaseItem>[] = [
@@ -552,7 +670,11 @@ function getDetailedPrintColumns({
     },
     {
       title: "Description",
-      render: purchaseDescriptionLinesForPrint,
+      render: (purchase) =>
+        purchaseDescriptionLinesForPrint({
+          membershipTierLabels,
+          purchase,
+        }),
     },
     {
       title: "Time",
@@ -628,14 +750,16 @@ function quoteFilter(filterText: string) {
 }
 
 function purchaseDescriptionLinesForPrint({
-  description,
-  notes,
-  service,
-}: PurchaseItem) {
+  membershipTierLabels,
+  purchase: { description, notes, service },
+}: {
+  membershipTierLabels: MembershipTierLabels;
+  purchase: PurchaseItem;
+}) {
   const descriptionAny = description as any;
-  const lines = [descriptionTextForPrint({ description, service })].filter(
-    Boolean,
-  );
+  const lines = [
+    descriptionTextForPrint({ description, membershipTierLabels, service }),
+  ].filter(Boolean);
   if (descriptionAny?.credit_id != null) {
     lines.push(`Credit Id: ${descriptionAny.credit_id}`);
   }
@@ -658,8 +782,11 @@ function purchaseDescriptionLinesForPrint({
 
 function descriptionTextForPrint({
   description,
+  membershipTierLabels,
   service,
-}: Pick<PurchaseItem, "description" | "service">) {
+}: Pick<PurchaseItem, "description" | "service"> & {
+  membershipTierLabels: MembershipTierLabels;
+}) {
   if (description == null || typeof service !== "string") {
     return "";
   }
@@ -685,16 +812,20 @@ function descriptionTextForPrint({
         descriptionAny.seat_count != null && descriptionAny.seat_count !== 1
           ? ` (${descriptionAny.seat_count} seats)`
           : "";
-      return `${kindLabel}: ${descriptionAny.membership_class ?? "unknown"}${seatLabel}${
+      return `${kindLabel}: ${membershipTierLabel(
+        descriptionAny.membership_class,
+        membershipTierLabels,
+      )}${seatLabel}${
         courseLabel ? ` for ${courseLabel}` : ""
       }${descriptionAny.expanded_existing_package ? " expanded" : ""}`;
     }
-    return `Membership: ${descriptionAny.class ?? "unknown"} (${descriptionAny.interval ?? "unknown"})${
+    return `Membership: ${membershipTierLabel(
+      descriptionAny.class,
+      membershipTierLabels,
+    )} (${descriptionAny.interval ?? "unknown"})${
       descriptionAny.admin_assigned
         ? ` admin assigned${descriptionAny.assigned_by ? ` by ${descriptionAny.assigned_by}` : ""}`
-        : descriptionAny.subscription_id != null
-          ? ` subscription ${descriptionAny.subscription_id}`
-          : ""
+        : ""
     }`;
   }
   if (service === "credit") {
@@ -808,15 +939,19 @@ export function GroupedPurchaseTable({
 }
 
 export function DetailedPurchaseTable({
+  membershipTierLabels = {},
   purchases,
   admin,
   refresh,
   hideColumns,
+  onSelectPurchase,
 }: {
+  membershipTierLabels?: MembershipTierLabels;
   purchases: PurchaseItem[] | null;
   admin?: boolean;
   refresh?;
   hideColumns?: Set<string>;
+  onSelectPurchase?: (id: number) => void;
 }) {
   const fragment = useTypedRedux("account", "fragment");
   const tableRef = useRef<HTMLDivElement | null>(null);
@@ -829,6 +964,7 @@ export function DetailedPurchaseTable({
     if (!Number.isFinite(id)) {
       return;
     }
+    onSelectPurchase?.(id);
     setHighlightedPurchaseId(id);
     const nextFragment = { id: `${id}` };
     redux.getActions("account").setFragment(nextFragment);
@@ -880,9 +1016,9 @@ export function DetailedPurchaseTable({
   return (
     <div ref={tableRef}>
       <Table
+        className="cocalc-purchases-table"
         size="small"
         pagination={false}
-        scroll={{ x: "max-content" }}
         dataSource={purchases}
         rowKey="id"
         rowClassName={(purchase) =>
@@ -921,6 +1057,7 @@ export function DetailedPurchaseTable({
               <PurchaseDescription
                 {...(purchase as any)}
                 admin={admin}
+                membershipTierLabels={membershipTierLabels}
                 refresh={refresh}
                 onSelectPurchase={selectPurchase}
               />
@@ -931,7 +1068,7 @@ export function DetailedPurchaseTable({
             title: "Time",
             dataIndex: "time",
             key: "time",
-            minWidth: 120,
+            minWidth: 110,
             render: (text) => {
               return <TimeAgo date={text} />;
             },
@@ -944,7 +1081,7 @@ export function DetailedPurchaseTable({
             title: "Period",
             dataIndex: "period_start",
             key: "period",
-            minWidth: 120,
+            minWidth: 110,
             render: (_, record) => (
               <>
                 <Active record={record} />
@@ -989,6 +1126,7 @@ function PurchaseDescription({
   id,
   description,
   invoice_id,
+  membershipTierLabels,
   notes,
   service,
   admin,
@@ -996,33 +1134,55 @@ function PurchaseDescription({
   refresh,
   onSelectPurchase,
 }) {
+  const [showLineItems, setShowLineItems] = useState<boolean>(false);
+  const lineItems = Array.isArray(description?.line_items)
+    ? description.line_items
+    : [];
+  const showLineItemsToggle = lineItems.length > 1;
+  const showRefundedMarker = description?.refund_purchase_id != null;
+  const showAdminRefund =
+    admin &&
+    description?.refund_purchase_id == null &&
+    id != null &&
+    isRefundable(service, cost);
+  const showInvoiceActions = invoice_id != null;
+  const showActions =
+    showRefundedMarker ||
+    showAdminRefund ||
+    showInvoiceActions ||
+    showLineItemsToggle;
   return (
-    <div>
-      <Description service={service} description={description} />
+    <Space vertical size={0}>
+      <Description
+        service={service}
+        description={description}
+        membershipTierLabels={membershipTierLabels}
+        onSelectPurchase={onSelectPurchase}
+      />
       {description?.credit_id != null && (
         <div>
-          <a
-            onClick={() => {
-              const creditId = Number(description.credit_id);
-              if (Number.isFinite(creditId)) {
-                onSelectPurchase?.(creditId);
-              }
-            }}
+          <RelatedPurchaseLink
+            purchaseId={description.credit_id}
+            onSelectPurchase={onSelectPurchase}
           >
             Credit Id: {description.credit_id}
-          </a>
+          </RelatedPurchaseLink>
         </div>
       )}
-      <Flex wrap style={{ marginLeft: "-8px" }}>
-        {description?.refund_purchase_id && (
-          <b style={{ marginLeft: "8px" }}>
-            REFUNDED: Transaction {description.refund_purchase_id}
-          </b>
-        )}
-        {admin &&
-          description?.refund_purchase_id == null &&
-          id != null &&
-          isRefundable(service, cost) && (
+      {showActions && (
+        <Space wrap>
+          {showRefundedMarker && (
+            <span>
+              Refunded:{" "}
+              <RelatedPurchaseLink
+                purchaseId={description.refund_purchase_id}
+                onSelectPurchase={onSelectPurchase}
+              >
+                Transaction {description.refund_purchase_id}
+              </RelatedPurchaseLink>
+            </span>
+          )}
+          {showAdminRefund && (
             <AdminRefund
               purchase_id={id}
               service={service}
@@ -1031,46 +1191,68 @@ function PurchaseDescription({
               refresh={refresh}
             />
           )}
-        {invoice_id && (
-          <Space>
-            {!admin && !description?.refund_purchase_id && (
-              <Button
-                size="small"
-                type="link"
-                target="_blank"
-                href={getSupportURL({
-                  body: `I would like to request a full refund for transaction ${id}.\n\nEXPLAIN WHAT HAPPENED.  THANKS!`,
-                  subject: `Refund Request: Transaction ${id}`,
-                  type: "purchase",
-                  hideExtra: true,
-                })}
-              >
-                <Icon name="external-link" /> Refund
-              </Button>
-            )}
-            <InvoiceLink invoice_id={invoice_id} />
-          </Space>
-        )}
-        {description?.["line_items"] != null && (
-          <LineItemsButton
-            lineItems={description["line_items"]}
-            style={{ marginBottom: "15px" }}
-          />
-        )}
-      </Flex>
-      {notes && (
-        <StaticMarkdown
-          style={{ marginTop: "8px" }}
-          value={`**Notes:** ${notes}`}
-        />
+          {showInvoiceActions && (
+            <>
+              {!admin && !description?.refund_purchase_id && (
+                <Button
+                  size="small"
+                  type="link"
+                  target="_blank"
+                  href={getSupportURL({
+                    body: `I would like to request a full refund for transaction ${id}.\n\nEXPLAIN WHAT HAPPENED.  THANKS!`,
+                    subject: `Refund Request: Transaction ${id}`,
+                    type: "purchase",
+                    hideExtra: true,
+                  })}
+                >
+                  <Icon name="support" /> Request refund
+                </Button>
+              )}
+              <InvoiceLink invoice_id={invoice_id} />
+            </>
+          )}
+          {showLineItemsToggle && (
+            <Button
+              size="small"
+              type="link"
+              onClick={() => setShowLineItems(!showLineItems)}
+            >
+              {showLineItems
+                ? "Hide line items"
+                : `Show ${lineItems.length} ${plural(lineItems.length, "line item")}`}
+            </Button>
+          )}
+        </Space>
       )}
-    </div>
+      {showLineItems && (
+        <LineItemsTable lineItems={lineItems} style={{ marginTop: "8px" }} />
+      )}
+      {notes && <StaticMarkdown value={`**Notes:** ${notes}`} />}
+    </Space>
   );
 }
 
 // "credit" | "openai-gpt-4" | "membership", etc.
 
-function Description({ description, service }) {
+function RelatedPurchaseLink({ children, onSelectPurchase, purchaseId }) {
+  const id = Number(purchaseId);
+  if (!Number.isFinite(id)) {
+    return <>{children}</>;
+  }
+  return <a onClick={() => onSelectPurchase?.(id)}>{children}</a>;
+}
+
+function Description({
+  description,
+  membershipTierLabels,
+  service,
+  onSelectPurchase,
+}: {
+  description: any;
+  membershipTierLabels: MembershipTierLabels;
+  service: any;
+  onSelectPurchase?;
+}) {
   if (description == null) {
     return null;
   }
@@ -1107,7 +1289,8 @@ function Description({ description, service }) {
           : "";
       return (
         <>
-          {kindLabel}: {membership_class ?? "unknown"}
+          {kindLabel}:{" "}
+          {membershipTierLabel(membership_class, membershipTierLabels)}
           {seat_count != null && seat_count !== 1
             ? ` (${seat_count} seats)`
             : ""}
@@ -1126,47 +1309,40 @@ function Description({ description, service }) {
       assigned_by,
       class: membershipClass,
       interval,
-      subscription_id,
     } = description;
     return (
       <>
-        Membership: {membershipClass ?? "unknown"} ({interval ?? "unknown"})
+        Membership: {membershipTierLabel(membershipClass, membershipTierLabels)}{" "}
+        ({interval ?? "unknown"})
         {admin_assigned ? (
           <>
             {" "}
             <Tag color="blue">admin assigned</Tag>
             {assigned_by ? ` by ${assigned_by}` : ""}
           </>
-        ) : subscription_id != null ? (
-          <> (subscription {subscription_id})</>
         ) : null}
       </>
     );
   }
   if (service === "credit") {
-    return (
-      <Space>
-        <Tooltip title="Thank you!">
-          {description?.description ?? "Credit"}
-        </Tooltip>
-      </Space>
-    );
+    return <>{description?.description ?? "Credit"}</>;
   }
   if (service === "refund") {
     const { notes, reason, purchase_id } = description;
     return (
-      <div>
-        Refund Transaction {purchase_id}
-        <div>
-          Reason: {capitalize(reason.replace(/_/g, " "))}
-          {!!notes && (
-            <>
-              <br />
-              Notes: {notes}
-            </>
-          )}
-        </div>
-      </div>
+      <Space vertical size={0}>
+        <span>
+          Refund{" "}
+          <RelatedPurchaseLink
+            purchaseId={purchase_id}
+            onSelectPurchase={onSelectPurchase}
+          >
+            Transaction {purchase_id}
+          </RelatedPurchaseLink>
+        </span>
+        <span>Reason: {capitalize(reason.replace(/_/g, " "))}</span>
+        {!!notes && <span>Notes: {notes}</span>}
+      </Space>
     );
   }
 
@@ -1392,22 +1568,16 @@ function Period({ record }) {
           {hoursToTimeIntervalHuman(hours)}
         </div>
       ) : null;
-    if (!record.period_end) {
-      return (
-        <div>
-          <TimeAgo date={record.period_start} /> - now
-          {duration}
-        </div>
-      );
-    } else {
-      return (
-        <div>
-          <TimeAgo date={record.period_start} /> -{" "}
-          <TimeAgo date={record.period_end} />
-          {duration}
-        </div>
-      );
-    }
+    return (
+      <div>
+        <Space wrap size={[4, 0]}>
+          <TimeAgo date={record.period_start} />
+          <span>to</span>
+          {record.period_end ? <TimeAgo date={record.period_end} /> : "now"}
+        </Space>
+        {duration}
+      </div>
+    );
   }
   return null;
 }
