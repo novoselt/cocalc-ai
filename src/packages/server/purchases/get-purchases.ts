@@ -15,7 +15,7 @@ import { Service, MAX_API_LIMIT } from "@cocalc/util/db-schema/purchases";
 import type { Purchase } from "@cocalc/util/db-schema/purchases";
 import { calendarMonthStart } from "./billing-period";
 import { COST_OR_METERED_COST } from "./get-balance";
-import getBalance from "./get-balance";
+import getBalance, { getBalanceAsOf } from "./get-balance";
 import type { MoneyValue } from "@cocalc/util/money";
 
 interface Options {
@@ -163,7 +163,9 @@ export default async function getPurchases({
     const { rows: purchases } = await client.query(query, params);
     const balance =
       account_id != null
-        ? await getBalance({ account_id, client, noSave: true })
+        ? cutoff_end != null
+          ? await getBalanceAsOf({ account_id, asOf: cutoff_end, client })
+          : await getBalance({ account_id, client, noSave: true })
         : 0;
     return { purchases: purchases as unknown as PurchaseData[], balance };
   } finally {

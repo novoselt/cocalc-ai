@@ -138,3 +138,85 @@ describe("creates and get purchases using various options", () => {
     expect((rows[0] as any).count).toBe(3);
   });
 });
+
+describe("purchase history balances", () => {
+  it("uses the selected end date for ranged balances", async () => {
+    const account_id = uuid();
+    await createAccount({
+      email: `${account_id}@example.com`,
+      password: "xyz",
+      firstName: "Balance",
+      lastName: "Range",
+      account_id,
+    });
+    const base = dayjs("2026-06-01T12:00:00Z");
+    await createPurchase({
+      account_id,
+      service: "credit",
+      description: {} as any,
+      client: null,
+      cost: -100,
+      time: base.toDate(),
+    });
+    await createPurchase({
+      account_id,
+      service: "membership",
+      description: {} as any,
+      client: null,
+      cost: 20,
+      time: base.add(1, "day").toDate(),
+    });
+    await createPurchase({
+      account_id,
+      service: "credit",
+      description: {} as any,
+      client: null,
+      cost: -50,
+      time: base.add(3, "day").toDate(),
+    });
+
+    const { balance, purchases } = await getPurchases({
+      account_id,
+      cutoff_end: base.add(2, "day").toDate(),
+    });
+
+    expect(purchases).toHaveLength(2);
+    expect(toDecimal(balance).toNumber()).toBe(80);
+  });
+
+  it("approximates active metered purchases at the selected end date", async () => {
+    const account_id = uuid();
+    await createAccount({
+      email: `${account_id}@example.com`,
+      password: "xyz",
+      firstName: "Balance",
+      lastName: "Active",
+      account_id,
+    });
+    const base = dayjs("2026-06-01T12:00:00Z");
+    await createPurchase({
+      account_id,
+      service: "credit",
+      description: {} as any,
+      client: null,
+      cost: -100,
+      time: base.toDate(),
+    });
+    await createPurchase({
+      account_id,
+      service: "dedicated-host",
+      description: {} as any,
+      client: null,
+      cost_per_hour: 2,
+      period_start: base.add(1, "hour").toDate(),
+      time: base.add(1, "hour").toDate(),
+    });
+
+    const { balance } = await getPurchases({
+      account_id,
+      cutoff_end: base.add(4, "hours").toDate(),
+    });
+
+    expect(toDecimal(balance).toNumber()).toBe(94);
+  });
+});
