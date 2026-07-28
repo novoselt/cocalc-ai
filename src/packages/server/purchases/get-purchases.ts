@@ -15,7 +15,7 @@ import { Service, MAX_API_LIMIT } from "@cocalc/util/db-schema/purchases";
 import type { Purchase } from "@cocalc/util/db-schema/purchases";
 import { calendarMonthStart } from "./billing-period";
 import { COST_OR_METERED_COST } from "./get-balance";
-import getBalance from "./get-balance";
+import getBalance, { getBalanceAsOf } from "./get-balance";
 import type { MoneyValue } from "@cocalc/util/money";
 
 interface Options {
@@ -63,10 +63,7 @@ export default async function getPurchases({
   no_statement,
   tag,
   includeName,
-}: Options): Promise<{
-  balance: MoneyValue | null;
-  purchases: PurchaseData[];
-}> {
+}: Options): Promise<{ balance: MoneyValue; purchases: PurchaseData[] }> {
   if (limit > MAX_API_LIMIT || !limit) {
     throw Error(`limit must be specified and at most ${MAX_API_LIMIT}`);
   }
@@ -164,15 +161,12 @@ export default async function getPurchases({
   });
   try {
     const { rows: purchases } = await client.query(query, params);
-    // A historical balance cannot always be reconstructed exactly after a
-    // metered purchase is finalized, so do not attach misleading running
-    // balances to upper-bounded history.
     const balance =
-      account_id == null
-        ? 0
-        : cutoff_end != null
-          ? null
-          : await getBalance({ account_id, client, noSave: true });
+      account_id != null
+        ? cutoff_end != null
+          ? await getBalanceAsOf({ account_id, asOf: cutoff_end, client })
+          : await getBalance({ account_id, client, noSave: true })
+        : 0;
     return { purchases: purchases as unknown as PurchaseData[], balance };
   } finally {
     try {

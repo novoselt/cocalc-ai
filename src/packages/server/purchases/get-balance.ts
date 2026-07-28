@@ -19,6 +19,14 @@ compute the sum of the following, over all rows of the table for a given account
 export const COST_OR_METERED_COST =
   "COALESCE(cost, COALESCE(cost_so_far, cost_per_hour * (EXTRACT(EPOCH FROM (COALESCE(period_end, NOW()) - period_start))::numeric / 3600)))";
 
+// Approximate purchase cost at a selected point in time.  Active rate-based
+// rows are evaluated using elapsed time up to asOf instead of NOW(), so a
+// bounded purchase-history report starts from a meaningful historical balance.
+// This is still an approximation for rows whose final cost was recorded later
+// but whose transaction time is already within the selected window.
+const COST_OR_METERED_COST_AS_OF =
+  "COALESCE(cost, cost_per_hour * GREATEST(EXTRACT(EPOCH FROM (COALESCE(LEAST(period_end, $2::timestamptz), $2::timestamptz) - period_start))::numeric / 3600, 0), cost_so_far)";
+
 // never update the balance more frequently than this for a given user.
 const MIN_BALANCE_UPDATE_MS = 1000;
 
@@ -73,6 +81,28 @@ export async function getTotalBalance(
   const { rows } = await pool.query(
     `SELECT -SUM(${COST_OR_METERED_COST}) as balance FROM purchases WHERE account_id=$1`,
     [account_id],
+  );
+  return moneyToDbString(rows[0]?.balance ?? 0);
+}
+
+export async function getBalanceAsOf({
+  account_id,
+  asOf,
+  client,
+}: {
+  account_id: string;
+  asOf: Date;
+  client?: PoolClient;
+}): Promise<MoneyValue> {
+  const pool = client ?? getPool();
+  const { rows } = await pool.query(
+    `
+      SELECT -SUM(${COST_OR_METERED_COST_AS_OF}) as balance
+        FROM purchases
+       WHERE account_id=$1
+         AND time <= $2
+    `,
+    [account_id, asOf],
   );
   return moneyToDbString(rows[0]?.balance ?? 0);
 }
