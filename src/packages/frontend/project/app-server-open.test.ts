@@ -28,6 +28,38 @@ import {
 } from "./app-server-open";
 
 describe("getProjectAppOpenUrl", () => {
+  it("prefers a reserved private hostname over public and proxy URLs", async () => {
+    const status: ManagedAppStatus = {
+      id: "cocalc-dev-main",
+      kind: "service",
+      state: "running",
+      url: "/project-1/proxy/23454/",
+      exposure: {
+        mode: "public",
+        auth_front: "none",
+        public_url: "https://public.example",
+      },
+    };
+
+    await expect(
+      getProjectAppOpenUrl({
+        privateHostname: {
+          project_id: "project-1",
+          app_id: "cocalc-dev-main",
+          label: "dev-example",
+          hostname: "dev-example.cocalc.ai",
+          base_path: "/apps/cocalc-dev-main",
+          url: "https://dev-example.cocalc.ai",
+          created_by: "account-1",
+          created_at: "2026-07-28T00:00:00.000Z",
+          updated_at: "2026-07-28T00:00:00.000Z",
+        },
+        project_id: "project-1",
+        status,
+      }),
+    ).resolves.toBe("https://dev-example.cocalc.ai");
+  });
+
   it("opens port-mode service apps at the translated port URL", async () => {
     const spec: AppSpec = {
       version: 1,

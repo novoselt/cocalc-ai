@@ -4,6 +4,7 @@
  */
 
 import type { AppSpec, ManagedAppStatus } from "@cocalc/conat/project/api/apps";
+import type { ProjectAppPrivateHostnameRecord } from "@cocalc/conat/hub/api/system";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { withProjectHostBase } from "./host-url";
 
@@ -67,17 +68,26 @@ function translateServiceOpenUrl(
 
 export async function getProjectAppOpenUrl({
   getSpec,
+  privateHostname,
   project_id,
   publicAppPolicy,
   spec,
   status,
 }: {
   getSpec?: (id: string) => Promise<AppSpec>;
+  privateHostname?: ProjectAppPrivateHostnameRecord;
   project_id: string;
   publicAppPolicy?: PublicAppPolicy;
   spec?: AppSpec;
   status: ManagedAppStatus;
 }): Promise<string | undefined> {
+  if (privateHostname?.url) {
+    return await webapp_client.conat_client.addProjectHostAuthToUrl({
+      project_id,
+      url: privateHostname.url,
+    });
+  }
+
   const publicUrl = buildPublicUrlFromExposure(status, publicAppPolicy);
   if (publicUrl) return publicUrl;
 
@@ -147,6 +157,7 @@ export async function getPrivateProjectAppOpenUrl({
 
 export async function openProjectAppStatus(opts: {
   getSpec?: (id: string) => Promise<AppSpec>;
+  privateHostname?: ProjectAppPrivateHostnameRecord;
   project_id: string;
   publicAppPolicy?: PublicAppPolicy;
   spec?: AppSpec;
