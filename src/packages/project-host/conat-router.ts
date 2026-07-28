@@ -10,6 +10,7 @@ import {
   type Server as HttpServer,
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
+import { isIP } from "node:net";
 import { availableParallelism } from "node:os";
 import express from "express";
 import type { Application } from "express";
@@ -460,6 +461,40 @@ export function rewriteProjectHostConatProxyUrl(
   return `${parsed.pathname}${parsed.search ?? ""}`;
 }
 
+function normalizeHostname(value: unknown): string {
+  const raw = `${value ?? ""}`.trim().toLowerCase();
+  if (!raw) return "";
+  try {
+    return new URL(`http://${raw}`).hostname
+      .replace(/^\[|\]$/g, "")
+      .replace(/\.$/, "");
+  } catch {
+    return "";
+  }
+}
+
+export function shouldRouteProjectHostIngressToApp(
+  req: Pick<IncomingMessage, "headers">,
+): boolean {
+  const requestHostname = normalizeHostname(req.headers.host);
+  if (
+    !requestHostname ||
+    requestHostname === "localhost" ||
+    isIP(requestHostname)
+  ) {
+    return false;
+  }
+  let projectHostHostname = "";
+  try {
+    projectHostHostname = normalizeHostname(
+      new URL(`${process.env.PROJECT_HOST_PUBLIC_URL ?? ""}`).host,
+    );
+  } catch {
+    return false;
+  }
+  return !!projectHostHostname && requestHostname !== projectHostHostname;
+}
+
 export function attachProjectHostConatRouterProxy({
   app,
   httpServer,
@@ -498,7 +533,10 @@ export function attachProjectHostConatRouterProxy({
   });
   app.use(async (req, res, next) => {
     await rewriteIngressRequest?.(req);
-    if (!rewriteProjectHostConatProxyUrl(req.url)) {
+    if (
+      shouldRouteProjectHostIngressToApp(req) ||
+      !rewriteProjectHostConatProxyUrl(req.url)
+    ) {
       return next();
     }
     void handleRequest(req, res);
@@ -506,7 +544,10 @@ export function attachProjectHostConatRouterProxy({
   for (const ingressServer of ingressServers) {
     ingressServer.prependListener("upgrade", async (req, socket, head) => {
       await rewriteIngressRequest?.(req);
-      if (!rewriteProjectHostConatProxyUrl(req.url)) {
+      if (
+        shouldRouteProjectHostIngressToApp(req) ||
+        !rewriteProjectHostConatProxyUrl(req.url)
+      ) {
         return;
       }
       void handleUpgrade(req, socket as any, head);
@@ -549,7 +590,10 @@ export function attachProjectHostHttpFallbackProxy({
   });
   for (const ingressServer of ingressServers) {
     ingressServer.on("upgrade", (req, socket, head) => {
-      if (rewriteProjectHostConatProxyUrl(req.url)) {
+      if (
+        rewriteProjectHostConatProxyUrl(req.url) &&
+        !shouldRouteProjectHostIngressToApp(req)
+      ) {
         return;
       }
       void handleUpgrade(req, socket as any, head);
