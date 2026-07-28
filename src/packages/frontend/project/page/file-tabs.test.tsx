@@ -73,8 +73,7 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
 }));
 
 jest.mock("@cocalc/frontend/components/sortable-tabs", () => ({
-  preferredTabStripWidth: (count: number, width: number, overflow: number) =>
-    count <= 0 ? 0 : count * width + overflow,
+  AccessibleAddTabIcon: ({ children }: any) => children,
   SortableTabs: ({ children, onDragEnd }: any) => {
     dragEnd = onDragEnd;
     return <div>{children}</div>;
@@ -276,7 +275,7 @@ describe("FileTabs keyboard navigation", () => {
     expect(mockActions.set_active_tab).not.toHaveBeenCalled();
   });
 
-  it("opens the new-file page from the external create button", () => {
+  it("opens the new-file page from the native accessible add tab", () => {
     render(
       <FileTabs
         activeTab="editor-a.ts"
@@ -285,11 +284,8 @@ describe("FileTabs keyboard navigation", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create file" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add tab" }));
 
     expect(mockActions.set_active_tab).toHaveBeenCalledWith("new");
-    expect(
-      screen.queryByRole("button", { name: "Add tab" }),
-    ).not.toBeInTheDocument();
   });
 });

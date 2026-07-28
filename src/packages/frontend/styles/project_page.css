@@ -29,11 +29,6 @@ dl.cc-project-settings-features > dd {
   margin-right: 10px;
 }
 
-.cocalc-file-tabs-strip:has(.ant-tabs-nav-operations-hidden)
-  + .cocalc-file-tabs-create {
-  margin-inline-start: -46px;
-}
-
 .cc-project-info-cgroup-table-flyout div.ant-descriptions-view {
   border-left: 0 !important;
   border-right: 0 !important;

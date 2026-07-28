@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 
 import { fireEvent, render, screen } from "@testing-library/react";
-import { preferredTabStripWidth, SortableTab } from "./sortable-tabs";
+import { AccessibleAddTabIcon, SortableTab } from "./sortable-tabs";
 
 const mockPointerDown = jest.fn();
 
@@ -47,10 +47,15 @@ describe("SortableTab", () => {
   });
 });
 
-describe("preferredTabStripWidth", () => {
-  it("reserves full tab widths and overflow chrome without circular sizing", () => {
-    expect(preferredTabStripWidth(0, 315, 46)).toBe(0);
-    expect(preferredTabStripWidth(1, 315, 46)).toBe(361);
-    expect(preferredTabStripWidth(3, 315, 46)).toBe(991);
+describe("AccessibleAddTabIcon", () => {
+  it("gives Ant's native add button valid tablist semantics", () => {
+    render(
+      <button className="ant-tabs-nav-add">
+        <AccessibleAddTabIcon label="Create file">+</AccessibleAddTabIcon>
+      </button>,
+    );
+
+    const button = screen.getByRole("tab", { name: "Create file" });
+    expect(button).toHaveAttribute("aria-selected", "false");
   });
 });

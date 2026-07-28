@@ -97,8 +97,7 @@ jest.mock("@cocalc/frontend/components", () => ({
 }));
 
 jest.mock("@cocalc/frontend/components/sortable-tabs", () => ({
-  preferredTabStripWidth: (count: number, width: number, overflow: number) =>
-    count <= 0 ? 0 : count * width + overflow,
+  AccessibleAddTabIcon: ({ children }: any) => children,
   SortableTab: ({ children }: any) => <>{children}</>,
   SortableTabs: ({ children }: any) => <div>{children}</div>,
   useItemContext: () => ({}),
@@ -156,18 +155,15 @@ describe("ProjectsNav", () => {
     mockBookmarkedProjects = [];
   });
 
-  it("opens the create-project modal from a button outside the tabs control", () => {
+  it("opens the create-project modal from the native accessible add tab", () => {
     render(<ProjectsNav height={42} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
     expect(screen.getByTestId("new-project-creator")).toHaveAttribute(
       "data-open",
       "true",
     );
-    expect(
-      screen.queryByRole("button", { name: "Add project" }),
-    ).not.toBeInTheDocument();
     expect(pageActions.set_active_tab).not.toHaveBeenCalledWith("projects");
   });
 

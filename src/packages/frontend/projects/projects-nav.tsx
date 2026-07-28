@@ -19,7 +19,7 @@ import {
 import { set_window_title } from "@cocalc/frontend/browser";
 import { Icon, Loading, Tooltip } from "@cocalc/frontend/components";
 import {
-  preferredTabStripWidth,
+  AccessibleAddTabIcon,
   SortableTab,
   SortableTabs,
   useItemContext,
@@ -64,9 +64,6 @@ const PROJECT_TITLE_FADE_STYLE: CSS = {
     "linear-gradient(90deg, #000 calc(100% - 18px), transparent)",
   maskImage: "linear-gradient(90deg, #000 calc(100% - 18px), transparent)",
 } as const;
-
-const MAX_PROJECT_TAB_WIDTH = 360;
-const PROJECT_TABS_OVERFLOW_WIDTH = 36;
 
 type ProjectsNavMode = "tabs" | "dropdown";
 
@@ -774,25 +771,15 @@ export function ProjectsNav(props: ProjectsNavProps) {
               </Button>
             </Tooltip>
           </div>
-          <div
-            className="cocalc-project-tabs-strip"
-            style={{
-              flex: `0 1 ${preferredTabStripWidth(
-                project_ids.length,
-                MAX_PROJECT_TAB_WIDTH,
-                PROJECT_TABS_OVERFLOW_WIDTH,
-              )}px`,
-              minWidth: 0,
-            }}
-          >
+          <div style={{ flex: "1 1 auto", minWidth: 0 }}>
             {items.length > 0 && (
               <SortableTabs
                 onDragStart={onDragStart}
                 onDragEnd={onDragEnd}
                 items={project_ids}
-                maxItemWidth={MAX_PROJECT_TAB_WIDTH}
+                maxItemWidth={360}
                 itemChromeWidth={30}
-                overflowWidth={PROJECT_TABS_OVERFLOW_WIDTH}
+                overflowWidth={36}
               >
                 <div onKeyDownCapture={onTabKeyDown}>
                   <Tabs
@@ -804,7 +791,11 @@ export function ProjectsNav(props: ProjectsNavProps) {
                     size="small"
                     tabBarStyle={{ margin: 0 }}
                     activeKey={activeTopTab}
-                    hideAdd
+                    addIcon={
+                      <AccessibleAddTabIcon label="Create project">
+                        <Icon name="plus" />
+                      </AccessibleAddTabIcon>
+                    }
                     onEdit={onEdit}
                     onChange={(project_id) => {
                       actions.set_active_tab(project_id);
@@ -817,16 +808,6 @@ export function ProjectsNav(props: ProjectsNavProps) {
               </SortableTabs>
             )}
           </div>
-          <Tooltip title="Create a new project">
-            <Button
-              aria-label="Create project"
-              className="cocalc-project-tabs-create"
-              icon={<Icon name="plus" />}
-              onClick={() => onEdit("", "add")}
-              size="small"
-              style={{ flex: "0 0 auto" }}
-            />
-          </Tooltip>
         </div>
       )}
     </div>
