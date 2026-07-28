@@ -15,6 +15,7 @@ import { useIntl } from "react-intl";
 import { useActions, useTypedRedux } from "@cocalc/frontend/app-framework";
 import { Icon, Tooltip } from "@cocalc/frontend/components";
 import {
+  preferredTabStripWidth,
   renderTabBar,
   SortableTabs,
   useItemContext,
@@ -34,6 +35,8 @@ import { FileTab } from "./file-tab";
 import { FILE_TAB_STRIP_ATTRIBUTE } from "./keyboard-navigation";
 
 const MIN_WIDTH = 48;
+const MAX_ITEM_WIDTH = 315;
+const OVERFLOW_WIDTH = 46;
 const FILE_TABS_MODE_KEY = "cocalc:file-tabs-mode";
 
 type FileTabsMode = "tabs" | "dropdown";
@@ -595,11 +598,22 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
         }}
       >
         {renderToggle("Switch to file list")}
-        <div style={{ flex: "0 1 auto", minWidth: 0 }}>
+        <div
+          style={{
+            flex: `0 1 ${preferredTabStripWidth(
+              keys.length,
+              MAX_ITEM_WIDTH,
+              OVERFLOW_WIDTH,
+            )}px`,
+            minWidth: 0,
+          }}
+        >
           <SortableTabs
             items={keys}
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
+            maxItemWidth={MAX_ITEM_WIDTH}
+            overflowWidth={OVERFLOW_WIDTH}
           >
             <div
               {...{ [FILE_TAB_STRIP_ATTRIBUTE]: project_id }}

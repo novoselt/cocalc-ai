@@ -73,6 +73,8 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
 }));
 
 jest.mock("@cocalc/frontend/components/sortable-tabs", () => ({
+  preferredTabStripWidth: (count: number, width: number, overflow: number) =>
+    count <= 0 ? 0 : count * width + overflow,
   SortableTabs: ({ children, onDragEnd }: any) => {
     dragEnd = onDragEnd;
     return <div>{children}</div>;

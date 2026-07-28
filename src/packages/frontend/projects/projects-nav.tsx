@@ -19,6 +19,7 @@ import {
 import { set_window_title } from "@cocalc/frontend/browser";
 import { Icon, Loading, Tooltip } from "@cocalc/frontend/components";
 import {
+  preferredTabStripWidth,
   SortableTab,
   SortableTabs,
   useItemContext,
@@ -63,6 +64,9 @@ const PROJECT_TITLE_FADE_STYLE: CSS = {
     "linear-gradient(90deg, #000 calc(100% - 18px), transparent)",
   maskImage: "linear-gradient(90deg, #000 calc(100% - 18px), transparent)",
 } as const;
+
+const MAX_PROJECT_TAB_WIDTH = 360;
+const PROJECT_TABS_OVERFLOW_WIDTH = 36;
 
 type ProjectsNavMode = "tabs" | "dropdown";
 
@@ -770,15 +774,24 @@ export function ProjectsNav(props: ProjectsNavProps) {
               </Button>
             </Tooltip>
           </div>
-          <div style={{ flex: "0 1 auto", minWidth: 0 }}>
+          <div
+            style={{
+              flex: `0 1 ${preferredTabStripWidth(
+                project_ids.length,
+                MAX_PROJECT_TAB_WIDTH,
+                PROJECT_TABS_OVERFLOW_WIDTH,
+              )}px`,
+              minWidth: 0,
+            }}
+          >
             {items.length > 0 && (
               <SortableTabs
                 onDragStart={onDragStart}
                 onDragEnd={onDragEnd}
                 items={project_ids}
-                maxItemWidth={360}
+                maxItemWidth={MAX_PROJECT_TAB_WIDTH}
                 itemChromeWidth={30}
-                overflowWidth={36}
+                overflowWidth={PROJECT_TABS_OVERFLOW_WIDTH}
               >
                 <div onKeyDownCapture={onTabKeyDown}>
                   <Tabs

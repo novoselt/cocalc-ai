@@ -56,6 +56,15 @@ export function useItemContext() {
   return useContext(ItemContext);
 }
 
+export function preferredTabStripWidth(
+  itemCount: number,
+  maxItemWidth: number,
+  overflowWidth: number,
+): number {
+  if (itemCount <= 0) return 0;
+  return itemCount * maxItemWidth + overflowWidth;
+}
+
 export function SortableTabs(props: Props) {
   const {
     onDragStart,

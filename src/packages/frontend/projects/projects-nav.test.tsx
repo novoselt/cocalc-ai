@@ -97,6 +97,8 @@ jest.mock("@cocalc/frontend/components", () => ({
 }));
 
 jest.mock("@cocalc/frontend/components/sortable-tabs", () => ({
+  preferredTabStripWidth: (count: number, width: number, overflow: number) =>
+    count <= 0 ? 0 : count * width + overflow,
   SortableTab: ({ children }: any) => <>{children}</>,
   SortableTabs: ({ children }: any) => <div>{children}</div>,
   useItemContext: () => ({}),
