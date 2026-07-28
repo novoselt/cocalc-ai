@@ -189,6 +189,32 @@ describe("project-host public route migration", () => {
     });
   });
 
+  it("reconciles and persists direct ingress after a runtime address change", async () => {
+    const { reconcileDirectCloudflareRouteForHost } =
+      await import("./public-route");
+    ensurePublicIngressMock.mockResolvedValue({
+      instance: { public_ip: "203.0.113.20" },
+    });
+
+    await expect(
+      reconcileDirectCloudflareRouteForHost(row),
+    ).resolves.toMatchObject({
+      public_ip: "203.0.113.20",
+      dns: { record_id: "stable-record" },
+    });
+
+    expect(ensurePublicIngressMock).toHaveBeenCalledTimes(1);
+    expect(ensureHostDnsMock).toHaveBeenCalledWith({
+      host_id: row.id,
+      ipAddress: "203.0.113.20",
+      record_id: "stable-record",
+    });
+    expect(row.metadata.dns).toEqual({
+      name: "host-37782b66-190d-41c3-a7e5-f5662e34cd4a-staging.example.com",
+      record_id: "stable-record",
+    });
+  });
+
   it("restores the tunnel route when direct-route preparation fails", async () => {
     ensurePublicIngressMock.mockRejectedValueOnce(
       new Error("firewall reconciliation failed"),

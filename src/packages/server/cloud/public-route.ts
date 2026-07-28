@@ -233,6 +233,31 @@ export async function ensureDirectCloudflareIngressForHost(row: {
   );
 }
 
+export async function reconcileDirectCloudflareRouteForHost(row: {
+  id: string;
+  region?: string;
+  metadata?: Record<string, any>;
+}) {
+  const publicIngress = await ensureDirectCloudflareIngressForHost(row);
+  const runtime = row.metadata?.runtime;
+  if (!runtime?.public_ip) {
+    throw new Error("host runtime does not have a public GCP address");
+  }
+  const dns = await ensureHostDns({
+    host_id: row.id,
+    ipAddress: runtime.public_ip,
+    record_id:
+      row.metadata?.dns?.record_id ??
+      row.metadata?.cloudflare_tunnel?.record_id,
+  });
+  await setMetadataField(row.id, "dns", dns);
+  return {
+    public_ip: runtime.public_ip,
+    public_ingress: publicIngress,
+    dns,
+  };
+}
+
 async function prepareDirectRoute({
   row,
   stableHostname,
