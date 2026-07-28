@@ -120,7 +120,11 @@ import { PDFWatcher } from "./pdf-watcher";
 import { pythontex, pythontex_errors } from "./pythontex";
 import { sagetex, sagetex_errors, sagetex_hash } from "./sagetex";
 import * as synctex from "./synctex";
-import { parseTableOfContents } from "./table-of-contents";
+import {
+  interleaveSubfileTocEntries,
+  parseTableOfContents,
+  type SubfileTocGroup,
+} from "./table-of-contents";
 import {
   BuildLog,
   BuildLogs,
@@ -2072,19 +2076,20 @@ export class Actions extends BaseActions<LatexEditorState> {
       includeBookmarks: true,
       includeChatMarkers: true,
     });
-    this._appendSubfileTocEntries(entries);
+    this._appendSubfileTocEntries(entries, value);
     const contents = fromJS(entries) as any;
     this.setState({ contents });
   }
 
-  // Append TOC content from *included* files: their section headings,
-  // chat markers, and bookmarks (the master's are already overlaid by
-  // parseTableOfContents).  We can't interleave across files by line
-  // number, so each open sub-file contributes a group at the end,
-  // introduced by a clickable file entry.  Markers/bookmarks are deduped
-  // against the master (same hash / bookmark text).  Only files the
-  // chat-marker scanner watches (i.e. open sub-files) are included.
-  private _appendSubfileTocEntries(entries: TableOfContentsEntry[]): void {
+  // Add TOC content from included files: their section headings, chat
+  // markers, and bookmarks (the master's are already overlaid by
+  // parseTableOfContents). A known \include/\input position determines where
+  // the file group is inserted; unmatched open subfiles remain visible at
+  // the end. Markers/bookmarks are deduped against the master.
+  private _appendSubfileTocEntries(
+    entries: TableOfContentsEntry[],
+    masterLatex: string,
+  ): void {
     const chatMarkers = this.store.get("chat_markers");
     const chatBookmarks = this.store.get("chat_bookmarks");
     if (chatMarkers == null && chatBookmarks == null) return;
@@ -2105,6 +2110,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       ...((chatBookmarks?.keySeq().toJS() ?? []) as string[]),
     ]);
     subPaths.delete(this.path);
+    const groups: SubfileTocGroup[] = [];
     for (const path of [...subPaths].sort()) {
       const tail = path_split(path).tail;
       const group: TableOfContentsEntry[] = [];
@@ -2167,14 +2173,26 @@ export class Actions extends BaseActions<LatexEditorState> {
           (((a as any).extra?.line ?? 0) as number) -
           (((b as any).extra?.line ?? 0) as number),
       );
-      entries.push({
-        id: `sub:${path}:0-file`,
-        value: `**${tail}**`,
-        icon: "tex-file",
-        extra: { kind: "line", path, line: 0 },
+      groups.push({
+        path,
+        entries: [
+          {
+            id: `sub:${path}:0-file`,
+            value: `**${tail}**`,
+            icon: "tex-file",
+            extra: { kind: "line", path, line: 0 },
+          },
+          ...group,
+        ],
       });
-      entries.push(...group);
     }
+    const ordered = interleaveSubfileTocEntries({
+      masterEntries: entries,
+      masterLatex,
+      masterPath: this.path,
+      groups,
+    });
+    entries.splice(0, entries.length, ...ordered);
   }
 
   public async scrollToHeading(entry: TableOfContentsEntry): Promise<void> {

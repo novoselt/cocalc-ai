@@ -7,6 +7,7 @@ change them.
 */
 
 import { TableOfContentsEntry as Entry } from "@cocalc/frontend/components";
+import { normalize as pathNormalize } from "path";
 
 import { scanBookmarks, scanMarkers } from "./chat-markers";
 
@@ -22,6 +23,133 @@ export interface ParseTableOfContentsOptions {
   includeChatMarkers?: boolean;
   // Overlay `% bookmark: <text>` comments as entries (deduped by text).
   includeBookmarks?: boolean;
+}
+
+export interface IncludeDirective {
+  line: number; // 1-based source line
+  target: string;
+}
+
+export interface SubfileTocGroup {
+  path: string;
+  entries: Entry[];
+}
+
+function stripLatexComment(line: string): string {
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] !== "%") continue;
+    let backslashes = 0;
+    for (let j = i - 1; j >= 0 && line[j] === "\\"; j -= 1) {
+      backslashes += 1;
+    }
+    if (backslashes % 2 === 0) {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+export function scanIncludeDirectives(latex: string): IncludeDirective[] {
+  const directives: IncludeDirective[] = [];
+  const pattern = /\\(?:include|input)\s*\{([^{}]+)\}/g;
+  for (const [index, rawLine] of latex.split("\n").entries()) {
+    const line = stripLatexComment(rawLine);
+    pattern.lastIndex = 0;
+    for (
+      let match = pattern.exec(line);
+      match != null;
+      match = pattern.exec(line)
+    ) {
+      const target = match[1].trim();
+      if (target) {
+        directives.push({ line: index + 1, target });
+      }
+    }
+  }
+  return directives;
+}
+
+function normalizeTocPath(path: string): string {
+  const normalized = pathNormalize(path).replace(/\\/g, "/");
+  return normalized.startsWith("./") ? normalized.slice(2) : normalized;
+}
+
+function resolveIncludePath({
+  target,
+  masterPath,
+  candidates,
+}: {
+  target: string;
+  masterPath: string;
+  candidates: Map<string, string>;
+}): string | undefined {
+  const targetWithExtension = /\.[^/]+$/.test(target)
+    ? target
+    : `${target}.tex`;
+  const slash = masterPath.lastIndexOf("/");
+  const directory = slash === -1 ? "" : masterPath.slice(0, slash);
+  const relative = normalizeTocPath(
+    directory ? `${directory}/${targetWithExtension}` : targetWithExtension,
+  );
+  const direct = normalizeTocPath(targetWithExtension);
+  return candidates.get(relative) ?? candidates.get(direct);
+}
+
+// Insert each known subfile group at the master's first matching
+// \include/\input directive. Groups whose directive cannot be resolved stay
+// visible at the end as a fallback.
+export function interleaveSubfileTocEntries({
+  masterEntries,
+  masterLatex,
+  masterPath,
+  groups,
+}: {
+  masterEntries: Entry[];
+  masterLatex: string;
+  masterPath: string;
+  groups: SubfileTocGroup[];
+}): Entry[] {
+  if (groups.length === 0) return masterEntries;
+  const candidates = new Map(
+    groups.map(({ path }) => [normalizeTocPath(path), path]),
+  );
+  const groupByPath = new Map(groups.map((group) => [group.path, group]));
+  const used = new Set<string>();
+  const placements: Array<{ line: number; group: SubfileTocGroup }> = [];
+  for (const directive of scanIncludeDirectives(masterLatex)) {
+    const path = resolveIncludePath({
+      target: directive.target,
+      masterPath,
+      candidates,
+    });
+    if (!path || used.has(path)) continue;
+    const group = groupByPath.get(path);
+    if (group == null) continue;
+    used.add(path);
+    placements.push({ line: directive.line, group });
+  }
+
+  const result: Entry[] = [];
+  let masterIndex = 0;
+  for (const { line, group } of placements) {
+    while (
+      masterIndex < masterEntries.length &&
+      parseInt(masterEntries[masterIndex].id) <= line
+    ) {
+      result.push(masterEntries[masterIndex]);
+      masterIndex += 1;
+    }
+    result.push(...group.entries);
+  }
+  result.push(...masterEntries.slice(masterIndex));
+  for (const group of [...groups].sort((a, b) =>
+    a.path.localeCompare(b.path),
+  )) {
+    if (!used.has(group.path)) {
+      result.push(...group.entries);
+    }
+  }
+  return result;
 }
 
 export function parseTableOfContents(

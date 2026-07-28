@@ -267,6 +267,8 @@ function RowHeader({
     | 5
     | 6;
   const indent = INDENTS[normalizedLevel];
+  const headingUnicode =
+    icon == null && normalizedLevel < 6 ? 0x00a7 : undefined;
   return (
     <div
       style={{
@@ -275,9 +277,11 @@ function RowHeader({
       }}
     >
       <span style={{ width: indent.gutter, display: "inline-block" }}>
-        {icon && (
+        {(icon != null || headingUnicode != null) && (
           <Icon
             name={icon}
+            unicode={headingUnicode}
+            aria-label={headingUnicode != null ? "Section" : undefined}
             style={{
               color: iconColor ?? COLORS.GRAY_M,
               marginLeft: indent.iconLeft,
