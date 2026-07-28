@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import compression from "compression";
 import express from "express";
 import { existsSync } from "fs";
+import { readFile } from "fs/promises";
 import ms from "ms";
 import { join } from "path";
 import { parse as parseURL } from "url";
@@ -51,6 +52,7 @@ import {
   isLaunchpadMode,
   isSoftwareLicenseActivated,
 } from "@cocalc/server/software-licenses/activation";
+import { normalizeConatPathComponent } from "@cocalc/util/conat-path";
 
 const logger = getLogger("hub:servers:express-app");
 
@@ -481,13 +483,22 @@ async function initStatic(router) {
       express.static(publicAssetsPath, { setHeaders: cacheLongTerm }),
     );
   }
-  router.use(
-    "/static/app.html",
-    staticCompression,
-    express.static(join(staticPath, "app.html"), {
-      setHeaders: cacheShortTerm,
-    }),
-  );
+  router.get("/static/app.html", staticCompression, async (_req, res, next) => {
+    try {
+      const html = await readFile(join(staticPath, "app.html"), "utf8");
+      const component = normalizeConatPathComponent(
+        process.env.COCALC_CONAT_PATH_COMPONENT,
+      );
+      const meta = `<meta name="cocalc-conat-path-component" content="${component}" />`;
+      const shell = html.includes('meta name="cocalc-conat-path-component"')
+        ? html
+        : html.replace("</head>", `    ${meta}\n  </head>`);
+      cacheShortTerm(res);
+      res.type("html").send(shell);
+    } catch (err) {
+      next(err);
+    }
+  });
   router.use(
     "/static/embed.html",
     staticCompression,

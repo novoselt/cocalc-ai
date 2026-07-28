@@ -40,7 +40,10 @@ import { ACCOUNT_ID_COOKIE } from "@cocalc/frontend/client/client";
 import { info as refCacheInfo } from "@cocalc/util/refcache";
 import { connect as connectToConat } from "@cocalc/conat/core/client";
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
-import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
+import {
+  appBasePath,
+  appConatPath,
+} from "@cocalc/frontend/customize/app-base-path";
 import {
   clearStoredControlPlaneOrigin,
   getControlPlaneAppUrl,
@@ -992,6 +995,7 @@ export class ConatClient extends EventEmitter {
       this.startStatsReporter();
       this._conatClient = connectToConat({
         address: this.address,
+        path: appConatPath,
         inboxPrefix: inboxPrefix({ account_id: this.client.account_id }),
         auth: (cb) => cb({ browser_id: this.client.browser_id }),
         withCredentials: true,

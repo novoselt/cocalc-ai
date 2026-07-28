@@ -13,6 +13,7 @@ import basePath from "@cocalc/backend/base-path";
 import { conat } from "@cocalc/backend/conat";
 import { type Client } from "@cocalc/conat/core/client";
 import { delay } from "awaiting";
+import { normalizeConatPathComponent } from "@cocalc/util/conat-path";
 
 const logger = getLogger("hub:proxy-conat");
 
@@ -85,7 +86,10 @@ function localConatServerAddress(): string {
 
 function extractConatPath(rawUrl: string | undefined): string {
   const url = `${rawUrl ?? "/"}`;
-  const i = url.lastIndexOf("/conat");
+  const component = normalizeConatPathComponent(
+    process.env.COCALC_CONAT_PATH_COMPONENT,
+  );
+  const i = url.lastIndexOf(`/${component}`);
   if (i === -1) {
     throw new Error(`invalid conat proxy path: ${url}`);
   }

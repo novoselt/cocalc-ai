@@ -77,7 +77,7 @@ Shared options:
   --json                 Emit machine-readable JSON where applicable.
 
 Init options:
-  --port <port>          Reserve an explicit HTTP port and adjacent SSH port.
+  --port <port>          Reserve HTTP, SSH, and Conat ports starting here.
   --data-dir <path>      Override the persistent data directory.
   --project <id>         Outer CoCalc project ID; enables app supervision.
   --api <url>            CoCalc API/site origin for CLI and ordinary app URL.
@@ -266,6 +266,7 @@ function readConfig(root, name) {
   if (config.version !== CONFIG_VERSION || config.name !== name) {
     throw new Error(`unsupported or malformed workspace site config: ${path}`);
   }
+  config.conat_port ??= Number(config.base_port) + 2;
   return config;
 }
 
@@ -301,8 +302,12 @@ function checkPortAvailable(port, host = "127.0.0.1") {
 }
 
 async function portPairAvailable(port, check = checkPortAvailable) {
-  const [http, ssh] = await Promise.all([check(port), check(port + 1)]);
-  return { ok: http.ok && ssh.ok, http, ssh };
+  const [http, ssh, conat] = await Promise.all([
+    check(port),
+    check(port + 1),
+    check(port + 2),
+  ]);
+  return { ok: http.ok && ssh.ok && conat.ok, http, ssh, conat };
 }
 
 async function allocatePortPair({
@@ -315,12 +320,17 @@ async function allocatePortPair({
   for (const config of configs) {
     reserved.add(Number(config.base_port));
     reserved.add(Number(config.sshd_port));
+    reserved.add(Number(config.conat_port ?? Number(config.base_port) + 2));
   }
   const validate = async (port) => {
-    if (!Number.isInteger(port) || port <= 0 || port >= 65_535) {
-      throw new Error("base port must be an integer between 1 and 65534");
+    if (!Number.isInteger(port) || port <= 0 || port > 65_533) {
+      throw new Error("base port must be an integer between 1 and 65533");
     }
-    if (reserved.has(port) || reserved.has(port + 1)) {
+    if (
+      reserved.has(port) ||
+      reserved.has(port + 1) ||
+      reserved.has(port + 2)
+    ) {
       return { ok: false, reason: "reserved by another workspace site" };
     }
     const available = await portPairAvailable(port, check);
@@ -334,20 +344,20 @@ async function allocatePortPair({
     const result = await validate(port);
     if (!result.ok) {
       throw new Error(
-        `cannot reserve ports ${port}-${port + 1}: ${result.reason}`,
+        `cannot reserve ports ${port}-${port + 2}: ${result.reason}`,
       );
     }
     return port;
   }
 
-  const pairCount = Math.floor((DEFAULT_PORT_MAX - DEFAULT_PORT_MIN + 1) / 2);
-  const start = hashName(name) % pairCount;
-  for (let offset = 0; offset < pairCount; offset += 1) {
-    const pair = (start + offset) % pairCount;
-    const port = DEFAULT_PORT_MIN + pair * 2;
+  const rangeCount = Math.floor((DEFAULT_PORT_MAX - DEFAULT_PORT_MIN + 1) / 3);
+  const start = hashName(name) % rangeCount;
+  for (let offset = 0; offset < rangeCount; offset += 1) {
+    const range = (start + offset) % rangeCount;
+    const port = DEFAULT_PORT_MIN + range * 3;
     if ((await validate(port)).ok) return port;
   }
-  throw new Error("unable to allocate a free workspace site port pair");
+  throw new Error("unable to allocate a free workspace site port range");
 }
 
 function run(command, args, options = {}) {
@@ -796,6 +806,7 @@ async function initSite(opts) {
       app_id: `cocalc-dev-${name}`,
       base_port: basePort,
       sshd_port: basePort + 1,
+      conat_port: basePort + 2,
       node_bin: process.execPath,
       supervisor: opts.local
         ? "local"
@@ -909,7 +920,7 @@ async function startLocal(config) {
   const pair = await portPairAvailable(config.base_port);
   if (!pair.ok) {
     throw new Error(
-      `workspace site ports ${config.base_port}-${config.sshd_port} are unavailable`,
+      `workspace site ports ${config.base_port}-${config.conat_port} are unavailable`,
     );
   }
   mkdirSync(dirname(config.stdout_log), { recursive: true });
@@ -1182,6 +1193,7 @@ async function statusSite(config) {
     ports: {
       http: config.base_port,
       sshd: config.sshd_port,
+      conat: config.conat_port,
     },
     app: {
       id: config.app_id,
@@ -1246,6 +1258,8 @@ function launchpadEnvironment(config) {
     COCALC_BASE_PORT: `${config.base_port}`,
     COCALC_HTTP_PORT: `${config.base_port}`,
     COCALC_SSHD_PORT: `${config.sshd_port}`,
+    CONAT_CLUSTER_PORT: `${config.conat_port ?? Number(config.base_port) + 2}`,
+    COCALC_CONAT_PATH_COMPONENT: "workspace-conat",
     COCALC_SOURCE_COMMIT: currentSourceState().commit ?? "",
     COCALC_OPEN_BROWSER: "0",
     COCALC_ALLOW_INSECURE_HTTP_MODE: "true",
@@ -1419,7 +1433,7 @@ function printHuman(command, value) {
     console.log(`supervisor: ${config.supervisor}`);
     console.log(`source:     ${config.src_dir}`);
     console.log(`data:       ${config.data_dir}`);
-    console.log(`ports:      ${config.base_port}-${config.sshd_port}`);
+    console.log(`ports:      ${config.base_port}-${config.conat_port}`);
     console.log(`app id:     ${config.app_id}`);
     console.log(
       `next:       pnpm -C ${shellQuote(config.src_dir)} dev:workspace:start --name ${shellQuote(config.name)}`,
@@ -1451,7 +1465,7 @@ function printHuman(command, value) {
       `build:      ${value.build.stale ? "stale or dirty" : "current"}`,
     );
     console.log(`data:       ${value.paths.data}`);
-    console.log(`ports:      ${value.ports.http}-${value.ports.sshd}`);
+    console.log(`ports:      ${value.ports.http}-${value.ports.conat}`);
     console.log(`local URL:  ${value.app.local_url}`);
     if (value.app.ordinary_url) {
       console.log(`app URL:    ${value.app.ordinary_url}`);

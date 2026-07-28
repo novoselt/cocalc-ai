@@ -1,5 +1,6 @@
 import { APP_BASE_PATH_ROUTE_MARKERS } from "@cocalc/util/routing/app";
 import { LOCALE } from "@cocalc/util/i18n/locale";
+import { conatPathForBase } from "@cocalc/util/conat-path";
 
 const UUID_PATTERN =
   /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/;
@@ -121,6 +122,22 @@ export function inferBasePathFromBaseElement(): string | undefined {
   return pathname.slice(0, -suffix.length) || "/";
 }
 
+export function inferConatPathFromMetaElement(
+  basePath: string,
+): string | undefined {
+  if (typeof document === "undefined") return;
+  const component = document
+    .querySelector('meta[name="cocalc-conat-path-component"]')
+    ?.getAttribute("content")
+    ?.trim();
+  if (!component) return;
+  try {
+    return conatPathForBase(basePath, component);
+  } catch {
+    return;
+  }
+}
+
 function init(): string {
   if (process.env.BASE_PATH) {
     // This is used by next.js.
@@ -142,3 +159,6 @@ function init(): string {
 }
 
 export let appBasePath: string = init();
+
+export const appConatPath =
+  inferConatPathFromMetaElement(appBasePath) ?? conatPathForBase(appBasePath);
