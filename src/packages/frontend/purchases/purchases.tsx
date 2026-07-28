@@ -32,7 +32,10 @@ import { open_new_tab } from "@cocalc/frontend/misc/open-browser-tab";
 import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
 import getSupportURL from "@cocalc/frontend/support/url";
 import { isLanguageModelService } from "@cocalc/util/db-schema/ai-models";
-import { type Service } from "@cocalc/util/db-schema/purchase-quotas";
+import {
+  serviceToDisplay,
+  type Service,
+} from "@cocalc/util/db-schema/purchase-quotas";
 import type { Purchase } from "@cocalc/util/db-schema/purchases";
 import { getAmountStyle } from "@cocalc/util/db-schema/purchases";
 import {
@@ -51,11 +54,11 @@ import {
 import AdminRefund, { isRefundable } from "./admin-refund";
 import * as api from "./api";
 import EmailStatement from "./email-statement";
-import Export from "./export";
+import Export, { type PrintColumn } from "./export";
 import DynamicallyUpdatingCost from "./pay-as-you-go/dynamically-updating-cost";
 import Refresh from "./refresh";
 import ServiceTag from "./service";
-import { LineItemsButton } from "./line-items";
+import { LineItemsButton, moneyToString } from "./line-items";
 import { getInvoiceUrlOrNull } from "./invoice-url";
 import searchFilter from "@cocalc/frontend/search/filter";
 import dayjs from "dayjs";
@@ -168,7 +171,12 @@ function Purchases0({
 }
 
 type PurchaseItem = Partial<
-  Purchase & { sum?: number; filter?: string; balance?: MoneyValue }
+  Purchase & {
+    sum?: number;
+    filter?: string;
+    balance?: MoneyValue;
+    count?: number;
+  }
 >;
 
 export function PurchasesTable({
@@ -391,11 +399,15 @@ export function PurchasesTable({
   const hasCriteria = hasDateCriteria || hasFilterCriteria;
   const purchaseLabel =
     visibleCount == null ? "purchases" : plural(visibleCount, "purchase");
+  const groupLabel =
+    visibleCount == null
+      ? "service groups"
+      : plural(visibleCount, "service group");
   const summary =
     visibleCount == null
       ? "Purchases"
       : group
-        ? `All ${hasCriteria ? "matching " : ""}${purchaseLabel} grouped by service`
+        ? `All ${hasCriteria ? "matching " : ""}${groupLabel}`
         : `${hasMore ? "Most recent" : "All"} ${visibleCount} ${
             hasCriteria ? "matching " : ""
           }${purchaseLabel}`;
@@ -403,6 +415,26 @@ export function PurchasesTable({
     hasFilterCriteria && visibleCount != null && purchases != null
       ? `Showing ${visibleCount} matching ${purchaseLabel} from ${loadedCount} loaded.`
       : "";
+  const print = visiblePurchases
+    ? {
+        title: getPrintTitle({
+          cutoff,
+          cutoffEnd,
+          filterText,
+          group: !!group,
+          hasMore,
+          noStatement,
+          thisMonth,
+        }),
+        columns: group
+          ? GROUPED_PRINT_COLUMNS
+          : getDetailedPrintColumns({
+              showBalance: visiblePurchases.some(
+                ({ balance }) => balance != null,
+              ),
+            }),
+      }
+    : undefined;
 
   return (
     <div style={style}>
@@ -462,6 +494,7 @@ export function PurchasesTable({
               })
             }
             data={visiblePurchases}
+            print={print}
           />
           <Refresh handleRefresh={refreshRecords} style={{ marginRight: 0 }} />
         </Space>
@@ -479,6 +512,240 @@ export function PurchasesTable({
       </div>
     </div>
   );
+}
+
+const GROUPED_PRINT_COLUMNS: PrintColumn<PurchaseItem>[] = [
+  {
+    title: "Service",
+    align: "center",
+    render: ({ service }) =>
+      service != null ? serviceToDisplay(service as Service) : "",
+  },
+  {
+    title: "Amount",
+    align: "right",
+    render: formatAmountForPrint,
+  },
+  {
+    title: "Items",
+    align: "center",
+    render: ({ count }) => count ?? "",
+  },
+];
+
+function getDetailedPrintColumns({
+  showBalance,
+}: {
+  showBalance: boolean;
+}): PrintColumn<PurchaseItem>[] {
+  const columns: PrintColumn<PurchaseItem>[] = [
+    {
+      title: "Id",
+      align: "right",
+      render: ({ id }) => id ?? "",
+    },
+    {
+      title: "Service",
+      align: "center",
+      render: ({ service }) =>
+        service != null ? serviceToDisplay(service as Service) : "",
+    },
+    {
+      title: "Description",
+      render: purchaseDescriptionLinesForPrint,
+    },
+    {
+      title: "Time",
+      render: ({ time }) => formatPrintDateTime(time),
+    },
+    {
+      title: "Period",
+      render: formatPeriodForPrint,
+    },
+    {
+      title: "Amount",
+      align: "right",
+      render: formatAmountForPrint,
+    },
+  ];
+  if (showBalance) {
+    columns.push({
+      title: "Balance",
+      align: "right",
+      render: ({ balance }) =>
+        balance == null
+          ? ""
+          : currency(moneyRound2Down(toDecimal(balance)).toNumber(), 2),
+    });
+  }
+  return columns;
+}
+
+function getPrintTitle({
+  cutoff,
+  cutoffEnd,
+  filterText,
+  group,
+  hasMore,
+  noStatement,
+  thisMonth,
+}: {
+  cutoff?: Date;
+  cutoffEnd?: Date;
+  filterText: string;
+  group: boolean;
+  hasMore: boolean;
+  noStatement?: boolean;
+  thisMonth?: boolean;
+}) {
+  const phrases = [hasMore && !group ? "Most recent purchases" : "Purchases"];
+  if (group) {
+    phrases.push("grouped by service");
+  }
+  if (thisMonth) {
+    phrases.push("since last statement");
+  }
+  if (noStatement) {
+    phrases.push("not on a statement");
+  }
+  if (cutoff && cutoffEnd) {
+    phrases.push(
+      `from ${formatPrintDate(cutoff)} to ${formatPrintDate(cutoffEnd)}`,
+    );
+  } else if (cutoff) {
+    phrases.push(`from ${formatPrintDate(cutoff)}`);
+  } else if (cutoffEnd) {
+    phrases.push(`through ${formatPrintDate(cutoffEnd)}`);
+  }
+  if (filterText.trim()) {
+    phrases.push(`containing ${quoteFilter(filterText)}`);
+  }
+  return phrases.join(" ");
+}
+
+function quoteFilter(filterText: string) {
+  return filterText.includes("'") ? `"${filterText}"` : `'${filterText}'`;
+}
+
+function purchaseDescriptionLinesForPrint({
+  description,
+  notes,
+  service,
+}: PurchaseItem) {
+  const descriptionAny = description as any;
+  const lines = [descriptionTextForPrint({ description, service })].filter(
+    Boolean,
+  );
+  if (descriptionAny?.credit_id != null) {
+    lines.push(`Credit Id: ${descriptionAny.credit_id}`);
+  }
+  if (descriptionAny?.refund_purchase_id != null) {
+    lines.push(`REFUNDED: Transaction ${descriptionAny.refund_purchase_id}`);
+  }
+  const lineItems = Array.isArray(descriptionAny?.line_items)
+    ? descriptionAny.line_items
+    : [];
+  if (lineItems.length > 1) {
+    for (const { amount, description } of lineItems) {
+      lines.push(`  ${description}: ${moneyToString(amount)}`);
+    }
+  }
+  if (notes) {
+    lines.push(`Notes: ${notes}`);
+  }
+  return lines;
+}
+
+function descriptionTextForPrint({
+  description,
+  service,
+}: Pick<PurchaseItem, "description" | "service">) {
+  if (description == null || typeof service !== "string") {
+    return "";
+  }
+  const descriptionAny = description as any;
+  if (service === "student-pay") {
+    return "Course fee";
+  }
+  if (service === "membership") {
+    if (descriptionAny.type === "membership-package") {
+      const kindLabel =
+        descriptionAny.kind === "course"
+          ? "Course membership"
+          : descriptionAny.kind === "team"
+            ? "Team membership package"
+            : descriptionAny.kind === "site"
+              ? "Site membership package"
+              : "Membership package";
+      const courseLabel =
+        descriptionAny.kind === "course"
+          ? `${descriptionAny.metadata?.course_title ?? descriptionAny.metadata?.course_path ?? ""}`.trim()
+          : "";
+      const seatLabel =
+        descriptionAny.seat_count != null && descriptionAny.seat_count !== 1
+          ? ` (${descriptionAny.seat_count} seats)`
+          : "";
+      return `${kindLabel}: ${descriptionAny.membership_class ?? "unknown"}${seatLabel}${
+        courseLabel ? ` for ${courseLabel}` : ""
+      }${descriptionAny.expanded_existing_package ? " expanded" : ""}`;
+    }
+    return `Membership: ${descriptionAny.class ?? "unknown"} (${descriptionAny.interval ?? "unknown"})${
+      descriptionAny.admin_assigned
+        ? ` admin assigned${descriptionAny.assigned_by ? ` by ${descriptionAny.assigned_by}` : ""}`
+        : descriptionAny.subscription_id != null
+          ? ` subscription ${descriptionAny.subscription_id}`
+          : ""
+    }`;
+  }
+  if (service === "credit") {
+    return descriptionAny.description ?? "Credit";
+  }
+  if (service === "refund") {
+    return `Refund Transaction ${descriptionAny.purchase_id}; Reason: ${capitalize(
+      descriptionAny.reason.replace(/_/g, " "),
+    )}${descriptionAny.notes ? `; Notes: ${descriptionAny.notes}` : ""}`;
+  }
+  return capitalize(service);
+}
+
+function formatAmountForPrint(record: PurchaseItem) {
+  const { cost } = record;
+  if (cost == null) {
+    if (record.period_start && record.cost_per_hour) {
+      return `${currency(toDecimal(record.cost_per_hour).toNumber(), 2)}/h`;
+    }
+    if (record.period_start && record.cost_so_far != null) {
+      return currency(toDecimal(record.cost_so_far).neg().toNumber(), 2);
+    }
+    return "-";
+  }
+  return currency(toDecimal(cost).neg().toNumber(), 2);
+}
+
+function formatPeriodForPrint(record: PurchaseItem) {
+  if (!record.period_start) {
+    return "";
+  }
+  const hours = periodLengthInHours(record);
+  const duration =
+    hours > 0 && hours < 24 ? ` (${hoursToTimeIntervalHuman(hours)})` : "";
+  if (!record.period_end) {
+    return `${formatPrintDateTime(record.period_start)} - now${duration}`;
+  }
+  return `${formatPrintDateTime(record.period_start)} - ${formatPrintDateTime(
+    record.period_end,
+  )}${duration}`;
+}
+
+function formatPrintDateTime(date?: Date | string | number) {
+  if (!date) {
+    return "";
+  }
+  return dayjs(date).format("MMMM D, YYYY h:mm A");
+}
+
+function formatPrintDate(date: Date) {
+  return dayjs(date).format("MMMM D, YYYY");
 }
 
 export function GroupedPurchaseTable({
@@ -507,6 +774,7 @@ export function GroupedPurchaseTable({
             title: "Service",
             dataIndex: "service",
             key: "service",
+            align: "center" as "center",
             sorter: (a, b) =>
               (a.service ?? "").localeCompare(b.service ?? "") ?? -1,
             sortDirections: ["ascend", "descend"],
@@ -630,6 +898,7 @@ export function DetailedPurchaseTable({
             title: "Id",
             dataIndex: "id",
             key: "id",
+            align: "right" as "right",
             sorter: (a, b) => (a.id ?? 0) - (b.id ?? 0),
             sortDirections: ["ascend", "descend"],
           },
@@ -638,6 +907,7 @@ export function DetailedPurchaseTable({
             title: "Service",
             dataIndex: "service",
             key: "service",
+            align: "center" as "center",
             sorter: (a, b) => (a.service ?? "").localeCompare(b.service ?? ""),
             sortDirections: ["ascend", "descend"],
             render: (service) => <ServiceTag service={service} />,
@@ -744,12 +1014,6 @@ function PurchaseDescription({
         </div>
       )}
       <Flex wrap style={{ marginLeft: "-8px" }}>
-        {description?.["line_items"] != null && (
-          <LineItemsButton
-            lineItems={description["line_items"]}
-            style={{ marginBottom: "15px" }}
-          />
-        )}
         {description?.refund_purchase_id && (
           <b style={{ marginLeft: "8px" }}>
             REFUNDED: Transaction {description.refund_purchase_id}
@@ -786,6 +1050,12 @@ function PurchaseDescription({
             )}
             <InvoiceLink invoice_id={invoice_id} />
           </Space>
+        )}
+        {description?.["line_items"] != null && (
+          <LineItemsButton
+            lineItems={description["line_items"]}
+            style={{ marginBottom: "15px" }}
+          />
         )}
       </Flex>
       {notes && (
@@ -964,21 +1234,14 @@ function Amount({ record }) {
     const amountValue = toDecimal(cost).neg();
     const amount = amountValue.toNumber();
     return (
-      <Tooltip
-        title={` (USD): ${currency(
-          amountValue.toDecimalPlaces(4).toNumber(),
-          4,
-        )}`}
+      <span
+        style={{
+          ...getAmountStyle(amount),
+          ...(record.pending ? { color: "#999" } : undefined),
+        }}
       >
-        <span
-          style={{
-            ...getAmountStyle(amount),
-            ...(record.pending ? { color: "#999" } : undefined),
-          }}
-        >
-          {currency(amount, 2)}
-        </span>
-      </Tooltip>
+        {currency(amount, 2)}
+      </span>
     );
   }
   return <>-</>;
@@ -988,16 +1251,9 @@ function Balance({ balance }) {
   if (balance != null) {
     const balanceValue = toDecimal(balance);
     return (
-      <Tooltip
-        title={` (USD): ${currency(
-          balanceValue.toDecimalPlaces(4).toNumber(),
-          4,
-        )}`}
-      >
-        <span style={getAmountStyle(balanceValue.toNumber())}>
-          {currency(moneyRound2Down(balanceValue).toNumber(), 2)}
-        </span>
-      </Tooltip>
+      <span style={getAmountStyle(balanceValue.toNumber())}>
+        {currency(moneyRound2Down(balanceValue).toNumber(), 2)}
+      </span>
     );
   }
   return <>-</>;
