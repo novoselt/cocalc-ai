@@ -2191,6 +2191,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       masterLatex,
       masterPath: this.path,
       groups,
+      canonicalPaths: this.canonical_paths,
     });
     entries.splice(0, entries.length, ...ordered);
   }

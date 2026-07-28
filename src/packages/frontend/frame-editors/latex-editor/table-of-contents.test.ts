@@ -149,6 +149,34 @@ describe("interleaveSubfileTocEntries", () => {
     ]);
   });
 
+  it("uses build-derived canonical paths for symlinked includes", () => {
+    const masterLatex = [
+      "\\section{Before}",
+      "\\input{linked/chapter}",
+      "\\section{After}",
+    ].join("\n");
+    const result = interleaveSubfileTocEntries({
+      masterEntries: parseTableOfContents(masterLatex),
+      masterLatex,
+      masterPath: "/home/user/project/main.tex",
+      groups: [
+        {
+          path: "/home/user/shared/chapter.tex",
+          entries: [{ id: "sub:chapter:file", value: "**chapter.tex**" }],
+        },
+      ],
+      canonicalPaths: {
+        "/home/user/project/linked/chapter.tex":
+          "/home/user/shared/chapter.tex",
+      },
+    });
+    expect(result.map(({ value }) => value)).toEqual([
+      "Before",
+      "**chapter.tex**",
+      "After",
+    ]);
+  });
+
   it("repeats groups at repeated includes and appends unmatched groups", () => {
     const masterLatex = [
       "\\include{123}",

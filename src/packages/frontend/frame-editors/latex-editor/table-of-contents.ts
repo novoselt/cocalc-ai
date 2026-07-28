@@ -78,10 +78,12 @@ function resolveIncludePath({
   target,
   masterPath,
   candidates,
+  canonicalPaths,
 }: {
   target: string;
   masterPath: string;
   candidates: Map<string, string>;
+  canonicalPaths?: Readonly<Record<string, string>>;
 }): string | undefined {
   const targetWithExtension = /\.[^/]+$/.test(target)
     ? target
@@ -92,7 +94,15 @@ function resolveIncludePath({
     directory ? `${directory}/${targetWithExtension}` : targetWithExtension,
   );
   const direct = normalizeTocPath(targetWithExtension);
-  return candidates.get(relative) ?? candidates.get(direct);
+  const lexical = candidates.get(relative) ?? candidates.get(direct);
+  if (lexical != null) return lexical;
+  for (const alias of [relative, direct]) {
+    const canonical = canonicalPaths?.[alias];
+    if (canonical == null) continue;
+    const resolved = candidates.get(normalizeTocPath(canonical));
+    if (resolved != null) return resolved;
+  }
+  return undefined;
 }
 
 function instantiateSubfileGroup(
@@ -126,11 +136,13 @@ export function interleaveSubfileTocEntries({
   masterLatex,
   masterPath,
   groups,
+  canonicalPaths,
 }: {
   masterEntries: Entry[];
   masterLatex: string;
   masterPath: string;
   groups: SubfileTocGroup[];
+  canonicalPaths?: Readonly<Record<string, string>>;
 }): Entry[] {
   if (groups.length === 0) return masterEntries;
   const candidates = new Map(
@@ -145,6 +157,7 @@ export function interleaveSubfileTocEntries({
       target: directive.target,
       masterPath,
       candidates,
+      canonicalPaths,
     });
     if (!path) continue;
     const group = groupByPath.get(path);
