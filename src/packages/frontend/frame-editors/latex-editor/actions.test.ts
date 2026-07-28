@@ -74,6 +74,55 @@ describe("LaTeX included-file chat ownership", () => {
   });
 });
 
+describe("LaTeX empty anchor reconciliation", () => {
+  it("follows an edited marker using the frame-tree thread selection", () => {
+    const setThreadAnchor = jest.fn(() => true);
+    const renameThread = jest.fn();
+    const frameTreeActions = {
+      _get_frame_data: jest.fn((_frameId: string, key: string) =>
+        key === "selectedThreadKey" ? "thread-1" : undefined,
+      ),
+    };
+    const chatActions = {
+      frameId: "chat-frame",
+      frameTreeActions,
+      store: Map(),
+      listThreadConfigRows: () => [
+        {
+          thread_id: "thread-1",
+          anchor: { id: "old-hash", path: "123.tex" },
+        },
+      ],
+      getThreadIndex: () =>
+        new globalThis.Map([["thread-1", { messageCount: 0 }]]),
+      setThreadAnchor,
+      renameThread,
+    };
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "main.tex";
+    actions._getChatActionsForMarkerReconciliation = () => chatActions;
+
+    actions._reconcileEmptyAnchorThread(
+      "123.tex",
+      [{ hash: "old-hash", line: 0, col: 0 }],
+      [{ hash: "new-hash", line: 0, col: 0 }],
+    );
+
+    expect(frameTreeActions._get_frame_data).toHaveBeenCalledWith(
+      "chat-frame",
+      "selectedThreadKey",
+    );
+    expect(setThreadAnchor).toHaveBeenCalledWith("thread-1", {
+      id: "new-hash",
+      path: "123.tex",
+    });
+    expect(renameThread).toHaveBeenCalledWith(
+      "thread-1",
+      "new-hash (123.tex:1)",
+    );
+  });
+});
+
 describe("LaTeX included-file table of contents", () => {
   it("lists build-discovered subfiles even without headings or annotations", () => {
     const actions: any = Object.create(Actions.prototype);

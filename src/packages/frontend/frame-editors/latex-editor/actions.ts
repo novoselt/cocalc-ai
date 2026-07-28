@@ -2546,6 +2546,10 @@ export class Actions extends BaseActions<LatexEditorState> {
         .get("chat_markers")
         ?.get(path)
         ?.toJS() ?? []) as unknown as ChatMarker[];
+      // Move a config-only thread to an edited marker id before publishing
+      // the new source snapshot. Otherwise the chat header can observe the
+      // old anchor against the new markers and classify it as deleted.
+      this._reconcileEmptyAnchorThread(path, previousMarkers, markers);
       this.setState({
         chat_markers: (
           this.store.get("chat_markers") ?? (fromJS({}) as any)
@@ -2557,7 +2561,6 @@ export class Actions extends BaseActions<LatexEditorState> {
           this.store.get("chat_bookmarks") ?? (fromJS({}) as any)
         ).set(path, fromJS(bookmarks)),
       });
-      this._reconcileEmptyAnchorThread(path, previousMarkers, markers);
       this._updateChatGutters(path, markers, bookmarks);
       this._refreshChatMarkerText(path);
       this._refreshCursorInsert(path);
@@ -2605,13 +2608,16 @@ export class Actions extends BaseActions<LatexEditorState> {
     previous: ChatMarker[],
     next: ChatMarker[],
   ): void {
-    let chatActions;
-    try {
-      chatActions = ensureSideChatActions(this.project_id, this.path);
-    } catch {
-      return;
-    }
-    const selectedKey = `${chatActions.store?.get("selectedThreadKey") ?? ""}`;
+    const chatActions = this._getChatActionsForMarkerReconciliation();
+    if (chatActions == null) return;
+    const selectedKey = `${
+      chatActions.frameTreeActions?._get_frame_data?.(
+        chatActions.frameId,
+        "selectedThreadKey",
+      ) ??
+      chatActions.store?.get("selectedThreadKey") ??
+      ""
+    }`;
     if (!selectedKey || selectedKey === "0") return;
     const row = chatActions
       .listThreadConfigRows()
@@ -2626,11 +2632,30 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
     const replacement = replacementMarkerHash(previous, next, anchor.id);
     if (replacement == null) return;
-    chatActions.setThreadAnchor(selectedKey, {
-      id: replacement,
-      ...(anchor.path ? { path: anchor.path } : undefined),
-    });
-    chatActions.renameThread(selectedKey, this.getAnchorLabel(replacement));
+    if (
+      !chatActions.setThreadAnchor(selectedKey, {
+        id: replacement,
+        ...(anchor.path ? { path: anchor.path } : undefined),
+      })
+    ) {
+      return;
+    }
+    const location = next.find((marker) => marker.hash === replacement);
+    const label =
+      location == null
+        ? (this.getAnchorLabel(replacement) ?? replacement)
+        : `${replacement} (${path_split(path).tail}:${location.line + 1})`;
+    chatActions.renameThread(selectedKey, label);
+  }
+
+  private _getChatActionsForMarkerReconciliation():
+    | ReturnType<typeof ensureSideChatActions>
+    | undefined {
+    try {
+      return ensureSideChatActions(this.project_id, this.path);
+    } catch {
+      return undefined;
+    }
   }
 
   private _updateChatGutters(
