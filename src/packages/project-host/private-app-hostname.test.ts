@@ -5,7 +5,9 @@
 
 import {
   createPrivateAppHostnameRequestRewriter,
+  privateAppHostnameExternalLocation,
   PRIVATE_APP_HOST_HEADER,
+  rewritePrivateAppHostnameResponseLocation,
   rewritePrivateAppHostnameUrl,
 } from "./private-app-hostname";
 
@@ -25,6 +27,21 @@ describe("private app hostname routing", () => {
     ).toBe(
       "/11111111-1111-4111-8111-111111111111/apps/dev-site/auth/sign-in?next=%2F",
     );
+  });
+
+  it("preserves the hostname-root trailing slash", () => {
+    expect(
+      rewritePrivateAppHostnameUrl({
+        originalUrl: "/",
+        route,
+      }),
+    ).toBe(`/${route.project_id}/apps/dev-site/`);
+    expect(
+      rewritePrivateAppHostnameUrl({
+        originalUrl: "/docs/",
+        route,
+      }),
+    ).toBe(`/${route.project_id}/apps/dev-site/docs/`);
   });
 
   it("does not duplicate an already canonical route", () => {
@@ -76,5 +93,45 @@ describe("private app hostname routing", () => {
     expect(trace).not.toHaveBeenCalled();
     expect(req.url).toBe(`/${route.project_id}/apps/dev-site/`);
     expect(req.headers[PRIVATE_APP_HOST_HEADER]).toBeUndefined();
+  });
+
+  it("maps internal redirect locations back to the private hostname root", async () => {
+    const rewrite = createPrivateAppHostnameRequestRewriter({
+      trace: async () => ({ matched: true, ...route }),
+    });
+    const req = {
+      headers: { host: "dev-1234.example.com" },
+      url: "/",
+    } as any;
+    await rewrite(req);
+
+    expect(
+      privateAppHostnameExternalLocation(
+        req,
+        `/${route.project_id}/apps/dev-site`,
+      ),
+    ).toBe("/");
+    expect(
+      privateAppHostnameExternalLocation(
+        req,
+        `/${route.project_id}/apps/dev-site/static/app.html?target=%2Fprojects`,
+      ),
+    ).toBe("/static/app.html?target=%2Fprojects");
+    expect(
+      privateAppHostnameExternalLocation(
+        req,
+        "https://other.example.com/11111111-1111-4111-8111-111111111111/apps/dev-site/",
+      ),
+    ).toBe(
+      "https://other.example.com/11111111-1111-4111-8111-111111111111/apps/dev-site/",
+    );
+
+    const proxyRes = {
+      headers: {
+        location: `/${route.project_id}/apps/dev-site/auth/sign-in`,
+      },
+    } as any;
+    rewritePrivateAppHostnameResponseLocation(proxyRes, req);
+    expect(proxyRes.headers.location).toBe("/auth/sign-in");
   });
 });

@@ -41,7 +41,10 @@ import {
 import { EventEmitter } from "node:events";
 import { createProjectHostBrowserSessionToken } from "./browser-session";
 import { PROJECT_HOST_HTTP_AUTH_QUERY_PARAM } from "@cocalc/conat/auth/project-host-http";
-import { PRIVATE_APP_HOST_HEADER } from "./private-app-hostname";
+import {
+  createPrivateAppHostnameRequestRewriter,
+  PRIVATE_APP_HOST_HEADER,
+} from "./private-app-hostname";
 
 function createResponse() {
   const headers = new Map<string, string | string[]>();
@@ -198,6 +201,44 @@ describe("project-host HTTP session cookie", () => {
       "Location",
       `/${project_id}/apps/python-hello/?x=1`,
     );
+    expect(res.end).toHaveBeenCalled();
+  });
+
+  it("keeps private-hostname token cleanup at the hostname root", async () => {
+    const auth = createProjectHostHttpProxyAuth({
+      host_id: "00000000-1000-4000-8000-000000000099",
+    });
+    const browserSession = createProjectHostBrowserSessionToken({
+      account_id,
+      now_ms: Date.now(),
+    });
+    const req = {
+      headers: {
+        cookie: `cocalc_project_host_session=${encodeURIComponent(browserSession)}`,
+        host: "dev-1234.example.com",
+        "x-forwarded-proto": "https",
+      },
+      method: "GET",
+      socket: {},
+      url: `/?${PROJECT_HOST_HTTP_AUTH_QUERY_PARAM}=secret`,
+    } as any;
+    const rewrite = createPrivateAppHostnameRequestRewriter({
+      trace: async () => ({
+        matched: true,
+        project_id,
+        app_id: "python-hello",
+        base_path: "/apps/python-hello",
+      }),
+    });
+    await rewrite(req);
+    const res = createResponse();
+    res.end = jest.fn();
+    res.statusCode = 200;
+
+    await auth.authorizeHttpRequest(req, res, project_id);
+
+    expect(res.statusCode).toBe(302);
+    expect(res.setHeader).toHaveBeenCalledWith("Location", "/");
     expect(res.end).toHaveBeenCalled();
   });
 

@@ -23,6 +23,19 @@ export interface PrivateAppHostnameTrace {
   base_path?: string;
 }
 
+interface PrivateAppHostnameRequestContext {
+  canonical_base_path: string;
+  hostname: string;
+}
+
+const PRIVATE_APP_HOSTNAME_REQUEST_CONTEXT = Symbol(
+  "cocalc-private-app-hostname-request-context",
+);
+
+type PrivateAppHostnameRequest = IncomingMessage & {
+  [PRIVATE_APP_HOSTNAME_REQUEST_CONTEXT]?: PrivateAppHostnameRequestContext;
+};
+
 function normalizePrefix(value: string): string {
   const withLeading = value.startsWith("/") ? value : `/${value}`;
   return withLeading.replace(/\/+$/, "") || "/";
@@ -48,10 +61,55 @@ export function rewritePrivateAppHostnameUrl({
     incomingPath === canonicalBasePath ||
     incomingPath.startsWith(`${canonicalBasePath}/`)
       ? incomingPath
-      : normalizePrefix(
-          `${canonicalBasePath}${incomingPath === "/" ? "" : incomingPath}`,
-        );
+      : `${canonicalBasePath}${incomingPath}`;
   return `${proxiedPath}${parsed.search ?? ""}`;
+}
+
+export function privateAppHostnameExternalLocation(
+  req: IncomingMessage,
+  location: string,
+): string {
+  const context = (req as PrivateAppHostnameRequest)[
+    PRIVATE_APP_HOSTNAME_REQUEST_CONTEXT
+  ];
+  if (!context || !location) return location;
+  let parsed: URL;
+  try {
+    parsed = new URL(location, "http://project-host.local");
+  } catch {
+    return location;
+  }
+  const { canonical_base_path: basePath } = context;
+  const externalPath =
+    parsed.pathname === basePath
+      ? "/"
+      : parsed.pathname.startsWith(`${basePath}/`)
+        ? parsed.pathname.slice(basePath.length) || "/"
+        : undefined;
+  if (!externalPath) return location;
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(location)) {
+    const hostname = normalizeHostHeader(parsed.host);
+    if (
+      hostname !== context.hostname &&
+      hostname !== "127.0.0.1" &&
+      hostname !== "localhost"
+    ) {
+      return location;
+    }
+    parsed.pathname = externalPath;
+    return parsed.toString();
+  }
+  return `${externalPath}${parsed.search}${parsed.hash}`;
+}
+
+export function rewritePrivateAppHostnameResponseLocation(
+  proxyRes: IncomingMessage,
+  req: IncomingMessage,
+): void {
+  const location = proxyRes.headers.location;
+  if (typeof location !== "string" || !location) return;
+  proxyRes.headers.location = privateAppHostnameExternalLocation(req, location);
 }
 
 export function createPrivateAppHostnameRequestRewriter({
@@ -100,6 +158,12 @@ export function createPrivateAppHostnameRequestRewriter({
     }
     if (!route) return;
 
+    (req as PrivateAppHostnameRequest)[PRIVATE_APP_HOSTNAME_REQUEST_CONTEXT] = {
+      canonical_base_path: normalizePrefix(
+        `/${route.project_id}${route.base_path}`,
+      ),
+      hostname,
+    };
     req.url = rewritePrivateAppHostnameUrl({
       originalUrl: currentUrl,
       route,

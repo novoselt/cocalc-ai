@@ -369,4 +369,64 @@ describe("project proxy forwarded app redirects", () => {
     await closeServer(server);
     await closeServer(upstream);
   });
+
+  it("applies caller-specific response rewriting after normalization", async () => {
+    const upstream = http.createServer((_req, res) => {
+      res.writeHead(302, {
+        Location:
+          "https://host-example.cocalc.ai:80/11111111-1111-4111-8111-111111111111/apps/dev-site/",
+      });
+      res.end("");
+    });
+    upstream.listen(0, "127.0.0.1");
+    await once(upstream, "listening");
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+
+    const app = express();
+    const server = http.createServer(app);
+    const normalizedLocations: Array<string | undefined> = [];
+    const rewriteResponse = jest.fn((proxyRes: http.IncomingMessage) => {
+      normalizedLocations.push(proxyRes.headers.location);
+      proxyRes.headers.location = "/rewritten";
+    });
+    attachProjectProxy({
+      httpServer: server,
+      app,
+      resolveTarget: async () => ({
+        handled: true,
+        target: { host: "127.0.0.1", port: upstreamPort },
+      }),
+      rewriteResponse,
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const proxyPort = (server.address() as AddressInfo).port;
+
+    const location = await new Promise<string | undefined>(
+      (resolve, reject) => {
+        http
+          .get(
+            {
+              host: "127.0.0.1",
+              port: proxyPort,
+              path: `/${PROJECT_ID}/apps/dev-site/`,
+            },
+            (res) => {
+              res.resume();
+              res.on("end", () => resolve(res.headers.location));
+            },
+          )
+          .on("error", reject);
+      },
+    );
+
+    expect(rewriteResponse).toHaveBeenCalledTimes(1);
+    expect(normalizedLocations).toEqual([
+      "https://host-example.cocalc.ai/11111111-1111-4111-8111-111111111111/apps/dev-site/",
+    ]);
+    expect(location).toBe("/rewritten");
+
+    await closeServer(server);
+    await closeServer(upstream);
+  });
 });

@@ -72,6 +72,7 @@ import { wireSystemApi } from "./hub/system";
 import {
   createPrivateAppHostnameRequestRewriter,
   PRIVATE_APP_HOST_HEADER,
+  rewritePrivateAppHostnameResponseLocation,
 } from "./private-app-hostname";
 import { startMasterRegistration } from "./master";
 import { startProvisionedInventoryReporter } from "./master-status";
@@ -1227,6 +1228,7 @@ export async function main(
     httpServers: [httpServer],
     app,
     rewriteRequest: maybeRewriteAppHostnameRequest,
+    rewriteResponse: rewritePrivateAppHostnameResponseLocation,
     noteUpstreamHttpBytes: ({ req, bytes }) => {
       noteManagedBoundaryClassifiedBytes({
         req,

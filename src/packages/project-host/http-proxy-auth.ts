@@ -38,7 +38,10 @@ import type {
 } from "@cocalc/conat/hub/api/public-directory-shares";
 import { getMasterConatClient } from "./master-status";
 import { isProjectViewerRole } from "@cocalc/util/project-access";
-import { PRIVATE_APP_HOST_HEADER } from "./private-app-hostname";
+import {
+  privateAppHostnameExternalLocation,
+  PRIVATE_APP_HOST_HEADER,
+} from "./private-app-hostname";
 
 const collaboratorCache = new TTL<string, boolean>({
   max: 50_000,
@@ -657,7 +660,10 @@ export function createProjectHostHttpProxyAuth({
     }
     if (/^(GET|HEAD)$/i.test(req.method ?? "GET")) {
       res.statusCode = 302;
-      res.setHeader("Location", cleaned);
+      res.setHeader(
+        "Location",
+        privateAppHostnameExternalLocation(req, cleaned),
+      );
       res.end("");
       return true;
     }

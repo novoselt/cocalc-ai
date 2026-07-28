@@ -402,6 +402,7 @@ export function attachProjectProxy({
   resolveTarget = defaultResolveTarget,
   onUpgradeAuthorized,
   rewriteRequest,
+  rewriteResponse,
   noteUpstreamHttpBytes,
   noteUpstreamWsBytes,
 }: {
@@ -414,6 +415,10 @@ export function attachProjectProxy({
     socket: Socket | Duplex,
   ) => void;
   rewriteRequest?: (req: http.IncomingMessage) => Promise<void> | void;
+  rewriteResponse?: (
+    proxyRes: http.IncomingMessage,
+    req: http.IncomingMessage,
+  ) => void;
   noteUpstreamHttpBytes?: NoteProxyBoundaryBytesFn;
   noteUpstreamWsBytes?: NoteProxyBoundaryBytesFn;
 }) {
@@ -469,6 +474,7 @@ export function attachProjectProxy({
 
   proxy.on("proxyRes", (proxyRes, req) => {
     normalizeProxyRedirectHeaders(proxyRes, req);
+    rewriteResponse?.(proxyRes, req);
     if (noteUpstreamHttpBytes) {
       proxyRes.on("data", (chunk) => {
         const bytes = getChunkByteLength(chunk);
