@@ -148,7 +148,7 @@ function parsePurchaseDates(v) {
 
 type PurchasesFunction = (
   opts: PurchasesOptions,
-) => Promise<{ purchases: Purchase[]; balance: MoneyValue | null }>;
+) => Promise<{ purchases: Purchase[]; balance: MoneyValue }>;
 
 export const getPurchases: PurchasesFunction = shortCache(
   async (opts: PurchasesOptions) => {
@@ -161,7 +161,7 @@ export const getPurchases: PurchasesFunction = shortCache(
 // Same options as getPurchases, but specify the account_id.
 export async function getPurchasesAdmin(
   opts: PurchasesOptions & { account_id?: string },
-): Promise<{ purchases: Purchase[]; balance: MoneyValue | null }> {
+): Promise<{ purchases: Purchase[]; balance: MoneyValue }> {
   return parsePurchaseDates(await api("purchases/get-purchases-admin", opts));
 }
 
