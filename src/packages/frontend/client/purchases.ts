@@ -29,6 +29,8 @@ export class PurchasesClient {
 
   async getPurchases(opts: {
     thisMonth?: boolean; // if true, limit and offset are ignored
+    cutoff?: Date;
+    cutoff_end?: Date;
     limit?: number;
     offset?: number;
     service?: Service;

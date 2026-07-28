@@ -90,5 +90,51 @@ describe("creates and get purchases using various options", () => {
       cutoff: dayjs().subtract(1, "week").toDate(),
     });
     expect(p_cutoff2.length).toBe(1);
+
+    const { purchases: p_cutoff_end } = await getPurchases({
+      account_id,
+      cutoff_end: dayjs().subtract(1, "week").toDate(),
+    });
+    expect(p_cutoff_end.length).toBe(1);
+
+    const { purchases: p_range } = await getPurchases({
+      account_id,
+      cutoff: dayjs().subtract(2, "month").toDate(),
+      cutoff_end: dayjs().subtract(1, "week").toDate(),
+    });
+    expect(p_range.length).toBe(1);
+  });
+
+  it("groups purchases by service without splitting by project", async () => {
+    const pool = getPool();
+    const firstPurchaseId = await createPurchase({
+      account_id,
+      service: "student-pay",
+      description: {} as any,
+      client: null,
+      cost: 7,
+    });
+    const secondPurchaseId = await createPurchase({
+      account_id,
+      service: "student-pay",
+      description: {} as any,
+      client: null,
+      cost: 11,
+    });
+    await pool.query("UPDATE purchases SET project_id=$1 WHERE id=$2", [
+      uuid(),
+      firstPurchaseId,
+    ]);
+    await pool.query("UPDATE purchases SET project_id=$1 WHERE id=$2", [
+      uuid(),
+      secondPurchaseId,
+    ]);
+
+    const { purchases } = await getPurchases({ account_id, group: true });
+    const rows = purchases.filter(({ service }) => service === "student-pay");
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].project_id).toBeUndefined();
+    expect((rows[0] as any).count).toBe(3);
   });
 });
