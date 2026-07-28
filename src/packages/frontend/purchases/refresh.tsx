@@ -16,12 +16,7 @@ export default function Refresh({
   const intl = useIntl();
 
   return (
-    <Button
-      type="text"
-      onClick={handleRefresh}
-      disabled={disabled}
-      style={style}
-    >
+    <Button onClick={handleRefresh} disabled={disabled} style={style}>
       <Icon name="refresh" />
       {intl.formatMessage(labels.refresh)}
     </Button>

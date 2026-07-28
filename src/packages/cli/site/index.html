@@ -13,7 +13,8 @@
         --accent: #2563eb;
         --accent-dark: #1d4ed8;
         --border: #e5e7eb;
-        --mono: "SFMono-Regular", ui-monospace, SFMono-Regular, Menlo, Monaco,
+        --mono:
+          "SFMono-Regular", ui-monospace, SFMono-Regular, Menlo, Monaco,
           Consolas, "Liberation Mono", "Courier New", monospace;
         --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
       }
@@ -126,8 +127,9 @@
       <section class="hero">
         <h1>CoCalc CLI (Alpha)</h1>
         <p>
-          Install the standalone CoCalc CLI in one command. This alpha is focused
-          on project and host automation, smoke testing, and agent workflows.
+          Install the standalone CoCalc CLI in one command. This alpha is
+          focused on project and host automation, smoke testing, and agent
+          workflows.
         </p>
       </section>
 
@@ -136,7 +138,8 @@
         <p>Copy and run this in your terminal:</p>
         <div class="command-box">
           <code id="install-command">
-            curl -fsSL https://software.cocalc.ai/software/cocalc/install.sh | bash
+            curl -fsSL https://software.cocalc.ai/software/cocalc/install.sh |
+            bash
           </code>
           <button id="copy-btn" type="button">Copy</button>
         </div>
@@ -147,8 +150,11 @@
               install.sh
             </a>
           </p>
+          <p>Supported: Linux (x64/arm64), macOS (arm64).</p>
           <p>
-            Supported: Linux (x64/arm64), macOS (arm64).
+            The installer requires <code>curl</code>. Project SSH commands also
+            require an OpenSSH client (<code>openssh-client</code> on
+            Debian/Ubuntu or <code>openssh-clients</code> on Fedora/RHEL).
           </p>
         </div>
       </section>
@@ -157,10 +163,15 @@
         <h2>What this does</h2>
         <ul>
           <li>Downloads the platform-specific CoCalc CLI manifest.</li>
-          <li>Downloads and verifies the corresponding compressed SEA binary.</li>
+          <li>Downloads and verifies the corresponding CLI runtime bundle.</li>
+          <li>
+            Bundles the required Linux <code>libatomic</code> runtime privately;
+            no system <code>libatomic</code> package is required.
+          </li>
           <li>Installs into <code>~/.local/share/cocalc</code> (XDG aware).</li>
           <li>
-            Creates <code>~/.local/bin/cocalc</code> and adds it to PATH if needed.
+            Creates <code>~/.local/bin/cocalc</code> and adds it to PATH if
+            needed.
           </li>
         </ul>
       </section>
@@ -174,9 +185,7 @@
         </div>
       </section>
 
-      <div class="footer">
-        Questions? Reach out to the CoCalc team.
-      </div>
+      <div class="footer">Questions? Reach out to the CoCalc team.</div>
     </main>
 
     <script>
@@ -193,16 +202,20 @@
         document.body.removeChild(input);
       };
 
-      const installCommand = document.getElementById("install-command").innerText.trim();
+      const installCommand = document
+        .getElementById("install-command")
+        .innerText.trim();
       document.getElementById("copy-btn").addEventListener("click", () => {
         copyText(installCommand);
       });
 
       const uninstallCommand =
         "rm -rf ~/.local/share/cocalc ~/.local/bin/cocalc";
-      document.getElementById("copy-uninstall").addEventListener("click", () => {
-        copyText(uninstallCommand);
-      });
+      document
+        .getElementById("copy-uninstall")
+        .addEventListener("click", () => {
+          copyText(uninstallCommand);
+        });
     </script>
   </body>
 </html>

@@ -8,6 +8,10 @@ import { dirname } from "node:path";
 import { Command } from "commander";
 
 import type { ProjectCommandDeps } from "../project";
+import {
+  buildManagedProjectSshConfigLines,
+  managedProjectSshOptionArgs,
+} from "./ssh-config";
 
 type PortableAppSpec = Record<string, any> & { id: string };
 
@@ -297,32 +301,23 @@ function ensureManagedProjectSshConfigEntry({
   if (!hostName) {
     throw new Error("project ssh route is missing host endpoint");
   }
-  const lines = [
-    `Host ${alias}`,
-    `  HostName ${hostName}`,
-    `  User ${route.ssh_username}`,
-  ];
+  let proxyCommand: string | null = null;
   if (route.ssh_transport !== "direct") {
     if (!cloudflaredBinary) {
       throw new Error(
         "cloudflared is required for managed Cloudflare SSH forwarding",
       );
     }
-    lines.push(`  ProxyCommand ${cloudflaredBinary} access ssh --hostname %h`);
-  } else if (route.ssh_port != null) {
-    lines.push(`  Port ${route.ssh_port}`);
+    proxyCommand = `${cloudflaredBinary} access ssh --hostname %h`;
   }
-  lines.push("  StrictHostKeyChecking accept-new");
-  lines.push("  ServerAliveInterval 15");
-  lines.push("  ServerAliveCountMax 2");
-  if (keyPath) {
-    lines.push(`  IdentityFile ${keyPath}`);
-    lines.push("  IdentitiesOnly yes");
-  }
-  lines.push("  BatchMode yes");
-  lines.push("  PreferredAuthentications publickey");
-  lines.push("  PasswordAuthentication no");
-  lines.push("  KbdInteractiveAuthentication no");
+  const lines = buildManagedProjectSshConfigLines({
+    alias,
+    hostName,
+    username: route.ssh_username,
+    proxyCommand,
+    port: route.ssh_transport === "direct" ? route.ssh_port : null,
+    identityFile: keyPath,
+  });
 
   const markers = projectSshConfigBlockMarkers(alias);
   const block = `${markers.start}\n${lines.join("\n")}\n${markers.end}\n`;
@@ -401,20 +396,7 @@ async function resolveAppForwardCommand(
   const sshArgs: string[] = [
     "-o",
     "ExitOnForwardFailure=yes",
-    "-o",
-    "StrictHostKeyChecking=accept-new",
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "ServerAliveCountMax=2",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "PreferredAuthentications=publickey",
-    "-o",
-    "PasswordAuthentication=no",
-    "-o",
-    "KbdInteractiveAuthentication=no",
+    ...managedProjectSshOptionArgs(),
     "-L",
     `${localHost}:${localPort}:127.0.0.1:${remotePort}`,
   ];

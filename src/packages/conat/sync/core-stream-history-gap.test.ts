@@ -16,6 +16,30 @@ function createStream() {
 }
 
 describe("CoreStream history gap propagation", () => {
+  it("returns empty KV read views after the stream closes", () => {
+    const stream = createStream();
+    (stream as any).kv.path = {
+      mesg: { value: "before-close" },
+      raw: {
+        seq: 1,
+        timestamp: Date.now(),
+        headers: { test: "value" },
+      },
+    };
+
+    stream.close();
+
+    expect(stream.getKv("path")).toBeUndefined();
+    expect(stream.hasKv("path")).toBe(false);
+    expect(stream.getAllKv()).toEqual({});
+    expect(stream.keysKv()).toEqual([]);
+    expect(stream.seqKv("path")).toBeUndefined();
+    expect(stream.timeKv("path")).toBeUndefined();
+    expect(stream.timeKv()).toEqual({});
+    expect(stream.headersKv("path")).toBeUndefined();
+    expect(stream.lengthKv).toBe(0);
+  });
+
   it("emits history-gap when replay starts after the requested seq", async () => {
     const stream = createStream();
     const events: any[] = [];

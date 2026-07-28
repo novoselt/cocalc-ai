@@ -32,7 +32,7 @@ jest.mock("./core-stream", () => ({
   },
 }));
 
-import { DKV } from "./dkv";
+import { DKV, dkv } from "./dkv";
 
 function deferred<T = void>() {
   let resolve: (value: T | PromiseLike<T>) => void = () => {};
@@ -79,6 +79,41 @@ describe("DKV initialization lifecycle", () => {
 
     expect(stream.config).not.toHaveBeenCalled();
     expect(connected).not.toHaveBeenCalled();
+  });
+
+  it("reports closure and still cleans up after the core stream closes itself", () => {
+    const dkv = createDkv();
+    const stream = mockCoreStreams[0];
+    stream.recoveryState = "closed";
+
+    expect(dkv.isClosed()).toBe(true);
+
+    dkv.close();
+
+    expect(stream.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a cached DKV whose core stream closed itself", async () => {
+    const client = { id: "closed-core-stream-cache-test" } as any;
+    const options = {
+      name: "closed-core-stream-cache-test",
+      client,
+      noInventory: true,
+    };
+    const first = await dkv(options);
+    const secondReference = await dkv(options);
+    expect(secondReference).toBe(first);
+
+    mockCoreStreams[0].recoveryState = "closed";
+    const replacement = await dkv(options);
+
+    expect(replacement).not.toBe(first);
+    expect(mockCoreStreams).toHaveLength(2);
+
+    first.close();
+    secondReference.close();
+    expect(replacement.isClosed()).toBe(false);
+    replacement.close();
   });
 
   it("stops initialization when DKV closes during core stream bootstrap", async () => {

@@ -24,15 +24,21 @@ export default function refCache<
 >({
   createKey,
   createObject,
+  isValid,
   name,
 }: {
   createKey?: (opts: Options) => string | null | undefined;
   createObject: (opts: Options) => Promise<T>;
+  isValid?: (obj: T) => boolean;
   name: string;
 }) {
-  const cache: { [key: string]: T } = {};
-  const count: { [key: string]: number } = {};
-  const close: { [key: string]: () => void | Promise<void> } = {};
+  interface Entry {
+    obj: T;
+    count: number;
+    closed: boolean;
+    close: () => void | Promise<void>;
+  }
+  const cache: { [key: string]: Entry } = {};
   if (createKey == null) {
     createKey = (x) => jsonStableStringify(x) ?? "";
   }
@@ -45,16 +51,21 @@ export default function refCache<
       return await createObject(opts);
     }
     const key = createKey(opts) ?? "";
-    if (cache[key] != undefined) {
-      count[key] += 1;
+    let entry: Entry | undefined = cache[key];
+    if (entry != null && isValid != null && !isValid(entry.obj)) {
+      delete cache[key];
+      entry = undefined;
+    }
+    if (entry != null) {
+      entry.count += 1;
       if (VERBOSE) {
         console.log("refCache: cache hit", {
           name,
           key,
-          count: count[key],
+          count: entry.count,
         });
       }
-      return cache[key];
+      return entry.obj;
     }
     const obj = await createObjectReuseInFlight(opts);
     if (VERBOSE) {
@@ -63,29 +74,39 @@ export default function refCache<
     if (cache[key] != null) {
       // it's possible after the above await that a
       // different call to get already setup the cache, count, etc.
-      count[key] += 1;
-      return cache[key];
+      cache[key].count += 1;
+      return cache[key].obj;
     }
     // we are *the* one setting things up.
-    cache[key] = obj;
-    count[key] = 1;
-    close[key] = obj.close;
+    const newEntry: Entry = {
+      obj,
+      count: 1,
+      closed: false,
+      close: obj.close,
+    };
+    cache[key] = newEntry;
     obj.close = (() => {
-      count[key] -= 1;
+      if (newEntry.closed) {
+        console.warn(
+          "WARNING: bug called .close() too many times on an object",
+          { name, key },
+        );
+        return;
+      }
+      newEntry.count -= 1;
       if (VERBOSE) {
-        console.log("refCache: close", { name, key, count: count[key] });
+        console.log("refCache: close", {
+          name,
+          key,
+          count: newEntry.count,
+        });
       }
       // make it so calling close again is a no-op
-      if (count[key] <= 0) {
-        const result = close[key]?.();
-        delete cache[key];
-        delete count[key];
-        delete close[key];
-        if (count[key] < 0) {
-          console.warn(
-            "WARNING: bug called .close() too many times on an object",
-            { name, key },
-          );
+      if (newEntry.count <= 0) {
+        newEntry.closed = true;
+        const result = newEntry.close();
+        if (cache[key] === newEntry) {
+          delete cache[key];
         }
         return result;
       }
@@ -94,11 +115,15 @@ export default function refCache<
     return obj;
   };
   get.info = () => {
-    return { name, count: { ...count } };
+    const count: { [key: string]: number } = {};
+    for (const key in cache) {
+      count[key] = cache[key].count;
+    }
+    return { name, count };
   };
   get.one = (): T | undefined => {
     for (const key in cache) {
-      return cache[key];
+      return cache[key].obj;
     }
   };
   get.size = () => {

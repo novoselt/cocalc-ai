@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { hostname } from "node:os";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Command } from "commander";
 import { humanSize } from "@cocalc/util/misc";
 
@@ -1436,7 +1436,9 @@ function packageBuildInfo(
   }
   if (component === "cli") {
     const { machine, os } = seaPlatformSuffix();
-    const artifactName = `cocalc-cli-${artifactId}-${machine}-${os}`;
+    const artifactName = `cocalc-cli-${artifactId}-${machine}-${os}${
+      os === "linux" ? ".tar.gz" : ""
+    }`;
     return {
       packageFilter: "@cocalc/cli",
       script: "sea",
@@ -2134,16 +2136,22 @@ async function materializeReleaseExecutable({
   workDir: string;
   deps: SoftwareCommandDeps;
 }): Promise<string> {
-  if (component === "launchpad" || artifactUrl.endsWith(".tar.xz")) {
+  if (
+    component === "launchpad" ||
+    artifactUrl.endsWith(".tar.xz") ||
+    artifactUrl.endsWith(".tar.gz") ||
+    artifactUrl.endsWith(".tgz")
+  ) {
     const extractDir = join(workDir, "extract");
     await mkdir(extractDir, { recursive: true });
     const runCommandOutput = deps.runCommandOutput ?? defaultRunCommandOutput;
-    const result = await runCommandOutput("tar", [
-      "-C",
-      extractDir,
-      "-Jxf",
-      artifactPath,
-    ]);
+    const compressedWithGzip =
+      artifactUrl.endsWith(".tar.gz") || artifactUrl.endsWith(".tgz");
+    const result = await runCommandOutput(
+      "tar",
+      ["-C", extractDir, compressedWithGzip ? "-xzf" : "-Jxf", artifactPath],
+      {},
+    );
     if (result.code !== 0) {
       throw new Error(
         `tar extraction failed with exit status ${result.code}: ${
@@ -2287,14 +2295,21 @@ async function smokeReleaseChannelChecks({
           });
           const runCommandOutput =
             deps.runCommandOutput ?? defaultRunCommandOutput;
+          const runEnv = {
+            ...(deps.env ?? process.env),
+            ...releaseSmokeVersionEnv({
+              component: target.artifactComponent,
+              manifest,
+            }),
+          };
+          const privateLibDir = join(dirname(executable), "lib");
+          if (existsSync(privateLibDir)) {
+            runEnv.LD_LIBRARY_PATH = [privateLibDir, runEnv.LD_LIBRARY_PATH]
+              .filter(Boolean)
+              .join(":");
+          }
           const result = await runCommandOutput(executable, ["--version"], {
-            env: {
-              ...(deps.env ?? process.env),
-              ...releaseSmokeVersionEnv({
-                component: target.artifactComponent,
-                manifest,
-              }),
-            },
+            env: runEnv,
           });
           if (result.code !== 0) {
             throw new Error(

@@ -1414,7 +1414,7 @@ export class CoreStream<T = any> extends EventEmitter {
   };
 
   getKv = (key: string): T | undefined => {
-    return this.kv[key]?.mesg;
+    return this.kv?.[key]?.mesg;
   };
 
   hasKv = (key: string): boolean => {
@@ -1423,6 +1423,9 @@ export class CoreStream<T = any> extends EventEmitter {
 
   getAllKv = (): { [key: string]: T } => {
     const all: { [key: string]: T } = {};
+    if (this.kv == null) {
+      return all;
+    }
     for (const key in this.kv) {
       all[key] = this.kv[key].mesg;
     }
@@ -1432,22 +1435,25 @@ export class CoreStream<T = any> extends EventEmitter {
   // efficient way to get just the keys -- use this instead of
   // getAllKv if you just need the keys.
   keysKv = (): string[] => {
-    return Object.keys(this.kv);
+    return Object.keys(this.kv ?? {});
   };
 
   seqKv = (key: string): number | undefined => {
-    return this.kv[key]?.raw.seq;
+    return this.kv?.[key]?.raw.seq;
   };
 
   timeKv = (key?: string): Date | { [key: string]: Date } | undefined => {
     if (key === undefined) {
       const all: { [key: string]: Date } = {};
+      if (this.kv == null) {
+        return all;
+      }
       for (const key in this.kv) {
         all[key] = new Date(this.kv[key].raw.timestamp);
       }
       return all;
     }
-    const r = this.kv[key]?.raw;
+    const r = this.kv?.[key]?.raw;
     if (r == null) {
       return;
     }
@@ -1455,11 +1461,11 @@ export class CoreStream<T = any> extends EventEmitter {
   };
 
   headersKv = (key: string): { [key: string]: any } | undefined => {
-    return this.kv[key]?.raw?.headers;
+    return this.kv?.[key]?.raw?.headers;
   };
 
   get lengthKv(): number {
-    return Object.keys(this.kv).length;
+    return Object.keys(this.kv ?? {}).length;
   }
 
   // load older messages starting at start_seq up to the oldest message

@@ -263,11 +263,11 @@ export class DKV<T = any> extends EventEmitter {
   };
 
   isClosed = () => {
-    return this.kv == null;
+    return this.kv == null || this.kv.getRecoveryState() === "closed";
   };
 
   close = () => {
-    if (this.isClosed()) {
+    if (this.kv == null) {
       return;
     }
     cancel_scheduled(this.updateInventory);
@@ -877,6 +877,7 @@ export const cache = refCache<DKVOptions & { client: Client }, DKV>({
   name: "dkv",
   createKey: ({ name, account_id, project_id, client }) =>
     JSON.stringify({ name, account_id, project_id, id: client?.id }),
+  isValid: (kv) => !kv.isClosed(),
   createObject: async (opts) => {
     const k = new DKV(opts);
     await k.init();

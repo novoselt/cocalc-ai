@@ -15,21 +15,22 @@ import { Service, MAX_API_LIMIT } from "@cocalc/util/db-schema/purchases";
 import type { Purchase } from "@cocalc/util/db-schema/purchases";
 import { calendarMonthStart } from "./billing-period";
 import { COST_OR_METERED_COST } from "./get-balance";
-import getBalance from "./get-balance";
+import getBalance, { getBalanceAsOf } from "./get-balance";
 import type { MoneyValue } from "@cocalc/util/money";
 
 interface Options {
   account_id?: string;
   // returns purchases back to this date (limit/offset NOT ignored); never excludes unfinished purchases (i.e., with cost not set)
   cutoff?: Date;
+  cutoff_end?: Date;
   thisMonth?: boolean;
   limit?: number;
   offset?: number;
   service?: Service;
   project_id?: string;
-  // if group is true, group all results by service, project_id together, along with
-  // the sum of the cost.  This provides a nice summary without potentially hundreds
-  // of rows for every single chat, etc.
+  // if group is true, group all results by service along with the sum of the
+  // cost.  This provides a nice summary without potentially hundreds of rows
+  // for every single chat, etc.
   group?: boolean;
   day_statement_id?: number;
   month_statement_id?: number;
@@ -50,6 +51,7 @@ interface PurchaseData extends Purchase {
 export default async function getPurchases({
   account_id,
   cutoff,
+  cutoff_end,
   thisMonth,
   limit = 100,
   offset,
@@ -71,7 +73,7 @@ export default async function getPurchases({
 
   if (group) {
     query = `
-  SELECT SUM(${COST_OR_METERED_COST}) AS cost, service, p.project_id, CAST(COUNT(*) AS INTEGER) AS count
+  SELECT SUM(${COST_OR_METERED_COST}) AS cost, p.service, CAST(COUNT(*) AS INTEGER) AS count
   FROM purchases AS p`;
   } else {
     query =
@@ -119,6 +121,10 @@ export default async function getPurchases({
     params.push(cutoff);
     conditions.push(`(p.time >= $${params.length} OR p.cost IS NULL)`);
   }
+  if (cutoff_end) {
+    params.push(cutoff_end);
+    conditions.push(`p.time <= $${params.length}`);
+  }
   if (no_statement) {
     conditions.push("p.day_statement_id IS NULL");
     conditions.push("p.month_statement_id IS NULL");
@@ -133,7 +139,7 @@ export default async function getPurchases({
   }
 
   if (group) {
-    query += " GROUP BY p.service, p.project_id ORDER BY cost DESC";
+    query += " GROUP BY p.service ORDER BY cost DESC";
   }
   if (!group) {
     query += " ORDER BY p.time DESC";
@@ -157,7 +163,9 @@ export default async function getPurchases({
     const { rows: purchases } = await client.query(query, params);
     const balance =
       account_id != null
-        ? await getBalance({ account_id, client, noSave: true })
+        ? cutoff_end != null
+          ? await getBalanceAsOf({ account_id, asOf: cutoff_end, client })
+          : await getBalance({ account_id, client, noSave: true })
         : 0;
     return { purchases: purchases as unknown as PurchaseData[], balance };
   } finally {

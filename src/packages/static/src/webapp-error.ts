@@ -1,24 +1,16 @@
 /*
-
-We do "window.onerror = null" below for the follwoing reason.
-
-When I merged this, the following always results in nonstop 100% cpu usage:
-
-1. Open cocalc
-2. Open a project.
-3. Boom!
-
-With the profiler on, it's this onerror that is being called repeatedly.
-Maybe there is a bug in it that causes it to call itself and crash things.
-That seems likely.  I've thus rewritten it so that is impossible, e.g., by
-making it so that if it is triggered, it disables itself after running once.
-*/
+ * The crash UI is deliberately shown at most once per page load. Keep this
+ * guard local: window.onerror belongs to the database reporter, and clearing
+ * it here suppresses the report for the error that triggered this UI.
+ */
 
 import Crash from "./crash";
 import CrashMessage from "./crash-message";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { isIgnorableBrowserError } from "./webapp-error-filter";
+
+let crashDisplayed = false;
 
 function handleError(event) {
   if (event.defaultPrevented) {
@@ -42,9 +34,12 @@ function handleError(event) {
     console.warn("handleError -- whitelisted");
     return;
   }
-  window.onerror = null; // only once!!
+  if (crashDisplayed) {
+    return;
+  }
   const crash = document.getElementById("cocalc-react-crash");
   if (crash == null) return;
+  crashDisplayed = true;
   crash.style.display = "block";
 
   let errorbox = document.getElementById("cocalc-error-report-startup");

@@ -73,6 +73,7 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
 }));
 
 jest.mock("@cocalc/frontend/components/sortable-tabs", () => ({
+  AccessibleAddTabIcon: ({ children }: any) => children,
   SortableTabs: ({ children, onDragEnd }: any) => {
     dragEnd = onDragEnd;
     return <div>{children}</div>;
@@ -176,8 +177,18 @@ describe("FileTabs keyboard navigation", () => {
     };
     const { rerender } = render(<FileTabs {...props} />);
 
-    fireEvent.click(screen.getByTitle("Close a.ts"));
+    const close = screen.getByTitle("Close a.ts");
+    fireEvent(
+      close,
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        cancelable: true,
+      }),
+    );
+    fireEvent.click(close);
     expect(mockActions.close_tab).toHaveBeenCalledWith("a.ts");
+    expect(mockActions.close_tab).toHaveBeenCalledTimes(1);
 
     mockActions.close_tab.mockReset();
     rerender(<FileTabs {...props} />);
@@ -264,7 +275,7 @@ describe("FileTabs keyboard navigation", () => {
     expect(mockActions.set_active_tab).not.toHaveBeenCalled();
   });
 
-  it("opens the new-file page from the external create button", () => {
+  it("opens the new-file page from the native accessible add tab", () => {
     render(
       <FileTabs
         activeTab="editor-a.ts"
@@ -273,11 +284,8 @@ describe("FileTabs keyboard navigation", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create file" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add tab" }));
 
     expect(mockActions.set_active_tab).toHaveBeenCalledWith("new");
-    expect(
-      screen.queryByRole("button", { name: "Add tab" }),
-    ).not.toBeInTheDocument();
   });
 });

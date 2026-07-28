@@ -156,6 +156,7 @@ describe("Avatar", () => {
     await waitFor(() => {
       const img = container.querySelector("img");
       expect(img?.getAttribute("src")).toBe("second.png");
+      expect(img?.getAttribute("alt")).toBe("User");
     });
   });
 });
