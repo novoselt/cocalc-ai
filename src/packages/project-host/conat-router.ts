@@ -338,10 +338,10 @@ export async function startStandaloneProjectHostConatRouter({
   let conatReady = false;
   app.get("/healthz", (_req, res) => {
     if (!conatReady) {
-      res.status(503).json({ ok: false, ready: false });
+      res.status(503).json(projectHostConatRouterHealthState(hostId, false));
       return;
     }
-    res.json({ ok: true, ready: true });
+    res.json(projectHostConatRouterHealthState(hostId, true));
   });
   const httpServer = createHttpServer(app);
   configureLongLivedHttpServer(httpServer);
@@ -363,7 +363,7 @@ export async function startStandaloneProjectHostConatRouter({
   if (upstreamUrl && ((ingressHost && ingressPort != null) || directHttps)) {
     const ingressApp = express();
     ingressApp.get("/healthz", (_req, res) => {
-      res.json({ ok: true, ready: true });
+      res.json(projectHostConatRouterHealthState(hostId, true));
     });
     const ingressServers: HttpServer[] = [];
     if (ingressHost && ingressPort != null) {
@@ -442,6 +442,13 @@ export async function startStandaloneProjectHostConatRouter({
     directHttpsHost: directHttps?.host,
     directHttpsPort: directHttps?.port,
   };
+}
+
+export function projectHostConatRouterHealthState(
+  hostId: string,
+  ready: boolean,
+): { ok: boolean; ready: boolean; host_id: string } {
+  return { ok: ready, ready, host_id: hostId };
 }
 
 export function rewriteProjectHostConatProxyUrl(

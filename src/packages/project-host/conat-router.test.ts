@@ -12,6 +12,7 @@ import {
   attachProjectHostConatRouterProxy,
   isProjectHostExternalConatRouterEnabled,
   isProjectHostManagedLocalConatRouter,
+  projectHostConatRouterHealthState,
   resolveProjectHostConatRouterClusterName,
   resolveProjectHostConatRouterUrl,
   resolveProjectHostDirectHttpsConfig,
@@ -120,6 +121,19 @@ describe("project-host conat router helpers", () => {
         localClusterSize: 2,
       }),
     ).toBe("explicit-cluster");
+  });
+
+  it("identifies the project host on router and ingress health responses", () => {
+    expect(projectHostConatRouterHealthState("host-123", true)).toEqual({
+      ok: true,
+      ready: true,
+      host_id: "host-123",
+    });
+    expect(projectHostConatRouterHealthState("host-123", false)).toEqual({
+      ok: false,
+      ready: false,
+      host_id: "host-123",
+    });
   });
 
   it("binds configured direct HTTPS ingress publicly by default", () => {
