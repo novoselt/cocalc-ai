@@ -2,6 +2,7 @@ import {
   classifyCloudOrphanInstances,
   ensureHostReadyVerificationWork,
   hasPendingRestoreBlockingWork,
+  runtimeSshServerForProviderReconcile,
   runReconcileOnce,
 } from "@cocalc/server/cloud";
 import { before, after, getPool } from "@cocalc/server/test";
@@ -140,6 +141,32 @@ describe("cloud reconcile state gating", () => {
     expect(new Date(rows[0].next_run_at).getTime()).toBe(
       now.getTime() + intervals.idle_ms,
     );
+  });
+});
+
+describe("cloud runtime endpoint reconciliation", () => {
+  it("keeps a GCP SSH endpoint aligned with the observed public IP", () => {
+    expect(
+      runtimeSshServerForProviderReconcile(
+        { metadata: { machine: { cloud: "gcp" } } },
+        { public_ip: "34.106.236.181" },
+      ),
+    ).toBe("34.106.236.181:2222");
+  });
+
+  it("does not invent endpoints for missing IPs or other providers", () => {
+    expect(
+      runtimeSshServerForProviderReconcile(
+        { metadata: { machine: { cloud: "gcp" } } },
+        { public_ip: undefined },
+      ),
+    ).toBeUndefined();
+    expect(
+      runtimeSshServerForProviderReconcile(
+        { metadata: { machine: { cloud: "nebius" } } },
+        { public_ip: "203.0.113.10" },
+      ),
+    ).toBeUndefined();
   });
 });
 

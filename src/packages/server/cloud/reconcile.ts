@@ -56,6 +56,7 @@ type HostRow = {
   metadata?: Record<string, any>;
   public_url?: string;
   internal_url?: string;
+  ssh_server?: string | null;
 };
 
 type RemoteInstance = {
@@ -113,7 +114,7 @@ const RESTORE_BLOCKING_PENDING_ACTIONS = [
 async function loadHosts(provider: Provider): Promise<HostRow[]> {
   const { rows } = await pool().query(
     `
-      SELECT id, name, status, region, metadata, public_url, internal_url
+      SELECT id, name, status, region, metadata, public_url, internal_url, ssh_server
       FROM project_hosts
       WHERE metadata->'machine'->>'cloud' = $1
         AND deleted IS NULL
@@ -567,6 +568,11 @@ async function updateHost(
     sets.push(`internal_url=$${idx++}`);
     params.push(updates.internal_url);
   }
+  const sshServer = runtimeSshServerForProviderReconcile(row, updates.runtime);
+  if (sshServer !== undefined && sshServer !== row.ssh_server) {
+    sets.push(`ssh_server=$${idx++}`);
+    params.push(sshServer);
+  }
   if (!sets.length) return;
   await pool().query(
     `UPDATE project_hosts SET ${sets.join(", ")}, updated=NOW() WHERE id=$1 AND deleted IS NULL`,
@@ -582,6 +588,17 @@ async function updateHost(
   if (rows[0]) {
     await recordHostAvailabilityFromSnapshot(rows[0], "cloud_reconcile");
   }
+}
+
+export function runtimeSshServerForProviderReconcile(
+  row: Pick<HostRow, "metadata">,
+  runtime: Record<string, any> | null | undefined,
+): string | undefined {
+  if (row.metadata?.machine?.cloud !== "gcp") {
+    return undefined;
+  }
+  const publicIp = `${runtime?.public_ip ?? ""}`.trim();
+  return publicIp ? `${publicIp}:2222` : undefined;
 }
 
 async function enqueueSpotRestore(

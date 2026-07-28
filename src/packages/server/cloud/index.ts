@@ -30,6 +30,7 @@ export {
   ensureHostReadyVerificationWork,
   hasPendingRestoreBlockingWork,
   listCloudOrphanInstances,
+  runtimeSshServerForProviderReconcile,
   type CloudOrphanInstance,
   bumpReconcile,
 } from "./reconcile";
