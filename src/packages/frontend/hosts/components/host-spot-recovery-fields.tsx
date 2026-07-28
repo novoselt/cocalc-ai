@@ -235,6 +235,40 @@ export const HostSpotRecoveryFields: React.FC<HostSpotRecoveryFieldsProps> = ({
                       <InputNumber min={1} style={{ width: "100%" }} />
                     </Form.Item>
                   </Col>
+                  <Col span={12}>
+                    <Form.Item
+                      name={[
+                        "spot_recovery_policy",
+                        "rapid_preemption_window_minutes",
+                      ]}
+                      label="Rapid-preemption window (minutes)"
+                      tooltip="Two provider-confirmed preemptions within this window open the standard-capacity circuit breaker."
+                      initialValue={
+                        draftManaged
+                          ? undefined
+                          : DEFAULT_SPOT_RECOVERY_POLICY.rapid_preemption_window_minutes
+                      }
+                    >
+                      <InputNumber min={1} style={{ width: "100%" }} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item
+                      name={[
+                        "spot_recovery_policy",
+                        "rapid_preemption_standard_hold_minutes",
+                      ]}
+                      label="Circuit-breaker hold (minutes)"
+                      tooltip="How long to keep the host on standard capacity after rapid preemptions."
+                      initialValue={
+                        draftManaged
+                          ? undefined
+                          : DEFAULT_SPOT_RECOVERY_POLICY.rapid_preemption_standard_hold_minutes
+                      }
+                    >
+                      <InputNumber min={1} style={{ width: "100%" }} />
+                    </Form.Item>
+                  </Col>
                   <Col span={24}>
                     <Form.Item
                       name={[

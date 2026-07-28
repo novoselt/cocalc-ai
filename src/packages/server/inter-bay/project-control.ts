@@ -70,6 +70,7 @@ import {
   reserveProjectRuntimeSlot,
   RuntimeSponsorSlotsExhaustedError,
 } from "@cocalc/server/projects/runtime-slots";
+import { assertProjectStartAllowedDuringMove } from "@cocalc/server/projects/move-guard";
 import { createBackup as createBackupLocal } from "@cocalc/server/conat/api/project-backups";
 import { getLro } from "@cocalc/server/lro/lro-db";
 import { BACKUP_TIMEOUT_MS } from "@cocalc/server/projects/backup-lro";
@@ -242,6 +243,10 @@ export async function handleProjectControlStart(
     project_id: req.project_id,
     epoch: req.epoch,
   });
+  await assertProjectStartAllowedDuringMove({
+    project_id: req.project_id,
+    project_move_id: req.project_move_id,
+  });
   await assertProjectNotHardDeleting({ project_id: req.project_id });
   const project = await getProject(req.project_id);
   const sponsor = await loadProjectRuntimeSponsor(req.project_id);
@@ -350,6 +355,10 @@ export async function handleProjectControlCheckStartAdmission(
   await assertCurrentProjectOwnership({
     project_id: req.project_id,
     epoch: req.epoch,
+  });
+  await assertProjectStartAllowedDuringMove({
+    project_id: req.project_id,
+    project_move_id: req.project_move_id,
   });
   await assertProjectNotHardDeleting({ project_id: req.project_id });
   const sponsor = await loadProjectRuntimeSponsor(req.project_id);

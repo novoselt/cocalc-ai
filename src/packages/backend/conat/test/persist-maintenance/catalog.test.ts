@@ -152,4 +152,24 @@ describe("persist maintenance catalog and path safety", () => {
       last_inspected_at: null,
     });
   });
+
+  it("aggregates present main-file and WAL bytes without exposing paths", () => {
+    const path = join(root, "aggregate.db");
+    writeFileSync(path, "sqlite-data");
+    const stat = require("node:fs").lstatSync(path);
+    catalog.observeFile(path, {
+      device: Number(stat.dev),
+      inode: Number(stat.ino),
+      sizeBytes: stat.size,
+      mtimeMs: stat.mtimeMs,
+      walSizeBytes: 4_096,
+    });
+
+    expect(catalog.statusBase()).toMatchObject({
+      presentDatabases: 1,
+      presentFileBytes: stat.size,
+      presentWalBytes: 4_096,
+    });
+    expect(JSON.stringify(catalog.statusBase())).not.toContain(path);
+  });
 });

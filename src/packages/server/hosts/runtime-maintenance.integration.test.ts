@@ -139,16 +139,29 @@ describe("public-route automatic repair claims", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("does not claim tunnel repair for a direct public route", async () => {
+  it("claims automatic repair for a direct public route", async () => {
     await insertHost({
       host_id: HOST_A,
       probe_claim_id: "probe-direct",
       public_route: { active_mode: "cloudflare-proxy", status: "active" },
     });
+    await getPool().query(
+      `UPDATE project_hosts
+       SET metadata=jsonb_set(
+         metadata,
+         '{cloudflared_restart_supported}',
+         'false'::jsonb
+       )
+       WHERE id=$1`,
+      [HOST_A],
+    );
 
-    await expect(
-      _test.claimPublicRouteAutoRepair(failure(HOST_A, "probe-direct")),
-    ).resolves.toBeUndefined();
+    const claimId = await _test.claimPublicRouteAutoRepair(
+      failure(HOST_A, "probe-direct"),
+    );
+    expect(claimId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 
   it("keeps the six most recent tunnel recovery incidents", async () => {

@@ -4,7 +4,7 @@
  */
 
 import { once } from "node:events";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo } from "node:net";
 import http from "node:http";
 import express from "express";
 import {
@@ -12,10 +12,12 @@ import {
   attachProjectHostConatRouterProxy,
   isProjectHostExternalConatRouterEnabled,
   isProjectHostManagedLocalConatRouter,
+  projectHostConatRouterHealthState,
   resolveProjectHostConatRouterClusterName,
   resolveProjectHostConatRouterUrl,
   resolveProjectHostDirectHttpsConfig,
   rewriteProjectHostConatProxyUrl,
+  shouldRouteProjectHostIngressToApp,
 } from "./conat-router";
 
 async function requestJson({
@@ -55,6 +57,7 @@ describe("project-host conat router helpers", () => {
     delete process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOST;
     delete process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT;
     delete process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME;
+    delete process.env.PROJECT_HOST_INTERNAL_URL;
     delete process.env.PROJECT_HOST_PUBLIC_URL;
   });
 
@@ -120,6 +123,19 @@ describe("project-host conat router helpers", () => {
     ).toBe("explicit-cluster");
   });
 
+  it("identifies the project host on router and ingress health responses", () => {
+    expect(projectHostConatRouterHealthState("host-123", true)).toEqual({
+      ok: true,
+      ready: true,
+      host_id: "host-123",
+    });
+    expect(projectHostConatRouterHealthState("host-123", false)).toEqual({
+      ok: false,
+      ready: false,
+      host_id: "host-123",
+    });
+  });
+
   it("binds configured direct HTTPS ingress publicly by default", () => {
     process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_PORT = "443";
     process.env.COCALC_PROJECT_HOST_DIRECT_HTTPS_HOSTNAME =
@@ -160,6 +176,237 @@ describe("project-host conat router helpers", () => {
     expect(
       rewriteProjectHostConatProxyUrl("/host/base/conat/socket"),
     ).toBeUndefined();
+    expect(
+      rewriteProjectHostConatProxyUrl(
+        "/11111111-1111-4111-8111-111111111111/apps/dev-site/conat/",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("routes only custom DNS hostnames through the app ingress", () => {
+    process.env.PROJECT_HOST_PUBLIC_URL =
+      "https://host-123.example.com/ignored";
+    process.env.PROJECT_HOST_INTERNAL_URL =
+      "http://host-123.projecthosts.internal:9002";
+    const request = (host: string) => ({ headers: { host } });
+
+    expect(
+      shouldRouteProjectHostIngressToApp(request("host-123.example.com")),
+    ).toBe(false);
+    expect(
+      shouldRouteProjectHostIngressToApp(request("HOST-123.EXAMPLE.COM.:443")),
+    ).toBe(false);
+    expect(
+      shouldRouteProjectHostIngressToApp(request("dev-123.example.com")),
+    ).toBe(true);
+    expect(
+      shouldRouteProjectHostIngressToApp(
+        request("host-123.projecthosts.internal:9002"),
+      ),
+    ).toBe(false);
+    expect(shouldRouteProjectHostIngressToApp(request("localhost:9002"))).toBe(
+      false,
+    );
+    expect(shouldRouteProjectHostIngressToApp(request("127.0.0.1"))).toBe(
+      false,
+    );
+    expect(shouldRouteProjectHostIngressToApp(request("[::1]:9002"))).toBe(
+      false,
+    );
+
+    delete process.env.PROJECT_HOST_PUBLIC_URL;
+    expect(
+      shouldRouteProjectHostIngressToApp(request("dev-123.example.com")),
+    ).toBe(false);
+  });
+
+  it("gives a custom hostname its root Conat HTTP namespace", async () => {
+    process.env.PROJECT_HOST_PUBLIC_URL = "https://host-123.example.com";
+    const conatApp = express();
+    conatApp.get("/conat/", (_req, res) => {
+      res.json({ source: "outer-conat" });
+    });
+    const conatServer = http.createServer(conatApp);
+    conatServer.listen(0, "127.0.0.1");
+    await once(conatServer, "listening");
+    const conatPort = (conatServer.address() as AddressInfo).port;
+
+    const upstreamApp = express();
+    upstreamApp.use((req, res) => {
+      res.json({ source: "project-host-upstream", url: req.url });
+    });
+    const upstreamServer = http.createServer(upstreamApp);
+    upstreamServer.listen(0, "127.0.0.1");
+    await once(upstreamServer, "listening");
+    const upstreamPort = (upstreamServer.address() as AddressInfo).port;
+
+    const ingressApp = express();
+    const ingressServer = http.createServer(ingressApp);
+    attachProjectHostConatRouterProxy({
+      app: ingressApp,
+      httpServer: ingressServer,
+      target: `http://127.0.0.1:${conatPort}`,
+    });
+    attachProjectHostHttpFallbackProxy({
+      app: ingressApp,
+      httpServer: ingressServer,
+      target: `http://127.0.0.1:${upstreamPort}`,
+    });
+    ingressServer.listen(0, "127.0.0.1");
+    await once(ingressServer, "listening");
+    const ingressPort = (ingressServer.address() as AddressInfo).port;
+
+    try {
+      expect(
+        await requestJson({
+          url: `http://127.0.0.1:${ingressPort}/conat/`,
+          headers: { host: "host-123.example.com" },
+        }),
+      ).toEqual({
+        statusCode: 200,
+        body: { source: "outer-conat" },
+      });
+      expect(
+        await requestJson({
+          url: `http://127.0.0.1:${ingressPort}/conat/`,
+          headers: { host: "dev-123.example.com" },
+        }),
+      ).toEqual({
+        statusCode: 200,
+        body: { source: "project-host-upstream", url: "/conat/" },
+      });
+    } finally {
+      await new Promise<void>((resolve) =>
+        ingressServer.close(() => resolve()),
+      );
+      await new Promise<void>((resolve) =>
+        upstreamServer.close(() => resolve()),
+      );
+      await new Promise<void>((resolve) => conatServer.close(() => resolve()));
+    }
+  });
+
+  it("gives a custom hostname its root Conat WebSocket namespace", async () => {
+    process.env.PROJECT_HOST_PUBLIC_URL = "https://host-123.example.com";
+    const createUpgradeServer = (source: string) => {
+      const server = http.createServer();
+      server.on("upgrade", (_req, socket) => {
+        socket.end(
+          "HTTP/1.1 101 Switching Protocols\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n" +
+            `X-Proxy-Source: ${source}\r\n\r\n`,
+        );
+      });
+      return server;
+    };
+    const conatServer = createUpgradeServer("outer-conat");
+    conatServer.listen(0, "127.0.0.1");
+    await once(conatServer, "listening");
+    const conatPort = (conatServer.address() as AddressInfo).port;
+    const upstreamServer = createUpgradeServer("project-host-upstream");
+    upstreamServer.listen(0, "127.0.0.1");
+    await once(upstreamServer, "listening");
+    const upstreamPort = (upstreamServer.address() as AddressInfo).port;
+
+    const ingressApp = express();
+    const ingressServer = http.createServer(ingressApp);
+    attachProjectHostConatRouterProxy({
+      app: ingressApp,
+      httpServer: ingressServer,
+      target: `http://127.0.0.1:${conatPort}`,
+    });
+    attachProjectHostHttpFallbackProxy({
+      app: ingressApp,
+      httpServer: ingressServer,
+      target: `http://127.0.0.1:${upstreamPort}`,
+    });
+    ingressServer.listen(0, "127.0.0.1");
+    await once(ingressServer, "listening");
+    const ingressPort = (ingressServer.address() as AddressInfo).port;
+
+    const requestUpgrade = async (host: string): Promise<string> => {
+      const client = connect({ host: "127.0.0.1", port: ingressPort });
+      await once(client, "connect");
+      client.write(
+        "GET /conat/?EIO=4&transport=websocket HTTP/1.1\r\n" +
+          `Host: ${host}\r\n` +
+          "Connection: Upgrade\r\n" +
+          "Upgrade: websocket\r\n" +
+          "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n" +
+          "Sec-WebSocket-Version: 13\r\n\r\n",
+      );
+      const [chunk] = (await once(client, "data")) as [Buffer];
+      client.destroy();
+      return chunk.toString("utf8");
+    };
+
+    try {
+      expect(
+        (await requestUpgrade("host-123.example.com")).toLowerCase(),
+      ).toContain("x-proxy-source: outer-conat");
+      expect(
+        (await requestUpgrade("dev-123.example.com")).toLowerCase(),
+      ).toContain("x-proxy-source: project-host-upstream");
+    } finally {
+      await new Promise<void>((resolve) =>
+        ingressServer.close(() => resolve()),
+      );
+      await new Promise<void>((resolve) =>
+        upstreamServer.close(() => resolve()),
+      );
+      await new Promise<void>((resolve) => conatServer.close(() => resolve()));
+    }
+  });
+
+  it("lets a host-routed app own its native Conat path", async () => {
+    const conatApp = express();
+    conatApp.get("/conat/", (_req, res) => {
+      res.json({ source: "outer-conat" });
+    });
+    const conatServer = http.createServer(conatApp);
+    conatServer.listen(0, "127.0.0.1");
+    await once(conatServer, "listening");
+    const conatPort = (conatServer.address() as AddressInfo).port;
+
+    const ingressApp = express();
+    const ingressServer = http.createServer(ingressApp);
+    attachProjectHostConatRouterProxy({
+      app: ingressApp,
+      httpServer: ingressServer,
+      target: `http://127.0.0.1:${conatPort}`,
+      rewriteIngressRequest: async (req) => {
+        if (req.headers.host === "dev.example.com") {
+          req.url = `/11111111-1111-4111-8111-111111111111/apps/dev-site${req.url}`;
+        }
+      },
+    });
+    ingressApp.use((req, res) => {
+      res.json({ source: "private-app", url: req.url });
+    });
+    ingressServer.listen(0, "127.0.0.1");
+    await once(ingressServer, "listening");
+    const ingressPort = (ingressServer.address() as AddressInfo).port;
+
+    try {
+      expect(
+        await requestJson({
+          url: `http://127.0.0.1:${ingressPort}/conat/`,
+          headers: { host: "dev.example.com" },
+        }),
+      ).toEqual({
+        statusCode: 200,
+        body: {
+          source: "private-app",
+          url: "/11111111-1111-4111-8111-111111111111/apps/dev-site/conat/",
+        },
+      });
+    } finally {
+      await new Promise<void>((resolve) =>
+        ingressServer.close(() => resolve()),
+      );
+      await new Promise<void>((resolve) => conatServer.close(() => resolve()));
+    }
   });
 
   it("attaches conat upgrades to every ingress listener", () => {

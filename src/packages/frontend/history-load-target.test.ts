@@ -61,6 +61,8 @@ const getNotificationFilterFromFragment = jest.fn((hash: string) => ({
   filter: "mentions",
   id: hash === "thread" ? "notif-1" : "notif-default",
 }));
+const handoffToPrivateProjectApp = jest.fn(async () => undefined);
+const alertMessage = jest.fn();
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
   redux: mockRedux,
@@ -68,6 +70,15 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: webappClient,
+}));
+
+jest.mock("@cocalc/frontend/alerts", () => ({
+  alert_message: (...args: unknown[]) => alertMessage(...args),
+}));
+
+jest.mock("@cocalc/frontend/project/private-app-handoff", () => ({
+  handoffToPrivateProjectApp: (...args: unknown[]) =>
+    handoffToPrivateProjectApp(...args),
 }));
 
 jest.mock("@cocalc/frontend/misc/fragment-id", () => ({
@@ -115,6 +126,38 @@ describe("load_target", () => {
 
     expect(projectsActions.load_target).toHaveBeenCalledWith(
       "project-1/files/work.txt",
+      true,
+      true,
+      false,
+      { line: "7" },
+    );
+  });
+
+  it("hands private app targets off before opening the project", () => {
+    load_target("projects/project-1/private-app/cocalc-dev-main", true, false);
+
+    expect(handoffToPrivateProjectApp).toHaveBeenCalledWith({
+      projectId: "project-1",
+      appId: "cocalc-dev-main",
+    });
+    expect(projectsActions.load_target).not.toHaveBeenCalled();
+  });
+
+  it("shows private app handoff failures on the Servers page", async () => {
+    handoffToPrivateProjectApp.mockRejectedValueOnce(
+      new Error("hostname unavailable"),
+    );
+
+    load_target("projects/project-1/private-app/cocalc-dev-main", true, false);
+    await Promise.resolve();
+
+    expect(alertMessage).toHaveBeenCalledWith({
+      type: "error",
+      message:
+        "Unable to open private project app: Error: hostname unavailable",
+    });
+    expect(projectsActions.load_target).toHaveBeenCalledWith(
+      "project-1/servers",
       true,
       true,
       false,

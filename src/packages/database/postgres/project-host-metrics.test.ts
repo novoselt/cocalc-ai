@@ -9,6 +9,7 @@ import { uuid } from "@cocalc/util/misc";
 import {
   clearProjectHostMetrics,
   loadProjectHostMetricsHistory,
+  pruneProjectHostMetricsSamples,
   recordProjectHostMetricsSample,
 } from "./project-host-metrics";
 
@@ -52,6 +53,17 @@ describe("project host metrics history", () => {
         btrfs_metadata_total_bytes: 100,
         btrfs_metadata_used_bytes: 20,
         running_project_count: 2,
+        conat_persist: {
+          schema_version: 1,
+          collected_at: first.toISOString(),
+          available: true,
+          ready: true,
+          pid: 123,
+          rss_bytes: 400 * 1024 ** 2,
+          open_streams: 500,
+          open_disk_streams: 490,
+          open_ephemeral_streams: 10,
+        },
         io_containment: {
           collected_at: first.toISOString(),
           policy: {
@@ -120,6 +132,12 @@ describe("project host metrics history", () => {
     expect(entry?.points[0].io_containment?.policy.profile).toBe(
       "test-profile",
     );
+    expect(entry?.points[0].conat_persist).toMatchObject({
+      available: true,
+      pid: 123,
+      rss_bytes: 400 * 1024 ** 2,
+      open_streams: 500,
+    });
     expect(entry?.points[1].cpu_percent).toBe(30);
     expect(entry?.points[0].disk_used_percent).toBe(40);
     expect(entry?.points[1].disk_used_percent).toBe(70);
@@ -482,5 +500,37 @@ describe("project host metrics history", () => {
     expect(entry?.points).toEqual([]);
     expect(entry?.growth).toBeUndefined();
     expect(entry?.derived).toBeUndefined();
+  });
+
+  it("prunes old samples in bounded batches", async () => {
+    const host_id = uuid();
+    await insertProjectHost(host_id);
+    const old = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    const recent = new Date();
+
+    for (const collected_at of [old, recent]) {
+      await recordProjectHostMetricsSample({
+        host_id,
+        metrics: {
+          collected_at: collected_at.toISOString(),
+          cpu_percent: 1,
+        },
+      });
+    }
+
+    expect(
+      await pruneProjectHostMetricsSamples({
+        before: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+        limit: 1,
+      }),
+    ).toBe(1);
+    const { rows } = await getPool().query(
+      "SELECT collected_at FROM project_host_metrics_samples WHERE host_id=$1",
+      [host_id],
+    );
+    expect(rows).toHaveLength(1);
+    expect(new Date(rows[0].collected_at).getTime()).toBeGreaterThan(
+      recent.getTime() - 60_000,
+    );
   });
 });

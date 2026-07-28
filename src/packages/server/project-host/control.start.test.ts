@@ -1592,7 +1592,14 @@ describe("startProjectOnHost placement", () => {
       }
       if (sql === "SELECT state FROM projects WHERE project_id=$1") {
         return {
-          rows: [{ state: { state: "opened", time: "2026-03-29T00:00:00Z" } }],
+          rows: [
+            {
+              state: {
+                state: "running",
+                time: new Date().toISOString(),
+              },
+            },
+          ],
         };
       }
       if (sql.includes("FROM long_running_operations")) {

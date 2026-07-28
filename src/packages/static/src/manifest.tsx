@@ -45,6 +45,7 @@ export default function Manifest() {
           attrs: {
             rel: "manifest",
             href: joinUrlPath(appBasePath, "customize?type=manifest"),
+            crossorigin: "use-credentials",
           },
         },
       ]}

@@ -10,6 +10,7 @@ import {
   type Server as HttpServer,
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
+import { isIP } from "node:net";
 import { availableParallelism } from "node:os";
 import express from "express";
 import type { Application } from "express";
@@ -32,6 +33,7 @@ import {
 import { PROJECT_HOST_BROWSER_SESSION_COOKIE_NAME } from "@cocalc/conat/auth/project-host-browser-session";
 import { createProxyHandlers } from "@cocalc/project-proxy/proxy";
 import { getOrCreateSelfSigned } from "@cocalc/lite/tls";
+import { isValidUUID } from "@cocalc/util/misc";
 import { createProjectHostConatAuth } from "./conat-auth";
 
 const logger = getLogger("project-host:conat-router");
@@ -336,10 +338,10 @@ export async function startStandaloneProjectHostConatRouter({
   let conatReady = false;
   app.get("/healthz", (_req, res) => {
     if (!conatReady) {
-      res.status(503).json({ ok: false, ready: false });
+      res.status(503).json(projectHostConatRouterHealthState(hostId, false));
       return;
     }
-    res.json({ ok: true, ready: true });
+    res.json(projectHostConatRouterHealthState(hostId, true));
   });
   const httpServer = createHttpServer(app);
   configureLongLivedHttpServer(httpServer);
@@ -361,7 +363,7 @@ export async function startStandaloneProjectHostConatRouter({
   if (upstreamUrl && ((ingressHost && ingressPort != null) || directHttps)) {
     const ingressApp = express();
     ingressApp.get("/healthz", (_req, res) => {
-      res.json({ ok: true, ready: true });
+      res.json(projectHostConatRouterHealthState(hostId, true));
     });
     const ingressServers: HttpServer[] = [];
     if (ingressHost && ingressPort != null) {
@@ -442,11 +444,22 @@ export async function startStandaloneProjectHostConatRouter({
   };
 }
 
+export function projectHostConatRouterHealthState(
+  hostId: string,
+  ready: boolean,
+): { ok: boolean; ready: boolean; host_id: string } {
+  return { ok: ready, ready, host_id: hostId };
+}
+
 export function rewriteProjectHostConatProxyUrl(
   url: string | undefined,
 ): string | undefined {
   if (!url) return;
   const parsed = new URL(url, "http://project-host.local");
+  const firstPathSegment = parsed.pathname.split("/").filter(Boolean)[0];
+  if (firstPathSegment && isValidUUID(firstPathSegment)) {
+    return;
+  }
   const trimmedPath = parsed.pathname.replace(/\/+$/, "");
   if (!trimmedPath.endsWith("/conat") && trimmedPath !== "/conat") {
     return;
@@ -455,16 +468,60 @@ export function rewriteProjectHostConatProxyUrl(
   return `${parsed.pathname}${parsed.search ?? ""}`;
 }
 
+function normalizeHostname(value: unknown): string {
+  const raw = `${value ?? ""}`.trim().toLowerCase();
+  if (!raw) return "";
+  try {
+    return new URL(`http://${raw}`).hostname
+      .replace(/^\[|\]$/g, "")
+      .replace(/\.$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function hostnameFromUrl(value: unknown): string {
+  try {
+    return normalizeHostname(new URL(`${value ?? ""}`).host);
+  } catch {
+    return "";
+  }
+}
+
+export function shouldRouteProjectHostIngressToApp(
+  req: Pick<IncomingMessage, "headers">,
+): boolean {
+  const requestHostname = normalizeHostname(req.headers.host);
+  if (
+    !requestHostname ||
+    requestHostname === "localhost" ||
+    isIP(requestHostname)
+  ) {
+    return false;
+  }
+  const publicHostname = hostnameFromUrl(process.env.PROJECT_HOST_PUBLIC_URL);
+  if (!publicHostname) {
+    return false;
+  }
+  const infrastructureHostnames = new Set([
+    publicHostname,
+    hostnameFromUrl(process.env.PROJECT_HOST_INTERNAL_URL),
+  ]);
+  return !infrastructureHostnames.has(requestHostname);
+}
+
 export function attachProjectHostConatRouterProxy({
   app,
   httpServer,
   httpServers,
   target,
+  rewriteIngressRequest,
 }: {
   app: Application;
   httpServer?: HttpServer;
   httpServers?: readonly HttpServer[];
   target: string;
+  rewriteIngressRequest?: (req: IncomingMessage) => Promise<void> | void;
 }): void {
   const ingressServers = httpServers ?? (httpServer ? [httpServer] : []);
   if (ingressServers.length === 0) {
@@ -489,15 +546,23 @@ export function attachProjectHostConatRouterProxy({
     target,
     proxyTarget,
   });
-  app.use((req, res, next) => {
-    if (!rewriteProjectHostConatProxyUrl(req.url)) {
+  app.use(async (req, res, next) => {
+    await rewriteIngressRequest?.(req);
+    if (
+      shouldRouteProjectHostIngressToApp(req) ||
+      !rewriteProjectHostConatProxyUrl(req.url)
+    ) {
       return next();
     }
     void handleRequest(req, res);
   });
   for (const ingressServer of ingressServers) {
-    ingressServer.prependListener("upgrade", (req, socket, head) => {
-      if (!rewriteProjectHostConatProxyUrl(req.url)) {
+    ingressServer.prependListener("upgrade", async (req, socket, head) => {
+      await rewriteIngressRequest?.(req);
+      if (
+        shouldRouteProjectHostIngressToApp(req) ||
+        !rewriteProjectHostConatProxyUrl(req.url)
+      ) {
         return;
       }
       void handleUpgrade(req, socket as any, head);
@@ -540,7 +605,10 @@ export function attachProjectHostHttpFallbackProxy({
   });
   for (const ingressServer of ingressServers) {
     ingressServer.on("upgrade", (req, socket, head) => {
-      if (rewriteProjectHostConatProxyUrl(req.url)) {
+      if (
+        rewriteProjectHostConatProxyUrl(req.url) &&
+        !shouldRouteProjectHostIngressToApp(req)
+      ) {
         return;
       }
       void handleUpgrade(req, socket as any, head);

@@ -25,6 +25,7 @@ let copyProjectSecretsMock: jest.Mock;
 let initializeProjectRootfsStatesMock: jest.Mock;
 let cloneProjectRootfsStatesMock: jest.Mock;
 let insertedProjectId: string | undefined;
+let mockWorkspaceProjectRuntime = false;
 
 const ACCOUNT_ID = "6e22d250-68d4-46fb-9851-80fbeaa2d6b6";
 const SOURCE_PROJECT_ID = "9a79d9ef-d6a5-4ae1-a215-f594e864637c";
@@ -198,6 +199,21 @@ jest.mock("@cocalc/server/project-host/control", () => ({
   takeStartProjectPhaseTimings: jest.fn(() => undefined),
 }));
 
+jest.mock("@cocalc/server/launchpad/project-runtime", () => ({
+  __esModule: true,
+  isWorkspaceProjectRuntime: () => mockWorkspaceProjectRuntime,
+  assertProjectRuntimeCapability: (capability: string) => {
+    if (
+      mockWorkspaceProjectRuntime &&
+      (capability === "host_placement" || capability === "rootfs")
+    ) {
+      throw new Error(
+        `${capability.replace(/_/g, " ")} is unsupported by the trusted workspace runtime (workspace)`,
+      );
+    }
+  },
+}));
+
 jest.mock("@cocalc/server/projects/project-secrets", () => ({
   __esModule: true,
   copyProjectSecrets: (...args: any[]) => copyProjectSecretsMock(...args),
@@ -215,6 +231,7 @@ describe("projects.createProject clone routing", () => {
   beforeEach(() => {
     jest.resetModules();
     delete process.env.COCALC_SETUP_PROFILE;
+    mockWorkspaceProjectRuntime = false;
     insertedProjectId = undefined;
     cloneMock = jest.fn(async () => undefined);
     hostCreateProjectMock = jest.fn(async () => undefined);
@@ -539,6 +556,79 @@ describe("projects.createProject clone routing", () => {
     });
     expect(ensurePlacementMock).toHaveBeenCalledWith(project_id, ACCOUNT_ID);
   });
+
+  it("keeps new workspace-runtime projects hostless", async () => {
+    mockWorkspaceProjectRuntime = true;
+    queryMock = jest.fn(async (sql: string, params: any[]) => {
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+        return { rows: [], rowCount: null };
+      }
+      if (
+        sql.includes(
+          "SELECT project_id FROM deleted_projects WHERE project_id=$1 LIMIT 1",
+        ) ||
+        sql.includes(
+          "SELECT project_id FROM projects WHERE project_id=$1 LIMIT 1",
+        )
+      ) {
+        return { rows: [] };
+      }
+      if (
+        sql.includes("SELECT COUNT(*)::BIGINT AS count") &&
+        sql.includes("COALESCE(users -> $1::text ->> 'group', '') = 'owner'")
+      ) {
+        return { rows: [{ count: "0" }] };
+      }
+      if (isRootfsScanSelectionQuery(sql)) {
+        return rootfsScanAllowedRows();
+      }
+      if (sql.startsWith("INSERT INTO projects ")) {
+        insertedProjectId = params[0];
+        expect(params[7]).toBeNull();
+        return { rowCount: 1 };
+      }
+      if (sql.includes("INSERT INTO project_rootfs_states")) {
+        return { rowCount: 1 };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const createProject = (await import("./create")).default;
+    const project_id = await createProject({
+      title: "Workspace runtime project",
+      description: "",
+      account_id: ACCOUNT_ID,
+      start: false,
+    });
+
+    expect(project_id).toBe(insertedProjectId);
+    expect(ensurePlacementMock).not.toHaveBeenCalled();
+    expect(hostControlCreateProjectMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["RootFS", { rootfs_image: "cocalc.local/rootfs/base" }, "rootfs"],
+    ["host", { host_id: HOST_ID }, "host placement"],
+  ])(
+    "rejects an explicit %s selection in workspace runtime",
+    async (_label, explicit, expected) => {
+      mockWorkspaceProjectRuntime = true;
+      const createProject = (await import("./create")).default;
+
+      await expect(
+        createProject({
+          title: "Unsupported workspace option",
+          description: "",
+          account_id: ACCOUNT_ID,
+          start: false,
+          ...explicit,
+        }),
+      ).rejects.toThrow(
+        `${expected} is unsupported by the trusted workspace runtime (workspace)`,
+      );
+      expect(queryMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("validates the cloned current RootFS state before copying files", async () => {
     queryMock = jest.fn(async (sql: string, params: any[]) => {

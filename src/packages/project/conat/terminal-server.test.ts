@@ -2,7 +2,11 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { is_valid_uuid_string } from "@cocalc/util/misc";
-import { applyTerminalInitFile, projectScopedCliEnv } from "./terminal-server";
+import {
+  applyTerminalInitFile,
+  applyTerminalRuntimeCwd,
+  projectScopedCliEnv,
+} from "./terminal-server";
 import {
   PROJECT_SECRETS_ENV,
   PROJECT_SECRETS_MOUNT_PATH,
@@ -53,5 +57,23 @@ describe("terminal-server init file support", () => {
     expect(env.COCALC_API_URL).toMatch(/^https?:\/\//);
     expect(env.COCALC_SECRET_TOKEN).toMatch(/secret-token$/);
     expect(env[PROJECT_SECRETS_ENV]).toBe(PROJECT_SECRETS_MOUNT_PATH);
+  });
+
+  it("maps a canonical terminal cwd to the workspace process home", () => {
+    const options = { cwd: "/home/user" };
+    applyTerminalRuntimeCwd(options, {
+      COCALC_RUNTIME_HOME: "/home/user",
+      HOME: "/srv/workspaces/project-id",
+    });
+    expect(options.cwd).toBe("/srv/workspaces/project-id");
+  });
+
+  it("leaves a terminal cwd outside the runtime home unchanged", () => {
+    const options = { cwd: "/tmp/session" };
+    applyTerminalRuntimeCwd(options, {
+      COCALC_RUNTIME_HOME: "/home/user",
+      HOME: "/srv/workspaces/project-id",
+    });
+    expect(options.cwd).toBe("/tmp/session");
   });
 });

@@ -293,6 +293,7 @@ export interface ProjectControlStartRequest {
   project_id: string;
   account_id: string;
   restore_backup_id?: string;
+  project_move_id?: string;
   lro_op_id?: string;
   source_bay_id?: string;
   autostart?: boolean;

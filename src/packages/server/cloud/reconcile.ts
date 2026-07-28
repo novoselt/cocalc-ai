@@ -18,7 +18,13 @@ import { enqueueCloudVmWorkOnce } from "./db";
 import { getServerProvider, listServerProviders } from "./providers";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { getNebiusRegionKeys } from "./nebius-credentials";
-import { shouldAutoRestoreInterruptedSpotHost } from "./spot-restore";
+import {
+  effectivePricingModel,
+  recordProviderSpotPreemption,
+  shouldAutoRestoreInterruptedSpotHost,
+  spotRecoveryPolicy,
+  spotRecoveryState,
+} from "./spot-restore";
 import { recordHostAvailabilityFromSnapshot } from "@cocalc/server/hosts/availability";
 export { shouldAutoRestoreInterruptedSpotHost } from "./spot-restore";
 
@@ -56,6 +62,7 @@ type HostRow = {
   metadata?: Record<string, any>;
   public_url?: string;
   internal_url?: string;
+  ssh_server?: string | null;
 };
 
 type RemoteInstance = {
@@ -68,6 +75,11 @@ type RemoteInstance = {
 
 const RECONCILE_MISSING_CONFIRMATIONS = 2;
 const RECONCILE_GRACE_MS = 2 * 60 * 1000;
+const HOST_READY_VERIFICATION_PHASES = new Set([
+  "retrying_spot",
+  "returning_to_spot",
+  "running_standard_fallback",
+]);
 
 type DiskStatus = "present" | "missing" | "unknown";
 
@@ -108,7 +120,7 @@ const RESTORE_BLOCKING_PENDING_ACTIONS = [
 async function loadHosts(provider: Provider): Promise<HostRow[]> {
   const { rows } = await pool().query(
     `
-      SELECT id, name, status, region, metadata, public_url, internal_url
+      SELECT id, name, status, region, metadata, public_url, internal_url, ssh_server
       FROM project_hosts
       WHERE metadata->'machine'->>'cloud' = $1
         AND deleted IS NULL
@@ -381,6 +393,49 @@ export async function hasPendingRestoreBlockingWork(
   return !!rows[0]?.exists;
 }
 
+export async function ensureHostReadyVerificationWork({
+  provider,
+  row,
+  provider_status,
+}: {
+  provider: Provider;
+  row: HostRow;
+  provider_status?: string;
+}): Promise<boolean> {
+  if (provider_status !== "running") return false;
+  const state = row.metadata?.spot_recovery_state;
+  if (!HOST_READY_VERIFICATION_PHASES.has(`${state?.phase ?? ""}`)) {
+    return false;
+  }
+  const startedAt = new Date(`${state?.verification_started_at ?? ""}`);
+  const deadlineAt = new Date(`${state?.verification_deadline_at ?? ""}`);
+  if (
+    !Number.isFinite(startedAt.getTime()) ||
+    !Number.isFinite(deadlineAt.getTime())
+  ) {
+    return false;
+  }
+  const workId = await enqueueCloudVmWorkOnce({
+    vm_id: row.id,
+    action: "verify_host_ready",
+    payload: {
+      provider,
+      started_at: startedAt.toISOString(),
+      deadline_at: deadlineAt.toISOString(),
+    },
+  });
+  if (workId) {
+    logger.warn("cloud reconcile: restored host readiness verification", {
+      provider,
+      host_id: row.id,
+      recovery_phase: state.phase,
+      verification_started_at: startedAt.toISOString(),
+      verification_deadline_at: deadlineAt.toISOString(),
+    });
+  }
+  return !!workId;
+}
+
 async function dataDiskStatus(
   provider: Provider,
   row: HostRow,
@@ -478,6 +533,7 @@ async function updateHost(
     status?: string;
     runtime?: Record<string, any> | null;
     desired_state?: "running" | "stopped";
+    spot_recovery_state?: Record<string, any>;
     public_url?: string | null;
     internal_url?: string | null;
   },
@@ -508,7 +564,15 @@ async function updateHost(
     metadataExpression = `jsonb_set(${metadataExpression}, '{desired_state}', to_jsonb($${idx++}::text), true)`;
     params.push(updates.desired_state);
   }
-  if (updates.runtime !== undefined || updates.desired_state !== undefined) {
+  if (updates.spot_recovery_state !== undefined) {
+    metadataExpression = `jsonb_set(${metadataExpression}, '{spot_recovery_state}', $${idx++}::jsonb, true)`;
+    params.push(JSON.stringify(updates.spot_recovery_state));
+  }
+  if (
+    updates.runtime !== undefined ||
+    updates.desired_state !== undefined ||
+    updates.spot_recovery_state !== undefined
+  ) {
     sets.push(`metadata = ${metadataExpression}`);
   }
   if (updates.public_url !== undefined) {
@@ -518,6 +582,11 @@ async function updateHost(
   if (updates.internal_url !== undefined) {
     sets.push(`internal_url=$${idx++}`);
     params.push(updates.internal_url);
+  }
+  const sshServer = runtimeSshServerForProviderReconcile(row, updates.runtime);
+  if (sshServer !== undefined && sshServer !== row.ssh_server) {
+    sets.push(`ssh_server=$${idx++}`);
+    params.push(sshServer);
   }
   if (!sets.length) return;
   await pool().query(
@@ -536,6 +605,17 @@ async function updateHost(
   }
 }
 
+export function runtimeSshServerForProviderReconcile(
+  row: Pick<HostRow, "metadata">,
+  runtime: Record<string, any> | null | undefined,
+): string | undefined {
+  if (row.metadata?.machine?.cloud !== "gcp") {
+    return undefined;
+  }
+  const publicIp = `${runtime?.public_ip ?? ""}`.trim();
+  return publicIp ? `${publicIp}:2222` : undefined;
+}
+
 async function enqueueSpotRestore(
   provider: Provider,
   row: HostRow,
@@ -543,6 +623,25 @@ async function enqueueSpotRestore(
   reason: string,
 ): Promise<boolean> {
   if (!shouldAutoRestoreInterruptedSpotHost(row)) return false;
+  const now = new Date();
+  const preemption =
+    effectivePricingModel(row) === "spot"
+      ? recordProviderSpotPreemption({
+          state: spotRecoveryState(row),
+          policy: spotRecoveryPolicy(row),
+          now,
+        })
+      : undefined;
+  const nextRecoveryState = preemption?.recorded
+    ? {
+        ...preemption.state,
+        phase: "retrying_spot" as const,
+        outage_started_at: now.toISOString(),
+        active_machine_type:
+          preemption.state.active_machine_type ??
+          row.metadata?.machine?.machine_type,
+      }
+    : undefined;
   const enqueued = await enqueueCloudVmWorkOnce({
     vm_id: row.id,
     action: "start",
@@ -556,12 +655,16 @@ async function enqueueSpotRestore(
     host_id: row.id,
     reason,
     enqueued: !!enqueued,
+    rapid_preemption_circuit_breaker:
+      preemption?.circuit_breaker_triggered ?? false,
+    standard_hold_until: preemption?.state.standard_hold_until,
   });
   const runtimeMetadata = nextRuntime.metadata ?? {};
   const reconcileMetadata = runtimeMetadata.reconcile ?? {};
   await updateHost(row, {
     status: "starting",
     desired_state: "running",
+    spot_recovery_state: nextRecoveryState,
     runtime: {
       ...nextRuntime,
       public_ip: undefined,
@@ -676,6 +779,11 @@ async function reconcileProvider(provider: Provider) {
 
     const desiredStatus =
       entry.provider.mapStatus?.(remote.status) ?? row.status;
+    await ensureHostReadyVerificationWork({
+      provider,
+      row,
+      provider_status: desiredStatus,
+    });
     const bootstrapDone =
       row.metadata?.bootstrap?.status === "done" ||
       row.metadata?.bootstrap_lifecycle?.summary_status === "in_sync";

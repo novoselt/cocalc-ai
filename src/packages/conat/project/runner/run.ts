@@ -91,6 +91,13 @@ export interface Options {
   //      server it would be the list of directories to sync on startup.
   //    - forward - initial port forward configuration.
   sshServers?: SshServersFunction;
+
+  // Projects recovered by a durable backend before this runner starts
+  // accepting RPCs.
+  initialProjects?: Array<{
+    project_id: string;
+    status: ProjectStatus;
+  }>;
 }
 
 export interface API {
@@ -124,6 +131,14 @@ export async function server(options: Options) {
   const { projects, runners } = await state({ client });
   let running = true;
 
+  for (const { project_id, status } of options.initialProjects ?? []) {
+    projects.set(project_id, {
+      server: id,
+      state: status.state,
+      http_port: status.http_port,
+      ssh_port: status.ssh_port,
+    });
+  }
   runners.set(id, { time: Date.now() });
   until(
     () => {
@@ -190,7 +205,12 @@ export async function server(options: Options) {
         })),
         server: id,
       };
-      projects.set(opts.project_id, { server: id, state: s.state } as const);
+      projects.set(opts.project_id, {
+        server: id,
+        state: s.state,
+        http_port: s.http_port,
+        ssh_port: s.ssh_port,
+      } as const);
       return s;
     },
 

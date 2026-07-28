@@ -18,6 +18,10 @@ let loadProjectRuntimeSponsorMock: jest.Mock;
 let reserveProjectRuntimeSlotMock: jest.Mock;
 let heartbeatProjectRuntimeSlotMock: jest.Mock;
 let releaseProjectRuntimeSlotMock: jest.Mock;
+let enqueueCloudVmWorkOnceMock: jest.Mock;
+let recordProviderSpotPreemptionMock: jest.Mock;
+let shouldAutoRestoreInterruptedSpotHostMock: jest.Mock;
+let spotRecoveryPolicyMock: jest.Mock;
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -87,11 +91,16 @@ jest.mock("@cocalc/server/bay-config", () => ({
 }));
 
 jest.mock("@cocalc/server/cloud/db", () => ({
-  enqueueCloudVmWorkOnce: jest.fn(async () => false),
+  enqueueCloudVmWorkOnce: (...args: any[]) =>
+    enqueueCloudVmWorkOnceMock(...args),
 }));
 
 jest.mock("@cocalc/server/cloud/spot-restore", () => ({
-  shouldAutoRestoreInterruptedSpotHost: () => false,
+  recordProviderSpotPreemption: (...args: any[]) =>
+    recordProviderSpotPreemptionMock(...args),
+  shouldAutoRestoreInterruptedSpotHost: (...args: any[]) =>
+    shouldAutoRestoreInterruptedSpotHostMock(...args),
+  spotRecoveryPolicy: (...args: any[]) => spotRecoveryPolicyMock(...args),
 }));
 
 jest.mock("@cocalc/server/conat/api/hosts", () => ({
@@ -173,6 +182,14 @@ describe("host-registry automatic convergence retry", () => {
     reserveProjectRuntimeSlotMock = jest.fn(async () => undefined);
     heartbeatProjectRuntimeSlotMock = jest.fn(async () => undefined);
     releaseProjectRuntimeSlotMock = jest.fn(async () => undefined);
+    enqueueCloudVmWorkOnceMock = jest.fn(async () => undefined);
+    recordProviderSpotPreemptionMock = jest.fn(({ state }) => ({
+      state: state ?? { phase: "idle" },
+      recorded: true,
+      circuit_breaker_triggered: false,
+    }));
+    shouldAutoRestoreInterruptedSpotHostMock = jest.fn(() => false);
+    spotRecoveryPolicyMock = jest.fn(() => undefined);
     upsertProjectHostMock = jest.fn(async ({ metadata, host_session_id }) => {
       currentMetadata = {
         ...currentMetadata,
@@ -202,6 +219,81 @@ describe("host-registry automatic convergence retry", () => {
   });
 
   let currentMetadata: any;
+
+  it("records one rapid-preemption event per host session", async () => {
+    const holdUntil = "2026-07-29T14:34:17.613Z";
+    currentMetadata = {
+      host_session_id: "session-1",
+      machine: { cloud: "gcp", machine_type: "t2d-standard-16" },
+      pricing_model: "spot",
+      desired_pricing_model: "spot",
+      effective_pricing_model: "spot",
+      interruption_restore_policy: "immediate",
+    };
+    let currentStatus = "running";
+    queryMock = jest.fn(async (sql: string, params: any[]) => {
+      const availabilityResult = handleAvailabilityQuery(sql);
+      if (availabilityResult) return availabilityResult;
+      if (
+        sql.includes(
+          "SELECT status, metadata FROM project_hosts WHERE id=$1 AND deleted IS NULL",
+        )
+      ) {
+        return {
+          rows: [{ status: currentStatus, metadata: currentMetadata }],
+        };
+      }
+      if (
+        sql.includes(
+          "UPDATE project_hosts SET metadata=$2, updated=NOW() WHERE id=$1",
+        )
+      ) {
+        currentMetadata = params[1];
+        return { rows: [] };
+      }
+      if (
+        sql.includes(
+          "UPDATE project_hosts SET status='starting', last_seen=NULL, metadata=$2",
+        )
+      ) {
+        currentStatus = "starting";
+        currentMetadata = params[1];
+        return { rows: [] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    shouldAutoRestoreInterruptedSpotHostMock.mockReturnValue(true);
+    spotRecoveryPolicyMock.mockReturnValue({});
+    recordProviderSpotPreemptionMock.mockReturnValue({
+      state: {
+        phase: "idle",
+        last_preempted_at: "2026-07-28T14:34:17.613Z",
+        standard_hold_until: holdUntil,
+      },
+      recorded: true,
+      circuit_breaker_triggered: true,
+    });
+    enqueueCloudVmWorkOnceMock.mockResolvedValue("work-1");
+
+    const { initHostRegistryService } = await import("./host-registry");
+    const service = await initHostRegistryService();
+    const notice = {
+      host_id: "host-1",
+      host_session_id: "session-1",
+      signal: "GCP_PREEMPTED",
+      reason: "host-shutdown",
+    };
+
+    await service.shutdownNotice(notice);
+    await service.shutdownNotice(notice);
+
+    expect(recordProviderSpotPreemptionMock).toHaveBeenCalledTimes(1);
+    expect(enqueueCloudVmWorkOnceMock).toHaveBeenCalledTimes(1);
+    expect(currentMetadata.spot_recovery_state).toMatchObject({
+      phase: "retrying_spot",
+      standard_hold_until: holdUntil,
+    });
+  });
 
   it("retries pending automatic convergence on heartbeat after register observation failure", async () => {
     currentMetadata = {};

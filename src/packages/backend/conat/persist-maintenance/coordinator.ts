@@ -924,6 +924,32 @@ export class PersistMaintenanceCoordinator {
       lastError: this.lastError,
     };
   }
+
+  diagnostics() {
+    return {
+      enabled: this.config.enabled,
+      dryRun: this.config.dryRun,
+      catalogHealthy: this.catalogHealthy,
+      trackingCoverage: this.trackingCoverage,
+      ...this.catalog.statusBase(),
+      lastScanStartedAt:
+        this.lastScanStartedAt ??
+        (Number(this.catalog.getState("scan_started_at") ?? 0) || undefined),
+      lastScanCompletedAt:
+        this.lastScanCompletedAt ??
+        (Number(this.catalog.getState("scan_completed_at") ?? 0) || undefined),
+      scannedFiles:
+        this.scannedFiles || Number(this.catalog.getState("scan_files") ?? 0),
+      pauseReason:
+        this.pauseReason ??
+        (!this.config.enabled
+          ? "disabled"
+          : !this.trackingCoverage
+            ? "tracking-coverage-incomplete"
+            : undefined),
+      lastError: this.lastError,
+    };
+  }
 }
 
 export function createPersistMaintenanceCoordinator(options: {

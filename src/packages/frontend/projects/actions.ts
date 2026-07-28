@@ -49,6 +49,7 @@ import {
   publishProjectDetailInvalidation,
 } from "@cocalc/frontend/project/use-project-field";
 import { ensureProjectCourseInfo } from "@cocalc/frontend/project/use-project-course";
+import { getProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
 import { getBackups as getProjectBackups } from "@cocalc/frontend/project/archive-info";
 import {
   buildOfflineMoveConfirmationDialog,
@@ -4089,6 +4090,9 @@ export class ProjectsActions extends Actions<ProjectsState> {
     project_id: string;
     autostart: boolean;
   }): Promise<boolean> {
+    if (!getProjectRuntimeCapabilities().host_placement) {
+      return true;
+    }
     if (store.getIn(["project_map", project_id, "host_id"])) {
       return true;
     }

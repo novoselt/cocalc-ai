@@ -50,12 +50,15 @@ import { callback2, retry_until_success } from "@cocalc/util/async-utils";
 import { set_agent_endpoint } from "./health-checks";
 import { getLogger } from "./logger";
 import initDatabase, { getDatabase } from "./servers/database";
-import initExpressApp from "./servers/express-app";
+import initExpressApp, {
+  createStrictCloudflareProxyResolver,
+} from "./servers/express-app";
 import {
   loadConatConfiguration,
   initConatApi,
   initConatPersist,
   initConatHostRegistry,
+  startConatApiBackgroundWorkers,
 } from "@cocalc/server/conat";
 import { initConatServer } from "@cocalc/server/conat/socketio";
 import initHttpRedirect from "./servers/http-redirect";
@@ -66,7 +69,10 @@ import { conatWithProjectRouting } from "@cocalc/server/conat/route-client";
 import { createProjectHostProxyHandlers } from "./proxy/project-host";
 import { ensureSelfHostReverseTunnelsOnStartup } from "@cocalc/server/self-host/ssh-target";
 import { assertLocalBindOrInsecure } from "@cocalc/backend/network/policy";
-import { startWorkerDiagnosticsServer } from "./worker-diagnostics";
+import {
+  setWorkerStartupPhase,
+  startWorkerDiagnosticsServer,
+} from "./worker-diagnostics";
 
 // Logger tagged with 'hub' for this file.
 const logger = getLogger("hub");
@@ -177,11 +183,13 @@ async function maybeInitOnPremTls(): Promise<void> {
 async function startServer(): Promise<void> {
   logger.info("start_server");
 
+  setWorkerStartupPhase("validate-network-policy");
   assertLocalBindOrInsecure({
     bindHost: program.hostname,
     serviceName: "hub http listener",
   });
 
+  setWorkerStartupPhase("worker-diagnostics");
   try {
     await startWorkerDiagnosticsServer();
   } catch (err) {
@@ -193,6 +201,7 @@ async function startServer(): Promise<void> {
   logger.info(`basePath='${basePath}'`);
   logger.info("database: using env configuration");
 
+  setWorkerStartupPhase("metrics");
   const { metric_blocked } = await initMetrics();
 
   // Log anything that blocks the CPU for more than ~100ms -- see https://github.com/tj/node-blocked
@@ -207,6 +216,7 @@ async function startServer(): Promise<void> {
   });
 
   // Wait for database connection to work.  Everything requires this.
+  setWorkerStartupPhase("database-connect");
   await retry_until_success({
     f: async () => await callback2(getDatabase().connect),
     start_delay: 1000,
@@ -215,6 +225,7 @@ async function startServer(): Promise<void> {
   logger.info("connected to database.");
 
   if (program.updateDatabaseSchema) {
+    setWorkerStartupPhase("database-schema");
     logger.info("Update database schema");
     await getDatabase().update_schema();
 
@@ -227,9 +238,13 @@ async function startServer(): Promise<void> {
   }
 
   // set server settings based on environment variables
+  setWorkerStartupPhase("server-settings");
   await load_server_settings_from_env(getDatabase());
+  setWorkerStartupPhase("on-prem-tls");
   await maybeInitOnPremTls();
+  setWorkerStartupPhase("launchpad-on-prem-services");
   await maybeStartLaunchpadOnPremServices();
+  setWorkerStartupPhase("self-host-reverse-tunnels");
   await ensureSelfHostReverseTunnelsOnStartup();
 
   if (program.agentPort) {
@@ -246,48 +261,49 @@ async function startServer(): Promise<void> {
   }
 
   // Project control
+  setWorkerStartupPhase("project-control");
   logger.info("initializing project control...");
   const projectControl = initProjectControl();
 
   // This loads from the database credentials to use Conat.
+  setWorkerStartupPhase("conat-configuration");
   await loadConatConfiguration();
 
-  if (program.conatRouter) {
-    // launch standalone socketio websocket server (no http server)
+  let strictCloudflareProxy: (() => boolean) | undefined;
+  if (program.conatRouter || program.conatServer) {
+    // Bind before starting any API or maintenance service that connects to
+    // this worker's local Conat server.
+    setWorkerStartupPhase("cloudflare-proxy-policy");
+    strictCloudflareProxy = await createStrictCloudflareProxyResolver();
+    setWorkerStartupPhase("conat-listener");
     await initConatServer({
       kucalc: program.mode == "kucalc",
       systemAccountPassword: conatPassword,
+      strictCloudflareProxy,
     });
   }
 
   // for now - we may bring this back for proxying remote project-host's.
+  setWorkerStartupPhase("project-proxy-handlers");
   let projectProxyHandlersPromise = createProjectHostProxyHandlers();
 
   if (program.conatApi || program.conatServer) {
-    await initConatApi();
+    setWorkerStartupPhase("conat-api");
+    await initConatApi({ startBackgroundWorkers: false });
   }
 
   if (program.conatPersist || program.conatServer) {
+    setWorkerStartupPhase("conat-persistence");
     await initConatPersist();
   }
 
   if (program.conatServer) {
+    setWorkerStartupPhase("conat-host-registry");
     await initConatHostRegistry();
   }
 
-  if (program.conatApi || program.conatServer) {
-    logger.info("starting cloud VM work queue worker...");
-    startCloudVmWorker({
-      worker_id: `hub-${process.pid}`,
-      handlers: cloudHostHandlers,
-    });
-    logger.info("starting cloud catalog worker...");
-    startCloudCatalogWorker();
-    logger.info("starting cloud VM reconcile loop...");
-    startCloudVmReconciler();
-  }
-
   if (program.conatServer || program.proxyServer || program.conatApi) {
+    setWorkerStartupPhase("express");
     const { router, httpServer } = await initExpressApp({
       isPersonal: program.personal,
       projectControl,
@@ -296,12 +312,14 @@ async function startServer(): Promise<void> {
       projectProxyHandlersPromise,
       cert: program.httpsCert,
       key: program.httpsKey,
+      strictCloudflareProxy,
     });
 
     const database = getDatabase();
 
     // The express app create via initExpressApp above **assumes** that init_passport is done
     // or complains a lot. This is obviously not really necessary, but we leave it for now.
+    setWorkerStartupPhase("passport");
     await callback2(init_passport, {
       router,
       database,
@@ -309,6 +327,7 @@ async function startServer(): Promise<void> {
     });
 
     logger.info(`starting webserver listening on ${program.hostname}:${port}`);
+    setWorkerStartupPhase("http-listener");
     await callback(httpServer.listen.bind(httpServer), port, program.hostname);
 
     if (port == 443 && program.httpsCert && program.httpsKey) {
@@ -322,6 +341,7 @@ async function startServer(): Promise<void> {
 
     // register the hub with the database periodically, and
     // also confirms that database is working.
+    setWorkerStartupPhase("hub-registration");
     await callback2(startHubRegister, {
       database,
       host: program.hostname,
@@ -332,6 +352,7 @@ async function startServer(): Promise<void> {
     const protocol = program.httpsKey ? "https" : "http";
     const target = `${protocol}://${program.hostname}:${port}${basePath}`;
 
+    setWorkerStartupPhase("bootstrap-admin");
     const bootstrapUrl = await ensureBootstrapAdminToken({ baseUrl: target });
     const displayUrl = bootstrapUrl ?? target;
     const msg = `PORT=${port}\nBASE_PATH=${basePath}\nPROTOCOL=${protocol}\n\n\n\nStarted HUB!\n\n-----------\n\n\n\n    ${displayUrl}\n\n\n\n-----------\n\n`;
@@ -340,7 +361,24 @@ async function startServer(): Promise<void> {
     openUrlIfRequested(displayUrl);
   }
 
+  if (program.conatApi || program.conatServer) {
+    // Startup-critical auth and HTTP must not compete with maintenance leaders
+    // for the bounded PostgreSQL application pool.
+    setWorkerStartupPhase("background-workers");
+    startConatApiBackgroundWorkers();
+    logger.info("starting cloud VM work queue worker...");
+    startCloudVmWorker({
+      worker_id: `hub-${process.pid}`,
+      handlers: cloudHostHandlers,
+    });
+    logger.info("starting cloud catalog worker...");
+    startCloudCatalogWorker();
+    logger.info("starting cloud VM reconcile loop...");
+    startCloudVmReconciler();
+  }
+
   if (program.all || program.mentions) {
+    setWorkerStartupPhase("maintenance");
     // kucalc: for now we just have the hub-mentions servers
     // do the new project pool maintenance, since there is only
     // one hub-stats.
@@ -355,6 +393,7 @@ async function startServer(): Promise<void> {
   }
 
   addErrorListeners();
+  setWorkerStartupPhase("ready");
 }
 
 //############################################

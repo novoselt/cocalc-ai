@@ -23,6 +23,7 @@ import RemoveMyself from "@cocalc/frontend/projects/remove-myself";
 import { ArchiveProject } from "./archive-project";
 import MoveProject from "./move-project";
 import { Project } from "./types";
+import { useProjectRuntimeCapabilities } from "../runtime-capabilities";
 
 interface Props {
   project: Project;
@@ -246,6 +247,7 @@ export function HideDeleteBox(props: Readonly<Props>) {
 }
 
 export function ProjectLocationBox(props: Readonly<Props>) {
+  const runtime = useProjectRuntimeCapabilities();
   const { project, actions, mode = "project", embedded = false } = props;
   const isFlyout = mode === "flyout";
   const isEmbedded = embedded || isFlyout;
@@ -264,46 +266,50 @@ export function ProjectLocationBox(props: Readonly<Props>) {
   function renderBody() {
     const locationRows = (
       <>
-        <DangerActionRow
-          icon="servers"
-          title="Move Project"
-          description="Move this project to another host. The project is unavailable during the move and snapshots are removed."
-          action={
-            <MoveProject
-              project_id={project_id}
-              disabled={movingDisabled}
-              label="Move Project"
-              showHostName={false}
-              size={isFlyout ? "small" : undefined}
-            />
-          }
-        />
-        <DangerActionRow
-          icon="file-archive"
-          title="Archive Project"
-          description={
-            <Space direction="vertical" size={4}>
-              <span>
-                Remove the active copy from its host. Starting later restores
-                from backup, which is slower, and snapshots are removed.
-              </span>
-              {publicShareCount > 0 ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="Public shares are not available when a project is archived."
-                />
-              ) : null}
-            </Space>
-          }
-          action={
-            <ArchiveProject
-              project_id={project_id}
-              disabled={lifecycleBusy}
-              size={isFlyout ? "small" : undefined}
-            />
-          }
-        />
+        {runtime.move && (
+          <DangerActionRow
+            icon="servers"
+            title="Move Project"
+            description="Move this project to another host. The project is unavailable during the move and snapshots are removed."
+            action={
+              <MoveProject
+                project_id={project_id}
+                disabled={movingDisabled}
+                label="Move Project"
+                showHostName={false}
+                size={isFlyout ? "small" : undefined}
+              />
+            }
+          />
+        )}
+        {runtime.archive && (
+          <DangerActionRow
+            icon="file-archive"
+            title="Archive Project"
+            description={
+              <Space direction="vertical" size={4}>
+                <span>
+                  Remove the active copy from its host. Starting later restores
+                  from backup, which is slower, and snapshots are removed.
+                </span>
+                {publicShareCount > 0 ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="Public shares are not available when a project is archived."
+                  />
+                ) : null}
+              </Space>
+            }
+            action={
+              <ArchiveProject
+                project_id={project_id}
+                disabled={lifecycleBusy}
+                size={isFlyout ? "small" : undefined}
+              />
+            }
+          />
+        )}
       </>
     );
     return (
@@ -313,8 +319,16 @@ export function ProjectLocationBox(props: Readonly<Props>) {
         mode={mode}
         embedded
         extraRows={locationRows}
-        introMessage="Location changes can interrupt access"
-        introDescription="These controls change where the project is listed, hosted, archived, or deleted. Moving and archiving can make the project unavailable for a while and remove snapshots."
+        introMessage={
+          runtime.move || runtime.archive
+            ? "Location changes can interrupt access"
+            : "Project visibility and deletion"
+        }
+        introDescription={
+          runtime.move || runtime.archive
+            ? "These controls change where the project is listed, hosted, archived, or deleted. Moving and archiving can make the project unavailable for a while and remove snapshots."
+            : "These controls change whether the project is listed or permanently deleted."
+        }
       />
     );
   }

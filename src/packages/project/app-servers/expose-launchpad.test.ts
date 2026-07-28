@@ -71,6 +71,9 @@ describe("app expose launchpad reservation", () => {
           releaseProjectAppPublicSubdomain: jest.fn(async () => ({
             released: true,
           })),
+          releaseProjectAppPrivateHostname: jest.fn(async () => ({
+            released: false,
+          })),
         },
       })),
     }));
@@ -148,6 +151,9 @@ describe("app expose launchpad reservation", () => {
           releaseProjectAppPublicSubdomain: jest.fn(async () => ({
             released: true,
           })),
+          releaseProjectAppPrivateHostname: jest.fn(async () => ({
+            released: false,
+          })),
         },
       })),
     }));
@@ -208,6 +214,9 @@ describe("app expose launchpad reservation", () => {
           reserveProjectAppPublicSubdomain: jest.fn(),
           releaseProjectAppPublicSubdomain: jest.fn(async () => ({
             released: true,
+          })),
+          releaseProjectAppPrivateHostname: jest.fn(async () => ({
+            released: false,
           })),
         },
       })),

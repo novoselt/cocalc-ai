@@ -314,7 +314,59 @@ describe("projects.start", () => {
     ).toHaveLength(1);
     expect(createLroDetailedMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        dedupe_key: "project-start:start:default",
+        dedupe_key: "project-start",
+      }),
+    );
+  });
+
+  it("does not let autostart supersede an active backup restore", async () => {
+    let created = true;
+    createLroDetailedMock = jest.fn(async (...args: any[]) => ({
+      lro: await createLroMock(...args),
+      created: created ? ((created = false), true) : false,
+    }));
+    const { start } = await import("./projects");
+
+    const restore = await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      restore_backup_id: "backup-1",
+      wait: false,
+    });
+    const autostart = await start({
+      account_id: "acct-2",
+      project_id: "proj-1",
+      autostart: true,
+      wait: false,
+    });
+    await flushBackgroundStartTask();
+
+    expect(restore.op_id).toBe("op-1");
+    expect(autostart.op_id).toBe("op-1");
+    expect(createLroDetailedMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          restore_backup_id: "backup-1",
+        }),
+        dedupe_key: "project-start",
+      }),
+    );
+    expect(createLroDetailedMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          autostart: true,
+        }),
+        dedupe_key: "project-start",
+      }),
+    );
+    expect(interBayStartMock).toHaveBeenCalledTimes(1);
+    expect(interBayStartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: "proj-1",
+        restore_backup_id: "backup-1",
+        lro_op_id: "op-1",
       }),
     );
   });
@@ -349,6 +401,47 @@ describe("projects.start", () => {
       source_bay_id: "bay-0",
       epoch: 0,
     });
+  });
+
+  it("forwards an internally authorized project move id", async () => {
+    const { start, PROJECT_DANGEROUS_INTERNAL_AUTH } =
+      await import("./projects");
+
+    await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      restore_backup_id: "backup-1",
+      project_move_id: "move-1",
+      project_move_auth: PROJECT_DANGEROUS_INTERNAL_AUTH,
+      wait: false,
+    });
+    await flushBackgroundStartTask();
+
+    expect(interBayCheckStartAdmissionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: "move-1" }),
+    );
+    expect(interBayStartMock).toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: "move-1" }),
+    );
+  });
+
+  it("does not forward a caller-supplied project move id", async () => {
+    const { start } = await import("./projects");
+
+    await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      project_move_id: "move-1",
+      wait: false,
+    });
+    await flushBackgroundStartTask();
+
+    expect(interBayCheckStartAdmissionMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: expect.anything() }),
+    );
+    expect(interBayStartMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: expect.anything() }),
+    );
   });
 
   it("uses finalized migration backup id when starting archived migration destination", async () => {

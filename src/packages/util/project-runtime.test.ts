@@ -1,8 +1,12 @@
 import {
   DEFAULT_PROJECT_RUNTIME_HOME,
-  projectRuntimeRootfsContractLabels,
+  PROJECT_RUNTIME_CAPABILITY_KEYS,
   isProjectRuntimeHomeAliasPath,
+  projectRuntimeCapabilityError,
+  projectRuntimeConfiguration,
   projectRuntimeHomeRelativePath,
+  projectRuntimePathForProcess,
+  projectRuntimeRootfsContractLabels,
   rootfsLabelsSatisfyCurrentProjectRuntimeContract,
 } from "./project-runtime";
 
@@ -37,6 +41,36 @@ describe("project runtime home helpers", () => {
     expect(isProjectRuntimeHomeAliasPath("/scratch/data.txt")).toBe(false);
   });
 
+  it("maps canonical client paths to a workspace process home", () => {
+    const env = {
+      COCALC_RUNTIME_HOME: "/home/user",
+      HOME: "/srv/workspaces/project-id",
+    };
+    expect(projectRuntimePathForProcess("/home/user", env)).toBe(
+      "/srv/workspaces/project-id",
+    );
+    expect(projectRuntimePathForProcess("/home/user/src/index.ts", env)).toBe(
+      "/srv/workspaces/project-id/src/index.ts",
+    );
+    expect(projectRuntimePathForProcess("src/index.ts", env)).toBe(
+      "src/index.ts",
+    );
+  });
+
+  it("does not map paths outside the configured runtime home", () => {
+    const env = {
+      COCALC_RUNTIME_HOME: "/home/user",
+      HOME: "/srv/workspaces/project-id",
+    };
+    expect(projectRuntimePathForProcess("/home/user2/file", env)).toBe(
+      "/home/user2/file",
+    );
+    expect(projectRuntimePathForProcess("/home/user/../shared", env)).toBe(
+      "/home/user/../shared",
+    );
+    expect(projectRuntimePathForProcess("/tmp/file", env)).toBe("/tmp/file");
+  });
+
   it("exposes stable RootFS runtime-contract labels", () => {
     const labels = projectRuntimeRootfsContractLabels();
     expect(labels).toMatchObject({
@@ -59,5 +93,35 @@ describe("project runtime home helpers", () => {
         "com.cocalc.rootfs.runtime_uid": "1000",
       }),
     ).toBe(false);
+  });
+});
+
+describe("project runtime capabilities", () => {
+  it.each(["external", "podman"] as const)(
+    "keeps every project-host feature enabled for %s",
+    (mode) => {
+      const runtime = projectRuntimeConfiguration(mode);
+      expect(runtime.mode).toBe(mode);
+      expect(runtime.trusted).toBe(false);
+      for (const capability of PROJECT_RUNTIME_CAPABILITY_KEYS) {
+        expect(runtime[capability]).toBe(true);
+      }
+    },
+  );
+
+  it("makes trusted workspace limitations explicit", () => {
+    const runtime = projectRuntimeConfiguration("workspace");
+    expect(runtime).toMatchObject({
+      mode: "workspace",
+      isolation: "trusted-workspace",
+      trusted: true,
+      label: "Trusted workspace",
+    });
+    for (const capability of PROJECT_RUNTIME_CAPABILITY_KEYS) {
+      expect(runtime[capability]).toBe(false);
+    }
+    expect(projectRuntimeCapabilityError(runtime, "host_placement")).toBe(
+      "host placement is unsupported by the trusted workspace runtime (workspace)",
+    );
   });
 });

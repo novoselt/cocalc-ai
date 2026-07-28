@@ -52,6 +52,7 @@ load_bay_env
 : "${COCALC_BAY_MIN_HEALTHY_WORKERS:=1}"
 : "${COCALC_BAY_WORKER_COUNT:=1}"
 : "${COCALC_BAY_HEALTH_TIMEOUT_S:=15}"
+: "${COCALC_BAY_WORKER_START_TIMEOUT_S:=90}"
 : "${COCALC_BAY_HUB_WATCHDOG_FAILURE_THRESHOLD:=2}"
 : "${COCALC_BAY_HUB_WATCHDOG_RESTART_TIMEOUT_S:=90}"
 : "${COCALC_BAY_HUB_WATCHDOG_RESTART_COOLDOWN_S:=300}"
@@ -220,7 +221,8 @@ http_check() {
 wait_for_http_check() {
   local url="$1"
   local label="$2"
-  local deadline=$((SECONDS + COCALC_BAY_HEALTH_TIMEOUT_S))
+  local timeout_s="${3:-$COCALC_BAY_HEALTH_TIMEOUT_S}"
+  local deadline=$((SECONDS + timeout_s))
   until http_check "$url"; do
     if ((SECONDS >= deadline)); then
       bay_log "${label} is unhealthy"

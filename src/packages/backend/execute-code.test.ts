@@ -13,6 +13,9 @@ pnpm test ./execute-code.test.ts
 
 import { delay } from "awaiting";
 import { PROJECT_SECRETS_ENV } from "@cocalc/util/project-secrets";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 process.env.COCALC_PROJECT_MONITOR_INTERVAL_S = "1";
 // default is much lower, might fail if you have more procs than the default
@@ -27,6 +30,33 @@ describe("hello world", () => {
       args: ["hello world"],
     });
     expect(stdout).toBe("hello world\n");
+  });
+
+  it("executes canonical project paths from the workspace process home", async () => {
+    const home = await mkdtemp(join(tmpdir(), "cocalc-workspace-exec-"));
+    const previousHome = process.env.HOME;
+    const previousRuntimeHome = process.env.COCALC_RUNTIME_HOME;
+    try {
+      process.env.HOME = home;
+      process.env.COCALC_RUNTIME_HOME = "/home/user";
+      const { stdout } = await executeCode({
+        command: "pwd",
+        path: "/home/user",
+      });
+      expect(stdout.trim()).toBe(home);
+    } finally {
+      if (previousHome == null) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousRuntimeHome == null) {
+        delete process.env.COCALC_RUNTIME_HOME;
+      } else {
+        process.env.COCALC_RUNTIME_HOME = previousRuntimeHome;
+      }
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it("preserves only the managed project secrets env var from CoCalc-prefixed env", async () => {

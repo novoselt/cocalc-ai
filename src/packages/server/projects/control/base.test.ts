@@ -3,6 +3,7 @@ export {};
 let assertLocalProjectOwnershipMock: jest.Mock;
 let projectRunnerClientMock: jest.Mock;
 let stopProjectOnHostMock: jest.Mock;
+let startProjectOnHostMock: jest.Mock;
 let getPoolQueryMock: jest.Mock;
 
 jest.mock("@cocalc/server/conat/project-local-access", () => ({
@@ -18,7 +19,7 @@ jest.mock("@cocalc/conat/project/runner/run", () => ({
 
 jest.mock("@cocalc/server/project-host/control", () => ({
   __esModule: true,
-  startProjectOnHost: jest.fn(async () => undefined),
+  startProjectOnHost: (...args: any[]) => startProjectOnHostMock(...args),
   stopProjectOnHost: (...args: any[]) => stopProjectOnHostMock(...args),
 }));
 
@@ -72,15 +73,35 @@ jest.mock("@cocalc/server/membership/project-defaults", () => ({
 
 describe("BaseProject local ownership", () => {
   const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
+  const originalProduct = process.env.COCALC_PRODUCT;
+  const originalRuntime = process.env.COCALC_PROJECT_RUNTIME;
 
   beforeEach(() => {
     jest.resetModules();
+    process.env.COCALC_PRODUCT = "plus";
+    delete process.env.COCALC_PROJECT_RUNTIME;
     assertLocalProjectOwnershipMock = jest.fn(async () => undefined);
+    startProjectOnHostMock = jest.fn(async () => undefined);
     stopProjectOnHostMock = jest.fn(async () => undefined);
     getPoolQueryMock = jest.fn(async () => ({ rows: [] }));
     projectRunnerClientMock = jest.fn(() => ({
+      start: jest.fn(async () => ({ state: "running" })),
+      stop: jest.fn(async () => ({ state: "opened" })),
       status: jest.fn(async () => ({ state: "running", ip: "1.2.3.4" })),
     }));
+  });
+
+  afterAll(() => {
+    if (originalProduct == null) {
+      delete process.env.COCALC_PRODUCT;
+    } else {
+      process.env.COCALC_PRODUCT = originalProduct;
+    }
+    if (originalRuntime == null) {
+      delete process.env.COCALC_PROJECT_RUNTIME;
+    } else {
+      process.env.COCALC_PROJECT_RUNTIME = originalRuntime;
+    }
   });
 
   it("blocks state access when the project belongs to another bay", async () => {
@@ -187,6 +208,42 @@ describe("BaseProject local ownership", () => {
     const project = getProject(PROJECT_ID);
     await expect(project.stop()).resolves.toBeUndefined();
     expect(stopProjectOnHostMock).toHaveBeenCalledWith(PROJECT_ID);
+  });
+
+  it("routes a workspace start to the local runner without assigning a host", async () => {
+    process.env.COCALC_PRODUCT = "launchpad";
+    process.env.COCALC_PROJECT_RUNTIME = "workspace";
+    const runnerStart = jest.fn(async () => ({ state: "running" }));
+    projectRunnerClientMock = jest.fn(() => ({
+      start: runnerStart,
+      stop: jest.fn(),
+      status: jest.fn(),
+    }));
+    const { getProject } = await import("./base");
+    const project = getProject(PROJECT_ID);
+    await expect(project.start()).resolves.toBeUndefined();
+    expect(runnerStart).toHaveBeenCalledWith({ project_id: PROJECT_ID });
+    expect(startProjectOnHostMock).not.toHaveBeenCalled();
+  });
+
+  it("routes a hostless workspace stop to the local runner", async () => {
+    process.env.COCALC_PRODUCT = "launchpad";
+    process.env.COCALC_PROJECT_RUNTIME = "workspace";
+    const runnerStop = jest.fn(async () => ({ state: "opened" }));
+    projectRunnerClientMock = jest.fn(() => ({
+      start: jest.fn(),
+      stop: runnerStop,
+      status: jest.fn(),
+    }));
+    const { getProject } = await import("./base");
+    const project = getProject(PROJECT_ID);
+    await expect(project.stop({ force: true })).resolves.toBeUndefined();
+    expect(runnerStop).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+      force: true,
+    });
+    expect(getPoolQueryMock).not.toHaveBeenCalled();
+    expect(stopProjectOnHostMock).not.toHaveBeenCalled();
   });
 
   it("allows local state access and caches the ownership check", async () => {

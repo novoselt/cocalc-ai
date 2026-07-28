@@ -1202,6 +1202,11 @@ export async function deleteApp(
   } catch {
     await unexposeAppState(id);
   }
+  const hub = hubApi(getProjectConatClient());
+  await hub.system.releaseProjectAppPrivateHostname({
+    project_id,
+    app_id: id,
+  });
   const result = await deleteAppSpec(id);
   deleteAppMetrics(id);
   invalidateRouteCache();
@@ -1490,6 +1495,42 @@ export async function unexposeApp(id: string): Promise<AppStatus> {
     });
   }
   return await statusApp(id);
+}
+
+export async function getPrivateHostnamePolicy() {
+  const hub = hubApi(getProjectConatClient());
+  return await hub.system.getProjectAppPrivateHostnamePolicy({ project_id });
+}
+
+export async function inspectPrivateHostname(id: string) {
+  await getAppSpec(id);
+  const hub = hubApi(getProjectConatClient());
+  return await hub.system.inspectProjectAppPrivateHostname({
+    project_id,
+    app_id: id,
+  });
+}
+
+export async function listPrivateHostnames() {
+  const hub = hubApi(getProjectConatClient());
+  return await hub.system.listProjectAppPrivateHostnames({ project_id });
+}
+
+export async function reservePrivateHostname(id: string) {
+  await getAppSpec(id);
+  const hub = hubApi(getProjectConatClient());
+  return await hub.system.reserveProjectAppPrivateHostname({
+    project_id,
+    app_id: id,
+  });
+}
+
+export async function releasePrivateHostname(id: string) {
+  const hub = hubApi(getProjectConatClient());
+  return await hub.system.releaseProjectAppPrivateHostname({
+    project_id,
+    app_id: id,
+  });
 }
 
 export async function appLogs(id: string): Promise<{

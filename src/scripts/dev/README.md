@@ -9,6 +9,121 @@ few personal/dev convenience scripts that used to live at `src/scripts/`:
 - `runoo`: quick repeated/flakiness command runner.
 - `upgrade-all.sh`: local hub rebuild/restart/host-upgrade helper.
 
+## Named workspace development sites
+
+The workspace-site commands run a complete Launchpad development site directly
+in a trusted CoCalc project, without Podman. Each name has its own PGlite
+database, inner projects, runtime state, logs, app id, and HTTP/SSH port pair.
+The registry and all site data default to
+`~/.local/share/cocalc-dev/workspace-sites`, outside the source checkout.
+
+From a source checkout inside a CoCalc project:
+
+```bash
+pnpm -C src dev:workspace:init --name main
+pnpm -C src dev:workspace:start --name main
+pnpm -C src dev:workspace:status --name main
+```
+
+When `COCALC_PROJECT_ID` is present, `init` generates a managed project app and
+`start` uses the outer project's app supervisor. It discovers the public site
+origin independently of the internal control-plane API URL, so `status` prints
+the ordinary `/apps/...` browser URL when one is available. If the ambient
+short-lived project token has expired, open a fresh project terminal or refresh
+the project session before rerunning the command; do not store a broad account
+session in the collaborative project merely to start the app.
+
+On a new site with no administrator, both `start` and `status` print an
+`admin signup` URL containing Launchpad's single-use bootstrap registration
+token. Open that URL to create the first administrator. The command rebases the
+Launchpad-generated URL onto the current local, managed-app, or random-hostname
+access path. Those paths are already protected by the outer project's
+collaborator authorization or the developer's SSH tunnel, so the inner
+registration token does not grant access to a non-collaborator.
+
+The random authenticated hostname flow is explicit:
+
+```bash
+pnpm -C src dev:workspace:hostname --name main --reserve
+pnpm -C src dev:workspace:open --name main
+```
+
+`open` prints a browser handoff URL. Open it while signed in to the outer CoCalc
+site. The browser verifies collaborator access, issues its own short-lived
+project-host token, redirects to the private hostname, and removes the token
+from the browser URL. Project-scoped credentials may inspect, reserve, and
+release hostnames only for their own project. No account session or Cloudflare
+credential is stored in the developer project.
+
+As of July 27, 2026, private random app hostnames are enabled on staging and
+disabled on production. Test this flow from a source checkout in a staging
+project. The ordinary managed app URL and SSH-forward flow remain available
+without enabling random hostnames.
+
+Useful lifecycle commands:
+
+```bash
+pnpm -C src dev:workspace:logs --name main
+pnpm -C src dev:workspace:restart --name main
+pnpm -C src dev:workspace:env --name main
+pnpm -C src dev:workspace:build --name main
+pnpm -C src dev:workspace:stop --name main
+pnpm -C src dev:workspace:hostname --name main --release
+```
+
+`status` reports the source commit, dirty state, and whether generated runtime
+artifacts are stale. `start` builds only when required outputs are missing;
+use `dev:workspace:build` after source changes when a full development build is
+needed.
+
+To use the PID-scoped local supervisor, including during initial SSH-forward
+testing:
+
+```bash
+pnpm -C src dev:workspace:init --name local-main --local
+pnpm -C src dev:workspace:start --name local-main
+pnpm -C src dev:workspace:status --name local-main
+```
+
+Use the HTTP port printed by `status` from the laptop:
+
+```bash
+ssh -N -L <port>:127.0.0.1:<port> <development-host>
+```
+
+Then open `http://127.0.0.1:<port>`. The stop command only signals the exact
+recorded process after verifying its command identity. When initialized inside
+a CoCalc project, a local site retains the outer project identity. Reserving a
+private hostname registers the already-running fixed port as an unmanaged
+project app; it does not add a second process supervisor:
+
+```bash
+pnpm -C src dev:workspace:hostname --name local-main --reserve
+pnpm -C src dev:workspace:open --name local-main
+```
+
+For local sites initialized by an older version of this command, `--reserve`
+attaches the existing site to the ambient `COCALC_PROJECT_ID` in place. Its
+ports, data, inner projects, and accounts are preserved. Outside a CoCalc
+project, pass `--project <outer-project-id>` explicitly. Private-hostname
+operations use the narrow project-scoped API when the target is the current
+project. Outside that project, they use the selected account CLI profile; pass
+`--profile staging` to resolve ambiguity explicitly.
+
+Parallel Git worktrees must use distinct names:
+
+```bash
+git worktree add ../cocalc-feature-a -b feature-a
+git worktree add ../cocalc-feature-b -b feature-b
+
+pnpm -C ../cocalc-feature-a/src dev:workspace:init --name feature-a
+pnpm -C ../cocalc-feature-b/src dev:workspace:init --name feature-b
+```
+
+The global registry prevents duplicate names, data paths, and ports across
+worktrees. Workspace mode is intentionally a trusted same-UID runtime, not a
+security boundary; do not use it for untrusted users or code.
+
 ## One-time setup (optional)
 
 ```bash

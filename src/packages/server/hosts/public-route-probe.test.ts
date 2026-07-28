@@ -14,6 +14,7 @@ import {
 
 const PUBLIC_URL = "https://host-123-cocalc-prod.cocalc.ai";
 const ORIGIN = "https://cocalc.ai";
+const HOST_ID = "84f2a969-6d8e-4a47-93c5-7cc13cf13ac0";
 
 function response(
   status: number,
@@ -32,12 +33,33 @@ function corsHeaders(): Record<string, string> {
   };
 }
 
+function healthResponse({
+  body = {},
+  headers = {},
+}: {
+  body?: Record<string, unknown>;
+  headers?: Record<string, string>;
+} = {}): Response {
+  return response(
+    200,
+    { "content-type": "application/json", ...headers },
+    JSON.stringify({
+      ok: true,
+      ready: true,
+      host_id: HOST_ID,
+      ...body,
+    }),
+  );
+}
+
 describe("probeProjectHostPublicRoute", () => {
   it("checks public health, CORS preflight, and session rejection", async () => {
     const fetchImpl = jest
       .fn()
       .mockResolvedValueOnce(
-        response(200, { server: "cloudflare", "cf-ray": "ray-1" }),
+        healthResponse({
+          headers: { server: "cloudflare", "cf-ray": "ray-1" },
+        }),
       )
       .mockResolvedValueOnce(response(204, corsHeaders()))
       .mockResolvedValueOnce(response(401, corsHeaders()));
@@ -47,6 +69,7 @@ describe("probeProjectHostPublicRoute", () => {
       probeProjectHostPublicRoute({
         public_url: `${PUBLIC_URL}/ignored/path`,
         origin: ORIGIN,
+        expected_host_id: HOST_ID,
         fetchImpl,
         websocketProbeImpl,
         timeout_ms: 1000,
@@ -54,6 +77,8 @@ describe("probeProjectHostPublicRoute", () => {
     ).resolves.toEqual({
       public_url: PUBLIC_URL,
       origin: ORIGIN,
+      expected_host_id: HOST_ID,
+      health_host_id: HOST_ID,
       health_status: 200,
       preflight_status: 204,
       session_status: 401,
@@ -98,7 +123,7 @@ describe("probeProjectHostPublicRoute", () => {
   it("tolerates a minority of sampled WebSocket upgrade failures", async () => {
     const fetchImpl = jest
       .fn()
-      .mockResolvedValueOnce(response(200))
+      .mockResolvedValueOnce(healthResponse())
       .mockResolvedValueOnce(response(204, corsHeaders()))
       .mockResolvedValueOnce(response(401, corsHeaders()));
     const websocketProbeImpl = jest
@@ -110,6 +135,7 @@ describe("probeProjectHostPublicRoute", () => {
       probeProjectHostPublicRoute({
         public_url: PUBLIC_URL,
         origin: ORIGIN,
+        expected_host_id: HOST_ID,
         fetchImpl,
         websocketProbeImpl,
         websocket_attempts: 4,
@@ -134,7 +160,7 @@ describe("probeProjectHostPublicRoute", () => {
   it("fails when fewer than 75 percent of WebSocket upgrades succeed", async () => {
     const fetchImpl = jest
       .fn()
-      .mockResolvedValueOnce(response(200))
+      .mockResolvedValueOnce(healthResponse())
       .mockResolvedValueOnce(response(204, corsHeaders()))
       .mockResolvedValueOnce(response(401, corsHeaders()));
     const websocketProbeImpl = jest
@@ -147,6 +173,7 @@ describe("probeProjectHostPublicRoute", () => {
       probeProjectHostPublicRoute({
         public_url: PUBLIC_URL,
         origin: ORIGIN,
+        expected_host_id: HOST_ID,
         fetchImpl,
         websocketProbeImpl,
         websocket_attempts: 4,
@@ -215,7 +242,7 @@ describe("probeProjectHostPublicRoute", () => {
       const localUrl = `http://127.0.0.1:${address.port}`;
       const fetchImpl = jest
         .fn()
-        .mockResolvedValueOnce(response(200))
+        .mockResolvedValueOnce(healthResponse())
         .mockResolvedValueOnce(response(204, corsHeaders()))
         .mockResolvedValueOnce(response(401, corsHeaders()));
       let caught: unknown;
@@ -223,6 +250,7 @@ describe("probeProjectHostPublicRoute", () => {
         await probeProjectHostPublicRoute({
           public_url: localUrl,
           origin: ORIGIN,
+          expected_host_id: HOST_ID,
           fetchImpl,
           websocket_attempts: 4,
           timeout_ms: 1000,
@@ -255,7 +283,7 @@ describe("probeProjectHostPublicRoute", () => {
   it("rejects a public edge response without browser CORS headers", async () => {
     const fetchImpl = jest
       .fn()
-      .mockResolvedValueOnce(response(200))
+      .mockResolvedValueOnce(healthResponse())
       .mockResolvedValueOnce(
         response(204, {
           ...corsHeaders(),
@@ -267,6 +295,7 @@ describe("probeProjectHostPublicRoute", () => {
       probeProjectHostPublicRoute({
         public_url: PUBLIC_URL,
         origin: ORIGIN,
+        expected_host_id: HOST_ID,
         fetchImpl,
       }),
     ).rejects.toThrow("invalid Access-Control-Allow-Origin");
@@ -280,6 +309,7 @@ describe("probeProjectHostPublicRoute", () => {
       probeProjectHostPublicRoute({
         public_url: PUBLIC_URL,
         origin: ORIGIN,
+        expected_host_id: HOST_ID,
         fetchImpl,
       }),
     ).rejects.toThrow("health check returned HTTP 502");
@@ -303,6 +333,7 @@ describe("probeProjectHostPublicRoute", () => {
       await probeProjectHostPublicRoute({
         public_url: PUBLIC_URL,
         origin: ORIGIN,
+        expected_host_id: HOST_ID,
         fetchImpl,
       });
     } catch (err) {
@@ -313,6 +344,7 @@ describe("probeProjectHostPublicRoute", () => {
     expect((caught as Error).message).toContain("reported ready=false");
     expect(projectHostPublicRouteProbeDiagnostic(caught)).toMatchObject({
       stage: "health",
+      expected_host_id: HOST_ID,
       health_status: 200,
       health_ok: true,
       health_ready: false,
@@ -323,7 +355,7 @@ describe("probeProjectHostPublicRoute", () => {
   it("requires the exact unauthenticated session response", async () => {
     const fetchImpl = jest
       .fn()
-      .mockResolvedValueOnce(response(200))
+      .mockResolvedValueOnce(healthResponse())
       .mockResolvedValueOnce(response(204, corsHeaders()))
       .mockResolvedValueOnce(response(403, corsHeaders()));
 
@@ -331,6 +363,7 @@ describe("probeProjectHostPublicRoute", () => {
       probeProjectHostPublicRoute({
         public_url: PUBLIC_URL,
         origin: ORIGIN,
+        expected_host_id: HOST_ID,
         fetchImpl,
       }),
     ).rejects.toThrow("returned HTTP 403; expected 401");
@@ -341,8 +374,57 @@ describe("probeProjectHostPublicRoute", () => {
       probeProjectHostPublicRoute({
         public_url: "https://user:secret@host.example.test",
         origin: ORIGIN,
+        expected_host_id: HOST_ID,
         fetchImpl: jest.fn(),
       }),
     ).rejects.toThrow("must not contain credentials");
+  });
+
+  it("rejects a health response without a project-host identity", async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(
+      healthResponse({
+        body: { host_id: undefined },
+      }),
+    );
+
+    await expect(
+      probeProjectHostPublicRoute({
+        public_url: PUBLIC_URL,
+        origin: ORIGIN,
+        expected_host_id: HOST_ID,
+        fetchImpl,
+      }),
+    ).rejects.toThrow("did not report host_id");
+  });
+
+  it("rejects a healthy response from the wrong project host", async () => {
+    const wrongHostId = "777d774e-3f9c-43a0-9944-c2c25324741f";
+    const fetchImpl = jest.fn().mockResolvedValue(
+      healthResponse({
+        body: { host_id: wrongHostId },
+      }),
+    );
+
+    let caught: unknown;
+    try {
+      await probeProjectHostPublicRoute({
+        public_url: PUBLIC_URL,
+        origin: ORIGIN,
+        expected_host_id: HOST_ID,
+        fetchImpl,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect((caught as Error).message).toContain(
+      `reached host "${wrongHostId}"; expected "${HOST_ID}"`,
+    );
+    expect(projectHostPublicRouteProbeDiagnostic(caught)).toMatchObject({
+      stage: "health",
+      expected_host_id: HOST_ID,
+      health_host_id: wrongHostId,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

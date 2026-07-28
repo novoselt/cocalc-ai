@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Space } from "antd";
+import { Space, Tag } from "antd";
 import { FormattedMessage, useIntl } from "react-intl";
 import {
   React,
@@ -37,6 +37,7 @@ import {
   hostLabel,
   normalizeProjectStateForDisplay,
 } from "@cocalc/frontend/projects/host-operational";
+import { useProjectRuntimeCapabilities } from "../runtime-capabilities";
 
 interface ReactProps {
   project: Project;
@@ -53,6 +54,7 @@ export const ProjectControl: React.FC<ReactProps> = (props: ReactProps) => {
     embedded = false,
   } = props;
   const { project_id } = useProjectContext();
+  const runtime = useProjectRuntimeCapabilities();
   const isFlyout = mode === "flyout";
   const isEmbedded = embedded || isFlyout;
   const intl = useIntl();
@@ -240,6 +242,18 @@ export const ProjectControl: React.FC<ReactProps> = (props: ReactProps) => {
   function render_status_summary() {
     return (
       <>
+        <LabeledRow key="runtime" label="Runtime" vertical={isFlyout}>
+          <Space size={6}>
+            <Tag color={runtime.trusted ? "orange" : "blue"}>
+              {runtime.label}
+            </Tag>
+            <span style={{ color: COLORS.GRAY_M }}>
+              {runtime.isolation === "trusted-workspace"
+                ? "Direct process on the Launchpad workspace host"
+                : "Isolated project runtime"}
+            </span>
+          </Space>
+        </LabeledRow>
         <LabeledRow
           key="state"
           label="State"
@@ -270,7 +284,7 @@ export const ProjectControl: React.FC<ReactProps> = (props: ReactProps) => {
   }
 
   function render_rootfs_details() {
-    if (!showRootFilesystemImage) {
+    if (!showRootFilesystemImage || !runtime.rootfs) {
       return null;
     }
     return (
@@ -290,7 +304,9 @@ export const ProjectControl: React.FC<ReactProps> = (props: ReactProps) => {
         style={{ width: "100%" }}
       >
         {render_lifecycle_actions()}
-        <RuntimeSponsorControls project={project} project_id={project_id} />
+        {runtime.resource_limits && (
+          <RuntimeSponsorControls project={project} project_id={project_id} />
+        )}
         {render_archived_note()}
         <section>{render_status_summary()}</section>
         {render_control_error()}
