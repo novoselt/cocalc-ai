@@ -297,7 +297,7 @@ export function AdminPage({
       {!isMobile && (
         <div
           style={{
-            background: "#00000005",
+            background: COLORS.YELL_LLL,
             borderRight: "1px solid rgba(5, 5, 5, 0.06)",
             display: "flex",
             flexDirection: "column",
@@ -333,7 +333,7 @@ export function AdminPage({
             }
             inlineIndent={navCollapsed ? 0 : 24}
             style={{
-              background: "#00000005",
+              background: COLORS.YELL_LLL,
               borderBottom: `1px solid ${COLORS.GRAY_DDD}`,
               flex: "1 1 auto",
               minHeight: 0,
