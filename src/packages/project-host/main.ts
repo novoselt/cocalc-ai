@@ -1236,7 +1236,23 @@ export async function main(
   };
   const maybeRewriteAppHostnameRequest = createAppHostnameRequestRewriteBarrier(
     {
-      shouldClaim: shouldRouteProjectHostIngressToApp,
+      shouldClaim: (req) => {
+        if (
+          req.headers[PRIVATE_APP_HOST_HEADER] ||
+          req.headers[PUBLIC_APP_HOST_HEADER]
+        ) {
+          return false;
+        }
+        const parsed = new URL(
+          `${req.url ?? "/"}`,
+          "http://project-host.local",
+        );
+        const maybeProjectPrefix = (parsed.pathname || "/").split("/")[1];
+        if (maybeProjectPrefix && isValidUUID(maybeProjectPrefix)) {
+          return false;
+        }
+        return shouldRouteProjectHostIngressToApp(req);
+      },
       rewrite: async (req, originalUrl) => {
         await maybeRewritePrivateHostnameRequest(req, originalUrl);
         if (req.headers[PRIVATE_APP_HOST_HEADER]) return;

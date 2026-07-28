@@ -144,6 +144,29 @@ describe("private app hostname routing", () => {
     expect(req.url).toBe("/routed/conat/?EIO=4&transport=websocket");
   });
 
+  it("does not mask a request that an earlier middleware already routed", async () => {
+    const rewrite = jest.fn(async () => {});
+    const barrier = createAppHostnameRequestRewriteBarrier({
+      shouldClaim: () => false,
+      rewrite,
+    });
+    const req = {
+      headers: {
+        host: "dev-1234.example.com",
+        [PRIVATE_APP_HOST_HEADER]: "dev-1234.example.com",
+      },
+      url: `/${route.project_id}/apps/dev-site/`,
+    } as any;
+
+    await barrier(req);
+
+    expect(req.url).toBe(`/${route.project_id}/apps/dev-site/`);
+    expect(rewrite).toHaveBeenCalledWith(
+      req,
+      `/${route.project_id}/apps/dev-site/`,
+    );
+  });
+
   it("leaves canonical project-host routes unchanged", async () => {
     const trace = jest.fn();
     const rewrite = createPrivateAppHostnameRequestRewriter({ trace });
