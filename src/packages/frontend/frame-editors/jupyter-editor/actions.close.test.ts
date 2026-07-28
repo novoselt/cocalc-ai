@@ -40,6 +40,20 @@ describe("JupyterEditorActions.close", () => {
 
     expect(order).toEqual(["base", "jupyter"]);
   });
+
+  it("provides AI metadata defaults after Jupyter actions are removed", () => {
+    const target = { jupyter_actions: undefined } as any;
+
+    expect(
+      JupyterEditorActions.prototype.languageModelGetLanguage.call(target),
+    ).toBe("py");
+    expect(
+      JupyterEditorActions.prototype.languageModelExtraFileInfo.call(target),
+    ).toBe("Jupyter notebook using the  kernel");
+    expect(
+      JupyterEditorActions.prototype.codexCodeDescription.call(target),
+    ).toBe("Jupyter notebook using the  kernel");
+  });
 });
 
 describe("JupyterEditorActions close-frame cleanup", () => {
