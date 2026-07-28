@@ -1124,6 +1124,37 @@ async function scheduleRuntimeRefresh(row: any, opts?: { force?: boolean }) {
   }
 }
 
+async function reconcileRuntimeNetworkAfterStart(
+  row: any,
+  providerId: string | undefined,
+): Promise<void> {
+  if (providerId === "gcp") {
+    try {
+      // A restarted GCP VM can receive a new ephemeral public IP. Refresh it
+      // before readiness verification so direct Cloudflare routes converge
+      // without waiting for a later queued worker or failed public probe.
+      await handleRefreshRuntime({
+        ...row,
+        payload: {
+          provider: providerId,
+          force: true,
+          attempt: 0,
+          source: "post_start",
+        },
+      });
+      return;
+    } catch (err) {
+      logger.warn("post-start runtime network reconciliation failed", {
+        host_id: row.id,
+        provider: providerId,
+        err,
+      });
+    }
+  }
+  await ensureDnsForHost(row);
+  await scheduleRuntimeRefresh(row, { force: providerId === "gcp" });
+}
+
 function maybeReplaceIpInUrl(
   urlValue: string | null | undefined,
   previousIp: string | undefined,
@@ -2138,8 +2169,7 @@ async function handleStart(row: any) {
       last_seen: null,
     });
     const nextRow = { ...row, status: "starting", metadata: nextMetadata };
-    await ensureDnsForHost(nextRow);
-    await scheduleRuntimeRefresh(nextRow, { force: providerId === "gcp" });
+    await reconcileRuntimeNetworkAfterStart(nextRow, providerId);
     await scheduleHostReadyVerification({
       row: nextRow,
       provider: providerId,
@@ -2166,8 +2196,7 @@ async function handleStart(row: any) {
     metadata: nextMetadata,
   });
   const nextRow = { ...row, status: "running", metadata: nextMetadata };
-  await ensureDnsForHost(nextRow);
-  await scheduleRuntimeRefresh(nextRow, { force: providerId === "gcp" });
+  await reconcileRuntimeNetworkAfterStart(nextRow, providerId);
   if (providerId) {
     await bumpReconcile(providerId, DEFAULT_INTERVALS.running_ms);
   }

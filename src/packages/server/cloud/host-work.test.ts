@@ -573,6 +573,88 @@ describe("cloud host start failures", () => {
     expect(rows[0].ssh_server).toBe("34.106.236.180:2222");
   });
 
+  it("refreshes a restarted GCP host address before readiness verification", async () => {
+    const hostId = "f8d2ca6f-563d-473d-a01d-2b4a7e8bdd91";
+    const startHost = jest.fn(async () => undefined);
+    const getStatus = jest.fn(async () => "running");
+    const getInstance = jest.fn(async () => ({
+      instance_id: `cocalc-host-${hostId}`,
+      name: `cocalc-host-${hostId}`,
+      status: "RUNNING",
+      public_ip: "34.106.236.181",
+      private_ip: "10.180.0.25",
+      internal_hostname: `cocalc-host-${hostId}.internal`,
+    }));
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        provider: {
+          startHost,
+          getStatus,
+          getInstance,
+          mapStatus: () => "running",
+        },
+      },
+      creds: {},
+    });
+
+    await upsertProjectHost({
+      id: hostId,
+      name: "Restarted address host",
+      region: "us-west3",
+      status: "off",
+      public_url: "https://host.example.test",
+      internal_url: "http://cocalc-host.internal:9002",
+      ssh_server: "34.106.236.180:2222",
+      metadata: {
+        owner: "acct-owner",
+        desired_state: "running",
+        interruption_restore_policy: "none",
+        public_route: {
+          desired_mode: "cloudflare-proxy",
+          active_mode: "cloudflare-proxy",
+          status: "active",
+        },
+        machine: {
+          cloud: "gcp",
+          zone: "us-west3-b",
+          machine_type: "t2d-standard-4",
+          disk_gb: 50,
+          disk_type: "balanced",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "gcp",
+          zone: "us-west3-b",
+          instance_id: `cocalc-host-${hostId}`,
+          public_ip: "34.106.236.180",
+          private_ip: "10.180.0.24",
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.start({
+      id: "work-start-ip-rotation",
+      vm_id: hostId,
+      action: "start",
+      payload: { provider: "gcp" },
+    } as any);
+
+    expect(startHost).toHaveBeenCalled();
+    expect(getInstance).toHaveBeenCalled();
+    const { rows } = await getPool().query(
+      "SELECT ssh_server, metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(rows[0].metadata.runtime.public_ip).toBe("34.106.236.181");
+    expect(rows[0].ssh_server).toBe("34.106.236.181:2222");
+    const workRows = await getPool().query(
+      "SELECT action FROM cloud_vm_work WHERE vm_id=$1 ORDER BY action",
+      [hostId],
+    );
+    expect(workRows.rows).toEqual([{ action: "verify_host_ready" }]);
+  });
+
   it("reschedules verify_host_ready while the current check is in progress", async () => {
     const hostId = "d848a2ca-5f63-4473-b01d-2b4a7e8bdd90";
     const startedAt = new Date(Date.now() - 60_000).toISOString();
