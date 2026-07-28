@@ -5,12 +5,15 @@
 
 import { v4 as uuid } from "uuid";
 
-import getPool from "@cocalc/database/pool";
+import getPool, { type PoolClient } from "@cocalc/database/pool";
 import { isValidUUID } from "@cocalc/util/misc";
 
 const TABLE = "account_admin_audit_log";
 
-export type AccountAdminAuditAction = "grant-admin" | "revoke-admin";
+export type AccountAdminAuditAction =
+  | "balance-adjustment"
+  | "grant-admin"
+  | "revoke-admin";
 
 function normalizeReason(reason?: string | null): string | null {
   const trimmed = `${reason ?? ""}`.trim();
@@ -50,12 +53,14 @@ export async function recordAccountAdminAuditEvent({
   actor_account_id,
   reason,
   metadata,
+  client,
 }: {
   account_id: string;
   action: AccountAdminAuditAction;
   actor_account_id?: string | null;
   reason?: string | null;
   metadata?: Record<string, unknown> | null;
+  client?: PoolClient;
 }): Promise<void> {
   if (!isValidUUID(account_id)) {
     throw new Error("account_id must be a valid uuid");
@@ -63,7 +68,7 @@ export async function recordAccountAdminAuditEvent({
   const actor =
     actor_account_id && isValidUUID(actor_account_id) ? actor_account_id : null;
   await ensureAccountAdminAuditLogSchema();
-  await getPool().query(
+  await (client ?? getPool()).query(
     `INSERT INTO ${TABLE}
        (id, account_id, action, actor_account_id, reason, metadata)
      VALUES

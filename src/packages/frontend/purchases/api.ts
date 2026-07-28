@@ -122,6 +122,7 @@ export async function isPurchaseAllowed(
 interface PurchasesOptions {
   thisMonth?: boolean; // if true, limit and offset are ignored
   cutoff?: Date; // if given, returns purchases back to this date (limit/offset NOT ignored)
+  cutoff_end?: Date;
   limit?: number;
   offset?: number;
   service?: Service;

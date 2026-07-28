@@ -6,6 +6,7 @@
 import dayjs from "dayjs";
 
 import { getTransactionClient } from "@cocalc/database/pool";
+import { recordAccountAdminAuditEvent } from "@cocalc/server/accounts/admin-audit";
 import isValidAccount from "@cocalc/server/accounts/is-valid-account";
 import userIsInGroup from "@cocalc/server/accounts/is-in-group";
 import {
@@ -201,18 +202,9 @@ export default async function adminPurchase({
     if (product === "balance") {
       const adjustmentAmount = priceValue;
       const absoluteAmount = adjustmentAmount.abs();
-      const userNote =
-        balance_user_note?.trim() ||
-        (adjustmentAmount.gt(0)
-          ? "Admin balance credit"
-          : "Admin balance debit");
-      const adjustmentNotes = buildNotes({
-        admin_account_id,
-        comment: balance_admin_note?.trim() || comment,
-        pricing_note: `Balance adjustment: ${moneyToCurrency(
-          adjustmentAmount.toNumber(),
-        )}`,
-      });
+      const userNote = balance_user_note?.trim() || "Balance adjustment";
+      const internalNote =
+        balance_admin_note?.trim() || comment?.trim() || undefined;
       let purchase_id: number;
       if (adjustmentAmount.gt(0)) {
         purchase_id = await createCredit({
@@ -223,7 +215,6 @@ export default async function adminPurchase({
             description: userNote,
             purpose: "admin-balance-adjustment",
           },
-          notes: adjustmentNotes,
           tag: "admin-purchase",
         });
       } else {
@@ -236,12 +227,24 @@ export default async function adminPurchase({
             description: userNote,
             purpose: "admin-balance-adjustment",
           },
-          notes: adjustmentNotes,
           service: "credit",
           tag: "admin-purchase",
         });
         await getBalance({ account_id: user_account_id, client });
       }
+      await recordAccountAdminAuditEvent({
+        account_id: user_account_id,
+        action: "balance-adjustment",
+        actor_account_id: admin_account_id,
+        client,
+        reason: internalNote,
+        metadata: {
+          adjustment_amount: adjustmentAmount.toNumber(),
+          direction: adjustmentAmount.gt(0) ? "credit" : "debit",
+          purchase_id,
+          user_visible_description: userNote,
+        },
+      });
       await client.query("COMMIT");
       await refreshAccountBalanceAndPublishBestEffort({
         account_id: user_account_id,

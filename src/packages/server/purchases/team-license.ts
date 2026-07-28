@@ -31,6 +31,7 @@ import {
   resolveTeamLicenseQuote,
 } from "@cocalc/server/membership/team-licenses";
 import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
+import { formatTeamLicenseCreditPurchaseDescription } from "@cocalc/util/purchases/descriptions";
 
 const logger = getLogger("purchases:team-license");
 const ALLOWED_SLACK = 0.01;
@@ -53,14 +54,21 @@ function normalizeTargets(target_seats?: Record<string, number>) {
   );
 }
 
+function positiveInteger(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export async function purchaseTeamLicenseChange({
   account_id,
   target_seats,
   amount,
+  creditId,
 }: {
   account_id: string;
   target_seats: Record<string, number>;
   amount?: MoneyValue;
+  creditId?: number;
 }) {
   logger.debug("purchaseTeamLicenseChange", {
     account_id,
@@ -91,6 +99,7 @@ export async function purchaseTeamLicenseChange({
       unrounded_cost: quote.total_price,
       description: {
         type: "team-license-change",
+        ...(creditId != null ? { credit_id: creditId } : {}),
         target_seats: normalizedTargets,
         line_items: quote.line_items,
         interval: quote.interval,
@@ -155,7 +164,8 @@ export async function createTeamLicenseRenewalPayment({
     const { payment_intent, hosted_invoice_url } = await createPaymentIntent({
       account_id: owner_account_id,
       purpose: TEAM_LICENSE_RENEWAL,
-      description: "Renew team license",
+      description:
+        formatTeamLicenseCreditPurchaseDescription(TEAM_LICENSE_RENEWAL),
       lineItems: quote.line_items,
       return_url,
       metadata: {
@@ -276,6 +286,7 @@ export async function processTeamLicenseRenewal({
     if (toDecimal(amount).add(ALLOWED_SLACK).lt(toDecimal(quote.total_price))) {
       throw Error("team license renewal payment is less than renewal cost");
     }
+    const creditId = positiveInteger(paymentIntent.metadata?.credit_id);
     const purchase_id = await createPurchase({
       account_id,
       service: "membership",
@@ -284,6 +295,7 @@ export async function processTeamLicenseRenewal({
       description: {
         type: "team-license-renewal",
         team_license_id,
+        ...(creditId != null ? { credit_id: creditId } : {}),
         line_items: quote.line_items,
         interval: "year",
       },

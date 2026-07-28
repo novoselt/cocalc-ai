@@ -1125,6 +1125,7 @@ ${await support()}`;
           paymentIntent.metadata,
         ),
         amount,
+        creditId: credit_id,
       });
     } else if (paymentIntent.metadata.purpose == TEAM_LICENSE_RENEWAL) {
       reason = `renew team license ${paymentIntent.metadata.team_license_id}`;

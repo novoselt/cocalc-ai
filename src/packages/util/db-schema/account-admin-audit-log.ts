@@ -28,17 +28,17 @@ Table({
   fields: {
     id: {
       type: "uuid",
-      desc: "Unique account admin-role audit event id.",
+      desc: "Unique account admin action audit event id.",
     },
     account_id: {
       type: "uuid",
-      desc: "Account affected by the admin-role action.",
+      desc: "Account affected by the admin action.",
       render: { type: "account" },
     },
     action: {
       type: "string",
       pg_type: "VARCHAR(32)",
-      desc: "Account admin-role audit action, e.g. grant-admin or revoke-admin.",
+      desc: "Account admin audit action, e.g. grant-admin, revoke-admin, or balance-adjustment.",
     },
     actor_account_id: {
       type: "uuid",

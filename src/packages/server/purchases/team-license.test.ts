@@ -32,6 +32,7 @@ jest.mock("@cocalc/server/messages/send", () => ({
 import {
   createTeamLicenseRenewalPayment,
   processTeamLicenseRenewal,
+  purchaseTeamLicenseChange,
 } from "./team-license";
 
 beforeAll(async () => {
@@ -98,6 +99,29 @@ describe("team license renewal payments", () => {
       [owner_account_id],
     );
     expect(Number(purchases.rows[0].cost)).toBe(240);
+  });
+
+  it("records the funding credit id on team license purchases", async () => {
+    const owner_account_id = uuid();
+    await createTestAccount(owner_account_id);
+
+    await purchaseTeamLicenseChange({
+      account_id: owner_account_id,
+      target_seats: {
+        [teamTier]: 1,
+      },
+      amount: 120,
+      creditId: 123,
+    });
+
+    const { rows } = await getPool().query(
+      "SELECT description FROM purchases WHERE account_id=$1 AND tag='team-license-change'",
+      [owner_account_id],
+    );
+    expect(rows[0].description).toMatchObject({
+      credit_id: 123,
+      type: "team-license-change",
+    });
   });
 
   it("does not fail a committed renewal when the success notification fails", async () => {
@@ -177,7 +201,7 @@ describe("team license renewal payments", () => {
 
     const paymentIntent = {
       id: "pi_team_license_retry",
-      metadata: { team_license_id: overview.id },
+      metadata: { credit_id: "456", team_license_id: overview.id },
     };
     await processTeamLicenseRenewal({
       account_id: owner_account_id,
@@ -205,11 +229,25 @@ describe("team license renewal payments", () => {
     expect(new Date(rows[0].current_period_start).toISOString()).toBe(
       new Date(overview.current_period_end).toISOString(),
     );
-    const purchases = await getPool().query(
+    const count = await getPool().query(
       "SELECT COUNT(*)::int AS count FROM purchases WHERE account_id=$1 AND tag='team-license-renewal'",
       [owner_account_id],
     );
-    expect(purchases.rows[0].count).toBe(1);
+    expect(count.rows[0].count).toBe(1);
+    const purchase = await getPool().query(
+      `
+        SELECT description
+          FROM purchases
+         WHERE account_id=$1
+           AND tag='team-license-renewal'
+         LIMIT 1
+      `,
+      [owner_account_id],
+    );
+    expect(purchase.rows[0].description).toMatchObject({
+      credit_id: 456,
+      type: "team-license-renewal",
+    });
   });
 
   it("creates a payment intent when the team balance setting is disabled", async () => {

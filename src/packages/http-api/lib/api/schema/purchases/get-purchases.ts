@@ -34,7 +34,7 @@ export const GetPurchasesInputSchema = z
     group: z
       .boolean()
       .describe(
-        `If \`true\`, results are groups by service and project id, and then decreasingly
+        `If \`true\`, results are grouped by service, and then decreasingly
          ordered by cost. Otherwise, results are ordered by time, with the newest
          purchases returned first.`,
       )
@@ -43,6 +43,13 @@ export const GetPurchasesInputSchema = z
       .union([z.string(), z.number()])
       .describe(
         `When provided, only purchases which occur _after_ the timestamp specified in this
+         field will be returned.`,
+      )
+      .nullish(),
+    cutoff_end: z
+      .union([z.string(), z.number()])
+      .describe(
+        `When provided, only purchases which occur _at or before_ the timestamp specified in this
          field will be returned.`,
       )
       .nullish(),
@@ -73,7 +80,9 @@ export const GetPurchasesOutputSchema = z.union([
   z
     .object({
       balance: MoneyValueSchema.describe(
-        `The account balance after this purchase was made. For in-progress metered purchases, this can be complicated -- it's the balance when the purchases table was requested, incorporating the contribution of this purchase so far.`,
+        `The account balance at the end of the selected range, used to derive the
+         running balance after each purchase. When \`cutoff_end\` is provided,
+         active rate-based purchases are estimated through that timestamp.`,
       ),
       purchases: z.array(
         z.object({

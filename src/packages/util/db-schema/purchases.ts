@@ -100,6 +100,9 @@ export interface MembershipPackagePurchase {
 
 export interface TeamLicenseChangePurchase {
   type: "team-license-change";
+  // Credit purchase created from the external payment that funded this
+  // team-license purchase. Undefined when it was paid from account balance.
+  credit_id?: number;
   target_seats: Record<string, number>;
   line_items?: LineItem[];
   interval?: "year";
@@ -108,6 +111,7 @@ export interface TeamLicenseChangePurchase {
 export interface TeamLicenseRenewalPurchase {
   type: "team-license-renewal";
   team_license_id: string;
+  credit_id?: number;
   line_items?: LineItem[];
   interval?: "year";
 }
