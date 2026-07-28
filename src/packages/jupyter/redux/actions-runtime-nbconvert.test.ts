@@ -42,4 +42,19 @@ describe("Jupyter runtime nbconvert state", () => {
     const applied = setState.mock.calls.at(-1)?.[0]?.nbconvert;
     expect(applied?.get("state")).toBe("run");
   });
+
+  it("ignores late cell runtime updates after actions teardown", () => {
+    const actions = new JupyterActions(
+      "runtime-cell-state-closed-test",
+      {} as any,
+    ) as any;
+    actions._state = "closed";
+    delete actions.pendingRuntimeRecords;
+    delete actions.pendingDeletedRuntimeRecords;
+
+    expect(() => {
+      actions.set_runtime_cell_state("cell-id", { state: "done" });
+      actions.clear_runtime_cell_state("cell-id");
+    }).not.toThrow();
+  });
 });
