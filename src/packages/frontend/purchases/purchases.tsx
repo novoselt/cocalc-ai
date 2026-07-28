@@ -41,6 +41,12 @@ import {
 import type { Purchase } from "@cocalc/util/db-schema/purchases";
 import { getAmountStyle } from "@cocalc/util/db-schema/purchases";
 import {
+  formatMembershipDebitPurchaseDescription,
+  formatTeamLicenseDebitPurchaseDescription,
+  membershipTierLabel,
+  type MembershipTierLabels,
+} from "@cocalc/util/purchases/descriptions";
+import {
   capitalize,
   field_cmp,
   currency,
@@ -182,16 +188,6 @@ type PurchaseItem = Partial<
     count?: number;
   }
 >;
-
-type MembershipTierLabels = Record<string, string>;
-
-function membershipTierLabel(
-  membershipClass: unknown,
-  labels: MembershipTierLabels,
-) {
-  const id = typeof membershipClass === "string" ? membershipClass : "";
-  return id ? (labels[id] ?? id) : "unknown";
-}
 
 export function PurchasesTable({
   account_id,
@@ -795,6 +791,11 @@ function descriptionTextForPrint({
     return "Course fee";
   }
   if (service === "membership") {
+    const teamLicenseLabel =
+      formatTeamLicenseDebitPurchaseDescription(descriptionAny);
+    if (teamLicenseLabel) {
+      return teamLicenseLabel;
+    }
     if (descriptionAny.type === "membership-package") {
       const kindLabel =
         descriptionAny.kind === "course"
@@ -819,10 +820,10 @@ function descriptionTextForPrint({
         courseLabel ? ` for ${courseLabel}` : ""
       }${descriptionAny.expanded_existing_package ? " expanded" : ""}`;
     }
-    return `Membership: ${membershipTierLabel(
-      descriptionAny.class,
-      membershipTierLabels,
-    )} (${descriptionAny.interval ?? "unknown"})${
+    return `${formatMembershipDebitPurchaseDescription({
+      description: descriptionAny,
+      labels: membershipTierLabels,
+    })}${
       descriptionAny.admin_assigned
         ? ` admin assigned${descriptionAny.assigned_by ? ` by ${descriptionAny.assigned_by}` : ""}`
         : ""
@@ -1139,6 +1140,7 @@ function PurchaseDescription({
     ? description.line_items
     : [];
   const showLineItemsToggle = lineItems.length > 1;
+  const showCreditLink = description?.credit_id != null;
   const showRefundedMarker = description?.refund_purchase_id != null;
   const showAdminRefund =
     admin &&
@@ -1147,6 +1149,7 @@ function PurchaseDescription({
     isRefundable(service, cost);
   const showInvoiceActions = invoice_id != null;
   const showActions =
+    showCreditLink ||
     showRefundedMarker ||
     showAdminRefund ||
     showInvoiceActions ||
@@ -1159,18 +1162,16 @@ function PurchaseDescription({
         membershipTierLabels={membershipTierLabels}
         onSelectPurchase={onSelectPurchase}
       />
-      {description?.credit_id != null && (
-        <div>
-          <RelatedPurchaseLink
-            purchaseId={description.credit_id}
-            onSelectPurchase={onSelectPurchase}
-          >
-            Credit Id: {description.credit_id}
-          </RelatedPurchaseLink>
-        </div>
-      )}
       {showActions && (
         <Space wrap>
+          {showCreditLink && (
+            <RelatedPurchaseLink
+              purchaseId={description.credit_id}
+              onSelectPurchase={onSelectPurchase}
+            >
+              Credit Id: {description.credit_id}
+            </RelatedPurchaseLink>
+          )}
           {showRefundedMarker && (
             <span>
               Refunded:{" "}
@@ -1267,6 +1268,11 @@ function Description({
     return <>Course fee</>;
   }
   if (service === "membership") {
+    const teamLicenseLabel =
+      formatTeamLicenseDebitPurchaseDescription(description);
+    if (teamLicenseLabel) {
+      return <>{teamLicenseLabel}</>;
+    }
     if (description?.type === "membership-package") {
       const {
         expanded_existing_package,
@@ -1304,16 +1310,13 @@ function Description({
         </>
       );
     }
-    const {
-      admin_assigned,
-      assigned_by,
-      class: membershipClass,
-      interval,
-    } = description;
+    const { admin_assigned, assigned_by } = description;
     return (
       <>
-        Membership: {membershipTierLabel(membershipClass, membershipTierLabels)}{" "}
-        ({interval ?? "unknown"})
+        {formatMembershipDebitPurchaseDescription({
+          description,
+          labels: membershipTierLabels,
+        })}
         {admin_assigned ? (
           <>
             {" "}
