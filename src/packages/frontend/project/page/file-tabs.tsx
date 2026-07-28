@@ -652,7 +652,11 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
               icon={<Icon name="plus" />}
               onClick={() => onEdit("", "add")}
               size="small"
-              style={{ flex: "0 0 auto" }}
+              style={{
+                alignSelf: "flex-start",
+                flex: "0 0 auto",
+                marginTop: 6,
+              }}
             />
           </Tooltip>
         )}
