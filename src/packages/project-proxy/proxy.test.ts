@@ -304,6 +304,8 @@ describe("project proxy upstream boundary metering", () => {
 
     const client = connect({ host: "127.0.0.1", port: proxyPort });
     await once(client, "connect");
+    const received: Buffer[] = [];
+    client.on("data", (chunk) => received.push(Buffer.from(chunk)));
     const callbackDone = new Promise<void>((resolve) => {
       noteUpstreamWsBytes.mockImplementation(() => resolve());
     });
@@ -316,11 +318,10 @@ describe("project proxy upstream boundary metering", () => {
         "Sec-WebSocket-Version: 13\r\n" +
         "\r\n",
     );
-    await once(client, "data");
     await callbackDone;
-    client.destroy();
     await once(client, "close");
 
+    expect(Buffer.concat(received).includes(payload)).toBe(true);
     expect(noteUpstreamWsBytes).toHaveBeenCalledWith(
       expect.objectContaining({
         bytes: payload.length,

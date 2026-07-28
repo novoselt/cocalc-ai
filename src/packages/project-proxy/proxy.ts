@@ -66,6 +66,34 @@ function getChunkByteLength(chunk: unknown): number {
   return 0;
 }
 
+function observeUpstreamWebSocketBytes({
+  proxyReq,
+  req,
+  noteUpstreamWsBytes,
+}: {
+  proxyReq: ClientRequest;
+  req: http.IncomingMessage;
+  noteUpstreamWsBytes: NoteProxyBoundaryBytesFn;
+}): void {
+  // http-proxy-3 registers its upgrade listener after proxyReqWs handlers
+  // return. Register ours in a microtask so its pipe sees the upgrade head
+  // before any metering listener can put the upstream socket in flowing mode.
+  queueMicrotask(() => {
+    proxyReq.once("upgrade", (_proxyRes, proxySocket, proxyHead) => {
+      const headBytes = getChunkByteLength(proxyHead);
+      if (headBytes > 0) {
+        noteUpstreamWsBytes({ req, bytes: headBytes });
+      }
+      proxySocket.on("data", (chunk) => {
+        const bytes = getChunkByteLength(chunk);
+        if (bytes > 0) {
+          noteUpstreamWsBytes({ req, bytes });
+        }
+      });
+    });
+  });
+}
+
 function firstHeaderValue(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return `${value[0] ?? ""}`.trim();
   return `${value ?? ""}`.trim();
@@ -283,13 +311,10 @@ export function createProxyHandlers({
       origin: req.headers?.origin,
     });
     if (noteUpstreamWsBytes) {
-      proxyReq.once("upgrade", (_proxyRes, proxySocket) => {
-        proxySocket.on("data", (chunk) => {
-          const bytes = getChunkByteLength(chunk);
-          if (bytes > 0) {
-            noteUpstreamWsBytes({ req, bytes });
-          }
-        });
+      observeUpstreamWebSocketBytes({
+        proxyReq,
+        req,
+        noteUpstreamWsBytes,
       });
     }
   });
@@ -429,13 +454,10 @@ export function attachProjectProxy({
       origin: req.headers?.origin,
     });
     if (noteUpstreamWsBytes) {
-      _proxyReq.once("upgrade", (_proxyRes, proxySocket) => {
-        proxySocket.on("data", (chunk) => {
-          const bytes = getChunkByteLength(chunk);
-          if (bytes > 0) {
-            noteUpstreamWsBytes({ req, bytes });
-          }
-        });
+      observeUpstreamWebSocketBytes({
+        proxyReq: _proxyReq,
+        req,
+        noteUpstreamWsBytes,
       });
     }
   });
