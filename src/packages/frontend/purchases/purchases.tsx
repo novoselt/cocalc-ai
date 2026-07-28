@@ -564,7 +564,7 @@ export function PurchasesTable({
               <Alert
                 showIcon
                 type="info"
-                message={filterInfo}
+                title={filterInfo}
                 style={{ padding: "4px 12px" }}
               />
             )}

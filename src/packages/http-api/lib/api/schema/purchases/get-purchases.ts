@@ -79,8 +79,10 @@ export const GetPurchasesOutputSchema = z.union([
   FailedAPIOperationSchema,
   z
     .object({
-      balance: MoneyValueSchema.describe(
-        `The account balance after this purchase was made. For in-progress metered purchases, this can be complicated -- it's the balance when the purchases table was requested, incorporating the contribution of this purchase so far.`,
+      balance: MoneyValueSchema.nullable().describe(
+        `The current account balance used to derive the running balance after each purchase.
+         This is null when \`cutoff_end\` is provided because an exact historical balance
+         cannot always be reconstructed for metered purchases.`,
       ),
       purchases: z.array(
         z.object({

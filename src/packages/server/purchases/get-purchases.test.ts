@@ -91,11 +91,13 @@ describe("creates and get purchases using various options", () => {
     });
     expect(p_cutoff2.length).toBe(1);
 
-    const { purchases: p_cutoff_end } = await getPurchases({
-      account_id,
-      cutoff_end: dayjs().subtract(1, "week").toDate(),
-    });
+    const { purchases: p_cutoff_end, balance: cutoff_end_balance } =
+      await getPurchases({
+        account_id,
+        cutoff_end: dayjs().subtract(1, "week").toDate(),
+      });
     expect(p_cutoff_end.length).toBe(1);
+    expect(cutoff_end_balance).toBeNull();
 
     const { purchases: p_range } = await getPurchases({
       account_id,
