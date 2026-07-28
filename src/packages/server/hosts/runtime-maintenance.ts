@@ -725,6 +725,8 @@ async function claimSyntheticProbe(
 ): Promise<SyntheticProbeClaim | undefined> {
   const claimId = randomUUID();
   const previous = row.metadata?.runtime_synthetic_probe ?? {};
+  // The due decision used this snapshot; reject it if another worker advanced it.
+  const previousClaimId = `${previous.claim_id ?? ""}`.trim() || undefined;
   const sameSession =
     `${previous.host_session_id ?? ""}`.trim() ===
     `${row.metadata?.host_session_id ?? ""}`.trim();
@@ -774,6 +776,8 @@ async function claimSyntheticProbe(
         AND status='running'
         AND COALESCE(last_seen, to_timestamp(0)) >=
           NOW() - ($2::double precision * INTERVAL '1 millisecond')
+        AND metadata -> 'runtime_synthetic_probe' ->> 'claim_id'
+          IS NOT DISTINCT FROM $5::text
         AND (
           metadata -> 'runtime_synthetic_probe' ->> 'status' IS DISTINCT FROM 'running'
           OR COALESCE(
@@ -787,6 +791,7 @@ async function claimSyntheticProbe(
       HEARTBEAT_FRESH_MS,
       JSON.stringify(probe),
       SYNTHETIC_PROBE_CLAIM_TIMEOUT_MS,
+      previousClaimId ?? null,
     ],
   );
   return rowCount ? claim : undefined;
@@ -1002,6 +1007,8 @@ async function claimPublicRouteProbe(
 ): Promise<PublicRouteProbeClaim | undefined> {
   const claimId = randomUUID();
   const previous = row.metadata?.public_route_probe ?? {};
+  // The due decision used this snapshot; reject it if another worker advanced it.
+  const previousClaimId = `${previous.claim_id ?? ""}`.trim() || undefined;
   const claim: PublicRouteProbeClaim = {
     claim_id: claimId,
     previous_status: `${previous.status ?? ""}`.trim() || undefined,
@@ -1038,6 +1045,8 @@ async function claimPublicRouteProbe(
         AND status='running'
         AND COALESCE(last_seen, to_timestamp(0)) >=
           NOW() - ($2::double precision * INTERVAL '1 millisecond')
+        AND metadata -> 'public_route_probe' ->> 'claim_id'
+          IS NOT DISTINCT FROM $5::text
         AND (
           metadata -> 'public_route_probe' ->> 'status' IS DISTINCT FROM 'running'
           OR COALESCE(
@@ -1051,6 +1060,7 @@ async function claimPublicRouteProbe(
       HEARTBEAT_FRESH_MS,
       JSON.stringify(probe),
       PUBLIC_ROUTE_PROBE_CLAIM_TIMEOUT_MS,
+      previousClaimId ?? null,
     ],
   );
   return rowCount ? claim : undefined;
@@ -1213,6 +1223,7 @@ function publicRouteFailureClass(error: string): string {
   if (/http 52[0-9]/.test(value)) return "cloudflare_52x";
   if (value.includes("timed out") || value.includes("timeout"))
     return "timeout";
+  if (value.includes("fetch failed")) return "network_fetch";
   if (value.includes("cors")) return "cors";
   if (value.includes("session")) return "session";
   if (value.includes("websocket")) return "websocket";
@@ -1236,7 +1247,9 @@ function publicRouteFleetContext({
     ({ origin_health }) => origin_health?.status === "healthy",
   ).length;
   const ingressFailures =
-    (failureClasses.timeout ?? 0) + (failureClasses.cloudflare_52x ?? 0);
+    (failureClasses.timeout ?? 0) +
+    (failureClasses.cloudflare_52x ?? 0) +
+    (failureClasses.network_fetch ?? 0);
   const sharedIngressFailure =
     checked_hosts >= 3 &&
     failures.length >= 2 &&
@@ -1299,13 +1312,17 @@ async function alertPublicRouteFailures({
     new Set(failures.map(({ row }) => deploymentLabel(row))),
   ).join(",");
   await adminAlert({
-    subject: `[${sites}] ${failures.length} project-host public route${failures.length === 1 ? "" : "s"} failed`,
+    subject: failures[0]?.fleet?.shared_ingress_failure
+      ? `[${sites}] Project-host public route fleet probe degraded`
+      : failures.length === 1
+        ? `[${sites}] Project-host public route failure: ${hostName(failures[0].row)}`
+        : `[${sites}] ${failures.length} project-host public routes failed`,
     body: [
       `${failures.length} public project-host browser route${failures.length === 1 ? " requires" : "s require"} operator attention after automatic monitoring and recovery.`,
       `site=${sites}`,
       `origin=${origin}`,
       failures[0]?.fleet?.shared_ingress_failure
-        ? "The failures were classified as a shared ingress incident because at least half of the fleet failed with timeout/Cloudflare 52x errors while every checked host-local origin remained healthy. Individual failure counters, placement quarantine, and per-host tunnel restarts were suppressed."
+        ? "The failures were classified as a shared ingress incident because at least half of the fleet failed with timeout, network fetch, or Cloudflare 52x errors while every checked host-local origin remained healthy. Individual failure counters, placement quarantine, per-host alerts, and route repairs were suppressed."
         : "Affected hosts that crossed the repeated-failure threshold are quarantined from placement because browser CORS/session traffic may not reach them.",
       failures[0]?.fleet?.shared_ingress_failure
         ? "Investigate the shared DNS, Cloudflare, firewall, or probe path before changing individual hosts."
@@ -1324,7 +1341,7 @@ async function alertPublicRouteFailures({
           .join(" "),
       ),
     ].join("\n"),
-    dedupMinutes: 15,
+    dedupMinutes: failures[0]?.fleet?.shared_ingress_failure ? 60 : 15,
     dedupBySubject: true,
   });
 }
@@ -1359,7 +1376,7 @@ async function alertPublicRouteRecoveries(
   if (!rows.length) return;
   const sites = Array.from(new Set(rows.map(deploymentLabel))).join(",");
   await adminAlert({
-    subject: `[${sites}] ${rows.length} project-host public route${rows.length === 1 ? "" : "s"} recovered`,
+    subject: `[${sites}] Project-host public route recovery`,
     body: [
       `${rows.length} previously escalated public project-host browser route${rows.length === 1 ? " is" : "s are"} healthy again. Quarantined hosts passed the required recovery probes and returned to placement.`,
       ...rows.map(
@@ -1367,6 +1384,7 @@ async function alertPublicRouteRecoveries(
       ),
     ].join("\n"),
     dedupMinutes: 15,
+    dedupBySubject: true,
   });
 }
 
@@ -1773,7 +1791,11 @@ export async function runProjectHostPublicRouteProbes(): Promise<{
   const failures = (
     await Promise.all(
       allFailures
-        .filter((failure) => publicRouteFailureEscalationDue(failure))
+        .filter(
+          (failure) =>
+            !fleet.shared_ingress_failure &&
+            publicRouteFailureEscalationDue(failure),
+        )
         .map(async (failure) =>
           (await markPublicRouteFailureEscalated(failure))
             ? failure
@@ -1782,7 +1804,10 @@ export async function runProjectHostPublicRouteProbes(): Promise<{
     )
   ).filter((failure): failure is PublicRouteFailure => failure != null);
   const repairs = await runPublicRouteAutoRepair(allFailures);
-  await alertPublicRouteFailures({ origin, failures });
+  await alertPublicRouteFailures({
+    origin,
+    failures: fleet.shared_ingress_failure ? allFailures : failures,
+  });
   await alertPublicRouteRecoveries(
     results.flatMap((result, index) =>
       result.recovered_alerted ? [claimed[index].row] : [],

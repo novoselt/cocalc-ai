@@ -466,6 +466,32 @@ describe("project-host runtime maintenance policy", () => {
     });
   });
 
+  it("classifies correlated fetch failures with healthy origins as shared", () => {
+    const failures: any[] = Array.from({ length: 9 }, (_, index) => ({
+      row: degradedCloudHost({ name: `host-${index}` }),
+      error:
+        "ProjectHostPublicRouteProbeError: public project-host health check failed: TypeError: fetch failed",
+      consecutive_failures: 0,
+      probe: {},
+      origin_health: {
+        status: "healthy",
+        checked_at: new Date(NOW).toISOString(),
+        duration_ms: 2,
+      },
+    }));
+
+    expect(
+      _test.publicRouteFleetContext({ checked_hosts: 10, failures }),
+    ).toMatchObject({
+      checked_hosts: 10,
+      failed_hosts: 9,
+      healthy_origin_failures: 9,
+      failure_classes: { network_fetch: 9 },
+      correlated_failure: true,
+      shared_ingress_failure: true,
+    });
+  });
+
   it("preserves host failure state during a shared ingress incident", () => {
     const outcome = _test.publicRouteProbeOutcome({
       row: degradedCloudHost(),
