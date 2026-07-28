@@ -58,6 +58,7 @@ import {
   initConatApi,
   initConatPersist,
   initConatHostRegistry,
+  startConatApiBackgroundWorkers,
 } from "@cocalc/server/conat";
 import { initConatServer } from "@cocalc/server/conat/socketio";
 import initHttpRedirect from "./servers/http-redirect";
@@ -288,7 +289,7 @@ async function startServer(): Promise<void> {
 
   if (program.conatApi || program.conatServer) {
     setWorkerStartupPhase("conat-api");
-    await initConatApi();
+    await initConatApi({ startBackgroundWorkers: false });
   }
 
   if (program.conatPersist || program.conatServer) {
@@ -299,19 +300,6 @@ async function startServer(): Promise<void> {
   if (program.conatServer) {
     setWorkerStartupPhase("conat-host-registry");
     await initConatHostRegistry();
-  }
-
-  if (program.conatApi || program.conatServer) {
-    setWorkerStartupPhase("cloud-workers");
-    logger.info("starting cloud VM work queue worker...");
-    startCloudVmWorker({
-      worker_id: `hub-${process.pid}`,
-      handlers: cloudHostHandlers,
-    });
-    logger.info("starting cloud catalog worker...");
-    startCloudCatalogWorker();
-    logger.info("starting cloud VM reconcile loop...");
-    startCloudVmReconciler();
   }
 
   if (program.conatServer || program.proxyServer || program.conatApi) {
@@ -371,6 +359,22 @@ async function startServer(): Promise<void> {
     logger.info(msg);
     console.log(msg);
     openUrlIfRequested(displayUrl);
+  }
+
+  if (program.conatApi || program.conatServer) {
+    // Startup-critical auth and HTTP must not compete with maintenance leaders
+    // for the bounded PostgreSQL application pool.
+    setWorkerStartupPhase("background-workers");
+    startConatApiBackgroundWorkers();
+    logger.info("starting cloud VM work queue worker...");
+    startCloudVmWorker({
+      worker_id: `hub-${process.pid}`,
+      handlers: cloudHostHandlers,
+    });
+    logger.info("starting cloud catalog worker...");
+    startCloudCatalogWorker();
+    logger.info("starting cloud VM reconcile loop...");
+    startCloudVmReconciler();
   }
 
   if (program.all || program.mentions) {

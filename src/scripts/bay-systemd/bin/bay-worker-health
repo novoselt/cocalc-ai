@@ -22,6 +22,19 @@ if ! wait_for_http_check \
   "$(worker_url "$worker_id")" \
   "worker ${worker_id}" \
   "$COCALC_BAY_WORKER_START_TIMEOUT_S"; then
+  diagnostics_port=$(( $(worker_port "$worker_id") + 2000 ))
+  diagnostics="$(
+    curl --fail --silent --show-error --max-time 2 \
+      "http://127.0.0.1:${diagnostics_port}/diagnostics" 2>/dev/null \
+      | tr -d '\n' \
+      | cut -c1-8000 \
+      || true
+  )"
+  if [[ -n "$diagnostics" ]]; then
+    bay_log "worker ${worker_id} startup diagnostics: ${diagnostics}"
+  else
+    bay_log "worker ${worker_id} startup diagnostics unavailable"
+  fi
   exit 1
 fi
 

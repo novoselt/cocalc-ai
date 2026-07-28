@@ -90,23 +90,13 @@ function isPrimaryBayWorker(): boolean {
   return !workerId || workerId === "1";
 }
 
-export async function initConatApi() {
-  logger.debug("initConatApi: the central api services", {
-    conatApiCount,
-    projectRunnerCount,
-  });
-  await loadConatConfiguration();
-  configureHubServiceAdmissionDenialRecorder();
-  startConatAdmissionSettingsRefresh();
-  logProjectionReadModes();
-  enableDbAccountRowFeedPublishing();
-  enableDbCollaboratorAccountFeedPublishing();
-  enableDbProjectAccountFeedPublishing();
+let conatApiBackgroundWorkersStarted = false;
 
-  // do not block on any of these!
-  for (let i = 0; i < conatApiCount; i++) {
-    initAPI();
-  }
+export function startConatApiBackgroundWorkers(): void {
+  if (conatApiBackgroundWorkersStarted) return;
+  conatApiBackgroundWorkersStarted = true;
+
+  logger.info("starting Conat API background workers");
   startBackupLroWorker();
   startCopyLroWorker();
   startCourseCollectLroWorker();
@@ -159,6 +149,29 @@ export async function initConatApi() {
   }
   startBayBackupMaintenance();
   startBayWalArchiveMaintenance();
+}
+
+export async function initConatApi({
+  startBackgroundWorkers = true,
+}: {
+  startBackgroundWorkers?: boolean;
+} = {}) {
+  logger.debug("initConatApi: the central api services", {
+    conatApiCount,
+    projectRunnerCount,
+  });
+  await loadConatConfiguration();
+  configureHubServiceAdmissionDenialRecorder();
+  startConatAdmissionSettingsRefresh();
+  logProjectionReadModes();
+  enableDbAccountRowFeedPublishing();
+  enableDbCollaboratorAccountFeedPublishing();
+  enableDbProjectAccountFeedPublishing();
+
+  // do not block on any of these!
+  for (let i = 0; i < conatApiCount; i++) {
+    initAPI();
+  }
   initInterBayServices().catch((err) => {
     logger.warn("failed to initialize inter-bay services", { err: `${err}` });
   });
@@ -198,6 +211,9 @@ export async function initConatApi() {
     logger.info("external project runtime: skipping embedded runner services");
   }
   createTimeService({ client: conat() });
+  if (startBackgroundWorkers) {
+    startConatApiBackgroundWorkers();
+  }
 }
 
 export async function initConatHostRegistry() {
