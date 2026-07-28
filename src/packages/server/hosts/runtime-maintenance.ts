@@ -518,7 +518,7 @@ function publicRouteFailureEscalationDue(
   nowMs = Date.now(),
 ): boolean {
   if (timestampMs(failure.probe.alerted_at) != null) return false;
-  if (failure.fleet?.correlated_failure) return true;
+  if (failure.probe.quarantined === true) return true;
   const incidentStartedAt = timestampMs(failure.probe.incident_started_at);
   return (
     incidentStartedAt != null &&
@@ -1223,7 +1223,14 @@ function publicRouteFailureClass(error: string): string {
   if (/http 52[0-9]/.test(value)) return "cloudflare_52x";
   if (value.includes("timed out") || value.includes("timeout"))
     return "timeout";
-  if (value.includes("fetch failed")) return "network_fetch";
+  if (
+    value.includes("fetch failed") ||
+    /\b(eai_again|econnreset|etimedout|econnrefused|enotfound)\b/.test(value) ||
+    value.includes("socket hang up") ||
+    value.includes("client network socket disconnected")
+  ) {
+    return "network_fetch";
+  }
   if (value.includes("cors")) return "cors";
   if (value.includes("session")) return "session";
   if (value.includes("websocket")) return "websocket";
@@ -1251,10 +1258,9 @@ function publicRouteFleetContext({
     (failureClasses.cloudflare_52x ?? 0) +
     (failureClasses.network_fetch ?? 0);
   const sharedIngressFailure =
-    checked_hosts >= 3 &&
     failures.length >= 2 &&
-    failures.length / checked_hosts >= 0.5 &&
-    healthyOriginFailures === failures.length &&
+    healthyOriginFailures >=
+      (failures.length === 2 ? 2 : failures.length - 1) &&
     ingressFailures === failures.length;
   return {
     checked_hosts,
@@ -1341,7 +1347,7 @@ async function alertPublicRouteFailures({
           .join(" "),
       ),
     ].join("\n"),
-    dedupMinutes: failures[0]?.fleet?.shared_ingress_failure ? 60 : 15,
+    dedupMinutes: failures[0]?.fleet?.shared_ingress_failure ? 4 * 60 : 15,
     dedupBySubject: true,
   });
 }

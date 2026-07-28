@@ -462,6 +462,14 @@ describe("project-host runtime maintenance policy", () => {
       _test.publicRouteFleetContext({ checked_hosts: 4, failures }),
     ).toMatchObject({
       healthy_origin_failures: 2,
+      shared_ingress_failure: true,
+    });
+
+    failures[1].origin_health.status = "unknown";
+    expect(
+      _test.publicRouteFleetContext({ checked_hosts: 4, failures }),
+    ).toMatchObject({
+      healthy_origin_failures: 1,
       shared_ingress_failure: false,
     });
   });
@@ -516,7 +524,7 @@ describe("project-host runtime maintenance policy", () => {
     });
   });
 
-  it("escalates persistent or correlated public-route incidents once", () => {
+  it("escalates quarantined or persistent public-route incidents once", () => {
     const row = degradedCloudHost();
     const failure = {
       row,
@@ -549,6 +557,8 @@ describe("project-host runtime maintenance policy", () => {
     failure.probe.incident_started_at = new Date(NOW).toISOString();
     failure.fleet.correlated_failure = true;
     failure.fleet.failed_hosts = 2;
+    expect(_test.publicRouteFailureEscalationDue(failure, NOW)).toBe(false);
+    failure.probe.quarantined = true;
     expect(_test.publicRouteFailureEscalationDue(failure, NOW)).toBe(true);
 
     expect(
