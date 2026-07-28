@@ -41,8 +41,7 @@ import initSitemap from "./sitemap";
 import { applyBaselineSecurityHeaders } from "./security-headers";
 import getServerSettings from "./server-settings";
 import basePath from "@cocalc/backend/base-path";
-import { initConatServer } from "@cocalc/server/conat/socketio";
-import { conatPassword, conatSocketioCount, root } from "@cocalc/backend/data";
+import { conatSocketioCount, root } from "@cocalc/backend/data";
 import { createApiV2Router, createConatRouter } from "@cocalc/http-api";
 import { ensureBootstrapAdminToken } from "@cocalc/server/auth/bootstrap-admin";
 import {
@@ -103,6 +102,26 @@ function cloudflareProxyHeadersEnabled(settings: Record<string, any>): boolean {
   );
 }
 
+export async function createStrictCloudflareProxyResolver(): Promise<
+  () => boolean
+> {
+  const settings = await getServerSettings();
+  let strictCloudflareProxy = false;
+  const refresh = () => {
+    strictCloudflareProxy = cloudflareProxyHeadersEnabled(
+      settings.all as Record<string, any>,
+    );
+    logger.info(
+      strictCloudflareProxy
+        ? "proxy trust mode is strict-cloudflare (forwarded headers trusted only from loopback peers)"
+        : "proxy trust mode is off (forwarded headers ignored; using direct socket address)",
+    );
+  };
+  refresh();
+  settings.table.on("change", refresh);
+  return () => strictCloudflareProxy;
+}
+
 function normalizeIp(ip?: string): string {
   let v = `${ip ?? ""}`.trim();
   if (!v) return "";
@@ -129,6 +148,7 @@ interface Options {
   cert?: string;
   key?: string;
   projectProxyHandlersPromise?;
+  strictCloudflareProxy?: () => boolean;
 }
 
 const staticCompression = compression({ threshold: 0 });
@@ -183,27 +203,12 @@ export default async function init(opts: Options): Promise<{
   // In launchpad self-host mode we enable strict-cloudflare when either tunnel
   // mode is configured or the bay frontdoor explicitly normalizes headers from
   // a Cloudflare-proxied direct ingress.
-  const settings = await getServerSettings();
-  let strictCloudflareProxy = false;
-  const applyTrustProxy = () => {
-    const nextStrict = cloudflareProxyHeadersEnabled(
-      settings.all as Record<string, any>,
-    );
-    strictCloudflareProxy = nextStrict;
-    if (nextStrict) {
-      app.set("trust proxy", (ip: string) => isTrustedCloudflareProxyPeer(ip));
-      logger.info(
-        "proxy trust mode is strict-cloudflare (forwarded headers trusted only from loopback peers)",
-      );
-    } else {
-      app.set("trust proxy", false);
-      logger.info(
-        "proxy trust mode is off (forwarded headers ignored; using direct socket address)",
-      );
-    }
-  };
-  applyTrustProxy();
-  settings.table.on("change", applyTrustProxy);
+  const strictCloudflareProxy =
+    opts.strictCloudflareProxy ?? (await createStrictCloudflareProxyResolver());
+  app.set(
+    "trust proxy",
+    (ip: string) => strictCloudflareProxy() && isTrustedCloudflareProxyPeer(ip),
+  );
 
   router.use("/robots.txt", initRobots());
   router.use("/sitemap.xml", initSitemap());
@@ -328,15 +333,6 @@ export default async function init(opts: Options): Promise<{
     key: opts.key,
     app,
   });
-
-  if (opts.conatServer) {
-    logger.info(`initializing the standalone Conat server`);
-    await initConatServer({
-      systemAccountPassword: conatPassword,
-      ssl: !!opts.cert,
-      strictCloudflareProxy: () => strictCloudflareProxy,
-    });
-  }
 
   // This must be second to the last, since it will prevent any
   // other upgrade handlers from being added to httpServer.

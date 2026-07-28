@@ -50,7 +50,9 @@ import { callback2, retry_until_success } from "@cocalc/util/async-utils";
 import { set_agent_endpoint } from "./health-checks";
 import { getLogger } from "./logger";
 import initDatabase, { getDatabase } from "./servers/database";
-import initExpressApp from "./servers/express-app";
+import initExpressApp, {
+  createStrictCloudflareProxyResolver,
+} from "./servers/express-app";
 import {
   loadConatConfiguration,
   initConatApi,
@@ -252,11 +254,15 @@ async function startServer(): Promise<void> {
   // This loads from the database credentials to use Conat.
   await loadConatConfiguration();
 
-  if (program.conatRouter) {
-    // launch standalone socketio websocket server (no http server)
+  let strictCloudflareProxy: (() => boolean) | undefined;
+  if (program.conatRouter || program.conatServer) {
+    // Bind before starting any API or maintenance service that connects to
+    // this worker's local Conat server.
+    strictCloudflareProxy = await createStrictCloudflareProxyResolver();
     await initConatServer({
       kucalc: program.mode == "kucalc",
       systemAccountPassword: conatPassword,
+      strictCloudflareProxy,
     });
   }
 
@@ -296,6 +302,7 @@ async function startServer(): Promise<void> {
       projectProxyHandlersPromise,
       cert: program.httpsCert,
       key: program.httpsKey,
+      strictCloudflareProxy,
     });
 
     const database = getDatabase();
