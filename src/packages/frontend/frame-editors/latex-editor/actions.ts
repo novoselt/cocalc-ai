@@ -3059,11 +3059,12 @@ export class Actions extends BaseActions<LatexEditorState> {
         ? "cc-chat-marker cc-chat-marker-locked"
         : "cc-chat-marker",
       clearOnEnter: false,
-      // Once a thread has messages, protect the marker boundaries too.
-      // Otherwise Backspace from the next line can remove the newline and
-      // typing at the old right edge can silently extend the hash outside
-      // the read-only range, turning it into a new editable anchor.
-      inclusiveLeft: locked,
+      // Keep the left edge outside the atom so the cursor can rest immediately
+      // before `%` and insert text there. Protect the right edge: otherwise
+      // Backspace from the next line can remove the newline and typing at the
+      // old right edge can silently extend the hash outside the read-only
+      // range, turning it into a new editable anchor.
+      inclusiveLeft: false,
       inclusiveRight: locked,
       handleMouseEvents: false,
       readOnly: locked,

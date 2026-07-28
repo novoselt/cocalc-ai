@@ -1,4 +1,5 @@
 import { List, Map } from "immutable";
+import * as CodeMirror from "codemirror";
 import { Actions } from "./actions";
 import { EventEmitter } from "events";
 
@@ -599,7 +600,7 @@ describe("LaTeX invalid chat marker timing", () => {
 });
 
 describe("LaTeX chat marker locking", () => {
-  it("protects both marker boundaries after the thread has messages", () => {
+  it("keeps the left boundary editable and protects the right boundary", () => {
     const textMarker = {};
     const cm = {
       markText: jest.fn(() => textMarker),
@@ -622,10 +623,33 @@ describe("LaTeX chat marker locking", () => {
       expect.objectContaining({
         readOnly: true,
         atomic: true,
-        inclusiveLeft: true,
+        inclusiveLeft: false,
         inclusiveRight: true,
       }),
     );
+  });
+
+  it("allows insertion before a locked marker but rejects its right edge", () => {
+    const doc = new (CodeMirror as any).Doc("x% chat: HASH");
+    const cm = {
+      markText: doc.markText.bind(doc),
+    };
+    const actions: any = Object.create(Actions.prototype);
+
+    actions._createChatTextMarker({
+      cm,
+      hash: "HASH",
+      path: "123.tex",
+      from: { line: 0, ch: 1 },
+      to: { line: 0, ch: 13 },
+      locked: true,
+    });
+
+    doc.replaceRange("y", { line: 0, ch: 1 });
+    expect(doc.getValue()).toBe("xy% chat: HASH");
+
+    doc.replaceRange("z", { line: 0, ch: 14 });
+    expect(doc.getValue()).toBe("xy% chat: HASH");
   });
 
   it("leaves both boundaries editable before the first message", () => {
