@@ -18,7 +18,10 @@ if [[ -n "${COCALC_BAY_WORKER_HEALTH_CMD:-}" ]]; then
   exit 0
 fi
 
-if ! wait_for_http_check "$(worker_url "$worker_id")" "worker ${worker_id}"; then
+if ! wait_for_http_check \
+  "$(worker_url "$worker_id")" \
+  "worker ${worker_id}" \
+  "$COCALC_BAY_WORKER_START_TIMEOUT_S"; then
   exit 1
 fi
 
