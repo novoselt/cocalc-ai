@@ -162,6 +162,14 @@ describe("hub proxy websocket upgrades", () => {
         localConatServer: true,
       });
       expect(proxyHandlers.handleUpgrade).not.toHaveBeenCalled();
+
+      mockProxyConatWebsocket.mockReset();
+      req.url = "/conat/?EIO=4&transport=websocket";
+      await handler(req, socket, head);
+      expect(mockProxyConatWebsocket).toHaveBeenCalledWith(req, socket, head, {
+        localConatServer: true,
+      });
+      expect(proxyHandlers.handleUpgrade).not.toHaveBeenCalled();
     } finally {
       if (priorPath == null) {
         delete process.env.COCALC_CONAT_PATH_COMPONENT;

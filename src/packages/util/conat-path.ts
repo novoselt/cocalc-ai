@@ -30,3 +30,36 @@ export function conatPathForBase(
       : "/";
   return joinUrlPath(absoluteBase, normalizeConatPathComponent(component));
 }
+
+export function conatProxyPathsForBase(
+  basePath: string,
+  publicComponent?: string | null,
+): string[] {
+  const canonical = conatPathForBase(basePath);
+  const publicPath = conatPathForBase(basePath, publicComponent);
+  return publicPath === canonical ? [canonical] : [canonical, publicPath];
+}
+
+export function canonicalConatProxyPath(
+  rawUrl: string | undefined,
+  publicComponent?: string | null,
+): string {
+  const url = new URL(`${rawUrl ?? "/"}`, "http://cocalc.invalid");
+  const components = [
+    normalizeConatPathComponent(publicComponent),
+    DEFAULT_CONAT_PATH_COMPONENT,
+  ];
+  for (const component of new Set(components)) {
+    const marker = `/${component}`;
+    const index = url.pathname.lastIndexOf(marker);
+    if (index === -1) {
+      continue;
+    }
+    const suffix = url.pathname.slice(index + marker.length);
+    if (suffix && !suffix.startsWith("/")) {
+      continue;
+    }
+    return `/${DEFAULT_CONAT_PATH_COMPONENT}${suffix}${url.search}`;
+  }
+  throw new Error(`invalid Conat proxy path: ${rawUrl ?? "/"}`);
+}

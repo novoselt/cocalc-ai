@@ -5,7 +5,7 @@ import stripRememberMeCookie from "./strip-remember-me-cookie";
 import { versionCheckFails } from "./version";
 import { proxyConatWebsocket } from "./proxy-conat";
 import basePath from "@cocalc/backend/base-path";
-import { conatPathForBase } from "@cocalc/util/conat-path";
+import { conatProxyPathsForBase } from "@cocalc/util/conat-path";
 import { parseReq } from "./parse";
 import hasAccess, {
   resolveAuthenticatedAccountId,
@@ -133,9 +133,8 @@ function isConatUpgradePath(url: string) {
     /\/+$/,
     "",
   );
-  const conatPath = conatPathForBase(
+  return conatProxyPathsForBase(
     basePath,
     process.env.COCALC_CONAT_PATH_COMPONENT,
-  );
-  return pathname === conatPath;
+  ).includes(pathname);
 }

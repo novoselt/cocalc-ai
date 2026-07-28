@@ -11,7 +11,7 @@ import { maybeRewritePublicAppSubdomainRequest } from "./public-app-subdomain";
 import { proxyConatRequest } from "./proxy-conat";
 import base_path from "@cocalc/backend/base-path";
 import { ProjectControlFunction } from "@cocalc/server/projects/control";
-import { conatPathForBase } from "@cocalc/util/conat-path";
+import { conatProxyPathsForBase } from "@cocalc/util/conat-path";
 
 const logger = getLogger("proxy");
 
@@ -30,11 +30,13 @@ export default function initProxy(opts: Options) {
     base_path.length <= 1 ? "" : base_path
   }\/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}\/*`;
   const proxy_route_regexp = new RegExp(proxy_regexp);
-  const conatPath = conatPathForBase(
+  const conatPaths = conatProxyPathsForBase(
     base_path,
     process.env.COCALC_CONAT_PATH_COMPONENT,
-  ).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const conat_regexp = new RegExp(`^${conatPath}(?:\\/|$)`);
+  )
+    .map((path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const conat_regexp = new RegExp(`^(?:${conatPaths})(?:\\/|$)`);
   logger.info("creating proxy server with proxy_regexp", proxy_regexp);
 
   // tcp connections:

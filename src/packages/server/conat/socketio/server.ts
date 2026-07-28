@@ -149,7 +149,9 @@ export async function init(
     isAllowed,
     systemAccountPassword:
       options.systemAccountPassword ?? (await secureRandomString(64)),
-    path: conatPathForBase(basePath, process.env.COCALC_CONAT_PATH_COMPONENT),
+    // Alternate public paths are rewritten by the Hub proxy. Keep the
+    // standalone server canonical so backend and project clients stay local.
+    path: conatPathForBase(basePath),
     port,
     clusterName,
     ...options,
