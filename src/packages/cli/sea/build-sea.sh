@@ -82,7 +82,13 @@ esac
 
 rm -f cocalc.js sea-prep.blob sea.term
 ln -sfn "$(basename "$TARGET")" "$BUILD_DIR/$NAME"
+if [[ "$OS" == "linux" ]]; then
+  "$SEA_DIR/package-linux-runtime.sh" "$TARGET" "$TARGET.tar.gz"
+fi
 
 echo "Built $TARGET"
 ls -lh "$TARGET"
 ls -lh "$BUILD_DIR/$NAME"
+if [[ "$OS" == "linux" ]]; then
+  ls -lh "$TARGET.tar.gz"
+fi

@@ -2,18 +2,24 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import SSHKeyAdder from "./ssh-key-adder";
 
 jest.mock("antd", () => {
-  const Button = ({
-    children,
-    onClick,
-    disabled,
-  }: {
-    children: any;
-    onClick?: () => void;
-    disabled?: boolean;
-  }) => (
-    <button type="button" onClick={onClick} disabled={disabled}>
-      {children}
-    </button>
+  const React = jest.requireActual("react");
+  const Button = React.forwardRef(
+    (
+      {
+        children,
+        onClick,
+        disabled,
+      }: {
+        children: any;
+        onClick?: () => void;
+        disabled?: boolean;
+      },
+      ref,
+    ) => (
+      <button ref={ref} type="button" onClick={onClick} disabled={disabled}>
+        {children}
+      </button>
+    ),
   );
   const TextArea = ({
     value,
@@ -81,6 +87,16 @@ jest.mock("@cocalc/frontend/components/error", () => ({
 }));
 
 describe("SSHKeyAdder", () => {
+  it("restores focus to the trigger after cancelling", async () => {
+    render(<SSHKeyAdder add_ssh_key={jest.fn()} />);
+    const trigger = screen.getByRole("button", { name: /Add SSH Key\.\.\./i });
+
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
   it("keeps the dialog open and shows the backend error when add_ssh_key rejects", async () => {
     const add_ssh_key = jest.fn(async () => {
       throw Error("write failed");

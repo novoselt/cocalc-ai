@@ -1062,6 +1062,14 @@ describe("PublicApp", () => {
       screen.getByRole("heading", { name: "Ways to Run CoCalc" }),
     ).not.toBeNull();
     expect(screen.getByText("Which path fits?")).not.toBeNull();
+    const productChooser = screen.getByRole("list", {
+      name: "CoCalc product path chooser",
+    });
+    expect(
+      within(productChooser).getByRole("link", {
+        name: /CoCalc Launchpad.*customer-operated private environment/,
+      }),
+    ).toHaveAttribute("href", "/products/cocalc-launchpad");
   });
 
   it("renders the cocalc launchpad page", async () => {

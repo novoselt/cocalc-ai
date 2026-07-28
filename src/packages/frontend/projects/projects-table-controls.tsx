@@ -153,6 +153,7 @@ export function ProjectsTableControls({
         )}
 
         <Select
+          aria-label="Filter projects by hashtags"
           mode="multiple"
           allowClear
           showSearch

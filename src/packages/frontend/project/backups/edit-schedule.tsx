@@ -200,6 +200,7 @@ export default function EditBackupSchedule() {
               <Flex style={{ marginBottom: "5px" }}>
                 <div style={{ flex: 0.5 }}>Daily</div>
                 <InputNumber
+                  aria-label="Daily backups"
                   suffix="backups"
                   style={{ flex: 0.5 }}
                   step={1}
@@ -220,6 +221,7 @@ export default function EditBackupSchedule() {
               <Flex style={{ marginBottom: "5px" }}>
                 <div style={{ flex: 0.5 }}>Weekly</div>
                 <InputNumber
+                  aria-label="Weekly backups"
                   suffix="backups"
                   style={{ flex: 0.5 }}
                   step={1}
@@ -240,6 +242,7 @@ export default function EditBackupSchedule() {
               <Flex style={{ marginBottom: "5px" }}>
                 <div style={{ flex: 0.5 }}>Monthly</div>
                 <InputNumber
+                  aria-label="Monthly backups"
                   suffix="backups"
                   style={{ flex: 0.5 }}
                   step={1}

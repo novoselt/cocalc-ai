@@ -25,12 +25,16 @@ jest.mock("antd", () => ({
   ),
   Divider: () => <hr />,
   Popover: ({ children }: any) => <>{children}</>,
-  Select: () => <select aria-label="Switch project" />,
-  Tabs: ({ items = [], onEdit, onChange }: any) => (
+  Select: ({ "aria-label": ariaLabel }: any) => (
+    <select aria-label={ariaLabel} />
+  ),
+  Tabs: ({ hideAdd, items = [], onEdit, onChange }: any) => (
     <div>
-      <button type="button" onClick={() => onEdit?.("", "add")}>
-        Add project
-      </button>
+      {!hideAdd && (
+        <button type="button" onClick={() => onEdit?.("", "add")}>
+          Add project
+        </button>
+      )}
       {items.map((item: any) => (
         <div
           key={item.key}
@@ -93,6 +97,7 @@ jest.mock("@cocalc/frontend/components", () => ({
 }));
 
 jest.mock("@cocalc/frontend/components/sortable-tabs", () => ({
+  AccessibleAddTabIcon: ({ children }: any) => children,
   SortableTab: ({ children }: any) => <>{children}</>,
   SortableTabs: ({ children }: any) => <div>{children}</div>,
   useItemContext: () => ({}),
@@ -150,10 +155,10 @@ describe("ProjectsNav", () => {
     mockBookmarkedProjects = [];
   });
 
-  it("opens the create-project modal from the editable tabs add button", () => {
+  it("opens the create-project modal from the native accessible add tab", () => {
     render(<ProjectsNav height={42} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Add project/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
     expect(screen.getByTestId("new-project-creator")).toHaveAttribute(
       "data-open",
@@ -169,5 +174,27 @@ describe("ProjectsNav", () => {
     expect(screen.queryByRole("button", { name: "Star project" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unstar project" })).toBeNull();
     expect(mockSetProjectBookmarked).not.toHaveBeenCalled();
+  });
+
+  it("labels the project switcher in list mode", () => {
+    render(<ProjectsNav height={42} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Tabs" }));
+
+    expect(
+      screen.getByRole("combobox", { name: "Switch project" }),
+    ).toBeInTheDocument();
+  });
+
+  it("closes project tabs with the pointer control or Delete key", () => {
+    const { rerender } = render(<ProjectsNav height={42} />);
+
+    fireEvent.click(screen.getByTitle("Close Alpha"));
+    expect(pageActions.close_project_tab).toHaveBeenCalledWith("project-1");
+
+    pageActions.close_project_tab.mockReset();
+    rerender(<ProjectsNav height={42} />);
+    fireEvent.keyDown(screen.getByRole("tab"), { key: "Delete" });
+    expect(pageActions.close_project_tab).toHaveBeenCalledWith("project-1");
   });
 });

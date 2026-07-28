@@ -262,7 +262,11 @@ export function ProjectsTable({
           onChange: (keys) =>
             onSelectedProjectIdsChange(keys.map((key) => `${key}`)),
           getCheckboxProps: (record) => ({
+            "aria-label": `Select project ${record.title}`,
             disabled: record.deleting || record.deletionScheduled,
+          }),
+          getTitleCheckboxProps: () => ({
+            "aria-label": "Select all projects",
           }),
         }}
         pagination={false}

@@ -17,7 +17,8 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { cloneElement, useEffect, useMemo, useState } from "react";
+import type { ReactElement } from "react";
 import { defineMessage } from "react-intl";
 
 import type { PublicDirectoryShareSummary } from "@cocalc/conat/hub/api/public-directory-shares";
@@ -496,6 +497,13 @@ function PublicSharesPage() {
               pagination={{ defaultPageSize: 25, showSizeChanger: true }}
               rowSelection={{
                 selectedRowKeys: selectedShareIds,
+                renderCell: (_checked, share, _index, checkbox) =>
+                  cloneElement(
+                    checkbox as ReactElement<{ "aria-label"?: string }>,
+                    {
+                      "aria-label": `Select share ${share.slug}`,
+                    },
+                  ),
                 onChange: (keys) =>
                   setSelectedShareIds(keys.map((key) => `${key}`)),
               }}

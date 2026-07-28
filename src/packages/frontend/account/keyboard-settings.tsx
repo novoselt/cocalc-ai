@@ -63,6 +63,7 @@ export const KeyboardSettings: React.FC = () => {
     return (
       <LabeledRow label={label} label_cols={LABEL_COLS}>
         <SelectorInput
+          ariaLabel={label}
           options={EVALUATE_KEYS}
           selected={evaluate_key}
           on_change={eval_change}

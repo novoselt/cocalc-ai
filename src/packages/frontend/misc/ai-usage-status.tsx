@@ -246,6 +246,7 @@ function UsageBar({
         {window.reset_in ? ` · in ${window.reset_in}` : ""}
       </Text>
       <Progress
+        aria-label={`${label}: ${window.used} of ${limit} units used`}
         percent={percent}
         size="small"
         showInfo={false}

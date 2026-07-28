@@ -39,7 +39,6 @@ const cgroupReconciledAt = new Map<string, number>();
 let networkReconciledAt = 0;
 
 export interface ReconcileOptions {
-  recoverStaleRuntime?: (project_id: string) => Promise<string | undefined>;
   reconcileProjectCgroup?: (opts: {
     project_id: string;
     run_quota?: any;
@@ -293,41 +292,20 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
         heartbeatAgeMs <= staleProjectHeartbeatMs()
       ) {
         staleHeartbeatCycles.delete(info.project_id);
-      } else if (options.recoverStaleRuntime != null && base != null) {
+      } else if (base != null) {
         const cycles = (staleHeartbeatCycles.get(info.project_id) ?? 0) + 1;
         staleHeartbeatCycles.set(info.project_id, cycles);
-        if (cycles >= staleProjectHeartbeatCycles()) {
+        if (cycles === staleProjectHeartbeatCycles()) {
           logger.warn(
-            "running project daemon heartbeat is stale; recovering runtime",
+            "running project daemon heartbeat is stale; preserving container",
             {
               project_id: info.project_id,
               heartbeat_age_ms: heartbeatAgeMs,
               stale_after_ms: staleProjectHeartbeatMs(),
               stale_cycles: cycles,
+              action: "none",
             },
           );
-          try {
-            const recoveredState = await options.recoverStaleRuntime(
-              info.project_id,
-            );
-            if (recoveredState === "opened") {
-              staleHeartbeatCycles.delete(info.project_id);
-              await reportRuntimeLost(info.project_id, now);
-              continue;
-            }
-            logger.debug(
-              "stale project runtime recovery did not reach opened state",
-              {
-                project_id: info.project_id,
-                state: recoveredState,
-              },
-            );
-          } catch (err) {
-            logger.warn("stale project runtime recovery failed", {
-              project_id: info.project_id,
-              err: `${err}`,
-            });
-          }
         }
       }
       if (shouldCheckProjectLastChangedRunning(info.project_id)) {

@@ -86,6 +86,8 @@ export const NavTab: React.FC<Props> = React.memo((props: Props) => {
   const is_active = active_top_tab === name;
 
   const outer_style: CSS = {
+    background: "transparent",
+    padding: 0,
     fontSize: "14px",
     cursor: "pointer",
     float: "left",
@@ -131,17 +133,20 @@ export const NavTab: React.FC<Props> = React.memo((props: Props) => {
   }
 
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
       style={outer_style}
       className={TOP_BAR_ELEMENT_CLASS}
       aria-label={
         ariaLabel ??
-        (hide_label && typeof label === "string" ? label : undefined)
+        (typeof label === "string" ? label : undefined) ??
+        tooltip ??
+        name
       }
       {...(is_project && name != null ? { "data-node-key": name } : {})}
     >
       {renderInner()}
-    </div>
+    </button>
   );
 });

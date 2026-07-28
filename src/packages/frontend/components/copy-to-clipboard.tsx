@@ -22,6 +22,7 @@ interface Props {
   inputWidth?: string;
   size?: "large" | "middle" | "small";
   copyTip?: string;
+  ariaLabel?: string;
 }
 
 const INPUT_STYLE: CSS = { display: "inline-block", flex: 1 } as const;
@@ -46,6 +47,7 @@ export default function CopyToClipBoard({
   outerStyle,
   inputWidth,
   copyTip,
+  ariaLabel,
 }: Props) {
   const [copied, setCopied] = useState<boolean>(false);
 
@@ -56,7 +58,11 @@ export default function CopyToClipBoard({
   let copy = useMemo(() => {
     const btn = (
       <CopyToClipboard text={value} onCopy={() => setCopied(true)}>
-        <Button size={size} icon={<CopyOutlined />} />
+        <Button
+          aria-label={copyTip ?? "Copy to clipboard"}
+          size={size}
+          icon={<CopyOutlined />}
+        />
       </CopyToClipboard>
     );
     if (!copied) return btn;
@@ -74,6 +80,9 @@ export default function CopyToClipBoard({
     <Space.Compact style={outerStyle}>
       {copy}
       <Input
+        aria-label={
+          ariaLabel ?? (typeof label === "string" ? label : "Copyable value")
+        }
         style={{
           width: inputWidth ?? `${(display ?? value).length + 8}ex`,
           fontFamily: "monospace",

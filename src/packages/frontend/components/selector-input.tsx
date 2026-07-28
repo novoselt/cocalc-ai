@@ -11,6 +11,7 @@ import * as misc from "@cocalc/util/misc";
 const { Option } = Select;
 
 interface Props {
+  ariaLabel?: string;
   options:
     | string[]
     | { value: string; display: React.JSX.Element | string }[]
@@ -30,6 +31,7 @@ function isStringArrayHeuristic(a: any): a is string[] {
 
 export const SelectorInput: React.FC<Props> = (props: Props) => {
   const {
+    ariaLabel,
     options,
     disabled = false,
     selected,
@@ -99,6 +101,7 @@ export const SelectorInput: React.FC<Props> = (props: Props) => {
       <Form.Item style={style}>
         <Select
           {...searchProps()}
+          aria-label={ariaLabel}
           value={selected}
           onChange={onChange}
           disabled={disabled}

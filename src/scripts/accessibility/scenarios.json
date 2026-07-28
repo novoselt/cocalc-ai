@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "id": "pricing-details-expanded",
+      "title": "Pricing exact limits expanded",
+      "path": "/pricing",
+      "authentication": "none",
+      "engine": "axe",
+      "minimumScore": 1,
+      "readySelector": "main",
+      "settleMs": 1000,
+      "actions": [
+        {
+          "type": "remember",
+          "key": "trigger",
+          "selector": ".ant-collapse-header:has-text('Compare exact limits and features')"
+        },
+        {
+          "type": "focus",
+          "selector": ".ant-collapse-header:has-text('Compare exact limits and features')"
+        },
+        {
+          "type": "press",
+          "key": "Enter"
+        },
+        {
+          "type": "wait",
+          "selector": ".ant-collapse-panel-active"
+        },
+        {
+          "type": "assertFocus",
+          "key": "trigger"
+        }
+      ],
+      "cleanupActions": [
+        {
+          "type": "press",
+          "key": "Enter"
+        },
+        {
+          "type": "assertHidden",
+          "selector": ".ant-collapse-panel-active"
+        },
+        {
+          "type": "assertFocus",
+          "key": "trigger"
+        }
+      ]
+    },
+    {
+      "id": "membership-change-dialog",
+      "title": "Membership change dialog",
+      "path": "/settings/membership",
+      "authentication": "account",
+      "engine": "axe",
+      "minimumScore": 1,
+      "settleMs": 1500,
+      "actions": [
+        {
+          "type": "remember",
+          "key": "trigger",
+          "selector": "button:has-text('Manage'):visible"
+        },
+        {
+          "type": "focus",
+          "selector": "button:has-text('Manage'):visible"
+        },
+        {
+          "type": "press",
+          "key": "Enter"
+        },
+        {
+          "type": "wait",
+          "role": "dialog",
+          "name": "Change Membership"
+        },
+        {
+          "type": "assertFocusWithin",
+          "role": "dialog",
+          "name": "Change Membership"
+        }
+      ],
+      "cleanupActions": [
+        {
+          "type": "press",
+          "key": "Escape"
+        },
+        {
+          "type": "assertHidden",
+          "role": "dialog",
+          "name": "Change Membership"
+        },
+        {
+          "type": "assertFocus",
+          "key": "trigger"
+        }
+      ]
+    },
+    {
+      "id": "ssh-key-dialog",
+      "title": "Add SSH key dialog",
+      "path": "/settings/keys",
+      "authentication": "account",
+      "engine": "axe",
+      "minimumScore": 1,
+      "settleMs": 1500,
+      "actions": [
+        {
+          "type": "remember",
+          "key": "trigger",
+          "selector": "button:has-text('Add SSH Key'):visible"
+        },
+        {
+          "type": "focus",
+          "selector": "button:has-text('Add SSH Key'):visible"
+        },
+        {
+          "type": "press",
+          "key": "Enter"
+        },
+        {
+          "type": "wait",
+          "selector": ".ant-modal:visible"
+        },
+        {
+          "type": "assertFocusWithin",
+          "selector": ".ant-modal:visible"
+        }
+      ],
+      "cleanupActions": [
+        {
+          "type": "press",
+          "key": "Escape"
+        },
+        {
+          "type": "assertHidden",
+          "selector": ".ant-modal:visible"
+        },
+        {
+          "type": "waitForTimeout",
+          "timeoutMs": 250
+        },
+        {
+          "type": "assertFocus",
+          "key": "trigger"
+        }
+      ]
+    },
+    {
+      "id": "project-new-file",
+      "title": "Project new file state",
+      "path": "/projects/{project_id}/files/",
+      "authentication": "account",
+      "requiresProject": true,
+      "engine": "axe",
+      "minimumScore": 1,
+      "readySelector": ".smc-vfill",
+      "settleMs": 2000,
+      "actions": [
+        {
+          "type": "click",
+          "selector": "button[aria-label='Create file']:visible, button[aria-label='Create file or folder']:visible"
+        },
+        {
+          "type": "wait",
+          "selector": "input[placeholder*='Name your file']:visible"
+        },
+        {
+          "type": "assertFocusWithin",
+          "selector": "input[placeholder*='Name your file']:visible"
+        }
+      ]
+    },
+    {
+      "id": "project-files-shell",
+      "title": "Project files shell",
+      "path": "/projects/{project_id}/files/",
+      "authentication": "account",
+      "requiresProject": true,
+      "engine": "axe",
+      "minimumScore": 1,
+      "readySelector": ".smc-vfill",
+      "settleMs": 2000,
+      "actions": [
+        {
+          "type": "wait",
+          "selector": ".smc-vfill"
+        }
+      ]
+    },
+    {
+      "id": "project-settings-shell",
+      "title": "Project settings shell",
+      "path": "/projects/{project_id}/settings",
+      "authentication": "account",
+      "requiresProject": true,
+      "engine": "axe",
+      "minimumScore": 1,
+      "readySelector": ".smc-vfill",
+      "settleMs": 2000,
+      "actions": [
+        {
+          "type": "wait",
+          "selector": ".smc-vfill"
+        }
+      ]
+    }
+  ]
+}

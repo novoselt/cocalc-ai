@@ -621,6 +621,7 @@ export default function NewFilePage(props: Props) {
             >
               {/* No placeholder: Ant Design fades it out after hide, and the header already labels this control. */}
               <Select<string>
+                aria-label="More file types"
                 showSearch
                 allowClear
                 style={{ flex: "1 1 260px", minWidth: "200px" }}
@@ -649,6 +650,7 @@ export default function NewFilePage(props: Props) {
           <div style={{ marginTop: "12px" }}>
             <h4 style={{ marginBottom: "6px" }}>Filename generator</h4>
             <SelectorInput
+              ariaLabel="Filename generator"
               style={{ width: "100%" }}
               selected={selectedFilenameFamily}
               options={NewFilenameFamilies}

@@ -26,7 +26,13 @@ if [[ "$OS" == "darwin" && "$ARCH" != "arm64" ]]; then
 fi
 
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-BIN_HOME="${XDG_BIN_HOME:-$HOME/.local/bin}"
+if [[ -n "${XDG_BIN_HOME:-}" ]]; then
+  BIN_HOME="$XDG_BIN_HOME"
+elif [[ "$(id -u)" -eq 0 && -d /usr/local/bin && -w /usr/local/bin ]]; then
+  BIN_HOME="/usr/local/bin"
+else
+  BIN_HOME="$HOME/.local/bin"
+fi
 INSTALL_ROOT="${COCALC_CLI_HOME:-$DATA_HOME/cocalc}"
 VERSIONS_DIR="$INSTALL_ROOT/versions"
 
@@ -38,13 +44,16 @@ trap cleanup EXIT
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
+    local hint="${2:-}"
     echo "Missing required command: $1" >&2
+    if [[ -n "$hint" ]]; then
+      echo "$hint" >&2
+    fi
     exit 1
   }
 }
 
 need_cmd curl
-need_cmd xz
 
 sha256_check() {
   local file="$1"
@@ -105,16 +114,60 @@ if [[ ! -x "$TARGET_BIN" ]]; then
   download "$ASSET_URL" "$tmpdir/artifact"
   sha256_check "$tmpdir/artifact" "$ASSET_SHA"
 
-  rm -rf "$TARGET_DIR"
-  mkdir -p "$TARGET_DIR"
+  staging_dir="$tmpdir/version"
+  mkdir -p "$staging_dir"
 
-  if [[ "$ASSET_URL" == *.xz ]]; then
-    xz -dc "$tmpdir/artifact" > "$TARGET_BIN"
-    chmod +x "$TARGET_BIN"
-  else
-    mv "$tmpdir/artifact" "$TARGET_BIN"
-    chmod +x "$TARGET_BIN"
+  case "$ASSET_URL" in
+    *.tar.gz|*.tgz)
+      need_cmd tar "Install the tar package and try again."
+      need_cmd gzip "Install the gzip package and try again."
+      tar -xzf "$tmpdir/artifact" -C "$staging_dir"
+      ;;
+    *.tar.xz)
+      need_cmd tar "Install the tar package and try again."
+      need_cmd xz "Debian/Ubuntu: apt-get install xz-utils; Fedora/RHEL: dnf install xz"
+      tar -xJf "$tmpdir/artifact" -C "$staging_dir"
+      ;;
+    *.xz)
+      need_cmd xz "Debian/Ubuntu: apt-get install xz-utils; Fedora/RHEL: dnf install xz"
+      xz -dc "$tmpdir/artifact" > "$staging_dir/cocalc"
+      ;;
+    *.gz)
+      need_cmd gzip "Install the gzip package and try again."
+      gzip -dc "$tmpdir/artifact" > "$staging_dir/cocalc"
+      ;;
+    *)
+      mv "$tmpdir/artifact" "$staging_dir/cocalc"
+      ;;
+  esac
+
+  if [[ ! -f "$staging_dir/cocalc" ]]; then
+    echo "Downloaded CLI artifact does not contain a cocalc executable." >&2
+    exit 1
   fi
+  chmod +x "$staging_dir/cocalc"
+  rm -rf "$TARGET_DIR"
+  mv "$staging_dir" "$TARGET_DIR"
+fi
+
+runtime_env=()
+if [[ -d "$TARGET_DIR/lib" ]]; then
+  runtime_path="$TARGET_DIR/lib"
+  if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+    runtime_path="$runtime_path:$LD_LIBRARY_PATH"
+  fi
+  runtime_env=(env "LD_LIBRARY_PATH=$runtime_path")
+fi
+if ! smoke_output="$("${runtime_env[@]}" "$TARGET_BIN" --version 2>&1)"; then
+  echo "CoCalc CLI was downloaded but could not start:" >&2
+  echo "$smoke_output" >&2
+  if [[ "$smoke_output" == *"libatomic.so.1"* ]]; then
+    echo >&2
+    echo "This legacy Linux artifact requires libatomic.so.1." >&2
+    echo "Debian/Ubuntu: apt-get install libatomic1" >&2
+    echo "Fedora/RHEL: dnf install libatomic" >&2
+  fi
+  exit 1
 fi
 
 ln -sfn "$TARGET_DIR" "$INSTALL_ROOT/current"
@@ -130,6 +183,10 @@ ${ARTIFACT_ID:+export COCALC_CLI_ARTIFACT_ID="$ARTIFACT_ID"}
 ${PUBLISHED_AT:+export COCALC_CLI_PUBLISHED_AT="$PUBLISHED_AT"}
 ${GIT_COMMIT:+export COCALC_CLI_GIT_COMMIT="$GIT_COMMIT"}
 ${GIT_SHORT:+export COCALC_CLI_GIT_SHORT="$GIT_SHORT"}
+if [[ -d "$INSTALL_ROOT/current/lib" ]]; then
+  export COCALC_CLI_PRIVATE_LIB_DIR="$INSTALL_ROOT/current/lib"
+  export LD_LIBRARY_PATH="\$COCALC_CLI_PRIVATE_LIB_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+fi
 exec "$INSTALL_ROOT/bin/cocalc" "\$@"
 EOF
 chmod +x "$WRAPPER"
@@ -171,4 +228,17 @@ if ! echo "$PATH" | tr ':' '\n' | grep -Fx "$BIN_HOME" >/dev/null; then
   echo "  $PATH_LINE"
 fi
 
-echo "CoCalc CLI installed. Run: cocalc --help"
+if command -v cocalc >/dev/null 2>&1; then
+  echo "CoCalc CLI installed. Run: cocalc --help"
+else
+  echo "CoCalc CLI installed. For this shell, run:"
+  echo "  $PATH_LINE"
+  echo "Then run: cocalc --help"
+fi
+
+if ! command -v ssh >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; then
+  echo
+  echo "Project SSH commands additionally require an OpenSSH client."
+  echo "Debian/Ubuntu: apt-get install openssh-client"
+  echo "Fedora/RHEL: dnf install openssh-clients"
+fi

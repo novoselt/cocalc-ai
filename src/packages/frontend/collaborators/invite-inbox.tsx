@@ -978,6 +978,7 @@ export const InviteInboxPanel: React.FC<Props> = ({
           <Button
             type="text"
             size="small"
+            aria-label="Refresh invitations"
             onClick={() => void load()}
             disabled={loading}
             style={{ paddingInline: 4 }}

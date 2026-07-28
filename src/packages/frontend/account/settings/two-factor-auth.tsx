@@ -298,7 +298,7 @@ export default function TwoFactorAuthSetting({ showHeader = true }: Props) {
         ) : undefined}
         {status?.passkeys?.length ? (
           <Flex vertical gap="small">
-            <Typography.Title level={5} style={{ margin: 0 }}>
+            <Typography.Title level={2} style={{ margin: 0, fontSize: 18 }}>
               Passkeys
             </Typography.Title>
             {status.passkeys.map((passkey) => (

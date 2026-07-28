@@ -94,6 +94,7 @@ export function BlobCleanupButton({ mode, project_id }: Props) {
           <Space wrap>
             <Text>Delete oldest</Text>
             <InputNumber
+              aria-label="Number of oldest blob records to delete"
               min={1}
               max={MAX_DELETE_LIMIT}
               value={limit}

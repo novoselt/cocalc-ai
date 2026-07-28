@@ -30,6 +30,10 @@ const StaticMarkdown = lazy(
 );
 const { Text } = Typography;
 
+const PUBLIC_CODE_BLOCK_THEME = {
+  "--cocalc-slate-code-definition": PUBLIC_COLORS.codeDefinition,
+} as CSSProperties;
+
 export { getPublicMarketingSiteName };
 export { getPublicDocsAccess };
 export { getSiteName };
@@ -115,7 +119,10 @@ export function CodeBlock({
   return (
     <div aria-label={ariaLabel} className="cocalc-public-code-block">
       <Suspense fallback={<pre>{code}</pre>}>
-        <StaticMarkdown value={toFencedCodeBlock(code, language)} />
+        <StaticMarkdown
+          style={PUBLIC_CODE_BLOCK_THEME}
+          value={toFencedCodeBlock(code, language)}
+        />
       </Suspense>
     </div>
   );

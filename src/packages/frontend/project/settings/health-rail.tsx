@@ -474,6 +474,7 @@ function StorageHealthRow({ project_id }: { project_id: string }) {
           <>
             <Text>{quotaLabel}</Text>
             <Progress
+              aria-label="Project storage usage"
               percent={percent}
               showInfo={false}
               size="small"

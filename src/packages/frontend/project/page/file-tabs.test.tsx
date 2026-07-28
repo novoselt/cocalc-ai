@@ -41,11 +41,13 @@ jest.mock("antd", () => ({
       {popupRender?.()}
     </div>
   ),
-  Tabs: ({ activeKey, items, onChange, onEdit }: any) => (
+  Tabs: ({ activeKey, hideAdd, items, onChange, onEdit }: any) => (
     <div>
-      <button type="button" onClick={() => onEdit?.("", "add")}>
-        Add tab
-      </button>
+      {!hideAdd && (
+        <button type="button" onClick={() => onEdit?.("", "add")}>
+          Add tab
+        </button>
+      )}
       {items.map((item: any) => (
         <div
           key={item.key}
@@ -71,6 +73,7 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
 }));
 
 jest.mock("@cocalc/frontend/components/sortable-tabs", () => ({
+  AccessibleAddTabIcon: ({ children }: any) => children,
   SortableTabs: ({ children, onDragEnd }: any) => {
     dragEnd = onDragEnd;
     return <div>{children}</div>;
@@ -166,6 +169,33 @@ describe("FileTabs keyboard navigation", () => {
     expect(mockActions.focus_file_tab_strip).toHaveBeenCalled();
   });
 
+  it("closes file tabs with the pointer control or Delete key", () => {
+    const props = {
+      activeTab: "editor-a.ts",
+      openFiles: List(["a.ts", "b.ts"]),
+      project_id: "project-1",
+    };
+    const { rerender } = render(<FileTabs {...props} />);
+
+    const close = screen.getByTitle("Close a.ts");
+    fireEvent(
+      close,
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        cancelable: true,
+      }),
+    );
+    fireEvent.click(close);
+    expect(mockActions.close_tab).toHaveBeenCalledWith("a.ts");
+    expect(mockActions.close_tab).toHaveBeenCalledTimes(1);
+
+    mockActions.close_tab.mockReset();
+    rerender(<FileTabs {...props} />);
+    fireEvent.keyDown(screen.getAllByRole("tab")[0], { key: "Delete" });
+    expect(mockActions.close_tab).toHaveBeenCalledWith("a.ts");
+  });
+
   it("reorders only the visible workspace subset when dragging tabs", () => {
     workspaces.selection = { kind: "workspace", workspace_id: "w1" } as any;
     workspaces.filterPaths = (paths: string[]) =>
@@ -245,7 +275,7 @@ describe("FileTabs keyboard navigation", () => {
     expect(mockActions.set_active_tab).not.toHaveBeenCalled();
   });
 
-  it("opens the new-file page from the editable tabs add button", () => {
+  it("opens the new-file page from the native accessible add tab", () => {
     render(
       <FileTabs
         activeTab="editor-a.ts"

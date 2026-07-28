@@ -29,6 +29,7 @@ export function TextSetting(props: Props): React.JSX.Element {
       style={props.disabled ? { color: "#666" } : undefined}
     >
       <Input
+        aria-label={props.label}
         value={props.value}
         onChange={props.onChange}
         onBlur={props.onBlur}

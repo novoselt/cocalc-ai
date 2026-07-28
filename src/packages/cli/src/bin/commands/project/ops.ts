@@ -16,6 +16,10 @@ import type {
 } from "@cocalc/conat/hub/api/projects";
 import type { LroStatus } from "../../core/lro";
 import type { ProjectCommandDeps } from "../project";
+import {
+  buildManagedProjectSshConfigLines,
+  managedProjectSshOptionArgs,
+} from "./ssh-config";
 
 type SyncKeyInfo = any;
 type ProjectRuntimeLogRow = any;
@@ -328,16 +332,7 @@ export function registerProjectOpsCommands(
               "IdentitiesOnly=yes",
             );
           }
-          baseArgs.push(
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "PasswordAuthentication=no",
-            "-o",
-            "KbdInteractiveAuthentication=no",
-            "-o",
-            "PreferredAuthentications=publickey",
-          );
+          baseArgs.push(...managedProjectSshOptionArgs());
           let sshServer = route.ssh_server;
           if (route.transport !== "direct") {
             const cloudflareHostname = route.cloudflare_hostname;
@@ -367,20 +362,7 @@ export function registerProjectOpsCommands(
           const commandLine = `ssh ${baseArgs.map((x) => (x.includes(" ") ? JSON.stringify(x) : x)).join(" ")}`;
 
           if (opts.check) {
-            const checkArgs = [
-              "-o",
-              "BatchMode=yes",
-              "-o",
-              "StrictHostKeyChecking=accept-new",
-              "-o",
-              "ConnectTimeout=10",
-              "-o",
-              "ServerAliveInterval=15",
-              "-o",
-              "ServerAliveCountMax=2",
-              ...baseArgs,
-              "true",
-            ];
+            const checkArgs = ["-o", "ConnectTimeout=10", ...baseArgs, "true"];
             const timeoutMs = Math.min(Math.max(ctx.timeoutMs, 10_000), 30_000);
             const result = await runSshCheck(checkArgs, timeoutMs);
             if (result.code !== 0) {
@@ -467,16 +449,7 @@ export function registerProjectOpsCommands(
           const route = await resolveProjectSshConnection(ctx, opts.project, {
             direct: !!opts.direct,
           });
-          const baseArgs: string[] = [
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "PreferredAuthentications=publickey",
-            "-o",
-            "PasswordAuthentication=no",
-            "-o",
-            "KbdInteractiveAuthentication=no",
-          ];
+          const baseArgs = managedProjectSshOptionArgs();
           let sshServer = route.ssh_server;
           if (route.transport !== "direct") {
             const cloudflareHostname = route.cloudflare_hostname;
@@ -582,32 +555,24 @@ export function registerProjectOpsCommands(
             throw new Error("project ssh route is missing host endpoint");
           }
 
-          const lines = [
-            `Host ${alias}`,
-            `  HostName ${hostName}`,
-            `  User ${route.ssh_username}`,
-          ];
           let cloudflared: string | null = null;
+          let proxyCommand: string | null = null;
           if (route.transport !== "direct") {
             const cloudflaredPath = await ensureCloudflaredBinary();
             cloudflared = cloudflaredPath;
-            lines.push(
-              `  ProxyCommand ${cloudflaredProxyCommand({
-                cloudflared: cloudflaredPath,
-                hostname: "%h",
-              })}`,
-            );
-          } else if (route.ssh_port != null) {
-            lines.push(`  Port ${route.ssh_port}`);
+            proxyCommand = cloudflaredProxyCommand({
+              cloudflared: cloudflaredPath,
+              hostname: "%h",
+            });
           }
-          if (keyInfo?.private_key_path) {
-            lines.push(`  IdentityFile ${keyInfo.private_key_path}`);
-            lines.push("  IdentitiesOnly yes");
-          }
-          lines.push("  BatchMode yes");
-          lines.push("  PreferredAuthentications publickey");
-          lines.push("  PasswordAuthentication no");
-          lines.push("  KbdInteractiveAuthentication no");
+          const lines = buildManagedProjectSshConfigLines({
+            alias,
+            hostName,
+            username: route.ssh_username,
+            proxyCommand,
+            port: route.transport === "direct" ? route.ssh_port : null,
+            identityFile: keyInfo?.private_key_path,
+          });
           const markers = projectSshConfigBlockMarkers(alias);
           const block = `${markers.start}\n${lines.join("\n")}\n${markers.end}\n`;
 

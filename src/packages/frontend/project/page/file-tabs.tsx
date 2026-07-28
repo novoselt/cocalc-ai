@@ -15,6 +15,7 @@ import { useIntl } from "react-intl";
 import { useActions, useTypedRedux } from "@cocalc/frontend/app-framework";
 import { Icon, Tooltip } from "@cocalc/frontend/components";
 import {
+  AccessibleAddTabIcon,
   renderTabBar,
   SortableTabs,
   useItemContext,
@@ -51,19 +52,54 @@ function Label({ path, project_id, label, onClose }) {
   const { width } = useItemContext();
   const { active } = useSortable({ id: project_id });
   return (
-    <FileTab
-      key={path}
-      project_id={project_id}
-      path={path}
-      label={label}
-      noPopover={active != null}
+    <div
       style={{
-        ...(width != null
-          ? { width: Math.max(MIN_WIDTH, width + 15), marginRight: "-10px" }
-          : undefined),
+        alignItems: "center",
+        display: "flex",
+        minWidth: 0,
+        width: "100%",
       }}
-      onClose={onClose}
-    />
+    >
+      <FileTab
+        key={path}
+        project_id={project_id}
+        path={path}
+        label={label}
+        noPopover={active != null}
+        style={{
+          ...(width != null
+            ? { width: Math.max(MIN_WIDTH, width + 15), marginRight: "-10px" }
+            : undefined),
+        }}
+        onClose={onClose}
+      />
+      <span
+        aria-hidden="true"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onClose(path);
+        }}
+        style={{
+          alignItems: "center",
+          cursor: "pointer",
+          display: "inline-flex",
+          flex: "0 0 20px",
+          height: "24px",
+          justifyContent: "center",
+          position: "relative",
+          zIndex: 1,
+        }}
+        title={`Close ${path}`}
+      >
+        <Icon name="times" />
+      </span>
+    </div>
   );
 }
 
@@ -207,6 +243,7 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
   const items: TabsProps["items"] = [];
   for (let index = 0; index < labelsForPaths.length; index++) {
     items.push({
+      closable: false,
       key: pathToKey(paths[index]),
       label: (
         <Label
@@ -304,6 +341,12 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
       case "End":
         nextIndex = keys.length - 1;
         break;
+      case "Delete":
+        event.preventDefault();
+        event.stopPropagation();
+        closeVisibleTab(keyToPath(keys[currentIndex]));
+        focusTabStripSoon();
+        return;
       default:
         return;
     }
@@ -578,6 +621,11 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
                 activeKey={activeKey}
                 type={"editable-card"}
                 hideAdd={viewer}
+                addIcon={
+                  <AccessibleAddTabIcon label="Create file">
+                    <Icon name="plus" />
+                  </AccessibleAddTabIcon>
+                }
                 onChange={(key) => {
                   if (actions == null || !key) return;
                   actions.set_active_tab(path_to_tab(keyToPath(key)));

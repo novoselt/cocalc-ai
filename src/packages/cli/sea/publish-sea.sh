@@ -18,7 +18,6 @@ esac
 SEA_DIR="../build/sea"
 TARGET="${NAME}-${VERSION}-${MACHINE}-${OS}"
 FILE="${SEA_DIR}/${TARGET}"
-FILE_XZ="${FILE}.xz"
 
 if [ ! -f "$FILE" ]; then
   echo "SEA artifact not found: $FILE" >&2
@@ -26,24 +25,31 @@ if [ ! -f "$FILE" ]; then
   exit 1
 fi
 
-if ! command -v xz >/dev/null 2>&1; then
-  echo "Missing required command: xz" >&2
-  exit 1
-fi
-
-# Keep original binary while publishing a compressed artifact.
-xz -z -f -k -9 "$FILE"
-
-if [ ! -f "$FILE_XZ" ]; then
-  echo "Failed to produce compressed artifact: $FILE_XZ" >&2
-  exit 1
-fi
+case "$OS" in
+  linux)
+    PUBLISH_FILE="${FILE}.tar.gz"
+    CONTENT_TYPE="application/gzip"
+    if [[ ! -f "$PUBLISH_FILE" ]]; then
+      echo "Linux runtime bundle not found: $PUBLISH_FILE" >&2
+      echo "Run: pnpm run sea" >&2
+      exit 1
+    fi
+    ;;
+  darwin)
+    PUBLISH_FILE="$FILE"
+    CONTENT_TYPE="application/octet-stream"
+    ;;
+  *)
+    echo "Unsupported OS: $OS" >&2
+    exit 1
+    ;;
+esac
 
 LATEST_KEY="${COCALC_R2_LATEST_KEY:-software/cocalc/latest-${OS}-${ARCH}.json}"
 PREFIX="${COCALC_R2_PREFIX:-software/cocalc/$VERSION}"
 
 node ../../cloud/scripts/publish-r2.js \
-  --file "$FILE_XZ" \
+  --file "$PUBLISH_FILE" \
   --bucket "${COCALC_R2_BUCKET:-}" \
   --prefix "$PREFIX" \
   --latest-key "$LATEST_KEY" \
@@ -51,4 +57,4 @@ node ../../cloud/scripts/publish-r2.js \
   --os "$OS" \
   --arch "$ARCH" \
   --version "$VERSION" \
-  --content-type "application/x-xz"
+  --content-type "$CONTENT_TYPE"
