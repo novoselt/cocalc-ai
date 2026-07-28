@@ -599,6 +599,7 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
       >
         {renderToggle("Switch to file list")}
         <div
+          className="cocalc-file-tabs-strip"
           style={{
             flex: `0 1 ${preferredTabStripWidth(
               keys.length,
@@ -647,6 +648,7 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
           <Tooltip title="Create a new file">
             <Button
               aria-label="Create file"
+              className="cocalc-file-tabs-create"
               icon={<Icon name="plus" />}
               onClick={() => onEdit("", "add")}
               size="small"

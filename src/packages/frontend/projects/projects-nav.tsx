@@ -775,6 +775,7 @@ export function ProjectsNav(props: ProjectsNavProps) {
             </Tooltip>
           </div>
           <div
+            className="cocalc-project-tabs-strip"
             style={{
               flex: `0 1 ${preferredTabStripWidth(
                 project_ids.length,
@@ -819,6 +820,7 @@ export function ProjectsNav(props: ProjectsNavProps) {
           <Tooltip title="Create a new project">
             <Button
               aria-label="Create project"
+              className="cocalc-project-tabs-create"
               icon={<Icon name="plus" />}
               onClick={() => onEdit("", "add")}
               size="small"

@@ -29,3 +29,8 @@
   margin-left: 2px;
   padding-inline: 2px;
 }
+
+.cocalc-project-tabs-strip:has(.ant-tabs-nav-operations-hidden)
+  + .cocalc-project-tabs-create {
+  margin-inline-start: -36px;
+}
