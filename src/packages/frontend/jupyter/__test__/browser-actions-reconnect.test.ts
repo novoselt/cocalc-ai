@@ -226,6 +226,20 @@ describe("JupyterActions reconnect coordination", () => {
     expect(() => actions.updateContentsNow()).not.toThrow();
   });
 
+  it("does not fetch kernels after actions teardown removes redux and store", async () => {
+    const actions: any = new JupyterActions("jupyter-test", {
+      getStore: jest.fn(),
+      removeActions: jest.fn(),
+    } as any);
+    actions._state = "closed";
+    delete actions.redux;
+    delete actions.store;
+    actions.waitUntilProjectIsRunning = jest.fn();
+
+    await expect(actions.fetch_jupyter_kernels()).resolves.toBeUndefined();
+    expect(actions.waitUntilProjectIsRunning).not.toHaveBeenCalled();
+  });
+
   it("stops kernel selection after Jupyter resources are removed", async () => {
     const actions: any = new JupyterActions("jupyter-test", {
       getStore: jest.fn(),
