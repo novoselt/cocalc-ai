@@ -122,7 +122,7 @@ export function LineItemsTable({
 export function LineItemsButton({ lineItems, style }: { lineItems?; style? }) {
   const [show, setShow] = useState<boolean>(false);
   const n = lineItems?.length ?? 0;
-  if (n == 0) {
+  if (n <= 1) {
     return null;
   }
   if (!show) {
