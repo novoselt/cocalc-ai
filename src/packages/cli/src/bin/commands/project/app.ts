@@ -783,22 +783,6 @@ export function registerProjectAppCommands(
     .command("app")
     .description("project app server specs and lifecycle");
 
-  async function resolvePrivateHostnameProject(
-    ctx: any,
-    projectIdentifier?: string,
-  ) {
-    const requested = `${projectIdentifier ?? ""}`.trim();
-    const current = `${ctx.remote?.user?.project_id ?? ""}`.trim();
-    if (current && (!requested || requested === current)) {
-      return {
-        project_id: current,
-        title: current,
-        host_id: null,
-      };
-    }
-    return await resolveProjectFromArgOrContext(ctx, projectIdentifier);
-  }
-
   app
     .command("list")
     .description("list app specs with runtime status")
@@ -1689,11 +1673,11 @@ export function registerProjectAppCommands(
         command,
         "project app private-hostname policy",
         async (ctx) => {
-          const ws = await resolvePrivateHostnameProject(ctx, opts.project);
-          const policy =
-            await ctx.hub.system.getProjectAppPrivateHostnamePolicy({
-              project_id: ws.project_id,
-            });
+          const { project: ws, api } = await resolveProjectProjectApi(
+            ctx,
+            opts.project,
+          );
+          const policy = await api.apps.getPrivateHostnamePolicy();
           return {
             project_id: ws.project_id,
             ...policy,
@@ -1711,10 +1695,11 @@ export function registerProjectAppCommands(
         command,
         "project app private-hostname list",
         async (ctx) => {
-          const ws = await resolvePrivateHostnameProject(ctx, opts.project);
-          const items = await ctx.hub.system.listProjectAppPrivateHostnames({
-            project_id: ws.project_id,
-          });
+          const { project: ws, api } = await resolveProjectProjectApi(
+            ctx,
+            opts.project,
+          );
+          const items = await api.apps.listPrivateHostnames();
           return {
             project_id: ws.project_id,
             items,
@@ -1738,11 +1723,7 @@ export function registerProjectAppCommands(
               opts.project,
             );
             await api.apps.getAppSpec(appId);
-            const hostname =
-              await ctx.hub.system.inspectProjectAppPrivateHostname({
-                project_id: ws.project_id,
-                app_id: appId,
-              });
+            const hostname = await api.apps.inspectPrivateHostname(appId);
             return {
               project_id: ws.project_id,
               app_id: appId,
@@ -1768,11 +1749,7 @@ export function registerProjectAppCommands(
               opts.project,
             );
             await api.apps.getAppSpec(appId);
-            const hostname =
-              await ctx.hub.system.reserveProjectAppPrivateHostname({
-                project_id: ws.project_id,
-                app_id: appId,
-              });
+            const hostname = await api.apps.reservePrivateHostname(appId);
             return {
               project_id: ws.project_id,
               app_id: appId,
@@ -1793,12 +1770,11 @@ export function registerProjectAppCommands(
           command,
           "project app private-hostname release",
           async (ctx) => {
-            const ws = await resolvePrivateHostnameProject(ctx, opts.project);
-            const result =
-              await ctx.hub.system.releaseProjectAppPrivateHostname({
-                project_id: ws.project_id,
-                app_id: appId,
-              });
+            const { project: ws, api } = await resolveProjectProjectApi(
+              ctx,
+              opts.project,
+            );
+            const result = await api.apps.releasePrivateHostname(appId);
             return {
               project_id: ws.project_id,
               app_id: appId,
@@ -1832,16 +1808,9 @@ export function registerProjectAppCommands(
               opts.project,
             );
             await api.apps.getAppSpec(appId);
-            let hostname =
-              await ctx.hub.system.inspectProjectAppPrivateHostname({
-                project_id: ws.project_id,
-                app_id: appId,
-              });
+            let hostname = await api.apps.inspectPrivateHostname(appId);
             if (!hostname && opts.reserve) {
-              hostname = await ctx.hub.system.reserveProjectAppPrivateHostname({
-                project_id: ws.project_id,
-                app_id: appId,
-              });
+              hostname = await api.apps.reservePrivateHostname(appId);
             }
             if (!hostname) {
               throw new Error(
@@ -1851,10 +1820,7 @@ export function registerProjectAppCommands(
             if (
               `${ctx.remote?.user?.project_id ?? ""}`.trim() === ws.project_id
             ) {
-              const policy =
-                await ctx.hub.system.getProjectAppPrivateHostnamePolicy({
-                  project_id: ws.project_id,
-                });
+              const policy = await api.apps.getPrivateHostnamePolicy();
               return {
                 project_id: ws.project_id,
                 app_id: appId,
