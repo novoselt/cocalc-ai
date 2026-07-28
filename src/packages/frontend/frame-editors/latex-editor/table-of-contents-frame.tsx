@@ -152,13 +152,16 @@ export function LatexTOCBody({
             key={key}
             title={`Included file: ${tocGroupPath}`}
             style={{
-              marginLeft: 4,
-              marginTop: starts ? 5 : undefined,
-              marginBottom: ends ? 5 : undefined,
-              paddingLeft: 2,
-              borderLeft: `2px solid ${COLORS.GRAY_L}`,
-              borderTop: starts ? `1px solid ${COLORS.GRAY_L}` : undefined,
-              borderBottom: ends ? `1px solid ${COLORS.GRAY_L}` : undefined,
+              // The inset shadow draws the accent stripe without shifting
+              // content, so group rows stay aligned with the master entries.
+              boxShadow: `inset 3px 0 0 ${COLORS.BLUE_LL}`,
+              background: starts ? COLORS.BLUE_LLLL : COLORS.GRAY_LLL,
+              marginTop: starts ? 6 : undefined,
+              marginBottom: ends ? 6 : undefined,
+              paddingTop: starts ? 3 : undefined,
+              paddingBottom: starts ? 3 : undefined,
+              borderTopRightRadius: starts ? 4 : undefined,
+              borderBottomRightRadius: ends ? 4 : undefined,
             }}
           >
             {row}
