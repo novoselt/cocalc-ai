@@ -18,7 +18,13 @@ import { enqueueCloudVmWorkOnce } from "./db";
 import { getServerProvider, listServerProviders } from "./providers";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { getNebiusRegionKeys } from "./nebius-credentials";
-import { shouldAutoRestoreInterruptedSpotHost } from "./spot-restore";
+import {
+  effectivePricingModel,
+  recordProviderSpotPreemption,
+  shouldAutoRestoreInterruptedSpotHost,
+  spotRecoveryPolicy,
+  spotRecoveryState,
+} from "./spot-restore";
 import { recordHostAvailabilityFromSnapshot } from "@cocalc/server/hosts/availability";
 export { shouldAutoRestoreInterruptedSpotHost } from "./spot-restore";
 
@@ -527,6 +533,7 @@ async function updateHost(
     status?: string;
     runtime?: Record<string, any> | null;
     desired_state?: "running" | "stopped";
+    spot_recovery_state?: Record<string, any>;
     public_url?: string | null;
     internal_url?: string | null;
   },
@@ -557,7 +564,15 @@ async function updateHost(
     metadataExpression = `jsonb_set(${metadataExpression}, '{desired_state}', to_jsonb($${idx++}::text), true)`;
     params.push(updates.desired_state);
   }
-  if (updates.runtime !== undefined || updates.desired_state !== undefined) {
+  if (updates.spot_recovery_state !== undefined) {
+    metadataExpression = `jsonb_set(${metadataExpression}, '{spot_recovery_state}', $${idx++}::jsonb, true)`;
+    params.push(JSON.stringify(updates.spot_recovery_state));
+  }
+  if (
+    updates.runtime !== undefined ||
+    updates.desired_state !== undefined ||
+    updates.spot_recovery_state !== undefined
+  ) {
     sets.push(`metadata = ${metadataExpression}`);
   }
   if (updates.public_url !== undefined) {
@@ -608,6 +623,25 @@ async function enqueueSpotRestore(
   reason: string,
 ): Promise<boolean> {
   if (!shouldAutoRestoreInterruptedSpotHost(row)) return false;
+  const now = new Date();
+  const preemption =
+    effectivePricingModel(row) === "spot"
+      ? recordProviderSpotPreemption({
+          state: spotRecoveryState(row),
+          policy: spotRecoveryPolicy(row),
+          now,
+        })
+      : undefined;
+  const nextRecoveryState = preemption?.recorded
+    ? {
+        ...preemption.state,
+        phase: "retrying_spot" as const,
+        outage_started_at: now.toISOString(),
+        active_machine_type:
+          preemption.state.active_machine_type ??
+          row.metadata?.machine?.machine_type,
+      }
+    : undefined;
   const enqueued = await enqueueCloudVmWorkOnce({
     vm_id: row.id,
     action: "start",
@@ -621,12 +655,16 @@ async function enqueueSpotRestore(
     host_id: row.id,
     reason,
     enqueued: !!enqueued,
+    rapid_preemption_circuit_breaker:
+      preemption?.circuit_breaker_triggered ?? false,
+    standard_hold_until: preemption?.state.standard_hold_until,
   });
   const runtimeMetadata = nextRuntime.metadata ?? {};
   const reconcileMetadata = runtimeMetadata.reconcile ?? {};
   await updateHost(row, {
     status: "starting",
     desired_state: "running",
+    spot_recovery_state: nextRecoveryState,
     runtime: {
       ...nextRuntime,
       public_ip: undefined,

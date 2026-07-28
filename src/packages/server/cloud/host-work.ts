@@ -35,7 +35,8 @@ import {
   shouldAutoRestoreInterruptedSpotHost,
   spotProbeIntervalMs,
   spotRecoveryPolicy,
-  standardFallbackMinMs,
+  spotStandardHoldIsActive,
+  standardFallbackProbeNotBeforeMs,
   spotRecoveryState,
   spotRetryWindowMs,
 } from "./spot-restore";
@@ -626,6 +627,12 @@ function compactIdleSpotRecoveryState(
   if (state.active_machine_type) {
     next.active_machine_type = state.active_machine_type;
   }
+  if (state.last_preempted_at) {
+    next.last_preempted_at = state.last_preempted_at;
+  }
+  if (state.standard_hold_until) {
+    next.standard_hold_until = state.standard_hold_until;
+  }
   return next;
 }
 
@@ -748,8 +755,12 @@ async function scheduleSpotProbe(opts: {
   row: any;
   provider?: string;
   not_before: Date;
+  after_current_probe?: boolean;
 }) {
-  await enqueueCloudVmWorkOnce({
+  const enqueue = opts.after_current_probe
+    ? enqueueCloudVmWork
+    : enqueueCloudVmWorkOnce;
+  await enqueue({
     vm_id: opts.row.id,
     action: "probe_spot",
     not_before: opts.not_before,
@@ -1559,6 +1570,7 @@ async function handleStart(row: any) {
       managedSpotRecovery &&
       desiredPricing === "spot" &&
       currentEffectivePricing === "on_demand" &&
+      !spotStandardHoldIsActive(currentRecoveryState) &&
       (row.status === "off" ||
         row.status === "stopped" ||
         runtimeProviderStatusIsStopped(runtime));
@@ -1882,6 +1894,19 @@ async function handleStart(row: any) {
             nextRecoveryState?.outage_started_at ?? new Date().toISOString(),
         };
         await updateRecoveryRecord(nextRecoveryState);
+      } else if (
+        managedSpotRecovery &&
+        startMode === "spot" &&
+        recoveryPolicy &&
+        spotStandardHoldIsActive(nextRecoveryState)
+      ) {
+        if (
+          (await promoteToStandardFallback(
+            "rapid-preemption-circuit-breaker",
+          )) === "recreated"
+        ) {
+          return;
+        }
       } else if (
         managedSpotRecovery &&
         startMode === "spot" &&
@@ -2762,17 +2787,14 @@ async function handleVerifyHostReady(row: any) {
         );
         await updateHostRow(host.id, { metadata: nextMetadata });
         if (policy) {
-          const fallbackStartedAt = fallbackState.fallback_started_at
-            ? new Date(fallbackState.fallback_started_at)
-            : new Date();
           await scheduleSpotProbe({
             row: { ...host, metadata: nextMetadata },
             provider: providerId ?? host.metadata?.machine?.cloud,
             not_before: new Date(
-              Math.max(
-                Date.now(),
-                fallbackStartedAt.getTime() + standardFallbackMinMs(policy),
-              ),
+              standardFallbackProbeNotBeforeMs({
+                state: fallbackState,
+                policy,
+              }),
             ),
           });
         }
@@ -3072,6 +3094,15 @@ async function handleProbeSpot(row: any) {
   if (currentEffectivePricing !== "on_demand" && !alternateMachineType) return;
   const providerId = normalizeProviderId(host.metadata?.machine?.cloud);
   if (!providerId || !policy) return;
+  if (spotStandardHoldIsActive(state)) {
+    await scheduleSpotProbe({
+      row: host,
+      provider: providerId,
+      not_before: new Date(standardFallbackProbeNotBeforeMs({ state, policy })),
+      after_current_probe: true,
+    });
+    return;
+  }
   const { entry, creds } = await getProviderContext(providerId, {
     region: host.region,
   });
@@ -3125,6 +3156,7 @@ async function handleProbeSpot(row: any) {
       row: { ...host, metadata: failedMetadata },
       provider: providerId,
       not_before: new Date(Date.now() + spotProbeIntervalMs(policy)),
+      after_current_probe: true,
     });
     return;
   }

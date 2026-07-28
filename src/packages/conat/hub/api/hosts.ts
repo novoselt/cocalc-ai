@@ -129,6 +129,8 @@ export interface HostSpotRecoveryPolicy {
   spot_restore_backoff_seconds?: number;
   standard_fallback_enabled?: boolean;
   standard_fallback_min_minutes?: number;
+  rapid_preemption_window_minutes?: number;
+  rapid_preemption_standard_hold_minutes?: number;
   spot_probe_interval_minutes?: number;
   spot_return_requires_probe?: boolean;
   max_restore_attempts_before_fallback?: number;
@@ -143,6 +145,8 @@ export interface HostSpotRecoveryState {
   attempt?: number;
   next_retry_at?: string;
   fallback_started_at?: string;
+  last_preempted_at?: string;
+  standard_hold_until?: string;
   last_probe_at?: string;
   last_probe_result?: "success" | "failure";
   last_probe_error?: string;

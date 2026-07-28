@@ -204,6 +204,8 @@ export const HostSpotRecoveryDiagram: React.FC<
   const retryBackoff = policy.spot_restore_backoff_seconds;
   const maxRestoreAttempts = policy.max_restore_attempts_before_fallback;
   const fallbackMin = policy.standard_fallback_min_minutes;
+  const rapidPreemptionWindow = policy.rapid_preemption_window_minutes;
+  const rapidPreemptionHold = policy.rapid_preemption_standard_hold_minutes;
   const probeInterval = policy.spot_probe_interval_minutes;
   const liveState = host?.spot_recovery_state;
 
@@ -280,6 +282,12 @@ export const HostSpotRecoveryDiagram: React.FC<
             : "Standard fallback disabled"}
         </Tag>
         {standardFallbackEnabled && (
+          <Tag style={statusTagStyle(COLORS.COCALC_ORANGE)}>
+            2 preemptions in {rapidPreemptionWindow} min: standard for{" "}
+            {rapidPreemptionHold} min
+          </Tag>
+        )}
+        {standardFallbackEnabled && (
           <Tag style={statusTagStyle(COLORS.ANTD_GREEN_D)}>
             Return check every {probeInterval} min{" "}
             {probeRequired ? "(probe required)" : "(direct return allowed)"}
@@ -313,6 +321,12 @@ export const HostSpotRecoveryDiagram: React.FC<
           {liveState?.next_retry_at && (
             <Tag color="cyan">
               Next retry {formatShortDateTime(liveState.next_retry_at)}
+            </Tag>
+          )}
+          {liveState?.standard_hold_until && (
+            <Tag color="orange">
+              Standard hold until{" "}
+              {formatShortDateTime(liveState.standard_hold_until)}
             </Tag>
           )}
           {liveState?.last_probe_result && (

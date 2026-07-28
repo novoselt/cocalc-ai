@@ -2,12 +2,81 @@ import {
   maxStandardRuntimeMs,
   normalizeSpotRecoveryPolicy,
   normalizeSpotRecoveryState,
+  rapidPreemptionStandardHoldMs,
+  rapidPreemptionWindowMs,
+  recordProviderSpotPreemption,
   shouldAutoRestoreInterruptedSpotHost,
+  standardFallbackProbeNotBeforeMs,
 } from "./spot-restore";
 
 describe("spot recovery metadata", () => {
   it("bounds fallback runtime to 24 hours by default", () => {
     expect(maxStandardRuntimeMs({})).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it("holds standard capacity for 24 hours after two preemptions within four hours", () => {
+    expect(rapidPreemptionWindowMs({})).toBe(4 * 60 * 60 * 1000);
+    expect(rapidPreemptionStandardHoldMs({})).toBe(24 * 60 * 60 * 1000);
+
+    const now = new Date("2026-07-28T14:34:17.613Z");
+    const result = recordProviderSpotPreemption({
+      state: {
+        phase: "idle",
+        last_preempted_at: "2026-07-28T12:41:00.000Z",
+      },
+      policy: {},
+      now,
+    });
+
+    expect(result.circuit_breaker_triggered).toBe(true);
+    expect(result.recorded).toBe(true);
+    expect(result.state).toMatchObject({
+      last_preempted_at: now.toISOString(),
+      standard_hold_until: "2026-07-29T14:34:17.613Z",
+    });
+    expect(
+      standardFallbackProbeNotBeforeMs({
+        state: {
+          ...result.state,
+          fallback_started_at: now.toISOString(),
+        },
+        policy: {},
+        now,
+      }),
+    ).toBe(new Date("2026-07-29T14:34:17.613Z").getTime());
+  });
+
+  it("does not open the circuit breaker after an isolated preemption", () => {
+    const result = recordProviderSpotPreemption({
+      state: {
+        phase: "idle",
+        last_preempted_at: "2026-07-28T09:00:00.000Z",
+      },
+      policy: {},
+      now: new Date("2026-07-28T14:34:17.613Z"),
+    });
+
+    expect(result.circuit_breaker_triggered).toBe(false);
+    expect(result.recorded).toBe(true);
+    expect(result.state.standard_hold_until).toBeUndefined();
+  });
+
+  it("does not count the same active outage twice", () => {
+    const state = {
+      phase: "retrying_spot" as const,
+      last_preempted_at: "2026-07-28T14:34:17.613Z",
+    };
+    const result = recordProviderSpotPreemption({
+      state,
+      policy: {},
+      now: new Date("2026-07-28T14:35:00.000Z"),
+    });
+
+    expect(result).toEqual({
+      state,
+      recorded: false,
+      circuit_breaker_triggered: false,
+    });
   });
 
   it("advances from a repeatedly interrupted Spot machine type by default", () => {
@@ -34,6 +103,8 @@ describe("spot recovery metadata", () => {
         phase: "retrying_spot",
         active_machine_type: "n2d-standard-16",
         machine_type_attempt_started_at: "2026-07-15T19:00:00.000Z",
+        last_preempted_at: "2026-07-15T18:59:00.000Z",
+        standard_hold_until: "2026-07-16T18:59:00.000Z",
         spot_machine_types_tried: [
           "t2d-standard-16",
           "n2d-standard-16",
@@ -43,6 +114,8 @@ describe("spot recovery metadata", () => {
     ).toMatchObject({
       active_machine_type: "n2d-standard-16",
       machine_type_attempt_started_at: "2026-07-15T19:00:00.000Z",
+      last_preempted_at: "2026-07-15T18:59:00.000Z",
+      standard_hold_until: "2026-07-16T18:59:00.000Z",
       spot_machine_types_tried: ["t2d-standard-16", "n2d-standard-16"],
     });
   });

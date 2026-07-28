@@ -96,6 +96,12 @@ function spotRecoveryProbeDetails(host?: HostLike | null) {
       ? `${formatProbeTime(state.last_probe_at)} (${result})`
       : result;
   const targetTimes: number[] = [];
+  if (state?.standard_hold_until) {
+    const holdUntilMs = Date.parse(state.standard_hold_until);
+    if (Number.isFinite(holdUntilMs)) {
+      targetTimes.push(holdUntilMs);
+    }
+  }
   if (policy) {
     if (state?.last_probe_at) {
       const lastProbeMs = Date.parse(state.last_probe_at);
