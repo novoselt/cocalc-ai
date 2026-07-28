@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 
 import { fireEvent, render, screen } from "@testing-library/react";
-import { SortableTab } from "./sortable-tabs";
+import { AccessibleAddTabIcon, SortableTab } from "./sortable-tabs";
 
 const mockPointerDown = jest.fn();
 
@@ -44,5 +44,18 @@ describe("SortableTab", () => {
 
     fireEvent.pointerDown(wrapper!);
     expect(mockPointerDown).toHaveBeenCalled();
+  });
+});
+
+describe("AccessibleAddTabIcon", () => {
+  it("gives Ant's native add button valid tablist semantics", () => {
+    render(
+      <button className="ant-tabs-nav-add">
+        <AccessibleAddTabIcon label="Create file">+</AccessibleAddTabIcon>
+      </button>,
+    );
+
+    const button = screen.getByRole("tab", { name: "Create file" });
+    expect(button).toHaveAttribute("aria-selected", "false");
   });
 });

@@ -25,6 +25,7 @@ import {
   ReactNode,
   useContext,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -54,6 +55,33 @@ const ItemContext = createContext<ItemContextType>({
 
 export function useItemContext() {
   return useContext(ItemContext);
+}
+
+export function AccessibleAddTabIcon({
+  children,
+  label,
+}: {
+  children: ReactNode;
+  label: string;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    // Ant renders its add control directly inside role="tablist". Treating this
+    // action like an unselected tab preserves valid tablist semantics while
+    // retaining Ant's native placement and overflow behavior.
+    const button = ref.current?.closest<HTMLButtonElement>(".ant-tabs-nav-add");
+    if (button == null) return;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-selected", "false");
+    button.setAttribute("role", "tab");
+  }, [label]);
+
+  return (
+    <span ref={ref} aria-hidden="true">
+      {children}
+    </span>
+  );
 }
 
 export function SortableTabs(props: Props) {
