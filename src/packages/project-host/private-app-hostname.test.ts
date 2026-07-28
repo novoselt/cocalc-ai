@@ -4,6 +4,8 @@
  */
 
 import {
+  APP_HOSTNAME_ROUTING_PENDING_URL,
+  createAppHostnameRequestRewriteBarrier,
   createPrivateAppHostnameRequestRewriter,
   privateAppHostnameExternalLocation,
   PRIVATE_APP_HOST_HEADER,
@@ -105,6 +107,41 @@ describe("private app hostname routing", () => {
       `/${route.project_id}/apps/dev-site/conat/?EIO=4&transport=websocket`,
     );
     expect(req.headers[PRIVATE_APP_HOST_HEADER]).toBe("dev-1234.example.com");
+  });
+
+  it("synchronously claims custom-host upgrades during async routing", async () => {
+    let resolveRewrite!: () => void;
+    const routed = new Promise<void>((resolve) => {
+      resolveRewrite = resolve;
+    });
+    const rewrite = jest.fn(
+      async (req: any, originalUrl: string): Promise<void> => {
+        await routed;
+        req.url = `/routed${originalUrl}`;
+      },
+    );
+    const barrier = createAppHostnameRequestRewriteBarrier({
+      shouldClaim: () => true,
+      rewrite,
+    });
+    const req = {
+      headers: { host: "dev-1234.example.com" },
+      url: "/conat/?EIO=4&transport=websocket",
+    } as any;
+
+    const projectProxyRewrite = barrier(req);
+    const infrastructureConatRewrite = barrier(req);
+
+    expect(req.url).toBe(APP_HOSTNAME_ROUTING_PENDING_URL);
+    expect(rewrite).toHaveBeenCalledTimes(1);
+    expect(rewrite).toHaveBeenCalledWith(
+      req,
+      "/conat/?EIO=4&transport=websocket",
+    );
+
+    resolveRewrite();
+    await Promise.all([projectProxyRewrite, infrastructureConatRewrite]);
+    expect(req.url).toBe("/routed/conat/?EIO=4&transport=websocket");
   });
 
   it("leaves canonical project-host routes unchanged", async () => {

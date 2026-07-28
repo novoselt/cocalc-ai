@@ -70,6 +70,7 @@ import { wireHostsApi } from "./hub/hosts";
 import { wireNotificationsApi } from "./hub/notifications";
 import { wireSystemApi } from "./hub/system";
 import {
+  createAppHostnameRequestRewriteBarrier,
   createPrivateAppHostnameRequestRewriter,
   PRIVATE_APP_HOST_HEADER,
   rewritePrivateAppHostnameResponseLocation,
@@ -153,6 +154,7 @@ import { getProjectHostActivitySnapshot } from "./health-progress";
 import {
   attachProjectHostConatRouterProxy,
   resolveProjectHostConatRouterUrl,
+  shouldRouteProjectHostIngressToApp,
 } from "./conat-router";
 import { PROJECT_HOST_BROWSER_SESSION_BOOTSTRAP_PATH } from "@cocalc/conat/auth/project-host-browser-session";
 import {
@@ -1183,8 +1185,11 @@ export async function main(
         });
       },
     });
-  const maybeRewritePublicHostnameRequest = async (req: IncomingMessage) => {
-    const currentUrl = `${req.url ?? ""}`;
+  const maybeRewritePublicHostnameRequest = async (
+    req: IncomingMessage,
+    originalUrl?: string,
+  ) => {
+    const currentUrl = `${originalUrl ?? req.url ?? ""}`;
     if (!currentUrl || currentUrl.startsWith(`/${hostId}/`)) {
       return;
     }
@@ -1229,11 +1234,16 @@ export async function main(
     });
     req.headers[PUBLIC_APP_HOST_HEADER] = hostname;
   };
-  const maybeRewriteAppHostnameRequest = async (req: IncomingMessage) => {
-    await maybeRewritePrivateHostnameRequest(req);
-    if (req.headers[PRIVATE_APP_HOST_HEADER]) return;
-    await maybeRewritePublicHostnameRequest(req);
-  };
+  const maybeRewriteAppHostnameRequest = createAppHostnameRequestRewriteBarrier(
+    {
+      shouldClaim: shouldRouteProjectHostIngressToApp,
+      rewrite: async (req, originalUrl) => {
+        await maybeRewritePrivateHostnameRequest(req, originalUrl);
+        if (req.headers[PRIVATE_APP_HOST_HEADER]) return;
+        await maybeRewritePublicHostnameRequest(req, originalUrl);
+      },
+    },
+  );
   attachProjectHostConatRouterProxy({
     app,
     httpServer,

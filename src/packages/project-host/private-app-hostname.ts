@@ -9,6 +9,8 @@ import TTL from "@isaacs/ttlcache";
 import { isValidUUID } from "@cocalc/util/misc";
 
 export const PRIVATE_APP_HOST_HEADER = "x-cocalc-private-app-host";
+export const APP_HOSTNAME_ROUTING_PENDING_URL =
+  "/__cocalc_app_hostname_routing_pending__";
 
 export interface PrivateAppHostnameRoute {
   project_id: string;
@@ -39,6 +41,31 @@ type PrivateAppHostnameRequest = IncomingMessage & {
   [PRIVATE_APP_HOSTNAME_REQUEST_CONTEXT]?: PrivateAppHostnameRequestContext;
   [PRIVATE_APP_HOSTNAME_REWRITE_PROMISE]?: Promise<void>;
 };
+
+export function createAppHostnameRequestRewriteBarrier({
+  shouldClaim,
+  rewrite,
+}: {
+  shouldClaim: (req: IncomingMessage) => boolean;
+  rewrite: (req: IncomingMessage, originalUrl: string) => Promise<void>;
+}): (req: IncomingMessage) => Promise<void> {
+  const rewrites = new WeakMap<IncomingMessage, Promise<void>>();
+
+  return (req: IncomingMessage): Promise<void> => {
+    const existing = rewrites.get(req);
+    if (existing) return existing;
+
+    const originalUrl = `${req.url ?? ""}`;
+    if (originalUrl && shouldClaim(req)) {
+      // Node invokes every upgrade listener without awaiting promises. Hide
+      // root-level app paths from infrastructure listeners while routing.
+      req.url = APP_HOSTNAME_ROUTING_PENDING_URL;
+    }
+    const promise = rewrite(req, originalUrl);
+    rewrites.set(req, promise);
+    return promise;
+  };
+}
 
 function normalizePrefix(value: string): string {
   const withLeading = value.startsWith("/") ? value : `/${value}`;
@@ -124,14 +151,17 @@ export function createPrivateAppHostnameRequestRewriter({
   trace: (hostname: string) => Promise<PrivateAppHostnameTrace | undefined>;
   cacheMs?: number;
   onTraceError?: (hostname: string, err: unknown) => void;
-}): (req: IncomingMessage) => Promise<void> {
+}): (req: IncomingMessage, originalUrl?: string) => Promise<void> {
   const routeCache = new TTL<string, PrivateAppHostnameRoute | null>({
     max: 20_000,
     ttl: Math.max(1_000, cacheMs),
   });
 
-  const rewrite = async (req: IncomingMessage): Promise<void> => {
-    const currentUrl = `${req.url ?? ""}`;
+  const rewrite = async (
+    req: IncomingMessage,
+    originalUrl?: string,
+  ): Promise<void> => {
+    const currentUrl = `${originalUrl ?? req.url ?? ""}`;
     if (!currentUrl) return;
     const parsed = new URL(currentUrl, "http://project-host.local");
     const maybeProjectPrefix = (parsed.pathname || "/").split("/")[1];
@@ -175,12 +205,12 @@ export function createPrivateAppHostnameRequestRewriter({
     req.headers[PRIVATE_APP_HOST_HEADER] = hostname;
   };
 
-  return (req: IncomingMessage): Promise<void> => {
+  return (req: IncomingMessage, originalUrl?: string): Promise<void> => {
     const privateReq = req as PrivateAppHostnameRequest;
     if (privateReq[PRIVATE_APP_HOSTNAME_REWRITE_PROMISE]) {
       return privateReq[PRIVATE_APP_HOSTNAME_REWRITE_PROMISE];
     }
-    const promise = rewrite(req);
+    const promise = rewrite(req, originalUrl);
     privateReq[PRIVATE_APP_HOSTNAME_REWRITE_PROMISE] = promise;
     return promise;
   };
