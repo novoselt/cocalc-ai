@@ -12,12 +12,17 @@ import {
   attachPublicNavigationInterceptor,
   setPublicNavigationListener,
 } from "./navigation";
-import { getPublicRouteFromPath, isPublicTarget } from "./routes";
+import {
+  getPublicRouteFromPath,
+  isPublicTarget,
+  preservePublicTargetFragment,
+} from "./routes";
 
 (globalThis as any).__cocalc_public_app = true;
 
 export async function init(): Promise<void> {
   const target = new URLSearchParams(window.location.search).get("target");
+  const fragment = window.location.hash;
   const initialPath = isPublicTarget(target)
     ? target
     : window.location.pathname + window.location.search;
@@ -71,6 +76,10 @@ export async function init(): Promise<void> {
   const root = createRoot(document.getElementById("cocalc-webapp-container")!);
   root.render(<PublicBootstrapApp />);
   if (isPublicTarget(target)) {
-    window.history.replaceState({}, "", target);
+    window.history.replaceState(
+      {},
+      "",
+      preservePublicTargetFragment(target, fragment),
+    );
   }
 }
