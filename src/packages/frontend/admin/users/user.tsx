@@ -22,11 +22,7 @@ import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import { COLORS } from "@cocalc/util/theme";
 import { AdminMembership } from "./admin-membership";
 import { AdminBilling } from "./billing";
-import {
-  ManagedEgressHistoryButton,
-  ManagedEgressRateSummary,
-  ManagedEgressTopProjectsSummary,
-} from "@cocalc/frontend/purchases/managed-egress-history";
+import { ManagedEgressHistoryPanel } from "@cocalc/frontend/purchases/managed-egress-history";
 import { AccountStatusTags } from "../account-status-tags";
 import { LegacyMigrationAdmin } from "./legacy-migration";
 
@@ -237,18 +233,7 @@ export function UserResult({
           )}
           {activeMore === "billing" && <AdminBilling account_id={account_id} />}
           {activeMore === "egress" && (
-            <Space
-              orientation="vertical"
-              size="middle"
-              style={{ width: "100%" }}
-            >
-              <ManagedEgressRateSummary user_account_id={account_id} />
-              <ManagedEgressTopProjectsSummary user_account_id={account_id} />
-              <ManagedEgressHistoryButton
-                user_account_id={account_id}
-                buttonText="View egress history"
-              />
-            </Space>
+            <ManagedEgressHistoryPanel user_account_id={account_id} />
           )}
           {activeMore === "membership" && (
             <AdminMembership account_id={account_id} />

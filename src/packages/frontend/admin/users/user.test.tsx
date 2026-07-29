@@ -72,21 +72,15 @@ jest.mock("./legacy-migration", () => ({
 }));
 
 jest.mock("@cocalc/frontend/purchases/managed-egress-history", () => ({
-  ManagedEgressHistoryButton: ({ buttonText, user_account_id }: any) => (
-    <button>{`${buttonText}:${user_account_id}`}</button>
-  ),
-  ManagedEgressRateSummary: ({ user_account_id }: any) => (
-    <div>{`recent-egress-summary:${user_account_id}`}</div>
-  ),
-  ManagedEgressTopProjectsSummary: ({ user_account_id }: any) => (
-    <div>{`top-projects-summary:${user_account_id}`}</div>
+  ManagedEgressHistoryPanel: ({ user_account_id }: any) => (
+    <div>{`egress-history:${user_account_id}`}</div>
   ),
 }));
 
 const { UserResult } = require("./user");
 
-describe("UserResult egress entry points", () => {
-  it("shows egress history under expandable egress details", () => {
+describe("UserResult admin tools", () => {
+  it("shows egress history directly in the Egress tool", () => {
     render(
       <UserResult
         first_name="Ada"
@@ -99,15 +93,13 @@ describe("UserResult egress entry points", () => {
       />,
     );
 
-    expect(screen.queryByText("Egress history:acct-1")).toBeNull();
+    expect(screen.queryByText("egress-history:acct-1")).toBeNull();
 
     fireEvent.click(screen.getByText(/Ada Lovelace/));
     expect(screen.getByText("Profile")).toBeTruthy();
     fireEvent.click(screen.getByText("Egress"));
 
-    expect(screen.getByText("recent-egress-summary:acct-1")).toBeTruthy();
-    expect(screen.getByText("top-projects-summary:acct-1")).toBeTruthy();
-    expect(screen.getByText("View egress history:acct-1")).toBeTruthy();
+    expect(screen.getByText("egress-history:acct-1")).toBeTruthy();
   });
 
   it("shows account status tags in the collapsed user header", () => {
@@ -192,10 +184,10 @@ describe("UserResult egress entry points", () => {
     expect(
       screen.queryByText("password-reset-email-status:unknown"),
     ).toBeNull();
-    expect(screen.getByText("recent-egress-summary:acct-1")).toBeTruthy();
+    expect(screen.getByText("egress-history:acct-1")).toBeTruthy();
 
     fireEvent.click(screen.getByText("Egress"));
-    expect(screen.queryByText("recent-egress-summary:acct-1")).toBeNull();
+    expect(screen.queryByText("egress-history:acct-1")).toBeNull();
   });
 
   it("opens the user billing section", () => {

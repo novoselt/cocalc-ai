@@ -1019,16 +1019,12 @@ function AdminTopProjects({
   );
 }
 
-export function ManagedEgressHistoryModal({
+export function ManagedEgressHistoryPanel({
   project_id,
   user_account_id,
-  open,
-  onClose,
 }: {
   project_id?: string;
   user_account_id?: string;
-  open: boolean;
-  onClose: () => void;
 }) {
   const [rangeKey, setRangeKey] = useState<ManagedEgressHistoryRangeKey>("24h");
   const [bucket, setBucket] = useState<ManagedEgressHistoryBucketSize>("5m");
@@ -1053,7 +1049,6 @@ export function ManagedEgressHistoryModal({
   }, [bucket, rangeKey, validBuckets]);
 
   useEffect(() => {
-    if (!open) return;
     const range = getRangeSpec(rangeKey);
     const end = new Date();
     const start = new Date(end.getTime() - range.durationMs);
@@ -1084,36 +1079,15 @@ export function ManagedEgressHistoryModal({
           setLoading(false);
         }
       });
-  }, [
-    effectiveBucket,
-    open,
-    project_id,
-    rangeKey,
-    reloadToken,
-    user_account_id,
-  ]);
+  }, [effectiveBucket, project_id, rangeKey, reloadToken, user_account_id]);
 
   const summary = history ? summarizeManagedEgressHistory(history) : null;
   const categoryTotals = history
     ? categoryEntries(history.categories_bytes)
     : [];
-  const modalTitle = project_id
-    ? "Project network egress"
-    : "Account network egress";
 
   return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      onOk={onClose}
-      width={760}
-      closable={false}
-      title={
-        <span>
-          <Icon name="network" /> {modalTitle}
-        </span>
-      }
-    >
+    <>
       <ShowError error={error} setError={setError} />
       <div
         style={{
@@ -1258,6 +1232,41 @@ export function ManagedEgressHistoryModal({
           </div>
         </>
       )}
+    </>
+  );
+}
+
+export function ManagedEgressHistoryModal({
+  project_id,
+  user_account_id,
+  open,
+  onClose,
+}: {
+  project_id?: string;
+  user_account_id?: string;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const modalTitle = project_id
+    ? "Project network egress"
+    : "Account network egress";
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      onOk={onClose}
+      width={760}
+      closable={false}
+      title={
+        <span>
+          <Icon name="network" /> {modalTitle}
+        </span>
+      }
+    >
+      <ManagedEgressHistoryPanel
+        project_id={project_id}
+        user_account_id={user_account_id}
+      />
     </Modal>
   );
 }
