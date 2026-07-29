@@ -15,6 +15,10 @@ export default function initPublicAuth(router: Router): void {
     servePublicShell,
   );
 
+  // Direct browser requests reach Express before the public React router.
+  // Keep these paths synchronized with frontend/public/auth/routes.ts. This is
+  // critical for emailed links: their fragment token is invisible to Express,
+  // but the browser preserves it while following this shell redirect.
   const authPaths = [
     "/auth/sign-in/*rest",
     "/auth/cli-login",
