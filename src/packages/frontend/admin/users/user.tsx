@@ -17,15 +17,11 @@ import { Impersonate } from "./impersonate";
 import { PasswordReset } from "./password-reset";
 import { AdminRole } from "./admin-role";
 import { Ban } from "./ban";
-import { PurchasesButton } from "@cocalc/frontend/purchases/purchases";
-import { PaymentsButton } from "@cocalc/frontend/purchases/payments";
-import { CreatePaymentButton } from "./create-payment";
-import { AdminBalanceAdjustmentButton } from "../admin-purchase";
 import { CopyToClipBoard } from "@cocalc/frontend/components";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import { COLORS } from "@cocalc/util/theme";
-import Money from "./money";
 import { AdminMembership } from "./admin-membership";
+import { AdminBilling } from "./billing";
 import {
   ManagedEgressHistoryButton,
   ManagedEgressRateSummary,
@@ -36,7 +32,7 @@ import { LegacyMigrationAdmin } from "./legacy-migration";
 
 type More =
   | "projects"
-  | "purchases"
+  | "billing"
   | "egress"
   | "activity"
   | "impersonate"
@@ -190,7 +186,7 @@ export function UserResult({
               {renderMoreLink("password")}
               {renderMoreLink("ban")}
               {renderMoreLink("projects")}
-              {renderMoreLink("purchases")}
+              {renderMoreLink("billing")}
               {renderMoreLink("egress")}
               {renderMoreLink("membership")}
               {renderMoreLink("migration")}
@@ -251,19 +247,9 @@ export function UserResult({
               title={`Recently active projects that ${userName} collaborates on`}
             />
           )}
-          {activeMore === "purchases" && (
-            <Card title="Purchases">
-              <div style={{ margin: "15px 0" }}>
-                <Money account_id={account_id} />
-                <div style={{ height: "15px" }} />
-                <PurchasesButton account_id={account_id} />
-                <div style={{ height: "15px" }} />
-                <PaymentsButton account_id={account_id} />
-                <div style={{ height: "15px" }} />
-                <CreatePaymentButton account_id={account_id} />
-                <div style={{ height: "15px" }} />
-                <AdminBalanceAdjustmentButton account_id={account_id} />
-              </div>
+          {activeMore === "billing" && (
+            <Card title="Billing">
+              <AdminBilling account_id={account_id} />
             </Card>
           )}
           {activeMore === "egress" && (

@@ -677,23 +677,3 @@ export function AdminBalanceAdjustment({
     </Card>
   );
 }
-
-export function AdminBalanceAdjustmentButton({
-  account_id,
-}: {
-  account_id: string;
-}) {
-  const [show, setShow] = useState<boolean>(false);
-  return (
-    <div>
-      <Button onClick={() => setShow(!show)} type={show ? "dashed" : undefined}>
-        Balance Adjustment
-      </Button>
-      {show ? (
-        <div style={{ marginTop: "8px" }}>
-          <AdminBalanceAdjustment account_id={account_id} />
-        </div>
-      ) : null}
-    </div>
-  );
-}

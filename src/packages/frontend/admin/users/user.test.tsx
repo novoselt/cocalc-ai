@@ -59,19 +59,11 @@ jest.mock("./ban", () => ({
   Ban: () => null,
 }));
 
-jest.mock("@cocalc/frontend/purchases/purchases", () => ({
-  PurchasesButton: () => null,
+jest.mock("./billing", () => ({
+  AdminBilling: ({ account_id }: any) => (
+    <div>{`admin-billing:${account_id}`}</div>
+  ),
 }));
-jest.mock("@cocalc/frontend/purchases/payments", () => ({
-  PaymentsButton: () => null,
-}));
-jest.mock("./create-payment", () => ({
-  CreatePaymentButton: () => null,
-}));
-jest.mock("../admin-purchase", () => ({
-  AdminBalanceAdjustmentButton: () => null,
-}));
-jest.mock("./money", () => () => null);
 jest.mock("./admin-membership", () => ({
   AdminMembership: () => null,
 }));
@@ -200,5 +192,22 @@ describe("UserResult egress entry points", () => {
 
     fireEvent.click(screen.getByText("Egress"));
     expect(screen.queryByText("recent-egress-summary:acct-1")).toBeNull();
+  });
+
+  it("opens the user billing section", () => {
+    render(
+      <UserResult
+        first_name="Ada"
+        last_name="Lovelace"
+        email_address="ada@example.com"
+        account_id="acct-1"
+        banned={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(/Ada Lovelace/));
+    fireEvent.click(screen.getByText("Billing"));
+
+    expect(screen.getByText("admin-billing:acct-1")).toBeTruthy();
   });
 });

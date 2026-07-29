@@ -16,8 +16,8 @@ const mockEditNews = jest.fn();
 const mockClearNewsCache = jest.fn();
 const mockGetNewsItem = jest.fn();
 const mockGetAdminNewsIndex = jest.fn();
-const mockGetMoneyData = jest.fn();
 const mockGetBalance = jest.fn();
+const mockGetBillingSummary = jest.fn();
 const mockGetPurchases = jest.fn();
 const mockThrottle = jest.fn();
 
@@ -56,13 +56,14 @@ jest.mock("@cocalc/database/postgres/news", () => ({
   getNewsItem: (...args) => mockGetNewsItem(...args),
 }));
 
-jest.mock("@cocalc/server/salesloft/money", () => ({
-  getMoneyData: (...args) => mockGetMoneyData(...args),
-}));
-
 jest.mock("@cocalc/server/purchases/get-balance", () => ({
   __esModule: true,
   default: (...args) => mockGetBalance(...args),
+}));
+
+jest.mock("@cocalc/server/purchases/get-billing-summary", () => ({
+  __esModule: true,
+  default: (...args) => mockGetBillingSummary(...args),
 }));
 
 jest.mock("@cocalc/server/purchases/get-purchases", () => ({
@@ -98,8 +99,13 @@ describe("admin HTTP routes API-key scope", () => {
     mockClearNewsCache.mockReset();
     mockGetNewsItem.mockReset().mockResolvedValue({ id: 1 });
     mockGetAdminNewsIndex.mockReset().mockResolvedValue([]);
-    mockGetMoneyData.mockReset().mockResolvedValue({});
     mockGetBalance.mockReset().mockResolvedValue({ balance: 0 });
+    mockGetBillingSummary.mockReset().mockResolvedValue({
+      balance: 0,
+      spend_30d: 0,
+      spend_365d: 0,
+      last_transaction_at: null,
+    });
     mockGetPurchases.mockReset().mockResolvedValue({ purchases: [] });
     mockThrottle.mockReset();
   });
@@ -108,8 +114,8 @@ describe("admin HTTP routes API-key scope", () => {
     ["./news/edit", mockEditNews],
     ["./news/admin-get", mockGetNewsItem],
     ["./news/admin-list", mockGetAdminNewsIndex],
-    ["./salesloft/money", mockGetMoneyData],
     ["./purchases/get-balance-admin", mockGetBalance],
+    ["./purchases/get-billing-summary-admin", mockGetBillingSummary],
     ["./purchases/get-purchases-admin", mockGetPurchases],
   ])("rejects API-key access to %s", async (modulePath, backendCall) => {
     const { req, res } = createMocks({
