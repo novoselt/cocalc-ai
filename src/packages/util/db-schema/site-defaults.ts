@@ -13,6 +13,7 @@ import {
   parseDomainRules,
   SIGNUP_EMAIL_DOMAIN_POLICY_MODES,
 } from "../accounts/signup-email-domain-policy";
+import { EMAIL_AUTHENTICATION_MODES } from "../auth/email-auth";
 export const ALWAYS_ALLOWED_TIMETRAVEL = 10;
 
 export type ConfigValid = Readonly<string[]> | ((val: string) => boolean);
@@ -88,6 +89,7 @@ export type SiteSettingsKeys =
   | "organization_name"
   | "organization_email"
   | "organization_url"
+  | "email_authentication_mode"
   | "policy_pages"
   | "terms_of_service"
   | "terms_of_service_url"
@@ -839,6 +841,19 @@ export const site_settings_conf: SiteSettings = {
     tags: ["Email"],
     group: "Messaging & Email",
     subgroup: "General",
+  },
+  email_authentication_mode: {
+    name: "Email authentication mode",
+    desc: "Controls the public email signup experience. Password required is the legacy flow; verify after signup keeps the user in signup until email verification; email first is reserved for the pre-account code/link flow.",
+    default: "password_required",
+    valid: EMAIL_AUTHENTICATION_MODES.filter((mode) => mode !== "email_first"),
+    valid_labels: {
+      password_required: "Password required",
+      verify_after_signup: "Require verification before entering CoCalc",
+    },
+    tags: ["Email", "Security"],
+    group: "Access & Identity",
+    subgroup: "Signup",
   },
   email_signup: {
     name: "Allow email signup",

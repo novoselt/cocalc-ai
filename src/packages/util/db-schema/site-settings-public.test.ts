@@ -9,6 +9,14 @@ describe("buildPublicSiteSettings", () => {
     ).toBe("https://status.example.com");
   });
 
+  it("exposes the public email authentication mode", () => {
+    expect(
+      buildPublicSiteSettings({
+        email_authentication_mode: "verify_after_signup",
+      }).configuration.email_authentication_mode,
+    ).toBe("verify_after_signup");
+  });
+
   it("derives a public zendesk flag from private zendesk settings", () => {
     expect(
       buildPublicSiteSettings({

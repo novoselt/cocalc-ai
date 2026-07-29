@@ -268,6 +268,7 @@ export default function PublicAuthApp({
           ...(current ?? config ?? {}),
           account_display_name: bootstrap.display_name,
           account_email_address: bootstrap.email_address,
+          account_email_address_verified: bootstrap.email_address_verified,
           account_id: bootstrap.account_id,
           is_authenticated: !!bootstrap.signed_in,
         }));

@@ -8,6 +8,7 @@ import { createContext, useContext } from "react";
 
 import type { DocsAccess } from "@cocalc/docs";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
+import type { EmailAuthenticationMode } from "@cocalc/util/auth/email-auth";
 import { SITE_NAME } from "@cocalc/util/theme";
 import type { SignupEmailDomainPublicPolicy } from "@cocalc/util/accounts/signup-email-domain-policy";
 import type { PassportStrategyFrontend } from "@cocalc/util/types/passport-types";
@@ -29,12 +30,16 @@ export {
 export interface PublicConfig {
   account_display_name?: string;
   account_email_address?: string;
+  account_email_address_verified?: boolean;
   account_creation_email_instructions?: string;
   account_id?: string;
   cocalc_product?: string;
   cookie_banner_enabled?: boolean;
   cookie_banner_text?: string;
   dns?: string;
+  email_enabled?: boolean;
+  email_authentication_mode?: EmailAuthenticationMode;
+  verify_emails?: boolean;
   help_email?: string;
   imprint?: string;
   is_admin?: boolean;

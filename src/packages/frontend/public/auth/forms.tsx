@@ -7,17 +7,22 @@ import type { CSSProperties, ReactNode, RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import api from "@cocalc/frontend/client/api";
-import { setStoredControlPlaneOrigin } from "@cocalc/frontend/control-plane-origin";
+import {
+  getControlPlaneOrigin,
+  setStoredControlPlaneOrigin,
+} from "@cocalc/frontend/control-plane-origin";
 import {
   requireEssentialConsent,
   useEssentialConsent,
 } from "@cocalc/frontend/cookie-consent";
 import type { AuthView } from "@cocalc/frontend/auth/types";
 import {
+  getControlPlaneAuthBootstrap,
   isMfaRequiredAuthResponse,
   isWrongBayAuthResponse,
   postAuthApi,
   retryAuthOnHomeBay,
+  signOutAuthSession,
   type SecondFactorMethod,
 } from "@cocalc/frontend/auth/api";
 import AuthInstructions from "@cocalc/frontend/auth/instructions";
@@ -37,6 +42,7 @@ import {
   usePublicConfig,
 } from "@cocalc/frontend/public/config";
 import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from "@cocalc/util/auth";
+import { normalizeEmailAuthenticationMode } from "@cocalc/util/auth/email-auth";
 import {
   emailAllowedByPublicSignupPolicy,
   type SignupEmailDomainPublicPolicy,
@@ -242,6 +248,7 @@ function Alert({
 }
 
 function TextInput(props: {
+  ariaLabel?: string;
   autoComplete?: string;
   autoFocus?: boolean;
   inputRef?: RefObject<HTMLInputElement | null>;
@@ -255,6 +262,7 @@ function TextInput(props: {
 }) {
   return (
     <input
+      aria-label={props.ariaLabel}
       autoComplete={props.autoComplete}
       autoFocus={props.autoFocus}
       ref={props.inputRef}
@@ -1029,6 +1037,245 @@ export function PublicPasswordResetForm({
   );
 }
 
+const VERIFICATION_POLL_INTERVAL_MS = 2_000;
+const VERIFICATION_RESEND_DELAY_MS = 30_000;
+
+function PostSignupVerificationStep({
+  initialEmail,
+  redirectToPath,
+}: {
+  initialEmail: string;
+  redirectToPath?: string | (() => string);
+}) {
+  const [email, setEmail] = useState(initialEmail);
+  const [now, setNow] = useState(() => Date.now());
+  const [resendAvailableAt, setResendAvailableAt] = useState(
+    () => Date.now() + VERIFICATION_RESEND_DELAY_MS,
+  );
+  const [resending, setResending] = useState(false);
+  const [sent, setSent] = useState(true);
+  const [error, setError] = useState("");
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [newEmail, setNewEmail] = useState(initialEmail);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [updatingEmail, setUpdatingEmail] = useState(false);
+  const redirecting = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkVerification() {
+      try {
+        const bootstrap = await getControlPlaneAuthBootstrap();
+        if (cancelled || redirecting.current) {
+          return;
+        }
+        if (!bootstrap.signed_in) {
+          setError(
+            "Your signup session ended. Sign in with the password you just created to continue verification.",
+          );
+          return;
+        }
+        if (bootstrap.email_address) {
+          setEmail(bootstrap.email_address);
+          if (!editingEmail) {
+            setNewEmail(bootstrap.email_address);
+          }
+        }
+        if (bootstrap.email_address_verified === true) {
+          redirecting.current = true;
+          window.location.href = resolveAuthRedirectPath(redirectToPath);
+        }
+      } catch {
+        // A transient bootstrap failure should not replace the useful
+        // verification instructions. The next poll retries automatically.
+      }
+    }
+
+    void checkVerification();
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+      void checkVerification();
+    }, VERIFICATION_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [editingEmail, redirectToPath]);
+
+  async function resendVerification() {
+    setError("");
+    setResending(true);
+    try {
+      await postAuthApi({
+        endpoint: "accounts/send-verification-email",
+        origin: getControlPlaneOrigin(),
+        body: {},
+      });
+      setSent(true);
+      setResendAvailableAt(Date.now() + VERIFICATION_RESEND_DELAY_MS);
+      setNow(Date.now());
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setResending(false);
+    }
+  }
+
+  async function updateEmail() {
+    const normalized = newEmail.trim().toLowerCase();
+    if (!isValidEmailAddress(normalized)) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    if (!currentPassword) {
+      setError("Enter the password you just created.");
+      return;
+    }
+    setError("");
+    setUpdatingEmail(true);
+    try {
+      await postAuthApi({
+        endpoint: "auth/fresh-auth",
+        origin: getControlPlaneOrigin(),
+        body: {
+          current_password: currentPassword,
+          duration: "default",
+        },
+      });
+      const result = await postAuthApi<{
+        verification_email_error?: string;
+      }>({
+        endpoint: "accounts/set-email-address",
+        origin: getControlPlaneOrigin(),
+        body: {
+          email_address: normalized,
+          password: currentPassword,
+        },
+      });
+      setEmail(normalized);
+      setNewEmail(normalized);
+      setCurrentPassword("");
+      setEditingEmail(false);
+      if (result?.verification_email_error) {
+        setSent(false);
+        setError(
+          `The email address was changed, but the verification message could not be sent: ${result.verification_email_error}`,
+        );
+        setResendAvailableAt(Date.now());
+      } else {
+        setSent(true);
+        setResendAvailableAt(Date.now() + VERIFICATION_RESEND_DELAY_MS);
+      }
+      setNow(Date.now());
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setUpdatingEmail(false);
+    }
+  }
+
+  async function signOut() {
+    setError("");
+    try {
+      await signOutAuthSession();
+      window.location.reload();
+    } catch (err) {
+      setError(`${err}`);
+    }
+  }
+
+  const resendSeconds = Math.max(
+    0,
+    Math.ceil((resendAvailableAt - now) / 1_000),
+  );
+
+  return (
+    <div style={STACK_STYLE}>
+      <Alert kind="success">
+        <div style={{ fontSize: "17px", fontWeight: 700, marginBottom: "6px" }}>
+          Check your email
+        </div>
+        We sent a verification link to <strong>{email}</strong>.
+      </Alert>
+      <div style={{ color: COLORS.GRAY_D, lineHeight: "22px" }}>
+        Open the message and click <strong>Verify email address</strong>. This
+        page will continue automatically. Check your spam folder if the message
+        does not arrive.
+      </div>
+      {sent ? (
+        <div style={POLICY_STATUS_STYLE}>
+          Verification email sent. Waiting for confirmation...
+        </div>
+      ) : null}
+      {error ? <Alert kind="error">{error}</Alert> : null}
+      <ActionButton
+        disabled={resending || resendSeconds > 0}
+        onClick={resendVerification}
+      >
+        {resending
+          ? "Sending..."
+          : resendSeconds > 0
+            ? `Resend available in ${resendSeconds}s`
+            : "Resend verification email"}
+      </ActionButton>
+      {editingEmail ? (
+        <div style={{ ...STACK_STYLE, paddingTop: "4px" }}>
+          <Alert kind="info">
+            Correct the address using the password you just created. We will
+            send a new verification message.
+          </Alert>
+          <div style={FIELD_STYLE}>
+            <div style={LABEL_STYLE}>New email address</div>
+            <TextInput
+              ariaLabel="New email address"
+              autoComplete="email"
+              autoFocus
+              name="new-email"
+              placeholder="you@example.com"
+              value={newEmail}
+              onChange={setNewEmail}
+              onPressEnter={updateEmail}
+            />
+          </div>
+          <div style={FIELD_STYLE}>
+            <div style={LABEL_STYLE}>Current password</div>
+            <TextInput
+              ariaLabel="Current password"
+              autoComplete="current-password"
+              name="current-password"
+              type="password"
+              value={currentPassword}
+              onChange={setCurrentPassword}
+              onPressEnter={updateEmail}
+            />
+          </div>
+          <ActionButton
+            disabled={
+              updatingEmail ||
+              !isValidEmailAddress(newEmail.trim().toLowerCase()) ||
+              !currentPassword
+            }
+            onClick={updateEmail}
+          >
+            {updatingEmail ? "Updating..." : "Update email and resend"}
+          </ActionButton>
+          <div style={{ textAlign: "center" }}>
+            <NavLink onClick={() => setEditingEmail(false)}>Cancel</NavLink>
+          </div>
+        </div>
+      ) : (
+        <div style={{ ...LINK_ROW_STYLE, justifyContent: "center" }}>
+          <NavLink onClick={() => setEditingEmail(true)}>
+            Use a different email
+          </NavLink>
+          <NavLink onClick={signOut}>Sign out</NavLink>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PublicSignUpForm({
   cookieBannerEnabled = false,
   initialEmail,
@@ -1055,6 +1302,7 @@ export function PublicSignUpForm({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [signingUp, setSigningUp] = useState(false);
+  const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
   const [issues, setIssues] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const strategies = usePublicSsoStrategies(initialSSOStrategies);
@@ -1065,6 +1313,10 @@ export function PublicSignUpForm({
   const confirmPasswordInputRef = useRef<HTMLInputElement | null>(null);
   const displayNameInputRef = useRef<HTMLInputElement | null>(null);
   const publicConfig = usePublicConfig();
+  const requiresContinuousVerification =
+    normalizeEmailAuthenticationMode(
+      publicConfig?.email_authentication_mode,
+    ) !== "password_required";
   const consentReady = useEssentialConsent();
   const cookieConsentReady = !cookieBannerEnabled || consentReady;
   const policiesVisible = arePublicPoliciesVisible(publicConfig);
@@ -1211,6 +1463,10 @@ export function PublicSignUpForm({
         throw new Error("Sign up failed. Please try again.");
       }
       setStoredControlPlaneOrigin(result?.home_bay_url);
+      if (requiresContinuousVerification) {
+        setPendingVerificationEmail(email.trim().toLowerCase());
+        return;
+      }
       window.location.href = resolveAuthRedirectPath(redirectToPath);
     } catch (err) {
       setError(`${err}`);
@@ -1225,6 +1481,15 @@ export function PublicSignUpForm({
     (requiresToken === false ||
       (requiresToken === true && !!registrationToken.trim())) &&
     cookieConsentReady;
+
+  if (pendingVerificationEmail) {
+    return (
+      <PostSignupVerificationStep
+        initialEmail={pendingVerificationEmail}
+        redirectToPath={redirectToPath}
+      />
+    );
+  }
 
   return (
     <div

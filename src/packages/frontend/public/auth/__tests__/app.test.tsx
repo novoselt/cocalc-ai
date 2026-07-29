@@ -532,6 +532,88 @@ describe("PublicAuthApp", () => {
     });
   });
 
+  it("keeps verify-after-signup users in a dedicated verification step", async () => {
+    mockedApi.mockResolvedValueOnce(false);
+    mockedPostAuthApi.mockResolvedValueOnce({
+      account_id: "account-new",
+      home_bay_id: "bay-0",
+      home_bay_url: "https://bay-0.example.test",
+    } as any);
+    mockedGetControlPlaneAuthBootstrap
+      .mockRejectedValueOnce(new Error("initial bootstrap unavailable"))
+      .mockResolvedValue({
+        account_id: "account-new",
+        email_address: "new-user@example.edu",
+        email_address_verified: false,
+        signed_in: true,
+      });
+
+    render(
+      <PublicAuthApp
+        config={config({
+          email_authentication_mode: "verify_after_signup",
+          policy_pages: "none",
+        })}
+        initialRoute={{ kind: "auth-form", view: "sign-up" }}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "new-user@example.edu" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("At least 8 characters"), {
+      target: { value: "correct horse battery staple 12345!" },
+    });
+    fireEvent.change(
+      screen.getByPlaceholderText("Enter the same password again"),
+      {
+        target: { value: "correct horse battery staple 12345!" },
+      },
+    );
+    fireEvent.change(screen.getByPlaceholderText("Your name"), {
+      target: { value: "New User" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+
+    expect(await screen.findByText("Check your email")).not.toBeNull();
+    expect(screen.getByText("new-user@example.edu")).not.toBeNull();
+    expect(
+      screen.getByText("Verification email sent. Waiting for confirmation..."),
+    ).not.toBeNull();
+    expect(screen.queryByPlaceholderText("Your name")).toBeNull();
+    expect(mockedGetControlPlaneAuthBootstrap).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("Use a different email"));
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "corrected@example.edu" },
+    });
+    fireEvent.change(screen.getByLabelText("Current password"), {
+      target: { value: "correct horse battery staple 12345!" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Update email and resend" }),
+    );
+
+    await waitFor(() => {
+      expect(mockedPostAuthApi).toHaveBeenCalledWith({
+        endpoint: "auth/fresh-auth",
+        origin: expect.any(String),
+        body: {
+          current_password: "correct horse battery staple 12345!",
+          duration: "default",
+        },
+      });
+      expect(mockedPostAuthApi).toHaveBeenCalledWith({
+        endpoint: "accounts/set-email-address",
+        origin: expect.any(String),
+        body: {
+          email_address: "corrected@example.edu",
+          password: "correct horse battery staple 12345!",
+        },
+      });
+    });
+  });
+
   it("shows registration-token issues on sign-up", async () => {
     mockedApi.mockResolvedValueOnce(true);
     mockedPostAuthApi.mockResolvedValueOnce({
