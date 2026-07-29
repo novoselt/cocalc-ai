@@ -119,6 +119,19 @@ runtime_asset_notes="$(
 cat >"$release_notes_output" <<EOF
 CoCalc Star runtime release from commit $(short_head).
 
+## Test this immutable release
+
+This installs directly from this release without changing or consulting the
+candidate or stable channels:
+
+\`\`\`sh
+curl -fsSL https://github.com/sagemathinc/cocalc-ai/releases/download/${release_id}/install-cocalc-star.sh \\
+  | sudo env \\
+      COCALC_STAR_RELEASE_BASE_URL=https://github.com/sagemathinc/cocalc-ai/releases/download/${release_id} \\
+      COCALC_STAR_DISABLE_CHANNEL_MANIFEST=1 \\
+      bash
+\`\`\`
+
 ## Install
 
 Public stable install on a fresh Ubuntu VM:
