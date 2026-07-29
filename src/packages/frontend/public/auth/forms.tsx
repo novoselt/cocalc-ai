@@ -550,28 +550,561 @@ function SsoButton({
   );
 }
 
+type EmailAuthChallengeResponse = {
+  challenge_id: string;
+  purpose?: "sign_in_or_sign_up" | "email_fresh_auth";
+  state: string;
+  masked_email: string;
+  expires_at: string;
+  resend_available_at: string;
+};
+
+type EmailAuthExchangeResponse = {
+  challenge_id: string;
+  exchange_token: string;
+  exchange_expires_at: string;
+  home_bay_id: string;
+  home_bay_url?: string;
+  redirect_to?: string;
+  state: "account_ready";
+};
+
+export async function completeEmailAuthExchange(
+  exchange: EmailAuthExchangeResponse,
+): Promise<any> {
+  const origin = `${exchange.home_bay_url ?? ""}`.trim();
+  if (!origin) {
+    throw new Error("The account home bay is temporarily unavailable.");
+  }
+  setStoredControlPlaneOrigin(origin);
+  return await postAuthApi({
+    endpoint: "auth/email/exchange",
+    origin,
+    body: { retry_token: exchange.exchange_token },
+  });
+}
+
+export function PublicEmailAuthLinkView({
+  challengeId,
+  cookieBannerEnabled = false,
+  initialSSOStrategies,
+  onNavigate,
+  redirectToPath,
+}: {
+  challengeId: string;
+  cookieBannerEnabled?: boolean;
+  initialSSOStrategies?: PublicSsoStrategy[];
+  onNavigate: AuthNavigate;
+  redirectToPath?: string | (() => string);
+}) {
+  const [token] = useState(() => {
+    const value = new URLSearchParams(window.location.hash.slice(1)).get(
+      "token",
+    );
+    if (window.location.hash) {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        window.location.pathname + window.location.search,
+      );
+    }
+    return `${value ?? ""}`.trim();
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [freshAuthApproved, setFreshAuthApproved] = useState(false);
+  const [mfa, setMfa] = useState<{
+    challenge_id: string;
+    home_bay_url?: string;
+  }>();
+
+  if (mfa) {
+    return (
+      <PublicSignInForm
+        cookieBannerEnabled={cookieBannerEnabled}
+        initialChallengeId={mfa.challenge_id}
+        initialInfo="Your email is verified. Enter your CoCalc second factor to finish signing in."
+        initialMfaOrigin={mfa.home_bay_url}
+        initialSSOStrategies={initialSSOStrategies}
+        onNavigate={onNavigate}
+        redirectToPath={redirectToPath}
+      />
+    );
+  }
+
+  async function continueWithLink(): Promise<void> {
+    if (!challengeId || token.length < 32 || submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await postAuthApi<
+        EmailAuthExchangeResponse | EmailAuthChallengeResponse
+      >({
+        endpoint: "auth/email/redeem-link",
+        body: {
+          challenge_id: challengeId,
+          token,
+        },
+      });
+      if (
+        "purpose" in response &&
+        response.purpose === "email_fresh_auth" &&
+        response.state === "email_proved"
+      ) {
+        setFreshAuthApproved(true);
+        return;
+      }
+      const exchange = response as EmailAuthExchangeResponse;
+      const result = await completeEmailAuthExchange(exchange);
+      if (isMfaRequiredAuthResponse(result)) {
+        setMfa({
+          challenge_id: result.challenge_id,
+          home_bay_url: result.home_bay_url,
+        });
+        return;
+      }
+      if (!result?.account_id) {
+        throw new Error("Email sign-in did not create a session.");
+      }
+      window.location.href =
+        exchange.redirect_to ?? resolveAuthRedirectPath(redirectToPath);
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div style={STACK_STYLE}>
+      {error ? <Alert kind="error">{error}</Alert> : null}
+      {freshAuthApproved ? (
+        <Alert kind="info">
+          Email approval succeeded. Return to the original CoCalc tab to finish
+          the security action.
+        </Alert>
+      ) : !token || !challengeId ? (
+        <Alert kind="error">
+          This email sign-in link is incomplete or invalid. Return to sign in
+          and request a new message.
+        </Alert>
+      ) : (
+        <>
+          <Alert kind="info">
+            Continue only if you requested this email from CoCalc. Opening the
+            message alone does not sign you in.
+          </Alert>
+          <ActionButton disabled={submitting} onClick={continueWithLink}>
+            {submitting ? "Continuing..." : "Continue to CoCalc"}
+          </ActionButton>
+        </>
+      )}
+      <div style={{ textAlign: "center" }}>
+        <NavLink onClick={() => onNavigate("sign-in")}>Back to sign in</NavLink>
+      </div>
+    </div>
+  );
+}
+
+export function PublicEmailFirstForm({
+  cookieBannerEnabled = false,
+  initialEmail,
+  initialSSOStrategies,
+  onNavigate,
+  redirectToPath,
+  view,
+}: {
+  cookieBannerEnabled?: boolean;
+  initialEmail?: string;
+  initialSSOStrategies?: PublicSsoStrategy[];
+  onNavigate: AuthNavigate;
+  redirectToPath?: string | (() => string);
+  view: "sign-in" | "sign-up";
+}) {
+  const [email, setEmail] = useState(() => validInitialEmail(initialEmail));
+  const [challenge, setChallenge] = useState<EmailAuthChallengeResponse>();
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [usePassword, setUsePassword] = useState(false);
+  const [requiredSso, setRequiredSso] = useState<{
+    name: string;
+    display: string;
+  }>();
+  const [mfa, setMfa] = useState<{
+    challenge_id: string;
+    home_bay_url?: string;
+  }>();
+  const [now, setNow] = useState(Date.now());
+  const strategies = usePublicSsoStrategies(initialSSOStrategies);
+  const googleStrategy = googleStrategyFrom(strategies);
+  const publicConfig = usePublicConfig();
+  const consentReady = useEssentialConsent();
+  const cookieConsentReady = !cookieBannerEnabled || consentReady;
+  const policiesVisible = arePublicPoliciesVisible(publicConfig);
+  const { termsUrl, privacyUrl } = policyUrls(publicConfig);
+
+  useEffect(() => {
+    if (!challenge) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [challenge]);
+
+  useEffect(() => {
+    if (!challenge) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const status = await postAuthApi<EmailAuthChallengeResponse>({
+            endpoint: "auth/email/status",
+            body: { challenge_id: challenge.challenge_id },
+          });
+          if (cancelled) return;
+          setChallenge((current) =>
+            current ? { ...current, ...status } : status,
+          );
+          if (
+            ["expired", "superseded", "blocked", "failed"].includes(
+              status.state,
+            )
+          ) {
+            setError(
+              status.state === "expired"
+                ? "This code has expired. Start again to receive a new one."
+                : "This email sign-in can no longer be used. Start again.",
+            );
+            return;
+          }
+          if (
+            ["account_ready", "mfa_required", "completed"].includes(
+              status.state,
+            )
+          ) {
+            const bootstrap = await getControlPlaneAuthBootstrap();
+            if (bootstrap.signed_in) {
+              window.location.href = resolveAuthRedirectPath(redirectToPath);
+            }
+          }
+        } catch {
+          // Polling is best effort; direct code/link completion reports errors.
+        }
+      })();
+    }, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [challenge?.challenge_id, redirectToPath]);
+
+  if (usePassword) {
+    return view === "sign-up" ? (
+      <PublicSignUpForm
+        cookieBannerEnabled={cookieBannerEnabled}
+        initialEmail={email}
+        initialSSOStrategies={initialSSOStrategies}
+        onNavigate={onNavigate}
+        redirectToPath={redirectToPath}
+      />
+    ) : (
+      <PublicSignInForm
+        cookieBannerEnabled={cookieBannerEnabled}
+        initialEmail={email}
+        initialSSOStrategies={initialSSOStrategies}
+        onNavigate={onNavigate}
+        redirectToPath={redirectToPath}
+      />
+    );
+  }
+
+  if (mfa) {
+    return (
+      <PublicSignInForm
+        cookieBannerEnabled={cookieBannerEnabled}
+        initialChallengeId={mfa.challenge_id}
+        initialInfo="Your email is verified. Enter your CoCalc second factor to finish signing in."
+        initialMfaOrigin={mfa.home_bay_url}
+        initialSSOStrategies={initialSSOStrategies}
+        onNavigate={onNavigate}
+        redirectToPath={redirectToPath}
+      />
+    );
+  }
+
+  async function startEmailAuth(): Promise<void> {
+    if (!isValidEmailAddress(email) || submitting) return;
+    if (
+      cookieBannerEnabled &&
+      !cookieConsentReady &&
+      !requireEssentialConsent()
+    ) {
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    setRequiredSso(undefined);
+    try {
+      const result = await postAuthApi<any>({
+        endpoint: "auth/email/start",
+        body: {
+          email: normalizedEmailAddress(email),
+          target: resolveAuthRedirectPath(redirectToPath),
+          terms: true,
+        },
+      });
+      if (result?.sso_required && result.strategy) {
+        setRequiredSso(result.strategy);
+        return;
+      }
+      if (!result?.challenge_id) {
+        throw new Error("Unable to start email sign-in.");
+      }
+      setChallenge(result);
+      setCode("");
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function redeemCode(): Promise<void> {
+    const normalizedCode = code.replace(/\s/g, "");
+    if (!challenge || !/^\d{6}$/.test(normalizedCode) || submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const exchange = await postAuthApi<EmailAuthExchangeResponse>({
+        endpoint: "auth/email/redeem-code",
+        body: {
+          challenge_id: challenge.challenge_id,
+          code: normalizedCode,
+        },
+      });
+      const result = await completeEmailAuthExchange(exchange);
+      if (isMfaRequiredAuthResponse(result)) {
+        setMfa({
+          challenge_id: result.challenge_id,
+          home_bay_url: result.home_bay_url,
+        });
+        return;
+      }
+      if (!result?.account_id) {
+        throw new Error("Email sign-in did not create a session.");
+      }
+      window.location.href =
+        exchange.redirect_to ?? resolveAuthRedirectPath(redirectToPath);
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function resend(): Promise<void> {
+    if (!challenge || submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      setChallenge(
+        await postAuthApi<EmailAuthChallengeResponse>({
+          endpoint: "auth/email/resend",
+          body: { challenge_id: challenge.challenge_id },
+        }),
+      );
+      setCode("");
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const resendSeconds = challenge
+    ? Math.max(
+        0,
+        Math.ceil(
+          (new Date(challenge.resend_available_at).valueOf() - now) / 1000,
+        ),
+      )
+    : 0;
+
+  return (
+    <div style={STACK_STYLE}>
+      {error ? <Alert kind="error">{error}</Alert> : null}
+      {!challenge ? (
+        <>
+          {googleStrategy != null ? (
+            <>
+              {policiesVisible ? (
+                <PolicyActionNotice
+                  action={`continuing with ${googleStrategy.display}`}
+                  privacyUrl={privacyUrl}
+                  termsUrl={termsUrl}
+                />
+              ) : null}
+              <SsoButton
+                cookieBannerEnabled={cookieBannerEnabled}
+                cookieConsentReady={cookieConsentReady}
+                href={ssoLoginHref("google", {
+                  target: resolveAuthRedirectPath(redirectToPath),
+                  terms: policiesVisible ? true : undefined,
+                })}
+              >
+                Continue with {googleStrategy.display}
+              </SsoButton>
+              <AuthDivider />
+            </>
+          ) : null}
+          <div style={FIELD_STYLE}>
+            <div style={LABEL_STYLE}>Email address</div>
+            <TextInput
+              ariaLabel="Email address"
+              autoComplete="email"
+              autoFocus
+              name="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(value) => {
+                setEmail(value);
+                setError("");
+                setRequiredSso(undefined);
+              }}
+              onPressEnter={startEmailAuth}
+            />
+          </div>
+          {requiredSso ? (
+            <Alert kind="info">
+              <div style={{ fontWeight: 600, marginBottom: "8px" }}>
+                This email domain uses single sign-on.
+              </div>
+              <a
+                href={ssoLoginHref(requiredSso.name, {
+                  target: resolveAuthRedirectPath(redirectToPath),
+                  terms: policiesVisible ? true : undefined,
+                })}
+                style={LINK_STYLE}
+              >
+                Continue with {requiredSso.display}
+              </a>
+            </Alert>
+          ) : null}
+          {policiesVisible ? (
+            <PolicyActionNotice
+              action="continuing"
+              privacyUrl={privacyUrl}
+              termsUrl={termsUrl}
+            />
+          ) : null}
+          <ActionButton
+            disabled={
+              !isValidEmailAddress(email) ||
+              submitting ||
+              !cookieConsentReady ||
+              !!requiredSso
+            }
+            onClick={startEmailAuth}
+          >
+            {submitting
+              ? "Sending..."
+              : !cookieConsentReady
+                ? "Acknowledge cookie banner to continue"
+                : "Continue with email"}
+          </ActionButton>
+          <div style={{ textAlign: "center" }}>
+            <NavLink onClick={() => setUsePassword(true)}>
+              Use a password instead
+            </NavLink>
+          </div>
+        </>
+      ) : (
+        <>
+          <Alert kind="info">
+            <div style={{ fontWeight: 600, marginBottom: "6px" }}>
+              Check your email
+            </div>
+            We sent a six-digit code and sign-in link to{" "}
+            <strong>{challenge.masked_email}</strong>.
+          </Alert>
+          <div style={FIELD_STYLE}>
+            <div style={LABEL_STYLE}>Six-digit code</div>
+            <TextInput
+              ariaLabel="Six-digit email code"
+              autoComplete="one-time-code"
+              autoFocus
+              maxLength={6}
+              name="email-code"
+              placeholder="123456"
+              value={code}
+              onChange={(value) =>
+                setCode(value.replace(/\D/g, "").slice(0, 6))
+              }
+              onPressEnter={redeemCode}
+            />
+          </div>
+          <ActionButton
+            disabled={!/^\d{6}$/.test(code) || submitting}
+            onClick={redeemCode}
+          >
+            {submitting ? "Continuing..." : "Continue"}
+          </ActionButton>
+          <div style={{ ...LINK_ROW_STYLE, justifyContent: "center" }}>
+            <NavLink
+              onClick={() => {
+                if (resendSeconds === 0) void resend();
+              }}
+            >
+              {resendSeconds > 0
+                ? `Resend available in ${resendSeconds}s`
+                : "Resend email"}
+            </NavLink>
+            <NavLink
+              onClick={() => {
+                setChallenge(undefined);
+                setCode("");
+                setError("");
+              }}
+            >
+              Use a different email
+            </NavLink>
+            <NavLink onClick={() => setUsePassword(true)}>
+              Use a password instead
+            </NavLink>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function PublicSignInForm({
+  initialEmail,
   initialChallengeId,
   initialInfo,
+  initialMfaOrigin,
   initialSSOStrategies,
   cookieBannerEnabled = false,
   onNavigate,
   redirectToPath,
 }: {
+  initialEmail?: string;
   initialChallengeId?: string;
   initialInfo?: string;
+  initialMfaOrigin?: string;
   initialSSOStrategies?: PublicSsoStrategy[];
   cookieBannerEnabled?: boolean;
   onNavigate: AuthNavigate;
   redirectToPath?: string | (() => string);
 }) {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => validInitialEmail(initialEmail));
   const [password, setPassword] = useState("");
   const [challengeId, setChallengeId] = useState(initialChallengeId ?? "");
   const [factorMethods, setFactorMethods] = useState<SecondFactorMethod[]>([]);
   const [factorMethod, setFactorMethod] = useState<SecondFactorMethod>("totp");
   const [factorCode, setFactorCode] = useState("");
-  const [mfaOrigin, setMfaOrigin] = useState<string | undefined>();
+  const [mfaOrigin, setMfaOrigin] = useState<string | undefined>(
+    initialMfaOrigin,
+  );
   const [signingIn, setSigningIn] = useState(false);
   const [checkingSignInMethod, setCheckingSignInMethod] = useState(false);
   const [signInMethod, setSignInMethod] = useState<SignInMethod>();
@@ -593,7 +1126,8 @@ export function PublicSignInForm({
 
   useEffect(() => {
     setChallengeId(initialChallengeId ?? "");
-  }, [initialChallengeId]);
+    setMfaOrigin(initialMfaOrigin);
+  }, [initialChallengeId, initialMfaOrigin]);
 
   const canSubmit = challengeId
     ? factorMethod === "passkey"

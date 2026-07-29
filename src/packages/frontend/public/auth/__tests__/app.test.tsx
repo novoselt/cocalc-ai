@@ -149,6 +149,14 @@ describe("getPublicAuthRouteFromPath", () => {
       challengeId: "challenge-3",
       kind: "auth-second-factor",
     });
+    expect(
+      getPublicAuthRouteFromPath(
+        "/base/auth/email/continue/11111111-1111-4111-8111-111111111111",
+      ),
+    ).toEqual({
+      challengeId: "11111111-1111-4111-8111-111111111111",
+      kind: "auth-email-continue",
+    });
   });
 });
 
@@ -218,10 +226,8 @@ describe("PublicAuthApp", () => {
       screen.getByRole("heading", { name: "Create your Launchpad account" }),
     ).not.toBeNull();
     expect(
-      screen.getByText(
-        "Create an account to start projects, then compare product paths whenever your needs change.",
-      ),
-    ).not.toBeNull();
+      screen.queryByText("Create or access your CoCalc account."),
+    ).toBeNull();
     expect(await screen.findByText("Registration token")).not.toBeNull();
   });
 
@@ -304,6 +310,20 @@ describe("PublicAuthApp", () => {
     expect(mockedEnableForceConsent).not.toHaveBeenCalled();
   });
 
+  it("forces cookie consent on email-first sign-in because it can create an account", async () => {
+    render(
+      <PublicAuthApp
+        config={config({
+          cookie_banner_enabled: true,
+          email_authentication_mode: "email_first",
+        })}
+        initialRoute={{ kind: "auth-form", view: "sign-in" }}
+      />,
+    );
+
+    await waitFor(() => expect(mockedEnableForceConsent).toHaveBeenCalled());
+  });
+
   it("shows and enforces a public signup allow-list domain policy", async () => {
     mockedApi.mockResolvedValueOnce(false);
 
@@ -361,10 +381,8 @@ describe("PublicAuthApp", () => {
     );
 
     expect(
-      screen.getByText(
-        "Create an account to start projects, then compare product paths whenever your needs change.",
-      ),
-    ).not.toBeNull();
+      screen.queryByText("Create or access your CoCalc account."),
+    ).toBeNull();
     fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
       target: { value: "new-user@example.edu" },
     });
@@ -437,6 +455,86 @@ describe("PublicAuthApp", () => {
       screen.getByText(/By creating an account, you agree/),
     ).not.toBeNull();
     expect(screen.queryByText(/Send me occasional platform tips/)).toBeNull();
+  });
+
+  it("uses email first without requesting a password", () => {
+    render(
+      <PublicAuthApp
+        config={config({ email_authentication_mode: "email_first" })}
+        initialRoute={{ kind: "auth-form", view: "sign-up" }}
+      />,
+    );
+
+    expect(screen.getByLabelText("Email address")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Continue with email" }),
+    ).not.toBeNull();
+    expect(screen.queryByPlaceholderText("At least 8 characters")).toBeNull();
+
+    fireEvent.click(screen.getByText("Use a password instead"));
+
+    expect(screen.getByPlaceholderText("At least 8 characters")).not.toBeNull();
+  });
+
+  it("starts a passwordless email challenge", async () => {
+    mockedPostAuthApi.mockResolvedValueOnce({
+      challenge_id: "11111111-1111-4111-8111-111111111111",
+      state: "pending",
+      masked_email: "pe…@example.edu",
+      expires_at: "2026-07-29T01:15:00.000Z",
+      resend_available_at: "2026-07-29T01:00:30.000Z",
+      send_count: 1,
+      message_sent: true,
+      message_failed: false,
+    });
+    render(
+      <PublicAuthApp
+        config={config({ email_authentication_mode: "email_first" })}
+        initialRoute={{ kind: "auth-form", view: "sign-in" }}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "Person@Example.EDU" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
+    );
+
+    expect(await screen.findByText("Check your email")).not.toBeNull();
+    expect(mockedPostAuthApi).toHaveBeenCalledWith({
+      endpoint: "auth/email/start",
+      body: {
+        email: "person@example.edu",
+        target: "/projects",
+        terms: true,
+      },
+    });
+    expect(screen.getByLabelText("Six-digit email code")).not.toBeNull();
+  });
+
+  it("does not redeem an email link until the user continues", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/auth/email/continue/11111111-1111-4111-8111-111111111111#token=abcdefghijklmnopqrstuvwxyz1234567890",
+    );
+
+    render(
+      <PublicAuthApp
+        config={config({ email_authentication_mode: "email_first" })}
+        initialRoute={{
+          challengeId: "11111111-1111-4111-8111-111111111111",
+          kind: "auth-email-continue",
+        }}
+      />,
+    );
+
+    expect(window.location.hash).toBe("");
+    expect(mockedPostAuthApi).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Continue to CoCalc" }),
+    ).not.toBeNull();
   });
 
   it("shows policy notice before Google sign-up without disabling SSO", async () => {
