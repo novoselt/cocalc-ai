@@ -22,6 +22,11 @@ short_head() {
   git -C "$REPO_ROOT" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown'
 }
 
+full_head() {
+  git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null ||
+    die "unable to resolve the Git revision for this release"
+}
+
 usage() {
   cat <<EOF
 Usage:
@@ -53,13 +58,17 @@ fi
 
 output_dir="${1:-${STAR_GITHUB_RELEASE_DIR:-${REPO_ROOT}/dist/star/github}}"
 release_id="${STAR_RELEASE_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$(short_head)}"
+git_revision="$(full_head)"
 installer_output="${output_dir}/install-cocalc-star.sh"
 lima_installer_output="${output_dir}/install-cocalc-star-local-lima.sh"
 release_notes_output="${output_dir}/release-notes.md"
 
 mkdir -p "$output_dir"
 
-mapfile -t arches < <(release_arches)
+arches=()
+while IFS= read -r arch; do
+  arches+=("$arch")
+done < <(release_arches)
 runtime_assets=()
 first_runtime=1
 for arch in "${arches[@]}"; do
@@ -169,7 +178,7 @@ Release id:
   $release_id
 
 GitHub release upload example:
-  gh release create "$release_id" "$installer_output" "$lima_installer_output"$runtime_asset_args "${output_dir}/SHA256SUMS" --repo sagemathinc/cocalc-ai --title "CoCalc Star $release_id" --notes-file "$release_notes_output" --latest=false
+  gh release create "$release_id" "$installer_output" "$lima_installer_output"$runtime_asset_args "${output_dir}/SHA256SUMS" --repo sagemathinc/cocalc-ai --target "$git_revision" --title "CoCalc Star $release_id" --notes-file "$release_notes_output" --latest=false
 
 Publish as candidate after uploading the immutable release:
   ${SCRIPT_DIR}/promote-github-release-channel.sh --upload "$release_id" candidate
