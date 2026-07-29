@@ -4313,7 +4313,14 @@ export class BaseEditorActions<
         .open_chat({ path: this.path });
       const frameId = this.show_focused_frame_of_type(chat.type);
       const actions = await this.waitForSideChatActions(generation, frameId);
-      actions?.scrollToDate(fragmentId.chat);
+      if (actions == null) return;
+      if (fragmentId.thread) {
+        actions.clearAllFilters();
+        actions.setSelectedThread(fragmentId.thread);
+      }
+      // open_file already installed the complete fragment, including its
+      // explicit thread target. Do not replace it with a chat-only fragment.
+      actions.scrollToDate(fragmentId.chat, { persistFragment: false });
     }
   }
 

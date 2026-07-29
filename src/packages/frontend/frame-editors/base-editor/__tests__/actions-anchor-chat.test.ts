@@ -107,4 +107,43 @@ describe("anchored side-chat readiness", () => {
     expect(readyActions.frameTreeActions).toBe(actions);
     expect(readyActions.frameId).toBe("chat-frame");
   });
+
+  it("selects the explicit notification thread before scrolling", async () => {
+    const chatActions = {
+      syncdb: { get_state: () => "ready" },
+      frameTreeActions: undefined,
+      frameId: "",
+      clearAllFilters: jest.fn(),
+      setSelectedThread: jest.fn(),
+      scrollToDate: jest.fn(),
+    };
+    mockEnsureSideChatActions.mockReturnValue(chatActions);
+    const open_chat = jest.fn();
+    const actions: any = Object.create(TextEditorActions.prototype);
+    actions.project_id = "project-1";
+    actions.path = "notebook.ipynb";
+    actions._openAnchorChatGeneration = 0;
+    actions.isClosed = jest.fn(() => false);
+    actions.redux = {
+      getProjectActions: () => ({ open_chat }),
+    };
+    actions.show_focused_frame_of_type = jest.fn(() => "chat-frame");
+
+    await actions.gotoFragment({
+      chat: "1785326400000",
+      thread: "cell-thread-56",
+    });
+
+    expect(open_chat).toHaveBeenCalledWith({ path: "notebook.ipynb" });
+    expect(chatActions.clearAllFilters).toHaveBeenCalledTimes(1);
+    expect(chatActions.setSelectedThread).toHaveBeenCalledWith(
+      "cell-thread-56",
+    );
+    expect(chatActions.scrollToDate).toHaveBeenCalledWith("1785326400000", {
+      persistFragment: false,
+    });
+    expect(
+      chatActions.setSelectedThread.mock.invocationCallOrder[0],
+    ).toBeLessThan(chatActions.scrollToDate.mock.invocationCallOrder[0]);
+  });
 });
