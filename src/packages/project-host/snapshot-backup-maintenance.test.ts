@@ -2,6 +2,8 @@ const listProjectMaintenanceSchedulesMock = jest.fn();
 const getMasterConatClientMock = jest.fn();
 const runScheduledSnapshotMaintenanceMock = jest.fn();
 const runScheduledBackupMaintenanceMock = jest.fn();
+const admitStorageOperationMock = jest.fn();
+const releaseStorageOperationMock = jest.fn();
 
 jest.mock("@cocalc/backend/logger", () => ({
   __esModule: true,
@@ -34,6 +36,17 @@ jest.mock("./file-server", () => ({
     runScheduledBackupMaintenanceMock(...args),
 }));
 
+jest.mock("./storage-admission", () => ({
+  __esModule: true,
+  admitStorageOperation: (...args: any[]) => admitStorageOperationMock(...args),
+}));
+
+jest.mock("@cocalc/file-server/btrfs/operation-cache", () => ({
+  __esModule: true,
+  withBtrfsMutationContext: (_context: unknown, run: () => Promise<unknown>) =>
+    run(),
+}));
+
 describe("snapshot-backup-maintenance", () => {
   const env = process.env;
 
@@ -64,6 +77,15 @@ describe("snapshot-backup-maintenance", () => {
     ]);
     runScheduledSnapshotMaintenanceMock.mockResolvedValue(undefined);
     runScheduledBackupMaintenanceMock.mockResolvedValue(undefined);
+    releaseStorageOperationMock.mockReset();
+    admitStorageOperationMock.mockImplementation(
+      ({ operation_kind, project_id }) => ({
+        admitted: true,
+        would_defer: false,
+        operation_id: `${operation_kind}:${project_id}`,
+        release: releaseStorageOperationMock,
+      }),
+    );
   });
 
   afterEach(() => {
@@ -106,6 +128,15 @@ describe("snapshot-backup-maintenance", () => {
       },
       limit: 5,
     });
+    expect(admitStorageOperationMock).toHaveBeenCalledWith({
+      operation_kind: "scheduled_snapshot",
+      project_id: "proj-1",
+    });
+    expect(admitStorageOperationMock).toHaveBeenCalledWith({
+      operation_kind: "scheduled_backup",
+      project_id: "proj-2",
+    });
+    expect(releaseStorageOperationMock).toHaveBeenCalledTimes(2);
   });
 
   it("runs backup maintenance even when snapshot maintenance fails", async () => {
@@ -279,5 +310,34 @@ describe("snapshot-backup-maintenance", () => {
     expect(listProjectMaintenanceSchedulesMock).not.toHaveBeenCalled();
     expect(runScheduledSnapshotMaintenanceMock).not.toHaveBeenCalled();
     expect(runScheduledBackupMaintenanceMock).not.toHaveBeenCalled();
+  });
+
+  it("reevaluates admission before snapshot and backup work", async () => {
+    listProjectMaintenanceSchedulesMock.mockResolvedValue([
+      {
+        project_id: "proj-1",
+        snapshots: {},
+        backups: {},
+      },
+    ]);
+    admitStorageOperationMock.mockImplementation(({ operation_kind }) => ({
+      admitted: operation_kind !== "scheduled_snapshot",
+      would_defer: operation_kind === "scheduled_snapshot",
+      reason:
+        operation_kind === "scheduled_snapshot"
+          ? "lifecycle_active"
+          : undefined,
+      operation_id: operation_kind,
+      release: releaseStorageOperationMock,
+    }));
+    const { runProjectSnapshotBackupMaintenanceSweepOnce } =
+      await import("./snapshot-backup-maintenance");
+
+    await runProjectSnapshotBackupMaintenanceSweepOnce({ hostId: "host-1" });
+
+    expect(runScheduledSnapshotMaintenanceMock).not.toHaveBeenCalled();
+    expect(runScheduledBackupMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(admitStorageOperationMock).toHaveBeenCalledTimes(2);
+    expect(releaseStorageOperationMock).toHaveBeenCalledTimes(1);
   });
 });

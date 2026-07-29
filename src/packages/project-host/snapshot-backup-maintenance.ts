@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 
 import getLogger from "@cocalc/backend/logger";
 import { createHostStatusClient } from "@cocalc/conat/project-host/api";
+import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
 import {
   DEFAULT_BACKUP_COUNTS,
   DEFAULT_SNAPSHOT_COUNTS,
@@ -13,6 +14,8 @@ import {
   runScheduledBackupMaintenance,
   runScheduledSnapshotMaintenance,
 } from "./file-server";
+import { admitStorageOperation } from "./storage-admission";
+import type { StorageOperationKind } from "./storage-operation-registry";
 
 const logger = getLogger("project-host:snapshot-backup-maintenance");
 
@@ -248,6 +251,57 @@ async function runWithParallelism<T>(
   );
 }
 
+async function runScheduledStorageOperation({
+  hostId,
+  project_id,
+  operation_kind,
+  run,
+}: {
+  hostId: string;
+  project_id: string;
+  operation_kind: Extract<
+    StorageOperationKind,
+    "scheduled_snapshot" | "scheduled_backup"
+  >;
+  run: () => Promise<void>;
+}): Promise<boolean> {
+  const ticket = admitStorageOperation({ operation_kind, project_id });
+  if (!ticket.admitted) {
+    logger.info("deferring scheduled project storage operation", {
+      hostId,
+      project_id,
+      operation_kind,
+      reason: ticket.reason,
+    });
+    return false;
+  }
+  if (ticket.would_defer) {
+    logger.info("scheduled project storage operation would be deferred", {
+      hostId,
+      project_id,
+      operation_kind,
+      reason: ticket.reason,
+      admission_mode: "observe",
+    });
+  }
+  try {
+    await withBtrfsMutationContext(
+      {
+        operation_id: ticket.operation_id,
+        project_id,
+        priority: "scheduled",
+        operation_class: operation_kind,
+        cgroup_path: "/sys/fs/cgroup/cocalc-maintenance",
+        checkpointable: true,
+      },
+      run,
+    );
+    return true;
+  } finally {
+    ticket.release();
+  }
+}
+
 export async function runProjectSnapshotBackupMaintenanceSweepOnce({
   hostId,
 }: {
@@ -318,10 +372,16 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
       );
       if (!snapshotSchedule.disabled) {
         try {
-          await runScheduledSnapshotMaintenance({
+          await runScheduledStorageOperation({
+            hostId,
             project_id,
-            counts: scheduleToCounts(snapshotSchedule),
-            limit: row.max_snapshots_per_project ?? undefined,
+            operation_kind: "scheduled_snapshot",
+            run: async () =>
+              await runScheduledSnapshotMaintenance({
+                project_id,
+                counts: scheduleToCounts(snapshotSchedule),
+                limit: row.max_snapshots_per_project ?? undefined,
+              }),
           });
         } catch (err) {
           logger.warn("scheduled snapshot maintenance failed", {
@@ -334,10 +394,18 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
       const backupSchedule = mergeSchedule(DEFAULT_BACKUP_COUNTS, row.backups);
       if (!backupSchedule.disabled) {
         try {
-          await runScheduledBackupMaintenance({
+          await runScheduledStorageOperation({
+            hostId,
             project_id,
-            counts: scheduleToCounts(backupSchedule, { allowFrequent: false }),
-            limit: row.max_backups_per_project ?? undefined,
+            operation_kind: "scheduled_backup",
+            run: async () =>
+              await runScheduledBackupMaintenance({
+                project_id,
+                counts: scheduleToCounts(backupSchedule, {
+                  allowFrequent: false,
+                }),
+                limit: row.max_backups_per_project ?? undefined,
+              }),
           });
         } catch (err) {
           logger.warn("scheduled backup maintenance failed", {
@@ -425,4 +493,5 @@ export const _test = {
   parseMeminfo,
   parsePressureFullAvg10,
   maintenanceMemoryDecision,
+  runScheduledStorageOperation,
 };
