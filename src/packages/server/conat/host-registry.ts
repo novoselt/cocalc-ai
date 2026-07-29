@@ -157,13 +157,32 @@ function getHostRuntimeHealth(metadata: any): {
   };
 }
 
-function hostRuntimeAvailability(metadata: any) {
+function getSpotRecoveryPhase(
+  metadata: any,
+  controlPlaneMetadata?: any,
+): string | undefined {
+  const reportedPhase = `${metadata?.spot_recovery_state?.phase ?? ""}`.trim();
+  if (reportedPhase) {
+    return reportedPhase;
+  }
+  return (
+    `${controlPlaneMetadata?.spot_recovery_state?.phase ?? ""}`.trim() ||
+    undefined
+  );
+}
+
+function hostRuntimeAvailability(metadata: any, controlPlaneMetadata?: any) {
   const runtime = getHostRuntimeHealth(metadata);
   if (runtime.ready) {
+    const recoveryPhase = getSpotRecoveryPhase(metadata, controlPlaneMetadata);
     return {
       state: "online" as const,
       category: "unknown" as const,
-      summary: "Host is online.",
+      summary:
+        recoveryPhase === "running_standard_fallback" ||
+        recoveryPhase === "probing_spot"
+          ? "Host is online on standard fallback."
+          : "Host is online.",
     };
   }
   if (runtime.status === "starting") {
@@ -1367,7 +1386,10 @@ export async function initHostRegistryService() {
           last_seen: new Date(),
           host_session_id: nextSessionId,
         });
-        const runtimeAvailability = hostRuntimeAvailability(sanitized.metadata);
+        const runtimeAvailability = hostRuntimeAvailability(
+          sanitized.metadata,
+          previousRows[0]?.metadata,
+        );
         const plannedRuntimeTransition = getPlannedProjectHostRuntimeTransition(
           previousRows[0]?.metadata,
         );
@@ -1464,7 +1486,10 @@ export async function initHostRegistryService() {
           last_seen: new Date(),
           host_session_id: nextSessionId,
         });
-        const runtimeAvailability = hostRuntimeAvailability(sanitized.metadata);
+        const runtimeAvailability = hostRuntimeAvailability(
+          sanitized.metadata,
+          previousRows[0]?.metadata,
+        );
         const plannedRuntimeTransition = getPlannedProjectHostRuntimeTransition(
           previousRows[0]?.metadata,
         );
@@ -1939,3 +1964,7 @@ export async function initHostRegistryService() {
     },
   });
 }
+
+export const _test = {
+  hostRuntimeAvailability,
+};

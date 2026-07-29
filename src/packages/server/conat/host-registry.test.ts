@@ -1189,3 +1189,60 @@ describe("host-registry automatic convergence retry", () => {
     });
   });
 });
+
+describe("host-registry runtime availability", () => {
+  const readyMetadata = {
+    runtime_health: {
+      status: "ready",
+      ready: true,
+      consecutive_failures: 0,
+    },
+  };
+
+  it.each(["running_standard_fallback", "probing_spot"])(
+    "preserves the standard-fallback summary during %s",
+    async (phase) => {
+      const { _test } = await import("./host-registry");
+
+      expect(
+        _test.hostRuntimeAvailability(readyMetadata, {
+          spot_recovery_state: { phase },
+        }),
+      ).toMatchObject({
+        state: "online",
+        category: "unknown",
+        summary: "Host is online on standard fallback.",
+      });
+    },
+  );
+
+  it("uses the normal online summary outside standard fallback", async () => {
+    const { _test } = await import("./host-registry");
+
+    expect(_test.hostRuntimeAvailability(readyMetadata)).toMatchObject({
+      state: "online",
+      category: "unknown",
+      summary: "Host is online.",
+    });
+  });
+
+  it("prefers an explicitly reported idle phase over stale control-plane fallback metadata", async () => {
+    const { _test } = await import("./host-registry");
+
+    expect(
+      _test.hostRuntimeAvailability(
+        {
+          ...readyMetadata,
+          spot_recovery_state: { phase: "idle" },
+        },
+        {
+          spot_recovery_state: { phase: "running_standard_fallback" },
+        },
+      ),
+    ).toMatchObject({
+      state: "online",
+      category: "unknown",
+      summary: "Host is online.",
+    });
+  });
+});
