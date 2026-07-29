@@ -206,7 +206,12 @@ describe("LaTeX included-file table of contents", () => {
 
   it("scans unopened source and suppresses stale thread-config anchors", async () => {
     const readFile = jest.fn(async () =>
-      ["intro", "% chat: live-one", "middle", "% chat: live-two"].join("\n"),
+      [
+        "\\section{Disk section}",
+        "% chat: live-one",
+        "middle",
+        "% chat: live-two",
+      ].join("\n"),
     );
     const { actions, subfile, getState } = createDiskScanActions({
       readFile,
@@ -260,16 +265,44 @@ describe("LaTeX included-file table of contents", () => {
 
     expect(entries.map(({ value }) => value)).toEqual([
       "**123.tex**",
+      "Disk section",
       "Chat live-one (line 2)",
       "Chat live-two (line 4)",
       "After",
     ]);
-    expect(entries[1].extra).toEqual(
+    expect(entries[2].extra).toEqual(
       expect.objectContaining({
         kind: "chat",
         hash: "live-one",
         path: "/home/user/project/123.tex",
         line: 1,
+      }),
+    );
+  });
+
+  it("prefers live subfile headings over disk-scanned headings", async () => {
+    const { actions, subfile } = createDiskScanActions({
+      readFile: jest.fn(async () => "\\section{Disk section}"),
+    });
+    await actions._scanDiskChatSubfiles();
+    actions.redux.getEditorActions.mockReturnValue({
+      _syncstring: {
+        to_str: () => "\\section{Live section}",
+      },
+    });
+
+    const entries: any[] = [];
+    actions._appendSubfileTocEntries(entries, "\\include{123}");
+
+    expect(entries.map(({ value }) => value)).toEqual([
+      "**123.tex**",
+      "Live section",
+    ]);
+    expect(entries[1].extra).toEqual(
+      expect.objectContaining({
+        kind: "line",
+        path: subfile,
+        line: 0,
       }),
     );
   });
@@ -294,6 +327,7 @@ describe("LaTeX included-file table of contents", () => {
     await scan;
 
     expect(getState().get("chat_markers")).toBeUndefined();
+    expect(actions._diskSubfileHeadings?.has(subfile) ?? false).toBe(false);
   });
 
   it("keeps a failed disk read header-only", async () => {
@@ -332,6 +366,7 @@ describe("LaTeX included-file table of contents", () => {
 
     expect(getState().hasIn(["chat_markers", subfile])).toBe(false);
     expect(getState().hasIn(["chat_bookmarks", subfile])).toBe(false);
+    expect(actions._diskSubfileHeadings.has(subfile)).toBe(false);
   });
 
   it("trusts a loaded subfile scan over remote thread metadata", () => {
@@ -607,6 +642,46 @@ describe("LaTeX chat marker resolution", () => {
     expect(diskText).not.toContain("% chat: anchor-1");
     expect(state.getIn(["chat_markers", path]).size).toBe(0);
     expect(actions.updateTableOfContents).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves live CodeMirror edits that are ahead of the syncstring", async () => {
+    const path = "paper.tex";
+    let syncText = ["stale", "% chat: anchor-1"].join("\n");
+    let liveText = ["pending local edit", "% chat: anchor-1"].join("\n");
+    const cm = {
+      getValue: jest.fn(() => liveText),
+      getWrapperElement: jest.fn(() => ({ isConnected: true })),
+      setValueNoJump: jest.fn((value: string) => {
+        liveText = value;
+      }),
+    };
+    const olderCm = {
+      getValue: jest.fn(() => syncText),
+      getWrapperElement: jest.fn(() => ({ isConnected: true })),
+      setValueNoJump: jest.fn(),
+    };
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = path;
+    actions._syncstring = {
+      to_str: jest.fn(() => syncText),
+    };
+    actions._cm = { older: olderCm, "cm-1": cm };
+    actions._get_cm = jest.fn(() => cm);
+    actions._chatMarkerScanners = {};
+    actions._clearChatTextDecorations = jest.fn();
+    actions.set_value = jest.fn((value: string) => {
+      syncText = value;
+      liveText = value;
+    });
+    actions.syncstring_commit = jest.fn();
+
+    await expect(
+      actions._removeChatMarkersForHash(path, "anchor-1"),
+    ).resolves.toBe(true);
+
+    expect(actions.set_value).toHaveBeenCalledWith("pending local edit");
+    expect(syncText).toBe("pending local edit");
+    expect(liveText).toBe("pending local edit");
   });
 });
 

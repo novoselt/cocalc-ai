@@ -827,6 +827,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     this._chatStoreDispose = undefined;
     this._diskChatScanRefresh?.cancel();
     this._diskChatScanRefresh = undefined;
+    this._diskSubfileHeadings.clear();
     super.close();
   }
 
@@ -2133,26 +2134,30 @@ export class Actions extends BaseActions<LatexEditorState> {
       const tail = path_split(path).tail;
       const group: TableOfContentsEntry[] = [];
 
-      // Section headings from the sub-file's live syncstring.
+      // Section headings from the sub-file's live syncstring, falling back to
+      // the same disk read that discovers markers/bookmarks for unopened
+      // build-known files. A mounted editor always wins over the disk cache.
       const subActions: any = this.redux.getEditorActions(
         this.project_id,
         path,
       );
-      let subText: string | undefined;
+      let subHeadings: TableOfContentsEntry[] | undefined;
       try {
-        subText = subActions?._syncstring?.to_str();
+        const subText = subActions?._syncstring?.to_str();
+        if (subText != null) {
+          subHeadings = parseTableOfContents(subText);
+        }
       } catch {
         // not ready yet; headings will appear on a later rescan
       }
-      if (subText) {
-        for (const h of parseTableOfContents(subText)) {
-          group.push({
-            id: `sub:${path}:${h.id}-heading`,
-            value: h.value,
-            level: h.level,
-            extra: { kind: "line", path, line: parseInt(h.id) - 1 },
-          });
-        }
+      subHeadings ??= this._diskSubfileHeadings?.get(path);
+      for (const h of subHeadings ?? []) {
+        group.push({
+          id: `sub:${path}:${h.id}-heading`,
+          value: h.value,
+          level: h.level,
+          extra: { kind: "line", path, line: parseInt(h.id) - 1 },
+        });
       }
 
       const markers = (chatMarkers?.get(path)?.toJS() ??
@@ -2351,6 +2356,7 @@ export class Actions extends BaseActions<LatexEditorState> {
   private _diskScannedPaths = new Set<string>();
   private _diskChatContentHashes = new Map<string, number>();
   private _diskChatAnchorSignatures = new Map<string, string>();
+  private _diskSubfileHeadings = new Map<string, TableOfContentsEntry[]>();
   private _diskChatRead?: (path: string) => Promise<void>;
   private _diskChatScanRefresh?: ReturnType<typeof debounce>;
   private _diskChatScanForce = false;
@@ -2412,6 +2418,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     this._chatMarkersOwnedByParent = true;
     this._diskChatScanRefresh?.cancel();
     this._diskChatScanRefresh = undefined;
+    this._diskSubfileHeadings.clear();
     this._logAbandonedStandaloneChat();
     for (const handle of Object.values(this._chatMarkerScanners)) {
       handle.dispose();
@@ -2545,6 +2552,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       const contentHash = hash_string(text);
       const hashes = (this._diskChatContentHashes ??= new Map());
       const diskPaths = (this._diskScannedPaths ??= new Set());
+      const headings = (this._diskSubfileHeadings ??= new Map());
       if (diskPaths.has(path) && hashes.get(path) === contentHash) return;
 
       const chatMarkers = this.store.get("chat_markers") ?? (fromJS({}) as any);
@@ -2552,6 +2560,7 @@ export class Actions extends BaseActions<LatexEditorState> {
         this.store.get("chat_bookmarks") ?? (fromJS({}) as any);
       hashes.set(path, contentHash);
       diskPaths.add(path);
+      headings.set(path, parseTableOfContents(text));
       this.setState({
         chat_markers: chatMarkers.set(path, fromJS(scanMarkers(text))),
         chat_bookmarks: chatBookmarks.set(path, fromJS(scanBookmarks(text))),
@@ -2567,6 +2576,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     const diskPaths = (this._diskScannedPaths ??= new Set());
     const hashes = (this._diskChatContentHashes ??= new Map());
     const signatures = (this._diskChatAnchorSignatures ??= new Map());
+    const headings = (this._diskSubfileHeadings ??= new Map());
     let chatMarkers = this.store.get("chat_markers");
     let chatBookmarks = this.store.get("chat_bookmarks");
     let changed = false;
@@ -2577,6 +2587,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       diskPaths.delete(path);
       hashes.delete(path);
       signatures.delete(path);
+      headings.delete(path);
       chatMarkers = chatMarkers?.delete(path);
       chatBookmarks = chatBookmarks?.delete(path);
       changed = true;
@@ -2636,6 +2647,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     this._diskScannedPaths?.delete(path);
     this._diskChatContentHashes?.delete(path);
     this._diskChatAnchorSignatures?.delete(path);
+    this._diskSubfileHeadings?.delete(path);
     const scan = (publishNewInvalidMarkers: boolean) => {
       if (this._state === ("closed" as any)) return;
       if (syncstring.get_state?.() !== "ready") return;
@@ -4068,8 +4080,24 @@ export class Actions extends BaseActions<LatexEditorState> {
     const syncstring = actions?._syncstring;
     if (actions != null && syncstring != null) {
       let text: string;
+      const isConnected = (candidate: CodeMirror.Editor | undefined) => {
+        const wrapper = candidate?.getWrapperElement?.();
+        return candidate != null && (wrapper == null || wrapper.isConnected);
+      };
+      const recentCm: CodeMirror.Editor | undefined = actions._get_cm?.(
+        undefined,
+        true,
+      );
+      const liveCm = isConnected(recentCm)
+        ? recentCm
+        : Object.values(
+            (actions._cm ?? {}) as Record<string, CodeMirror.Editor>,
+          ).find(isConnected);
       try {
-        text = syncstring.to_str() ?? "";
+        // CodeMirror can be ahead of the syncstring for a short interval after
+        // a local edit. Transform the visible buffer so resolving a marker
+        // cannot replace and discard those pending keystrokes.
+        text = liveCm?.getValue() ?? syncstring.to_str() ?? "";
       } catch {
         return false;
       }
@@ -4079,12 +4107,17 @@ export class Actions extends BaseActions<LatexEditorState> {
       // Remove our transient UI markers before applying the source transform;
       // the scanner recreates any remaining markers immediately afterward.
       this._clearChatTextDecorations(path);
+      liveCm?.setValueNoJump(newText);
       actions.set_value(newText);
       actions.syncstring_commit();
       this._chatMarkerScanners[path]?.rescan();
       try {
-        const verifiedText = syncstring.to_str() ?? "";
-        return removeMarkersForHash(verifiedText, hash) === verifiedText;
+        const verifiedSyncText = syncstring.to_str() ?? "";
+        const verifiedLiveText = liveCm?.getValue() ?? verifiedSyncText;
+        return (
+          removeMarkersForHash(verifiedSyncText, hash) === verifiedSyncText &&
+          removeMarkersForHash(verifiedLiveText, hash) === verifiedLiveText
+        );
       } catch {
         return false;
       }
@@ -4131,6 +4164,10 @@ export class Actions extends BaseActions<LatexEditorState> {
         hash_string(verifiedText),
       );
       (this._diskScannedPaths ??= new Set()).add(path);
+      (this._diskSubfileHeadings ??= new Map()).set(
+        path,
+        parseTableOfContents(verifiedText),
+      );
       this.setState({
         chat_markers: chatMarkers.set(path, fromJS(scanMarkers(verifiedText))),
         chat_bookmarks: chatBookmarks.set(
