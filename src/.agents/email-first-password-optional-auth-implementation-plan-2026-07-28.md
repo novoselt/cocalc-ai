@@ -347,6 +347,36 @@ The first email-auth session may receive the normal 15-minute fresh-auth window
 only after required 2FA is also satisfied. Later password setup can otherwise
 start an email fresh-auth challenge.
 
+For an eligible passwordless account, every future fresh-auth prompt should
+explain that email approval is required now and that adding a password will
+make similar approvals faster:
+
+```text
+Approve this action by email
+
+We will send a code and approval link to w...@example.edu.
+
+[Email me a code]
+
+Add a password after approval to approve changes like this more quickly next
+time.
+```
+
+After email proof and any required 2FA:
+
+- complete or resume the originally requested action first;
+- show a non-blocking **Add a password for faster approvals** action;
+- let that action reuse the newly established fresh-auth window, so selecting
+  it does not trigger another email;
+- repeat the recommendation at every later fresh-auth gate until a password
+  exists;
+- do not store a permanent "offer seen" or dismissal flag;
+- never require password setup to finish the original action.
+
+Do not show this recommendation when organization policy requires SSO or
+otherwise forbids password authentication. In that case, fresh authentication
+must use the policy-approved identity provider.
+
 ## Authentication State Machine
 
 ### Challenge states
@@ -902,6 +932,23 @@ The initial account-creating email authentication may grant the default
 the user to add a password or configure account security without immediately
 repeating email proof.
 
+For an account with no password hash and no policy prohibition on password
+authentication:
+
+- the fresh-auth gate identifies email as the current approval method;
+- it mentions that a password can be added after approval;
+- successful email fresh auth emits a measurement event when the
+  password-setup offer is shown;
+- the original privileged operation remains the primary continuation;
+- password setup is a secondary continuation that consumes the same
+  `fresh_auth_until` interval;
+- declining or ignoring the offer has no durable suppression effect, so the
+  next fresh-auth gate may recommend it again.
+
+Instrument `password_setup_offer_shown`, `password_setup_offer_selected`, and
+`password_setup_completed` with the primary auth method and gate category, but
+without the email address or details of the privileged operation.
+
 ### Passkeys
 
 Current CoCalc passkeys are second-factor credentials. Keep that model for this
@@ -1238,6 +1285,7 @@ Required dashboards:
 - legacy-linked versus genuinely new;
 - SSO/password/email primary auth mix;
 - 2FA challenge and completion;
+- passwordless fresh-auth frequency and password-setup offer conversion;
 - continuation kind and successful resume;
 - verified account creation by attribution source and landing page;
 - first project association/activity within 1 and 24 hours;
@@ -1357,6 +1405,7 @@ Refactor:
 - `src/packages/frontend/public/auth/routes.ts`;
 - public auth tests;
 - account security password UI;
+- fresh-auth prompts and post-approval password setup offer;
 - verification-required panels and share/invite entry points.
 
 Suggested components:
@@ -1435,6 +1484,12 @@ Prefer generated server secrets over administrator-pasted values.
 - 2FA required and completed;
 - 2FA failure and expiry;
 - fresh auth by email;
+- passwordless fresh auth resumes the privileged action before offering
+  password setup;
+- the password setup offer reappears at a later fresh-auth gate while the
+  account remains passwordless;
+- the password setup offer is absent for password and SSO-mandated accounts;
+- password setup uses the active fresh-auth window without a second email;
 - add first password;
 - change existing password.
 
@@ -1616,6 +1671,10 @@ Functional:
 - registration-token and bootstrap deployments remain functional;
 - invite/share/project continuations survive all auth stages;
 - a passwordless account can add a password safely;
+- every eligible passwordless fresh-auth gate recommends password setup
+  without blocking or replacing the requested action;
+- selecting the recommendation immediately after email approval does not
+  require a second fresh-auth challenge;
 - old verification links remain valid during compatibility lifetime.
 
 Security:
