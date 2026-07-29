@@ -825,6 +825,8 @@ export class Actions extends BaseActions<LatexEditorState> {
     this._chatMarkerStoreDispose = undefined;
     this._chatStoreDispose?.();
     this._chatStoreDispose = undefined;
+    this._diskChatScanRefresh?.cancel();
+    this._diskChatScanRefresh = undefined;
     super.close();
   }
 
@@ -1384,6 +1386,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     this.setState({
       switch_to_files: Array.from(new Set(switch_to_files)).sort(),
     });
+    this._scheduleDiskChatScans(true);
     // Dependency path resolution is asynchronous, so the build's other TOC
     // refreshes can run before switch_to_files contains the discovered
     // subfiles. Refresh again once the canonical file list is published.
@@ -2112,38 +2115,17 @@ export class Actions extends BaseActions<LatexEditorState> {
         (b) => b.text,
       ),
     );
-    // Thread configs sync with the master's side chat even when this client
-    // has never opened the anchored subfile. Use them as a provisional TOC
-    // source until that file's scanner can provide the actual marker line.
-    const unloadedAnchors = new Map<string, Set<string>>();
-    const loadedMarkerPaths = new Set<string>(
-      (chatMarkers?.keySeq().toJS() ?? []) as string[],
-    );
-    for (const row of this._getAnchoredThreadRows()) {
-      if (parseThreadResolved(row?.resolved) != null) continue;
-      const anchor = parseThreadAnchor(row?.anchor);
-      if (anchor == null) continue;
-      const path =
-        anchor.path == null
-          ? undefined
-          : (this.canonical_paths[path_normalize(anchor.path)] ?? anchor.path);
-      if (path == null || path === this.path || loadedMarkerPaths.has(path)) {
-        continue;
-      }
-      let hashes = unloadedAnchors.get(path);
-      if (hashes == null) {
-        hashes = new Set();
-        unloadedAnchors.set(path, hashes);
-      }
-      hashes.add(anchor.id);
-    }
+    // Thread configs discover paths that may not yet be in the build output.
+    // Their hashes are never rendered directly: config rows intentionally
+    // survive deleted source markers, so only source scans are authoritative.
+    const anchoredPaths = this._getAnchoredSubfilePaths();
     const subPaths = new Set<string>([
       ...((switchToFiles?.toJS() ?? []) as string[]).filter((path) =>
         path.toLowerCase().endsWith(".tex"),
       ),
       ...((chatMarkers?.keySeq().toJS() ?? []) as string[]),
       ...((chatBookmarks?.keySeq().toJS() ?? []) as string[]),
-      ...unloadedAnchors.keys(),
+      ...anchoredPaths,
     ]);
     subPaths.delete(this.path);
     const groups: SubfileTocGroup[] = [];
@@ -2186,25 +2168,6 @@ export class Actions extends BaseActions<LatexEditorState> {
           // line is only used for in-group ordering; jumping goes via
           // the hash (jumpToAnchor) so it survives marker moves.
           extra: { kind: "chat", hash: m.hash, path, line: m.line },
-        });
-      }
-      for (const hash of [...(unloadedAnchors.get(path) ?? [])].sort()) {
-        if (seenHashes.has(hash)) continue;
-        seenHashes.add(hash);
-        group.push({
-          id: `sub:${path}:unloaded-chat-${hash}`,
-          value: `Chat ${hash}`,
-          level: 6,
-          icon: "comment",
-          // The source has not been loaded, so its line is unknown. Put the
-          // provisional row last; jumpToAnchor opens/scans the file and then
-          // navigates to the marker's real position.
-          extra: {
-            kind: "chat",
-            hash,
-            path,
-            line: Number.MAX_SAFE_INTEGER,
-          },
         });
       }
       const bookmarks = (chatBookmarks?.get(path)?.toJS() ??
@@ -2263,6 +2226,34 @@ export class Actions extends BaseActions<LatexEditorState> {
       // store/cache event will recompute the TOC.
       return [];
     }
+  }
+
+  private _getActiveAnchorsByPath(): Map<string, Set<string>> {
+    const byPath = new Map<string, Set<string>>();
+    for (const row of this._getAnchoredThreadRows()) {
+      const archived =
+        row?.archived === true ||
+        row?.archived === "true" ||
+        row?.archived === 1 ||
+        row?.archived === "1";
+      if (archived || parseThreadResolved(row?.resolved) != null) continue;
+      const anchor = parseThreadAnchor(row?.anchor);
+      if (anchor?.path == null) continue;
+      const path =
+        this.canonical_paths[path_normalize(anchor.path)] ?? anchor.path;
+      if (path === this.path) continue;
+      let ids = byPath.get(path);
+      if (ids == null) {
+        ids = new Set();
+        byPath.set(path, ids);
+      }
+      ids.add(anchor.id);
+    }
+    return byPath;
+  }
+
+  private _getAnchoredSubfilePaths(): Set<string> {
+    return new Set(this._getActiveAnchorsByPath().keys());
   }
 
   public async scrollToHeading(entry: TableOfContentsEntry): Promise<void> {
@@ -2357,6 +2348,12 @@ export class Actions extends BaseActions<LatexEditorState> {
   private _chatStoreDispose?: () => void;
   private _chatMarkerStoreDispose?: () => void;
   private _chatMarkersOwnedByParent = false;
+  private _diskScannedPaths = new Set<string>();
+  private _diskChatContentHashes = new Map<string, number>();
+  private _diskChatAnchorSignatures = new Map<string, string>();
+  private _diskChatRead?: (path: string) => Promise<void>;
+  private _diskChatScanRefresh?: ReturnType<typeof debounce>;
+  private _diskChatScanForce = false;
 
   private _initChatMarkers(): void {
     if (this.parent_file != null && this.parent_file !== this.path) {
@@ -2365,6 +2362,7 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
     this._attachChatMarkerScanner(this, this.path);
     this._initChatAnchorLockListener();
+    this._scheduleDiskChatScans();
     // Sub-files get picked up whenever the build discovers dependencies
     // (set_switch_to_files) or the store otherwise changes.
     const refreshScanners = debounce(
@@ -2412,6 +2410,8 @@ export class Actions extends BaseActions<LatexEditorState> {
   private _yieldChatMarkersToParent(): void {
     if (this._chatMarkersOwnedByParent) return;
     this._chatMarkersOwnedByParent = true;
+    this._diskChatScanRefresh?.cancel();
+    this._diskChatScanRefresh = undefined;
     this._logAbandonedStandaloneChat();
     for (const handle of Object.values(this._chatMarkerScanners)) {
       handle.dispose();
@@ -2458,6 +2458,139 @@ export class Actions extends BaseActions<LatexEditorState> {
         chat_bookmarks: chatBookmarks?.delete(path),
       });
     }
+    this._scheduleDiskChatScans();
+  }
+
+  private _getDiskChatCandidates(): Map<string, Set<string>> {
+    const candidates = this._getActiveAnchorsByPath();
+    const switchToFiles = this.store.get("switch_to_files");
+    for (const path of (switchToFiles?.toJS() ?? []) as string[]) {
+      if (
+        path !== this.path &&
+        path.toLowerCase().endsWith(".tex") &&
+        !candidates.has(path)
+      ) {
+        candidates.set(path, new Set());
+      }
+    }
+    for (const path of [...candidates.keys()]) {
+      if (this._chatMarkerScanners?.[path] != null) {
+        candidates.delete(path);
+      }
+    }
+    return candidates;
+  }
+
+  private _scheduleDiskChatScans(force: boolean = false): void {
+    if (this._state === ("closed" as any) || this._chatMarkersOwnedByParent) {
+      return;
+    }
+    this._diskChatScanForce ||= force;
+    this._diskChatScanRefresh ??= debounce(
+      () => {
+        const scanForce = this._diskChatScanForce;
+        this._diskChatScanForce = false;
+        void this._scanDiskChatSubfiles(scanForce);
+      },
+      500,
+      { leading: false, trailing: true },
+    );
+    this._diskChatScanRefresh();
+  }
+
+  private async _scanDiskChatSubfiles(force: boolean = false): Promise<void> {
+    if (this._state === ("closed" as any) || this._chatMarkersOwnedByParent) {
+      return;
+    }
+    const candidates = this._getDiskChatCandidates();
+    this._cleanupDiskChatScans(candidates);
+    const signatures = (this._diskChatAnchorSignatures ??= new Map());
+    const read =
+      this._diskChatRead ??
+      (this._diskChatRead = reuseInFlight(
+        this._readDiskChatSubfile.bind(this),
+      ));
+    const reads: Promise<void>[] = [];
+    for (const [path, anchorIds] of candidates) {
+      const signature = [...anchorIds].sort().join("\0");
+      if (!force && signatures.get(path) === signature) continue;
+      // Record attempts as well as successful scans. A missing/unreadable file
+      // should not be hammered on every chat message; a build refresh forces a
+      // retry, and a changed anchor signature retries automatically.
+      signatures.set(path, signature);
+      reads.push(read(path));
+    }
+    await Promise.all(reads);
+  }
+
+  private async _readDiskChatSubfile(path: string): Promise<void> {
+    try {
+      const fs = this._get_project_actions()?.fs?.();
+      if (typeof fs?.readFile !== "function") return;
+      const raw = await fs.readFile(path, "utf8");
+      if (
+        this._state === ("closed" as any) ||
+        this._chatMarkersOwnedByParent ||
+        this._chatMarkerScanners?.[path] != null ||
+        !this._getDiskChatCandidates().has(path)
+      ) {
+        // A live editor may have attached while the disk read was in flight.
+        // Its syncstring scan is authoritative, so discard this result.
+        return;
+      }
+      const text =
+        typeof raw === "string"
+          ? raw
+          : ((raw as any)?.toString?.("utf8") ?? `${raw ?? ""}`);
+      const contentHash = hash_string(text);
+      const hashes = (this._diskChatContentHashes ??= new Map());
+      const diskPaths = (this._diskScannedPaths ??= new Set());
+      if (diskPaths.has(path) && hashes.get(path) === contentHash) return;
+
+      const chatMarkers = this.store.get("chat_markers") ?? (fromJS({}) as any);
+      const chatBookmarks =
+        this.store.get("chat_bookmarks") ?? (fromJS({}) as any);
+      hashes.set(path, contentHash);
+      diskPaths.add(path);
+      this.setState({
+        chat_markers: chatMarkers.set(path, fromJS(scanMarkers(text))),
+        chat_bookmarks: chatBookmarks.set(path, fromJS(scanBookmarks(text))),
+      });
+      this.updateTableOfContents();
+    } catch {
+      // Keep a build-known file's header, but never fall back to config-only
+      // marker guesses when its source cannot be read.
+    }
+  }
+
+  private _cleanupDiskChatScans(candidates: Map<string, Set<string>>): void {
+    const diskPaths = (this._diskScannedPaths ??= new Set());
+    const hashes = (this._diskChatContentHashes ??= new Map());
+    const signatures = (this._diskChatAnchorSignatures ??= new Map());
+    let chatMarkers = this.store.get("chat_markers");
+    let chatBookmarks = this.store.get("chat_bookmarks");
+    let changed = false;
+    for (const path of [...diskPaths]) {
+      if (candidates.has(path) && this._chatMarkerScanners?.[path] == null) {
+        continue;
+      }
+      diskPaths.delete(path);
+      hashes.delete(path);
+      signatures.delete(path);
+      chatMarkers = chatMarkers?.delete(path);
+      chatBookmarks = chatBookmarks?.delete(path);
+      changed = true;
+    }
+    for (const path of [...signatures.keys()]) {
+      if (!candidates.has(path)) signatures.delete(path);
+    }
+    if (changed) {
+      this.setState({
+        chat_markers: chatMarkers,
+        chat_bookmarks: chatBookmarks,
+      });
+      this.updateTableOfContents();
+    }
   }
 
   private _disposeChatStateForPath(path: string): void {
@@ -2499,6 +2632,10 @@ export class Actions extends BaseActions<LatexEditorState> {
     if (this._chatMarkerScanners[path] != null) return;
     const syncstring = (actions as any)._syncstring;
     if (syncstring == null) return;
+    // A mounted syncstring is authoritative over an optimistic disk read.
+    this._diskScannedPaths?.delete(path);
+    this._diskChatContentHashes?.delete(path);
+    this._diskChatAnchorSignatures?.delete(path);
     const scan = (publishNewInvalidMarkers: boolean) => {
       if (this._state === ("closed" as any)) return;
       if (syncstring.get_state?.() !== "ready") return;
@@ -3389,8 +3526,9 @@ export class Actions extends BaseActions<LatexEditorState> {
         if (this._state === ("closed" as any)) return;
         this._refreshChatMarkerLocks();
         // A remote thread config can identify a marker in an unopened
-        // subfile. Recompute the TOC as well as the locks so that provisional
-        // row appears without requiring the source file to be opened first.
+        // subfile. Verify unopened candidates from disk before updating their
+        // TOC rows; thread metadata alone includes deleted historical anchors.
+        this._scheduleDiskChatScans();
         this.updateTableOfContents();
       },
       150,

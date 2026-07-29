@@ -125,6 +125,49 @@ describe("LaTeX empty anchor reconciliation", () => {
 });
 
 describe("LaTeX included-file table of contents", () => {
+  function createDiskScanActions({
+    readFile,
+    rows = [],
+  }: {
+    readFile: jest.Mock;
+    rows?: any[];
+  }) {
+    const main = "/home/user/project/main.tex";
+    const subfile = "/home/user/project/123.tex";
+    let state = Map({
+      switch_to_files: List([main, subfile]),
+    });
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = main;
+    actions.project_id = "project-1";
+    actions.canonical_paths = {};
+    actions._state = "open";
+    actions._chatMarkerScanners = {};
+    actions.store = {
+      get: (key: string) => state.get(key),
+    };
+    actions.setState = jest.fn((update) => {
+      state = state.merge(update);
+    });
+    actions.updateTableOfContents = jest.fn();
+    actions.redux = {
+      getEditorActions: jest.fn(() => undefined),
+      getProjectActions: jest.fn(() => ({
+        fs: () => ({ readFile }),
+      })),
+    };
+    actions._getAnchoredThreadRows = () => rows;
+    return {
+      actions,
+      main,
+      subfile,
+      getState: () => state,
+      setState: (update: any) => {
+        state = state.merge(update);
+      },
+    };
+  }
+
   it("lists build-discovered subfiles even without headings or annotations", () => {
     const actions: any = Object.create(Actions.prototype);
     actions.path = "/home/user/project/main.tex";
@@ -161,29 +204,53 @@ describe("LaTeX included-file table of contents", () => {
     );
   });
 
-  it("lists a remote anchored chat before its subfile is opened", () => {
-    const actions: any = Object.create(Actions.prototype);
-    actions.path = "/home/user/project/main.tex";
-    actions.project_id = "project-1";
-    actions.canonical_paths = {};
-    actions.store = Map({
-      switch_to_files: List([
-        "/home/user/project/main.tex",
-        "/home/user/project/123.tex",
-      ]),
-    });
-    actions.redux = {
-      getEditorActions: jest.fn(() => undefined),
-    };
-    actions._getAnchoredThreadRows = () => [
-      {
-        thread_id: "thread-1",
-        anchor: {
-          id: "remote-chat",
-          path: "/home/user/project/123.tex",
+  it("scans unopened source and suppresses stale thread-config anchors", async () => {
+    const readFile = jest.fn(async () =>
+      ["intro", "% chat: live-one", "middle", "% chat: live-two"].join("\n"),
+    );
+    const { actions, subfile, getState } = createDiskScanActions({
+      readFile,
+      rows: [
+        {
+          thread_id: "thread-live",
+          anchor: {
+            id: "live-one",
+            path: "/home/user/project/123.tex",
+          },
         },
+        {
+          thread_id: "thread-stale",
+          anchor: {
+            id: "deleted-marker",
+            path: "/home/user/project/123.tex",
+          },
+        },
+        {
+          thread_id: "thread-archived",
+          archived: true,
+          anchor: {
+            id: "archived-marker",
+            path: "/home/user/project/123.tex",
+          },
+        },
+      ],
+    });
+
+    await actions._scanDiskChatSubfiles();
+
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(getState().getIn(["chat_markers", subfile]).toJS()).toEqual([
+      {
+        hash: "live-one",
+        line: 1,
+        col: 0,
       },
-    ];
+      {
+        hash: "live-two",
+        line: 3,
+        col: 0,
+      },
+    ]);
     const entries: any[] = [{ id: "2", value: "After", level: 1 }];
 
     actions._appendSubfileTocEntries(
@@ -193,16 +260,78 @@ describe("LaTeX included-file table of contents", () => {
 
     expect(entries.map(({ value }) => value)).toEqual([
       "**123.tex**",
-      "Chat remote-chat",
+      "Chat live-one (line 2)",
+      "Chat live-two (line 4)",
       "After",
     ]);
     expect(entries[1].extra).toEqual(
       expect.objectContaining({
         kind: "chat",
-        hash: "remote-chat",
+        hash: "live-one",
         path: "/home/user/project/123.tex",
+        line: 1,
       }),
     );
+  });
+
+  it("drops a disk result when a live scanner attaches in flight", async () => {
+    let finishRead!: (value: string) => void;
+    const readFile = jest.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finishRead = resolve;
+        }),
+    );
+    const { actions, subfile, getState } = createDiskScanActions({ readFile });
+
+    const scan = actions._scanDiskChatSubfiles();
+    await Promise.resolve();
+    actions._chatMarkerScanners[subfile] = {
+      dispose: jest.fn(),
+      rescan: jest.fn(),
+    };
+    finishRead("% chat: disk-result");
+    await scan;
+
+    expect(getState().get("chat_markers")).toBeUndefined();
+  });
+
+  it("keeps a failed disk read header-only", async () => {
+    const { actions } = createDiskScanActions({
+      readFile: jest.fn(async () => {
+        throw Error("missing");
+      }),
+      rows: [
+        {
+          thread_id: "thread-stale",
+          anchor: {
+            id: "stale",
+            path: "/home/user/project/123.tex",
+          },
+        },
+      ],
+    });
+
+    await actions._scanDiskChatSubfiles();
+    const entries: any[] = [];
+    actions._appendSubfileTocEntries(entries, "\\include{123}");
+
+    expect(entries.map(({ value }) => value)).toEqual(["**123.tex**"]);
+  });
+
+  it("removes disk-derived state when a path leaves the candidates", async () => {
+    const { actions, main, subfile, getState, setState } =
+      createDiskScanActions({
+        readFile: jest.fn(async () => "% chat: live-one"),
+      });
+    await actions._scanDiskChatSubfiles();
+    expect(getState().hasIn(["chat_markers", subfile])).toBe(true);
+
+    setState({ switch_to_files: List([main]) });
+    await actions._scanDiskChatSubfiles();
+
+    expect(getState().hasIn(["chat_markers", subfile])).toBe(false);
+    expect(getState().hasIn(["chat_bookmarks", subfile])).toBe(false);
   });
 
   it("trusts a loaded subfile scan over remote thread metadata", () => {
