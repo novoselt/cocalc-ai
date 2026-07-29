@@ -6,7 +6,6 @@
 import {
   Alert,
   Button,
-  Card,
   Divider,
   Flex,
   Input,
@@ -652,7 +651,7 @@ export function AdminBalanceAdjustment({
   }
 
   return (
-    <Card size="small" title="Admin balance adjustment">
+    <>
       <Space orientation="vertical" size="small" style={{ width: "100%" }}>
         <BalanceAdjustmentFields
           adminNote={adminNote}
@@ -674,6 +673,6 @@ export function AdminBalanceAdjustment({
         </Button>
       </Space>
       <FreshAuthModal {...freshAuthModalProps} />
-    </Card>
+    </>
   );
 }

@@ -65,17 +65,19 @@ function BillingSummary({
   return (
     <Space wrap>
       <span>
-        <strong>Balance:</strong> {formatMoney(summary.balance)}
+        Balance: <strong>{formatMoney(summary.balance)}</strong>
       </span>
       <span>
-        <strong>Last 30 days spend:</strong> {formatMoney(summary.spend_30d)}
+        Last 30 days spend: <strong>{formatMoney(summary.spend_30d)}</strong>
       </span>
       <span>
-        <strong>Last year spend:</strong> {formatMoney(summary.spend_365d)}
+        Last year spend: <strong>{formatMoney(summary.spend_365d)}</strong>
       </span>
       <span>
-        <strong>Last transaction:</strong>{" "}
-        <TimeAgo date={new Date(summary.last_transaction_at)} />
+        Last transaction:{" "}
+        <strong>
+          <TimeAgo date={new Date(summary.last_transaction_at)} />
+        </strong>
       </span>
     </Space>
   );

@@ -1,13 +1,4 @@
-import {
-  Alert,
-  Button,
-  Card,
-  Flex,
-  Input,
-  InputNumber,
-  Space,
-  Spin,
-} from "antd";
+import { Alert, Button, Flex, Input, InputNumber, Space, Spin } from "antd";
 import {
   FreshAuthModal,
   useFreshAuthAction,
@@ -69,7 +60,7 @@ export default function CreatePayment({ account_id }: Props) {
   };
 
   return (
-    <Card title={"Create Payment"}>
+    <>
       <Input
         disabled={done || loading}
         style={{ flex: 1, maxWidth: "700px", marginBottom: "15px" }}
@@ -165,6 +156,6 @@ export default function CreatePayment({ account_id }: Props) {
         />
       </div>
       <FreshAuthModal {...freshAuthModalProps} />
-    </Card>
+    </>
   );
 }

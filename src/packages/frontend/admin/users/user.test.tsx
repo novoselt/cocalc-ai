@@ -209,5 +209,6 @@ describe("UserResult egress entry points", () => {
     fireEvent.click(screen.getByText("Billing"));
 
     expect(screen.getByText("admin-billing:acct-1")).toBeTruthy();
+    expect(screen.getAllByText("Billing")).toHaveLength(1);
   });
 });

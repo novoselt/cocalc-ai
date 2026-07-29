@@ -93,9 +93,10 @@ export function UserResult({
 
   return (
     <Card
-      style={{ margin: "15px 0", background: COLORS.GRAY_LLL }}
+      style={{ margin: "15px 0" }}
       styles={{
-        body: { padding: "0 24px" },
+        body: { padding: details ? undefined : 0 },
+        header: { background: COLORS.GRAY_LLL },
         title: {
           overflow: "visible",
           padding: "0",
@@ -170,7 +171,7 @@ export function UserResult({
       }
     >
       {details && (
-        <div>
+        <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
           <div
             style={{
               alignItems: "center",
@@ -178,7 +179,6 @@ export function UserResult({
               flexWrap: "wrap-reverse",
               gap: "8px 16px",
               justifyContent: "space-between",
-              marginTop: "5px",
             }}
           >
             <Space wrap>
@@ -208,10 +208,14 @@ export function UserResult({
             </Space>
           </div>
           {activeMore === "impersonate" && (
-            <Impersonate account_id={account_id} display_name={userName} />
+            <Impersonate
+              account_id={account_id}
+              display_name={userName}
+              embedded
+            />
           )}
           {activeMore === "password" && (
-            <Card title="Profile">
+            <>
               <PasswordReset
                 account_id={account_id}
                 email_address={email_address ?? ""}
@@ -224,59 +228,44 @@ export function UserResult({
                   is_admin={is_admin}
                 />
               </div>
-            </Card>
+            </>
           )}
           {activeMore === "ban" && (
-            <Card
-              title={
-                <>
-                  Ban {userName} {email_address}
-                </>
-              }
-            >
-              <Ban
-                account_id={account_id}
-                banned={banned}
-                name={`${userName} ${email_address ?? ""}`}
-              />
-            </Card>
+            <Ban
+              account_id={account_id}
+              banned={banned}
+              name={`${userName} ${email_address ?? ""}`}
+            />
           )}
           {activeMore === "projects" && (
             <Projects
               account_id={account_id}
+              embedded
               title={`Recently active projects that ${userName} collaborates on`}
             />
           )}
-          {activeMore === "billing" && (
-            <Card title="Billing">
-              <AdminBilling account_id={account_id} />
-            </Card>
-          )}
+          {activeMore === "billing" && <AdminBilling account_id={account_id} />}
           {activeMore === "egress" && (
-            <Card title="Network Egress">
-              <Space
-                direction="vertical"
-                size="middle"
-                style={{ width: "100%" }}
-              >
-                <ManagedEgressRateSummary user_account_id={account_id} />
-                <ManagedEgressTopProjectsSummary user_account_id={account_id} />
-                <ManagedEgressHistoryButton
-                  user_account_id={account_id}
-                  buttonText="View egress history"
-                />
-              </Space>
-            </Card>
+            <Space
+              orientation="vertical"
+              size="middle"
+              style={{ width: "100%" }}
+            >
+              <ManagedEgressRateSummary user_account_id={account_id} />
+              <ManagedEgressTopProjectsSummary user_account_id={account_id} />
+              <ManagedEgressHistoryButton
+                user_account_id={account_id}
+                buttonText="View egress history"
+              />
+            </Space>
           )}
           {activeMore === "membership" && (
-            <Card title="Membership">
-              <AdminMembership account_id={account_id} />
-            </Card>
+            <AdminMembership account_id={account_id} />
           )}
           {activeMore === "migration" && (
             <LegacyMigrationAdmin account_id={account_id} />
           )}
-        </div>
+        </Space>
       )}
     </Card>
   );

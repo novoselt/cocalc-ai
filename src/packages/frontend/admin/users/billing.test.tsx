@@ -72,10 +72,12 @@ describe("AdminBilling", () => {
   it("shows a live summary and opens Purchases by default", async () => {
     render(<AdminBilling account_id="acct-1" />);
 
-    expect(await screen.findByText("$56.51")).toBeTruthy();
-    expect(screen.getByText("$12.34")).toBeTruthy();
-    expect(screen.getByText("$78.90")).toBeTruthy();
-    expect(screen.getByText("time:2026-07-01T12:00:00.000Z")).toBeTruthy();
+    expect((await screen.findByText("$56.51")).tagName).toBe("STRONG");
+    expect(screen.getByText("$12.34").tagName).toBe("STRONG");
+    expect(screen.getByText("$78.90").tagName).toBe("STRONG");
+    expect(
+      screen.getByText("time:2026-07-01T12:00:00.000Z").parentElement?.tagName,
+    ).toBe("STRONG");
     expect(screen.getByText("purchases:acct-1:true")).toBeTruthy();
     expect(screen.queryByText("payments:acct-1")).toBeNull();
 
