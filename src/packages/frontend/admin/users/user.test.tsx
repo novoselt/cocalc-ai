@@ -128,6 +128,10 @@ describe("UserResult egress entry points", () => {
 
     expect(screen.getByText("Banned")).toBeTruthy();
     expect(screen.getByText("UCLA Student")).toBeTruthy();
+
+    fireEvent.click(screen.getByText(/Ada Lovelace/));
+    expect(screen.getAllByText("Banned")).toHaveLength(1);
+    expect(screen.getAllByText("UCLA Student")).toHaveLength(1);
   });
 
   it("shows admin status in the collapsed user header and profile card", () => {

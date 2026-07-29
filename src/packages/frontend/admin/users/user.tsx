@@ -91,11 +91,13 @@ export function UserResult({
     );
   };
 
+  const showActiveContent = details && activeMore != null;
+
   return (
     <Card
       style={{ margin: "15px 0" }}
       styles={{
-        body: { padding: details ? undefined : 0 },
+        body: { padding: showActiveContent ? undefined : 0 },
         header: { background: COLORS.GRAY_LLL },
         title: {
           overflow: "visible",
@@ -105,98 +107,37 @@ export function UserResult({
         },
       }}
       title={
-        <div
-          style={{
-            alignItems: "center",
-            cursor: "pointer",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "8px 16px",
-            minWidth: 0,
-          }}
-          onClick={details ? undefined : () => setDetails(true)}
-        >
-          <Icon
-            onClick={() => setDetails(!details)}
-            name={details ? "minus-square" : "plus-square"}
-            style={{ flex: "0 0 auto" }}
-          />
-          <Space
-            wrap
-            style={{ color: COLORS.GRAY_M, flex: "1 1 360px", minWidth: 0 }}
-          >
-            {userName}{" "}
-            {email_address ? (
-              <CopyToClipBoard
-                style={{ color: COLORS.GRAY_M }}
-                value={email_address}
-              />
-            ) : (
-              "NO Email"
-            )}
-            {home_bay_id && <Tag>Home bay: {home_bay_id}</Tag>}
-            <AccountStatusTags
-              account={{
-                banned,
-                membership_class,
-                membership_label,
-                membership_source,
-              }}
-            />
-            {is_admin && <Tag color="gold">ADMIN</Tag>}
-          </Space>
+        <Space orientation="vertical" size="small" style={{ width: "100%" }}>
           <div
             style={{
               alignItems: "center",
-              color: COLORS.GRAY_M,
+              cursor: "pointer",
               display: "flex",
-              flex: "0 1 auto",
               flexWrap: "wrap",
-              gap: "8px",
-              justifyContent: "flex-end",
-              marginLeft: "auto",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <ManagedEgressHistoryButton
-              user_account_id={account_id}
-              buttonText="Egress history"
-              size="small"
-            />
-            <span>
-              Active {renderLastActive()} (Created {renderCreated()})
-            </span>
-          </div>
-        </div>
-      }
-    >
-      {details && (
-        <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-          <div
-            style={{
-              alignItems: "center",
-              display: "flex",
-              flexWrap: "wrap-reverse",
               gap: "8px 16px",
-              justifyContent: "space-between",
+              minWidth: 0,
             }}
+            onClick={details ? undefined : () => setDetails(true)}
           >
-            <Space wrap>
-              {renderMoreLink("impersonate")}
-              {renderMoreLink("password")}
-              {renderMoreLink("ban")}
-              {renderMoreLink("projects")}
-              {renderMoreLink("billing")}
-              {renderMoreLink("egress")}
-              {renderMoreLink("membership")}
-              {renderMoreLink("migration")}
-            </Space>
-            <Space wrap>
-              <CopyToClipBoard
-                copyTip={"Copied account_id!"}
-                style={{ color: COLORS.GRAY_M }}
-                value={account_id}
-              />
+            <Icon
+              onClick={() => setDetails(!details)}
+              name={details ? "minus-square" : "plus-square"}
+              style={{ flex: "0 0 auto" }}
+            />
+            <Space
+              wrap
+              style={{ color: COLORS.GRAY_M, flex: "1 1 360px", minWidth: 0 }}
+            >
+              {userName}{" "}
+              {email_address ? (
+                <CopyToClipBoard
+                  style={{ color: COLORS.GRAY_M }}
+                  value={email_address}
+                />
+              ) : (
+                "NO Email"
+              )}
+              {home_bay_id && <Tag>Home bay: {home_bay_id}</Tag>}
               <AccountStatusTags
                 account={{
                   banned,
@@ -205,8 +146,63 @@ export function UserResult({
                   membership_source,
                 }}
               />
+              {is_admin && <Tag color="gold">ADMIN</Tag>}
             </Space>
+            <div
+              style={{
+                alignItems: "center",
+                color: COLORS.GRAY_M,
+                display: "flex",
+                flex: "0 1 auto",
+                flexWrap: "wrap",
+                gap: "8px",
+                justifyContent: "flex-end",
+                marginLeft: "auto",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ManagedEgressHistoryButton
+                user_account_id={account_id}
+                buttonText="Egress history"
+                size="small"
+              />
+              <span>
+                Active {renderLastActive()} (Created {renderCreated()})
+              </span>
+            </div>
           </div>
+          {details && (
+            <div
+              style={{
+                alignItems: "center",
+                display: "flex",
+                flexWrap: "wrap-reverse",
+                gap: "8px 16px",
+                justifyContent: "space-between",
+              }}
+            >
+              <Space wrap>
+                {renderMoreLink("impersonate")}
+                {renderMoreLink("password")}
+                {renderMoreLink("ban")}
+                {renderMoreLink("projects")}
+                {renderMoreLink("billing")}
+                {renderMoreLink("egress")}
+                {renderMoreLink("membership")}
+                {renderMoreLink("migration")}
+              </Space>
+              <CopyToClipBoard
+                copyTip={"Copied account_id!"}
+                style={{ color: COLORS.GRAY_M }}
+                value={account_id}
+              />
+            </div>
+          )}
+        </Space>
+      }
+    >
+      {showActiveContent && (
+        <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
           {activeMore === "impersonate" && (
             <Impersonate
               account_id={account_id}
