@@ -161,11 +161,6 @@ export function UserResult({
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              <ManagedEgressHistoryButton
-                user_account_id={account_id}
-                buttonText="Egress history"
-                size="small"
-              />
               <span>
                 Active {renderLastActive()} (Created {renderCreated()})
               </span>

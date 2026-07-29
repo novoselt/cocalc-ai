@@ -86,7 +86,7 @@ jest.mock("@cocalc/frontend/purchases/managed-egress-history", () => ({
 const { UserResult } = require("./user");
 
 describe("UserResult egress entry points", () => {
-  it("shows direct egress history and expandable egress details", () => {
+  it("shows egress history under expandable egress details", () => {
     render(
       <UserResult
         first_name="Ada"
@@ -99,7 +99,7 @@ describe("UserResult egress entry points", () => {
       />,
     );
 
-    expect(screen.getByText("Egress history:acct-1")).toBeTruthy();
+    expect(screen.queryByText("Egress history:acct-1")).toBeNull();
 
     fireEvent.click(screen.getByText(/Ada Lovelace/));
     expect(screen.getByText("Profile")).toBeTruthy();
