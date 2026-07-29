@@ -19,6 +19,7 @@ import {
   Tag,
   Typography,
   message,
+  type TableColumnsType,
 } from "antd";
 import {
   useEffect,
@@ -623,9 +624,10 @@ function LegacyProjectImportModal({
             disabled={importing || rootfsLoading}
             value={draft.rootfs_image_id ?? draft.rootfs_image}
             optionFilterProp="data-search"
+            optionLabelProp="label"
             status={!rootfsLoading && imageMissing ? "error" : undefined}
             style={{ width: "100%" }}
-            popupMatchSelectWidth={false}
+            popupMatchSelectWidth
             onChange={(value) => {
               const entry = selectableRootfsImages.find(
                 (entry) => (entry.id ?? entry.image) === value,
@@ -639,6 +641,7 @@ function LegacyProjectImportModal({
               <Select.Option
                 key={entry.id ?? entry.image}
                 value={entry.id ?? entry.image}
+                label={entry.label || entry.image}
                 data-search={[
                   entry.label,
                   entry.image,
@@ -840,9 +843,10 @@ function LegacyProjectBulkImportModal({
             disabled={importing || rootfsLoading}
             value={draft.rootfs_image_id ?? draft.rootfs_image}
             optionFilterProp="data-search"
+            optionLabelProp="label"
             status={!rootfsLoading && imageMissing ? "error" : undefined}
             style={{ width: "100%" }}
-            popupMatchSelectWidth={false}
+            popupMatchSelectWidth
             onChange={(value) => {
               const entry = selectableRootfsImages.find(
                 (entry) => (entry.id ?? entry.image) === value,
@@ -856,6 +860,7 @@ function LegacyProjectBulkImportModal({
               <Select.Option
                 key={entry.id ?? entry.image}
                 value={entry.id ?? entry.image}
+                label={entry.label || entry.image}
                 data-search={[
                   entry.label,
                   entry.image,
@@ -1176,52 +1181,65 @@ export function LegacyMigrationPage() {
     setBulkImportOpen(true);
   }
 
-  const columns = [
+  const columns: TableColumnsType<LegacyMigrationProjectSummary> = [
     {
       title: "Project",
       dataIndex: "title",
       key: "title",
-      width: 560,
-      render: (_: unknown, project: LegacyMigrationProjectSummary) => (
-        <Space direction="vertical" size={2} style={{ width: "100%" }}>
-          <Text
-            strong
-            ellipsis={{ tooltip: project.title }}
-            style={{ display: "block", width: "100%" }}
-          >
-            {project.title}
-          </Text>
-          <span onClick={(event) => event.stopPropagation()}>
-            <Text
-              copyable={{ text: project.legacy_project_id }}
-              type="secondary"
-              style={{ display: "block", fontSize: 12, width: "100%" }}
-            >
-              {project.legacy_project_id}
-            </Text>
-          </span>
-          {project.description ? (
-            <Text
-              type="secondary"
-              ellipsis={{ tooltip: project.description }}
-              style={{ display: "block", width: "100%" }}
-            >
-              {project.description}
-            </Text>
-          ) : null}
-        </Space>
-      ),
-    },
-    {
-      title: "Status",
-      key: "status",
-      width: 180,
       render: (_: unknown, project: LegacyMigrationProjectSummary) => {
         const missingCount = restoreMissingArchiveFileCount(project);
         const progressText = restoreProgressText(project.restore_progress);
         return (
-          <Space direction="vertical" size={4}>
-            {projectStatusTag(project)}
+          <Space direction="vertical" size={4} style={{ width: "100%" }}>
+            <Text
+              strong
+              ellipsis={{ tooltip: project.title }}
+              style={{ display: "block", width: "100%" }}
+            >
+              {project.title}
+            </Text>
+            <span onClick={(event) => event.stopPropagation()}>
+              <Text
+                copyable={{ text: project.legacy_project_id }}
+                type="secondary"
+                style={{ display: "block", fontSize: 12, width: "100%" }}
+              >
+                {project.legacy_project_id}
+              </Text>
+            </span>
+            {project.description ? (
+              <Text
+                type="secondary"
+                ellipsis={{ tooltip: project.description }}
+                style={{ display: "block", width: "100%" }}
+              >
+                {project.description}
+              </Text>
+            ) : null}
+            <Space wrap size={[6, 4]}>
+              {projectStatusTag(project)}
+              <Button
+                disabled={!projectActionAvailable(project)}
+                loading={
+                  project.import_status === "creating" ||
+                  openingLegacyProjectId === project.legacy_project_id
+                }
+                onClick={() => void handleProjectAction(project)}
+                size="small"
+                title={
+                  projectActionAvailable(project)
+                    ? undefined
+                    : legacyProjectUnavailableReason()
+                }
+                type={project.project_id ? "default" : "primary"}
+              >
+                {project.project_id
+                  ? "Open"
+                  : archiveAvailable(project)
+                    ? "Restore and Open"
+                    : "Unavailable"}
+              </Button>
+            </Space>
             {missingCount > 0 || project.restore_error ? (
               <Button
                 danger={missingCount === 0}
@@ -1255,6 +1273,7 @@ export function LegacyMigrationPage() {
       dataIndex: "last_edited",
       key: "last_edited",
       width: 180,
+      responsive: ["xl"],
       render: (value: Date | string | null) => formatDate(value),
       sorter: (
         left: LegacyMigrationProjectSummary,
@@ -1268,6 +1287,7 @@ export function LegacyMigrationPage() {
       dataIndex: "disk_mb",
       key: "disk_mb",
       width: 125,
+      responsive: ["xl"],
       render: (value: number | null | undefined) => (
         <Space direction="vertical" size={0}>
           <Text>{formatDiskMb(value)}</Text>
@@ -1286,6 +1306,7 @@ export function LegacyMigrationPage() {
       dataIndex: "artifact_bytes",
       key: "artifact_bytes",
       width: 135,
+      responsive: ["xl"],
       render: (value: number | null | undefined) => (
         <Space direction="vertical" size={0}>
           <Text>{formatBytes(value)}</Text>
@@ -1298,34 +1319,6 @@ export function LegacyMigrationPage() {
         left: LegacyMigrationProjectSummary,
         right: LegacyMigrationProjectSummary,
       ) => (left.artifact_bytes ?? -1) - (right.artifact_bytes ?? -1),
-    },
-    {
-      title: "Action",
-      key: "import",
-      width: 160,
-      render: (_: unknown, project: LegacyMigrationProjectSummary) => (
-        <Button
-          disabled={!projectActionAvailable(project)}
-          loading={
-            project.import_status === "creating" ||
-            openingLegacyProjectId === project.legacy_project_id
-          }
-          onClick={() => void handleProjectAction(project)}
-          size="small"
-          title={
-            projectActionAvailable(project)
-              ? undefined
-              : legacyProjectUnavailableReason()
-          }
-          type={project.project_id ? "default" : "primary"}
-        >
-          {project.project_id
-            ? "Open"
-            : archiveAvailable(project)
-              ? "Restore and Open"
-              : "Unavailable"}
-        </Button>
-      ),
     },
   ];
 
@@ -1652,7 +1645,6 @@ export function LegacyMigrationPage() {
                 columns={columns}
                 dataSource={filteredProjects}
                 loading={state.loading}
-                scroll={{ x: 1340 }}
                 tableLayout="fixed"
                 onRow={(project) => ({
                   onClick: (event) => {
