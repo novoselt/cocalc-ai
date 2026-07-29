@@ -4,7 +4,6 @@
  */
 
 import getPool, { type PoolClient } from "@cocalc/database/pool";
-import getLogger from "@cocalc/backend/logger";
 import LRU from "lru-cache";
 import type {
   AbuseReviewAnnotation,
@@ -35,6 +34,7 @@ import {
   type ManagedCpuHostFundingMode,
 } from "./managed-cpu-scope";
 import { getAdminAccountMembershipStatusMap } from "./admin-account-status";
+import { createIndexConcurrentlyBestEffort } from "../database/concurrent-index";
 
 const TABLE = "account_cpu_usage_events";
 const DEFAULT_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -42,8 +42,6 @@ const MAX_HISTORY_WINDOW_MS = 31 * 24 * 60 * 60 * 1000;
 const MAX_HISTORY_BUCKETS = 2000;
 const ADMIN_OVERVIEW_CACHE_TTL_MS = 60_000;
 const USAGE_COUNTER_METRIC = "managed-cpu-seconds";
-
-const logger = getLogger("server:membership:managed-cpu");
 
 export type ManagedCpuUsage = {
   managed_cpu_5h_seconds: number;
@@ -78,45 +76,6 @@ const adminOverviewCache = new LRU<
   max: 100,
   ttl: ADMIN_OVERVIEW_CACHE_TTL_MS,
 });
-
-async function createIndexConcurrentlyBestEffort({
-  name,
-  sql,
-}: {
-  name: string;
-  sql: string;
-}): Promise<void> {
-  const pool = getPool();
-  if (typeof (pool as any).connect !== "function") {
-    await pool.query(sql.replace("CREATE INDEX CONCURRENTLY", "CREATE INDEX"));
-    return;
-  }
-  const client = await (pool as any).connect();
-  let locked = false;
-  try {
-    const { rows } = await client.query(
-      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-      [name],
-    );
-    locked = rows[0]?.locked === true;
-    if (!locked) {
-      return;
-    }
-    await client.query(sql);
-  } catch (err) {
-    logger.warn("failed to create admin overview index", {
-      index: name,
-      err: `${err}`,
-    });
-  } finally {
-    if (locked) {
-      await client
-        .query("SELECT pg_advisory_unlock(hashtext($1))", [name])
-        .catch(() => undefined);
-    }
-    client.release();
-  }
-}
 
 function ensureAdminTimeIndexBestEffort(): void {
   adminTimeIndexReady ??= createIndexConcurrentlyBestEffort({
