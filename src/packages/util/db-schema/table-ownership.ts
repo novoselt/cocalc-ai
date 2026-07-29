@@ -266,6 +266,7 @@ export const TABLE_OWNERSHIP = {
       "crm_support_tickets",
       "crm_tags",
       "crm_tasks",
+      "email_auth_challenges",
       "global_config_bay_state",
       "global_config_events",
       "global_config_versions",

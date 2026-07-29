@@ -625,6 +625,54 @@ export interface AccountDirectoryEntry extends UserSearchResult {
   home_bay_id?: string;
 }
 
+export type EmailAuthChallengeState =
+  | "pending"
+  | "email_proved"
+  | "account_creating"
+  | "account_ready"
+  | "mfa_required"
+  | "completed"
+  | "superseded"
+  | "expired"
+  | "blocked"
+  | "failed";
+
+export interface EmailAuthChallengeStatus {
+  challenge_id: string;
+  state: EmailAuthChallengeState;
+  masked_email: string;
+  expires_at: string;
+  resend_available_at: string;
+  send_count: number;
+  message_sent: boolean;
+  message_failed: boolean;
+}
+
+export interface EmailAuthChallengeStartRequest {
+  email_address: string;
+  browser_binding: string;
+  request_ip?: string;
+  analytics_token?: string;
+  purpose?: "sign_in_or_sign_up";
+}
+
+export interface EmailAuthChallengeStatusRequest {
+  challenge_id: string;
+  browser_binding: string;
+}
+
+export interface EmailAuthChallengeRedeemCodeRequest {
+  challenge_id: string;
+  code: string;
+  browser_binding?: string;
+}
+
+export interface EmailAuthChallengeRedeemLinkRequest {
+  challenge_id: string;
+  token: string;
+  browser_binding?: string;
+}
+
 export interface AccountApiKeyDirectoryEntry {
   key_id: string;
   account_id: string;
@@ -2180,6 +2228,11 @@ export type AccountDirectoryMethod =
   | "update-email-address-verified"
   | "update-banned"
   | "touch"
+  | "start-email-auth-challenge"
+  | "get-email-auth-challenge-status"
+  | "resend-email-auth-challenge"
+  | "redeem-email-auth-code"
+  | "redeem-email-auth-link"
   | "get-api-key"
   | "upsert-api-key"
   | "delete-api-key"
@@ -3388,6 +3441,21 @@ export interface InterBayAccountDirectoryApi {
     opts: AccountDirectoryUpdateBannedRequest,
   ) => Promise<AccountDirectoryEntry>;
   touch: (opts: AccountDirectoryTouchRequest) => Promise<void>;
+  startEmailAuthChallenge: (
+    opts: EmailAuthChallengeStartRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
+  getEmailAuthChallengeStatus: (
+    opts: EmailAuthChallengeStatusRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
+  resendEmailAuthChallenge: (
+    opts: EmailAuthChallengeStatusRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
+  redeemEmailAuthCode: (
+    opts: EmailAuthChallengeRedeemCodeRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
+  redeemEmailAuthLink: (
+    opts: EmailAuthChallengeRedeemLinkRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
   create: (
     opts: AccountDirectoryCreateRequest,
   ) => Promise<AccountDirectoryEntry>;
@@ -5124,6 +5192,40 @@ export function createInterBayAccountDirectoryClient({
     ...serviceClientOptions({ client, timeout }),
     subject: accountDirectorySubject({ method: "touch" }),
   });
+  const startEmailAuthChallengeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "startEmailAuthChallenge">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({ method: "start-email-auth-challenge" }),
+  });
+  const getEmailAuthChallengeStatusClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "getEmailAuthChallengeStatus">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "get-email-auth-challenge-status",
+    }),
+  });
+  const resendEmailAuthChallengeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "resendEmailAuthChallenge">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "resend-email-auth-challenge",
+    }),
+  });
+  const redeemEmailAuthCodeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "redeemEmailAuthCode">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({ method: "redeem-email-auth-code" }),
+  });
+  const redeemEmailAuthLinkClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "redeemEmailAuthLink">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({ method: "redeem-email-auth-link" }),
+  });
   const createClient = createServiceClient<
     Pick<InterBayAccountDirectoryApi, "create">
   >({
@@ -5237,6 +5339,16 @@ export function createInterBayAccountDirectoryClient({
       await updateEmailAddressVerifiedClient.updateEmailAddressVerified(opts),
     updateBanned: async (opts) => await updateBannedClient.updateBanned(opts),
     touch: async (opts) => await touchClient.touch(opts),
+    startEmailAuthChallenge: async (opts) =>
+      await startEmailAuthChallengeClient.startEmailAuthChallenge(opts),
+    getEmailAuthChallengeStatus: async (opts) =>
+      await getEmailAuthChallengeStatusClient.getEmailAuthChallengeStatus(opts),
+    resendEmailAuthChallenge: async (opts) =>
+      await resendEmailAuthChallengeClient.resendEmailAuthChallenge(opts),
+    redeemEmailAuthCode: async (opts) =>
+      await redeemEmailAuthCodeClient.redeemEmailAuthCode(opts),
+    redeemEmailAuthLink: async (opts) =>
+      await redeemEmailAuthLinkClient.redeemEmailAuthLink(opts),
     create: async (opts) => await createClient.create(opts),
     delete: async (opts) => await deleteClient.delete(opts),
     getApiKey: async (opts) => await getApiKeyClient.getApiKey(opts),
@@ -5375,6 +5487,67 @@ export function createInterBayAccountDirectoryHandlers({
       subject: accountDirectorySubject({ method: "touch" }),
       impl: {
         touch: async (opts) => await impl.touch(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "startEmailAuthChallenge">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "start-email-auth-challenge",
+      }),
+      impl: {
+        startEmailAuthChallenge: async (opts) =>
+          await impl.startEmailAuthChallenge(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "getEmailAuthChallengeStatus">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "get-email-auth-challenge-status",
+      }),
+      impl: {
+        getEmailAuthChallengeStatus: async (opts) =>
+          await impl.getEmailAuthChallengeStatus(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "resendEmailAuthChallenge">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "resend-email-auth-challenge",
+      }),
+      impl: {
+        resendEmailAuthChallenge: async (opts) =>
+          await impl.resendEmailAuthChallenge(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "redeemEmailAuthCode">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({ method: "redeem-email-auth-code" }),
+      impl: {
+        redeemEmailAuthCode: async (opts) =>
+          await impl.redeemEmailAuthCode(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "redeemEmailAuthLink">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({ method: "redeem-email-auth-link" }),
+      impl: {
+        redeemEmailAuthLink: async (opts) =>
+          await impl.redeemEmailAuthLink(opts),
       },
     }),
     createServiceHandler<Pick<InterBayAccountDirectoryApi, "create">>({
