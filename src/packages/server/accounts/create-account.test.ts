@@ -50,6 +50,7 @@ describe("accounts.createAccount", () => {
         false,
         null,
         "10.1.2.3",
+        null,
       ],
     );
   });
@@ -82,6 +83,7 @@ describe("accounts.createAccount", () => {
         "bay-7",
         null,
         false,
+        null,
         null,
         null,
       ],
