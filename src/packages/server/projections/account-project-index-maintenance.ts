@@ -210,6 +210,10 @@ export async function runAccountProjectIndexProjectionMaintenanceTick(
   }
 }
 
+function runAccountProjectIndexProjectionMaintenanceTickInBackground(): void {
+  void runAccountProjectIndexProjectionMaintenanceTick().catch(() => undefined);
+}
+
 export function startAccountProjectIndexProjectionMaintenance(): void {
   if (!ENABLED) {
     logger.info("account project index projector disabled");
@@ -218,10 +222,10 @@ export function startAccountProjectIndexProjectionMaintenance(): void {
   if (timer) return;
   startedAt = new Date();
   timer = setInterval(() => {
-    void runAccountProjectIndexProjectionMaintenanceTick();
+    runAccountProjectIndexProjectionMaintenanceTickInBackground();
   }, INTERVAL_MS);
   timer.unref?.();
-  void runAccountProjectIndexProjectionMaintenanceTick();
+  runAccountProjectIndexProjectionMaintenanceTickInBackground();
   logger.info("account project index projector started", {
     interval_ms: INTERVAL_MS,
     batch_limit: BATCH_LIMIT,
