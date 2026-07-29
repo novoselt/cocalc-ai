@@ -94,6 +94,11 @@ type Capture = {
     user?: string;
   }>;
   hostMachineUpdates?: Array<Record<string, any>>;
+  hostMetricsHistoryRequests?: Array<{
+    id: string;
+    window_minutes?: number;
+    max_points?: number;
+  }>;
 };
 
 function withConsoleCapture(fn: () => Promise<void> | void): Promise<string> {
@@ -154,6 +159,7 @@ function makeDeps(
   capture.hostSshKeyInstallRequests ??= [];
   capture.hostRuntimeLogRequests ??= [];
   capture.hostMachineUpdates ??= [];
+  capture.hostMetricsHistoryRequests ??= [];
   return {
     withContext: async (_command, _label, fn) => {
       const ctx = {
@@ -628,28 +634,31 @@ function makeDeps(
                 },
               ];
             },
-            getHostMetricsHistory: async (opts) => ({
-              window_minutes: opts?.window_minutes ?? 60,
-              point_count: 0,
-              points: [],
-              derived: {
+            getHostMetricsHistory: async (opts) => {
+              capture.hostMetricsHistoryRequests!.push(opts);
+              return {
                 window_minutes: opts?.window_minutes ?? 60,
-                disk: { level: "healthy" },
-                metadata: {
-                  level: "warning",
-                  reason: "metadata usage is high",
-                },
-                alerts: [
-                  {
-                    kind: "metadata",
+                point_count: 0,
+                points: [],
+                derived: {
+                  window_minutes: opts?.window_minutes ?? 60,
+                  disk: { level: "healthy" },
+                  metadata: {
                     level: "warning",
-                    message: "metadata usage is high",
+                    reason: "metadata usage is high",
                   },
-                ],
-                admission_allowed: true,
-                auto_grow_recommended: false,
-              },
-            }),
+                  alerts: [
+                    {
+                      kind: "metadata",
+                      level: "warning",
+                      message: "metadata usage is high",
+                    },
+                  ],
+                  admission_allowed: true,
+                  auto_grow_recommended: false,
+                },
+              };
+            },
             updateHostMachine: async (request) => {
               capture.hostMachineUpdates!.push(request);
               return {
@@ -1255,6 +1264,39 @@ test("host metrics returns current metrics and history", async () => {
   assert.equal(capture.data.current.cpu_percent, 55);
   assert.equal(capture.data.history.window_minutes, 24 * 60);
   assert.equal(capture.data.derived.metadata.level, "warning");
+});
+
+test("host metrics allows requesting one history point", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const deps = makeDeps(capture, {
+    resolveHost: async () => ({
+      id: "host-1",
+      name: "host-1",
+      status: "running",
+      last_seen: new Date().toISOString(),
+    }),
+  });
+  const program = new Command();
+  registerHostCommand(program, deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "metrics",
+    "host-1",
+    "--points",
+    "1",
+  ]);
+
+  assert.equal(capture.hostMetricsHistoryRequests?.[0]?.max_points, 1);
 });
 
 test("host where returns the bay for the resolved host", async () => {
@@ -2060,6 +2102,55 @@ test("host persistence summarizes memory, streams, and WAL across running hosts"
     capture.data.hosts.map((host) => host.host_id),
     ["host-2", "host-1"],
   );
+});
+
+test("host persistence uses the latest sampled diagnostics", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const program = new Command();
+  registerHostCommand(
+    program,
+    makeDeps(capture, {
+      listHosts: async () => [
+        {
+          id: "host-1",
+          name: "alpha",
+          status: "running",
+          metrics: {
+            current: {
+              collected_at: "2026-07-29T16:00:00.000Z",
+            },
+            history: {
+              points: [
+                {
+                  collected_at: "2026-07-29T16:01:00.000Z",
+                  conat_persist: {
+                    available: true,
+                    ready: true,
+                    rss_bytes: 800,
+                    open_streams: 50,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    }),
+  );
+
+  await program.parseAsync(["node", "test", "host", "persistence"]);
+
+  assert.equal(capture.data.summary.reporting, 1);
+  assert.equal(capture.data.summary.total_rss_bytes, 800);
+  assert.equal(capture.data.summary.total_open_streams, 50);
+  assert.equal(capture.data.hosts[0].collected_at, "2026-07-29T16:01:00.000Z");
 });
 
 test("host projects renders human-readable summary and rows", async () => {
