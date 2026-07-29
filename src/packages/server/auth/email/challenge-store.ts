@@ -108,6 +108,7 @@ type ChallengeRow = {
   registration_token_validated_at?: Date | null;
   continuation?: { target?: string } | null;
   email_proved_at?: Date | null;
+  account_created_at?: Date | null;
   expires_at: Date;
 };
 
@@ -223,6 +224,7 @@ function publicStatus(row: ChallengeRow): EmailAuthChallengePublicStatus {
     challenge_id: row.challenge_id,
     purpose: row.purpose as EmailAuthChallengePublicStatus["purpose"],
     state,
+    account_created: row.account_created_at != null,
     masked_email: maskEmailAddress(row.normalized_email),
     expires_at: new Date(row.expires_at).toISOString(),
     resend_available_at: new Date(row.resend_available_at).toISOString(),
@@ -907,6 +909,7 @@ function exchangeResult(row: ChallengeRow): EmailAuthExchangeResult {
   });
   return {
     challenge_id: row.challenge_id,
+    account_created: row.account_created_at != null,
     exchange_token: issued.token,
     exchange_expires_at: new Date(issued.expires_at).toISOString(),
     home_bay_id: row.selected_home_bay_id,

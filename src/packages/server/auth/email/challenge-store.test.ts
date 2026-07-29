@@ -286,6 +286,7 @@ describe("seed-global email authentication challenges", () => {
       auth_method: "email_code",
     });
     expect(exchange).toMatchObject({
+      account_created: false,
       challenge_id: started.challenge_id,
       home_bay_id: "bay-home",
       redirect_to: "/projects/project-id/files",
@@ -403,11 +404,12 @@ describe("seed-global email authentication challenges", () => {
       challenge_id: started.challenge_id,
       token: sent.link_token,
     });
-    await prepareEmailAuthExchangeDirect({
+    const exchange = await prepareEmailAuthExchangeDirect({
       challenge_id: started.challenge_id,
       auth_method: "email_link",
     });
 
+    expect(exchange.account_created).toBe(true);
     expect(createClusterAccountMock).toHaveBeenCalledWith(
       expect.objectContaining({
         email_address: "new@example.edu",

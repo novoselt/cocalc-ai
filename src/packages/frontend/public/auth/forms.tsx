@@ -554,6 +554,7 @@ type EmailAuthChallengeResponse = {
   challenge_id: string;
   purpose?: "sign_in_or_sign_up" | "email_fresh_auth";
   state: string;
+  account_created?: boolean;
   masked_email: string;
   expires_at: string;
   resend_available_at: string;
@@ -561,6 +562,7 @@ type EmailAuthChallengeResponse = {
 
 type EmailAuthExchangeResponse = {
   challenge_id: string;
+  account_created?: boolean;
   exchange_token: string;
   exchange_expires_at: string;
   home_bay_id: string;
@@ -568,6 +570,13 @@ type EmailAuthExchangeResponse = {
   redirect_to?: string;
   state: "account_ready";
 };
+
+type NewAccountProfileCompletion = {
+  origin?: string;
+  redirectTo: string;
+};
+
+const NEW_ACCOUNT_PLACEHOLDER_NAME = "CoCalc User";
 
 export async function completeEmailAuthExchange(
   exchange: EmailAuthExchangeResponse,
@@ -582,6 +591,109 @@ export async function completeEmailAuthExchange(
     origin,
     body: { retry_token: exchange.exchange_token },
   });
+}
+
+function NewAccountDisplayNameStep({
+  completion,
+}: {
+  completion: NewAccountProfileCompletion;
+}) {
+  const [displayName, setDisplayName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  function continueToApp(): void {
+    window.location.href = completion.redirectTo;
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const bootstrap = await getControlPlaneAuthBootstrap();
+        if (
+          !cancelled &&
+          bootstrap.signed_in &&
+          bootstrap.display_name &&
+          bootstrap.display_name !== NEW_ACCOUNT_PLACEHOLDER_NAME
+        ) {
+          window.location.href = completion.redirectTo;
+        }
+      } catch {
+        // Another tab may complete this step; checking is best effort.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [completion.redirectTo]);
+
+  async function saveDisplayName(): Promise<void> {
+    const name = displayName.trim();
+    if (!name || submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      await postAuthApi({
+        endpoint: "accounts/set-name",
+        origin: completion.origin || getControlPlaneOrigin(),
+        body: { display_name: name },
+      });
+      continueToApp();
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div style={STACK_STYLE}>
+      {error ? <Alert kind="error">{error}</Alert> : null}
+      <div>
+        <div
+          style={{
+            color: COLORS.GRAY_D,
+            fontSize: "18px",
+            fontWeight: 700,
+            marginBottom: "6px",
+          }}
+        >
+          What should we call you?
+        </div>
+        <div style={TERMS_NOTICE_STYLE}>
+          This is how collaborators will recognize you. You can change it later
+          in Account Settings.
+        </div>
+      </div>
+      <div style={FIELD_STYLE}>
+        <div style={LABEL_STYLE}>Your name</div>
+        <TextInput
+          ariaLabel="Your name"
+          autoComplete="name"
+          autoFocus
+          maxLength={254}
+          name="display-name"
+          placeholder="Your name"
+          value={displayName}
+          onChange={(value) => {
+            setDisplayName(value);
+            setError("");
+          }}
+          onPressEnter={saveDisplayName}
+        />
+      </div>
+      <ActionButton
+        disabled={!displayName.trim() || submitting}
+        onClick={saveDisplayName}
+      >
+        {submitting ? "Saving..." : "Continue"}
+      </ActionButton>
+      <div style={{ textAlign: "center" }}>
+        <NavLink onClick={continueToApp}>Skip for now</NavLink>
+      </div>
+    </div>
+  );
 }
 
 export function PublicEmailAuthLinkView({
@@ -617,6 +729,12 @@ export function PublicEmailAuthLinkView({
     challenge_id: string;
     home_bay_url?: string;
   }>();
+  const [profileCompletion, setProfileCompletion] =
+    useState<NewAccountProfileCompletion>();
+
+  if (profileCompletion) {
+    return <NewAccountDisplayNameStep completion={profileCompletion} />;
+  }
 
   if (mfa) {
     return (
@@ -666,8 +784,16 @@ export function PublicEmailAuthLinkView({
       if (!result?.account_id) {
         throw new Error("Email sign-in did not create a session.");
       }
-      window.location.href =
+      const redirectTo =
         exchange.redirect_to ?? resolveAuthRedirectPath(redirectToPath);
+      if (exchange.account_created) {
+        setProfileCompletion({
+          origin: exchange.home_bay_url,
+          redirectTo,
+        });
+        return;
+      }
+      window.location.href = redirectTo;
     } catch (err) {
       setError(`${err}`);
     } finally {
@@ -739,6 +865,8 @@ export function PublicEmailFirstForm({
     challenge_id: string;
     home_bay_url?: string;
   }>();
+  const [profileCompletion, setProfileCompletion] =
+    useState<NewAccountProfileCompletion>();
   const [now, setNow] = useState(Date.now());
   const registrationTokenInputRef = useRef<HTMLInputElement | null>(null);
   const strategies = usePublicSsoStrategies(initialSSOStrategies);
@@ -773,13 +901,13 @@ export function PublicEmailFirstForm({
   }, [view]);
 
   useEffect(() => {
-    if (!challenge) return;
+    if (!challenge || profileCompletion) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [challenge]);
+  }, [challenge, profileCompletion]);
 
   useEffect(() => {
-    if (!challenge) return;
+    if (!challenge || profileCompletion) return;
     let cancelled = false;
     const timer = setInterval(() => {
       void (async () => {
@@ -811,7 +939,19 @@ export function PublicEmailFirstForm({
           ) {
             const bootstrap = await getControlPlaneAuthBootstrap();
             if (bootstrap.signed_in) {
-              window.location.href = resolveAuthRedirectPath(redirectToPath);
+              const redirectTo = resolveAuthRedirectPath(redirectToPath);
+              if (
+                status.account_created &&
+                (!bootstrap.display_name ||
+                  bootstrap.display_name === NEW_ACCOUNT_PLACEHOLDER_NAME)
+              ) {
+                setProfileCompletion({
+                  origin: bootstrap.home_bay_url,
+                  redirectTo,
+                });
+                return;
+              }
+              window.location.href = redirectTo;
             }
           }
         } catch {
@@ -823,7 +963,11 @@ export function PublicEmailFirstForm({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [challenge?.challenge_id, redirectToPath]);
+  }, [challenge?.challenge_id, profileCompletion, redirectToPath]);
+
+  if (profileCompletion) {
+    return <NewAccountDisplayNameStep completion={profileCompletion} />;
+  }
 
   if (usePassword) {
     return view === "sign-up" ? (
@@ -935,8 +1079,16 @@ export function PublicEmailFirstForm({
       if (!result?.account_id) {
         throw new Error("Email sign-in did not create a session.");
       }
-      window.location.href =
+      const redirectTo =
         exchange.redirect_to ?? resolveAuthRedirectPath(redirectToPath);
+      if (exchange.account_created) {
+        setProfileCompletion({
+          origin: exchange.home_bay_url,
+          redirectTo,
+        });
+        return;
+      }
+      window.location.href = redirectTo;
     } catch (err) {
       setError(`${err}`);
     } finally {

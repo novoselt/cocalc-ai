@@ -38,6 +38,7 @@ export interface EmailAuthChallengePublicStatus {
   challenge_id: string;
   purpose: EmailAuthPurpose;
   state: EmailAuthChallengeState;
+  account_created: boolean;
   masked_email: string;
   expires_at: string;
   resend_available_at: string;
@@ -86,6 +87,7 @@ export interface PrepareEmailAuthExchangeOptions {
 
 export interface EmailAuthExchangeResult {
   challenge_id: string;
+  account_created: boolean;
   exchange_token: string;
   exchange_expires_at: string;
   home_bay_id: string;

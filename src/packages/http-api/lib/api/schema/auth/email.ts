@@ -22,6 +22,7 @@ export const EmailAuthChallengeStatusSchema = z.object({
   challenge_id: z.string().uuid(),
   purpose: z.enum(["sign_in_or_sign_up", "email_fresh_auth"]),
   state: EmailAuthChallengeStateSchema,
+  account_created: z.boolean(),
   masked_email: z.string(),
   expires_at: z.string(),
   resend_available_at: z.string(),
@@ -37,6 +38,7 @@ export const EmailAuthErrorSchema = z.object({
 
 export const EmailAuthExchangeSchema = z.object({
   challenge_id: z.string().uuid(),
+  account_created: z.boolean(),
   exchange_token: z.string().min(32),
   exchange_expires_at: z.string(),
   home_bay_id: z.string().min(1),

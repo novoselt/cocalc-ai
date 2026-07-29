@@ -554,6 +554,106 @@ describe("PublicAuthApp", () => {
     expect(screen.getByLabelText("Six-digit email code")).not.toBeNull();
   });
 
+  it("asks a newly created email-first account for its display name", async () => {
+    mockedApi.mockResolvedValueOnce(false);
+    mockedPostAuthApi
+      .mockResolvedValueOnce({
+        challenge_id: "11111111-1111-4111-8111-111111111111",
+        state: "pending",
+        account_created: false,
+        masked_email: "pe…@example.edu",
+        expires_at: "2026-07-29T01:15:00.000Z",
+        resend_available_at: "2026-07-29T01:00:30.000Z",
+      })
+      .mockResolvedValueOnce({
+        challenge_id: "11111111-1111-4111-8111-111111111111",
+        account_created: true,
+        exchange_token: "x".repeat(64),
+        exchange_expires_at: "2026-07-29T01:01:00.000Z",
+        home_bay_id: "bay-1",
+        home_bay_url: "https://bay-1.example.test",
+        redirect_to: "/projects/welcome",
+        state: "account_ready",
+      })
+      .mockResolvedValueOnce({
+        account_id: "22222222-2222-4222-8222-222222222222",
+        home_bay_id: "bay-1",
+        home_bay_url: "https://bay-1.example.test",
+      })
+      .mockResolvedValueOnce({ status: "success" });
+
+    render(
+      <PublicAuthApp
+        config={config({ email_authentication_mode: "email_first" })}
+        initialRoute={{ kind: "auth-form", view: "sign-up" }}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Email address"), {
+      target: { value: "person@example.edu" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
+    );
+    fireEvent.change(await screen.findByLabelText("Six-digit email code"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await screen.findByText("What should we call you?")).not.toBeNull();
+    expect(screen.getByText("Skip for now")).not.toBeNull();
+    fireEvent.change(screen.getByLabelText("Your name"), {
+      target: { value: "Ada Lovelace" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() =>
+      expect(mockedPostAuthApi).toHaveBeenCalledWith({
+        endpoint: "accounts/set-name",
+        origin: "https://bay-1.example.test",
+        body: { display_name: "Ada Lovelace" },
+      }),
+    );
+  });
+
+  it("asks a newly created magic-link account for its display name", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/auth/email/continue/11111111-1111-4111-8111-111111111111#token=abcdefghijklmnopqrstuvwxyz1234567890",
+    );
+    mockedPostAuthApi
+      .mockResolvedValueOnce({
+        challenge_id: "11111111-1111-4111-8111-111111111111",
+        account_created: true,
+        exchange_token: "x".repeat(64),
+        exchange_expires_at: "2026-07-29T01:01:00.000Z",
+        home_bay_id: "bay-1",
+        home_bay_url: "https://bay-1.example.test",
+        state: "account_ready",
+      })
+      .mockResolvedValueOnce({
+        account_id: "22222222-2222-4222-8222-222222222222",
+        home_bay_id: "bay-1",
+        home_bay_url: "https://bay-1.example.test",
+      });
+
+    render(
+      <PublicAuthApp
+        config={config({ email_authentication_mode: "email_first" })}
+        initialRoute={{
+          challengeId: "11111111-1111-4111-8111-111111111111",
+          kind: "auth-email-continue",
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to CoCalc" }));
+
+    expect(await screen.findByText("What should we call you?")).not.toBeNull();
+    expect(screen.getByLabelText("Your name")).not.toBeNull();
+  });
+
   it("does not redeem an email link until the user continues", () => {
     window.history.replaceState(
       {},
