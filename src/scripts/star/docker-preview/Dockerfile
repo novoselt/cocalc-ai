@@ -1,5 +1,16 @@
 FROM ubuntu:24.04
 
+ARG COCALC_STAR_RELEASE_ID=unknown
+ARG COCALC_STAR_GIT_REVISION=unknown
+ARG COCALC_STAR_TARGETARCH=unknown
+
+LABEL org.opencontainers.image.title="CoCalc Star"
+LABEL org.opencontainers.image.description="Self-hosted CoCalc Star appliance"
+LABEL org.opencontainers.image.source="https://github.com/sagemathinc/cocalc-ai"
+LABEL org.opencontainers.image.version="${COCALC_STAR_RELEASE_ID}"
+LABEL org.opencontainers.image.revision="${COCALC_STAR_GIT_REVISION}"
+LABEL com.cocalc.star.platform="linux/${COCALC_STAR_TARGETARCH}"
+
 ENV container=docker
 ENV DEBIAN_FRONTEND=noninteractive
 
