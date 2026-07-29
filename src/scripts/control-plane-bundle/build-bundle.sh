@@ -356,6 +356,8 @@ echo "- Build common control-plane runtime dependencies"
 pnpm --filter @cocalc/database run build
 pnpm --filter @cocalc/ai run build
 pnpm --filter @cocalc/server run build
+echo "- Clean HTTP API build output"
+rm -rf packages/http-api/dist packages/http-api/dist-types
 pnpm --filter @cocalc/http-api run build
 pnpm --filter @cocalc/hub run build
 
