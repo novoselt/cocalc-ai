@@ -113,10 +113,9 @@ export function UserResult({
               gap: "8px 16px",
               minWidth: 0,
             }}
-            onClick={details ? undefined : () => setDetails(true)}
+            onClick={() => setDetails((value) => !value)}
           >
             <Icon
-              onClick={() => setDetails(!details)}
               name={details ? "minus-square" : "plus-square"}
               style={{ flex: "0 0 auto" }}
             />
@@ -126,10 +125,12 @@ export function UserResult({
             >
               {userName}{" "}
               {email_address ? (
-                <CopyToClipBoard
-                  style={{ color: COLORS.GRAY_M }}
-                  value={email_address}
-                />
+                <div onClick={(e) => e.stopPropagation()}>
+                  <CopyToClipBoard
+                    style={{ color: COLORS.GRAY_M }}
+                    value={email_address}
+                  />
+                </div>
               ) : (
                 "NO Email"
               )}

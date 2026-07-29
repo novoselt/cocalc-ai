@@ -3,7 +3,11 @@ import { fireEvent, render, screen } from "@testing-library/react";
 jest.mock("@cocalc/frontend/components", () => ({
   Icon: () => null,
   TimeAgo: () => <span>time-ago</span>,
-  CopyToClipBoard: ({ value }: any) => <span>{value}</span>,
+  CopyToClipBoard: ({ value }: any) => (
+    <button type="button" aria-label={`Copy ${value}`}>
+      {value}
+    </button>
+  ),
 }));
 
 jest.mock("antd", () => {
@@ -80,6 +84,29 @@ jest.mock("@cocalc/frontend/purchases/managed-egress-history", () => ({
 const { UserResult } = require("./user");
 
 describe("UserResult admin tools", () => {
+  it("toggles details from the first row without toggling copy controls", () => {
+    render(
+      <UserResult
+        first_name="Ada"
+        last_name="Lovelace"
+        email_address="ada@example.com"
+        account_id="acct-1"
+        banned={false}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy ada@example.com" }),
+    );
+    expect(screen.queryByText("Profile")).toBeNull();
+
+    fireEvent.click(screen.getByText(/Ada Lovelace/));
+    expect(screen.getByText("Profile")).toBeTruthy();
+
+    fireEvent.click(screen.getByText(/Ada Lovelace/));
+    expect(screen.queryByText("Profile")).toBeNull();
+  });
+
   it("shows egress history directly in the Egress tool", () => {
     render(
       <UserResult
