@@ -150,6 +150,15 @@ Table({
       type: "timestamp",
       desc: "When the password was verified for this challenge.",
     },
+    primary_verified_at: {
+      type: "timestamp",
+      desc: "When the primary authentication method was verified.",
+    },
+    primary_auth_method: {
+      type: "string",
+      pg_type: "varchar(32)",
+      desc: "Primary authentication method used before the second factor.",
+    },
     factor_verified_at: {
       type: "timestamp",
       desc: "When the second factor was verified.",
@@ -227,6 +236,15 @@ Table({
     password_verified_at: {
       type: "timestamp",
       desc: "When password verification was last completed for this session.",
+    },
+    primary_verified_at: {
+      type: "timestamp",
+      desc: "When the primary authentication method was last verified.",
+    },
+    primary_auth_method: {
+      type: "string",
+      pg_type: "varchar(32)",
+      desc: "Primary authentication method for this session.",
     },
     factor_verified_at: {
       type: "timestamp",

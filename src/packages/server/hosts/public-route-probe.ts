@@ -11,6 +11,7 @@ import { PROJECT_HOST_BROWSER_SESSION_BOOTSTRAP_PATH } from "@cocalc/conat/auth/
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_WEBSOCKET_ATTEMPTS = 8;
+const TRANSIENT_REQUEST_RETRY_DELAY_MS = 250;
 const ENGINE_IO_WEBSOCKET_PATH = "/conat/?EIO=4&transport=websocket";
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -104,10 +105,18 @@ export function projectHostPublicRouteProbeDiagnostic(
     : undefined;
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error
-    ? `${error.name}: ${error.message}`
-    : `${error}`;
+function errorText(error: unknown, depth = 0): string {
+  if (!(error instanceof Error)) return `${error}`;
+  const detail = error as Error & { cause?: unknown; code?: unknown };
+  const code =
+    typeof detail.code === "string" && detail.code
+      ? ` code=${detail.code}`
+      : "";
+  const cause =
+    depth < 2 && detail.cause != null && detail.cause !== error
+      ? `; cause=${errorText(detail.cause, depth + 1)}`
+      : "";
+  return `${error.name}: ${error.message}${code}${cause}`;
 }
 
 function normalizedBaseUrl(value: string): URL {
@@ -138,15 +147,122 @@ async function fetchWithTimeout({
   init,
   timeout_ms,
 }: {
-  fetchImpl: FetchLike;
+  fetchImpl?: FetchLike;
   url: URL;
   init: RequestInit;
   timeout_ms: number;
 }): Promise<Response> {
+  if (fetchImpl == null) {
+    try {
+      return await requestWithIsolatedSocket({ url, init, timeout_ms });
+    } catch (err) {
+      if (!isTransientRequestError(err)) throw err;
+      await new Promise((resolve) =>
+        setTimeout(resolve, TRANSIENT_REQUEST_RETRY_DELAY_MS),
+      );
+      return await requestWithIsolatedSocket({ url, init, timeout_ms });
+    }
+  }
   return await fetchImpl(url, {
     ...init,
     redirect: "manual",
     signal: AbortSignal.timeout(timeout_ms),
+  });
+}
+
+function isTransientRequestError(error: unknown): boolean {
+  if (error == null || typeof error !== "object") return false;
+  const detail = error as {
+    code?: unknown;
+    message?: unknown;
+    name?: unknown;
+  };
+  const code = `${detail.code ?? ""}`.toUpperCase();
+  const message = `${detail.message ?? ""}`;
+  return (
+    [
+      "EAI_AGAIN",
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "ENETDOWN",
+      "ENETUNREACH",
+      "ENOTFOUND",
+      "EPIPE",
+      "ETIMEDOUT",
+    ].includes(code) ||
+    detail.name === "TimeoutError" ||
+    /socket hang up|client network socket disconnected/i.test(message)
+  );
+}
+
+async function requestWithIsolatedSocket({
+  url,
+  init,
+  timeout_ms,
+}: {
+  url: URL;
+  init: RequestInit;
+  timeout_ms: number;
+}): Promise<Response> {
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const headers = new Headers(init.headers);
+  const body =
+    typeof init.body === "string" || Buffer.isBuffer(init.body)
+      ? init.body
+      : undefined;
+  if (init.body != null && body == null) {
+    throw new Error("public route probe request body must be a string");
+  }
+  if (body != null && !headers.has("content-length")) {
+    headers.set("content-length", `${Buffer.byteLength(body)}`);
+  }
+  return await new Promise<Response>((resolve, reject) => {
+    const req = request(url, {
+      method: init.method,
+      headers: Object.fromEntries(headers.entries()),
+      // Do not share the application process's long-lived HTTP agent state.
+      agent: false,
+    });
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      const err = new Error("The operation was aborted due to timeout");
+      err.name = "TimeoutError";
+      req.destroy(err);
+    }, timeout_ms);
+    req.once("response", (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) =>
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
+      );
+      response.once("end", () =>
+        finish(() => {
+          const responseHeaders = new Headers();
+          for (let i = 0; i < response.rawHeaders.length; i += 2) {
+            responseHeaders.append(
+              response.rawHeaders[i],
+              response.rawHeaders[i + 1],
+            );
+          }
+          resolve(
+            new Response(chunks.length ? Buffer.concat(chunks) : null, {
+              status: response.statusCode ?? 500,
+              statusText: response.statusMessage,
+              headers: responseHeaders,
+            }),
+          );
+        }),
+      );
+      response.once("error", (err) => finish(() => reject(err)));
+    });
+    req.once("error", (err) => finish(() => reject(err)));
+    if (body != null) req.write(body);
+    req.end();
   });
 }
 
@@ -319,7 +435,7 @@ export async function probeProjectHostPublicRoute({
   public_url,
   origin,
   expected_host_id,
-  fetchImpl = fetch,
+  fetchImpl,
   websocketProbeImpl = probeWebSocketUpgrade,
   websocket_attempts = DEFAULT_WEBSOCKET_ATTEMPTS,
   timeout_ms = DEFAULT_REQUEST_TIMEOUT_MS,

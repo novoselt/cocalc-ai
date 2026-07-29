@@ -153,8 +153,9 @@ function registrationTokenInfoFromRow(
 
 export async function validateRegistrationTokenDirect(
   token: string,
+  opts: { required?: boolean } = {},
 ): Promise<RegistrationTokenInfo | undefined> {
-  const required = await getRequiresTokensDirect();
+  const required = opts.required ?? (await getRequiresTokensDirect());
   if (!required) {
     return;
   }
@@ -174,8 +175,9 @@ export async function validateRegistrationTokenDirect(
 
 export async function redeemRegistrationTokenDirect(
   token: string,
+  opts: { required?: boolean } = {},
 ): Promise<RegistrationTokenInfo | undefined> {
-  const required = await getRequiresTokensDirect();
+  const required = opts.required ?? (await getRequiresTokensDirect());
   if (!required) {
     // no token required, so nothing to do.
     return;

@@ -25,6 +25,7 @@ import { Locale } from "@cocalc/frontend/i18n";
 import { callback2, retry_until_success } from "@cocalc/util/async-utils";
 import type { AIServicesAvailable } from "@cocalc/util/db-schema/ai-models";
 import type { SignupEmailDomainPublicPolicy } from "@cocalc/util/accounts/signup-email-domain-policy";
+import type { EmailAuthenticationMode } from "@cocalc/util/auth/email-auth";
 import {
   Config,
   PLATFORM_MODE_CLOUD,
@@ -102,6 +103,7 @@ export interface CustomizeState {
   dns: string; // e.g. "cocalc.ai"
   public_viewer_dns?: string;
   email_enabled: false;
+  email_authentication_mode?: EmailAuthenticationMode;
   email_signup: boolean;
   public_signup_without_registration_token: boolean;
   cookie_banner_enabled?: boolean;

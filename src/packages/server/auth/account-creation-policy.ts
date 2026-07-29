@@ -3,7 +3,12 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-export type AccountCreationAuthMethod = "password" | "google_oidc" | "saml";
+export type AccountCreationAuthMethod =
+  | "password"
+  | "email_code"
+  | "email_link"
+  | "google_oidc"
+  | "saml";
 
 export type AccountCreationPolicyDecision =
   | {
@@ -64,7 +69,12 @@ export function evaluateAccountCreationPolicy({
   }
 
   const requiredDomain = normalizedDomain(sso_required_domain);
-  if (auth_method === "password" && requiredDomain) {
+  if (
+    (auth_method === "password" ||
+      auth_method === "email_code" ||
+      auth_method === "email_link") &&
+    requiredDomain
+  ) {
     return {
       type: "deny_use_sso",
       domain: requiredDomain,

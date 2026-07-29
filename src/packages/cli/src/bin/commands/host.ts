@@ -650,12 +650,20 @@ function formatEpochMilliseconds(value: unknown): string {
 
 function hostConatPersistRow(host: any): Record<string, unknown> {
   const current = host.metrics?.current;
-  const persist = current?.conat_persist;
+  const latestHistory = host.metrics?.history?.points?.at(-1);
+  const persist =
+    current?.conat_persist ??
+    latestHistory?.conat_persist ??
+    host.metrics?.history?.latest?.conat_persist;
   return {
     host_id: host.id,
     name: host.name ?? "",
     status: host.status ?? "",
-    collected_at: persist?.collected_at ?? current?.collected_at ?? null,
+    collected_at:
+      persist?.collected_at ??
+      latestHistory?.collected_at ??
+      current?.collected_at ??
+      null,
     available: persist?.available === true,
     ready: persist?.ready === true,
     pid: persist?.pid ?? null,
@@ -2618,7 +2626,7 @@ export function registerHostCommand(
         await withContext(command, "host metrics", async (ctx) => {
           const h = await resolveHost(ctx, hostIdentifier);
           const max_points = Math.max(
-            10,
+            1,
             Math.min(1440, Number(opts.points ?? "60") || 60),
           );
           const history = await ctx.hub.hosts.getHostMetricsHistory({

@@ -51,6 +51,7 @@ describe("/api/v2/auth/bootstrap", () => {
       account_id: "account-1",
       display_name: "AdmiN",
       email_address: "admin@example.com",
+      email_address_verified: true,
       first_name: "Admin",
       home_bay_id: "bay-0",
       last_name: "User",
@@ -68,6 +69,7 @@ describe("/api/v2/auth/bootstrap", () => {
         account_id: "account-1",
         display_name: "AdmiN",
         email_address: "admin@example.com",
+        email_address_verified: true,
         signed_in: true,
       }),
     );

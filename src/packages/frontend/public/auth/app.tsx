@@ -30,6 +30,8 @@ import {
 } from "./completion-views";
 import {
   type AuthNavigateOptions,
+  PublicEmailAuthLinkView,
+  PublicEmailFirstForm,
   PublicPasswordResetForm,
   PublicSignInForm,
   PublicSignUpForm,
@@ -75,6 +77,8 @@ function titleForRoute(route: PublicAuthRoute, siteName: string): string {
       return `${siteName} password updated`;
     case "auth-password-reset-redeem":
       return `Choose a new ${siteName} password`;
+    case "auth-email-continue":
+      return `Continue to ${siteName}`;
     case "auth-verify-email":
       return `Verify your ${siteName} email`;
     case "project-invite":
@@ -96,7 +100,7 @@ function subtitleForRoute(
     case "auth-form":
       switch (route.view) {
         case "sign-up":
-          return "Create an account to start projects, then compare product paths whenever your needs change.";
+          return undefined;
         case "sign-in":
           return "Sign in to open projects, manage your account, or continue from a product or support link.";
         case "password-reset":
@@ -115,6 +119,8 @@ function subtitleForRoute(
       return `Finish signing in to ${siteName}`;
     case "auth-password-reset-done":
       return siteName;
+    case "auth-email-continue":
+      return `Finish signing in to ${siteName}`;
     case "project-invite":
       if (isAuthenticated) {
         return `Review this ${siteName} project invite before accepting it.`;
@@ -136,6 +142,7 @@ function cardWidthForRoute(route: PublicAuthRoute): string | undefined {
     case "auth-password-reset-redeem":
     case "auth-password-reset-done":
     case "auth-verify-email":
+    case "auth-email-continue":
       return "min(560px, 96vw)";
     case "project-invite":
       return "min(720px, 96vw)";
@@ -144,8 +151,15 @@ function cardWidthForRoute(route: PublicAuthRoute): string | undefined {
   }
 }
 
-function routeForcesCookieConsent(route: PublicAuthRoute): boolean {
-  return route.kind === "auth-form" && route.view === "sign-up";
+function routeForcesCookieConsent(
+  route: PublicAuthRoute,
+  emailAuthenticationMode?: string,
+): boolean {
+  return (
+    route.kind === "auth-form" &&
+    (route.view === "sign-up" ||
+      (route.view === "sign-in" && emailAuthenticationMode === "email_first"))
+  );
 }
 
 function topNavActiveForRoute(route: PublicAuthRoute): PublicTopNavActiveKey {
@@ -236,6 +250,8 @@ export default function PublicAuthApp({
   const [route, setRoute] = useState<PublicAuthRoute>(initialRoute);
   const [authNavigateOptions, setAuthNavigateOptions] =
     useState<AuthNavigateOptions>({});
+  const [signupVerificationPending, setSignupVerificationPending] =
+    useState(false);
   const pendingAuthNavigateOptions = useRef<AuthNavigateOptions | undefined>(
     undefined,
   );
@@ -246,6 +262,7 @@ export default function PublicAuthApp({
 
   useEffect(() => {
     setRoute(initialRoute);
+    setSignupVerificationPending(false);
     if (pendingAuthNavigateOptions.current) {
       setAuthNavigateOptions(pendingAuthNavigateOptions.current);
       pendingAuthNavigateOptions.current = undefined;
@@ -268,6 +285,7 @@ export default function PublicAuthApp({
           ...(current ?? config ?? {}),
           account_display_name: bootstrap.display_name,
           account_email_address: bootstrap.email_address,
+          account_email_address_verified: bootstrap.email_address_verified,
           account_id: bootstrap.account_id,
           is_authenticated: !!bootstrap.signed_in,
         }));
@@ -292,9 +310,17 @@ export default function PublicAuthApp({
 
   useEffect(() => {
     if (!resolvedConfig?.cookie_banner_enabled) return;
-    if (!routeForcesCookieConsent(route)) return;
+    if (
+      !routeForcesCookieConsent(route, resolvedConfig.email_authentication_mode)
+    ) {
+      return;
+    }
     return enableForceConsent();
-  }, [resolvedConfig?.cookie_banner_enabled, route]);
+  }, [
+    resolvedConfig?.cookie_banner_enabled,
+    resolvedConfig?.email_authentication_mode,
+    route,
+  ]);
 
   function onNavigate(next: AuthView, options: AuthNavigateOptions = {}) {
     const nextRoute: PublicAuthRoute = { kind: "auth-form", view: next };
@@ -312,19 +338,35 @@ export default function PublicAuthApp({
     >
       <PublicAuthPageShell
         cardWidth={cardWidthForRoute(route)}
-        subtitle={subtitleForRoute(
-          route,
-          siteName,
-          resolvedConfig?.is_authenticated,
-        )}
+        subtitle={
+          signupVerificationPending
+            ? undefined
+            : subtitleForRoute(
+                route,
+                siteName,
+                resolvedConfig?.is_authenticated,
+              )
+        }
       >
         {route.kind === "auth-form" && route.view === "sign-in" && (
-          <PublicSignInForm
-            cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
-            initialSSOStrategies={ssoStrategies}
-            onNavigate={onNavigate}
-            redirectToPath={redirectToPath}
-          />
+          <>
+            {resolvedConfig?.email_authentication_mode === "email_first" ? (
+              <PublicEmailFirstForm
+                cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+                initialSSOStrategies={ssoStrategies}
+                onNavigate={onNavigate}
+                redirectToPath={redirectToPath}
+                view="sign-in"
+              />
+            ) : (
+              <PublicSignInForm
+                cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+                initialSSOStrategies={ssoStrategies}
+                onNavigate={onNavigate}
+                redirectToPath={redirectToPath}
+              />
+            )}
+          </>
         )}
         {route.kind === "auth-second-factor" && (
           <PublicSignInForm
@@ -344,17 +386,37 @@ export default function PublicAuthApp({
                 accountEmailAddress={resolvedConfig.account_email_address}
               />
             ) : (
-              <PublicSignUpForm
-                cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
-                initialEmail={authNavigateOptions.initialEmail}
-                initialSSOStrategies={ssoStrategies}
-                legacySignUpPrompt={!!authNavigateOptions.legacySignUpPrompt}
-                onNavigate={onNavigate}
-                redirectToPath={redirectToPath}
-                signupEmailDomainPolicy={
-                  resolvedConfig?.signup_email_domain_public_policy
-                }
-              />
+              <>
+                {resolvedConfig?.email_authentication_mode === "email_first" ? (
+                  <PublicEmailFirstForm
+                    cookieBannerEnabled={
+                      !!resolvedConfig?.cookie_banner_enabled
+                    }
+                    initialEmail={authNavigateOptions.initialEmail}
+                    initialSSOStrategies={ssoStrategies}
+                    onNavigate={onNavigate}
+                    redirectToPath={redirectToPath}
+                    view="sign-up"
+                  />
+                ) : (
+                  <PublicSignUpForm
+                    cookieBannerEnabled={
+                      !!resolvedConfig?.cookie_banner_enabled
+                    }
+                    initialEmail={authNavigateOptions.initialEmail}
+                    initialSSOStrategies={ssoStrategies}
+                    legacySignUpPrompt={
+                      !!authNavigateOptions.legacySignUpPrompt
+                    }
+                    onNavigate={onNavigate}
+                    onVerificationPendingChange={setSignupVerificationPending}
+                    redirectToPath={redirectToPath}
+                    signupEmailDomainPolicy={
+                      resolvedConfig?.signup_email_domain_public_policy
+                    }
+                  />
+                )}
+              </>
             )}
           </>
         )}
@@ -364,6 +426,15 @@ export default function PublicAuthApp({
         {route.kind === "auth-password-reset-redeem" && (
           <PublicRedeemPasswordResetView
             passwordResetId={route.passwordResetId}
+          />
+        )}
+        {route.kind === "auth-email-continue" && (
+          <PublicEmailAuthLinkView
+            challengeId={route.challengeId}
+            cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+            initialSSOStrategies={ssoStrategies}
+            onNavigate={onNavigate}
+            redirectToPath={redirectToPath}
           />
         )}
         {route.kind === "auth-cli-login" && (

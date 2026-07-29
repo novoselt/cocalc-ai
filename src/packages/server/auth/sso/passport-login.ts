@@ -922,6 +922,8 @@ export class PassportLogin {
       }
       const challenge = await createSignInSecondFactorChallenge({
         account_id: locals.account_id,
+        primary_auth_method:
+          this.opts.strategyName === "google" ? "google_oidc" : "legacy_sso",
       });
       locals.target = joinUrlPath(
         base_path,
@@ -940,6 +942,9 @@ export class PassportLogin {
       session: {
         authenticated_at: new Date(),
         password_verified_at: null,
+        primary_verified_at: new Date(),
+        primary_auth_method:
+          this.opts.strategyName === "google" ? "google_oidc" : "legacy_sso",
         factor_verified_at: null,
         factor_level: "none",
         fresh_auth_until: null,

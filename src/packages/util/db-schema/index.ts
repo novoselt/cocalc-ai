@@ -42,6 +42,7 @@ import "./collaborators";
 import "./crm";
 import "./deleted-projects";
 import "./email-counter";
+import "./email-auth";
 import "./external-credentials";
 import "./global-config";
 import "./hub-servers";

@@ -41,6 +41,7 @@ export default async function bootstrap(req, res) {
     signed_in: true,
     account_id,
     email_address: account?.email_address,
+    email_address_verified: account?.email_address_verified === true,
     display_name,
     home_bay_id,
     home_bay_url: await getBayPublicOriginForRequest(req, home_bay_id),

@@ -400,8 +400,30 @@ export async function drainAccountProjectIndexProjection(opts?: {
   const limit = normalizeLimit(opts?.limit);
   const dry_run = opts?.dry_run ?? true;
   const client = await getPool().connect();
+  const projectorLockKey = `account-project-index-projector:${bay_id}`;
+  let projectorLocked = false;
   try {
     await client.query("BEGIN");
+    const { rows: lockRows } = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      [projectorLockKey],
+    );
+    projectorLocked = lockRows[0]?.locked === true;
+    if (!projectorLocked) {
+      await client.query("ROLLBACK");
+      return {
+        bay_id,
+        dry_run,
+        requested_limit: limit,
+        scanned_events: 0,
+        applied_events: 0,
+        inserted_rows: 0,
+        deleted_rows: 0,
+        feed_events: [],
+        event_types: {},
+      };
+    }
+
     const { rows } = await client.query<ProjectOutboxEventRow>(
       `SELECT
          event_id,
@@ -458,6 +480,11 @@ export async function drainAccountProjectIndexProjection(opts?: {
     await client.query("ROLLBACK");
     throw err;
   } finally {
+    if (projectorLocked) {
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext($1))", [projectorLockKey])
+        .catch(() => undefined);
+    }
     client.release();
   }
 }

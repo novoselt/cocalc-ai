@@ -17,6 +17,14 @@ import { isValidUUID } from "@cocalc/util/misc";
 export type SecondFactorMethod = "totp" | "recovery_code" | "passkey";
 export type PasswordFreshAuthFactorLevel = "none" | SecondFactorMethod;
 export type SsoFreshAuthMethod = "google_oidc";
+export type AuthPrimaryMethod =
+  | "password"
+  | "email_code"
+  | "email_link"
+  | "google_oidc"
+  | "saml"
+  | "legacy_sso"
+  | "admin";
 export type AuthSessionFactorLevel =
   | PasswordFreshAuthFactorLevel
   | SsoFreshAuthMethod;
@@ -40,6 +48,8 @@ export interface AccountAuthSessionRow {
   expire?: Date;
   authenticated_at?: Date;
   password_verified_at?: Date | null;
+  primary_verified_at?: Date | null;
+  primary_auth_method?: AuthPrimaryMethod | null;
   factor_verified_at?: Date | null;
   fresh_auth_until?: Date | null;
   factor_level?: AuthSessionFactorLevel;
@@ -66,6 +76,8 @@ async function upsertAuthSessionWithDb({
   expire,
   authenticated_at,
   password_verified_at,
+  primary_verified_at,
+  primary_auth_method,
   factor_verified_at,
   fresh_auth_until,
   factor_level,
@@ -79,6 +91,8 @@ async function upsertAuthSessionWithDb({
   expire: Date;
   authenticated_at: Date;
   password_verified_at?: Date | null;
+  primary_verified_at?: Date | null;
+  primary_auth_method?: AuthPrimaryMethod | null;
   factor_verified_at?: Date | null;
   fresh_auth_until?: Date | null;
   factor_level?: AuthSessionFactorLevel;
@@ -96,6 +110,8 @@ async function upsertAuthSessionWithDb({
         expire,
         authenticated_at,
         password_verified_at,
+        primary_verified_at,
+        primary_auth_method,
         factor_verified_at,
         fresh_auth_until,
         factor_level,
@@ -112,12 +128,14 @@ async function upsertAuthSessionWithDb({
         $4::TIMESTAMP,
         $5::TIMESTAMP,
         $6::TIMESTAMP,
-        $7::TIMESTAMP,
-        $8::VARCHAR(32),
-        $9::INET,
-        $10::TEXT,
+        $7::VARCHAR(32),
+        $8::TIMESTAMP,
+        $9::TIMESTAMP,
+        $10::VARCHAR(32),
+        $11::INET,
+        $12::TEXT,
         NULL,
-        $11::JSONB
+        $13::JSONB
       )
       ON CONFLICT (session_hash) DO UPDATE SET
         account_id = EXCLUDED.account_id,
@@ -125,6 +143,8 @@ async function upsertAuthSessionWithDb({
         expire = EXCLUDED.expire,
         authenticated_at = EXCLUDED.authenticated_at,
         password_verified_at = EXCLUDED.password_verified_at,
+        primary_verified_at = EXCLUDED.primary_verified_at,
+        primary_auth_method = EXCLUDED.primary_auth_method,
         factor_verified_at = EXCLUDED.factor_verified_at,
         fresh_auth_until = EXCLUDED.fresh_auth_until,
         factor_level = EXCLUDED.factor_level,
@@ -139,6 +159,8 @@ async function upsertAuthSessionWithDb({
       expire,
       authenticated_at,
       password_verified_at ?? null,
+      primary_verified_at ?? password_verified_at ?? null,
+      primary_auth_method ?? (password_verified_at ? "password" : null),
       factor_verified_at ?? null,
       fresh_auth_until ?? null,
       factor_level ?? "none",
@@ -156,6 +178,8 @@ export async function recordNewAuthSession({
   req,
   authenticated_at = new Date(),
   password_verified_at,
+  primary_verified_at,
+  primary_auth_method,
   factor_verified_at,
   factor_level = "none",
   fresh_auth_until,
@@ -167,6 +191,8 @@ export async function recordNewAuthSession({
   req?: Request;
   authenticated_at?: Date;
   password_verified_at?: Date | null;
+  primary_verified_at?: Date | null;
+  primary_auth_method?: AuthPrimaryMethod | null;
   factor_verified_at?: Date | null;
   factor_level?: AuthSessionFactorLevel;
   fresh_auth_until?: Date | null;
@@ -183,6 +209,8 @@ export async function recordNewAuthSession({
         expire,
         authenticated_at,
         password_verified_at,
+        primary_verified_at,
+        primary_auth_method,
         factor_verified_at,
         fresh_auth_until,
         factor_level,
@@ -338,12 +366,16 @@ export async function setCurrentSessionFreshAuth({
   factor_level,
   fresh_auth_until,
   metadata_patch,
+  primary_auth_method = "password",
+  primary_verified_at = new Date(),
 }: {
   req: Request;
   account_id: string;
   factor_level: AuthSessionFactorLevel;
   fresh_auth_until: Date;
   metadata_patch?: Record<string, unknown>;
+  primary_auth_method?: AuthPrimaryMethod;
+  primary_verified_at?: Date;
 }): Promise<void> {
   const session_hash = (await getCurrentAuthSession({ req, account_id }))
     .session_hash;
@@ -356,6 +388,8 @@ export async function setCurrentSessionFreshAuth({
     factor_level,
     fresh_auth_until,
     metadata_patch,
+    primary_auth_method,
+    primary_verified_at,
   });
 }
 
@@ -365,12 +399,16 @@ export async function setSessionFreshAuth({
   factor_level,
   fresh_auth_until,
   metadata_patch,
+  primary_auth_method = "password",
+  primary_verified_at = new Date(),
 }: {
   account_id: string;
   session_hash: string;
   factor_level: AuthSessionFactorLevel;
   fresh_auth_until: Date;
   metadata_patch?: Record<string, unknown>;
+  primary_auth_method?: AuthPrimaryMethod;
+  primary_verified_at?: Date;
 }): Promise<void> {
   const cleanedSessionHash = `${session_hash ?? ""}`.trim();
   if (!cleanedSessionHash) {
@@ -389,7 +427,13 @@ export async function setSessionFreshAuth({
         `
           UPDATE account_auth_sessions
              SET updated = NOW(),
-                 password_verified_at = NOW(),
+                 password_verified_at =
+                   CASE
+                     WHEN $6::VARCHAR(32) = 'password' THEN $7::TIMESTAMP
+                     ELSE password_verified_at
+                   END,
+                 primary_verified_at = $7::TIMESTAMP,
+                 primary_auth_method = $6::VARCHAR(32),
                  factor_verified_at =
                    CASE
                      WHEN $3::VARCHAR(32) = 'none' THEN factor_verified_at
@@ -413,6 +457,8 @@ export async function setSessionFreshAuth({
           factor_level,
           JSON.stringify(metadata_patch ?? {}),
           account_id,
+          primary_auth_method,
+          primary_verified_at,
         ],
       );
       if ((rowCount ?? 0) === 0) {

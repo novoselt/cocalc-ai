@@ -212,6 +212,36 @@ describe("/api/v2/auth/sign-up", () => {
     expect(mockCreateClusterAccount).not.toHaveBeenCalled();
   });
 
+  it("does not create an account when continuous verification cannot send email", async () => {
+    mockGetServerSettings.mockResolvedValue({
+      email_authentication_mode: "verify_after_signup",
+      email_enabled: false,
+      email_signup: true,
+      verify_emails: true,
+    });
+    const { req, res } = createMocks({
+      method: "POST",
+      url: "/api/v2/auth/sign-up",
+      body: {
+        terms: true,
+        email: "new@example.com",
+        password: "correct horse battery staple 12345!",
+        displayName: "New User",
+        registrationToken: "valid-token",
+      },
+    });
+
+    const { signUp } = await import("./sign-up");
+    await signUp(req, res);
+
+    expect(res._getJSONData()).toEqual({
+      issues: {
+        api: "Email signup is temporarily unavailable because verification email delivery is not configured.",
+      },
+    });
+    expect(mockCreateClusterAccount).not.toHaveBeenCalled();
+  });
+
   it("tells a signed-in non-admin to sign out before creating another account", async () => {
     mockGetAccountId.mockResolvedValue("signed-in-account-id");
     mockAssertTrusted.mockRejectedValue(

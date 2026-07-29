@@ -183,6 +183,129 @@ describe("probeProjectHostPublicRoute", () => {
     );
   });
 
+  it("uses isolated native HTTP requests for the default transport", async () => {
+    const server = createServer((request, response) => {
+      if (request.url === "/healthz") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({ ok: true, ready: true, host_id: HOST_ID }),
+        );
+        return;
+      }
+      if (
+        request.url === "/.cocalc/project-host/session" &&
+        request.method === "OPTIONS"
+      ) {
+        response.writeHead(204, corsHeaders());
+        response.end();
+        return;
+      }
+      if (
+        request.url === "/.cocalc/project-host/session" &&
+        request.method === "POST"
+      ) {
+        response.writeHead(401, corsHeaders());
+        response.end();
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("test server did not bind a TCP port");
+      }
+      await expect(
+        probeProjectHostPublicRoute({
+          public_url: `http://127.0.0.1:${address.port}`,
+          origin: ORIGIN,
+          expected_host_id: HOST_ID,
+          websocketProbeImpl: jest.fn().mockResolvedValue({ status: 101 }),
+          websocket_attempts: 4,
+          timeout_ms: 1000,
+        }),
+      ).resolves.toMatchObject({
+        health_status: 200,
+        preflight_status: 204,
+        session_status: 401,
+        websocket_successes: 4,
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
+  });
+
+  it("retries one transient native HTTP socket reset", async () => {
+    let healthAttempts = 0;
+    const server = createServer((request, response) => {
+      if (request.url === "/healthz") {
+        healthAttempts += 1;
+        if (healthAttempts === 1) {
+          request.socket.destroy();
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({ ok: true, ready: true, host_id: HOST_ID }),
+        );
+        return;
+      }
+      if (
+        request.url === "/.cocalc/project-host/session" &&
+        request.method === "OPTIONS"
+      ) {
+        response.writeHead(204, corsHeaders());
+        response.end();
+        return;
+      }
+      if (
+        request.url === "/.cocalc/project-host/session" &&
+        request.method === "POST"
+      ) {
+        response.writeHead(401, corsHeaders());
+        response.end();
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("test server did not bind a TCP port");
+      }
+      await expect(
+        probeProjectHostPublicRoute({
+          public_url: `http://127.0.0.1:${address.port}`,
+          origin: ORIGIN,
+          expected_host_id: HOST_ID,
+          websocketProbeImpl: jest.fn().mockResolvedValue({ status: 101 }),
+          websocket_attempts: 4,
+          timeout_ms: 1000,
+        }),
+      ).resolves.toMatchObject({
+        health_status: 200,
+        preflight_status: 204,
+        session_status: 401,
+        websocket_successes: 4,
+      });
+      expect(healthAttempts).toBe(2);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
+  });
+
   it("performs and validates a raw WebSocket upgrade", async () => {
     const server = createServer();
     server.on("upgrade", (request, socket) => {

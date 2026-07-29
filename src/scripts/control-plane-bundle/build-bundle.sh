@@ -302,7 +302,10 @@ files.forEach((file, index) => {
   const relative = path.relative(apiRoot, file).split(path.sep).join("/");
   lines.push(`  const mod${index} = require(${JSON.stringify(file)});`);
   lines.push(
-    `  loadedRoutes.push({ path: ${JSON.stringify(routePath(relative))}, handler: mod${index}.default ?? mod${index} });`,
+    `  const handler${index} = mod${index}.default ?? mod${index};`,
+  );
+  lines.push(
+    `  if (typeof handler${index} === "function") loadedRoutes.push({ path: ${JSON.stringify(routePath(relative))}, handler: handler${index} });`,
   );
 });
 
@@ -353,6 +356,8 @@ echo "- Build common control-plane runtime dependencies"
 pnpm --filter @cocalc/database run build
 pnpm --filter @cocalc/ai run build
 pnpm --filter @cocalc/server run build
+echo "- Clean HTTP API build output"
+rm -rf packages/http-api/dist packages/http-api/dist-types
 pnpm --filter @cocalc/http-api run build
 pnpm --filter @cocalc/hub run build
 
