@@ -558,6 +558,7 @@ type EmailAuthChallengeResponse = {
   masked_email: string;
   expires_at: string;
   resend_available_at: string;
+  message_sent_now?: boolean;
 };
 
 type EmailAuthExchangeResponse = {
@@ -1248,8 +1249,19 @@ export function PublicEmailFirstForm({
             <div style={{ fontWeight: 600, marginBottom: "6px" }}>
               Check your email
             </div>
-            We sent a six-digit code and sign-in link to{" "}
-            <strong>{challenge.masked_email}</strong>.
+            {challenge.message_sent_now === false ? (
+              <>
+                A sign-in email is already pending for{" "}
+                <strong>{challenge.masked_email}</strong>. We did not send
+                another message. Use <strong>Resend email</strong> below if it
+                has not arrived.
+              </>
+            ) : (
+              <>
+                We sent a six-digit code and sign-in link to{" "}
+                <strong>{challenge.masked_email}</strong>.
+              </>
+            )}
           </Alert>
           <div style={FIELD_STYLE}>
             <div style={LABEL_STYLE}>Six-digit code</div>

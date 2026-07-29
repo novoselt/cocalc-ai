@@ -130,6 +130,7 @@ describe("seed-global email authentication challenges", () => {
       masked_email: "pe…@example.edu",
       send_count: 1,
       message_sent: true,
+      message_sent_now: true,
     });
     expect(sendEmailAuthChallengeMessageMock).toHaveBeenCalledTimes(1);
     const sent = sendEmailAuthChallengeMessageMock.mock.calls[0][0];
@@ -192,6 +193,7 @@ describe("seed-global email authentication challenges", () => {
       browser_binding: "browser-one",
     });
     expect(second.challenge_id).toBe(first.challenge_id);
+    expect(second.message_sent_now).toBe(false);
     expect(sendEmailAuthChallengeMessageMock).toHaveBeenCalledTimes(1);
   });
 
