@@ -47,6 +47,7 @@ export const EmailAuthExchangeSchema = z.object({
 
 export const EmailAuthStartInputSchema = z.object({
   email: z.string().email(),
+  registration_token: z.string().max(4096).optional(),
   analytics_token: z.string().uuid().optional(),
   terms: z.boolean().optional(),
   terms_version: z.string().max(128).optional(),

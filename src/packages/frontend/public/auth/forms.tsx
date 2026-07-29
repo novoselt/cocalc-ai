@@ -721,6 +721,10 @@ export function PublicEmailFirstForm({
   redirectToPath?: string | (() => string);
   view: "sign-in" | "sign-up";
 }) {
+  const [requiresToken, setRequiresToken] = useState<boolean>();
+  const [registrationToken, setRegistrationToken] = useState(
+    new URL(window.location.href).searchParams.get("registrationToken") ?? "",
+  );
   const [email, setEmail] = useState(() => validInitialEmail(initialEmail));
   const [challenge, setChallenge] = useState<EmailAuthChallengeResponse>();
   const [code, setCode] = useState("");
@@ -736,6 +740,7 @@ export function PublicEmailFirstForm({
     home_bay_url?: string;
   }>();
   const [now, setNow] = useState(Date.now());
+  const registrationTokenInputRef = useRef<HTMLInputElement | null>(null);
   const strategies = usePublicSsoStrategies(initialSSOStrategies);
   const googleStrategy = googleStrategyFrom(strategies);
   const publicConfig = usePublicConfig();
@@ -743,6 +748,29 @@ export function PublicEmailFirstForm({
   const cookieConsentReady = !cookieBannerEnabled || consentReady;
   const policiesVisible = arePublicPoliciesVisible(publicConfig);
   const { termsUrl, privacyUrl } = policyUrls(publicConfig);
+
+  useEffect(() => {
+    if (view !== "sign-up") {
+      setRequiresToken(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api("auth/requires-token");
+        if (!cancelled) {
+          setRequiresToken(!!result);
+        }
+      } catch {
+        if (!cancelled) {
+          setRequiresToken(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
 
   useEffect(() => {
     if (!challenge) return;
@@ -802,6 +830,7 @@ export function PublicEmailFirstForm({
       <PublicSignUpForm
         cookieBannerEnabled={cookieBannerEnabled}
         initialEmail={email}
+        initialRegistrationToken={registrationToken}
         initialSSOStrategies={initialSSOStrategies}
         onNavigate={onNavigate}
         redirectToPath={redirectToPath}
@@ -833,6 +862,17 @@ export function PublicEmailFirstForm({
 
   async function startEmailAuth(): Promise<void> {
     if (!isValidEmailAddress(email) || submitting) return;
+    if (view === "sign-up" && requiresToken === undefined) {
+      return;
+    }
+    if (
+      view === "sign-up" &&
+      requiresToken === true &&
+      !registrationToken.trim()
+    ) {
+      setError("Enter the registration token for this site.");
+      return;
+    }
     if (
       cookieBannerEnabled &&
       !cookieConsentReady &&
@@ -848,6 +888,9 @@ export function PublicEmailFirstForm({
         endpoint: "auth/email/start",
         body: {
           email: normalizedEmailAddress(email),
+          ...(view === "sign-up" && registrationToken.trim()
+            ? { registration_token: registrationToken.trim() }
+            : {}),
           target: resolveAuthRedirectPath(redirectToPath),
           terms: true,
         },
@@ -934,6 +977,24 @@ export function PublicEmailFirstForm({
       {error ? <Alert kind="error">{error}</Alert> : null}
       {!challenge ? (
         <>
+          {view === "sign-up" && requiresToken ? (
+            <div style={FIELD_STYLE}>
+              <div style={LABEL_STYLE}>Registration token</div>
+              <TextInput
+                ariaLabel="Registration token"
+                autoFocus
+                inputRef={registrationTokenInputRef}
+                name="registration-token"
+                placeholder="Enter your registration token"
+                value={registrationToken}
+                onChange={(value) => {
+                  setRegistrationToken(value);
+                  setError("");
+                }}
+                onPressEnter={startEmailAuth}
+              />
+            </div>
+          ) : null}
           {googleStrategy != null ? (
             <>
               {policiesVisible ? (
@@ -944,11 +1005,20 @@ export function PublicEmailFirstForm({
                 />
               ) : null}
               <SsoButton
+                disabled={
+                  view === "sign-up" &&
+                  (requiresToken === undefined ||
+                    (requiresToken && !registrationToken.trim()))
+                }
                 cookieBannerEnabled={cookieBannerEnabled}
                 cookieConsentReady={cookieConsentReady}
                 href={ssoLoginHref("google", {
                   target: resolveAuthRedirectPath(redirectToPath),
                   terms: policiesVisible ? true : undefined,
+                  registration_token:
+                    view === "sign-up"
+                      ? registrationToken.trim() || undefined
+                      : undefined,
                 })}
               >
                 Continue with {googleStrategy.display}
@@ -961,7 +1031,7 @@ export function PublicEmailFirstForm({
             <TextInput
               ariaLabel="Email address"
               autoComplete="email"
-              autoFocus
+              autoFocus={view !== "sign-up" || requiresToken === false}
               name="email"
               placeholder="you@example.com"
               value={email}
@@ -1000,6 +1070,9 @@ export function PublicEmailFirstForm({
             disabled={
               !isValidEmailAddress(email) ||
               submitting ||
+              (view === "sign-up" &&
+                (requiresToken === undefined ||
+                  (requiresToken && !registrationToken.trim()))) ||
               !cookieConsentReady ||
               !!requiredSso
             }
@@ -1822,6 +1895,7 @@ function PostSignupVerificationStep({
 export function PublicSignUpForm({
   cookieBannerEnabled = false,
   initialEmail,
+  initialRegistrationToken,
   initialSSOStrategies,
   legacySignUpPrompt = false,
   onNavigate,
@@ -1831,6 +1905,7 @@ export function PublicSignUpForm({
 }: {
   cookieBannerEnabled?: boolean;
   initialEmail?: string;
+  initialRegistrationToken?: string;
   initialSSOStrategies?: PublicSsoStrategy[];
   legacySignUpPrompt?: boolean;
   onNavigate: AuthNavigate;
@@ -1840,7 +1915,9 @@ export function PublicSignUpForm({
 }) {
   const [requiresToken, setRequiresToken] = useState<boolean>();
   const [registrationToken, setRegistrationToken] = useState(
-    new URL(window.location.href).searchParams.get("registrationToken") ?? "",
+    initialRegistrationToken ??
+      new URL(window.location.href).searchParams.get("registrationToken") ??
+      "",
   );
   const [email, setEmail] = useState(() => validInitialEmail(initialEmail));
   const [password, setPassword] = useState("");

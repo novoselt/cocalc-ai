@@ -15,6 +15,9 @@ const getServerSettingsMock = jest.fn();
 const getStrategiesMock = jest.fn();
 const getEnabledSsoDomainPolicyForEmailMock = jest.fn();
 const getRequiresRegistrationTokenMock = jest.fn();
+const validateRegistrationTokenDirectMock = jest.fn();
+const redeemRegistrationTokenDirectMock = jest.fn();
+const restoreRedeemedRegistrationTokenDirectMock = jest.fn();
 const issueHomeBayRetryTokenMock = jest.fn(({ token_id }) => ({
   token: `signed-${token_id}-${"x".repeat(40)}`,
   expires_at: Date.now() + 60_000,
@@ -61,6 +64,15 @@ jest.mock("@cocalc/server/auth/tokens/get-requires-token", () => ({
   default: (...args: any[]) => getRequiresRegistrationTokenMock(...args),
 }));
 
+jest.mock("@cocalc/server/auth/tokens/redeem", () => ({
+  validateRegistrationTokenDirect: (...args: any[]) =>
+    validateRegistrationTokenDirectMock(...args),
+  redeemRegistrationTokenDirect: (...args: any[]) =>
+    redeemRegistrationTokenDirectMock(...args),
+  restoreRedeemedRegistrationTokenDirect: (...args: any[]) =>
+    restoreRedeemedRegistrationTokenDirectMock(...args),
+}));
+
 jest.mock("@cocalc/database/settings/secret-settings", () => ({
   getSecretSettingsKey: async () => Buffer.alloc(32, 7),
 }));
@@ -86,6 +98,15 @@ describe("seed-global email authentication challenges", () => {
     getStrategiesMock.mockReset().mockResolvedValue([]);
     getEnabledSsoDomainPolicyForEmailMock.mockReset().mockResolvedValue(null);
     getRequiresRegistrationTokenMock.mockReset().mockResolvedValue(false);
+    validateRegistrationTokenDirectMock.mockReset().mockResolvedValue({
+      token: "registration-token",
+    });
+    redeemRegistrationTokenDirectMock.mockReset().mockResolvedValue({
+      token: "registration-token",
+    });
+    restoreRedeemedRegistrationTokenDirectMock
+      .mockReset()
+      .mockResolvedValue(undefined);
     await getPool().query("TRUNCATE email_auth_challenges");
   });
 
@@ -404,6 +425,152 @@ describe("seed-global email authentication challenges", () => {
     expect(adminVerifyClusterAccountEmailAddressMock).toHaveBeenCalledWith({
       account_id: "33333333-3333-4333-8333-333333333333",
     });
+  });
+
+  it("reserves and redeems a registration token only after email proof", async () => {
+    getRequiresRegistrationTokenMock.mockResolvedValue(true);
+    validateRegistrationTokenDirectMock.mockResolvedValue({
+      token: "course-token",
+      ephemeral: 86_400,
+    });
+    redeemRegistrationTokenDirectMock.mockResolvedValue({
+      token: "course-token",
+      ephemeral: 86_400,
+    });
+    createClusterAccountMock.mockResolvedValue({
+      account_id: "44444444-4444-4444-8444-444444444444",
+      email_address: "student@example.edu",
+      home_bay_id: "bay-new",
+    });
+    const {
+      prepareEmailAuthExchangeDirect,
+      redeemEmailAuthCodeDirect,
+      startEmailAuthChallengeDirect,
+    } = await import("./challenge-store");
+    const started = await startEmailAuthChallengeDirect({
+      email_address: "student@example.edu",
+      browser_binding: "browser-token",
+      prospective_home_bay_id: "bay-new",
+      registration_token: "course-token",
+      terms_accepted: true,
+    });
+
+    expect(validateRegistrationTokenDirectMock).toHaveBeenCalledWith(
+      "course-token",
+      { required: true },
+    );
+    expect(redeemRegistrationTokenDirectMock).not.toHaveBeenCalled();
+    const { rows } = await getPool().query(
+      `SELECT registration_token_reservation_id,
+              registration_token_encrypted,
+              registration_token_validated_at
+         FROM email_auth_challenges
+        WHERE challenge_id=$1`,
+      [started.challenge_id],
+    );
+    expect(rows[0].registration_token_reservation_id).not.toBeNull();
+    expect(rows[0].registration_token_validated_at).not.toBeNull();
+    expect(rows[0].registration_token_encrypted).not.toContain("course-token");
+
+    await redeemEmailAuthCodeDirect({
+      challenge_id: started.challenge_id,
+      code: sendEmailAuthChallengeMessageMock.mock.calls[0][0].code,
+    });
+    await prepareEmailAuthExchangeDirect({
+      challenge_id: started.challenge_id,
+      auth_method: "email_code",
+    });
+
+    expect(redeemRegistrationTokenDirectMock).toHaveBeenCalledWith(
+      "course-token",
+      { required: true },
+    );
+    expect(createClusterAccountMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email_address: "student@example.edu",
+        ephemeral: 86_400,
+        trusted_product_access: true,
+        trusted_product_access_reason: "registration_token",
+      }),
+    );
+    const ready = await getPool().query(
+      `SELECT account_created_at, registration_token_encrypted
+         FROM email_auth_challenges
+        WHERE challenge_id=$1`,
+      [started.challenge_id],
+    );
+    expect(ready.rows[0].account_created_at).not.toBeNull();
+    expect(ready.rows[0].registration_token_encrypted).toBeNull();
+  });
+
+  it("allows an existing account to use email auth without a registration token", async () => {
+    getRequiresRegistrationTokenMock.mockResolvedValue(true);
+    getClusterAccountByEmailDirectMock.mockResolvedValue({
+      account_id: "22222222-2222-4222-8222-222222222222",
+      email_address: "person@example.edu",
+      home_bay_id: "bay-home",
+      banned: false,
+    });
+    const {
+      prepareEmailAuthExchangeDirect,
+      redeemEmailAuthCodeDirect,
+      startEmailAuthChallengeDirect,
+    } = await import("./challenge-store");
+    const started = await startEmailAuthChallengeDirect({
+      email_address: "person@example.edu",
+      browser_binding: "browser-existing",
+      prospective_home_bay_id: "bay-new",
+      terms_accepted: true,
+    });
+    await redeemEmailAuthCodeDirect({
+      challenge_id: started.challenge_id,
+      code: sendEmailAuthChallengeMessageMock.mock.calls[0][0].code,
+    });
+    await expect(
+      prepareEmailAuthExchangeDirect({
+        challenge_id: started.challenge_id,
+        auth_method: "email_code",
+      }),
+    ).resolves.toMatchObject({
+      home_bay_id: "bay-home",
+      state: "account_ready",
+    });
+    expect(validateRegistrationTokenDirectMock).not.toHaveBeenCalled();
+    expect(redeemRegistrationTokenDirectMock).not.toHaveBeenCalled();
+    expect(createClusterAccountMock).not.toHaveBeenCalled();
+  });
+
+  it("restores a redeemed token when account creation fails", async () => {
+    getRequiresRegistrationTokenMock.mockResolvedValue(true);
+    createClusterAccountMock.mockRejectedValue(
+      new Error("account creation failed"),
+    );
+    const {
+      prepareEmailAuthExchangeDirect,
+      redeemEmailAuthCodeDirect,
+      startEmailAuthChallengeDirect,
+    } = await import("./challenge-store");
+    const started = await startEmailAuthChallengeDirect({
+      email_address: "failed@example.edu",
+      browser_binding: "browser-failed",
+      prospective_home_bay_id: "bay-new",
+      registration_token: "registration-token",
+      terms_accepted: true,
+    });
+    await redeemEmailAuthCodeDirect({
+      challenge_id: started.challenge_id,
+      code: sendEmailAuthChallengeMessageMock.mock.calls[0][0].code,
+    });
+
+    await expect(
+      prepareEmailAuthExchangeDirect({
+        challenge_id: started.challenge_id,
+        auth_method: "email_code",
+      }),
+    ).rejects.toThrow("account creation failed");
+    expect(restoreRedeemedRegistrationTokenDirectMock).toHaveBeenCalledWith(
+      "registration-token",
+    );
   });
 
   it("binds fresh-auth email proof to an existing account", async () => {

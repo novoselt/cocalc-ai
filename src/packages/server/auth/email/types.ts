@@ -50,6 +50,7 @@ export interface StartEmailAuthChallengeOptions {
   email_address: string;
   browser_binding: string;
   request_ip?: string;
+  registration_token?: string;
   analytics_token?: string;
   purpose?: EmailAuthPurpose;
   prospective_home_bay_id?: string;

@@ -476,6 +476,47 @@ describe("PublicAuthApp", () => {
     expect(screen.getByPlaceholderText("At least 8 characters")).not.toBeNull();
   });
 
+  it("requests the registration token in email-first signup", async () => {
+    mockedApi.mockResolvedValueOnce(true);
+    mockedPostAuthApi.mockResolvedValueOnce({
+      challenge_id: "11111111-1111-4111-8111-111111111111",
+      state: "pending",
+      masked_email: "pe…@example.edu",
+      expires_at: "2026-07-29T01:15:00.000Z",
+      resend_available_at: "2026-07-29T01:00:30.000Z",
+      send_count: 1,
+      message_sent: true,
+      message_failed: false,
+    });
+    render(
+      <PublicAuthApp
+        config={config({ email_authentication_mode: "email_first" })}
+        initialRoute={{ kind: "auth-form", view: "sign-up" }}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Registration token"), {
+      target: { value: "course-token" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "Person@Example.EDU" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
+    );
+
+    expect(await screen.findByText("Check your email")).not.toBeNull();
+    expect(mockedPostAuthApi).toHaveBeenCalledWith({
+      endpoint: "auth/email/start",
+      body: {
+        email: "person@example.edu",
+        registration_token: "course-token",
+        target: "/projects",
+        terms: true,
+      },
+    });
+  });
+
   it("starts a passwordless email challenge", async () => {
     mockedPostAuthApi.mockResolvedValueOnce({
       challenge_id: "11111111-1111-4111-8111-111111111111",

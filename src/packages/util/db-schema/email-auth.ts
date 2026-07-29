@@ -93,6 +93,14 @@ Table({
       type: "uuid",
       desc: "Opaque reservation for token-gated account creation.",
     },
+    registration_token_encrypted: {
+      type: "string",
+      desc: "Encrypted short-lived registration token pending verified account creation.",
+    },
+    registration_token_validated_at: {
+      type: "timestamp",
+      desc: "When the reserved registration token was validated.",
+    },
     continuation: {
       type: "map",
       desc: "Validated same-site authentication continuation.",

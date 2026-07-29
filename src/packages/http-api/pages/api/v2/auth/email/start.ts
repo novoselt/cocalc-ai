@@ -49,6 +49,7 @@ export async function start(req, res) {
     await assertEmailAuthStartEnabled();
     const {
       email: rawEmail,
+      registration_token,
       analytics_token,
       target,
       terms,
@@ -74,6 +75,7 @@ export async function start(req, res) {
         email_address: email,
         browser_binding: getOrSetEmailAuthBrowserBinding(req, res),
         request_ip: req.ip,
+        registration_token: `${registration_token ?? ""}`.trim() || undefined,
         analytics_token: `${analytics_token ?? ""}`.trim() || undefined,
         prospective_home_bay_id: await selectSignupHomeBay({ req }),
         terms_accepted: terms === true,

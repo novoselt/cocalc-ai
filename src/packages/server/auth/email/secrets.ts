@@ -11,8 +11,15 @@ import {
 } from "node:crypto";
 
 import { getSecretSettingsKey } from "@cocalc/database/settings/secret-settings";
+import {
+  decryptSecretSettingValue,
+  encryptSecretSettingValue,
+} from "@cocalc/util/secret-settings-crypto";
 
 type EmailAuthSecretKind = "browser" | "code" | "email" | "ip" | "link";
+
+const REGISTRATION_TOKEN_SECRET_NAME =
+  "email_auth_challenges.registration_token";
 
 let cachedKey: Buffer | undefined;
 
@@ -72,6 +79,26 @@ export function createEmailAuthLinkToken(): string {
 
 export function createEmailAuthBrowserBinding(): string {
   return randomBytes(24).toString("base64url");
+}
+
+export async function encryptEmailAuthRegistrationToken(
+  token: string,
+): Promise<string> {
+  return encryptSecretSettingValue(
+    REGISTRATION_TOKEN_SECRET_NAME,
+    token,
+    await emailAuthKey(),
+  );
+}
+
+export async function decryptEmailAuthRegistrationToken(
+  encrypted: string,
+): Promise<string> {
+  return decryptSecretSettingValue(
+    REGISTRATION_TOKEN_SECRET_NAME,
+    encrypted,
+    await emailAuthKey(),
+  );
 }
 
 export function maskEmailAddress(email_address: string): string {

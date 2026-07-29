@@ -17,10 +17,19 @@ import { getLogger } from "@cocalc/backend/logger";
 import { evaluateAccountCreationPolicy } from "@cocalc/server/auth/account-creation-policy";
 import { issueHomeBayRetryToken } from "@cocalc/server/auth/home-bay-retry-token";
 import {
+  recordSignUpTokenFail,
+  signUpTokenCheck,
+} from "@cocalc/server/auth/throttle";
+import {
   checkRequiredSSO,
   getEmailDomain,
 } from "@cocalc/server/auth/sso/check-required-sso";
 import getRequiresRegistrationToken from "@cocalc/server/auth/tokens/get-requires-token";
+import {
+  redeemRegistrationTokenDirect,
+  restoreRedeemedRegistrationTokenDirect,
+  validateRegistrationTokenDirect,
+} from "@cocalc/server/auth/tokens/redeem";
 import {
   adminVerifyClusterAccountEmailAddress,
   createClusterAccount,
@@ -32,8 +41,10 @@ import { sendEmailAuthChallengeMessage } from "./delivery";
 import {
   createEmailAuthCode,
   createEmailAuthLinkToken,
+  decryptEmailAuthRegistrationToken,
   emailAuthDigest,
   emailAuthSecretMatches,
+  encryptEmailAuthRegistrationToken,
   maskEmailAddress,
 } from "./secrets";
 import type {
@@ -92,6 +103,9 @@ type ChallengeRow = {
   message_failed_at?: Date | null;
   terms_accepted_at?: Date | null;
   terms_version?: string | null;
+  registration_token_reservation_id?: string | null;
+  registration_token_encrypted?: string | null;
+  registration_token_validated_at?: Date | null;
   continuation?: { target?: string } | null;
   email_proved_at?: Date | null;
   expires_at: Date;
@@ -128,6 +142,8 @@ async function ensureEmailAuthChallengeSchemaInner(): Promise<void> {
       terms_accepted_at TIMESTAMPTZ,
       terms_version TEXT,
       registration_token_reservation_id UUID,
+      registration_token_encrypted TEXT,
+      registration_token_validated_at TIMESTAMPTZ,
       continuation JSONB,
       attempt_count INTEGER NOT NULL DEFAULT 0,
       max_attempts INTEGER NOT NULL DEFAULT ${MAX_ATTEMPTS},
@@ -150,6 +166,12 @@ async function ensureEmailAuthChallengeSchemaInner(): Promise<void> {
       metadata JSONB NOT NULL DEFAULT '{}'::JSONB
     )
   `);
+  await pool.query(`
+    ALTER TABLE ${TABLE}
+      ADD COLUMN IF NOT EXISTS registration_token_reservation_id UUID,
+      ADD COLUMN IF NOT EXISTS registration_token_encrypted TEXT,
+      ADD COLUMN IF NOT EXISTS registration_token_validated_at TIMESTAMPTZ
+  `);
   await pool.query(
     `CREATE INDEX IF NOT EXISTS ${TABLE}_email_lookup_hash_idx ON ${TABLE} (email_lookup_hash, created_at DESC)`,
   );
@@ -169,7 +191,11 @@ async function ensureEmailAuthChallengeSchemaInner(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS ${TABLE}_analytics_token_idx ON ${TABLE} (analytics_token)`,
   );
   await pool.query(
-    `UPDATE ${TABLE} SET state='expired', updated_at=NOW() WHERE state='pending' AND expires_at <= NOW()`,
+    `UPDATE ${TABLE}
+        SET state='expired',
+            registration_token_encrypted=NULL,
+            updated_at=NOW()
+      WHERE state='pending' AND expires_at <= NOW()`,
   );
   await pool.query(
     `DELETE FROM ${TABLE} WHERE created_at < NOW() - INTERVAL '30 days'`,
@@ -204,6 +230,52 @@ function publicStatus(row: ChallengeRow): EmailAuthChallengePublicStatus {
     message_sent: row.message_sent_at != null,
     message_failed: row.message_failed_at != null,
   };
+}
+
+function isPrivilegedRegistrationToken(customize: unknown): boolean {
+  if (!customize || typeof customize !== "object") {
+    return false;
+  }
+  const value = customize as { bootstrap?: boolean; make_admin?: boolean };
+  return value.bootstrap === true || value.make_admin === true;
+}
+
+async function requiresRegistrationTokenForEmail(email: string) {
+  const ssoDomainPolicy = await getEnabledSsoDomainPolicyForEmail(email);
+  return {
+    requiresRegistrationToken:
+      ssoDomainPolicy?.signup_mode === "public_allowed"
+        ? false
+        : ssoDomainPolicy?.signup_mode === "registration_token_required"
+          ? true
+          : await getRequiresRegistrationToken(),
+    ssoDomainPolicy,
+  };
+}
+
+async function registrationTokenMatchesChallenge({
+  row,
+  token,
+}: {
+  row: ChallengeRow;
+  token?: string;
+}): Promise<boolean> {
+  const supplied = `${token ?? ""}`.trim();
+  if (!row.registration_token_encrypted) {
+    return !supplied;
+  }
+  if (!supplied) {
+    return false;
+  }
+  try {
+    return (
+      (await decryptEmailAuthRegistrationToken(
+        row.registration_token_encrypted,
+      )) === supplied
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function assertStartRateLimit({
@@ -346,6 +418,45 @@ export async function startEmailAuthChallengeDirect(
       "not_allowed",
     );
   }
+  const registrationToken = `${opts.registration_token ?? ""}`.trim();
+  let registrationTokenReservationId: string | undefined;
+  let registrationTokenEncrypted: string | undefined;
+  let registrationTokenValidatedAt: Date | undefined;
+  if (purpose === "sign_in_or_sign_up" && registrationToken) {
+    const { requiresRegistrationToken } =
+      await requiresRegistrationTokenForEmail(email);
+    if (requiresRegistrationToken) {
+      const tokenThrottle = signUpTokenCheck(email, opts.request_ip);
+      if (tokenThrottle) {
+        throw new EmailAuthChallengeError(tokenThrottle, "rate_limited");
+      }
+      try {
+        const tokenInfo = await validateRegistrationTokenDirect(
+          registrationToken,
+          { required: true },
+        );
+        if (isPrivilegedRegistrationToken(tokenInfo?.customize)) {
+          throw new EmailAuthChallengeError(
+            "Administrator and bootstrap registration tokens require password signup.",
+            "not_allowed",
+          );
+        }
+      } catch (err) {
+        if (err instanceof EmailAuthChallengeError) {
+          throw err;
+        }
+        recordSignUpTokenFail(email, opts.request_ip);
+        throw new EmailAuthChallengeError(
+          `Registration token was not accepted -- ${err instanceof Error ? err.message : err}`,
+          "invalid",
+        );
+      }
+      registrationTokenReservationId = randomUUID();
+      registrationTokenEncrypted =
+        await encryptEmailAuthRegistrationToken(registrationToken);
+      registrationTokenValidatedAt = new Date();
+    }
+  }
   const pool = getPool();
   const db = await pool.connect();
   let row: ChallengeRow;
@@ -374,6 +485,10 @@ export async function startEmailAuthChallengeDirect(
         digest: active.browser_binding_digest,
         kind: "browser",
         value: opts.browser_binding,
+      })) &&
+      (await registrationTokenMatchesChallenge({
+        row: active,
+        token: registrationTokenEncrypted ? registrationToken : undefined,
       }))
     ) {
       await db.query("COMMIT");
@@ -387,7 +502,10 @@ export async function startEmailAuthChallengeDirect(
     await db.query(
       `
         UPDATE ${TABLE}
-           SET state='superseded', superseded_at=NOW(), updated_at=NOW()
+           SET state='superseded',
+               superseded_at=NOW(),
+               registration_token_encrypted=NULL,
+               updated_at=NOW()
          WHERE email_lookup_hash=$1
            AND purpose=$2
            AND state='pending'
@@ -404,12 +522,16 @@ export async function startEmailAuthChallengeDirect(
             challenge_id, normalized_email, email_lookup_hash, account_id,
             selected_home_bay_id, purpose, state, code_digest,
             link_token_digest, browser_binding_digest, analytics_token,
-            terms_accepted_at, terms_version, continuation,
+            terms_accepted_at, terms_version,
+            registration_token_reservation_id,
+            registration_token_encrypted, registration_token_validated_at,
+            continuation,
             attempt_count, max_attempts, send_count, resend_available_at,
             message_queued_at, expires_at, request_ip_hash, metadata
           ) VALUES (
             $1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10,
-            $11, $12, $13::JSONB, 0, $14, 1, $15, NOW(), $16, $17,
+            $11, $12, $13, $14, $15, $16::JSONB, 0, $17, 1, $18,
+            NOW(), $19, $20,
             '{}'::JSONB
           )
           RETURNING *
@@ -427,6 +549,9 @@ export async function startEmailAuthChallengeDirect(
           opts.analytics_token || null,
           opts.terms_accepted ? new Date() : null,
           `${opts.terms_version ?? ""}`.trim() || null,
+          registrationTokenReservationId ?? null,
+          registrationTokenEncrypted ?? null,
+          registrationTokenValidatedAt ?? null,
           opts.continuation_target
             ? JSON.stringify({ target: opts.continuation_target })
             : null,
@@ -492,7 +617,11 @@ export async function getEmailAuthChallengeStatusDirect(
     new Date(row.expires_at).valueOf() <= Date.now()
   ) {
     await getPool().query(
-      `UPDATE ${TABLE} SET state='expired', updated_at=NOW() WHERE challenge_id=$1 AND state='pending'`,
+      `UPDATE ${TABLE}
+          SET state='expired',
+              registration_token_encrypted=NULL,
+              updated_at=NOW()
+        WHERE challenge_id=$1 AND state='pending'`,
       [row.challenge_id],
     );
     row.state = "expired";
@@ -789,7 +918,11 @@ function exchangeResult(row: ChallengeRow): EmailAuthExchangeResult {
 async function resolveChallengeAccount(
   row: ChallengeRow,
   auth_method: "email_code" | "email_link",
-): Promise<{ account_id: string; home_bay_id: string }> {
+): Promise<{
+  account_created: boolean;
+  account_id: string;
+  home_bay_id: string;
+}> {
   const existing = await getClusterAccountByEmailDirect(row.normalized_email);
   if (existing?.account_id) {
     if (existing.banned) {
@@ -805,7 +938,11 @@ async function resolveChallengeAccount(
     await adminVerifyClusterAccountEmailAddress({
       account_id: existing.account_id,
     });
-    return { account_id: existing.account_id, home_bay_id };
+    return {
+      account_created: false,
+      account_id: existing.account_id,
+      home_bay_id,
+    };
   }
 
   const settings = await getServerSettings();
@@ -822,8 +959,8 @@ async function resolveChallengeAccount(
     );
   }
 
-  const [ssoDomainPolicy, requiredSsoStrategy] = await Promise.all([
-    getEnabledSsoDomainPolicyForEmail(row.normalized_email),
+  const [registrationPolicy, requiredSsoStrategy] = await Promise.all([
+    requiresRegistrationTokenForEmail(row.normalized_email),
     getStrategies().then((strategies) =>
       checkRequiredSSO({
         email: row.normalized_email,
@@ -831,12 +968,12 @@ async function resolveChallengeAccount(
       }),
     ),
   ]);
-  const requiresRegistrationToken =
-    ssoDomainPolicy?.signup_mode === "public_allowed"
-      ? false
-      : ssoDomainPolicy?.signup_mode === "registration_token_required"
-        ? true
-        : await getRequiresRegistrationToken();
+  const { requiresRegistrationToken, ssoDomainPolicy } = registrationPolicy;
+  const registrationTokenValidated =
+    !requiresRegistrationToken ||
+    (!!row.registration_token_reservation_id &&
+      !!row.registration_token_encrypted &&
+      !!row.registration_token_validated_at);
   const ssoRequiredDomain = passwordSignupBlockedBySsoPolicy(ssoDomainPolicy)
     ? ssoDomainPolicy?.domain
     : requiredSsoStrategy != null
@@ -847,7 +984,7 @@ async function resolveChallengeAccount(
     email: row.normalized_email,
     email_verified: true,
     requires_registration_token: requiresRegistrationToken,
-    registration_token_validated: false,
+    registration_token_validated: registrationTokenValidated,
     sso_required_domain: ssoRequiredDomain,
     signup_disabled_domain:
       ssoDomainPolicy?.signup_mode === "disabled"
@@ -857,7 +994,7 @@ async function resolveChallengeAccount(
   if (policy.type !== "allow_create") {
     const message =
       policy.type === "deny_registration_token_required"
-        ? "A registration token is required. Use password signup instead."
+        ? "A registration token is required to create this account."
         : policy.type === "deny_use_sso"
           ? `Continue with your organization's single sign-on for @${policy.domain}.`
           : "An account cannot be created with this email address.";
@@ -874,34 +1011,90 @@ async function resolveChallengeAccount(
   if (!home_bay_id) {
     throw new Error("email authentication challenge has no selected home bay");
   }
+  let registrationToken: string | undefined;
+  let tokenInfo:
+    | Awaited<ReturnType<typeof redeemRegistrationTokenDirect>>
+    | undefined;
+  let tokenRedeemed = false;
+  if (requiresRegistrationToken) {
+    try {
+      registrationToken = await decryptEmailAuthRegistrationToken(
+        row.registration_token_encrypted!,
+      );
+      tokenInfo = await redeemRegistrationTokenDirect(registrationToken, {
+        required: true,
+      });
+      tokenRedeemed = true;
+      if (isPrivilegedRegistrationToken(tokenInfo?.customize)) {
+        await restoreRedeemedRegistrationTokenDirect(registrationToken);
+        tokenRedeemed = false;
+        throw new EmailAuthChallengeError(
+          "Administrator and bootstrap registration tokens require password signup.",
+          "not_allowed",
+        );
+      }
+    } catch (err) {
+      if (err instanceof EmailAuthChallengeError) {
+        throw err;
+      }
+      throw new EmailAuthChallengeError(
+        `Registration token can no longer be used -- ${err instanceof Error ? err.message : err}`,
+        "not_allowed",
+      );
+    }
+  }
   let account;
+  let accountCreated = false;
   try {
     account = await createClusterAccount({
       email_address: row.normalized_email,
       display_name: "CoCalc User",
       home_bay_id,
+      ephemeral: tokenInfo?.ephemeral,
       other_settings: buildMarketingConsentOtherSettings(false),
+      trusted_product_access: requiresRegistrationToken,
+      trusted_product_access_reason: requiresRegistrationToken
+        ? "registration_token"
+        : undefined,
       verified_email: {
         address: row.normalized_email,
         verified_at: (row.email_proved_at ?? new Date()).toISOString(),
         method: auth_method,
       },
     });
+    accountCreated = true;
   } catch (err) {
+    if (tokenRedeemed && registrationToken) {
+      await restoreRedeemedRegistrationTokenDirect(registrationToken);
+      tokenRedeemed = false;
+    }
     // Another verified flow may have won the global email reservation.
     account = await getClusterAccountByEmailDirect(row.normalized_email);
     if (!account?.account_id) {
       throw err;
+    }
+    if (account.banned) {
+      throw new EmailAuthChallengeError(
+        "This account is not allowed to sign in.",
+        "not_allowed",
+      );
     }
   }
   const account_id = `${account.account_id ?? ""}`.trim();
   const resolvedHomeBayId =
     `${account.home_bay_id ?? ""}`.trim() || home_bay_id;
   if (!account_id) {
+    if (tokenRedeemed && registrationToken) {
+      await restoreRedeemedRegistrationTokenDirect(registrationToken);
+    }
     throw new Error("account creation did not return an account id");
   }
   await adminVerifyClusterAccountEmailAddress({ account_id });
-  return { account_id, home_bay_id: resolvedHomeBayId };
+  return {
+    account_created: accountCreated,
+    account_id,
+    home_bay_id: resolvedHomeBayId,
+  };
 }
 
 export async function prepareEmailAuthExchangeDirect(
@@ -966,6 +1159,11 @@ export async function prepareEmailAuthExchangeDirect(
                  account_id=$2,
                  selected_home_bay_id=$3,
                  exchange_id=$4,
+                 account_created_at=CASE
+                   WHEN $5::BOOLEAN THEN NOW()
+                   ELSE account_created_at
+                 END,
+                 registration_token_encrypted=NULL,
                  updated_at=NOW()
            WHERE challenge_id=$1
              AND state='account_creating'
@@ -976,6 +1174,7 @@ export async function prepareEmailAuthExchangeDirect(
           account.account_id,
           account.home_bay_id,
           exchange_id,
+          account.account_created,
         ],
       )
     ).rows[0];
@@ -989,7 +1188,11 @@ export async function prepareEmailAuthExchangeDirect(
     await pool.query(
       `
         UPDATE ${TABLE}
-           SET state=$2,
+           SET state=$2::VARCHAR(32),
+               registration_token_encrypted=CASE
+                 WHEN $2::VARCHAR(32)='blocked' THEN NULL
+                 ELSE registration_token_encrypted
+               END,
                updated_at=NOW(),
                metadata=metadata || jsonb_build_object(
                  'completion_error', $3::TEXT
