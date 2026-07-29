@@ -245,7 +245,8 @@ function parseHeadings(latex: string): Entry[] {
   for (const line0 of latex.split("\n")) {
     id += 1;
     const line = line0.trim();
-    const section = extractHeading(line, "\\section{");
+    const section =
+      extractHeading(line, "\\part{") ?? extractHeading(line, "\\section{");
     if (section != null) {
       number = [number[0] + 1];
       entries.push({

@@ -50,6 +50,16 @@ describe("parseTableOfContents", () => {
     expect(heading?.id).toBe("3");
   });
 
+  it("treats part headings like sections", () => {
+    const entries = parseTableOfContents(
+      "\\part{Foundations}\n\\section{Introduction}",
+    );
+    expect(entries.map(({ value, level }) => ({ value, level }))).toEqual([
+      { value: "Foundations", level: 1 },
+      { value: "Introduction", level: 1 },
+    ]);
+  });
+
   it("parses nested braces and ignores trailing chat comments", () => {
     const entries = parseTableOfContents(
       "\\section{One \\textbf{bold}} % chat: abc12345",
