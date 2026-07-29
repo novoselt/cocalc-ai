@@ -1229,6 +1229,15 @@ test("software push publishes an immutable host bootstrap selector", async () =>
     r2.objects.get(`${key}.sha256`)!.toString("utf8"),
     `${sha256}  bootstrap.py\n`,
   );
+  const contentAddressedKey = `software/bootstrap/${sha256}/bootstrap.py`;
+  assert.equal(
+    r2.objects.get(contentAddressedKey)!.toString("utf8"),
+    bootstrapBody,
+  );
+  assert.equal(
+    r2.objects.get(`${contentAddressedKey}.sha256`)!.toString("utf8"),
+    `${sha256}  bootstrap.py\n`,
+  );
   assert.equal(r2.objects.has("software/bootstrap/latest/bootstrap.py"), false);
 });
 
@@ -3358,6 +3367,12 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
       .get("software/bootstrap/latest/bootstrap.py.sha256")!
       .toString("utf8"),
     `${sha256}  bootstrap.py\n`,
+  );
+  assert.equal(
+    r2.objects
+      .get(`software/bootstrap/${sha256}/bootstrap.py`)!
+      .toString("utf8"),
+    bootstrapBody,
   );
   assert.equal(runs.length, 2);
   assert.deepEqual(runs[0].args, [
