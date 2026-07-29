@@ -534,11 +534,17 @@ describe("PublicAuthApp", () => {
 
   it("keeps verify-after-signup users in a dedicated verification step", async () => {
     mockedApi.mockResolvedValueOnce(false);
-    mockedPostAuthApi.mockResolvedValueOnce({
-      account_id: "account-new",
-      home_bay_id: "bay-0",
-      home_bay_url: "https://bay-0.example.test",
-    } as any);
+    mockedPostAuthApi
+      .mockResolvedValueOnce({
+        account_id: "account-new",
+        home_bay_id: "bay-0",
+        home_bay_url: "https://bay-0.example.test",
+      } as any)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        verification_email_error: "temporary delivery failure",
+      })
+      .mockResolvedValueOnce(undefined);
     mockedGetControlPlaneAuthBootstrap
       .mockRejectedValueOnce(new Error("initial bootstrap unavailable"))
       .mockResolvedValue({
@@ -612,6 +618,22 @@ describe("PublicAuthApp", () => {
         },
       });
     });
+
+    expect(
+      await screen.findByText(
+        /The email address was changed, but the verification message could not be sent/,
+      ),
+    ).not.toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Resend verification email" }),
+    );
+    await waitFor(() =>
+      expect(mockedPostAuthApi).toHaveBeenCalledWith({
+        endpoint: "accounts/send-verification-email",
+        origin: expect.any(String),
+        body: { email_address: "corrected@example.edu" },
+      }),
+    );
   });
 
   it("shows registration-token issues on sign-up", async () => {

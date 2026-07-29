@@ -1060,6 +1060,7 @@ function PostSignupVerificationStep({
   const [currentPassword, setCurrentPassword] = useState("");
   const [updatingEmail, setUpdatingEmail] = useState(false);
   const redirecting = useRef(false);
+  const correctedEmail = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -1077,9 +1078,16 @@ function PostSignupVerificationStep({
           return;
         }
         if (bootstrap.email_address) {
-          setEmail(bootstrap.email_address);
-          if (!editingEmail) {
-            setNewEmail(bootstrap.email_address);
+          const bootstrapEmail = bootstrap.email_address.trim().toLowerCase();
+          if (
+            !correctedEmail.current ||
+            correctedEmail.current === bootstrapEmail
+          ) {
+            correctedEmail.current = "";
+            setEmail(bootstrapEmail);
+            if (!editingEmail) {
+              setNewEmail(bootstrapEmail);
+            }
           }
         }
         if (bootstrap.email_address_verified === true) {
@@ -1110,7 +1118,7 @@ function PostSignupVerificationStep({
       await postAuthApi({
         endpoint: "accounts/send-verification-email",
         origin: getControlPlaneOrigin(),
-        body: {},
+        body: { email_address: email },
       });
       setSent(true);
       setResendAvailableAt(Date.now() + VERIFICATION_RESEND_DELAY_MS);
@@ -1153,6 +1161,7 @@ function PostSignupVerificationStep({
           password: currentPassword,
         },
       });
+      correctedEmail.current = normalized;
       setEmail(normalized);
       setNewEmail(normalized);
       setCurrentPassword("");
