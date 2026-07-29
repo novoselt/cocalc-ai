@@ -381,7 +381,9 @@ stage_hub_bundle_release() {
     "${extract_dir}/runtime/control-plane/bundle/index.js" \
     "${extract_dir}/runtime/control-plane/api-v2-routes/index.js" \
     "${extract_dir}/runtime/control-plane/http-api-dist/pages/api/v2/index.js" \
-    "${extract_dir}/runtime/migrate-schema/index.js"; do
+    "${extract_dir}/runtime/migrate-schema/index.js" \
+    "${extract_dir}/scripts/bay-systemd/install-scaffold.sh" \
+    "${extract_dir}/scripts/bay-systemd/systemd/cocalc-bay-hub@.service"; do
     if [[ ! -f "$required_file" ]]; then
       echo "hub bundle is missing required file: $required_file" >&2
       exit 1
@@ -393,6 +395,7 @@ stage_hub_bundle_release() {
     "${TARGET_RELEASE}/runtime/control-plane/api-v2-routes" \
     "${TARGET_RELEASE}/runtime/control-plane/http-api-dist" \
     "${TARGET_RELEASE}/runtime/migrate-schema" \
+    "${TARGET_RELEASE}/scripts/bay-systemd" \
     "${TARGET_RELEASE}/bay-hub-manifest.json"
   run rsync -a "${extract_dir}/" "$TARGET_RELEASE/"
   make_target_release_accessible
@@ -759,6 +762,15 @@ EOF
   fi
 
   if [[ -n "$HUB_BUNDLE_PATH" ]]; then
+    INSTALL_CMD=(
+      "${TARGET_RELEASE}/scripts/bay-systemd/install-scaffold.sh"
+      "--overlay"
+      "$OVERLAY_MODE"
+    )
+    if [[ "$DAEMON_RELOAD" -eq 1 ]]; then
+      INSTALL_CMD+=("--daemon-reload")
+    fi
+    run "${INSTALL_CMD[@]}"
     prune_old_releases
     cat <<EOF
 Hub release bootstrap complete.
@@ -853,6 +865,7 @@ COCALC_BAY_HUB_DIAGNOSTIC_MAX_FILES=100
 
 COCALC_BAY_MIN_HEALTHY_WORKERS=1
 COCALC_BAY_HEALTH_TIMEOUT_S=15
+COCALC_BAY_WORKER_START_TIMEOUT_S=90
 COCALC_BAY_MIN_FREE_MB=1024
 COCALC_BAY_CLOUDFLARED_SYSTEMD=1
 

@@ -5,7 +5,10 @@
 
 import getLogger from "@cocalc/backend/logger";
 import { numSubscriptions } from "@cocalc/conat/client";
-import { getConatPersistDiagnostics } from "@cocalc/server/conat";
+import {
+  getConatPersistDiagnostics,
+  getConatPersistSqliteDiagnostics,
+} from "@cocalc/server/conat";
 import { getRoutedClientCacheStats } from "@cocalc/server/conat/route-client";
 import {
   createServer,
@@ -25,6 +28,27 @@ const logger = getLogger("hub:worker-diagnostics");
 export const WORKER_DIAGNOSTICS_HOST = "127.0.0.1";
 export const WORKER_DIAGNOSTICS_PATH = "/diagnostics";
 const WORKER_DIAGNOSTICS_PORT_OFFSET = 2_000;
+const startupStartedAt = Date.now();
+
+interface WorkerStartupState {
+  phase: string;
+  changed_at: string;
+  elapsed_ms: number;
+}
+
+let startupState: WorkerStartupState = {
+  phase: "module-loaded",
+  changed_at: new Date(startupStartedAt).toISOString(),
+  elapsed_ms: 0,
+};
+
+export function setWorkerStartupPhase(phase: string): void {
+  startupState = {
+    phase,
+    changed_at: new Date().toISOString(),
+    elapsed_ms: Date.now() - startupStartedAt,
+  };
+}
 
 function parsePort(value: string, name: string): number {
   if (!/^\d+$/.test(value)) {
@@ -71,7 +95,12 @@ function countActiveResources(): Record<string, number> {
   );
 }
 
-export function collectWorkerDiagnostics() {
+export function collectWorkerDiagnostics({
+  includePersistenceDetail = false,
+}: {
+  includePersistenceDetail?: boolean;
+} = {}) {
+  const persistence = getConatPersistDiagnostics();
   return {
     schema_version: 1,
     collected_at: new Date().toISOString(),
@@ -80,6 +109,7 @@ export function collectWorkerDiagnostics() {
       worker_id: process.env.COCALC_BAY_WORKER_ID ?? null,
       node_version: process.version,
       uptime_seconds: process.uptime(),
+      startup: startupState,
       memory: process.memoryUsage(),
       cpu: process.cpuUsage(),
       resource_usage: process.resourceUsage(),
@@ -94,7 +124,12 @@ export function collectWorkerDiagnostics() {
     conat: {
       local_client_subscriptions: numSubscriptions(),
       routed_clients: getRoutedClientCacheStats(),
-      persistence: getConatPersistDiagnostics(),
+      persistence: {
+        ...persistence,
+        ...(includePersistenceDetail
+          ? { sqlite_detail: getConatPersistSqliteDiagnostics() }
+          : {}),
+      },
     },
   };
 }
@@ -115,13 +150,24 @@ function handleDiagnosticsRequest(
   request: IncomingMessage,
   response: ServerResponse,
 ): void {
-  const path = request.url?.split("?", 1)[0];
+  const url = new URL(
+    request.url ?? WORKER_DIAGNOSTICS_PATH,
+    `http://${WORKER_DIAGNOSTICS_HOST}`,
+  );
+  const path = url.pathname;
   if (request.method !== "GET" || path !== WORKER_DIAGNOSTICS_PATH) {
     sendJson(response, 404, { error: "not found" });
     return;
   }
   try {
-    sendJson(response, 200, collectWorkerDiagnostics());
+    sendJson(
+      response,
+      200,
+      collectWorkerDiagnostics({
+        includePersistenceDetail:
+          url.searchParams.get("persistence") === "full",
+      }),
+    );
   } catch (err) {
     logger.warn("failed collecting worker diagnostics", { err: `${err}` });
     sendJson(response, 500, { error: "diagnostics unavailable" });

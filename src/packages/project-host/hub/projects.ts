@@ -14,6 +14,7 @@ import {
   vacuumChatStore,
 } from "@cocalc/backend/chat-store/sqlite-offload";
 import { uuid, isValidUUID } from "@cocalc/util/misc";
+import { projectRuntimeConfiguration } from "@cocalc/util/project-runtime";
 import {
   deleteProjectLocal,
   getProject,
@@ -1868,7 +1869,10 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
   }
 
   async function status({ project_id }: { project_id: string }) {
-    return await getProjectRuntimeStatus({ runnerApi, project_id });
+    return {
+      runtime: projectRuntimeConfiguration("podman"),
+      ...(await getProjectRuntimeStatus({ runnerApi, project_id })),
+    };
   }
 
   async function restoreSnapshot({

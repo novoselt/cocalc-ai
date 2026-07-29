@@ -15,6 +15,8 @@ export const DEFAULT_SPOT_RECOVERY_POLICY: Required<HostSpotRecoveryPolicy> =
     spot_restore_backoff_seconds: 15,
     standard_fallback_enabled: true,
     standard_fallback_min_minutes: 20,
+    rapid_preemption_window_minutes: 4 * 60,
+    rapid_preemption_standard_hold_minutes: 24 * 60,
     spot_probe_interval_minutes: 10,
     spot_return_requires_probe: true,
     max_restore_attempts_before_fallback: 0,
@@ -62,6 +64,15 @@ export function normalizeSpotRecoveryPolicy(
       parsePositiveInt(
         (value as HostSpotRecoveryPolicy).standard_fallback_min_minutes,
       ) ?? DEFAULT_SPOT_RECOVERY_POLICY.standard_fallback_min_minutes,
+    rapid_preemption_window_minutes:
+      parsePositiveInt(
+        (value as HostSpotRecoveryPolicy).rapid_preemption_window_minutes,
+      ) ?? DEFAULT_SPOT_RECOVERY_POLICY.rapid_preemption_window_minutes,
+    rapid_preemption_standard_hold_minutes:
+      parsePositiveInt(
+        (value as HostSpotRecoveryPolicy)
+          .rapid_preemption_standard_hold_minutes,
+      ) ?? DEFAULT_SPOT_RECOVERY_POLICY.rapid_preemption_standard_hold_minutes,
     spot_probe_interval_minutes:
       parsePositiveInt(
         (value as HostSpotRecoveryPolicy).spot_probe_interval_minutes,

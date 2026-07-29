@@ -3,7 +3,9 @@
 # Build a compact control-plane-only CoCalc Rocket bay update bundle.
 #
 # This artifact is for hub/backend deploys where the current target release
-# already has valid static assets, project-host runtime, and systemd scaffold.
+# already has valid static assets and project-host runtime.  The systemd
+# scaffold is included so hub startup policy and operational helpers are
+# versioned with the control-plane code they supervise.
 # The remote bootstrap path creates a new release from the current release,
 # replaces only hub/control-plane runtime files, flips the current symlink, and
 # the upgrade wrapper rolls hub workers after running migrations.
@@ -92,7 +94,7 @@ echo "  root:    $ROOT"
 echo "  out:     $OUT"
 echo "  tarball: $FINAL_TARBALL"
 
-mkdir -p "$OUT/runtime"
+mkdir -p "$OUT/runtime" "$OUT/scripts"
 
 cd "$ROOT"
 
@@ -113,6 +115,9 @@ pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/pack
 
 copy_native_pkg "bufferutil" "$OUT/runtime/migrate-schema"
 copy_native_pkg "utf-8-validate" "$OUT/runtime/migrate-schema"
+
+echo "- Copy bay systemd scaffold"
+cp -a "$ROOT/scripts/bay-systemd" "$OUT/scripts/"
 
 echo "- Write hub manifest"
 node - "$OUT/bay-hub-manifest.json" "$ROOT" <<'NODE'
@@ -153,6 +158,7 @@ const manifest = {
     apiV2Root: "runtime/control-plane/http-api-dist/pages/api/v2",
     apiV2Routes: "runtime/control-plane/api-v2-routes/index.js",
   },
+  scaffold: "scripts/bay-systemd",
 };
 
 fs.writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n");
@@ -163,6 +169,8 @@ validate_file "$OUT/runtime/control-plane/bundle/index.js"
 validate_file "$OUT/runtime/control-plane/api-v2-routes/index.js"
 validate_file "$OUT/runtime/control-plane/http-api-dist/pages/api/v2/index.js"
 validate_file "$OUT/runtime/migrate-schema/index.js"
+validate_file "$OUT/scripts/bay-systemd/install-scaffold.sh"
+validate_file "$OUT/scripts/bay-systemd/systemd/cocalc-bay-hub@.service"
 validate_file "$OUT/bay-hub-manifest.json"
 
 echo "- Publish output directory"

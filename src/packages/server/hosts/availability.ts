@@ -6,8 +6,11 @@
 import { randomUUID } from "node:crypto";
 
 import getLogger from "@cocalc/backend/logger";
-import getPool from "@cocalc/database/pool";
-import { ensureProjectHostMetricsSamplesSchema } from "@cocalc/database/postgres/project-host-metrics";
+import getPool, { withSessionAdvisoryLock } from "@cocalc/database/pool";
+import {
+  ensureProjectHostMetricsSamplesSchema,
+  pruneProjectHostMetricsSamples,
+} from "@cocalc/database/postgres/project-host-metrics";
 import { createLro, ensureLroSchema } from "@cocalc/server/lro/lro-db";
 import adminAlert from "@cocalc/server/messages/admin-alert";
 import { runProjectHostRuntimeMaintenance } from "./runtime-maintenance";
@@ -16,6 +19,7 @@ import type {
   HostAvailabilityEvent,
   HostAvailabilityReport,
   HostAvailabilityState,
+  HostConatPersistMetrics,
 } from "@cocalc/conat/hub/api/hosts";
 
 const TABLE = "project_host_availability_events";
@@ -43,6 +47,9 @@ const HOST_RUNNING_STALE_TRANSITION_SUPPRESS_MS = Math.max(
 );
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 60 * 1000;
+const HOST_METRICS_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
+const HOST_METRICS_PRUNE_LOCK = "project-host-metrics-retention";
+let lastHostMetricsPruneAt = 0;
 const STALE_ALERT_LIMIT = 25;
 const STALE_SCAN_LIMIT = 1000;
 const HOST_RECONCILE_LRO_KIND = "host-reconcile-software";
@@ -67,6 +74,39 @@ const RUNNING_STALE_REPAIR_SUPPRESS_MS = Math.max(
   ),
 );
 const PRESSURE_ALERT_LIMIT = 25;
+const CONAT_PERSIST_ALERT_LIMIT = 25;
+const GIB = 1024 ** 3;
+const CONAT_PERSIST_WARNING_RSS_BYTES = envNumberAtLeast(
+  "COCALC_HOST_CONAT_PERSIST_WARNING_RSS_BYTES",
+  1 * GIB,
+  128 * 1024 ** 2,
+);
+const CONAT_PERSIST_CRITICAL_RSS_BYTES = Math.max(
+  CONAT_PERSIST_WARNING_RSS_BYTES,
+  envNumberAtLeast(
+    "COCALC_HOST_CONAT_PERSIST_CRITICAL_RSS_BYTES",
+    2 * GIB,
+    128 * 1024 ** 2,
+  ),
+);
+const CONAT_PERSIST_WARNING_OPEN_STREAMS = envNumberAtLeast(
+  "COCALC_HOST_CONAT_PERSIST_WARNING_OPEN_STREAMS",
+  2_000,
+  100,
+);
+const CONAT_PERSIST_CRITICAL_OPEN_STREAMS = Math.max(
+  CONAT_PERSIST_WARNING_OPEN_STREAMS,
+  envNumberAtLeast(
+    "COCALC_HOST_CONAT_PERSIST_CRITICAL_OPEN_STREAMS",
+    5_000,
+    100,
+  ),
+);
+const CONAT_PERSIST_ALERT_FRESH_METRICS_MS = envNumberAtLeast(
+  "COCALC_HOST_CONAT_PERSIST_ALERT_FRESH_METRICS_MS",
+  5 * 60_000,
+  60_000,
+);
 const RUNTIME_DEGRADED_ALERT_LIMIT = 25;
 const RUNTIME_DEGRADED_ALERT_FAILURES = Math.max(
   2,
@@ -152,6 +192,24 @@ type HostPressureAlertRow = ProjectHostAvailabilitySnapshot & {
 type RuntimeDegradedHostRow = ProjectHostAvailabilitySnapshot & {
   public_url?: string | null;
 };
+
+type ConatPersistAlertRow = ProjectHostAvailabilitySnapshot & {
+  public_url?: string | null;
+  metric_collected_at?: Date | string | null;
+  conat_persist?: HostConatPersistMetrics | null;
+  persist_level: "warning" | "critical";
+  persist_reason: string;
+};
+
+function envNumberAtLeast(
+  name: string,
+  fallback: number,
+  minimum: number,
+): number {
+  const parsed = Number(process.env[name]);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, parsed);
+}
 
 function pool() {
   return getPool();
@@ -958,7 +1016,7 @@ export async function runRunningStaleHostAlertCheck(): Promise<number> {
   return rows.length;
 }
 
-function pressureAlertHostName(row: HostPressureAlertRow): string {
+function pressureAlertHostName(row: ProjectHostAvailabilitySnapshot): string {
   const metadataName =
     `${row.metadata?.name ?? row.metadata?.display_name ?? ""}`.trim();
   return metadataName || row.id;
@@ -1113,6 +1171,147 @@ export async function runHostPressureAlertCheck(): Promise<number> {
   return rows.length;
 }
 
+function formatBytes(value: number): string {
+  if (value >= GIB) return `${(value / GIB).toFixed(2)} GiB`;
+  return `${(value / 1024 ** 2).toFixed(0)} MiB`;
+}
+
+function conatPersistAlertRow(
+  row: ProjectHostAvailabilitySnapshot & {
+    public_url?: string | null;
+    metric_collected_at?: Date | string | null;
+    conat_persist?: HostConatPersistMetrics | null;
+  },
+  now = Date.now(),
+): ConatPersistAlertRow | undefined {
+  const metrics = row.conat_persist;
+  if (!metrics?.available) return undefined;
+  const collectedAt = timestampMs(
+    metrics.collected_at ?? row.metric_collected_at,
+  );
+  if (
+    collectedAt == null ||
+    now - collectedAt > CONAT_PERSIST_ALERT_FRESH_METRICS_MS
+  ) {
+    return undefined;
+  }
+  const rss = numericValue(metrics.rss_bytes);
+  const streams = numericValue(metrics.open_streams);
+  let persist_level: ConatPersistAlertRow["persist_level"] | undefined;
+  const reasons: string[] = [];
+  if (rss != null && rss >= CONAT_PERSIST_CRITICAL_RSS_BYTES) {
+    persist_level = "critical";
+    reasons.push(
+      `RSS ${formatBytes(rss)} >= ${formatBytes(CONAT_PERSIST_CRITICAL_RSS_BYTES)}`,
+    );
+  } else if (rss != null && rss >= CONAT_PERSIST_WARNING_RSS_BYTES) {
+    persist_level = "warning";
+    reasons.push(
+      `RSS ${formatBytes(rss)} >= ${formatBytes(CONAT_PERSIST_WARNING_RSS_BYTES)}`,
+    );
+  }
+  if (streams != null && streams >= CONAT_PERSIST_CRITICAL_OPEN_STREAMS) {
+    persist_level = "critical";
+    reasons.push(
+      `open streams ${streams} >= ${CONAT_PERSIST_CRITICAL_OPEN_STREAMS}`,
+    );
+  } else if (streams != null && streams >= CONAT_PERSIST_WARNING_OPEN_STREAMS) {
+    persist_level ??= "warning";
+    reasons.push(
+      `open streams ${streams} >= ${CONAT_PERSIST_WARNING_OPEN_STREAMS}`,
+    );
+  }
+  if (!persist_level) return undefined;
+  return {
+    ...row,
+    persist_level,
+    persist_reason: reasons.join("; "),
+  };
+}
+
+function formatConatPersistAlertBody(rows: ConatPersistAlertRow[]): string {
+  return [
+    `${rows.length} project-host persistence daemon${rows.length === 1 ? " requires" : "s require"} operator attention.`,
+    "",
+    "This alert is observational only. It does not restart persistence, stop projects, or change admission.",
+    "",
+    "Hosts:",
+    "",
+    ...rows.slice(0, CONAT_PERSIST_ALERT_LIMIT).map((row) => {
+      const metrics = row.conat_persist;
+      return [
+        `- ${pressureAlertHostName(row)}`,
+        `host_id=${row.id}`,
+        `level=${row.persist_level}`,
+        metrics?.pid != null ? `pid=${metrics.pid}` : undefined,
+        metrics?.rss_bytes != null
+          ? `rss=${formatBytes(metrics.rss_bytes)}`
+          : undefined,
+        metrics?.open_streams != null
+          ? `streams=${metrics.open_streams}`
+          : undefined,
+        `reason=${row.persist_reason}`,
+      ]
+        .filter((part) => part != null)
+        .join(" ");
+    }),
+    rows.length > CONAT_PERSIST_ALERT_LIMIT
+      ? "- ... more hosts not shown"
+      : undefined,
+  ]
+    .filter((line) => line != null)
+    .join("\n");
+}
+
+async function getConatPersistAlertRows(): Promise<ConatPersistAlertRow[]> {
+  await ensureProjectHostMetricsSamplesSchema();
+  const { rows } = await pool().query<
+    ProjectHostAvailabilitySnapshot & {
+      public_url?: string | null;
+      metric_collected_at?: Date | string | null;
+      conat_persist?: HostConatPersistMetrics | null;
+    }
+  >(
+    `
+      SELECT
+        h.id,
+        h.status,
+        h.deleted,
+        h.last_seen,
+        h.metadata,
+        h.public_url,
+        m.collected_at AS metric_collected_at,
+        m.conat_persist
+      FROM project_hosts h
+      LEFT JOIN LATERAL (
+        SELECT collected_at, conat_persist
+        FROM project_host_metrics_samples
+        WHERE host_id = h.id
+        ORDER BY collected_at DESC
+        LIMIT 1
+      ) m ON true
+      WHERE h.deleted IS NULL
+        AND h.status = 'running'
+        AND m.conat_persist IS NOT NULL
+      ORDER BY h.last_seen DESC NULLS LAST
+      LIMIT 1000
+    `,
+  );
+  return rows.map(conatPersistAlertRow).filter((row) => row != null);
+}
+
+export async function runConatPersistAlertCheck(): Promise<number> {
+  const rows = await getConatPersistAlertRows();
+  if (!rows.length) return 0;
+  await adminAlert({
+    subject: "Project-host persistence pressure is high",
+    body: formatConatPersistAlertBody(rows),
+    dedupMinutes: 30,
+    dedupBySubject: true,
+  });
+  return rows.length;
+}
+
 function runtimeDegradedHostName(row: RuntimeDegradedHostRow): string {
   return (
     `${row.metadata?.name ?? row.metadata?.display_name ?? ""}`.trim() || row.id
@@ -1193,9 +1392,31 @@ export function startHostAvailabilityMaintenance({
   maintenanceStarted = true;
   const run = async () => {
     try {
+      if (
+        Date.now() - lastHostMetricsPruneAt >=
+        HOST_METRICS_PRUNE_INTERVAL_MS
+      ) {
+        lastHostMetricsPruneAt = Date.now();
+        try {
+          const pruned = await withSessionAdvisoryLock({
+            lockKey: HOST_METRICS_PRUNE_LOCK,
+            fn: pruneProjectHostMetricsSamples,
+          });
+          if (pruned != null && pruned > 0) {
+            logger.info("pruned old project-host metrics samples", {
+              count: pruned,
+            });
+          }
+        } catch (err) {
+          logger.warn("failed pruning old project-host metrics samples", {
+            err: `${err}`,
+          });
+        }
+      }
       const count = await reconcileCurrentHostAvailability();
       const staleRunning = await runRunningStaleHostAlertCheck();
       const pressureProblems = await runHostPressureAlertCheck();
+      const persistProblems = await runConatPersistAlertCheck();
       const runtimeProblems = await runRuntimeDegradedHostAlertCheck();
       void runProjectHostRuntimeMaintenance().catch((err) => {
         logger.warn("project-host runtime maintenance failed", {
@@ -1211,6 +1432,11 @@ export function startHostAvailabilityMaintenance({
       if (pressureProblems) {
         logger.warn("project hosts have unresolved pressure actions", {
           count: pressureProblems,
+        });
+      }
+      if (persistProblems) {
+        logger.warn("project-host persistence daemons require attention", {
+          count: persistProblems,
         });
       }
       if (runtimeProblems) {
@@ -1516,6 +1742,8 @@ export async function annotateHostAvailabilityEvent({
 }
 
 export const _test = {
+  conatPersistAlertRow,
+  formatConatPersistAlertBody,
   formatHostPressureAlertBody,
   formatRuntimeDegradedHostAlertBody,
   formatRunningStaleHostAlertBody,

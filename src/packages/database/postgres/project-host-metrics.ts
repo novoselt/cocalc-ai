@@ -7,6 +7,7 @@ import type {
   HostMetricsHistoryPoint,
   HostMetricsRiskLevel,
   HostMetricsRiskState,
+  HostConatPersistMetrics,
   HostIoContainmentMetrics,
 } from "@cocalc/conat/hub/api/hosts";
 import type { Pool } from "pg";
@@ -14,6 +15,9 @@ import type { Pool } from "pg";
 const SAMPLE_INTERVAL_MS = 60_000;
 const DEFAULT_WINDOW_MINUTES = 60;
 const DEFAULT_MAX_POINTS = 60;
+const MAX_WINDOW_MINUTES = 7 * 24 * 60;
+const DEFAULT_RETENTION_MINUTES = 8 * 24 * 60;
+const DEFAULT_PRUNE_LIMIT = 25_000;
 const GIB = 1024 * 1024 * 1024;
 const DISK_WARNING_AVAILABLE_BYTES = bytesEnv(
   "COCALC_PROJECT_HOST_METRICS_DISK_WARNING_AVAILABLE_BYTES",
@@ -80,6 +84,7 @@ type ProjectHostMetricsSampleRow = {
   starting_project_count: number | string | null;
   stopping_project_count: number | string | null;
   io_containment: HostIoContainmentMetrics | string | null;
+  conat_persist: HostConatPersistMetrics | string | null;
 };
 
 function pool(): Pool {
@@ -125,12 +130,25 @@ function toIoContainment(
   }
 }
 
+function toConatPersist(
+  value: ProjectHostMetricsSampleRow["conat_persist"],
+): HostConatPersistMetrics | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "object") return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeWindowMinutes(value?: number): number {
   const parsed = Number(value ?? DEFAULT_WINDOW_MINUTES);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return DEFAULT_WINDOW_MINUTES;
   }
-  return Math.min(7 * 24 * 60, Math.max(5, Math.floor(parsed)));
+  return Math.min(MAX_WINDOW_MINUTES, Math.max(5, Math.floor(parsed)));
 }
 
 function normalizeMaxPoints(value?: number): number {
@@ -278,6 +296,7 @@ function toPoint(row: ProjectHostMetricsSampleRow): HostMetricsHistoryPoint {
     starting_project_count: toInteger(row.starting_project_count),
     stopping_project_count: toInteger(row.stopping_project_count),
     io_containment: toIoContainment(row.io_containment),
+    conat_persist: toConatPersist(row.conat_persist),
   };
   point.disk_used_percent = computeDiskUsedPercent(point);
   point.shared_scratch_used_percent = computeSharedScratchUsedPercent(point);
@@ -737,6 +756,7 @@ export async function ensureProjectHostMetricsSamplesSchema(): Promise<void> {
           starting_project_count INTEGER,
           stopping_project_count INTEGER,
           io_containment JSONB,
+          conat_persist JSONB,
           PRIMARY KEY (host_id, collected_at)
         )
       `);
@@ -754,6 +774,9 @@ export async function ensureProjectHostMetricsSamplesSchema(): Promise<void> {
       );
       await pool().query(
         "ALTER TABLE project_host_metrics_samples ADD COLUMN IF NOT EXISTS io_containment JSONB",
+      );
+      await pool().query(
+        "ALTER TABLE project_host_metrics_samples ADD COLUMN IF NOT EXISTS conat_persist JSONB",
       );
     })().catch((err) => {
       schemaReady = undefined;
@@ -812,15 +835,16 @@ export async function recordProjectHostMetricsSample({
         running_project_count,
         starting_project_count,
         stopping_project_count,
-        io_containment
+        io_containment,
+        conat_persist
       )
       SELECT
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
       WHERE NOT EXISTS (
         SELECT 1
         FROM project_host_metrics_samples
         WHERE host_id = $1
-          AND collected_at >= $2::timestamptz - ($35::bigint * INTERVAL '1 millisecond')
+          AND collected_at >= $2::timestamptz - ($36::bigint * INTERVAL '1 millisecond')
       )
     `,
     [
@@ -858,6 +882,7 @@ export async function recordProjectHostMetricsSample({
       metrics.starting_project_count ?? null,
       metrics.stopping_project_count ?? null,
       metrics.io_containment ?? null,
+      metrics.conat_persist ?? null,
       SAMPLE_INTERVAL_MS,
     ],
   );
@@ -877,6 +902,35 @@ export async function clearProjectHostMetrics({
     `,
     [host_id],
   );
+}
+
+export async function pruneProjectHostMetricsSamples({
+  before = new Date(Date.now() - DEFAULT_RETENTION_MINUTES * 60_000),
+  limit = DEFAULT_PRUNE_LIMIT,
+}: {
+  before?: Date;
+  limit?: number;
+} = {}): Promise<number> {
+  await ensureProjectHostMetricsSamplesSchema();
+  const boundedLimit = Math.max(
+    1,
+    Math.min(100_000, Math.floor(Number(limit) || DEFAULT_PRUNE_LIMIT)),
+  );
+  const result = await pool().query(
+    `
+      WITH expired AS (
+        SELECT ctid
+        FROM project_host_metrics_samples
+        WHERE collected_at < $1
+        LIMIT $2
+      )
+      DELETE FROM project_host_metrics_samples AS samples
+      USING expired
+      WHERE samples.ctid = expired.ctid
+    `,
+    [before, boundedLimit],
+  );
+  return result.rowCount ?? 0;
 }
 
 export async function loadProjectHostMetricsHistory({

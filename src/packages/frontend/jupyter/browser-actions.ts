@@ -2306,10 +2306,12 @@ export class JupyterActions extends JupyterActions0 {
   }
 
   private updateContentsNow = () => {
-    if (this._state == "closed") return;
-    const cells = this.store.get("cells");
+    if (this.isClosed()) return;
+    const store = this.store;
+    if (store == null) return;
+    const cells = store.get("cells");
     if (cells == null) return;
-    const cell_list = this.store.get("cell_list");
+    const cell_list = store.get("cell_list");
     if (cell_list == null) return;
     const contents = fromJS(parseHeadings(cells, cell_list));
     this.setState({ contents });
@@ -2339,10 +2341,13 @@ export class JupyterActions extends JupyterActions0 {
   });
 
   private getProjectRuntimeState(): string | undefined {
+    if (this.isClosed()) {
+      return;
+    }
     if (lite) {
       return "running";
     }
-    const projectsStore = this.redux.getStore("projects") as any;
+    const projectsStore = this.redux?.getStore("projects") as any;
     return (
       projectsStore?.get_state?.(this.project_id) ??
       projectsStore
@@ -2360,6 +2365,7 @@ export class JupyterActions extends JupyterActions0 {
     noCache,
     autostart = false,
   }: { noCache?: boolean; autostart?: boolean } = {}): Promise<void> => {
+    if (this.isClosed()) return;
     if (autostart || this.shouldWaitForProjectForPassiveJupyterWork()) {
       try {
         await this.waitUntilProjectIsRunning();
@@ -2399,12 +2405,15 @@ export class JupyterActions extends JupyterActions0 {
     const kernels = fromJS(data ?? []).filter(
       (k) => !k.getIn(["metadata", "cocalc", "disabled"], false),
     );
-    const key: string = await this.store.jupyter_kernel_key();
+    const store = this.store;
+    if (store == null) return;
+    const key: string = await store.jupyter_kernel_key();
+    if (this.isClosed() || this.store !== store) return;
     jupyter_kernels = jupyter_kernels.set(key, kernels); // global
     this.setState({ kernels });
     // We must also update the kernel info (e.g., display name), now that we
     // know the kernels (e.g., maybe it changed or is now known but wasn't before).
-    const kernel_info = this.store.get_kernel_info(this.store.get("kernel"));
+    const kernel_info = store.get_kernel_info(store.get("kernel"));
     this.setState({ kernel_info });
     // e.g. "kernel_selection" is derived from "kernels"
     await this.update_select_kernel_data();

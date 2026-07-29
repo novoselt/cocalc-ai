@@ -780,6 +780,8 @@ export class PersistMaintenanceCatalog {
     | "presentDatabases"
     | "missingDatabases"
     | "unverifiedDatabases"
+    | "presentFileBytes"
+    | "presentWalBytes"
     | "attempts"
     | "successes"
     | "invalidations"
@@ -794,6 +796,8 @@ export class PersistMaintenanceCatalog {
            SUM(CASE WHEN presence_state='present' THEN 1 ELSE 0 END) AS present,
            SUM(CASE WHEN presence_state='missing' THEN 1 ELSE 0 END) AS missing,
            SUM(CASE WHEN presence_state='unverified' THEN 1 ELSE 0 END) AS unverified,
+           COALESCE(SUM(CASE WHEN presence_state='present' THEN file_size_bytes ELSE 0 END), 0) AS present_file_bytes,
+           COALESCE(SUM(CASE WHEN presence_state='present' THEN wal_size_bytes ELSE 0 END), 0) AS present_wal_bytes,
            COALESCE(SUM(CASE WHEN last_inspected_at IS NOT NULL THEN file_size_bytes ELSE 0 END), 0) AS inspected
          FROM databases`,
       )
@@ -801,6 +805,8 @@ export class PersistMaintenanceCatalog {
       present: number;
       missing: number;
       unverified: number;
+      present_file_bytes: number;
+      present_wal_bytes: number;
       inspected: number;
     };
     const runCounts = this.db
@@ -829,6 +835,8 @@ export class PersistMaintenanceCatalog {
       presentDatabases: databaseCounts.present ?? 0,
       missingDatabases: databaseCounts.missing ?? 0,
       unverifiedDatabases: databaseCounts.unverified ?? 0,
+      presentFileBytes: databaseCounts.present_file_bytes ?? 0,
+      presentWalBytes: databaseCounts.present_wal_bytes ?? 0,
       attempts: runCounts.attempts ?? 0,
       successes: runCounts.successes ?? 0,
       invalidations: runCounts.invalidations ?? 0,

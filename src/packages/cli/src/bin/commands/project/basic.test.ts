@@ -5,6 +5,62 @@ import { Command } from "commander";
 
 import { registerProjectBasicCommands } from "./basic";
 
+test("project status reports the server runtime contract", async () => {
+  let output: any;
+  const deps = {
+    withContext: async (_command, _label, fn) => {
+      output = await fn({
+        hub: {
+          projects: {
+            status: async () => ({
+              state: "running",
+              runtime: {
+                mode: "workspace",
+                isolation: "trusted-workspace",
+                trusted: true,
+                label: "Trusted workspace",
+                rootfs: false,
+                host_placement: false,
+                gpu: false,
+                backups: false,
+                snapshots: false,
+                archive: false,
+                move: false,
+                ssh: false,
+                resource_limits: false,
+                cloud_hosts: false,
+              },
+            }),
+          },
+        },
+      });
+    },
+    resolveProjectFromArgOrContext: async () => ({
+      project_id: "project-id",
+      title: "Workspace Project",
+      host_id: null,
+    }),
+  };
+  const program = new Command();
+  program.name("cocalc");
+  const project = program.command("project");
+  registerProjectBasicCommands(project, deps as any);
+
+  await program.parseAsync([
+    "node",
+    "cocalc",
+    "project",
+    "status",
+    "--project",
+    "project-id",
+  ]);
+
+  assert.equal(output.project_id, "project-id");
+  assert.equal(output.state, "running");
+  assert.equal(output.runtime.mode, "workspace");
+  assert.equal(output.runtime.host_placement, false);
+});
+
 test("project label commands call project label APIs", async () => {
   const calls: any[] = [];
   const outputs: any[] = [];
@@ -487,7 +543,7 @@ test("project exec waits for an async job to complete", async () => {
   assert.equal(returned?.stdout, "done\n");
 });
 
-test("project start --wait accepts running as successful start state", async () => {
+test("project start passes an explicit backup and accepts running as successful wait state", async () => {
   let startOpts: any;
   let waitedOpId: string | undefined;
   let returned: any;
@@ -533,11 +589,14 @@ test("project start --wait accepts running as successful start state", async () 
     "start",
     "--project",
     "project-id",
+    "--restore-backup-id",
+    "backup-1",
     "--wait",
   ]);
 
   assert.deepEqual(startOpts, {
     project_id: "project-id",
+    restore_backup_id: "backup-1",
     wait: false,
   });
   assert.equal(waitedOpId, "start-op-1");

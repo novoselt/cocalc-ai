@@ -29,6 +29,10 @@ import type { ProjectSettingsNavItem } from "./section-nav";
 import { SSHPanel } from "./ssh";
 import type { Project } from "./types";
 import { UpgradeUsage } from "./upgrade-usage";
+import {
+  useProjectRuntimeCapabilities,
+  WorkspaceRuntimeAdminWarning,
+} from "../runtime-capabilities";
 
 const CourseRuntimeSponsorSummary = lazy(async () => {
   const module = await import("./runtime-sponsor-controls");
@@ -74,7 +78,8 @@ export function useProjectSettingsSections({
     enabled: !isViewer,
   });
   const datastore = useTypedRedux("customize", "datastore");
-  const showSSH = !lite;
+  const runtime = useProjectRuntimeCapabilities();
+  const showSSH = !lite && runtime.ssh;
   const showDatastore =
     platformMode === PLATFORM_MODE_CLOUD ||
     (platformMode === PLATFORM_MODE_ON_PREMISES && datastore);
@@ -154,21 +159,25 @@ export function useProjectSettingsSections({
       icon: "server",
       label: "Runtime",
       title: "Runtime",
-      description:
-        "Control the active project process and review host diagnostics.",
+      description: runtime.host_placement
+        ? "Control the active project process and review host diagnostics."
+        : "Control the active project process and review runtime diagnostics.",
       children: (
         <Space direction="vertical" size={sectionGap} style={{ width: "100%" }}>
+          <WorkspaceRuntimeAdminWarning />
           <ProjectControl
             project={project}
             mode={componentMode}
             showRootFilesystemImage={false}
             embedded={embeddedInSection}
           />
-          <UpgradeUsage
-            project_id={project_id}
-            project={project}
-            mode={flyout ? "flyout" : "project"}
-          />
+          {runtime.resource_limits && (
+            <UpgradeUsage
+              project_id={project_id}
+              project={project}
+              mode={flyout ? "flyout" : "project"}
+            />
+          )}
         </Space>
       ),
     });
@@ -205,8 +214,9 @@ export function useProjectSettingsSections({
         icon: "terminal",
         label: "Environment",
         title: "Environment",
-        description:
-          "Launcher defaults, environment variables, secrets, software capability checks, and the root filesystem image.",
+        description: runtime.rootfs
+          ? "Launcher defaults, environment variables, secrets, software capability checks, and the root filesystem image."
+          : "Launcher defaults, environment variables, secrets, and software capability checks.",
         className: "cc-project-flyout-settings-panel",
         children: (
           <EnvironmentOverview
@@ -234,7 +244,9 @@ export function useProjectSettingsSections({
         label: "Recovery",
         title: "Recovery",
         description:
-          "Create backups, snapshots, clones, and review persistent datastore information.",
+          runtime.backups || runtime.snapshots
+            ? "Create backups, snapshots, clones, and review persistent datastore information."
+            : "Create a project copy and review persistent datastore information.",
         className: "cc-project-flyout-settings-panel",
         extra: showDatastore ? recoveryExtra : undefined,
         children: (
@@ -311,7 +323,9 @@ export function useProjectSettingsSections({
       label: "Location",
       title: "Location",
       description:
-        "Hide, move, archive, or delete this project. These actions change where the project is available.",
+        runtime.move || runtime.archive
+          ? "Hide, move, archive, or delete this project. These actions change where the project is available."
+          : "Hide or permanently delete this project.",
       children: (
         <ProjectLocationBox
           project={project}

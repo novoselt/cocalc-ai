@@ -463,14 +463,14 @@ export function projectHostSslRuleExpression(opts: {
   const hostId = `${opts.hostId ?? ""}`.trim().toLowerCase();
   const labels = hostname.split(".").filter(Boolean);
   const idOffset = labels[0]?.indexOf(hostId) ?? -1;
-  const zoneHostname =
-    normalizeCloudflareHostname(opts.zoneHostname) ?? labels.slice(1).join(".");
+  const explicitZoneHostname = normalizeCloudflareHostname(opts.zoneHostname);
+  const zoneHostname = explicitZoneHostname ?? labels.slice(1).join(".");
   if (
     !hostname ||
     !hostId ||
     idOffset <= 0 ||
     !zoneHostname ||
-    !hostname.endsWith(`.${zoneHostname}`)
+    (!explicitZoneHostname && !hostname.endsWith(`.${zoneHostname}`))
   ) {
     throw new Error(
       "cannot derive project-host Cloudflare SSL rule expression",
@@ -483,6 +483,8 @@ export function projectHostSslRuleExpression(opts: {
     `(starts_with(http.host, ${JSON.stringify(stablePrefix)}) and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
     " or ",
     `(starts_with(http.host, "direct-check-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
+    " or ",
+    `(starts_with(http.host, "dev-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
     ")",
   ].join("");
 }
@@ -504,9 +506,10 @@ function configurationRuleMatches(
 export async function ensureCloudflareProjectHostSslRule(opts: {
   hostname: string;
   host_id: string;
+  zone_hostname?: string;
 }): Promise<CloudflareProjectHostSslRule> {
   const { token, zoneId, zoneHostname } = await getZoneClientForHostname(
-    opts.hostname,
+    opts.zone_hostname ?? opts.hostname,
   );
   const expression = projectHostSslRuleExpression({
     hostname: opts.hostname,
@@ -627,6 +630,7 @@ export async function ensureHostnameCnameDns(opts: {
   hostname: string;
   target_hostname: string;
   record_id?: string;
+  adopt_existing?: boolean;
 }): Promise<{ record_id: string }> {
   const hostname = `${opts.hostname ?? ""}`.trim().toLowerCase();
   const target = `${opts.target_hostname ?? ""}`.trim().toLowerCase();
@@ -688,6 +692,18 @@ export async function ensureHostnameCnameDns(opts: {
     }
   }
   if (!record_id) {
+    if (opts.adopt_existing === false) {
+      const existingRecords = await listDnsRecordsByName(
+        token,
+        zoneId,
+        hostname,
+      );
+      if (existingRecords.length > 0) {
+        throw new Error(
+          `refusing to replace existing DNS record for '${hostname}'`,
+        );
+      }
+    }
     if (!recordIds.length) {
       await deleteAddressRecordsConflictingWithCname({
         token,
@@ -729,6 +745,7 @@ export async function ensureAppSubdomainDns(opts: {
   hostname: string;
   target_hostname: string;
   record_id?: string;
+  adopt_existing?: boolean;
 }): Promise<{ record_id: string }> {
   return await ensureHostnameCnameDns(opts);
 }

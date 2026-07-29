@@ -53,6 +53,7 @@ import {
 } from "./create/project-create-draft";
 import { ProjectCreateHealthCard } from "./create/project-create-health-card";
 import { useProjectCreateDraft } from "./create/use-project-create-draft";
+import { useProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
 import "./create-project.css";
 
 const IS_STAR_SETUP_PROFILE = cocalc_setup_profile === "star";
@@ -103,6 +104,7 @@ function projectPresetDescription(preset: (typeof PROJECT_PRESETS)[number]) {
 }
 
 export function NewProjectCreator({ default_value, open, onClose }: Props) {
+  const runtime = useProjectRuntimeCapabilities();
   const intl = useIntl();
   const projectLabel = intl.formatMessage(labels.project);
   const projectLabelLower = projectLabel.toLowerCase();
@@ -222,7 +224,7 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
       set_error(`Please enter a title for the new ${projectLabelLower}.`);
       return;
     }
-    if (!draft.rootfs_image.trim()) {
+    if (runtime.rootfs && !draft.rootfs_image.trim()) {
       setCreateAction(null);
       set_error("Please choose an image for the new project.");
       return;
@@ -232,6 +234,13 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
       title,
       start: openAfterCreate,
     });
+    if (!runtime.rootfs) {
+      delete opts.rootfs_image;
+      delete opts.rootfs_image_id;
+    }
+    if (!runtime.host_placement) {
+      delete opts.host_id;
+    }
     try {
       project_id = await actions.create_project(opts);
     } catch (err) {
@@ -258,7 +267,11 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
   }
 
   function isDisabled() {
-    return saving || titleIsMissing || !summary.rootfs_image.trim();
+    return (
+      saving ||
+      titleIsMissing ||
+      (runtime.rootfs && !summary.rootfs_image.trim())
+    );
   }
 
   function handle_keypress(e): void {
@@ -534,25 +547,34 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
         label: "Preset",
         value: presetTitle(draft.mode),
         color: COLORS.GRAY_LLL,
+        hidden: !runtime.rootfs,
       },
       {
         icon: "cube",
         label: "Image",
         value: summary.rootfsLabel,
         color: COLORS.YELL_LLL,
+        hidden: !runtime.rootfs,
       },
       {
         icon: "servers",
         label: "Host / region",
         value: summary.hostName || summary.host_id || "Automatic placement",
         color: COLORS.BS_GREEN_LL,
-        hidden: IS_STAR_SETUP_PROFILE,
+        hidden: IS_STAR_SETUP_PROFILE || !runtime.host_placement,
       },
       {
         icon: "database",
         label: "Backups",
         value: R2_REGION_LABELS[draft.region],
         color: COLORS.GRAY_LLL,
+        hidden: !runtime.backups,
+      },
+      {
+        icon: "terminal",
+        label: "Runtime",
+        value: runtime.label,
+        color: COLORS.ANTD_BG_BLUE_L,
       },
     ];
     return (
@@ -611,20 +633,22 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
               ))}
           </Space>
           <Space wrap>
-            {summary.gpu && <Tag color="purple">GPU</Tag>}
-            {selectedRootfsEntry?.section && (
+            {runtime.gpu && summary.gpu && <Tag color="purple">GPU</Tag>}
+            {runtime.rootfs && selectedRootfsEntry?.section && (
               <Tag color={sectionTagColor(selectedRootfsEntry.section)}>
                 {sectionLabel(selectedRootfsEntry.section)}
               </Tag>
             )}
-            {selectedRootfsEntry?.warning && <Tag color="orange">Review</Tag>}
-            {!selectedRootfsEntry && summary.rootfs_image && (
+            {runtime.rootfs && selectedRootfsEntry?.warning && (
+              <Tag color="orange">Review</Tag>
+            )}
+            {runtime.rootfs && !selectedRootfsEntry && summary.rootfs_image && (
               <Tag color={isAdmin ? "orange" : "red"}>
                 {isAdmin ? "Advanced OCI" : "Unavailable image"}
               </Tag>
             )}
           </Space>
-          {summary.warnings.length > 0 && (
+          {runtime.rootfs && summary.warnings.length > 0 && (
             <Alert
               type="warning"
               showIcon
@@ -714,8 +738,16 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
             />
           </Form.Item>
         </Form>
-        {renderRootfsSection()}
-        {!IS_STAR_SETUP_PROFILE && (
+        {runtime.trusted && (
+          <Alert
+            type="warning"
+            showIcon
+            message="Trusted workspace runtime"
+            description="This project runs directly on the Launchpad workspace host without container isolation. Host, image, GPU, backup, snapshot, SSH, and resource-limit controls are unavailable."
+          />
+        )}
+        {runtime.rootfs && renderRootfsSection()}
+        {!IS_STAR_SETUP_PROFILE && runtime.host_placement && (
           <SelectNewHost
             disabled={saving}
             selectedHost={selectedHost}

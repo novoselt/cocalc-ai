@@ -28,10 +28,12 @@ import {
 import { capitalize, humanSize } from "@cocalc/util/misc";
 import { requireDangerousProjectMutationAuth } from "./project-dangerous-auth";
 import { assertCanPerformDestructiveStorageAction } from "@cocalc/server/projects/destructive-storage-actions";
+import { assertProjectRuntimeCapability } from "@cocalc/server/launchpad/project-runtime";
 const log = getLogger("server:conat:api:project-backups");
 const BACKUP_CONTROL_TIMEOUT_MS = BACKUP_TIMEOUT_MS + 60_000;
 
 async function projectClient(project_id: string, account_id?: string) {
+  assertProjectRuntimeCapability("backups");
   return await getProjectFileServerClient({ project_id, account_id });
 }
 
@@ -327,6 +329,7 @@ export async function createBackup(
   service: string;
   stream_name: string;
 }> {
+  assertProjectRuntimeCapability("backups");
   if (!opts?.skip_collab_check) {
     await assertCollab({ account_id, project_id });
   }
@@ -449,6 +452,7 @@ export async function restoreBackup({
   service: string;
   stream_name: string;
 }> {
+  assertProjectRuntimeCapability("backups");
   await assertCollab({ account_id, project_id });
   await assertProjectOwnerCanIncreaseAccountStorage({ project_id });
   const op = await createLro({

@@ -1982,6 +1982,86 @@ test("host projects-count renders a human-readable total", async () => {
   assert.match(output, /alpha/);
 });
 
+test("host persistence summarizes memory, streams, and WAL across running hosts", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const program = new Command();
+  registerHostCommand(
+    program,
+    makeDeps(capture, {
+      listHosts: async () => [
+        {
+          id: "host-1",
+          name: "alpha",
+          status: "running",
+          metrics: {
+            current: {
+              conat_persist: {
+                collected_at: "2026-07-27T20:00:00.000Z",
+                available: true,
+                ready: true,
+                rss_bytes: 400,
+                heap_used_bytes: 200,
+                open_streams: 30,
+                maintenance_present_file_bytes: 1_000,
+                maintenance_present_wal_bytes: 100,
+              },
+            },
+          },
+        },
+        {
+          id: "host-2",
+          name: "beta",
+          status: "active",
+          metrics: {
+            current: {
+              conat_persist: {
+                collected_at: "2026-07-27T20:00:00.000Z",
+                available: true,
+                ready: true,
+                rss_bytes: 800,
+                heap_used_bytes: 300,
+                open_streams: 50,
+                maintenance_present_file_bytes: 2_000,
+                maintenance_present_wal_bytes: 200,
+              },
+            },
+          },
+        },
+        {
+          id: "host-offline",
+          name: "offline",
+          status: "off",
+        },
+      ],
+    }),
+  );
+
+  await program.parseAsync(["node", "test", "host", "persistence"]);
+
+  assert.deepEqual(capture.data.summary, {
+    hosts: 2,
+    reporting: 2,
+    unavailable: 0,
+    total_rss_bytes: 1_200,
+    total_open_streams: 80,
+    total_file_bytes: 3_000,
+    total_wal_bytes: 300,
+    max_rss_bytes: 800,
+    max_open_streams: 50,
+  });
+  assert.deepEqual(
+    capture.data.hosts.map((host) => host.host_id),
+    ["host-2", "host-1"],
+  );
+});
+
 test("host projects renders human-readable summary and rows", async () => {
   const capture: Capture = {
     upgrades: [],

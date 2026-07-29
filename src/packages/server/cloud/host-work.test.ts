@@ -573,6 +573,88 @@ describe("cloud host start failures", () => {
     expect(rows[0].ssh_server).toBe("34.106.236.180:2222");
   });
 
+  it("refreshes a restarted GCP host address before readiness verification", async () => {
+    const hostId = "f8d2ca6f-563d-473d-a01d-2b4a7e8bdd91";
+    const startHost = jest.fn(async () => undefined);
+    const getStatus = jest.fn(async () => "running");
+    const getInstance = jest.fn(async () => ({
+      instance_id: `cocalc-host-${hostId}`,
+      name: `cocalc-host-${hostId}`,
+      status: "RUNNING",
+      public_ip: "34.106.236.181",
+      private_ip: "10.180.0.25",
+      internal_hostname: `cocalc-host-${hostId}.internal`,
+    }));
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        provider: {
+          startHost,
+          getStatus,
+          getInstance,
+          mapStatus: () => "running",
+        },
+      },
+      creds: {},
+    });
+
+    await upsertProjectHost({
+      id: hostId,
+      name: "Restarted address host",
+      region: "us-west3",
+      status: "off",
+      public_url: "https://host.example.test",
+      internal_url: "http://cocalc-host.internal:9002",
+      ssh_server: "34.106.236.180:2222",
+      metadata: {
+        owner: "acct-owner",
+        desired_state: "running",
+        interruption_restore_policy: "none",
+        public_route: {
+          desired_mode: "cloudflare-proxy",
+          active_mode: "cloudflare-proxy",
+          status: "active",
+        },
+        machine: {
+          cloud: "gcp",
+          zone: "us-west3-b",
+          machine_type: "t2d-standard-4",
+          disk_gb: 50,
+          disk_type: "balanced",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "gcp",
+          zone: "us-west3-b",
+          instance_id: `cocalc-host-${hostId}`,
+          public_ip: "34.106.236.180",
+          private_ip: "10.180.0.24",
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.start({
+      id: "work-start-ip-rotation",
+      vm_id: hostId,
+      action: "start",
+      payload: { provider: "gcp" },
+    } as any);
+
+    expect(startHost).toHaveBeenCalled();
+    expect(getInstance).toHaveBeenCalled();
+    const { rows } = await getPool().query(
+      "SELECT ssh_server, metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(rows[0].metadata.runtime.public_ip).toBe("34.106.236.181");
+    expect(rows[0].ssh_server).toBe("34.106.236.181:2222");
+    const workRows = await getPool().query(
+      "SELECT action FROM cloud_vm_work WHERE vm_id=$1 ORDER BY action",
+      [hostId],
+    );
+    expect(workRows.rows).toEqual([{ action: "verify_host_ready" }]);
+  });
+
   it("reschedules verify_host_ready while the current check is in progress", async () => {
     const hostId = "d848a2ca-5f63-4473-b01d-2b4a7e8bdd90";
     const startedAt = new Date(Date.now() - 60_000).toISOString();
@@ -1882,6 +1964,88 @@ describe("cloud host start failures", () => {
     expect(workRows.rows).toEqual([{ action: "start", state: "queued" }]);
   });
 
+  it("does not probe Spot before a rapid-preemption standard hold expires", async () => {
+    const hostId = "788826be-0c90-497d-b92a-3be610f6374c";
+    const currentWorkId = "b274393f-aa99-4f73-919e-b863cc3066eb";
+    const now = Date.now();
+    const holdUntil = new Date(now + 23 * 60 * 60_000);
+    const probeSpotAvailability = jest.fn(async () => true);
+    getProviderContextMock.mockResolvedValue({
+      entry: { provider: { probeSpotAvailability } },
+      creds: {},
+    });
+    await upsertProjectHost({
+      id: hostId,
+      name: "Rapid preemption hold host",
+      region: "us-south1",
+      status: "running",
+      last_seen: new Date(now) as any,
+      metadata: {
+        owner: "acct-owner",
+        billing: { funding_mode: "site-funded" },
+        pricing_model: "spot",
+        desired_pricing_model: "spot",
+        effective_pricing_model: "on_demand",
+        interruption_restore_policy: "immediate",
+        machine: {
+          cloud: "gcp",
+          zone: "us-south1-c",
+          machine_type: "t2d-standard-16",
+          disk_gb: 200,
+          disk_type: "balanced",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "gcp",
+          instance_id: `cocalc-host-${hostId}`,
+        },
+        spot_recovery_state: {
+          phase: "running_standard_fallback",
+          fallback_started_at: new Date(now - 60 * 60_000).toISOString(),
+          last_preempted_at: new Date(now - 60 * 60_000).toISOString(),
+          standard_hold_until: holdUntil.toISOString(),
+        },
+      },
+    });
+    await getPool().query(
+      `
+        INSERT INTO cloud_vm_work
+          (id, vm_id, action, payload, state, locked_by, locked_at)
+        VALUES ($1, $2, 'probe_spot', '{}', 'in_progress', 'test-worker', NOW())
+      `,
+      [currentWorkId, hostId],
+    );
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.probe_spot({
+      id: currentWorkId,
+      vm_id: hostId,
+      action: "probe_spot",
+      payload: { provider: "gcp" },
+    } as any);
+
+    expect(probeSpotAvailability).not.toHaveBeenCalled();
+    const workRows = await getPool().query(
+      `
+        SELECT id, state, not_before
+        FROM cloud_vm_work
+        WHERE vm_id=$1 AND action='probe_spot'
+        ORDER BY created_at
+      `,
+      [hostId],
+    );
+    expect(workRows.rows).toHaveLength(2);
+    expect(
+      workRows.rows.find(({ state }) => state === "in_progress"),
+    ).toMatchObject({
+      id: currentWorkId,
+      state: "in_progress",
+    });
+    const queued = workRows.rows.find(({ state }) => state === "queued");
+    expect(queued).toBeDefined();
+    expect(new Date(queued.not_before).getTime()).toBe(holdUntil.getTime());
+  });
+
   it("keeps Spot recovery pending until provider and heartbeats are stable", async () => {
     const hostId = "8e66cb07-9557-4f4a-9775-49dd40af5c42";
     const startedAt = new Date();
@@ -2213,6 +2377,90 @@ describe("cloud host start failures", () => {
       phase: "running_standard_fallback",
       outage_started_at: "2026-05-04T03:02:20.004Z",
       attempt: 2,
+    });
+  });
+
+  it("starts on standard while the rapid-preemption circuit breaker is open", async () => {
+    const hostId = "5f1dc74f-df6c-46e4-b329-aa2ade2b8eaf";
+    const holdUntil = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+    const setPricingModel = jest.fn(async () => undefined);
+    const startHost = jest.fn(async () => undefined);
+    const getStatus = jest.fn(async () => "running");
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        provider: {
+          setPricingModel,
+          startHost,
+          getStatus,
+        },
+      },
+      creds: {},
+    });
+
+    await upsertProjectHost({
+      id: hostId,
+      name: "Open rapid-preemption circuit host",
+      region: "us-south1",
+      status: "starting",
+      metadata: {
+        owner: "acct-owner",
+        billing: { funding_mode: "site-funded" },
+        pricing_model: "spot",
+        desired_pricing_model: "spot",
+        effective_pricing_model: "spot",
+        interruption_restore_policy: "immediate",
+        machine: {
+          cloud: "gcp",
+          zone: "us-south1-c",
+          machine_type: "t2d-standard-16",
+          disk_gb: 200,
+          disk_type: "balanced",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "gcp",
+          instance_id: `cocalc-host-${hostId}`,
+        },
+        spot_recovery_policy: {
+          spot_restore_retry_window_minutes: 60,
+          max_restore_attempts_before_fallback: 99,
+        },
+        spot_recovery_state: {
+          phase: "retrying_spot",
+          outage_started_at: new Date(Date.now() - 60_000).toISOString(),
+          attempt: 0,
+          last_preempted_at: new Date().toISOString(),
+          standard_hold_until: holdUntil,
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.start({
+      id: "start-open-circuit-1",
+      vm_id: hostId,
+      action: "start",
+      payload: {
+        provider: "gcp",
+        source: "shutdown_notice",
+        reason: "host-shutdown",
+      },
+    } as any);
+
+    expect(setPricingModel).toHaveBeenCalledWith(
+      expect.objectContaining({ instance_id: `cocalc-host-${hostId}` }),
+      "on_demand",
+      {},
+    );
+    expect(startHost).toHaveBeenCalled();
+    const hostRows = await getPool().query(
+      "SELECT metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(hostRows.rows[0].metadata.effective_pricing_model).toBe("on_demand");
+    expect(hostRows.rows[0].metadata.spot_recovery_state).toMatchObject({
+      phase: "running_standard_fallback",
+      standard_hold_until: holdUntil,
     });
   });
 });

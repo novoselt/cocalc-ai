@@ -190,7 +190,7 @@ function createMockClient(options: {
     if (text.includes("FROM   pg_index i")) {
       return { rows: primaryKeyRows };
     }
-    if (text.startsWith("ALTER TABLE ")) {
+    if (text.startsWith("ALTER TABLE ") || text.startsWith("DROP INDEX ")) {
       return { rows: [] };
     }
     throw new Error(`Unexpected query: ${text}`);
@@ -304,5 +304,30 @@ describe("schemaNeedsSync column actions", () => {
     expect(client.query).toHaveBeenCalledWith(
       "ALTER TABLE membership_tiers RENAME COLUMN llm_limits TO ai_limits",
     );
+  });
+
+  it("drops stale PGlite indexes without CONCURRENTLY", async () => {
+    const originalDatabase = process.env.COCALC_DB;
+    process.env.COCALC_DB = "pglite";
+    const client = createMockClient({
+      tableName: "embedding_cache",
+      columnRows: embeddingColumns,
+      indexRows: [...embeddingIndexRows, { name: "embedding_cache_stale_idx" }],
+      primaryKeyRows: embeddingPrimaryKeyRows,
+    });
+    (getClient as jest.Mock).mockReturnValue(client);
+
+    try {
+      await syncSchema(embeddingSchema);
+      expect(client.query).toHaveBeenCalledWith(
+        'DROP INDEX IF EXISTS "embedding_cache_stale_idx"',
+      );
+    } finally {
+      if (originalDatabase == null) {
+        delete process.env.COCALC_DB;
+      } else {
+        process.env.COCALC_DB = originalDatabase;
+      }
+    }
   });
 });

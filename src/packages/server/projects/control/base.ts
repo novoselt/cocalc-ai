@@ -66,6 +66,7 @@ import {
   resolveRuntimeSponsorAccountId,
   type ProjectUsers,
 } from "@cocalc/server/projects/runtime-sponsor";
+import { isWorkspaceProjectRuntime } from "@cocalc/server/launchpad/project-runtime";
 export type { ProjectState, ProjectStatus };
 
 const logger = getLogger("project-control");
@@ -355,6 +356,10 @@ export class BaseProject extends EventEmitter {
     restore_backup_id?: string;
   }): Promise<void> => {
     await this.ensureLocalOwnership();
+    if (isWorkspaceProjectRuntime()) {
+      await this.projectRunner().start({ project_id: this.project_id });
+      return;
+    }
     await this.startOnHost(opts);
     if (process.env[DISABLE_ROOTFS_PORTABILITY_SEAL_ENV] === "1") {
       logger.warn("skipping project RootFS portability seal", {
@@ -399,6 +404,13 @@ export class BaseProject extends EventEmitter {
 
   stop = async ({ force }: { force?: boolean } = {}): Promise<void> => {
     await this.ensureLocalOwnership();
+    if (isWorkspaceProjectRuntime()) {
+      await this.projectRunner().stop({
+        project_id: this.project_id,
+        force,
+      });
+      return;
+    }
     if (force) {
       logger.debug("stop -- TODO -- force not implemented");
     }

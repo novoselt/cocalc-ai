@@ -129,4 +129,35 @@ describe("hub proxy websocket upgrades", () => {
     expect(mockProxyConatWebsocket).not.toHaveBeenCalled();
     expect(proxyHandlers.handleUpgrade).toHaveBeenCalledWith(req, socket, head);
   });
+
+  it("routes root Conat websocket upgrades to the Conat proxy", async () => {
+    const initUpgrade = (await import("./handle-upgrade")).default;
+    const proxyHandlers = { handleUpgrade: jest.fn() };
+    const handler = initUpgrade(
+      {
+        proxyConat: true,
+        localConatServer: true,
+        isPersonal: false,
+        projectProxyHandlersPromise: Promise.resolve(proxyHandlers),
+      },
+      "^/",
+    );
+    const req: any = {
+      url: "/conat/?EIO=4&transport=websocket",
+      headers: {},
+    };
+    const socket: any = {
+      on: jest.fn(),
+      write: jest.fn(),
+      destroy: jest.fn(),
+    };
+    const head = Buffer.alloc(0);
+
+    await handler(req, socket, head);
+
+    expect(mockProxyConatWebsocket).toHaveBeenCalledWith(req, socket, head, {
+      localConatServer: true,
+    });
+    expect(proxyHandlers.handleUpgrade).not.toHaveBeenCalled();
+  });
 });

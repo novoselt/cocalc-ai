@@ -497,6 +497,16 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
       "Account-scoped usage counter state keyed by account_usage_windows. Authority is inherited from the referenced window's account_id; these rows must move or be removed with that account's usage windows.",
   }),
 
+  ...adHocEntries(["project_app_private_hostnames"], {
+    ownership: "project-owning",
+    authority: "project_id",
+    portability: "unsupported",
+    source: "server Postgres schema bootstrap",
+    migrate_to_schema: true,
+    notes:
+      "Private project-app hostname routes are authoritative on the project's owning bay. Cross-bay project rehome must release and recreate them until explicit portable DNS handoff exists.",
+  }),
+
   ...adHocEntries(["ai_sessions"], {
     ownership: "account-home",
     authority: "account_id",

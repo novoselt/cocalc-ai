@@ -45,6 +45,10 @@ export const DEFAULT_SPOT_RECOVERY_POLICY: Required<HostSpotRecoveryPolicy> =
     spot_restore_backoff_seconds: 15,
     standard_fallback_enabled: true,
     standard_fallback_min_minutes: 20,
+    // A second provider-confirmed preemption within this window opens a
+    // circuit breaker instead of immediately cycling back to Spot again.
+    rapid_preemption_window_minutes: 4 * 60,
+    rapid_preemption_standard_hold_minutes: 24 * 60,
     spot_probe_interval_minutes: 10,
     spot_return_requires_probe: true,
     // Give each Spot machine type one restore attempt before advancing.
@@ -167,6 +171,12 @@ export function normalizeSpotRecoveryPolicy(
   const standardFallbackMinMinutes =
     parsePositiveInt((value as any).standard_fallback_min_minutes) ??
     DEFAULT_SPOT_RECOVERY_POLICY.standard_fallback_min_minutes;
+  const rapidPreemptionWindowMinutes =
+    parsePositiveInt((value as any).rapid_preemption_window_minutes) ??
+    DEFAULT_SPOT_RECOVERY_POLICY.rapid_preemption_window_minutes;
+  const rapidPreemptionStandardHoldMinutes =
+    parsePositiveInt((value as any).rapid_preemption_standard_hold_minutes) ??
+    DEFAULT_SPOT_RECOVERY_POLICY.rapid_preemption_standard_hold_minutes;
   const spotProbeIntervalMinutes =
     parsePositiveInt((value as any).spot_probe_interval_minutes) ??
     DEFAULT_SPOT_RECOVERY_POLICY.spot_probe_interval_minutes;
@@ -190,6 +200,8 @@ export function normalizeSpotRecoveryPolicy(
     spot_restore_backoff_seconds: backoffSeconds,
     standard_fallback_enabled: standardFallbackEnabled,
     standard_fallback_min_minutes: standardFallbackMinMinutes,
+    rapid_preemption_window_minutes: rapidPreemptionWindowMinutes,
+    rapid_preemption_standard_hold_minutes: rapidPreemptionStandardHoldMinutes,
     spot_probe_interval_minutes: spotProbeIntervalMinutes,
     spot_return_requires_probe: spotReturnRequiresProbe,
     max_restore_attempts_before_fallback: maxAttempts,
@@ -254,6 +266,20 @@ export function normalizeSpotRecoveryState(
       ? {
           fallback_started_at: normalizeIsoTimestamp(
             (value as any).fallback_started_at,
+          ),
+        }
+      : {}),
+    ...(normalizeIsoTimestamp((value as any).last_preempted_at)
+      ? {
+          last_preempted_at: normalizeIsoTimestamp(
+            (value as any).last_preempted_at,
+          ),
+        }
+      : {}),
+    ...(normalizeIsoTimestamp((value as any).standard_hold_until)
+      ? {
+          standard_hold_until: normalizeIsoTimestamp(
+            (value as any).standard_hold_until,
           ),
         }
       : {}),
@@ -376,6 +402,105 @@ export function standardFallbackMinMs(policy?: HostSpotRecoveryPolicy): number {
     ...DEFAULT_SPOT_RECOVERY_POLICY,
   };
   return normalized.standard_fallback_min_minutes * 60 * 1000;
+}
+
+export function rapidPreemptionWindowMs(
+  policy?: HostSpotRecoveryPolicy,
+): number {
+  const normalized = normalizeSpotRecoveryPolicy(policy) ?? {
+    ...DEFAULT_SPOT_RECOVERY_POLICY,
+  };
+  return normalized.rapid_preemption_window_minutes * 60 * 1000;
+}
+
+export function rapidPreemptionStandardHoldMs(
+  policy?: HostSpotRecoveryPolicy,
+): number {
+  const normalized = normalizeSpotRecoveryPolicy(policy) ?? {
+    ...DEFAULT_SPOT_RECOVERY_POLICY,
+  };
+  return normalized.rapid_preemption_standard_hold_minutes * 60 * 1000;
+}
+
+export function spotStandardHoldUntilMs(
+  state?: HostSpotRecoveryState,
+): number | undefined {
+  if (!state?.standard_hold_until) return undefined;
+  const value = new Date(state.standard_hold_until).getTime();
+  return Number.isFinite(value) ? value : undefined;
+}
+
+export function spotStandardHoldIsActive(
+  state?: HostSpotRecoveryState,
+  now = new Date(),
+): boolean {
+  const holdUntil = spotStandardHoldUntilMs(state);
+  return holdUntil != null && holdUntil > now.getTime();
+}
+
+export function recordProviderSpotPreemption(opts: {
+  state?: HostSpotRecoveryState;
+  policy?: HostSpotRecoveryPolicy;
+  now?: Date;
+}): {
+  state: HostSpotRecoveryState;
+  recorded: boolean;
+  circuit_breaker_triggered: boolean;
+} {
+  const now = opts.now ?? new Date();
+  const previous = normalizeSpotRecoveryState(opts.state) ?? { phase: "idle" };
+  if (previous.phase !== "idle") {
+    return {
+      state: previous,
+      recorded: false,
+      circuit_breaker_triggered: false,
+    };
+  }
+  const lastPreemptedAt = previous.last_preempted_at
+    ? new Date(previous.last_preempted_at).getTime()
+    : undefined;
+  const rapid =
+    lastPreemptedAt != null &&
+    Number.isFinite(lastPreemptedAt) &&
+    now.getTime() >= lastPreemptedAt &&
+    now.getTime() - lastPreemptedAt <= rapidPreemptionWindowMs(opts.policy);
+  const existingHoldUntil = spotStandardHoldUntilMs(previous);
+  const nextHoldUntil = rapid
+    ? Math.max(
+        existingHoldUntil ?? 0,
+        now.getTime() + rapidPreemptionStandardHoldMs(opts.policy),
+      )
+    : existingHoldUntil;
+  return {
+    state: {
+      ...previous,
+      last_preempted_at: now.toISOString(),
+      ...(nextHoldUntil != null
+        ? { standard_hold_until: new Date(nextHoldUntil).toISOString() }
+        : {}),
+    },
+    recorded: true,
+    circuit_breaker_triggered: rapid,
+  };
+}
+
+export function standardFallbackProbeNotBeforeMs(opts: {
+  state?: HostSpotRecoveryState;
+  policy?: HostSpotRecoveryPolicy;
+  now?: Date;
+}): number {
+  const nowMs = (opts.now ?? new Date()).getTime();
+  const fallbackStartedAt = opts.state?.fallback_started_at
+    ? new Date(opts.state.fallback_started_at).getTime()
+    : nowMs;
+  const minimumProbeAt =
+    (Number.isFinite(fallbackStartedAt) ? fallbackStartedAt : nowMs) +
+    standardFallbackMinMs(opts.policy);
+  return Math.max(
+    nowMs,
+    minimumProbeAt,
+    spotStandardHoldUntilMs(opts.state) ?? 0,
+  );
 }
 
 export function maxStandardRuntimeMs(policy?: HostSpotRecoveryPolicy): number {

@@ -36,6 +36,25 @@ jest.mock("@cocalc/server/launchpad/mode", () => ({
   isRocketProduct: () => false,
 }));
 
+jest.mock("@cocalc/server/launchpad/project-runtime", () => ({
+  getProjectRuntimeConfiguration: () => ({
+    mode: "workspace",
+    isolation: "trusted-workspace",
+    trusted: true,
+    label: "Trusted workspace",
+    rootfs: false,
+    host_placement: false,
+    gpu: false,
+    backups: false,
+    snapshots: false,
+    archive: false,
+    move: false,
+    ssh: false,
+    resource_limits: false,
+    cloud_hosts: false,
+  }),
+}));
+
 jest.mock("@cocalc/server/launchpad/onprem-sshd", () => ({
   getLaunchpadCloudflaredStatus: (...args) =>
     mockGetLaunchpadCloudflaredStatus(...args),
@@ -90,6 +109,11 @@ describe("webapp configuration", () => {
         site_name: "CoCalc",
         dns: "127.0.0.1:9100",
         is_launchpad: true,
+        project_runtime: {
+          mode: "workspace",
+          trusted: true,
+          rootfs: false,
+        },
       },
       registration: true,
       strategies: [{ name: "email", public: true }],
@@ -129,6 +153,11 @@ describe("webapp configuration", () => {
         site_name: "CoCalc",
         dns: "lite4b.cocalc.ai",
         is_launchpad: true,
+        project_runtime: {
+          mode: "workspace",
+          trusted: true,
+          rootfs: false,
+        },
       },
       registration: true,
       strategies: [{ name: "email", public: true }],

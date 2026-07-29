@@ -12,7 +12,7 @@ import { once } from "node:events";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { URL } from "node:url";
-import express from "express";
+import express, { type NextFunction } from "express";
 import TTL from "@isaacs/ttlcache";
 import getPort from "@cocalc/backend/get-port";
 import getLogger from "@cocalc/backend/logger";
@@ -69,6 +69,12 @@ import {
 import { wireHostsApi } from "./hub/hosts";
 import { wireNotificationsApi } from "./hub/notifications";
 import { wireSystemApi } from "./hub/system";
+import {
+  createAppHostnameRequestRewriteBarrier,
+  createPrivateAppHostnameRequestRewriter,
+  PRIVATE_APP_HOST_HEADER,
+  rewritePrivateAppHostnameResponseLocation,
+} from "./private-app-hostname";
 import { startMasterRegistration } from "./master";
 import { startProvisionedInventoryReporter } from "./master-status";
 import { startReconciler } from "./reconcile";
@@ -148,6 +154,7 @@ import { getProjectHostActivitySnapshot } from "./health-progress";
 import {
   attachProjectHostConatRouterProxy,
   resolveProjectHostConatRouterUrl,
+  shouldRouteProjectHostIngressToApp,
 } from "./conat-router";
 import { PROJECT_HOST_BROWSER_SESSION_BOOTSTRAP_PATH } from "@cocalc/conat/auth/project-host-browser-session";
 import {
@@ -217,6 +224,10 @@ const ACP_STARTUP_REHYDRATE_CONCURRENCY = Math.max(
 const PUBLIC_APP_ROUTE_CACHE_MS = Math.max(
   1000,
   Number(process.env.COCALC_PROJECT_HOST_PUBLIC_APP_ROUTE_CACHE_MS ?? 30_000),
+);
+const PRIVATE_APP_ROUTE_CACHE_MS = Math.max(
+  1000,
+  Number(process.env.COCALC_PROJECT_HOST_PRIVATE_APP_ROUTE_CACHE_MS ?? 30_000),
 );
 
 function formatManagedEgressCategory(category: string): string {
@@ -495,23 +506,34 @@ export async function main(
 
   // 1) HTTP + conat server
   const app = express();
+  let handlePrivateAppHttpRequest:
+    | ((
+        req: IncomingMessage,
+        res: ServerResponse,
+        next: NextFunction,
+      ) => Promise<void>)
+    | undefined;
+  // Private hostnames own their complete URL namespace, including paths such
+  // as /healthz and /conat that the project-host itself also serves.
+  app.use((req, res, next) => {
+    if (!handlePrivateAppHttpRequest) {
+      return next();
+    }
+    void handlePrivateAppHttpRequest(req, res, next).catch(next);
+  });
   app.use(express.json());
   const { httpServer } = await startHttpListener(app, port, host, tls);
   app.get("/healthz", (_req, res) =>
     res.json({
       ok: true,
       ready: healthState.ready,
+      host_id: hostId,
       pid: process.pid,
       activity: getProjectHostActivitySnapshot(),
       event_loop: getProjectHostEventLoopStallStatus(),
     }),
   );
   const conatRouterUrl = resolveProjectHostConatRouterUrl();
-  attachProjectHostConatRouterProxy({
-    app,
-    httpServer,
-    target: conatRouterUrl,
-  });
   const conatClient: ConatClient = connectToConat({
     address: conatRouterUrl,
     systemAccountPassword: localConatPassword,
@@ -1152,8 +1174,23 @@ export async function main(
     max: 20_000,
     ttl: PUBLIC_APP_ROUTE_CACHE_MS,
   });
-  const maybeRewritePublicHostnameRequest = async (req: IncomingMessage) => {
-    const currentUrl = `${req.url ?? ""}`;
+  const maybeRewritePrivateHostnameRequest =
+    createPrivateAppHostnameRequestRewriter({
+      cacheMs: PRIVATE_APP_ROUTE_CACHE_MS,
+      trace: async (hostname) =>
+        await hubApi.system.tracePrivateAppHostname({ hostname }),
+      onTraceError: (hostname, err) => {
+        logger.debug("private hostname trace failed", {
+          hostname,
+          err: `${err}`,
+        });
+      },
+    });
+  const maybeRewritePublicHostnameRequest = async (
+    req: IncomingMessage,
+    originalUrl?: string,
+  ) => {
+    const currentUrl = `${originalUrl ?? req.url ?? ""}`;
     if (!currentUrl || currentUrl.startsWith(`/${hostId}/`)) {
       return;
     }
@@ -1198,10 +1235,43 @@ export async function main(
     });
     req.headers[PUBLIC_APP_HOST_HEADER] = hostname;
   };
-  attachProjectProxy({
+  const maybeRewriteAppHostnameRequest = createAppHostnameRequestRewriteBarrier(
+    {
+      shouldClaim: (req) => {
+        if (
+          req.headers[PRIVATE_APP_HOST_HEADER] ||
+          req.headers[PUBLIC_APP_HOST_HEADER]
+        ) {
+          return false;
+        }
+        const parsed = new URL(
+          `${req.url ?? "/"}`,
+          "http://project-host.local",
+        );
+        const maybeProjectPrefix = (parsed.pathname || "/").split("/")[1];
+        if (maybeProjectPrefix && isValidUUID(maybeProjectPrefix)) {
+          return false;
+        }
+        return shouldRouteProjectHostIngressToApp(req);
+      },
+      rewrite: async (req, originalUrl) => {
+        await maybeRewritePrivateHostnameRequest(req, originalUrl);
+        if (req.headers[PRIVATE_APP_HOST_HEADER]) return;
+        await maybeRewritePublicHostnameRequest(req, originalUrl);
+      },
+    },
+  );
+  attachProjectHostConatRouterProxy({
+    app,
+    httpServer,
+    target: conatRouterUrl,
+    rewriteIngressRequest: maybeRewriteAppHostnameRequest,
+  });
+  const projectProxyHandlers = attachProjectProxy({
     httpServers: [httpServer],
     app,
-    rewriteRequest: maybeRewritePublicHostnameRequest,
+    rewriteRequest: maybeRewriteAppHostnameRequest,
+    rewriteResponse: rewritePrivateAppHostnameResponseLocation,
     noteUpstreamHttpBytes: ({ req, bytes }) => {
       noteManagedBoundaryClassifiedBytes({
         req,
@@ -1385,6 +1455,8 @@ export async function main(
       }
       const publicAppHost =
         `${req.headers[PUBLIC_APP_HOST_HEADER] ?? ""}`.trim();
+      const privateAppHost =
+        `${req.headers[PRIVATE_APP_HOST_HEADER] ?? ""}`.trim();
       const isManagedHttpRoute =
         !!res && isManagedProjectHttpEgressRequest(req, project_id);
       const isManagedWsRoute =
@@ -1437,10 +1509,11 @@ export async function main(
           exposure_mode: publicAppHost ? "public" : "private",
         });
       }
-      if (publicAppHost) {
-        req.headers.host = publicAppHost;
+      if (publicAppHost || privateAppHost) {
+        req.headers.host = publicAppHost || privateAppHost;
       }
       delete req.headers[PUBLIC_APP_HOST_HEADER];
+      delete req.headers[PRIVATE_APP_HOST_HEADER];
       if (res) {
         const match = await matchAppRequest({
           project_id,
@@ -1495,6 +1568,13 @@ export async function main(
       return { handled: true, target: { host: "127.0.0.1", port: http_port } };
     },
   });
+  handlePrivateAppHttpRequest = async (req, res, next) => {
+    await maybeRewritePrivateHostnameRequest(req);
+    if (!req.headers[PRIVATE_APP_HOST_HEADER]) {
+      return next();
+    }
+    await projectProxyHandlers.handleRequest(req, res, next);
+  };
 
   logger.info(
     "Serve per-project files via the fs.* conat service, mounting from the local file-server.",
@@ -1575,13 +1655,6 @@ export async function main(
         force,
       }),
     reconcileProjectNetworkLimits,
-    recoverStaleRuntime: async (project_id) => {
-      const stopped = await runnerApi.stop({ project_id, force: true });
-      if (stopped?.state === "opened") {
-        return stopped.state;
-      }
-      return (await runnerApi.status({ project_id }))?.state;
-    },
   });
   const stopDataPermissionHardener = startDataPermissionHardener(dataDir);
 

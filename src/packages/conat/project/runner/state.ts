@@ -24,11 +24,17 @@ export interface ProjectStatus {
   project_bundle_version?: string;
   tools_version?: string;
   phase_timings_ms?: Record<string, number>;
+  error?: string;
 }
 
 export default async function state({ client }) {
   return {
-    projects: await dkv<{ server?: string; state: ProjectState }>({
+    projects: await dkv<{
+      server?: string;
+      state: ProjectState;
+      http_port?: number;
+      ssh_port?: number;
+    }>({
       client,
       name: "project-runner.projects",
     }),

@@ -28,6 +28,9 @@ jest.mock("@cocalc/project/conat/hub", () => ({
       releaseProjectAppPublicSubdomain: jest.fn(async () => ({
         released: true,
       })),
+      releaseProjectAppPrivateHostname: jest.fn(async () => ({
+        released: false,
+      })),
     },
   })),
 }));

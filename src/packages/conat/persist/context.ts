@@ -37,7 +37,7 @@ export let ensureContainingDirectoryExists: (path: string) => Promise<void> = (
   throw Error("must initialize persist context");
 };
 
-export let statSync = (_path: string): { mtimeMs: number } => {
+export let statSync = (_path: string): { mtimeMs: number; size?: number } => {
   throw Error("must initialize persist context");
 };
 
@@ -60,7 +60,7 @@ export function initContext(opts: {
     backup: string;
   };
   ensureContainingDirectoryExists: (path: string) => Promise<void>;
-  statSync: (path: string) => { mtimeMs: number };
+  statSync: (path: string) => { mtimeMs: number; size?: number };
   copyFileSync: (src: string, desc: string) => void;
 }) {
   sqliteModule = opts.sqlite;

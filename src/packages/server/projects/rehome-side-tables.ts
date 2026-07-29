@@ -195,6 +195,12 @@ export const PROJECT_REHOME_SQL_SIDE_TABLE_DECISIONS = {
     reason:
       "RootFS build rows describe builder-project operations and project-host artifacts; they should not move with project ownership until build artifact migration is explicit.",
   },
+  project_app_private_hostnames: {
+    table: "project_app_private_hostnames",
+    status: "not-portable",
+    reason:
+      "Private app hostnames contain owning-bay DNS lifecycle state. Release them before cross-bay rehome and reserve them again on the destination until an explicit DNS handoff protocol exists.",
+  },
   account_project_index: {
     table: "account_project_index",
     status: "projection",
