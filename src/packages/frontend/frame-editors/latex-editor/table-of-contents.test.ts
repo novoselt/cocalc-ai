@@ -70,6 +70,19 @@ describe("parseTableOfContents", () => {
       "Chat abc12345 (line 1)",
     ]);
   });
+
+  it("ignores escaped braces while finding a heading's closing brace", () => {
+    const entries = parseTableOfContents(
+      [
+        String.raw`\section{The \{ symbol}`,
+        String.raw`\section{The \} symbol}`,
+      ].join("\n"),
+    );
+    expect(entries.map((e) => e.value)).toEqual([
+      String.raw`The \{ symbol`,
+      String.raw`The \} symbol`,
+    ]);
+  });
 });
 
 describe("scanIncludeDirectives", () => {

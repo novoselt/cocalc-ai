@@ -19,6 +19,8 @@ let currentThread = {
   isArchived: false,
 };
 let currentThreads = [currentThread];
+let currentThreadMetadata: any;
+let latestThreadPanelProps: any;
 
 jest.mock("@cocalc/frontend/feature", () => ({
   IS_MOBILE: false,
@@ -117,7 +119,10 @@ jest.mock("../chatroom-thread-actions", () => ({
 }));
 
 jest.mock("../chatroom-thread-panel", () => ({
-  ChatRoomThreadPanel: () => null,
+  ChatRoomThreadPanel: (props: any) => {
+    latestThreadPanelProps = props;
+    return null;
+  },
   getDefaultNewThreadSetup: () => ({
     codexConfig: {
       workingDirectory: "/",
@@ -150,6 +155,8 @@ describe("ChatPanel selected thread read tracking", () => {
       isArchived: false,
     };
     currentThreads = [currentThread];
+    currentThreadMetadata = undefined;
+    latestThreadPanelProps = undefined;
   });
 
   function renderPanel() {
@@ -157,7 +164,7 @@ describe("ChatPanel selected thread read tracking", () => {
       markThreadRead: jest.fn(),
       scrollToIndex: jest.fn(),
       getCodexConfig: jest.fn(),
-      getThreadMetadata: jest.fn(),
+      getThreadMetadata: jest.fn(() => currentThreadMetadata),
       getMessagesInThread: jest.fn(() => []),
       frameTreeActions: undefined,
       frameId: undefined,
@@ -181,6 +188,20 @@ describe("ChatPanel selected thread read tracking", () => {
 
     expect(actions.markThreadRead).toHaveBeenCalledTimes(1);
     expect(actions.markThreadRead).toHaveBeenCalledWith("thread-1", 2);
+  });
+
+  it("makes resolved thread messages read-only", () => {
+    currentThreadMetadata = {
+      resolved: {
+        account_id: "acct",
+        at: "2026-07-29T00:00:00.000Z",
+        anchorId: "cell-1",
+      },
+    };
+
+    renderPanel();
+
+    expect(latestThreadPanelProps.readOnly).toBe(true);
   });
 
   it("does not mark another unread thread when opening the selected one", () => {

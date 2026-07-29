@@ -2817,7 +2817,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       void this.openAnchorChatThread(threadKey);
     };
     const removeStaleMarker = (hash: string, markerPath: string) => {
-      this._removeChatMarkersForHash(markerPath, hash);
+      void this._removeChatMarkersForHash(markerPath, hash);
     };
 
     const chatTargets: Array<{ line: number; hash: string }> = [];
@@ -3396,7 +3396,7 @@ export class Actions extends BaseActions<LatexEditorState> {
             onConfirmResolve: (expectsThread) =>
               this.resolveChatMarker(marker.hash, expectsThread),
             onConfirmRemoveStale: () =>
-              this._removeChatMarkersForHash(path, marker.hash),
+              void this._removeChatMarkersForHash(path, marker.hash),
           }),
         );
         reused?.bookmark.clear();
@@ -3940,27 +3940,17 @@ export class Actions extends BaseActions<LatexEditorState> {
       return;
     }
     const label = this.getAnchorLabel(hash);
-    let resolved = false;
-    const attempts = expectsThread ? 30 : 1;
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const threadKeys = chatActions.listAnchoredThreadKeys(hash);
-      for (const threadKey of threadKeys) {
-        chatActions.resolveAnchoredThread(threadKey, { label });
+    let threadKeys: string[] = [];
+    if (expectsThread) {
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        threadKeys = chatActions.listAnchoredThreadKeys(hash);
+        if (threadKeys.length > 0) break;
+        await delay(100);
       }
-      const remaining = chatActions.listAnchoredThreadKeys(hash);
-      const hasResolved = chatActions
-        .listThreadConfigRows()
-        .some((row) => parseThreadResolved(row?.resolved)?.anchorId === hash);
-      if (remaining.length === 0 && hasResolved) {
-        resolved = true;
-        break;
-      }
-      if (!expectsThread) break;
-      await delay(100);
     }
     // Never turn a known discussion into a marker-only deletion just because
     // this client has not received its thread-config row yet.
-    if (expectsThread && !resolved) {
+    if (expectsThread && threadKeys.length === 0) {
       console.warn("resolveChatMarker: anchored thread is still syncing", {
         project_id: this.project_id,
         path: this.path,
@@ -3973,9 +3963,60 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
     const chatMarkers = this.store.get("chat_markers");
     if (chatMarkers == null) return;
-    for (const path of chatMarkers.keySeq().toJS() as string[]) {
-      this._removeChatMarkersForHash(path, hash);
+    const markerPaths = (chatMarkers.keySeq().toJS() as string[]).filter(
+      (path) =>
+        chatMarkers
+          .get(path)
+          ?.some(
+            (marker: any) => (marker?.get?.("hash") ?? marker?.hash) === hash,
+          ) === true,
+    );
+    if (markerPaths.length === 0) return;
+    for (const path of markerPaths) {
+      if (!(await this._removeChatMarkersForHash(path, hash))) {
+        console.warn("resolveChatMarker: failed to update marker source", {
+          project_id: this.project_id,
+          path,
+          hash,
+        });
+        antdMessage.warning(
+          "The source file could not be updated; the chat was not resolved.",
+        );
+        return;
+      }
     }
+    if (!expectsThread) return;
+
+    for (const threadKey of threadKeys) {
+      if (!chatActions.resolveAnchoredThread(threadKey, { label })) {
+        console.warn("resolveChatMarker: failed to resolve anchored thread", {
+          project_id: this.project_id,
+          path: this.path,
+          hash,
+          threadKey,
+        });
+        antdMessage.warning(
+          "The marker was removed, but the chat could not be resolved. Please try again.",
+        );
+        return;
+      }
+    }
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const remaining = chatActions.listAnchoredThreadKeys(hash);
+      const hasResolved = chatActions
+        .listThreadConfigRows()
+        .some((row) => parseThreadResolved(row?.resolved)?.anchorId === hash);
+      if (remaining.length === 0 && hasResolved) return;
+      await delay(100);
+    }
+    console.warn("resolveChatMarker: resolved state is still syncing", {
+      project_id: this.project_id,
+      path: this.path,
+      hash,
+    });
+    antdMessage.warning(
+      "The marker was removed and the chat is still finishing resolution.",
+    );
   }
 
   private async _waitForReadyChatActions(): Promise<
@@ -4016,28 +4057,92 @@ export class Actions extends BaseActions<LatexEditorState> {
     }
   }
 
-  private _removeChatMarkersForHash(path: string, hash: string): void {
+  private async _removeChatMarkersForHash(
+    path: string,
+    hash: string,
+  ): Promise<boolean> {
     const actions: any =
       path === this.path
         ? this
         : this.redux.getEditorActions(this.project_id, path);
     const syncstring = actions?._syncstring;
-    if (actions == null || syncstring == null) return;
-    let text: string;
-    try {
-      text = syncstring.to_str() ?? "";
-    } catch {
-      return;
+    if (actions != null && syncstring != null) {
+      let text: string;
+      try {
+        text = syncstring.to_str() ?? "";
+      } catch {
+        return false;
+      }
+      const newText = removeMarkersForHash(text, hash);
+      if (newText === text) return true;
+      // CodeMirror read-only ranges intentionally reject overlapping edits.
+      // Remove our transient UI markers before applying the source transform;
+      // the scanner recreates any remaining markers immediately afterward.
+      this._clearChatTextDecorations(path);
+      actions.set_value(newText);
+      actions.syncstring_commit();
+      this._chatMarkerScanners[path]?.rescan();
+      try {
+        const verifiedText = syncstring.to_str() ?? "";
+        return removeMarkersForHash(verifiedText, hash) === verifiedText;
+      } catch {
+        return false;
+      }
     }
-    const newText = removeMarkersForHash(text, hash);
-    if (newText === text) return;
-    // CodeMirror read-only ranges intentionally reject overlapping edits.
-    // Remove our transient UI markers before applying the source transform;
-    // the scanner recreates any remaining markers immediately afterward.
-    this._clearChatTextDecorations(path);
-    actions.set_value(newText);
-    actions.syncstring_commit();
-    this._chatMarkerScanners[path]?.rescan();
+
+    // Disk-scanned subfiles do not have editor actions or a syncstring. Update
+    // them through the project filesystem and verify the marker is gone before
+    // allowing the associated thread to become resolved/archived.
+    try {
+      const fs = this._get_project_actions()?.fs?.();
+      if (
+        typeof fs?.readFile !== "function" ||
+        typeof fs?.writeFileDelta !== "function"
+      ) {
+        return false;
+      }
+      const raw = await fs.readFile(path, "utf8");
+      const text =
+        typeof raw === "string"
+          ? raw
+          : ((raw as any)?.toString?.("utf8") ?? `${raw ?? ""}`);
+      const newText = removeMarkersForHash(text, hash);
+      if (newText !== text) {
+        await fs.writeFileDelta(path, newText, {
+          baseContents: text,
+          minLength: 0,
+        });
+      }
+      const verifiedRaw = await fs.readFile(path, "utf8");
+      const verifiedText =
+        typeof verifiedRaw === "string"
+          ? verifiedRaw
+          : ((verifiedRaw as any)?.toString?.("utf8") ??
+            `${verifiedRaw ?? ""}`);
+      if (removeMarkersForHash(verifiedText, hash) !== verifiedText) {
+        return false;
+      }
+
+      const chatMarkers = this.store.get("chat_markers") ?? (fromJS({}) as any);
+      const chatBookmarks =
+        this.store.get("chat_bookmarks") ?? (fromJS({}) as any);
+      (this._diskChatContentHashes ??= new Map()).set(
+        path,
+        hash_string(verifiedText),
+      );
+      (this._diskScannedPaths ??= new Set()).add(path);
+      this.setState({
+        chat_markers: chatMarkers.set(path, fromJS(scanMarkers(verifiedText))),
+        chat_bookmarks: chatBookmarks.set(
+          path,
+          fromJS(scanBookmarks(verifiedText)),
+        ),
+      });
+      this.updateTableOfContents();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   languageModelExtraFileInfo() {

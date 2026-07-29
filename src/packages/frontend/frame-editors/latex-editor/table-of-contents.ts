@@ -38,15 +38,19 @@ export interface SubfileTocGroup {
 function stripLatexComment(line: string): string {
   for (let i = 0; i < line.length; i += 1) {
     if (line[i] !== "%") continue;
-    let backslashes = 0;
-    for (let j = i - 1; j >= 0 && line[j] === "\\"; j -= 1) {
-      backslashes += 1;
-    }
-    if (backslashes % 2 === 0) {
+    if (!isEscaped(line, i)) {
       return line.slice(0, i);
     }
   }
   return line;
+}
+
+function isEscaped(text: string, index: number): boolean {
+  let backslashes = 0;
+  for (let i = index - 1; i >= 0 && text[i] === "\\"; i -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
 }
 
 export function scanIncludeDirectives(latex: string): IncludeDirective[] {
@@ -321,6 +325,9 @@ function extractHeading(line: string, prefix: string): string | null {
   }
   let depth = 1;
   for (let i = prefix.length; i < line.length; i += 1) {
+    if (isEscaped(line, i)) {
+      continue;
+    }
     if (line[i] === "{") {
       depth += 1;
     } else if (line[i] === "}") {

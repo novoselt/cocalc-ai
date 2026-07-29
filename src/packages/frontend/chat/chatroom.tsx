@@ -1106,6 +1106,8 @@ export function ChatPanel({
         : undefined,
     [actions, selectedThreadKey, selectedThreadId, docVersion],
   );
+  const selectedThreadResolved = selectedThreadMetadata?.resolved;
+  const effectiveReadOnly = readOnly || selectedThreadResolved != null;
   const notifyOnSelectedTurnFinish = useMemo(
     () => threadNotifyOnTurnFinishEnabled(selectedThreadMetadata?.acp_config),
     [selectedThreadMetadata?.acp_config],
@@ -2514,11 +2516,11 @@ export function ChatPanel({
         topRightControlsPrefix={threadPanelTopRightPrefix}
         compactTopRightControls={effectiveThreadPanelCompactTopRightControls}
         topRightControlsPortal={threadPanelTopRightControlsPortal}
-        readOnly={readOnly}
+        readOnly={effectiveReadOnly}
       />
       {automationBanner}
-      {selectedThreadMetadata?.resolved != null ? (
-        <ResolvedThreadNotice resolved={selectedThreadMetadata.resolved} />
+      {selectedThreadResolved != null ? (
+        <ResolvedThreadNotice resolved={selectedThreadResolved} />
       ) : !readOnly ? (
         <>
           <ChatRoomComposer

@@ -483,9 +483,13 @@ describe("LaTeX chat marker resolution", () => {
     actions._waitForReadyChatActions = jest.fn(async () => chatActions);
     actions.store = {
       get: (key: string) =>
-        key === "chat_markers" ? Map({ "paper.tex": List() }) : undefined,
+        key === "chat_markers"
+          ? Map({
+              "paper.tex": List([Map({ hash: "anchor-1", line: 3, col: 0 })]),
+            })
+          : undefined,
     };
-    actions._removeChatMarkersForHash = jest.fn();
+    actions._removeChatMarkersForHash = jest.fn(async () => true);
     return actions;
   }
 
@@ -522,6 +526,9 @@ describe("LaTeX chat marker resolution", () => {
       "paper.tex",
       "anchor-1",
     );
+    expect(
+      actions._removeChatMarkersForHash.mock.invocationCallOrder[0],
+    ).toBeLessThan(resolveAnchoredThread.mock.invocationCallOrder[0]);
   });
 
   it("allows removing a marker that has no chat thread", async () => {
@@ -539,6 +546,67 @@ describe("LaTeX chat marker resolution", () => {
       "paper.tex",
       "anchor-1",
     );
+  });
+
+  it("does not resolve the thread when its source marker cannot be removed", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const chatActions = {
+      listAnchoredThreadKeys: jest.fn(() => ["thread-1"]),
+      listThreadConfigRows: jest.fn(() => []),
+      resolveAnchoredThread: jest.fn(),
+    };
+    const actions = createResolutionActions(chatActions);
+    actions._removeChatMarkersForHash.mockResolvedValue(false);
+
+    await actions.resolveChatMarker("anchor-1", true);
+
+    expect(chatActions.resolveAnchoredThread).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("removes markers from unopened disk-scanned subfiles", async () => {
+    const path = "/home/user/project/chapter.tex";
+    let diskText = ["intro", "% chat: anchor-1", "outro"].join("\n");
+    const readFile = jest.fn(async () => diskText);
+    const writeFileDelta = jest.fn(async (_path, text) => {
+      diskText = text;
+    });
+    let state = Map({
+      chat_markers: Map({
+        [path]: List([Map({ hash: "anchor-1", line: 1, col: 0 })]),
+      }),
+      chat_bookmarks: Map(),
+    });
+    const actions: any = Object.create(Actions.prototype);
+    actions.path = "/home/user/project/main.tex";
+    actions.project_id = "project-1";
+    actions.redux = {
+      getEditorActions: jest.fn(() => undefined),
+    };
+    actions._get_project_actions = () => ({
+      fs: () => ({ readFile, writeFileDelta }),
+    });
+    actions.store = { get: (key: string) => state.get(key) };
+    actions.setState = jest.fn((update) => {
+      state = state.merge(update);
+    });
+    actions.updateTableOfContents = jest.fn();
+
+    await expect(
+      actions._removeChatMarkersForHash(path, "anchor-1"),
+    ).resolves.toBe(true);
+
+    expect(writeFileDelta).toHaveBeenCalledWith(
+      path,
+      ["intro", "outro"].join("\n"),
+      {
+        baseContents: ["intro", "% chat: anchor-1", "outro"].join("\n"),
+        minLength: 0,
+      },
+    );
+    expect(diskText).not.toContain("% chat: anchor-1");
+    expect(state.getIn(["chat_markers", path]).size).toBe(0);
+    expect(actions.updateTableOfContents).toHaveBeenCalledTimes(1);
   });
 });
 
