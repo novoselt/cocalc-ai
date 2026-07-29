@@ -360,6 +360,11 @@ describe("PublicAuthApp", () => {
       />,
     );
 
+    expect(
+      screen.getByText(
+        "Create an account to start projects, then compare product paths whenever your needs change.",
+      ),
+    ).not.toBeNull();
     fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
       target: { value: "new-user@example.edu" },
     });
@@ -587,6 +592,11 @@ describe("PublicAuthApp", () => {
       screen.getByText("Verification email sent. Waiting for confirmation..."),
     ).not.toBeNull();
     expect(screen.queryByPlaceholderText("Your name")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Create an account to start projects, then compare product paths whenever your needs change.",
+      ),
+    ).toBeNull();
     expect(mockedGetControlPlaneAuthBootstrap).toHaveBeenCalled();
 
     fireEvent.click(screen.getByText("Use a different email"));

@@ -1291,6 +1291,7 @@ export function PublicSignUpForm({
   initialSSOStrategies,
   legacySignUpPrompt = false,
   onNavigate,
+  onVerificationPendingChange,
   redirectToPath,
   signupEmailDomainPolicy,
 }: {
@@ -1299,6 +1300,7 @@ export function PublicSignUpForm({
   initialSSOStrategies?: PublicSsoStrategy[];
   legacySignUpPrompt?: boolean;
   onNavigate: AuthNavigate;
+  onVerificationPendingChange?: (pending: boolean) => void;
   redirectToPath?: string | (() => string);
   signupEmailDomainPolicy?: SignupEmailDomainPublicPolicy;
 }) {
@@ -1474,6 +1476,7 @@ export function PublicSignUpForm({
       setStoredControlPlaneOrigin(result?.home_bay_url);
       if (requiresContinuousVerification) {
         setPendingVerificationEmail(email.trim().toLowerCase());
+        onVerificationPendingChange?.(true);
         return;
       }
       window.location.href = resolveAuthRedirectPath(redirectToPath);

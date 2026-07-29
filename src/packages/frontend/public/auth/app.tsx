@@ -236,6 +236,8 @@ export default function PublicAuthApp({
   const [route, setRoute] = useState<PublicAuthRoute>(initialRoute);
   const [authNavigateOptions, setAuthNavigateOptions] =
     useState<AuthNavigateOptions>({});
+  const [signupVerificationPending, setSignupVerificationPending] =
+    useState(false);
   const pendingAuthNavigateOptions = useRef<AuthNavigateOptions | undefined>(
     undefined,
   );
@@ -246,6 +248,7 @@ export default function PublicAuthApp({
 
   useEffect(() => {
     setRoute(initialRoute);
+    setSignupVerificationPending(false);
     if (pendingAuthNavigateOptions.current) {
       setAuthNavigateOptions(pendingAuthNavigateOptions.current);
       pendingAuthNavigateOptions.current = undefined;
@@ -313,11 +316,15 @@ export default function PublicAuthApp({
     >
       <PublicAuthPageShell
         cardWidth={cardWidthForRoute(route)}
-        subtitle={subtitleForRoute(
-          route,
-          siteName,
-          resolvedConfig?.is_authenticated,
-        )}
+        subtitle={
+          signupVerificationPending
+            ? undefined
+            : subtitleForRoute(
+                route,
+                siteName,
+                resolvedConfig?.is_authenticated,
+              )
+        }
       >
         {route.kind === "auth-form" && route.view === "sign-in" && (
           <PublicSignInForm
@@ -351,6 +358,7 @@ export default function PublicAuthApp({
                 initialSSOStrategies={ssoStrategies}
                 legacySignUpPrompt={!!authNavigateOptions.legacySignUpPrompt}
                 onNavigate={onNavigate}
+                onVerificationPendingChange={setSignupVerificationPending}
                 redirectToPath={redirectToPath}
                 signupEmailDomainPolicy={
                   resolvedConfig?.signup_email_domain_public_policy
