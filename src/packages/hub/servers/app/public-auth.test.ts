@@ -69,6 +69,20 @@ describe("public auth routes", () => {
     );
   });
 
+  it.each([
+    "/auth/email/continue/68809aff-5486-41aa-84cd-8ef761197b12",
+    "/auth/second-factor/challenge-789",
+  ])("redirects %s into the public auth shell", async (path) => {
+    const response = await request(`${path}?target=%2Fprojects`);
+    expect(response.status).toBe(302);
+    const location = response.headers.get("location");
+    expect(location).toContain("/static/public.html?target=");
+    const redirected = new URL(`http://host${location}`);
+    expect(redirected.searchParams.get("target")).toBe(
+      `${path}?target=%2Fprojects`,
+    );
+  });
+
   it("redirects project invite routes into the public auth shell", async () => {
     const response = await request(
       "/invites/project/937f48ab-c8ce-4877-bb02-5ff43da8e787/f5888c36-fb55-47e7-9cb7-99d3c5d1b231?token=secret",
