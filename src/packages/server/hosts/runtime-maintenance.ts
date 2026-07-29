@@ -1258,9 +1258,10 @@ function publicRouteFleetContext({
     (failureClasses.cloudflare_52x ?? 0) +
     (failureClasses.network_fetch ?? 0);
   const sharedIngressFailure =
+    checked_hosts >= 3 &&
     failures.length >= 2 &&
-    healthyOriginFailures >=
-      (failures.length === 2 ? 2 : failures.length - 1) &&
+    failures.length * 2 >= checked_hosts &&
+    healthyOriginFailures === failures.length &&
     ingressFailures === failures.length;
   return {
     checked_hosts,
@@ -1328,7 +1329,7 @@ async function alertPublicRouteFailures({
       `site=${sites}`,
       `origin=${origin}`,
       failures[0]?.fleet?.shared_ingress_failure
-        ? "The failures were classified as a shared ingress incident because at least half of the fleet failed with timeout, network fetch, or Cloudflare 52x errors while every checked host-local origin remained healthy. Individual failure counters, placement quarantine, per-host alerts, and route repairs were suppressed."
+        ? "The failures were classified as a shared ingress incident because at least half of the checked probe batch failed with timeout, network fetch, or Cloudflare 52x errors while every failed host-local origin remained healthy. Individual failure counters, placement quarantine, per-host alerts, and route repairs were suppressed."
         : "Affected hosts that crossed the repeated-failure threshold are quarantined from placement because browser CORS/session traffic may not reach them.",
       failures[0]?.fleet?.shared_ingress_failure
         ? "Investigate the shared DNS, Cloudflare, firewall, or probe path before changing individual hosts."
