@@ -9,19 +9,33 @@ import {
   EmailAuthChallengeOutputSchema,
   EmailAuthRedeemCodeInputSchema,
 } from "@cocalc/http-api/lib/api/schema/auth/email";
-import { redeemEmailAuthCode } from "@cocalc/server/inter-bay/email-auth";
+import {
+  prepareEmailAuthExchange,
+  redeemEmailAuthCode,
+} from "@cocalc/server/inter-bay/email-auth";
+import { getBayPublicOriginForRequest } from "@cocalc/server/bay-public-origin";
 
 import { emailAuthErrorPayload } from "./_shared";
 
 export async function redeemCode(req, res) {
   try {
     const { challenge_id, code } = getParams(req);
-    res.json(
-      await redeemEmailAuthCode({
-        challenge_id: `${challenge_id ?? ""}`.trim(),
-        code: `${code ?? ""}`.trim(),
-      }),
-    );
+    const normalizedChallengeId = `${challenge_id ?? ""}`.trim();
+    await redeemEmailAuthCode({
+      challenge_id: normalizedChallengeId,
+      code: `${code ?? ""}`.trim(),
+    });
+    const exchange = await prepareEmailAuthExchange({
+      challenge_id: normalizedChallengeId,
+      auth_method: "email_code",
+    });
+    res.json({
+      ...exchange,
+      home_bay_url: await getBayPublicOriginForRequest(
+        req,
+        exchange.home_bay_id,
+      ),
+    });
   } catch (err) {
     res.json(emailAuthErrorPayload(err));
   }

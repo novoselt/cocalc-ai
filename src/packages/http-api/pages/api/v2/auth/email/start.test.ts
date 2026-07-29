@@ -11,6 +11,7 @@ const getServerSettingsMock = jest.fn();
 const isEmailConfiguredMock = jest.fn();
 const getStrategiesMock = jest.fn();
 const startEmailAuthChallengeMock = jest.fn();
+const selectSignupHomeBayMock = jest.fn();
 
 jest.mock("@cocalc/database/settings/server-settings", () => ({
   getServerSettings: (...args) => getServerSettingsMock(...args),
@@ -29,6 +30,10 @@ jest.mock("@cocalc/server/inter-bay/email-auth", () => ({
   startEmailAuthChallenge: (...args) => startEmailAuthChallengeMock(...args),
 }));
 
+jest.mock("@cocalc/server/accounts/select-home-bay", () => ({
+  selectSignupHomeBay: (...args) => selectSignupHomeBayMock(...args),
+}));
+
 describe("/api/v2/auth/email/start", () => {
   beforeEach(() => {
     getServerSettingsMock.mockReset().mockResolvedValue({
@@ -40,6 +45,7 @@ describe("/api/v2/auth/email/start", () => {
     getStrategiesMock.mockReset().mockResolvedValue([]);
     startEmailAuthChallengeMock.mockReset().mockResolvedValue({
       challenge_id: "11111111-1111-4111-8111-111111111111",
+      purpose: "sign_in_or_sign_up",
       state: "pending",
       masked_email: "pe…@example.edu",
       expires_at: "2026-07-29T01:15:00.000Z",
@@ -48,6 +54,7 @@ describe("/api/v2/auth/email/start", () => {
       message_sent: true,
       message_failed: false,
     });
+    selectSignupHomeBayMock.mockReset().mockResolvedValue("bay-test");
   });
 
   it("fails closed while email-first mode is disabled", async () => {
@@ -80,7 +87,10 @@ describe("/api/v2/auth/email/start", () => {
         "content-type": "application/json",
         "x-forwarded-proto": "https",
       },
-      body: { email: "Person@Example.EDU" },
+      body: {
+        email: "Person@Example.EDU",
+        target: "/projects/project-id/files?path=README.md#preview",
+      },
     });
 
     const { default: handler } = await import("./start");
@@ -99,6 +109,8 @@ describe("/api/v2/auth/email/start", () => {
       expect.objectContaining({
         email_address: "person@example.edu",
         browser_binding: expect.any(String),
+        continuation_target:
+          "/projects/project-id/files?path=README.md#preview",
       }),
     );
     expect(
@@ -124,6 +136,27 @@ describe("/api/v2/auth/email/start", () => {
     expect(startEmailAuthChallengeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         browser_binding: "existing-binding",
+      }),
+    );
+  });
+
+  it("does not retain an external continuation target", async () => {
+    const { req, res } = createMocks({
+      method: "POST",
+      url: "/api/v2/auth/email/start",
+      headers: { "content-type": "application/json" },
+      body: {
+        email: "person@example.edu",
+        target: "//evil.example.test/steal",
+      },
+    });
+
+    const { default: handler } = await import("./start");
+    await handler(req, res);
+
+    expect(startEmailAuthChallengeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuation_target: undefined,
       }),
     );
   });

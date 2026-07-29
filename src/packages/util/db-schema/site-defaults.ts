@@ -846,10 +846,11 @@ export const site_settings_conf: SiteSettings = {
     name: "Email authentication mode",
     desc: "Controls the public email signup experience. Password required is the legacy flow; verify after signup keeps the user in signup until email verification; email first is reserved for the pre-account code/link flow.",
     default: "password_required",
-    valid: EMAIL_AUTHENTICATION_MODES.filter((mode) => mode !== "email_first"),
+    valid: EMAIL_AUTHENTICATION_MODES,
     valid_labels: {
       password_required: "Password required",
       verify_after_signup: "Require verification before entering CoCalc",
+      email_first: "Email first, password optional",
     },
     tags: ["Email", "Security"],
     group: "Access & Identity",

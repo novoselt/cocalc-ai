@@ -639,6 +639,7 @@ export type EmailAuthChallengeState =
 
 export interface EmailAuthChallengeStatus {
   challenge_id: string;
+  purpose: "sign_in_or_sign_up" | "email_fresh_auth";
   state: EmailAuthChallengeState;
   masked_email: string;
   expires_at: string;
@@ -653,7 +654,12 @@ export interface EmailAuthChallengeStartRequest {
   browser_binding: string;
   request_ip?: string;
   analytics_token?: string;
-  purpose?: "sign_in_or_sign_up";
+  purpose?: "sign_in_or_sign_up" | "email_fresh_auth";
+  prospective_home_bay_id?: string;
+  terms_accepted?: boolean;
+  terms_version?: string;
+  continuation_target?: string;
+  expected_account_id?: string;
 }
 
 export interface EmailAuthChallengeStatusRequest {
@@ -671,6 +677,50 @@ export interface EmailAuthChallengeRedeemLinkRequest {
   challenge_id: string;
   token: string;
   browser_binding?: string;
+}
+
+export interface EmailAuthExchangePrepareRequest {
+  challenge_id: string;
+  auth_method: "email_code" | "email_link";
+}
+
+export interface EmailAuthExchangeResult {
+  challenge_id: string;
+  exchange_token: string;
+  exchange_expires_at: string;
+  home_bay_id: string;
+  redirect_to?: string;
+  state: "account_ready";
+}
+
+export interface EmailAuthExchangeConsumeRequest {
+  account_id: string;
+  challenge_id: string;
+  completion: "completed" | "mfa_required";
+  exchange_id: string;
+  home_bay_id: string;
+}
+
+export interface EmailAuthExchangeConsumeResult {
+  account_id: string;
+  auth_method: "email_code" | "email_link";
+  email_proved_at: string;
+}
+
+export interface EmailAuthMfaCompleteRequest {
+  account_id: string;
+  challenge_id: string;
+  home_bay_id: string;
+}
+
+export interface EmailFreshAuthCompleteRequest {
+  account_id: string;
+  challenge_id: string;
+}
+
+export interface EmailFreshAuthCompleteResult {
+  auth_method: "email_code" | "email_link";
+  email_proved_at: string;
 }
 
 export interface AccountApiKeyDirectoryEntry {
@@ -714,7 +764,7 @@ export interface AccountApiKeyDirectoryTouchRequest {
 
 export interface AccountDirectoryCreateRequest {
   email_address: string;
-  password: string;
+  password?: string;
   display_name?: string;
   first_name?: string;
   last_name?: string;
@@ -729,6 +779,11 @@ export interface AccountDirectoryCreateRequest {
   other_settings?: Record<string, unknown>;
   trusted_product_access?: boolean;
   trusted_product_access_reason?: string;
+  verified_email?: {
+    address: string;
+    verified_at: string;
+    method: "email_code" | "email_link" | "google_oidc" | "saml";
+  };
 }
 
 export type MembershipClaimIdentityState = "pending" | "active" | "revoked";
@@ -2233,6 +2288,10 @@ export type AccountDirectoryMethod =
   | "resend-email-auth-challenge"
   | "redeem-email-auth-code"
   | "redeem-email-auth-link"
+  | "prepare-email-auth-exchange"
+  | "consume-email-auth-exchange"
+  | "complete-email-auth-mfa"
+  | "complete-email-fresh-auth"
   | "get-api-key"
   | "upsert-api-key"
   | "delete-api-key"
@@ -3456,6 +3515,16 @@ export interface InterBayAccountDirectoryApi {
   redeemEmailAuthLink: (
     opts: EmailAuthChallengeRedeemLinkRequest,
   ) => Promise<EmailAuthChallengeStatus>;
+  prepareEmailAuthExchange: (
+    opts: EmailAuthExchangePrepareRequest,
+  ) => Promise<EmailAuthExchangeResult>;
+  consumeEmailAuthExchange: (
+    opts: EmailAuthExchangeConsumeRequest,
+  ) => Promise<EmailAuthExchangeConsumeResult>;
+  completeEmailAuthMfa: (opts: EmailAuthMfaCompleteRequest) => Promise<void>;
+  completeEmailFreshAuth: (
+    opts: EmailFreshAuthCompleteRequest,
+  ) => Promise<EmailFreshAuthCompleteResult>;
   create: (
     opts: AccountDirectoryCreateRequest,
   ) => Promise<AccountDirectoryEntry>;
@@ -5226,6 +5295,38 @@ export function createInterBayAccountDirectoryClient({
     ...serviceClientOptions({ client, timeout }),
     subject: accountDirectorySubject({ method: "redeem-email-auth-link" }),
   });
+  const prepareEmailAuthExchangeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "prepareEmailAuthExchange">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "prepare-email-auth-exchange",
+    }),
+  });
+  const consumeEmailAuthExchangeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "consumeEmailAuthExchange">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "consume-email-auth-exchange",
+    }),
+  });
+  const completeEmailAuthMfaClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "completeEmailAuthMfa">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "complete-email-auth-mfa",
+    }),
+  });
+  const completeEmailFreshAuthClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "completeEmailFreshAuth">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "complete-email-fresh-auth",
+    }),
+  });
   const createClient = createServiceClient<
     Pick<InterBayAccountDirectoryApi, "create">
   >({
@@ -5349,6 +5450,14 @@ export function createInterBayAccountDirectoryClient({
       await redeemEmailAuthCodeClient.redeemEmailAuthCode(opts),
     redeemEmailAuthLink: async (opts) =>
       await redeemEmailAuthLinkClient.redeemEmailAuthLink(opts),
+    prepareEmailAuthExchange: async (opts) =>
+      await prepareEmailAuthExchangeClient.prepareEmailAuthExchange(opts),
+    consumeEmailAuthExchange: async (opts) =>
+      await consumeEmailAuthExchangeClient.consumeEmailAuthExchange(opts),
+    completeEmailAuthMfa: async (opts) =>
+      await completeEmailAuthMfaClient.completeEmailAuthMfa(opts),
+    completeEmailFreshAuth: async (opts) =>
+      await completeEmailFreshAuthClient.completeEmailFreshAuth(opts),
     create: async (opts) => await createClient.create(opts),
     delete: async (opts) => await deleteClient.delete(opts),
     getApiKey: async (opts) => await getApiKeyClient.getApiKey(opts),
@@ -5548,6 +5657,58 @@ export function createInterBayAccountDirectoryHandlers({
       impl: {
         redeemEmailAuthLink: async (opts) =>
           await impl.redeemEmailAuthLink(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "prepareEmailAuthExchange">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "prepare-email-auth-exchange",
+      }),
+      impl: {
+        prepareEmailAuthExchange: async (opts) =>
+          await impl.prepareEmailAuthExchange(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "consumeEmailAuthExchange">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "consume-email-auth-exchange",
+      }),
+      impl: {
+        consumeEmailAuthExchange: async (opts) =>
+          await impl.consumeEmailAuthExchange(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "completeEmailAuthMfa">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "complete-email-auth-mfa",
+      }),
+      impl: {
+        completeEmailAuthMfa: async (opts) =>
+          await impl.completeEmailAuthMfa(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "completeEmailFreshAuth">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "complete-email-fresh-auth",
+      }),
+      impl: {
+        completeEmailFreshAuth: async (opts) =>
+          await impl.completeEmailFreshAuth(opts),
       },
     }),
     createServiceHandler<Pick<InterBayAccountDirectoryApi, "create">>({

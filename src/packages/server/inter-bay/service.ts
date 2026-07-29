@@ -78,7 +78,11 @@ import {
   redeemResetLocal as redeemPasswordResetLocal,
 } from "@cocalc/server/auth/password-reset";
 import {
+  completeEmailAuthMfaDirect,
+  completeEmailFreshAuthDirect,
+  consumeEmailAuthExchangeDirect,
   getEmailAuthChallengeStatusDirect,
+  prepareEmailAuthExchangeDirect,
   redeemEmailAuthCodeDirect,
   redeemEmailAuthLinkDirect,
   resendEmailAuthChallengeDirect,
@@ -776,6 +780,14 @@ async function startAccountDirectoryService(): Promise<void> {
       await resendEmailAuthChallengeDirect(opts),
     redeemEmailAuthCode: async (opts) => await redeemEmailAuthCodeDirect(opts),
     redeemEmailAuthLink: async (opts) => await redeemEmailAuthLinkDirect(opts),
+    prepareEmailAuthExchange: async (opts) =>
+      await prepareEmailAuthExchangeDirect(opts),
+    consumeEmailAuthExchange: async (opts) =>
+      await consumeEmailAuthExchangeDirect(opts),
+    completeEmailAuthMfa: async (opts) =>
+      await completeEmailAuthMfaDirect(opts),
+    completeEmailFreshAuth: async (opts) =>
+      await completeEmailFreshAuthDirect(opts),
     create: async (opts) => await createClusterAccount(opts),
     delete: async (opts) => await deleteClusterAccount(opts),
     getApiKey: async ({ key_id }) =>

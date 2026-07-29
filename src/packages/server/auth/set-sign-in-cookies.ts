@@ -3,7 +3,10 @@ import {
   HOME_BAY_ID_COOKIE_NAME,
   REMEMBER_ME_COOKIE_NAME,
 } from "@cocalc/backend/auth/cookie-names";
-import type { AuthSessionFactorLevel } from "@cocalc/server/auth/auth-sessions";
+import type {
+  AuthPrimaryMethod,
+  AuthSessionFactorLevel,
+} from "@cocalc/server/auth/auth-sessions";
 import { recordNewAuthSession } from "@cocalc/server/auth/auth-sessions";
 import { createRememberMeCookie } from "@cocalc/server/auth/remember-me";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
@@ -34,6 +37,8 @@ export default async function setSignInCookies({
   session?: {
     authenticated_at?: Date;
     password_verified_at?: Date | null;
+    primary_verified_at?: Date | null;
+    primary_auth_method?: AuthPrimaryMethod | null;
     factor_verified_at?: Date | null;
     factor_level?: AuthSessionFactorLevel;
     fresh_auth_until?: Date | null;
@@ -83,6 +88,8 @@ async function setRememberMeCookie({ req, res, account_id, maxAge, session }) {
     req,
     authenticated_at: session?.authenticated_at,
     password_verified_at: session?.password_verified_at,
+    primary_verified_at: session?.primary_verified_at,
+    primary_auth_method: session?.primary_auth_method,
     factor_verified_at: session?.factor_verified_at,
     factor_level: session?.factor_level,
     fresh_auth_until: session?.fresh_auth_until,

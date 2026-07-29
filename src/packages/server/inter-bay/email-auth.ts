@@ -5,14 +5,22 @@
 
 import { createInterBayAccountDirectoryClient } from "@cocalc/conat/inter-bay/api";
 import {
+  completeEmailAuthMfaDirect,
+  completeEmailFreshAuthDirect,
+  consumeEmailAuthExchangeDirect,
   getEmailAuthChallengeStatusDirect,
+  prepareEmailAuthExchangeDirect,
   redeemEmailAuthCodeDirect,
   redeemEmailAuthLinkDirect,
   resendEmailAuthChallengeDirect,
   startEmailAuthChallengeDirect,
 } from "@cocalc/server/auth/email/challenge-store";
 import type {
+  CompleteEmailAuthMfaOptions,
+  CompleteEmailFreshAuthOptions,
   GetEmailAuthChallengeStatusOptions,
+  ConsumeEmailAuthExchangeOptions,
+  PrepareEmailAuthExchangeOptions,
   RedeemEmailAuthCodeOptions,
   RedeemEmailAuthLinkOptions,
   ResendEmailAuthChallengeOptions,
@@ -68,4 +76,36 @@ export async function redeemEmailAuthLink(opts: RedeemEmailAuthLinkOptions) {
   return useDirectSeedAuthority()
     ? await redeemEmailAuthLinkDirect(opts)
     : await seedClient().redeemEmailAuthLink(opts);
+}
+
+export async function prepareEmailAuthExchange(
+  opts: PrepareEmailAuthExchangeOptions,
+) {
+  return useDirectSeedAuthority()
+    ? await prepareEmailAuthExchangeDirect(opts)
+    : await seedClient().prepareEmailAuthExchange(opts);
+}
+
+export async function consumeEmailAuthExchange(
+  opts: ConsumeEmailAuthExchangeOptions,
+) {
+  return useDirectSeedAuthority()
+    ? await consumeEmailAuthExchangeDirect(opts)
+    : await seedClient().consumeEmailAuthExchange(opts);
+}
+
+export async function completeEmailAuthMfa(
+  opts: CompleteEmailAuthMfaOptions,
+): Promise<void> {
+  return useDirectSeedAuthority()
+    ? await completeEmailAuthMfaDirect(opts)
+    : await seedClient().completeEmailAuthMfa(opts);
+}
+
+export async function completeEmailFreshAuth(
+  opts: CompleteEmailFreshAuthOptions,
+) {
+  return useDirectSeedAuthority()
+    ? await completeEmailFreshAuthDirect(opts)
+    : await seedClient().completeEmailFreshAuth(opts);
 }

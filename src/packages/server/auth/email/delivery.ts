@@ -23,11 +23,13 @@ export async function sendEmailAuthChallengeMessage({
   code,
   email_address,
   link_token,
+  purpose,
 }: {
   challenge_id: string;
   code: string;
   email_address: string;
   link_token: string;
+  purpose: "sign_in_or_sign_up" | "email_fresh_auth";
 }): Promise<void> {
   const [{ site_name }, site_url] = await Promise.all([
     getServerSettings(),
@@ -40,18 +42,23 @@ export async function sendEmailAuthChallengeMessage({
   )}#token=${encodeURIComponent(link_token)}`;
   const safeSiteName = escapeHtml(siteName);
   const safeContinueUrl = escapeHtml(continueUrl);
+  const isFreshAuth = purpose === "email_fresh_auth";
+  const action = isFreshAuth ? "approve this security action" : "continue";
+  const linkAction = isFreshAuth
+    ? "Approve this action"
+    : `Continue to ${safeSiteName}`;
   const html = `
-<p>Use this code to continue to ${safeSiteName}:</p>
+<p>Use this code to ${action} in ${safeSiteName}:</p>
 <p style="font-size:28px;font-weight:700;letter-spacing:6px;margin:24px 0">${code}</p>
-<p>Or continue using this sign-in link:</p>
-<p><a href="${safeContinueUrl}">Continue to ${safeSiteName}</a></p>
+<p>Or use this approval link:</p>
+<p><a href="${safeContinueUrl}">${linkAction}</a></p>
 <p style="color:#666">This code and link expire in 15 minutes. If you did not request this, you can ignore this message.</p>
 `;
-  const text = `Use this code to continue to ${siteName}:
+  const text = `Use this code to ${action} in ${siteName}:
 
 ${code}
 
-Or open this sign-in link:
+Or open this approval link:
 
 ${continueUrl}
 
@@ -60,7 +67,7 @@ This code and link expire in 15 minutes. If you did not request this, you can ig
   await sendEmail(
     await appendFooter({
       to: email_address,
-      subject: `${code} is your ${siteName} sign-in code`,
+      subject: `${code} is your ${siteName} ${isFreshAuth ? "approval" : "sign-in"} code`,
       html,
       text,
       categories: ["email-auth"],

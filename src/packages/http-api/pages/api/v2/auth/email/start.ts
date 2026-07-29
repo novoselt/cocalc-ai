@@ -12,6 +12,7 @@ import {
 } from "@cocalc/http-api/lib/api/schema/auth/email";
 import { checkRequiredSSO } from "@cocalc/server/auth/sso/check-required-sso";
 import { startEmailAuthChallenge } from "@cocalc/server/inter-bay/email-auth";
+import { selectSignupHomeBay } from "@cocalc/server/accounts/select-home-bay";
 
 import {
   assertEmailAuthStartEnabled,
@@ -19,10 +20,40 @@ import {
   getOrSetEmailAuthBrowserBinding,
 } from "./_shared";
 
+function safeContinuationTarget(value: unknown): string | undefined {
+  const target = `${value ?? ""}`.trim();
+  if (
+    !target ||
+    target.length > 4096 ||
+    !target.startsWith("/") ||
+    target.startsWith("//")
+  ) {
+    return undefined;
+  }
+  try {
+    const url = new URL(target, "https://example.invalid");
+    if (
+      url.origin !== "https://example.invalid" ||
+      /^\/(auth|sso)(\/|$)/.test(url.pathname)
+    ) {
+      return undefined;
+    }
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function start(req, res) {
   try {
     await assertEmailAuthStartEnabled();
-    const { email: rawEmail, analytics_token } = getParams(req);
+    const {
+      email: rawEmail,
+      analytics_token,
+      target,
+      terms,
+      terms_version,
+    } = getParams(req);
     const email = `${rawEmail ?? ""}`.trim().toLowerCase();
     const strategy = checkRequiredSSO({
       email,
@@ -44,6 +75,10 @@ export async function start(req, res) {
         browser_binding: getOrSetEmailAuthBrowserBinding(req, res),
         request_ip: req.ip,
         analytics_token: `${analytics_token ?? ""}`.trim() || undefined,
+        prospective_home_bay_id: await selectSignupHomeBay({ req }),
+        terms_accepted: terms === true,
+        terms_version: `${terms_version ?? ""}`.trim() || undefined,
+        continuation_target: safeContinuationTarget(target),
       }),
     );
   } catch (err) {

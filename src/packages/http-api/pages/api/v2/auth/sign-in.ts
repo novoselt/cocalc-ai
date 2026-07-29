@@ -18,7 +18,10 @@ Sign in works as follows:
 import { Request, Response } from "express";
 
 import { recordFail, signInCheck } from "@cocalc/server/auth/throttle";
-import type { AuthSessionFactorLevel } from "@cocalc/server/auth/auth-sessions";
+import type {
+  AuthPrimaryMethod,
+  AuthSessionFactorLevel,
+} from "@cocalc/server/auth/auth-sessions";
 import getRequiresToken from "@cocalc/server/auth/tokens/get-requires-token";
 import {
   createSignInSecondFactorChallenge,
@@ -132,6 +135,8 @@ export default async function signIn(req: Request, res: Response) {
   await signUserIn(req, res, account_id, {
     authenticated_at: new Date(),
     password_verified_at: new Date(),
+    primary_verified_at: new Date(),
+    primary_auth_method: "password",
     factor_level: "none",
     fresh_auth_until: null,
   });
@@ -290,6 +295,8 @@ export async function signUserIn(
     maxAge?: number;
     authenticated_at?: Date;
     password_verified_at?: Date | null;
+    primary_verified_at?: Date | null;
+    primary_auth_method?: AuthPrimaryMethod | null;
     factor_verified_at?: Date | null;
     factor_level?: AuthSessionFactorLevel;
     fresh_auth_until?: Date | null;
@@ -308,6 +315,11 @@ export async function signUserIn(
           opts?.password_verified_at === undefined
             ? authenticated_at
             : opts.password_verified_at,
+        primary_verified_at:
+          opts?.primary_verified_at === undefined
+            ? authenticated_at
+            : opts.primary_verified_at,
+        primary_auth_method: opts?.primary_auth_method ?? "password",
         factor_verified_at: opts?.factor_verified_at ?? null,
         factor_level: opts?.factor_level ?? "none",
         fresh_auth_until: opts?.fresh_auth_until ?? null,

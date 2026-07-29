@@ -20,6 +20,7 @@ export const EmailAuthChallengeStateSchema = z.enum([
 
 export const EmailAuthChallengeStatusSchema = z.object({
   challenge_id: z.string().uuid(),
+  purpose: z.enum(["sign_in_or_sign_up", "email_fresh_auth"]),
   state: EmailAuthChallengeStateSchema,
   masked_email: z.string(),
   expires_at: z.string(),
@@ -34,9 +35,22 @@ export const EmailAuthErrorSchema = z.object({
   code: z.string().optional(),
 });
 
+export const EmailAuthExchangeSchema = z.object({
+  challenge_id: z.string().uuid(),
+  exchange_token: z.string().min(32),
+  exchange_expires_at: z.string(),
+  home_bay_id: z.string().min(1),
+  home_bay_url: z.string().optional(),
+  redirect_to: z.string().optional(),
+  state: z.literal("account_ready"),
+});
+
 export const EmailAuthStartInputSchema = z.object({
   email: z.string().email(),
   analytics_token: z.string().uuid().optional(),
+  terms: z.boolean().optional(),
+  terms_version: z.string().max(128).optional(),
+  target: z.string().max(4096).optional(),
 });
 
 export const EmailAuthStartOutputSchema = z.union([
@@ -69,5 +83,10 @@ export const EmailAuthRedeemLinkInputSchema = EmailAuthStatusInputSchema.extend(
 
 export const EmailAuthChallengeOutputSchema = z.union([
   EmailAuthChallengeStatusSchema,
+  EmailAuthExchangeSchema,
   EmailAuthErrorSchema,
 ]);
+
+export const EmailAuthExchangeInputSchema = z.object({
+  retry_token: z.string().min(32),
+});

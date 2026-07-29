@@ -32,6 +32,10 @@ interface Params {
   other_settings?: Record<string, unknown>;
   trusted_product_access?: boolean;
   trusted_product_access_reason?: string;
+  verified_email?: {
+    address: string;
+    verified_at: Date;
+  };
 }
 
 export default async function createAccount({
@@ -51,6 +55,7 @@ export default async function createAccount({
   other_settings,
   trusted_product_access,
   trusted_product_access_reason,
+  verified_email,
 }: Params): Promise<void> {
   if (!email) {
     throw Error("Email address is required for account creation.");
@@ -72,7 +77,7 @@ export default async function createAccount({
       "Anonymous User";
     const pool = getPool();
     await pool.query(
-      "INSERT INTO accounts (email_address, password_hash, display_name, first_name, last_name, account_id, created, tags, sign_up_usage_intent, owner_id, ephemeral, customize, home_bay_id, other_settings, trusted_product_access, trusted_product_access_reason, created_by) VALUES($1::TEXT, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT, $6::UUID, NOW(), $7::TEXT[], $8::TEXT, $9::UUID, $10::BIGINT, $11::JSONB, $12::TEXT, COALESCE($13::JSONB, '{}'::JSONB), $14::BOOL, $15::TEXT, $16::INET)",
+      "INSERT INTO accounts (email_address, password_hash, display_name, first_name, last_name, account_id, created, tags, sign_up_usage_intent, owner_id, ephemeral, customize, home_bay_id, other_settings, trusted_product_access, trusted_product_access_reason, created_by, email_address_verified) VALUES($1::TEXT, $2::TEXT, $3::TEXT, $4::TEXT, $5::TEXT, $6::UUID, NOW(), $7::TEXT[], $8::TEXT, $9::UUID, $10::BIGINT, $11::JSONB, $12::TEXT, COALESCE($13::JSONB, '{}'::JSONB), $14::BOOL, $15::TEXT, $16::INET, $17::JSONB)",
       [
         email ? email : undefined, // can't insert "" more than once!
         password ? passwordHash(password) : undefined, // definitely don't set password_hash to hash of empty string, e.g., anonymous accounts can then NEVER switch to email/password.  This was a bug in production for a while.
@@ -92,6 +97,11 @@ export default async function createAccount({
           ? `${trusted_product_access_reason ?? ""}`.trim() || null
           : null,
         `${created_by ?? ""}`.trim() || null,
+        verified_email
+          ? {
+              [verified_email.address]: verified_email.verified_at,
+            }
+          : null,
       ],
     );
   } catch (error) {

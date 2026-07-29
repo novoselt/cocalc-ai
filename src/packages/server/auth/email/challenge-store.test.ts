@@ -7,6 +7,18 @@ import getPool, { initEphemeralDatabase } from "@cocalc/database/pool";
 
 const sendEmailAuthChallengeMessageMock = jest.fn(async () => undefined);
 const getClusterAccountByEmailDirectMock = jest.fn(async () => null);
+const adminVerifyClusterAccountEmailAddressMock = jest.fn(
+  async () => undefined,
+);
+const createClusterAccountMock = jest.fn();
+const getServerSettingsMock = jest.fn();
+const getStrategiesMock = jest.fn();
+const getEnabledSsoDomainPolicyForEmailMock = jest.fn();
+const getRequiresRegistrationTokenMock = jest.fn();
+const issueHomeBayRetryTokenMock = jest.fn(({ token_id }) => ({
+  token: `signed-${token_id}-${"x".repeat(40)}`,
+  expires_at: Date.now() + 60_000,
+}));
 
 jest.mock("./delivery", () => ({
   sendEmailAuthChallengeMessage: (...args: any[]) =>
@@ -16,6 +28,37 @@ jest.mock("./delivery", () => ({
 jest.mock("@cocalc/server/accounts/cluster-directory", () => ({
   getClusterAccountByEmailDirect: (...args: any[]) =>
     getClusterAccountByEmailDirectMock(...args),
+}));
+
+jest.mock("@cocalc/server/inter-bay/accounts", () => ({
+  adminVerifyClusterAccountEmailAddress: (...args: any[]) =>
+    adminVerifyClusterAccountEmailAddressMock(...args),
+  createClusterAccount: (...args: any[]) => createClusterAccountMock(...args),
+}));
+
+jest.mock("@cocalc/server/auth/home-bay-retry-token", () => ({
+  issueHomeBayRetryToken: (...args: any[]) =>
+    issueHomeBayRetryTokenMock(...args),
+}));
+
+jest.mock("@cocalc/database/settings/server-settings", () => ({
+  getServerSettings: (...args: any[]) => getServerSettingsMock(...args),
+}));
+
+jest.mock("@cocalc/database/settings/get-sso-strategies", () => ({
+  __esModule: true,
+  default: (...args: any[]) => getStrategiesMock(...args),
+}));
+
+jest.mock("@cocalc/database/settings/sso-policies", () => ({
+  getEnabledSsoDomainPolicyForEmail: (...args: any[]) =>
+    getEnabledSsoDomainPolicyForEmailMock(...args),
+  passwordSignupBlockedBySsoPolicy: () => false,
+}));
+
+jest.mock("@cocalc/server/auth/tokens/get-requires-token", () => ({
+  __esModule: true,
+  default: (...args: any[]) => getRequiresRegistrationTokenMock(...args),
 }));
 
 jest.mock("@cocalc/database/settings/secret-settings", () => ({
@@ -34,6 +77,15 @@ describe("seed-global email authentication challenges", () => {
     sendEmailAuthChallengeMessageMock.mockClear();
     getClusterAccountByEmailDirectMock.mockClear();
     getClusterAccountByEmailDirectMock.mockResolvedValue(null);
+    adminVerifyClusterAccountEmailAddressMock.mockClear();
+    createClusterAccountMock.mockReset();
+    issueHomeBayRetryTokenMock.mockClear();
+    getServerSettingsMock.mockReset().mockResolvedValue({
+      email_signup: true,
+    });
+    getStrategiesMock.mockReset().mockResolvedValue([]);
+    getEnabledSsoDomainPolicyForEmailMock.mockReset().mockResolvedValue(null);
+    getRequiresRegistrationTokenMock.mockReset().mockResolvedValue(false);
     await getPool().query("TRUNCATE email_auth_challenges");
   });
 
@@ -181,5 +233,224 @@ describe("seed-global email authentication challenges", () => {
         browser_binding: "browser-one",
       }),
     ).rejects.toMatchObject({ code: "resend_too_soon" });
+  });
+
+  it("prepares and consumes a one-time home-bay exchange", async () => {
+    getClusterAccountByEmailDirectMock.mockResolvedValue({
+      account_id: "22222222-2222-4222-8222-222222222222",
+      email_address: "person@example.edu",
+      home_bay_id: "bay-home",
+      banned: false,
+    });
+    const {
+      consumeEmailAuthExchangeDirect,
+      prepareEmailAuthExchangeDirect,
+      redeemEmailAuthCodeDirect,
+      startEmailAuthChallengeDirect,
+    } = await import("./challenge-store");
+    const started = await startEmailAuthChallengeDirect({
+      email_address: "person@example.edu",
+      browser_binding: "browser-one",
+      continuation_target: "/projects/project-id/files",
+      prospective_home_bay_id: "bay-new",
+      terms_accepted: true,
+    });
+    const sent = sendEmailAuthChallengeMessageMock.mock.calls[0][0];
+    await redeemEmailAuthCodeDirect({
+      challenge_id: started.challenge_id,
+      code: sent.code,
+    });
+    const exchange = await prepareEmailAuthExchangeDirect({
+      challenge_id: started.challenge_id,
+      auth_method: "email_code",
+    });
+    expect(exchange).toMatchObject({
+      challenge_id: started.challenge_id,
+      home_bay_id: "bay-home",
+      redirect_to: "/projects/project-id/files",
+      state: "account_ready",
+    });
+    expect(exchange.exchange_token).toContain("signed-");
+    expect(adminVerifyClusterAccountEmailAddressMock).toHaveBeenCalledWith({
+      account_id: "22222222-2222-4222-8222-222222222222",
+    });
+
+    const tokenArgs = issueHomeBayRetryTokenMock.mock.calls.at(-1)?.[0];
+    const consumed = await consumeEmailAuthExchangeDirect({
+      account_id: "22222222-2222-4222-8222-222222222222",
+      challenge_id: started.challenge_id,
+      completion: "completed",
+      exchange_id: tokenArgs.token_id,
+      home_bay_id: "bay-home",
+    });
+    expect(consumed).toMatchObject({
+      account_id: "22222222-2222-4222-8222-222222222222",
+      auth_method: "email_code",
+    });
+    await expect(
+      consumeEmailAuthExchangeDirect({
+        account_id: consumed.account_id,
+        challenge_id: started.challenge_id,
+        completion: "completed",
+        exchange_id: tokenArgs.token_id,
+        home_bay_id: "bay-home",
+      }),
+    ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("marks an MFA-backed exchange complete only after the second factor", async () => {
+    getClusterAccountByEmailDirectMock.mockResolvedValue({
+      account_id: "22222222-2222-4222-8222-222222222222",
+      email_address: "person@example.edu",
+      home_bay_id: "bay-home",
+      banned: false,
+    });
+    const {
+      completeEmailAuthMfaDirect,
+      consumeEmailAuthExchangeDirect,
+      prepareEmailAuthExchangeDirect,
+      redeemEmailAuthCodeDirect,
+      startEmailAuthChallengeDirect,
+    } = await import("./challenge-store");
+    const started = await startEmailAuthChallengeDirect({
+      email_address: "person@example.edu",
+      browser_binding: "browser-one",
+      prospective_home_bay_id: "bay-new",
+      terms_accepted: true,
+    });
+    await redeemEmailAuthCodeDirect({
+      challenge_id: started.challenge_id,
+      code: sendEmailAuthChallengeMessageMock.mock.calls[0][0].code,
+    });
+    await prepareEmailAuthExchangeDirect({
+      challenge_id: started.challenge_id,
+      auth_method: "email_code",
+    });
+    const tokenArgs = issueHomeBayRetryTokenMock.mock.calls.at(-1)?.[0];
+    await consumeEmailAuthExchangeDirect({
+      account_id: "22222222-2222-4222-8222-222222222222",
+      challenge_id: started.challenge_id,
+      completion: "mfa_required",
+      exchange_id: tokenArgs.token_id,
+      home_bay_id: "bay-home",
+    });
+
+    await completeEmailAuthMfaDirect({
+      account_id: "22222222-2222-4222-8222-222222222222",
+      challenge_id: started.challenge_id,
+      home_bay_id: "bay-home",
+    });
+
+    const { rows } = await getPool().query(
+      `SELECT state, completed_at, session_completed_at
+         FROM email_auth_challenges
+        WHERE challenge_id=$1`,
+      [started.challenge_id],
+    );
+    expect(rows[0].state).toBe("completed");
+    expect(rows[0].completed_at).not.toBeNull();
+    expect(rows[0].session_completed_at).not.toBeNull();
+    await expect(
+      completeEmailAuthMfaDirect({
+        account_id: "22222222-2222-4222-8222-222222222222",
+        challenge_id: started.challenge_id,
+        home_bay_id: "bay-home",
+      }),
+    ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("creates a verified account without a password only after proof", async () => {
+    createClusterAccountMock.mockResolvedValue({
+      account_id: "33333333-3333-4333-8333-333333333333",
+      email_address: "new@example.edu",
+      home_bay_id: "bay-new",
+    });
+    const {
+      prepareEmailAuthExchangeDirect,
+      redeemEmailAuthLinkDirect,
+      startEmailAuthChallengeDirect,
+    } = await import("./challenge-store");
+    const started = await startEmailAuthChallengeDirect({
+      email_address: "new@example.edu",
+      browser_binding: "browser-new",
+      prospective_home_bay_id: "bay-new",
+      terms_accepted: true,
+      terms_version: "2026-07",
+    });
+    const sent = sendEmailAuthChallengeMessageMock.mock.calls[0][0];
+    await redeemEmailAuthLinkDirect({
+      challenge_id: started.challenge_id,
+      token: sent.link_token,
+    });
+    await prepareEmailAuthExchangeDirect({
+      challenge_id: started.challenge_id,
+      auth_method: "email_link",
+    });
+
+    expect(createClusterAccountMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email_address: "new@example.edu",
+        display_name: "CoCalc User",
+        home_bay_id: "bay-new",
+        verified_email: expect.objectContaining({
+          address: "new@example.edu",
+          method: "email_link",
+        }),
+      }),
+    );
+    expect(createClusterAccountMock.mock.calls[0][0]).not.toHaveProperty(
+      "password",
+    );
+    expect(adminVerifyClusterAccountEmailAddressMock).toHaveBeenCalledWith({
+      account_id: "33333333-3333-4333-8333-333333333333",
+    });
+  });
+
+  it("binds fresh-auth email proof to an existing account", async () => {
+    getClusterAccountByEmailDirectMock.mockResolvedValue({
+      account_id: "22222222-2222-4222-8222-222222222222",
+      email_address: "person@example.edu",
+      home_bay_id: "bay-home",
+      banned: false,
+    });
+    const {
+      completeEmailFreshAuthDirect,
+      redeemEmailAuthCodeDirect,
+      startEmailAuthChallengeDirect,
+    } = await import("./challenge-store");
+    await expect(
+      startEmailAuthChallengeDirect({
+        email_address: "person@example.edu",
+        browser_binding: "browser-fresh",
+        expected_account_id: "99999999-9999-4999-8999-999999999999",
+        purpose: "email_fresh_auth",
+      }),
+    ).rejects.toMatchObject({ code: "not_allowed" });
+
+    const started = await startEmailAuthChallengeDirect({
+      email_address: "person@example.edu",
+      browser_binding: "browser-fresh",
+      expected_account_id: "22222222-2222-4222-8222-222222222222",
+      purpose: "email_fresh_auth",
+    });
+    expect(started.purpose).toBe("email_fresh_auth");
+    await redeemEmailAuthCodeDirect({
+      challenge_id: started.challenge_id,
+      code: sendEmailAuthChallengeMessageMock.mock.calls.at(-1)?.[0].code,
+    });
+    await expect(
+      completeEmailFreshAuthDirect({
+        account_id: "99999999-9999-4999-8999-999999999999",
+        challenge_id: started.challenge_id,
+      }),
+    ).rejects.toMatchObject({ code: "invalid" });
+    await expect(
+      completeEmailFreshAuthDirect({
+        account_id: "22222222-2222-4222-8222-222222222222",
+        challenge_id: started.challenge_id,
+      }),
+    ).resolves.toMatchObject({
+      auth_method: "email_code",
+    });
   });
 });

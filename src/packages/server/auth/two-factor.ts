@@ -33,6 +33,7 @@ import {
   resolveFreshAuthDurationMs,
   revokeOtherAuthSessions,
   setCurrentSessionFreshAuth,
+  type AuthPrimaryMethod,
   type AuthSessionFactorLevel,
   type FreshAuthDuration,
   type PasswordFreshAuthFactorLevel,
@@ -96,12 +97,15 @@ type ChallengeRow = {
   account_id: string;
   purpose: string;
   password_verified_at?: Date | null;
+  primary_verified_at?: Date | null;
+  primary_auth_method?: AuthPrimaryMethod | null;
   factor_verified_at?: Date | null;
   verified_factor_type?: string | null;
   expire: Date;
   attempt_count: number;
   max_attempts: number;
   completed_at?: Date | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type FreshAuthSsoMethod = {
@@ -942,8 +946,14 @@ export async function confirmTwoFactorSetup({
 
 export async function createSignInSecondFactorChallenge({
   account_id,
+  metadata,
+  primary_auth_method = "password",
+  primary_verified_at = new Date(),
 }: {
   account_id: string;
+  metadata?: Record<string, unknown>;
+  primary_auth_method?: AuthPrimaryMethod;
+  primary_verified_at?: Date;
 }): Promise<{
   challenge_id: string;
   methods: SecondFactorMethod[];
@@ -1009,6 +1019,8 @@ export async function createSignInSecondFactorChallenge({
             account_id,
             purpose,
             password_verified_at,
+            primary_verified_at,
+            primary_auth_method,
             factor_verified_at,
             verified_factor_type,
             target_session_hash,
@@ -1022,25 +1034,30 @@ export async function createSignInSecondFactorChallenge({
             $1::UUID,
             $2::UUID,
             $3::VARCHAR(32),
-            NOW(),
-            NULL,
-            NULL,
-            NULL,
             $4::TIMESTAMP,
+            $5::TIMESTAMP,
+            $6::VARCHAR(32),
+            NULL,
+            NULL,
+            NULL,
+            $7::TIMESTAMP,
             0,
-            $5::INTEGER,
+            $8::INTEGER,
             NULL,
             NOW(),
-            $6::JSONB
+            $9::JSONB
           )
         `,
         [
           challenge_id,
           accountId,
           CHALLENGE_PURPOSE_SIGN_IN,
+          primary_auth_method === "password" ? primary_verified_at : null,
+          primary_verified_at,
+          primary_auth_method,
           new Date(Date.now() + CHALLENGE_TTL_MS),
           CHALLENGE_MAX_ATTEMPTS,
-          "{}",
+          JSON.stringify(metadata ?? {}),
         ],
       );
     },
@@ -1062,9 +1079,12 @@ export async function verifySignInSecondFactorChallenge({
 }): Promise<{
   account_id: string;
   factor_level: AuthSessionFactorLevel;
-  password_verified_at: Date;
+  password_verified_at: Date | null;
+  primary_verified_at: Date;
+  primary_auth_method: AuthPrimaryMethod;
   factor_verified_at: Date;
   fresh_auth_until: Date;
+  email_auth_challenge_id?: string;
 }> {
   const challenge = await getChallenge(`${challenge_id ?? ""}`);
   if (!challenge || challenge.purpose !== CHALLENGE_PURPOSE_SIGN_IN) {
@@ -1077,8 +1097,11 @@ export async function verifySignInSecondFactorChallenge({
     throw new Error("second factor code is required");
   }
 
-  let password_verified_at = new Date();
+  let password_verified_at: Date | null = null;
+  let primary_verified_at = new Date();
+  let primary_auth_method: AuthPrimaryMethod = "password";
   let factor_verified_at = new Date();
+  let email_auth_challenge_id: string | undefined;
   await withAccountRehomeWriteFence({
     account_id: accountId,
     action: "complete sign-in second-factor challenge",
@@ -1171,8 +1194,18 @@ export async function verifySignInSecondFactorChallenge({
       );
       password_verified_at = locked.password_verified_at
         ? new Date(locked.password_verified_at)
-        : new Date();
+        : null;
+      primary_verified_at = locked.primary_verified_at
+        ? new Date(locked.primary_verified_at)
+        : (password_verified_at ?? new Date());
+      primary_auth_method =
+        locked.primary_auth_method ??
+        (password_verified_at ? "password" : "legacy_sso");
       factor_verified_at = new Date();
+      const emailAuthChallengeId = `${locked.metadata?.email_auth_challenge_id ?? ""}`;
+      if (isValidUUID(emailAuthChallengeId)) {
+        email_auth_challenge_id = emailAuthChallengeId;
+      }
     },
   });
 
@@ -1180,8 +1213,11 @@ export async function verifySignInSecondFactorChallenge({
     account_id: accountId,
     factor_level: resolvedMethod,
     password_verified_at,
+    primary_verified_at,
+    primary_auth_method,
     factor_verified_at,
     fresh_auth_until: new Date(Date.now() + 15 * 60_000),
+    email_auth_challenge_id,
   };
 }
 

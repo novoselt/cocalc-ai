@@ -5,7 +5,7 @@
 
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { createEmailAuthBrowserBinding } from "@cocalc/server/auth/email/secrets";
-import { EmailAuthChallengeError } from "@cocalc/server/auth/email/challenge-store";
+import { EmailAuthChallengeError } from "@cocalc/server/auth/email/types";
 import { isEmailConfigured } from "@cocalc/server/email/send-email";
 import { normalizeEmailAuthenticationMode } from "@cocalc/util/auth/email-auth";
 

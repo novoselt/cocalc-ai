@@ -797,6 +797,12 @@ export async function provisionLocalClusterAccount(
     other_settings: opts.other_settings,
     trusted_product_access: opts.trusted_product_access,
     trusted_product_access_reason: opts.trusted_product_access_reason,
+    verified_email: opts.verified_email
+      ? {
+          address: opts.verified_email.address,
+          verified_at: new Date(opts.verified_email.verified_at),
+        }
+      : undefined,
   });
   return (
     (await getClusterAccountByIdDirect(account_id)) ?? {
@@ -922,6 +928,7 @@ async function createClusterAccountDirect(
       first_name: entry.first_name ?? opts.first_name,
       last_name: entry.last_name ?? opts.last_name,
       home_bay_id: entry.home_bay_id ?? home_bay_id,
+      email_address_verified: opts.verified_email != null,
     });
     return {
       ...entry,

@@ -6,9 +6,27 @@
 import { randomUUID } from "node:crypto";
 
 import getPool from "@cocalc/database/pool";
+import { getServerSettings } from "@cocalc/database/settings/server-settings";
+import getStrategies from "@cocalc/database/settings/get-sso-strategies";
+import {
+  getEnabledSsoDomainPolicyForEmail,
+  passwordSignupBlockedBySsoPolicy,
+} from "@cocalc/database/settings/sso-policies";
 import { getClusterAccountByEmailDirect } from "@cocalc/server/accounts/cluster-directory";
 import { getLogger } from "@cocalc/backend/logger";
+import { evaluateAccountCreationPolicy } from "@cocalc/server/auth/account-creation-policy";
+import { issueHomeBayRetryToken } from "@cocalc/server/auth/home-bay-retry-token";
+import {
+  checkRequiredSSO,
+  getEmailDomain,
+} from "@cocalc/server/auth/sso/check-required-sso";
+import getRequiresRegistrationToken from "@cocalc/server/auth/tokens/get-requires-token";
+import {
+  adminVerifyClusterAccountEmailAddress,
+  createClusterAccount,
+} from "@cocalc/server/inter-bay/accounts";
 import { is_valid_email_address as isValidEmailAddress } from "@cocalc/util/misc";
+import { buildMarketingConsentOtherSettings } from "@cocalc/util/notification-preferences";
 
 import { sendEmailAuthChallengeMessage } from "./delivery";
 import {
@@ -21,12 +39,20 @@ import {
 import type {
   EmailAuthChallengePublicStatus,
   EmailAuthChallengeState,
+  EmailAuthExchangeResult,
+  CompleteEmailAuthMfaOptions,
+  CompleteEmailFreshAuthOptions,
+  CompletedEmailFreshAuth,
+  ConsumedEmailAuthExchange,
+  ConsumeEmailAuthExchangeOptions,
   GetEmailAuthChallengeStatusOptions,
+  PrepareEmailAuthExchangeOptions,
   RedeemEmailAuthCodeOptions,
   RedeemEmailAuthLinkOptions,
   ResendEmailAuthChallengeOptions,
   StartEmailAuthChallengeOptions,
 } from "./types";
+import { EmailAuthChallengeError } from "./types";
 
 const logger = getLogger("server:auth:email");
 const TABLE = "email_auth_challenges";
@@ -51,6 +77,8 @@ type ChallengeRow = {
   email_lookup_hash: string;
   account_id?: string | null;
   selected_home_bay_id?: string | null;
+  exchange_id?: string | null;
+  auth_method?: "email_code" | "email_link" | null;
   purpose: string;
   state: EmailAuthChallengeState;
   code_digest: string;
@@ -62,24 +90,12 @@ type ChallengeRow = {
   resend_available_at: Date;
   message_sent_at?: Date | null;
   message_failed_at?: Date | null;
+  terms_accepted_at?: Date | null;
+  terms_version?: string | null;
+  continuation?: { target?: string } | null;
+  email_proved_at?: Date | null;
   expires_at: Date;
 };
-
-export class EmailAuthChallengeError extends Error {
-  constructor(
-    message: string,
-    readonly code:
-      | "blocked"
-      | "expired"
-      | "invalid"
-      | "not_found"
-      | "rate_limited"
-      | "resend_too_soon",
-  ) {
-    super(message);
-    this.name = "EmailAuthChallengeError";
-  }
-}
 
 export async function ensureEmailAuthChallengeSchema(): Promise<void> {
   if (schemaReady) {
@@ -179,6 +195,7 @@ function publicStatus(row: ChallengeRow): EmailAuthChallengePublicStatus {
       : row.state;
   return {
     challenge_id: row.challenge_id,
+    purpose: row.purpose as EmailAuthChallengePublicStatus["purpose"],
     state,
     masked_email: maskEmailAddress(row.normalized_email),
     expires_at: new Date(row.expires_at).toISOString(),
@@ -233,11 +250,13 @@ async function deliverChallenge({
   code,
   email_address,
   link_token,
+  purpose,
 }: {
   challenge_id: string;
   code: string;
   email_address: string;
   link_token: string;
+  purpose: EmailAuthChallengePublicStatus["purpose"];
 }): Promise<void> {
   const pool = getPool();
   try {
@@ -246,6 +265,7 @@ async function deliverChallenge({
       code,
       email_address,
       link_token,
+      purpose,
     });
     await pool.query(
       `
@@ -311,6 +331,21 @@ export async function startEmailAuthChallengeDirect(
     }),
     getClusterAccountByEmailDirect(email),
   ]);
+  if (
+    opts.expected_account_id &&
+    account?.account_id !== opts.expected_account_id
+  ) {
+    throw new EmailAuthChallengeError(
+      "This email address does not match the signed-in account.",
+      "not_allowed",
+    );
+  }
+  if (purpose === "email_fresh_auth" && !account?.account_id) {
+    throw new EmailAuthChallengeError(
+      "Fresh authentication requires an existing account.",
+      "not_allowed",
+    );
+  }
   const pool = getPool();
   const db = await pool.connect();
   let row: ChallengeRow;
@@ -322,13 +357,14 @@ export async function startEmailAuthChallengeDirect(
           SELECT *
             FROM ${TABLE}
            WHERE email_lookup_hash=$1
+             AND purpose=$2
              AND state='pending'
              AND expires_at > NOW()
            ORDER BY created_at DESC
            LIMIT 1
            FOR UPDATE
         `,
-        [emailLookupHash],
+        [emailLookupHash, purpose],
       )
     ).rows[0];
     if (
@@ -353,10 +389,11 @@ export async function startEmailAuthChallengeDirect(
         UPDATE ${TABLE}
            SET state='superseded', superseded_at=NOW(), updated_at=NOW()
          WHERE email_lookup_hash=$1
+           AND purpose=$2
            AND state='pending'
            AND expires_at > NOW()
       `,
-      [emailLookupHash],
+      [emailLookupHash, purpose],
     );
     const expiresAt = new Date(Date.now() + CHALLENGE_TTL_MS);
     const resendAvailableAt = new Date(Date.now() + RESEND_DELAY_MS);
@@ -367,11 +404,13 @@ export async function startEmailAuthChallengeDirect(
             challenge_id, normalized_email, email_lookup_hash, account_id,
             selected_home_bay_id, purpose, state, code_digest,
             link_token_digest, browser_binding_digest, analytics_token,
+            terms_accepted_at, terms_version, continuation,
             attempt_count, max_attempts, send_count, resend_available_at,
             message_queued_at, expires_at, request_ip_hash, metadata
           ) VALUES (
             $1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10,
-            0, $11, 1, $12, NOW(), $13, $14, '{}'::JSONB
+            $11, $12, $13::JSONB, 0, $14, 1, $15, NOW(), $16, $17,
+            '{}'::JSONB
           )
           RETURNING *
         `,
@@ -380,12 +419,17 @@ export async function startEmailAuthChallengeDirect(
           email,
           emailLookupHash,
           account?.account_id ?? null,
-          account?.home_bay_id ?? null,
+          account?.home_bay_id ?? opts.prospective_home_bay_id ?? null,
           purpose,
           codeDigest,
           linkTokenDigest,
           browserBindingDigest,
           opts.analytics_token || null,
+          opts.terms_accepted ? new Date() : null,
+          `${opts.terms_version ?? ""}`.trim() || null,
+          opts.continuation_target
+            ? JSON.stringify({ target: opts.continuation_target })
+            : null,
           MAX_ATTEMPTS,
           resendAvailableAt,
           expiresAt,
@@ -405,6 +449,7 @@ export async function startEmailAuthChallengeDirect(
     code,
     email_address: email,
     link_token: linkToken,
+    purpose,
   });
   return {
     ...publicStatus(row),
@@ -557,6 +602,7 @@ export async function resendEmailAuthChallengeDirect(
     code,
     email_address: row.normalized_email,
     link_token: linkToken,
+    purpose: row.purpose as EmailAuthChallengePublicStatus["purpose"],
   });
   return {
     ...publicStatus(row),
@@ -590,14 +636,15 @@ async function redeemSecret({
     if (!row) {
       throw new EmailAuthChallengeError("Challenge not found.", "not_found");
     }
-    if (row.state === "email_proved") {
-      await db.query("COMMIT");
-      transactionOpen = false;
-      return publicStatus(row);
-    }
+    const provedState = [
+      "email_proved",
+      "account_creating",
+      "account_ready",
+    ].includes(row.state);
     if (
-      row.state !== "pending" ||
-      new Date(row.expires_at).valueOf() <= Date.now()
+      (!provedState && row.state !== "pending") ||
+      (row.state === "pending" &&
+        new Date(row.expires_at).valueOf() <= Date.now())
     ) {
       throw new EmailAuthChallengeError(
         "This sign-in challenge has expired.",
@@ -616,6 +663,17 @@ async function redeemSecret({
       kind,
       value,
     });
+    if (provedState) {
+      if (!valid) {
+        throw new EmailAuthChallengeError(
+          "The code or link is not valid.",
+          "invalid",
+        );
+      }
+      await db.query("COMMIT");
+      transactionOpen = false;
+      return publicStatus(row);
+    }
     if (!valid) {
       const blocked = Number(row.attempt_count) + 1 >= Number(row.max_attempts);
       await db.query(
@@ -694,4 +752,356 @@ export async function redeemEmailAuthLinkDirect(
     kind: "link",
     value: token,
   });
+}
+
+function exchangeResult(row: ChallengeRow): EmailAuthExchangeResult {
+  if (
+    !row.account_id ||
+    !row.selected_home_bay_id ||
+    !row.exchange_id ||
+    !row.auth_method
+  ) {
+    throw new Error("email authentication exchange is incomplete");
+  }
+  const issued = issueHomeBayRetryToken({
+    account_id: row.account_id,
+    challenge_id: row.challenge_id,
+    email: row.normalized_email,
+    home_bay_id: row.selected_home_bay_id,
+    purpose: "email-auth",
+    primary_auth_method: row.auth_method,
+    primary_verified_at: new Date(
+      row.email_proved_at ?? new Date(),
+    ).toISOString(),
+    token_id: row.exchange_id,
+    ttl_seconds: 60,
+  });
+  return {
+    challenge_id: row.challenge_id,
+    exchange_token: issued.token,
+    exchange_expires_at: new Date(issued.expires_at).toISOString(),
+    home_bay_id: row.selected_home_bay_id,
+    redirect_to: `${row.continuation?.target ?? ""}`.trim() || undefined,
+    state: "account_ready",
+  };
+}
+
+async function resolveChallengeAccount(
+  row: ChallengeRow,
+  auth_method: "email_code" | "email_link",
+): Promise<{ account_id: string; home_bay_id: string }> {
+  const existing = await getClusterAccountByEmailDirect(row.normalized_email);
+  if (existing?.account_id) {
+    if (existing.banned) {
+      throw new EmailAuthChallengeError(
+        "This account is not allowed to sign in.",
+        "not_allowed",
+      );
+    }
+    const home_bay_id = `${existing.home_bay_id ?? ""}`.trim();
+    if (!home_bay_id) {
+      throw new Error("existing account does not have a home bay");
+    }
+    await adminVerifyClusterAccountEmailAddress({
+      account_id: existing.account_id,
+    });
+    return { account_id: existing.account_id, home_bay_id };
+  }
+
+  const settings = await getServerSettings();
+  if (settings.email_signup !== true) {
+    throw new EmailAuthChallengeError(
+      "New email accounts are not enabled for this site.",
+      "not_allowed",
+    );
+  }
+  if (!row.terms_accepted_at) {
+    throw new EmailAuthChallengeError(
+      "Accept the Terms of Service before creating an account.",
+      "not_allowed",
+    );
+  }
+
+  const [ssoDomainPolicy, requiredSsoStrategy] = await Promise.all([
+    getEnabledSsoDomainPolicyForEmail(row.normalized_email),
+    getStrategies().then((strategies) =>
+      checkRequiredSSO({
+        email: row.normalized_email,
+        strategies,
+      }),
+    ),
+  ]);
+  const requiresRegistrationToken =
+    ssoDomainPolicy?.signup_mode === "public_allowed"
+      ? false
+      : ssoDomainPolicy?.signup_mode === "registration_token_required"
+        ? true
+        : await getRequiresRegistrationToken();
+  const ssoRequiredDomain = passwordSignupBlockedBySsoPolicy(ssoDomainPolicy)
+    ? ssoDomainPolicy?.domain
+    : requiredSsoStrategy != null
+      ? getEmailDomain(row.normalized_email)
+      : undefined;
+  const policy = evaluateAccountCreationPolicy({
+    auth_method,
+    email: row.normalized_email,
+    email_verified: true,
+    requires_registration_token: requiresRegistrationToken,
+    registration_token_validated: false,
+    sso_required_domain: ssoRequiredDomain,
+    signup_disabled_domain:
+      ssoDomainPolicy?.signup_mode === "disabled"
+        ? ssoDomainPolicy.domain
+        : undefined,
+  });
+  if (policy.type !== "allow_create") {
+    const message =
+      policy.type === "deny_registration_token_required"
+        ? "A registration token is required. Use password signup instead."
+        : policy.type === "deny_use_sso"
+          ? `Continue with your organization's single sign-on for @${policy.domain}.`
+          : "An account cannot be created with this email address.";
+    throw new EmailAuthChallengeError(message, "not_allowed");
+  }
+  if (ssoDomainPolicy?.require_cocalc_2fa) {
+    throw new EmailAuthChallengeError(
+      `Account creation is disabled for "@${ssoDomainPolicy.domain}" because that domain requires CoCalc two-factor authentication.`,
+      "not_allowed",
+    );
+  }
+
+  const home_bay_id = `${row.selected_home_bay_id ?? ""}`.trim();
+  if (!home_bay_id) {
+    throw new Error("email authentication challenge has no selected home bay");
+  }
+  let account;
+  try {
+    account = await createClusterAccount({
+      email_address: row.normalized_email,
+      display_name: "CoCalc User",
+      home_bay_id,
+      other_settings: buildMarketingConsentOtherSettings(false),
+      verified_email: {
+        address: row.normalized_email,
+        verified_at: (row.email_proved_at ?? new Date()).toISOString(),
+        method: auth_method,
+      },
+    });
+  } catch (err) {
+    // Another verified flow may have won the global email reservation.
+    account = await getClusterAccountByEmailDirect(row.normalized_email);
+    if (!account?.account_id) {
+      throw err;
+    }
+  }
+  const account_id = `${account.account_id ?? ""}`.trim();
+  const resolvedHomeBayId =
+    `${account.home_bay_id ?? ""}`.trim() || home_bay_id;
+  if (!account_id) {
+    throw new Error("account creation did not return an account id");
+  }
+  await adminVerifyClusterAccountEmailAddress({ account_id });
+  return { account_id, home_bay_id: resolvedHomeBayId };
+}
+
+export async function prepareEmailAuthExchangeDirect(
+  opts: PrepareEmailAuthExchangeOptions,
+): Promise<EmailAuthExchangeResult> {
+  await ensureEmailAuthChallengeSchema();
+  const pool = getPool();
+  const db = await pool.connect();
+  let row: ChallengeRow;
+  try {
+    await db.query("BEGIN");
+    row = (
+      await db.query<ChallengeRow>(
+        `SELECT * FROM ${TABLE} WHERE challenge_id=$1 FOR UPDATE`,
+        [opts.challenge_id],
+      )
+    ).rows[0];
+    if (!row) {
+      throw new EmailAuthChallengeError("Challenge not found.", "not_found");
+    }
+    if (
+      row.purpose !== "sign_in_or_sign_up" ||
+      row.auth_method !== opts.auth_method ||
+      !row.email_proved_at ||
+      !["email_proved", "account_creating", "account_ready"].includes(row.state)
+    ) {
+      throw new EmailAuthChallengeError(
+        "Email proof is required before continuing.",
+        "invalid",
+      );
+    }
+    if (row.state === "account_ready") {
+      await db.query("COMMIT");
+      return exchangeResult(row);
+    }
+    if (row.state === "account_creating") {
+      throw new EmailAuthChallengeError(
+        "Account preparation is already in progress. Try again shortly.",
+        "rate_limited",
+      );
+    }
+    await db.query(
+      `UPDATE ${TABLE} SET state='account_creating', updated_at=NOW() WHERE challenge_id=$1`,
+      [row.challenge_id],
+    );
+    await db.query("COMMIT");
+  } catch (err) {
+    await db.query("ROLLBACK");
+    throw err;
+  } finally {
+    db.release();
+  }
+
+  try {
+    const account = await resolveChallengeAccount(row, opts.auth_method);
+    const exchange_id = randomUUID();
+    const ready = (
+      await pool.query<ChallengeRow>(
+        `
+          UPDATE ${TABLE}
+             SET state='account_ready',
+                 account_id=$2,
+                 selected_home_bay_id=$3,
+                 exchange_id=$4,
+                 updated_at=NOW()
+           WHERE challenge_id=$1
+             AND state='account_creating'
+           RETURNING *
+        `,
+        [
+          row.challenge_id,
+          account.account_id,
+          account.home_bay_id,
+          exchange_id,
+        ],
+      )
+    ).rows[0];
+    if (!ready) {
+      throw new Error("email authentication challenge changed unexpectedly");
+    }
+    return exchangeResult(ready);
+  } catch (err) {
+    const blocked =
+      err instanceof EmailAuthChallengeError && err.code === "not_allowed";
+    await pool.query(
+      `
+        UPDATE ${TABLE}
+           SET state=$2,
+               updated_at=NOW(),
+               metadata=metadata || jsonb_build_object(
+                 'completion_error', $3::TEXT
+               )
+         WHERE challenge_id=$1
+           AND state='account_creating'
+      `,
+      [
+        row.challenge_id,
+        blocked ? "blocked" : "email_proved",
+        blocked ? "not_allowed" : "transient",
+      ],
+    );
+    throw err;
+  }
+}
+
+export async function consumeEmailAuthExchangeDirect(
+  opts: ConsumeEmailAuthExchangeOptions,
+): Promise<ConsumedEmailAuthExchange> {
+  await ensureEmailAuthChallengeSchema();
+  const { rows } = await getPool().query<ChallengeRow>(
+    `
+      UPDATE ${TABLE}
+         SET state=$5::VARCHAR(32),
+             completed_at=CASE WHEN $6::BOOLEAN THEN NOW() ELSE completed_at END,
+             session_completed_at=CASE WHEN $6::BOOLEAN THEN NOW() ELSE session_completed_at END,
+             updated_at=NOW()
+       WHERE challenge_id=$1
+         AND exchange_id=$2
+         AND account_id=$3
+         AND selected_home_bay_id=$4
+         AND state='account_ready'
+       RETURNING *
+    `,
+    [
+      opts.challenge_id,
+      opts.exchange_id,
+      opts.account_id,
+      opts.home_bay_id,
+      opts.completion,
+      opts.completion === "completed",
+    ],
+  );
+  const row = rows[0];
+  if (!row?.account_id || !row.auth_method || !row.email_proved_at) {
+    throw new EmailAuthChallengeError(
+      "This email sign-in exchange has already been used or is invalid.",
+      "invalid",
+    );
+  }
+  return {
+    account_id: row.account_id,
+    auth_method: row.auth_method,
+    email_proved_at: new Date(row.email_proved_at).toISOString(),
+  };
+}
+
+export async function completeEmailAuthMfaDirect(
+  opts: CompleteEmailAuthMfaOptions,
+): Promise<void> {
+  await ensureEmailAuthChallengeSchema();
+  const result = await getPool().query(
+    `
+      UPDATE ${TABLE}
+         SET state='completed',
+             completed_at=NOW(),
+             session_completed_at=NOW(),
+             updated_at=NOW()
+       WHERE challenge_id=$1
+         AND account_id=$2
+         AND selected_home_bay_id=$3
+         AND state='mfa_required'
+    `,
+    [opts.challenge_id, opts.account_id, opts.home_bay_id],
+  );
+  if (result.rowCount !== 1) {
+    throw new EmailAuthChallengeError(
+      "This email sign-in challenge is not awaiting a second factor.",
+      "invalid",
+    );
+  }
+}
+
+export async function completeEmailFreshAuthDirect(
+  opts: CompleteEmailFreshAuthOptions,
+): Promise<CompletedEmailFreshAuth> {
+  await ensureEmailAuthChallengeSchema();
+  const { rows } = await getPool().query<ChallengeRow>(
+    `
+      UPDATE ${TABLE}
+         SET state='completed',
+             completed_at=NOW(),
+             session_completed_at=NOW(),
+             updated_at=NOW()
+       WHERE challenge_id=$1
+         AND account_id=$2
+         AND purpose='email_fresh_auth'
+         AND state='email_proved'
+       RETURNING *
+    `,
+    [opts.challenge_id, opts.account_id],
+  );
+  const row = rows[0];
+  if (!row?.auth_method || !row.email_proved_at) {
+    throw new EmailAuthChallengeError(
+      "This email approval is invalid or has already been used.",
+      "invalid",
+    );
+  }
+  return {
+    auth_method: row.auth_method,
+    email_proved_at: new Date(row.email_proved_at).toISOString(),
+  };
 }
