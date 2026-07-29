@@ -9,7 +9,7 @@ import isPost from "@cocalc/http-api/lib/api/is-post";
 import { getRememberMeHash } from "@cocalc/server/auth/remember-me";
 import { redeemEmailAuthCode } from "@cocalc/server/inter-bay/email-auth";
 
-import { emailAuthErrorPayload } from "./_shared";
+import { emailAuthErrorPayload } from "@cocalc/http-api/lib/auth/email-shared";
 
 export default async function redeemEmailFreshAuthCode(req, res) {
   if (!isPost(req, res)) {

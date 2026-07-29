@@ -14,7 +14,7 @@ import { resendEmailAuthChallenge } from "@cocalc/server/inter-bay/email-auth";
 import {
   emailAuthErrorPayload,
   requireEmailAuthBrowserBinding,
-} from "./_shared";
+} from "@cocalc/http-api/lib/auth/email-shared";
 
 export async function resend(req, res) {
   try {

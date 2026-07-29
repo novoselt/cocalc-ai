@@ -15,7 +15,7 @@ import {
 } from "@cocalc/server/inter-bay/email-auth";
 import { getBayPublicOriginForRequest } from "@cocalc/server/bay-public-origin";
 
-import { emailAuthErrorPayload } from "./_shared";
+import { emailAuthErrorPayload } from "@cocalc/http-api/lib/auth/email-shared";
 
 export async function redeemLink(req, res) {
   try {

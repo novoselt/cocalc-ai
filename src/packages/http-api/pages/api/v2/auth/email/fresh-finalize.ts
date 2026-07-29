@@ -15,7 +15,7 @@ import { getRememberMeHash } from "@cocalc/server/auth/remember-me";
 import { hasActiveSecondFactor } from "@cocalc/server/auth/two-factor";
 import { completeEmailFreshAuth } from "@cocalc/server/inter-bay/email-auth";
 
-import { emailAuthErrorPayload } from "./_shared";
+import { emailAuthErrorPayload } from "@cocalc/http-api/lib/auth/email-shared";
 
 export default async function finalizeEmailFreshAuth(req, res) {
   if (!isPost(req, res)) {

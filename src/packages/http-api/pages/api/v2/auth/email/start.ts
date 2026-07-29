@@ -18,7 +18,7 @@ import {
   assertEmailAuthStartEnabled,
   emailAuthErrorPayload,
   getOrSetEmailAuthBrowserBinding,
-} from "./_shared";
+} from "@cocalc/http-api/lib/auth/email-shared";
 
 function safeContinuationTarget(value: unknown): string | undefined {
   const target = `${value ?? ""}`.trim();

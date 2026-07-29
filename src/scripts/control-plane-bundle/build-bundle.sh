@@ -302,7 +302,10 @@ files.forEach((file, index) => {
   const relative = path.relative(apiRoot, file).split(path.sep).join("/");
   lines.push(`  const mod${index} = require(${JSON.stringify(file)});`);
   lines.push(
-    `  loadedRoutes.push({ path: ${JSON.stringify(routePath(relative))}, handler: mod${index}.default ?? mod${index} });`,
+    `  const handler${index} = mod${index}.default ?? mod${index};`,
+  );
+  lines.push(
+    `  if (typeof handler${index} === "function") loadedRoutes.push({ path: ${JSON.stringify(routePath(relative))}, handler: handler${index} });`,
   );
 });
 

@@ -14,7 +14,7 @@ import { startEmailAuthChallenge } from "@cocalc/server/inter-bay/email-auth";
 import {
   emailAuthErrorPayload,
   getOrSetEmailAuthBrowserBinding,
-} from "./_shared";
+} from "@cocalc/http-api/lib/auth/email-shared";
 
 export default async function startEmailFreshAuth(req, res) {
   if (!isPost(req, res)) {

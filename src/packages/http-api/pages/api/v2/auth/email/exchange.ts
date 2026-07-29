@@ -17,7 +17,7 @@ import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getBayPublicOriginForRequest } from "@cocalc/server/bay-public-origin";
 import { consumeEmailAuthExchange } from "@cocalc/server/inter-bay/email-auth";
 
-import { emailAuthErrorPayload } from "./_shared";
+import { emailAuthErrorPayload } from "@cocalc/http-api/lib/auth/email-shared";
 import { signUserIn } from "../sign-in";
 
 export async function exchange(req, res) {
