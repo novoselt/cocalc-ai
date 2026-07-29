@@ -462,7 +462,7 @@ describe("project-host runtime maintenance policy", () => {
       _test.publicRouteFleetContext({ checked_hosts: 4, failures }),
     ).toMatchObject({
       healthy_origin_failures: 2,
-      shared_ingress_failure: true,
+      shared_ingress_failure: false,
     });
 
     failures[1].origin_health.status = "unknown";
@@ -497,6 +497,32 @@ describe("project-host runtime maintenance policy", () => {
       failure_classes: { network_fetch: 9 },
       correlated_failure: true,
       shared_ingress_failure: true,
+    });
+  });
+
+  it("does not classify two transient resets in a large batch as shared", () => {
+    const failures: any[] = Array.from({ length: 2 }, (_, index) => ({
+      row: degradedCloudHost({ name: `host-${index}` }),
+      error:
+        "ProjectHostPublicRouteProbeError: public project-host health check failed: Error: read ECONNRESET code=ECONNRESET",
+      consecutive_failures: 0,
+      probe: {},
+      origin_health: {
+        status: "healthy",
+        checked_at: new Date(NOW).toISOString(),
+        duration_ms: 2,
+      },
+    }));
+
+    expect(
+      _test.publicRouteFleetContext({ checked_hosts: 16, failures }),
+    ).toMatchObject({
+      checked_hosts: 16,
+      failed_hosts: 2,
+      healthy_origin_failures: 2,
+      failure_classes: { network_fetch: 2 },
+      correlated_failure: true,
+      shared_ingress_failure: false,
     });
   });
 

@@ -11,6 +11,7 @@ import { PROJECT_HOST_BROWSER_SESSION_BOOTSTRAP_PATH } from "@cocalc/conat/auth/
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_WEBSOCKET_ATTEMPTS = 8;
+const TRANSIENT_REQUEST_RETRY_DELAY_MS = 250;
 const ENGINE_IO_WEBSOCKET_PATH = "/conat/?EIO=4&transport=websocket";
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -146,19 +147,52 @@ async function fetchWithTimeout({
   init,
   timeout_ms,
 }: {
-  fetchImpl: FetchLike;
+  fetchImpl?: FetchLike;
   url: URL;
   init: RequestInit;
   timeout_ms: number;
 }): Promise<Response> {
-  if (fetchImpl === fetch) {
-    return await requestWithIsolatedSocket({ url, init, timeout_ms });
+  if (fetchImpl == null) {
+    try {
+      return await requestWithIsolatedSocket({ url, init, timeout_ms });
+    } catch (err) {
+      if (!isTransientRequestError(err)) throw err;
+      await new Promise((resolve) =>
+        setTimeout(resolve, TRANSIENT_REQUEST_RETRY_DELAY_MS),
+      );
+      return await requestWithIsolatedSocket({ url, init, timeout_ms });
+    }
   }
   return await fetchImpl(url, {
     ...init,
     redirect: "manual",
     signal: AbortSignal.timeout(timeout_ms),
   });
+}
+
+function isTransientRequestError(error: unknown): boolean {
+  if (error == null || typeof error !== "object") return false;
+  const detail = error as {
+    code?: unknown;
+    message?: unknown;
+    name?: unknown;
+  };
+  const code = `${detail.code ?? ""}`.toUpperCase();
+  const message = `${detail.message ?? ""}`;
+  return (
+    [
+      "EAI_AGAIN",
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "ENETDOWN",
+      "ENETUNREACH",
+      "ENOTFOUND",
+      "EPIPE",
+      "ETIMEDOUT",
+    ].includes(code) ||
+    detail.name === "TimeoutError" ||
+    /socket hang up|client network socket disconnected/i.test(message)
+  );
 }
 
 async function requestWithIsolatedSocket({
@@ -401,7 +435,7 @@ export async function probeProjectHostPublicRoute({
   public_url,
   origin,
   expected_host_id,
-  fetchImpl = fetch,
+  fetchImpl,
   websocketProbeImpl = probeWebSocketUpgrade,
   websocket_attempts = DEFAULT_WEBSOCKET_ATTEMPTS,
   timeout_ms = DEFAULT_REQUEST_TIMEOUT_MS,
