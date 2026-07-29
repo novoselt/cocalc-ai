@@ -1661,6 +1661,10 @@ async function smokeHttpChecks({
   for (const [check, path] of [
     ["homepage", "/"],
     ["static app shell", "/static/app.html"],
+    [
+      "email auth link shell",
+      "/auth/email/continue/00000000-0000-4000-8000-000000000000",
+    ],
     ["webapp favicon", "/webapp/favicon.ico"],
   ] as const) {
     checks.push(

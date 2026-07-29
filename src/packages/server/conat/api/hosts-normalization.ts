@@ -38,6 +38,7 @@ import type {
   HostMachine,
   HostPressureState,
   HostInterruptionRestorePolicy,
+  HostIoContainmentMetrics,
   HostMetricsHistory,
   HostPricingModel,
   HostPressureZone,
@@ -46,6 +47,7 @@ import type {
   HostSpotRecoveryPolicy,
   HostSpotRecoveryState,
   HostStatus,
+  HostStorageAdmissionMetrics,
 } from "@cocalc/conat/hub/api/hosts";
 import type {
   HostManagedComponentStatus,
@@ -104,6 +106,76 @@ function normalizeBeesStatus(value: unknown): HostBeesStatus | undefined {
     return undefined;
   }
   return value as HostBeesStatus;
+}
+
+function isNonNegativeNumberLike(value: unknown): boolean {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0;
+}
+
+function normalizeIoContainmentMetrics(
+  value: unknown,
+): HostIoContainmentMetrics | undefined {
+  if (value == null || typeof value !== "object") return undefined;
+  const metrics = value as Record<string, unknown>;
+  if (
+    typeof metrics.collected_at !== "string" ||
+    !["disabled", "observe", "enforce", "invalid"].includes(
+      `${metrics.policy_mode}`,
+    ) ||
+    typeof metrics.mountpoint !== "string" ||
+    !["available", "enabled", "validated", "unsupported"].includes(
+      `${metrics.capability}`,
+    ) ||
+    typeof metrics.pool_cgroup !== "string" ||
+    !Array.isArray(metrics.devices) ||
+    !Array.isArray(metrics.top_projects) ||
+    !isNonNegativeNumberLike(metrics.sampled_project_count) ||
+    !isNonNegativeNumberLike(metrics.total_project_count) ||
+    !isNonNegativeNumberLike(metrics.stale_project_count) ||
+    typeof metrics.truncated !== "boolean"
+  ) {
+    return undefined;
+  }
+  return value as HostIoContainmentMetrics;
+}
+
+function normalizeStorageAdmissionMetrics(
+  value: unknown,
+): HostStorageAdmissionMetrics | undefined {
+  if (value == null || typeof value !== "object") return undefined;
+  const metrics = value as Record<string, unknown>;
+  const activeByPriority =
+    metrics.active_by_priority && typeof metrics.active_by_priority === "object"
+      ? (metrics.active_by_priority as Record<string, unknown>)
+      : undefined;
+  if (
+    metrics.schema_version !== 1 ||
+    typeof metrics.collected_at !== "string" ||
+    !["disabled", "observe", "enforce"].includes(`${metrics.mode}`) ||
+    !["normal", "contended", "emergency", "recovery"].includes(
+      `${metrics.pressure_state}`,
+    ) ||
+    typeof metrics.state_since !== "string" ||
+    activeByPriority == null ||
+    ["lifecycle", "interactive", "scheduled", "scavenger"].some(
+      (priority) => !isNonNegativeNumberLike(activeByPriority[priority]),
+    ) ||
+    [
+      "lifecycle_active",
+      "starting_projects",
+      "stopping_projects",
+      "btrfs_mutation_locks",
+      "btrfs_mutation_waiters",
+      "admitted_total",
+      "deferred_total",
+      "observed_deferral_total",
+      "transition_count",
+    ].some((key) => !isNonNegativeNumberLike(metrics[key]))
+  ) {
+    return undefined;
+  }
+  return value as HostStorageAdmissionMetrics;
 }
 
 function normalizeManagedComponentUpgradePolicy(
@@ -887,6 +959,12 @@ export function parseRow(
       }
     : undefined;
   const rawCurrentMetrics = metadata.metrics?.current;
+  const ioContainmentMetrics = normalizeIoContainmentMetrics(
+    rawCurrentMetrics?.io_containment,
+  );
+  const storageAdmissionMetrics = normalizeStorageAdmissionMetrics(
+    rawCurrentMetrics?.storage_admission,
+  );
   const currentMetrics: HostCurrentMetrics | undefined =
     rawCurrentMetrics && typeof rawCurrentMetrics === "object"
       ? {
@@ -1141,6 +1219,12 @@ export function parseRow(
                   rawCurrentMetrics.stopping_project_count,
                 ),
               }
+            : {}),
+          ...(ioContainmentMetrics != null
+            ? { io_containment: ioContainmentMetrics }
+            : {}),
+          ...(storageAdmissionMetrics != null
+            ? { storage_admission: storageAdmissionMetrics }
             : {}),
         }
       : undefined;

@@ -29,6 +29,7 @@ export const EmailAuthChallengeStatusSchema = z.object({
   send_count: z.number().int(),
   message_sent: z.boolean(),
   message_failed: z.boolean(),
+  message_sent_now: z.boolean(),
 });
 
 export const EmailAuthErrorSchema = z.object({

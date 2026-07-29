@@ -122,6 +122,7 @@ POLICY_VERSION = 1
 CAPACITY_VERSION = 1
 DYNAMIC_CAPACITY_MODE = "gcp-pd-balanced"
 CLASSES = ("standard", "member", "premium")
+SCOPES = ("pool", "maintenance", *CLASSES)
 METRICS = ("rbps", "wbps", "riops", "wiops")
 
 DEFAULTS = {
@@ -493,10 +494,19 @@ def effective_limits(
     devices: list[dict[str, Any]],
     scope: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    if scope != "pool" and scope not in CLASSES:
-        raise ValueError("scope must be pool, standard, member, or premium")
+    if scope not in SCOPES:
+        raise ValueError(
+            "scope must be pool, maintenance, standard, member, or premium"
+        )
     if policy["capacity_mode"] == "static":
-        limits = policy["pool"] if scope == "pool" else policy["leaf"]
+        if scope == "pool":
+            limits = policy["pool"]
+        elif scope == "maintenance":
+            limits = {
+                key: max(1, policy["pool"][key] // 10) for key in METRICS
+            }
+        else:
+            limits = policy["leaf"]
         return [
             {**row, "limits": {key: limits[key] for key in METRICS}}
             for row in devices
@@ -504,6 +514,7 @@ def effective_limits(
     pool = dynamic_pool_limits(devices)
     factor = {
         "pool": 100,
+        "maintenance": 10,
         "standard": 25,
         "member": 50,
         "premium": 75,
@@ -3189,6 +3200,13 @@ BEES_CGROUP_MEMORY_MAX_MAX="$((8 * 1024 * 1024 * 1024))"
 BEES_CGROUP_MEMORY_HIGH_MIN="$((1 * 1024 * 1024 * 1024))"
 BEES_CGROUP_MEMORY_MAX_MIN="$((2 * 1024 * 1024 * 1024))"
 BEES_CGROUP_PIDS_MAX="64"
+MAINTENANCE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-maintenance"
+MAINTENANCE_CGROUP_CPU_MAX="200000 100000"
+MAINTENANCE_CGROUP_CPU_WEIGHT="10"
+MAINTENANCE_CGROUP_IO_WEIGHT="10"
+MAINTENANCE_CGROUP_MEMORY_HIGH="$((4 * 1024 * 1024 * 1024))"
+MAINTENANCE_CGROUP_MEMORY_MAX="$((8 * 1024 * 1024 * 1024))"
+MAINTENANCE_CGROUP_PIDS_MAX="256"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_IO_POLICY_DEFAULT="/etc/cocalc/project-io-policy.json"
 PROJECT_IO_POLICY_OVERRIDE_DEFAULT="/etc/cocalc/project-io-policy.override.json"
@@ -3387,6 +3405,33 @@ apply_project_pool_io_policy() {
   fi
 }
 
+configure_maintenance_cgroup() {
+  local fields mode
+  enable_cgroup_controllers /sys/fs/cgroup
+  mkdir -p "$MAINTENANCE_CGROUP_DEFAULT"
+  [ -w "${MAINTENANCE_CGROUP_DEFAULT}/cpu.max" ] &&
+    printf '%s\n' "$MAINTENANCE_CGROUP_CPU_MAX" > "${MAINTENANCE_CGROUP_DEFAULT}/cpu.max"
+  [ -w "${MAINTENANCE_CGROUP_DEFAULT}/cpu.weight" ] &&
+    printf '%s\n' "$MAINTENANCE_CGROUP_CPU_WEIGHT" > "${MAINTENANCE_CGROUP_DEFAULT}/cpu.weight"
+  [ -w "${MAINTENANCE_CGROUP_DEFAULT}/io.weight" ] &&
+    printf 'default %s\n' "$MAINTENANCE_CGROUP_IO_WEIGHT" > "${MAINTENANCE_CGROUP_DEFAULT}/io.weight"
+  [ -w "${MAINTENANCE_CGROUP_DEFAULT}/memory.high" ] &&
+    printf '%s\n' "$MAINTENANCE_CGROUP_MEMORY_HIGH" > "${MAINTENANCE_CGROUP_DEFAULT}/memory.high"
+  [ -w "${MAINTENANCE_CGROUP_DEFAULT}/memory.max" ] &&
+    printf '%s\n' "$MAINTENANCE_CGROUP_MEMORY_MAX" > "${MAINTENANCE_CGROUP_DEFAULT}/memory.max"
+  [ -w "${MAINTENANCE_CGROUP_DEFAULT}/memory.swap.max" ] &&
+    printf '0\n' > "${MAINTENANCE_CGROUP_DEFAULT}/memory.swap.max"
+  [ -w "${MAINTENANCE_CGROUP_DEFAULT}/pids.max" ] &&
+    printf '%s\n' "$MAINTENANCE_CGROUP_PIDS_MAX" > "${MAINTENANCE_CGROUP_DEFAULT}/pids.max"
+  fields="$(project_io_policy_fields standard)" ||
+    deny "project-io-policy-invalid" "maintenance"
+  IFS=$'\t' read -r mode _rest <<< "$fields"
+  apply_io_max "$MAINTENANCE_CGROUP_DEFAULT" "maintenance" "$mode"
+  if [ "$mode" = "enforce" ]; then
+    verify_io_max "$MAINTENANCE_CGROUP_DEFAULT" "maintenance"
+  fi
+}
+
 apply_existing_project_io_policy() {
   local cgroup="$1" project_id="$2" io_class="standard" fields
   local mode mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops
@@ -3434,6 +3479,7 @@ reconcile_project_io_policy() {
   acquire_project_cgroup_lock
   normalize_project_io_class_state
   configure_project_pool_hierarchy
+  configure_maintenance_cgroup
   for pool in "${PROJECT_POOL_CGROUP_DEFAULT}"/project-*; do
     [ -d "$pool" ] || continue
     project_id="${pool##*/project-}"
@@ -4249,6 +4295,18 @@ attach_storage_worker_to_project() {
   release_project_lock
 }
 
+attach_maintenance_worker() {
+  local actual
+  acquire_project_cgroup_lock
+  configure_maintenance_cgroup
+  printf '%s\n' "$$" > "${MAINTENANCE_CGROUP_DEFAULT}/cgroup.procs"
+  actual="$(awk -F: '$1 == "0" {print $3}' "/proc/$$/cgroup" 2>/dev/null || true)"
+  if [ "$actual" != "${MAINTENANCE_CGROUP_DEFAULT#/sys/fs/cgroup}" ]; then
+    deny "maintenance-worker-cgroup-mismatch" "${actual:-missing}"
+  fi
+  release_project_lock
+}
+
 check_relative_delete_path() {
   local rel="$1"
   if [ -z "$rel" ]; then
@@ -4445,6 +4503,7 @@ case "$cmd" in
     IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _leaf_rbps _leaf_wbps _leaf_riops _leaf_wiops _weight _class policy_version policy_profile capacity_source capacity_mode <<< "$fields"
     if [ "$io_mode" = "enforce" ]; then
       verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+      verify_io_max "$MAINTENANCE_CGROUP_DEFAULT" "maintenance"
     fi
     ;;
   project-io-status)
@@ -4462,11 +4521,33 @@ case "$cmd" in
     pool_pressure="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.pressure" 2>/dev/null || true)"
     legacy_processes="$(cat "$(project_legacy_cgroup)/cgroup.procs" 2>/dev/null || true)"
     pool_io_weight="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)"
-    /usr/bin/python3 - "$policy_status" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" <<'PY'
+    maintenance_io_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/io.max" 2>/dev/null || true)"
+    maintenance_pressure="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/io.pressure" 2>/dev/null || true)"
+    maintenance_io_weight="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)"
+    maintenance_processes="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/cgroup.procs" 2>/dev/null || true)"
+    maintenance_cpu_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/cpu.max" 2>/dev/null || true)"
+    maintenance_memory_high="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/memory.high" 2>/dev/null || true)"
+    maintenance_memory_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)"
+    maintenance_pids_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/pids.max" 2>/dev/null || true)"
+    /usr/bin/python3 - "$policy_status" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" "$maintenance_io_max" "$maintenance_io_weight" "$maintenance_pressure" "$maintenance_processes" "$maintenance_cpu_max" "$maintenance_memory_high" "$maintenance_memory_max" "$maintenance_pids_max" <<'PY'
 import json
 import sys
 
-status_json, io_max, io_weight, pressure, legacy = sys.argv[1:]
+(
+    status_json,
+    io_max,
+    io_weight,
+    pressure,
+    legacy,
+    maintenance_io_max,
+    maintenance_io_weight,
+    maintenance_pressure,
+    maintenance_processes,
+    maintenance_cpu_max,
+    maintenance_memory_high,
+    maintenance_memory_max,
+    maintenance_pids_max,
+) = sys.argv[1:]
 result = json.loads(status_json)
 discovery_error = result.pop("discovery_error", None)
 if discovery_error:
@@ -4478,23 +4559,44 @@ else:
     result["capability"] = "available"
 
 pressure_values = {}
-for row in pressure.splitlines():
-    columns = row.split()
-    if not columns:
-        continue
-    kind = columns[0]
-    values = dict(column.split("=", 1) for column in columns[1:] if "=" in column)
-    if "avg10" in values:
-        pressure_values[f"pressure_{kind}_percent"] = float(values["avg10"])
-    if "total" in values:
-        pressure_values[f"pressure_{kind}_total"] = int(values["total"])
+def parse_pressure(raw, prefix):
+    values_out = {}
+    for row in raw.splitlines():
+        columns = row.split()
+        if not columns:
+            continue
+        kind = columns[0]
+        values = dict(
+            column.split("=", 1)
+            for column in columns[1:]
+            if "=" in column
+        )
+        if "avg10" in values:
+            values_out[f"{prefix}{kind}_percent"] = float(values["avg10"])
+        if "total" in values:
+            values_out[f"{prefix}{kind}_total"] = int(values["total"])
+    return values_out
+
+pressure_values.update(parse_pressure(pressure, "pressure_"))
+maintenance_pressure_values = parse_pressure(
+    maintenance_pressure, "maintenance_pressure_"
+)
 
 result.update({
     "pool_cgroup": "/sys/fs/cgroup/cocalc-project-pool",
     "pool_io_max": io_max.strip(),
     "pool_io_weight": io_weight.strip(),
     "legacy_process_count": len(legacy.split()),
+    "maintenance_cgroup": "/sys/fs/cgroup/cocalc-maintenance",
+    "maintenance_io_max": maintenance_io_max.strip(),
+    "maintenance_io_weight": maintenance_io_weight.strip(),
+    "maintenance_process_count": len(maintenance_processes.split()),
+    "maintenance_cpu_max": maintenance_cpu_max.strip(),
+    "maintenance_memory_high": maintenance_memory_high.strip(),
+    "maintenance_memory_max": maintenance_memory_max.strip(),
+    "maintenance_pids_max": maintenance_pids_max.strip(),
     **pressure_values,
+    **maintenance_pressure_values,
 })
 print(json.dumps(result, separators=(",", ":")))
 PY
@@ -4560,8 +4662,11 @@ PY
     release_project_lock
     reconcile_project_network_limits
     ;;
-  btrfs)
+  btrfs|btrfs-maintenance)
     check_args "$@"
+    if [ "$cmd" = "btrfs-maintenance" ]; then
+      attach_maintenance_worker
+    fi
     exec /usr/bin/btrfs "$@"
     ;;
   mkfs.btrfs)
@@ -5240,7 +5345,7 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     fi
     exec "$(rustic_binary)" -P "$repo_profile" restore "$@" "$snapshot" "$dest"
     ;;
-  project-rustic-backup)
+  project-rustic-backup|project-rustic-backup-maintenance)
     if [ "$#" -lt 3 ]; then
       echo "usage: cocalc-runtime-storage project-rustic-backup <src> <repo-profile> <host> [--tag <tag>] [--parent <snapshot>]..." >&2
       exit 2
@@ -5285,6 +5390,9 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     done
     if [[ "$repo_profile" == *.toml ]]; then
       repo_profile="${repo_profile%.toml}"
+    fi
+    if [ "$cmd" = "project-rustic-backup-maintenance" ]; then
+      attach_maintenance_worker
     fi
     rustic_cmd=("$(rustic_binary)" -P "$repo_profile")
     cd "$src"

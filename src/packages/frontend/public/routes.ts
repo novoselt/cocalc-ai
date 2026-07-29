@@ -202,6 +202,17 @@ export function isPublicTarget(target?: string | null): target is string {
   return false;
 }
 
+export function preservePublicTargetFragment(
+  target: string,
+  fragment: string,
+): string {
+  if (!fragment || fragment === "#") {
+    return target;
+  }
+  const url = new URL(target, "https://example.invalid");
+  return url.hash ? target : `${target}${fragment}`;
+}
+
 export function publicPath(view: string): string {
   const base = appBasePath === "/" ? "" : appBasePath;
   return `${base}/${view}`;

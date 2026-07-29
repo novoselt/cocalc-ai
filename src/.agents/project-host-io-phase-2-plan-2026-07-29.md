@@ -5,6 +5,20 @@ Date: 2026-07-29
 Status: implementation plan; no production behavior is changed by this
 document.
 
+## Implementation Status
+
+The first safe foundation was implemented and deployed to staging on
+2026-07-29. It adds operation classification and priority ordering, a bounded
+host-maintenance cgroup, observe/enforce admission logic, attribution, and
+operator telemetry. Controlled and natural-sweep staging evidence is recorded
+in
+[`project-host-io-phase-2-staging-results-2026-07-29.md`](./project-host-io-phase-2-staging-results-2026-07-29.md).
+
+This does not complete the whole plan. In particular, durable per-operation
+workers and journaling, project-attributed leaf placement for all heavy work,
+durable control-plane policy assignment, weighted fairness, adaptive control,
+the full failure-injection matrix, and production rollout remain open.
+
 ## Executive Decision
 
 Phase 2 will make project-host I/O containment complete, durable, and

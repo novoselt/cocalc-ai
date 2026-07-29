@@ -117,6 +117,7 @@ import {
 import { ensureProjectHostKernelSysctls } from "./host-sysctl";
 import { startRuntimePostureMonitor } from "./runtime-posture";
 import { startProjectSnapshotBackupMaintenance } from "./snapshot-backup-maintenance";
+import { startStorageAdmissionController } from "./storage-admission";
 import {
   assertLocalBindOrInsecure,
   assertSecureUrlOrLocal,
@@ -1663,6 +1664,7 @@ export async function main(
   logger.info("File-server (local btrfs + optional ssh proxy if enabled)");
   let stopRuntimePostureMonitor: () => void = () => {};
   let stopSnapshotBackupMaintenance: () => void = () => {};
+  let stopStorageAdmissionController: () => void = () => {};
   try {
     await initFileServer({ client: conatClient });
     if (!stopOnPremTunnel) {
@@ -1674,6 +1676,7 @@ export async function main(
     stopProvisionedInventoryReporter = startProvisionedInventoryReporter({
       listProjectIds: listProvisionedProjects,
     });
+    stopStorageAdmissionController = startStorageAdmissionController();
     stopSnapshotBackupMaintenance = startProjectSnapshotBackupMaintenance({
       hostId,
     });
@@ -1736,6 +1739,7 @@ export async function main(
     stopRuntimeConformanceMonitor?.();
     stopRuntimePostureMonitor?.();
     stopSnapshotBackupMaintenance?.();
+    stopStorageAdmissionController?.();
     stopRawNetworkEgressLoop?.();
     stopCpuUsageLoop?.();
     stopEventLoopStallMonitor?.();
