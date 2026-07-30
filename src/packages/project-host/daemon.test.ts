@@ -1934,10 +1934,20 @@ describe("project-host daemon stop", () => {
     process.env.COCALC_PROJECT_HOST_DAEMON_LOCAL_ENV_FILE = localEnvFile;
     process.env.COCALC_PROJECT_HOST_RELOAD_ENV_FILES = "1";
     process.env.ADMISSION_MODE = "stale";
+    process.env.COCALC_PROJECT_HOST_STORAGE_ADMISSION_MODE = "enforce";
+    process.env.EXTERNAL_CREDENTIAL = "preserved";
 
     const resolved = __test__.resolveEnv(0);
 
     expect(resolved.env.ADMISSION_MODE).toBe("enforce");
+    expect(
+      resolved.env.COCALC_PROJECT_HOST_STORAGE_ADMISSION_MODE,
+    ).toBeUndefined();
+    expect(resolved.env.EXTERNAL_CREDENTIAL).toBe("preserved");
+    expect(resolved.env.COCALC_PROJECT_HOST_DAEMON_ENV_FILE).toBe(envFile);
+    expect(resolved.env.COCALC_PROJECT_HOST_DAEMON_LOCAL_ENV_FILE).toBe(
+      localEnvFile,
+    );
     expect(resolved.env.COCALC_PROJECT_HOST_RELOAD_ENV_FILES).toBeUndefined();
   });
 

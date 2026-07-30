@@ -10,6 +10,7 @@ describe("runnerConfigFromQuota", () => {
     expect(
       runnerConfigFromQuota({
         cpu_limit: 2,
+        shared_compute_priority: 4,
         memory_limit: 4000,
         pids_limit: 123,
         disk_quota: 5000,
@@ -18,6 +19,7 @@ describe("runnerConfigFromQuota", () => {
     ).toEqual(
       expect.objectContaining({
         cpu: 2,
+        cpu_priority: 4,
         memory: 4_000_000_000,
         tmp: 2_000_000_000,
         swap: true,

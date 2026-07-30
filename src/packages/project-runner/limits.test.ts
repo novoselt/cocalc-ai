@@ -97,6 +97,25 @@ describe("podmanLimits memory pressure controls", () => {
     ]);
   });
 
+  it.each([
+    [0, 1024, "39"],
+    [1, 2048, "79"],
+    [2, 4096, "157"],
+    [4, 16384, "625"],
+    [99, 262144, "10000"],
+  ])(
+    "maps CPU priority %p to work-conserving shares %p and cgroup weight %p",
+    async (cpu_priority, shares, weight) => {
+      const { podmanLimits, projectCgroupLimitsFromPodmanArgs } =
+        await import("./run/limits");
+      const args = await podmanLimits({ cpu_priority });
+
+      expect(args).toEqual([`--cpu-shares=${shares}`]);
+      expect(projectCgroupLimitsFromPodmanArgs(args).cpu_weight).toBe(weight);
+      expect(projectCgroupLimitsFromPodmanArgs(args).cpu_max_quota).toBe("max");
+    },
+  );
+
   it("translates Podman limits into cgroup-v2 leaf controls", async () => {
     getContainerSwapSizeMb.mockResolvedValue(200);
     const {

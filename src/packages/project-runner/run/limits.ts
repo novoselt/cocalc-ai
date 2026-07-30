@@ -13,6 +13,9 @@ const DEFAULT_MEMORY_RESERVATION_RATIO = 0.8;
 const DEFAULT_MEMORY_HIGH_RATIO = 1;
 const MIN_MEMORY_PRESSURE_GAP_RATIO = 0.05;
 const CGROUP_CPU_PERIOD_US = 100_000;
+const DEFAULT_CPU_SHARES = 1024;
+const MAX_CPU_SHARES = 262_144;
+const MAX_CPU_PRIORITY = 8;
 const DEFAULT_PROJECT_IO_WEIGHT = 100;
 
 export interface ProjectCgroupLimits {
@@ -84,6 +87,15 @@ function parseIntegerLimit(name: string, value: unknown, min: number): number {
   return parsed;
 }
 
+export function cpuSharesFromPriority(priority: unknown): number {
+  const parsed = Number(priority);
+  const normalized =
+    Number.isFinite(parsed) && parsed > 0
+      ? Math.min(MAX_CPU_PRIORITY, Math.floor(parsed))
+      : 0;
+  return Math.min(MAX_CPU_SHARES, DEFAULT_CPU_SHARES * Math.pow(2, normalized));
+}
+
 export async function podmanLimits(config?: Configuration): Promise<string[]> {
   const args: string[] = [];
 
@@ -93,9 +105,9 @@ export async function podmanLimits(config?: Configuration): Promise<string[]> {
 
   // CPU
   if (FAIR_CPU_MODE) {
-    // When the CPUs are busy they’ll split fairly; when they’re not, any container
-    // can burst to 100% with no cap.
-    args.push("--cpu-shares=1024");
+    // CPU remains work-conserving, while membership priority determines each
+    // project's proportional share when sibling cgroups are contending.
+    args.push(`--cpu-shares=${cpuSharesFromPriority(config.cpu_priority)}`);
   } else if (config.cpu != null) {
     const cpu = k8sCpuParser(config.cpu); // accepts "500m", "2", etc.
     if (!isFinite(cpu) || cpu <= 0) {

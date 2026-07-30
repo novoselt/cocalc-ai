@@ -264,4 +264,85 @@ describe("hosts start-worker billing drain completion metadata", () => {
       }),
     );
   });
+
+  test("preserves recovery data without a deprovision deadline when a billing drain fails", () => {
+    const metadata = __test__.billingEnforcementDrainFailedMetadata(
+      {
+        desired_state: "running",
+        billing: {
+          funding_mode: "account-prepaid",
+          funding_lane: "prepaid",
+          enforcement: {
+            state: "draining",
+            reason: "prepaid balance is exhausted",
+            final_backup_status: "running",
+            grace_until: "2026-06-28T00:00:00.000Z",
+            deprovision_after: "2026-06-28T00:00:00.000Z",
+          },
+        },
+      },
+      new Error("final backup failed"),
+      new Date("2026-06-25T00:00:00.000Z"),
+    );
+
+    expect(metadata.desired_state).toBe("stopped");
+    expect(metadata.billing.stop_reason).toBe("prepaid balance is exhausted");
+    expect(metadata.billing.stop_requested_at).toBe("2026-06-25T00:00:00.000Z");
+    expect(metadata.billing.enforcement).toEqual(
+      expect.objectContaining({
+        state: "stopped_billing_blocked",
+        reason: "prepaid balance is exhausted",
+        final_backup_status: "failed",
+        final_backup_failed_at: "2026-06-25T00:00:00.000Z",
+        final_backup_error: "Error: final backup failed",
+      }),
+    );
+    expect(metadata.billing.enforcement).not.toHaveProperty("grace_until");
+    expect(metadata.billing.enforcement).not.toHaveProperty(
+      "deprovision_after",
+    );
+    expect(metadata.billing.enforcement).not.toHaveProperty(
+      "final_backup_completed_at",
+    );
+  });
+
+  test("builds a deduplicated admin alert for failed billing drains", () => {
+    const alert = __test__.billingEnforcementDrainFailureAdminAlert({
+      host_id: "host-1",
+      account_id: "account-1",
+      op_id: "op-1",
+      error: new Error(
+        "failed to drain workspace project-1: final backup failed",
+      ),
+      final_backup_status: "failed",
+    });
+
+    expect(alert.subject).toBe("Dedicated host billing drain failed (host-1)");
+    expect(alert.body).toContain("project-1");
+    expect(alert.body).toContain("The compute stop request succeeded.");
+    expect(alert.body).toContain("provider disk were retained");
+    expect(alert.body).toContain("Automatic disk deprovisioning is disabled");
+    expect(alert.dedupMinutes).toBe(24 * 60);
+    expect(alert.dedupBySubject).toBe(true);
+  });
+
+  test("preserves successful-backup messaging when only the compute stop fails", () => {
+    const alert = __test__.billingEnforcementDrainFailureAdminAlert({
+      host_id: "host-1",
+      account_id: "account-1",
+      op_id: "op-1",
+      error: new Error("cloud stop failed"),
+      stop_error: new Error("provider unavailable"),
+      final_backup_status: "succeeded",
+    });
+
+    expect(alert.body).toContain("Final backup status: succeeded");
+    expect(alert.body).toContain("Normal backup-backed disk grace");
+    expect(alert.body).toContain(
+      "compute stop request also failed: Error: provider unavailable",
+    );
+    expect(alert.body).not.toContain(
+      "Automatic disk deprovisioning is disabled",
+    );
+  });
 });

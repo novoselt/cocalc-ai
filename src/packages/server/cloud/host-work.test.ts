@@ -2130,7 +2130,7 @@ describe("cloud host start failures", () => {
     ]);
   });
 
-  it("switches GCP Spot machine type after the second failed attempt", async () => {
+  it("uses an explicitly configured GCP Spot alternate after the second failed attempt", async () => {
     const hostId = "a4bdb95a-e3b1-4682-b83e-e0c73bf22ca7";
     const setMachineType = jest.fn(async () => undefined);
     const startHost = jest.fn(async () => undefined);
@@ -2158,6 +2158,9 @@ describe("cloud host start failures", () => {
         desired_pricing_model: "spot",
         effective_pricing_model: "spot",
         interruption_restore_policy: "immediate",
+        spot_recovery_policy: {
+          alternate_spot_machine_types: ["n2d-standard-16"],
+        },
         machine: {
           cloud: "gcp",
           zone: "us-south1-c",
@@ -2208,6 +2211,90 @@ describe("cloud host start failures", () => {
       active_machine_type: "n2d-standard-16",
       spot_machine_types_tried: ["t2d-standard-16", "n2d-standard-16"],
     });
+  });
+
+  it("falls back to on-demand without deriving a GCP Spot alternate", async () => {
+    const hostId = "c9fbf158-b78d-4497-b171-2b14ed2cb759";
+    const setMachineType = jest.fn(async () => undefined);
+    const setPricingModel = jest.fn(async () => undefined);
+    const startHost = jest.fn(async () => undefined);
+    const getStatus = jest.fn(async () => "running");
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        provider: {
+          setMachineType,
+          setPricingModel,
+          startHost,
+          getStatus,
+        },
+      },
+      creds: {},
+    });
+
+    await upsertProjectHost({
+      id: hostId,
+      name: "GCP Spot host without alternates",
+      region: "us-south1",
+      status: "starting",
+      metadata: {
+        owner: "acct-owner",
+        billing: { funding_mode: "site-funded" },
+        pricing_model: "spot",
+        desired_pricing_model: "spot",
+        effective_pricing_model: "spot",
+        interruption_restore_policy: "immediate",
+        machine: {
+          cloud: "gcp",
+          zone: "us-south1-c",
+          machine_type: "t2d-standard-16",
+          disk_gb: 200,
+          disk_type: "balanced",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "gcp",
+          instance_id: `cocalc-host-${hostId}`,
+          metadata: { machine_type: "t2d-standard-16" },
+        },
+        spot_recovery_state: {
+          phase: "retrying_spot",
+          outage_started_at: new Date().toISOString(),
+          attempt: 1,
+          active_machine_type: "t2d-standard-16",
+          spot_machine_types_tried: ["t2d-standard-16"],
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.start({
+      id: "start-no-alternate-spot-1",
+      vm_id: hostId,
+      action: "start",
+      payload: {
+        provider: "gcp",
+        source: "verify_host_ready",
+        reason: "provider-status:TERMINATED",
+      },
+    } as any);
+
+    expect(setMachineType).not.toHaveBeenCalled();
+    expect(setPricingModel).toHaveBeenCalledWith(
+      expect.objectContaining({ instance_id: `cocalc-host-${hostId}` }),
+      "on_demand",
+      {},
+    );
+    expect(startHost).toHaveBeenCalled();
+    const hostRows = await getPool().query(
+      "SELECT metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(hostRows.rows[0].metadata.spot_recovery_state).toMatchObject({
+      phase: "running_standard_fallback",
+      active_machine_type: "t2d-standard-16",
+      spot_machine_types_tried: ["t2d-standard-16"],
+    });
+    expect(hostRows.rows[0].metadata.effective_pricing_model).toBe("on_demand");
   });
 
   it("keeps the configured machine type for account-funded Spot hosts", async () => {
