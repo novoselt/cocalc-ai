@@ -7,6 +7,7 @@ import {
 } from "@cocalc/lite/hub/sqlite/database";
 import { account_id } from "@cocalc/backend/data";
 import { randomBytes } from "crypto";
+import { normalizeRootfsImageName } from "@cocalc/util/rootfs-images";
 import { releaseProjectPortLease } from "./port-leases";
 import {
   acceptProjectVolumeQuotaDesired,
@@ -119,6 +120,14 @@ export interface ProjectRuntimeArtifactReference {
   project_count: number;
 }
 
+export interface ProjectQuotaRepairRow {
+  project_id: string;
+  state?: string;
+  disk?: number;
+  scratch?: number;
+  run_quota_revision?: number;
+}
+
 function ensureProjectsTable() {
   const db = initDatabase();
   // Intentionally no `users` column here; collaborator state lives in the
@@ -184,6 +193,16 @@ function ensureProjectsTable() {
   } catch {}
   db.exec(
     "CREATE INDEX IF NOT EXISTS projects_state_idx ON projects(state, updated_at)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_active_ssh_port_idx ON projects(ssh_port) WHERE state IN ('running', 'starting')",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_active_http_port_idx ON projects(http_port) WHERE state IN ('running', 'starting')",
+  );
+  db.exec("CREATE INDEX IF NOT EXISTS projects_image_idx ON projects(image)");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_quota_repair_idx ON projects(project_id) WHERE disk > 0 OR scratch > 0",
   );
 }
 
@@ -440,6 +459,50 @@ export function listProjects(): ProjectRow[] {
     run_quota: parseRunQuota(row.run_quota),
     secret_names: parseStringArray(row.secret_names),
   })) as ProjectRow[];
+}
+
+export function listProjectQuotaRepairBatch({
+  after_project_id = "",
+  limit = 32,
+}: {
+  after_project_id?: string;
+  limit?: number;
+} = {}): ProjectQuotaRepairRow[] {
+  ensureProjectsTable();
+  const boundedLimit = Math.max(1, Math.min(256, Math.floor(limit)));
+  return getDatabase()
+    .prepare(
+      `SELECT project_id, state, disk, scratch, run_quota_revision
+        FROM projects
+        WHERE project_id > ?
+          AND (disk > 0 OR scratch > 0)
+        ORDER BY project_id
+        LIMIT ?`,
+    )
+    .all(after_project_id, boundedLimit) as ProjectQuotaRepairRow[];
+}
+
+export function getProjectsUsingRootfsImage(image: string): ProjectRow[] {
+  ensureProjectsTable();
+  const normalized = normalizeRootfsImageName(image);
+  if (!normalized) return [];
+  const candidates = new Set([`${image}`.trim(), normalized]);
+  if (normalized.startsWith("docker.io/")) {
+    candidates.add(normalized.slice("docker.io/".length));
+  }
+  const values = [...candidates].filter(Boolean);
+  const placeholders = values.map(() => "?").join(", ");
+  const rows = getDatabase()
+    .prepare(
+      `SELECT project_id, state, image
+         FROM projects
+        WHERE image IN (${placeholders})
+        ORDER BY project_id`,
+    )
+    .all(...values) as ProjectRow[];
+  return rows.filter(
+    (row) => normalizeRootfsImageName(row.image) === normalized,
+  );
 }
 
 export function getProject(project_id: string): ProjectRow | undefined {

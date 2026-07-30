@@ -11,6 +11,8 @@ export type LocalPathFunction = (opts: {
   // if true and scratch is enabled, recreate the non-backed-up temporary
   // storage volume before returning its path.
   resetScratch?: boolean;
+  // if false, the project host already applied authoritative volume quotas.
+  applyQuota?: boolean;
 }) => Promise<{ home: string; scratch?: string; quota_applied?: boolean }>;
 
 export interface SshServer {
@@ -72,6 +74,11 @@ export interface Configuration {
   // if given, a disk-backed temporary volume of this size in bytes is mounted
   // at /tmp in the container. A legacy /scratch alias may also be mounted.
   scratch?: number;
+  // The project host has durably applied the authoritative home and scratch
+  // quota revision. The runner must not independently rewrite those limits.
+  storage_quota_prepared?: boolean;
+  // The project host has reset and prepared scratch for this cold start.
+  scratch_prepared?: boolean;
   // optional explicit tmpfs size in bytes. Shared-host projects normally leave
   // this unset so /tmp uses the disk-backed temporary volume above instead of RAM.
   tmp?: number;

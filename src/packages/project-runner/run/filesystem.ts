@@ -85,6 +85,7 @@ export async function localPath({
   scratch: scratchQuota,
   ensure = true,
   resetScratch = false,
+  applyQuota = true,
 }: {
   project_id: string;
   // if given, this quota will be set in case of btrfs
@@ -99,6 +100,8 @@ export async function localPath({
   // if true and scratch is enabled, recreate the scratch volume before
   // returning it. Project runtimes mount this volume at /tmp.
   resetScratch?: boolean;
+  // if false, the host has already applied authoritative home/scratch quotas.
+  applyQuota?: boolean;
 }): Promise<{ home: string; scratch?: string; quota_applied?: boolean }> {
   logger.debug("localPath: start", {
     project_id,
@@ -106,6 +109,7 @@ export async function localPath({
     disk,
     scratchQuota,
     resetScratch,
+    applyQuota,
     hasProjectRunnerMountpoint: !!projectRunnerMountpoint,
     hasProjectPathEnv: !!process.env.COCALC_PROJECT_PATH,
     forceFileServerRpc,
@@ -161,10 +165,11 @@ export async function localPath({
       : undefined;
 
     const homeVol = await homeVolPromise;
-    const homeQuotaPromise = hasPositiveQuotaValue(disk)
-      ? homeVol.quota.set(disk)
-      : Promise.resolve();
-    if (hasPositiveQuotaValue(disk)) {
+    const homeQuotaPromise =
+      applyQuota && hasPositiveQuotaValue(disk)
+        ? homeVol.quota.set(disk)
+        : Promise.resolve();
+    if (applyQuota && hasPositiveQuotaValue(disk)) {
       logger.debug("localPath: setting home quota", { project_id, disk });
     } else {
       logger.debug("localPath: leaving home quota unchanged", { project_id });
@@ -182,7 +187,7 @@ export async function localPath({
       let effectiveScratchQuota = scratchQuota ?? disk;
       let scratchQuotaSource: "scratch" | "disk" | "home" | "unset" =
         scratchQuota != null ? "scratch" : disk != null ? "disk" : "unset";
-      if (effectiveScratchQuota == null) {
+      if (applyQuota && effectiveScratchQuota == null) {
         try {
           await homeQuotaPromise;
           const { size } = await homeVol.quota.get();
@@ -198,10 +203,11 @@ export async function localPath({
           });
         }
       }
-      const scratchQuotaPromise = hasPositiveQuotaValue(effectiveScratchQuota)
-        ? scratchVol.quota.set(effectiveScratchQuota)
-        : Promise.resolve();
-      if (hasPositiveQuotaValue(effectiveScratchQuota)) {
+      const scratchQuotaPromise =
+        applyQuota && hasPositiveQuotaValue(effectiveScratchQuota)
+          ? scratchVol.quota.set(effectiveScratchQuota)
+          : Promise.resolve();
+      if (applyQuota && hasPositiveQuotaValue(effectiveScratchQuota)) {
         logger.debug("localPath: setting scratch quota", {
           project_id,
           effectiveScratchQuota,
@@ -233,7 +239,7 @@ export async function localPath({
     return {
       home,
       scratch,
-      quota_applied: hasPositiveQuotaValue(disk),
+      quota_applied: !applyQuota || hasPositiveQuotaValue(disk),
     };
   } else if (process.env.COCALC_PROJECT_PATH && !forceFileServerRpc) {
     const path = join(process.env.COCALC_PROJECT_PATH, project_id);
@@ -262,13 +268,14 @@ export async function localPath({
     ensure,
     wantsScratch,
     resetScratch,
+    applyQuota,
     scratchDisabled: scratchQuota === 0,
   });
   const c = getFsClient();
   if (ensure) {
     logger.debug("localPath: ensuring remote home volume", { project_id });
     await c.ensureVolume({ project_id });
-    if (hasPositiveQuotaValue(disk)) {
+    if (applyQuota && hasPositiveQuotaValue(disk)) {
       logger.debug("localPath: setting remote home quota", {
         project_id,
         disk,
@@ -294,7 +301,7 @@ export async function localPath({
       let effectiveScratchQuota = scratchQuota ?? disk;
       let scratchQuotaSource: "scratch" | "disk" | "home" | "unset" =
         scratchQuota != null ? "scratch" : disk != null ? "disk" : "unset";
-      if (effectiveScratchQuota == null) {
+      if (applyQuota && effectiveScratchQuota == null) {
         try {
           const { size } = await c.getQuota({ project_id });
           if (hasPositiveQuotaValue(size)) {
@@ -311,7 +318,7 @@ export async function localPath({
           );
         }
       }
-      if (hasPositiveQuotaValue(effectiveScratchQuota)) {
+      if (applyQuota && hasPositiveQuotaValue(effectiveScratchQuota)) {
         logger.debug("localPath: setting remote scratch quota", {
           project_id,
           effectiveScratchQuota,
@@ -352,7 +359,7 @@ export async function localPath({
   return {
     home,
     scratch,
-    quota_applied: ensure && hasPositiveQuotaValue(disk),
+    quota_applied: ensure && (!applyQuota || hasPositiveQuotaValue(disk)),
   };
 }
 

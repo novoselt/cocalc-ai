@@ -39,6 +39,7 @@ jest.mock("@cocalc/lite/hub/api", () => ({
 }));
 
 jest.mock("./sqlite/projects", () => ({
+  getProjectsUsingRootfsImage: jest.fn(() => []),
   listProjects: jest.fn(() => []),
 }));
 
@@ -48,7 +49,7 @@ import {
   preflightMetadataFilePath,
 } from "@cocalc/project-runner/run/rootfs-base";
 import { hubApi } from "@cocalc/lite/hub/api";
-import { listProjects } from "./sqlite/projects";
+import { getProjectsUsingRootfsImage, listProjects } from "./sqlite/projects";
 
 import {
   __test__,
@@ -65,6 +66,7 @@ describe("rootfs-cache", () => {
     });
     await mkdir(mockTestImageCache, { recursive: true });
     jest.clearAllMocks();
+    jest.mocked(getProjectsUsingRootfsImage).mockReturnValue([]);
     jest.mocked(listProjects).mockReturnValue([]);
   });
 
@@ -168,13 +170,14 @@ describe("rootfs-cache", () => {
     expect(entry.size_bytes).toBe(123);
     expect(entry.project_count).toBe(0);
     expect(entry.running_project_count).toBe(0);
+    expect(listProjects).not.toHaveBeenCalled();
   });
 
   it("refreshes an outdated managed RootFS cache referenced only by stopped projects", async () => {
     const image = `cocalc.local/rootfs/${"c".repeat(64)}`;
     const cachePath = imageCachePath(image);
     await mkdir(join(cachePath, "usr"), { recursive: true });
-    jest.mocked(listProjects).mockReturnValue([
+    jest.mocked(getProjectsUsingRootfsImage).mockReturnValue([
       {
         project_id: "11111111-1111-4111-8111-111111111111",
         state: "opened",
@@ -201,7 +204,7 @@ describe("rootfs-cache", () => {
     const image = `cocalc.local/rootfs/${"d".repeat(64)}`;
     const cachePath = imageCachePath(image);
     await mkdir(join(cachePath, "usr"), { recursive: true });
-    jest.mocked(listProjects).mockReturnValue([
+    jest.mocked(getProjectsUsingRootfsImage).mockReturnValue([
       {
         project_id: "22222222-2222-4222-8222-222222222222",
         state: "running",

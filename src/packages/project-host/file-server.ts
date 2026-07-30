@@ -121,7 +121,15 @@ import execSandbox, { parseOutput } from "@cocalc/backend/sandbox/exec";
 import rustic from "@cocalc/backend/sandbox/rustic";
 import { envToInt } from "@cocalc/backend/misc/env-to-number";
 import { isValidUUID } from "@cocalc/util/misc";
-import { getProject, listProjects } from "./sqlite/projects";
+import { getProject, listProjectQuotaRepairBatch } from "./sqlite/projects";
+import {
+  acceptProjectVolumeQuotaDesired,
+  deleteProjectVolumeQuotas,
+  invalidateProjectVolumeQuota,
+  markProjectVolumeQuotaApplied,
+  markProjectVolumeQuotaApplying,
+  markProjectVolumeQuotaFailed,
+} from "./sqlite/volume-quotas";
 import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
 import { ensureSshpiperdKey } from "./ssh/sshpiperd-key";
 import { requireManagedSshKeyAccount } from "./ssh/managed-key-account";
@@ -229,11 +237,11 @@ const QUOTA_CACHE_TTL_MS = Math.max(
 );
 const PROJECT_QUOTA_REPAIR_SWEEP_MS = Math.max(
   60_000,
-  envToInt("COCALC_PROJECT_QUOTA_REPAIR_SWEEP_MS", 60 * 60 * 1000),
+  envToInt("COCALC_PROJECT_QUOTA_REPAIR_SWEEP_MS", 60_000),
 );
-const PROJECT_QUOTA_REPAIR_ACTIVE_MS = Math.max(
-  60 * 60 * 1000,
-  envToInt("COCALC_PROJECT_QUOTA_REPAIR_ACTIVE_MS", 7 * 24 * 60 * 60 * 1000),
+const PROJECT_QUOTA_REPAIR_BATCH_SIZE = Math.max(
+  1,
+  Math.min(256, envToInt("COCALC_PROJECT_QUOTA_REPAIR_BATCH_SIZE", 32)),
 );
 const sshWakeInFlight = new Map<string, Promise<number | null>>();
 const quotaCache = new Map<
@@ -946,6 +954,11 @@ async function swapProjectHome({
   );
   await sudo({ command: "mv", args: [home, oldHomePath] });
   await sudo({ command: "mv", args: [replacementPath, home] });
+  invalidateProjectVolumeQuota({
+    project_id,
+    volume_kind: "home",
+    reason: "project home replaced",
+  });
   return { oldHomePath };
 }
 
@@ -995,11 +1008,11 @@ async function createSafetySnapshotFromPath({
   });
 }
 
-export async function getVolume(project_id: string) {
+export async function getVolume(project_id: string, scratch?: boolean) {
   if (fs == null) {
     throw Error("file server not initialized");
   }
-  const vol = await fs.subvolumes.get(volName(project_id));
+  const vol = await fs.subvolumes.get(volumeName(project_id, scratch));
   if (!(await exists(vol.path))) {
     throw new Error(`project volume does not exist: ${vol.path}`);
   }
@@ -1053,6 +1066,11 @@ export async function resetScratchVolume(project_id: string) {
   const next = await fs.subvolumes.ensure(name);
   invalidateProjectFsServer(project_id);
   invalidateQuotaCache(project_id, true);
+  invalidateProjectVolumeQuota({
+    project_id,
+    volume_kind: "scratch",
+    reason: "scratch volume reset",
+  });
   return next;
 }
 
@@ -1091,6 +1109,7 @@ export async function deleteVolume(
 
   await deleteIfExists({ name: volName(project_id), clearSnapshots: true });
   await deleteIfExists({ name: scratchVolName(project_id) });
+  deleteProjectVolumeQuotas(project_id);
   invalidateProjectFsServer(project_id);
   if (opts.reportProvisioned !== false) {
     queueProjectProvisioned(project_id, false);
@@ -1970,58 +1989,80 @@ function positiveFiniteBytes(value: unknown): number | undefined {
   return Math.floor(n);
 }
 
-function shouldRepairProjectQuota(project: {
-  state?: string;
-  last_seen?: number;
-  updated_at?: number;
-}): boolean {
-  if (project.state === "running" || project.state === "starting") {
-    return true;
-  }
-  const lastActivity = Math.max(
-    Number(project.last_seen) || 0,
-    Number(project.updated_at) || 0,
-  );
-  return Date.now() - lastActivity <= PROJECT_QUOTA_REPAIR_ACTIVE_MS;
-}
-
 async function repairProjectVolumeQuota({
   project_id,
   scratch,
   desired,
+  desired_revision,
 }: {
   project_id: string;
   scratch?: boolean;
   desired: number;
+  desired_revision?: number;
 }): Promise<"repaired" | "ok" | "missing"> {
   if (fs == null) {
     throw Error("file server not initialized");
   }
+  const acceptance = acceptProjectVolumeQuotaDesired({
+    project_id,
+    volume_kind: scratch ? "scratch" : "home",
+    desired_bytes: desired,
+    desired_revision,
+  });
+  const target = acceptance.row.desired_bytes;
   const vol = await fs.subvolumes.get(volumeName(project_id, scratch));
   if (!(await exists(vol.path))) {
+    markProjectVolumeQuotaFailed({
+      project_id,
+      volume_kind: scratch ? "scratch" : "home",
+      state: "missing",
+      error: "volume missing during bounded quota audit",
+    });
     return "missing";
   }
   const current = await vol.quota.get();
-  if (current.size === desired) {
+  if (current.size === target) {
+    markProjectVolumeQuotaApplied({
+      project_id,
+      volume_kind: scratch ? "scratch" : "home",
+      desired_bytes: target,
+      desired_revision: acceptance.row.desired_revision,
+    });
     return "ok";
   }
   logger.warn("repairing project btrfs quota limit", {
     project_id,
     scratch: scratch === true,
     current_size: current.size,
-    desired_size: desired,
+    desired_size: target,
     warning: current.warning,
   });
-  await vol.quota.set(desired);
+  markProjectVolumeQuotaApplying({
+    project_id,
+    volume_kind: scratch ? "scratch" : "home",
+  });
+  await vol.quota.set(target, {
+    project_id,
+    volume_kind: scratch ? "scratch" : "home",
+    operation_class: "scheduled_quota_audit",
+    priority: "scheduled",
+  });
+  markProjectVolumeQuotaApplied({
+    project_id,
+    volume_kind: scratch ? "scratch" : "home",
+    desired_bytes: target,
+    desired_revision: acceptance.row.desired_revision,
+  });
   invalidateQuotaCache(project_id, scratch);
   return "repaired";
 }
 
 let quotaRepairRunning = false;
 let quotaRepairTimer: ReturnType<typeof setInterval> | undefined;
+let quotaRepairCursor = "";
 
 async function repairProjectQuotaLimits(
-  context: "startup" | "periodic" | "manual",
+  context: "periodic" | "manual",
 ): Promise<void> {
   if (!projectQuotaRepairEnabled() || fs == null) return;
   if (quotaRepairRunning) return;
@@ -2031,17 +2072,21 @@ async function repairProjectQuotaLimits(
     repaired: 0,
     missing: 0,
     skipped: 0,
-    inactive: 0,
     errors: 0,
   };
   try {
-    for (const project of listProjects()) {
+    const projects = listProjectQuotaRepairBatch({
+      after_project_id: quotaRepairCursor,
+      limit: PROJECT_QUOTA_REPAIR_BATCH_SIZE,
+    });
+    if (projects.length === 0) {
+      quotaRepairCursor = "";
+      return;
+    }
+    for (const project of projects) {
+      quotaRepairCursor = project.project_id;
       if (projectQuotaGraceActive.has(project.project_id)) {
         counts.skipped += 1;
-        continue;
-      }
-      if (!shouldRepairProjectQuota(project)) {
-        counts.inactive += 1;
         continue;
       }
       const disk = positiveFiniteBytes(project.disk);
@@ -2061,6 +2106,7 @@ async function repairProjectQuotaLimits(
             project_id: project.project_id,
             scratch: entry.scratch,
             desired: entry.desired,
+            desired_revision: project.run_quota_revision,
           });
           if (result === "repaired") {
             counts.repaired += 1;
@@ -2069,6 +2115,11 @@ async function repairProjectQuotaLimits(
           }
         } catch (err) {
           counts.errors += 1;
+          markProjectVolumeQuotaFailed({
+            project_id: project.project_id,
+            volume_kind: entry.scratch ? "scratch" : "home",
+            error: err,
+          });
           logger.warn("project quota repair failed", {
             context,
             project_id: project.project_id,
@@ -2097,13 +2148,13 @@ async function repairProjectQuotaLimits(
 
 function startProjectQuotaRepairMonitor(): void {
   if (!projectQuotaRepairEnabled() || quotaRepairTimer != null) return;
-  void repairProjectQuotaLimits("startup");
   quotaRepairTimer = setInterval(() => {
     void repairProjectQuotaLimits("periodic");
   }, PROJECT_QUOTA_REPAIR_SWEEP_MS);
   quotaRepairTimer.unref?.();
   logger.info("started project quota repair monitor", {
     sweepMs: PROJECT_QUOTA_REPAIR_SWEEP_MS,
+    batchSize: PROJECT_QUOTA_REPAIR_BATCH_SIZE,
   });
 }
 

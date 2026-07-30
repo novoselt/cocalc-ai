@@ -26,6 +26,7 @@ const getLocalHostId = jest.fn(() => "host-1");
 const getMasterConatClient = jest.fn();
 const fileServerCreateBackup = jest.fn();
 const ensureVolume = jest.fn();
+const resetScratchVolume = jest.fn();
 const deleteVolume = jest.fn();
 const sandboxExec = jest.fn();
 const getVolume = jest.fn(async () => ({ path: "/mnt/cocalc/project-test" }));
@@ -111,6 +112,7 @@ jest.mock("../file-server", () => ({
     writeManagedAuthorizedKeys(...args),
   getVolume: (...args: any[]) => getVolume(...args),
   ensureVolume: (...args: any[]) => ensureVolume(...args),
+  resetScratchVolume: (...args: any[]) => resetScratchVolume(...args),
   deleteVolume: (...args: any[]) => deleteVolume(...args),
   getMountPoint: jest.fn(() => "/mnt/cocalc"),
   resolveProjectContainerPath: (...args: any[]) =>
@@ -244,6 +246,7 @@ describe("project host start ACP rehydrate ordering", () => {
     getOrCreateProjectLocalSecretToken.mockReturnValue("secret");
     applyPendingCopies.mockResolvedValue(undefined);
     writeManagedAuthorizedKeys.mockResolvedValue(undefined);
+    resetScratchVolume.mockReset();
     pullRootfsCacheEntry.mockResolvedValue(undefined);
     prepareOciPullReservationEstimate.mockResolvedValue(undefined);
     withOciPullReservationIfNeeded.mockImplementation(
@@ -387,6 +390,7 @@ describe("project host start ACP rehydrate ordering", () => {
         http_port: 1234,
         ssh_port: 2222,
       })),
+      status: jest.fn(async () => ({ state: "running" })),
       stop: jest.fn(),
     } as any;
 
@@ -885,6 +889,7 @@ describe("project host start ACP rehydrate ordering", () => {
         http_port: 1234,
         ssh_port: 2222,
       })),
+      status: jest.fn(async () => ({ state: "running" })),
       stop: jest.fn(),
     } as any;
 
@@ -901,7 +906,72 @@ describe("project host start ACP rehydrate ordering", () => {
         desired_revision: 9,
       });
       expect(getVolume).not.toHaveBeenCalled();
+      expect(resetScratchVolume).not.toHaveBeenCalled();
       expect(runnerApi.start).toHaveBeenCalled();
+    } finally {
+      if (previousMode == null) {
+        delete process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+      } else {
+        process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = previousMode;
+      }
+    }
+  });
+
+  it("resets and applies scratch before attesting a cold start", async () => {
+    const previousMode = process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+    process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = "enforce";
+    getProject.mockReturnValue({
+      image: DEFAULT_PROJECT_IMAGE,
+      run_quota: { disk_quota: 65_000 },
+      run_quota_revision: 9,
+    });
+    getVolume.mockResolvedValueOnce({
+      path: `/mnt/cocalc/project-${project_id}`,
+      quota: {
+        get: jest.fn(async () => ({
+          used: 1_000,
+          size: 65_000_000_000,
+        })),
+        set: jest.fn(async () => undefined),
+      },
+    });
+    const scratchQuotaSet = jest.fn(async () => undefined);
+    resetScratchVolume.mockResolvedValueOnce({
+      path: `/mnt/cocalc/project-${project_id}-scratch`,
+      quota: {
+        get: jest.fn(async () => ({ used: 0, size: 0 })),
+        set: scratchQuotaSet,
+      },
+    });
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      status: jest.fn(async () => ({ state: "opened" })),
+      stop: jest.fn(),
+    } as any;
+
+    try {
+      const { wireProjectsApi } = await import("./projects");
+      wireProjectsApi(runnerApi);
+
+      await hubApi.projects.start({ project_id });
+
+      expect(resetScratchVolume).toHaveBeenCalledWith(project_id);
+      expect(scratchQuotaSet).toHaveBeenCalledWith(65_000_000_000, {
+        project_id,
+        volume_kind: "scratch",
+        operation_class: "project_volume_prepare",
+      });
+      expect(runnerApi.start).toHaveBeenCalledWith({
+        project_id,
+        config: expect.objectContaining({
+          storage_quota_prepared: true,
+          scratch_prepared: true,
+        }),
+      });
     } finally {
       if (previousMode == null) {
         delete process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;

@@ -6,6 +6,7 @@ import { btrfsQuotasDisabled } from "./config";
 import {
   cachedBtrfsQgroupShowRawForPath,
   invalidateBtrfsQgroupShowRaw,
+  type BtrfsMutationPriority,
 } from "./operation-cache";
 
 const logger = getLogger("file-server:btrfs:subvolume-quota");
@@ -170,6 +171,7 @@ export class SubvolumeQuota {
       volume_kind?: string;
       operation_id?: string;
       operation_class?: string;
+      priority?: BtrfsMutationPriority;
     },
   ) => {
     if (btrfsQuotasDisabled()) {

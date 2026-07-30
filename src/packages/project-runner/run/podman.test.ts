@@ -743,6 +743,7 @@ describe("project-runner podman orphan fallback", () => {
       disk: 1024,
       scratch: undefined,
       ensure: false,
+      applyQuota: true,
     });
     expect(localPath).toHaveBeenNthCalledWith(2, {
       project_id: project1,
@@ -750,6 +751,7 @@ describe("project-runner podman orphan fallback", () => {
       scratch: undefined,
       ensure: true,
       resetScratch: true,
+      applyQuota: true,
     });
     expect(mountArg).toHaveBeenCalledWith({
       source: `/tmp/project-${project1}-scratch`,
@@ -797,6 +799,38 @@ describe("project-runner podman orphan fallback", () => {
       scratch: undefined,
       ensure: true,
       resetScratch: false,
+      applyQuota: true,
+    });
+  });
+
+  it("trusts host-prepared storage without resetting scratch or applying quotas", async () => {
+    mockProjectStartPodman(project1);
+    const localPath = jest.fn(async () => ({
+      home: `/tmp/project-${project1}`,
+      scratch: `/tmp/project-${project1}-scratch`,
+      quota_applied: true,
+    }));
+
+    await start({
+      project_id: project1,
+      localPath,
+      config: {
+        disk: 1024,
+        image: "docker.io/library/ubuntu:latest",
+        ssh_port: 30123,
+        http_port: 45123,
+        storage_quota_prepared: true,
+        scratch_prepared: true,
+      },
+    });
+
+    expect(localPath).toHaveBeenNthCalledWith(2, {
+      project_id: project1,
+      disk: 1024,
+      scratch: undefined,
+      ensure: true,
+      resetScratch: false,
+      applyQuota: false,
     });
   });
 
