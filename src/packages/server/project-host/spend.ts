@@ -13,6 +13,7 @@ import getPool, { type PoolClient } from "@cocalc/database/pool";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { resolveAccountHomeBay } from "@cocalc/server/bay-directory";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
+import { isDeepStrictEqual } from "node:util";
 import { loadNebiusInstanceTypes } from "@cocalc/server/cloud/providers";
 import { nextCalendarMonthStartAfter } from "@cocalc/server/purchases/billing-period";
 import createPurchase from "@cocalc/server/purchases/create-purchase";
@@ -683,8 +684,10 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
     moneyToDbString(newest.cost_per_hour ?? 0) === normalizedRate &&
     newest.description?.funding_lane === funding_lane &&
     newest.description?.billing_state === billing_state &&
-    JSON.stringify(newest.description?.pricing_snapshot ?? null) ===
-      JSON.stringify(pricing_snapshot)
+    isDeepStrictEqual(
+      newest.description?.pricing_snapshot ?? null,
+      pricing_snapshot,
+    )
   ) {
     if (funding_lane === "credit") {
       await rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
