@@ -78,8 +78,10 @@ function parseBootstrapReconcileScope(
   value: string | undefined,
 ): HostBootstrapReconcileScope | undefined {
   if (value == null) return undefined;
-  if (value === "full" || value === "helpers") return value;
-  throw new Error("--bootstrap-scope must be full or helpers");
+  if (value === "full" || value === "helpers" || value === "environment") {
+    return value;
+  }
+  throw new Error("--bootstrap-scope must be full, helpers, or environment");
 }
 
 export function assertHostRehomeConfirmed({
@@ -2997,7 +2999,7 @@ Examples:
     )
     .option(
       "--bootstrap-scope <scope>",
-      "forced bootstrap scope: full restarts project-host; helpers updates privileged helpers without daemon restarts",
+      "forced bootstrap scope: full reconciles all software; helpers updates privileged helpers; environment updates managed configuration without daemon restarts",
     )
     .option("--wait", "wait for completion")
     .action(

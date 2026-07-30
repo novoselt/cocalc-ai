@@ -1592,7 +1592,10 @@ async function runHostAction(
         id: host_id,
         force_bootstrap: input?.force_bootstrap === true,
         bootstrap_scope:
-          input?.bootstrap_scope === "helpers" ? "helpers" : undefined,
+          input?.bootstrap_scope === "helpers" ||
+          input?.bootstrap_scope === "environment"
+            ? input.bootstrap_scope
+            : undefined,
       });
       return undefined;
     case "host-deprovision":
@@ -2230,7 +2233,10 @@ async function handleOp(op: LroSummary): Promise<void> {
         id: host_id,
         force_bootstrap: input?.force_bootstrap === true,
         bootstrap_scope:
-          input?.bootstrap_scope === "helpers" ? "helpers" : undefined,
+          input?.bootstrap_scope === "helpers" ||
+          input?.bootstrap_scope === "environment"
+            ? input.bootstrap_scope
+            : undefined,
       });
       await progressStep("waiting", "waiting for host to return", {
         host_id,

@@ -28,7 +28,7 @@ type Capture = {
   reconcileRequests?: Array<{
     id: string;
     force_bootstrap?: boolean;
-    bootstrap_scope?: "full" | "helpers";
+    bootstrap_scope?: "full" | "helpers" | "environment";
   }>;
   rollouts: Array<{ id: string; components: string[]; reason?: string }>;
   runtimeDeploymentReconciles: Array<{
@@ -2495,6 +2495,38 @@ test("host reconcile forwards non-disruptive helper bootstrap scope", async () =
       id: "host-1",
       force_bootstrap: true,
       bootstrap_scope: "helpers",
+    },
+  ]);
+});
+
+test("host reconcile forwards environment-only bootstrap scope", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const program = new Command();
+  registerHostCommand(program, makeDeps(capture));
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "reconcile",
+    "host-1",
+    "--force-bootstrap",
+    "--bootstrap-scope",
+    "environment",
+  ]);
+
+  assert.deepEqual(capture.reconcileRequests, [
+    {
+      id: "host-1",
+      force_bootstrap: true,
+      bootstrap_scope: "environment",
     },
   ]);
 });

@@ -1595,6 +1595,10 @@ if [ "$BOOTSTRAP_ALREADY_DONE" = "1" ]; then
       echo "bootstrap: already complete; reconciling privileged host helpers only"
       python3 "$BOOTSTRAP_DIR/bootstrap.py" helpers --bootstrap-dir "$BOOTSTRAP_DIR"
       ;;
+    environment)
+      echo "bootstrap: already complete; reconciling managed project-host environment only"
+      python3 "$BOOTSTRAP_DIR/bootstrap.py" environment --bootstrap-dir "$BOOTSTRAP_DIR"
+      ;;
     *)
       echo "bootstrap: invalid reconcile scope: $BOOTSTRAP_RECONCILE_SCOPE" >&2
       exit 2

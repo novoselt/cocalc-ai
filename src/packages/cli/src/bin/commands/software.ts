@@ -137,10 +137,12 @@ type DeployOptions = {
 
 function parseHostBootstrapScope(
   value: string | undefined,
-): "full" | "helpers" | undefined {
+): "full" | "helpers" | "environment" | undefined {
   if (value == null) return undefined;
-  if (value === "full" || value === "helpers") return value;
-  throw new Error("--bootstrap-scope must be full or helpers");
+  if (value === "full" || value === "helpers" || value === "environment") {
+    return value;
+  }
+  throw new Error("--bootstrap-scope must be full, helpers, or environment");
 }
 
 type HistoryOptions = {
@@ -2513,7 +2515,7 @@ function rollbackDeployArgs({
     const bootstrapScope = parseHostBootstrapScope(opts.bootstrapScope);
     if (opts.rollout && !bootstrapScope) {
       throw new Error(
-        "software rollback host-bootstrap --rollout requires --bootstrap-scope full or helpers",
+        "software rollback host-bootstrap --rollout requires --bootstrap-scope full, helpers, or environment",
       );
     }
     if (!opts.rollout && bootstrapScope) {
@@ -3973,7 +3975,7 @@ Supported deploy/smoke components:
         const deploysHostBootstrap = components.includes("host-bootstrap");
         if (deploysHostBootstrap && opts.rollout && !bootstrapScope) {
           throw new Error(
-            "software deploy host-bootstrap --rollout requires --bootstrap-scope full or helpers",
+            "software deploy host-bootstrap --rollout requires --bootstrap-scope full, helpers, or environment",
           );
         }
         if (deploysHostBootstrap && !opts.rollout && bootstrapScope) {
@@ -4735,7 +4737,7 @@ Supported deploy/smoke components:
     )
     .option(
       "--bootstrap-scope <scope>",
-      "with host-bootstrap --rollout: full or helpers",
+      "with host-bootstrap --rollout: full, helpers, or environment",
     )
     .option(
       "--rollout",

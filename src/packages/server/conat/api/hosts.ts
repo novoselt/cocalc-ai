@@ -7451,9 +7451,10 @@ export async function reconcileHostSoftware({
   if (
     bootstrap_scope != null &&
     bootstrap_scope !== "full" &&
-    bootstrap_scope !== "helpers"
+    bootstrap_scope !== "helpers" &&
+    bootstrap_scope !== "environment"
   ) {
-    throw new Error("bootstrap_scope must be full or helpers");
+    throw new Error("bootstrap_scope must be full, helpers, or environment");
   }
   if (bootstrap_scope && !force_bootstrap) {
     throw new Error("bootstrap_scope requires force_bootstrap");
@@ -7482,9 +7483,7 @@ export async function reconcileHostSoftware({
       ...(bootstrap_scope ? { bootstrap_scope } : {}),
     },
     dedupe_key: force_bootstrap
-      ? bootstrap_scope === "helpers"
-        ? `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap:helpers`
-        : `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap`
+      ? `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap:${bootstrap_scope ?? "full"}`
       : `${HOST_RECONCILE_LRO_KIND}:${row.id}`,
   });
 }
@@ -8067,9 +8066,10 @@ export async function reconcileHostSoftwareInternal({
   if (
     bootstrap_scope != null &&
     bootstrap_scope !== "full" &&
-    bootstrap_scope !== "helpers"
+    bootstrap_scope !== "helpers" &&
+    bootstrap_scope !== "environment"
   ) {
-    throw new Error("bootstrap_scope must be full or helpers");
+    throw new Error("bootstrap_scope must be full, helpers, or environment");
   }
   if (bootstrap_scope && !force_bootstrap) {
     throw new Error("bootstrap_scope requires force_bootstrap");
