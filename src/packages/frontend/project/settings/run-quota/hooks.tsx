@@ -60,10 +60,7 @@ export function useRunQuota(
           } else if (typeof val !== "number") {
             return [key, val];
           } else {
-            const up_key = quota2upgrade_key(key);
-            // no display factor!
-            const unit = PARAMS[up_key].display_unit;
-            return [key, renderValueUnit(val, unit)];
+            return [key, formatNumericRunQuotaValue(key, val)];
           }
         }),
       );
@@ -84,13 +81,25 @@ export function useMaxUpgrades(): DisplayQuota {
     for (const [key, val] of Object.entries(maxUpgradesData)) {
       if (typeof val !== "number") continue;
       const up_key = quota2upgrade_key(key);
-      const dval = PARAMS[up_key].display_factor * val;
-      const unit = PARAMS[up_key].display_unit;
+      const parameter = PARAMS[up_key];
+      if (parameter == null) continue;
+      const dval = parameter.display_factor * val;
+      const unit = parameter.display_unit;
       next[key] = renderValueUnit(dval, unit);
     }
     if (!isEqual(next, maxUpgrades)) setMaxUpgrades(next);
   }, [customMaxUpgrades]);
   return maxUpgrades;
+}
+
+export function formatNumericRunQuotaValue(
+  key: string,
+  value: number,
+): string | number {
+  const parameter = PARAMS[quota2upgrade_key(key)];
+  if (parameter == null) return value;
+  // Run quota values already use display units, so do not apply display_factor.
+  return renderValueUnit(value, parameter.display_unit);
 }
 
 function valPct(val, total): number {
