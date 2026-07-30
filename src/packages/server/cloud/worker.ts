@@ -7,6 +7,7 @@
 import getLogger from "@cocalc/backend/logger";
 import {
   claimCloudVmWork,
+  deferCloudVmWork,
   markCloudVmWorkDone,
   markCloudVmWorkFailed,
   refreshCloudVmWorkLease,
@@ -28,6 +29,8 @@ const pool = () => getPool();
 const DEFAULT_MAX_CONCURRENCY = 10;
 const DEFAULT_PER_PROVIDER = 10;
 const DEFAULT_LEASE_REFRESH_MS = 60_000;
+const UNKNOWN_HANDLER_RETRY_MS = 30_000;
+const UNKNOWN_HANDLER_MAX_ATTEMPTS = 12;
 
 export type CloudVmWorkHandler = (row: CloudVmWorkRow) => Promise<void>;
 
@@ -57,7 +60,19 @@ export async function processCloudVmWorkOnce(opts: {
   const runRow = async (row: CloudVmWorkRow) => {
     const handler = opts.handlers[row.action];
     if (!handler) {
-      await markCloudVmWorkFailed(row.id, `no handler for ${row.action}`);
+      const error = `no handler for ${row.action}`;
+      if (Number(row.attempt ?? 0) >= UNKNOWN_HANDLER_MAX_ATTEMPTS) {
+        await markCloudVmWorkFailed(row.id, error);
+      } else {
+        // During rolling hub upgrades, a previous worker can claim work
+        // introduced by the new release. Defer it until upgraded workers are
+        // available instead of losing the desired-state transition.
+        await deferCloudVmWork({
+          id: row.id,
+          error,
+          not_before: new Date(Date.now() + UNKNOWN_HANDLER_RETRY_MS),
+        });
+      }
       return;
     }
     const leaseTimer =

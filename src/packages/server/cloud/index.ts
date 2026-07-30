@@ -7,6 +7,7 @@ export {
   requeueStaleCloudVmWork,
   markCloudVmWorkDone,
   markCloudVmWorkFailed,
+  deferCloudVmWork,
   type CloudVmLogEvent,
   type CloudVmLogEntry,
   type CloudVmWorkRow,

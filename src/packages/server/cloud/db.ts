@@ -367,5 +367,26 @@ export async function markCloudVmWorkFailed(
   );
 }
 
+export async function deferCloudVmWork(opts: {
+  id: string;
+  error: string;
+  not_before: Date;
+}): Promise<void> {
+  await pool().query(
+    `
+      UPDATE cloud_vm_work
+      SET state='queued',
+          not_before=$2,
+          attempt=COALESCE(attempt, 0) + 1,
+          error=$3,
+          locked_by=NULL,
+          locked_at=NULL,
+          updated_at=NOW()
+      WHERE id=$1
+    `,
+    [opts.id, opts.not_before, opts.error],
+  );
+}
+
 // No legacy metadata normalization: new installs should only use canonical
 // provider ids (e.g., "gcp", "hyperstack", "lambda").
