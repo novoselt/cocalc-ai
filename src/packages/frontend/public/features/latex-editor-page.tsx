@@ -189,6 +189,7 @@ export default function LatexEditorFeaturePage({
             <Col xs={24} lg={12}>
               <ZoomableImage
                 alt="CoCalc LaTeX editor with a knitr .Rnw document: R code chunks in the source and the compiled PDF with the generated plot"
+                priority
                 src={featureAsset("latex-intro-rnw-20260730.png")}
               />
             </Col>

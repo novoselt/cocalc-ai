@@ -67,6 +67,7 @@ export default function TerminalFeaturePage({
         <div style={{ margin: "0 auto", maxWidth: 940 }}>
           <ZoomableImage
             alt="A terminal in a CoCalc project running latexmk next to the LaTeX file it compiles"
+            priority
             src={featureAsset("terminal-latexmk-20260730.png")}
           />
         </div>

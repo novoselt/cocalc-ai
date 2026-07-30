@@ -40,7 +40,15 @@ const MEDIA_STYLE: CSSProperties = {
 
 // Simple click-to-zoom for screenshots: clicking the image opens a
 // viewport-filling overlay; clicking again (or Escape) closes it.
-export function ZoomableImage({ alt, src }: { alt: string; src: string }) {
+export function ZoomableImage({
+  alt,
+  priority,
+  src,
+}: {
+  alt: string;
+  priority?: boolean;
+  src: string;
+}) {
   const [zoomed, setZoomed] = useState<boolean>(false);
   useEffect(() => {
     if (!zoomed) return;
@@ -57,7 +65,8 @@ export function ZoomableImage({ alt, src }: { alt: string; src: string }) {
       <img
         alt={alt}
         decoding="async"
-        loading="lazy"
+        fetchPriority={priority ? "high" : undefined}
+        loading={priority ? "eager" : "lazy"}
         onClick={() => setZoomed(true)}
         src={src}
         style={{ ...MEDIA_STYLE, cursor: "zoom-in" }}

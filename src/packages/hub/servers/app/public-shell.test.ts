@@ -2,7 +2,10 @@ import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { PUBLIC_STATIC_BASE_PLACEHOLDER } from "@cocalc/util/public-site-metadata";
+import {
+  PUBLIC_BODY_PLACEHOLDER,
+  PUBLIC_STATIC_BASE_PLACEHOLDER,
+} from "@cocalc/util/public-site-metadata";
 import { renderPublicShell } from "./public-shell";
 
 jest.mock("@cocalc/database/settings/customize", () => ({
@@ -66,7 +69,7 @@ function shellHtml({ tokenized }: { tokenized: boolean }): string {
     "load-abc.js",
   )}"></script><script defer src="${src(
     "public-def.js",
-  )}"></script><div id="cocalc-webapp-container"></div></body></html>`;
+  )}"></script><div id="cocalc-webapp-container">${PUBLIC_BODY_PLACEHOLDER}</div></body></html>`;
 }
 
 const staticDir = mkdtempSync(join(tmpdir(), "public-shell-test-"));
@@ -90,6 +93,26 @@ function request(
 }
 
 describe("public shell rendering", () => {
+  it("renders crawler-visible feature content into the initial HTML", async () => {
+    const { html: body, status } = await renderPublicShell(
+      request("/features/jupyter-notebook"),
+    );
+
+    expect(status).toBe(200);
+    expect(body).toContain('data-cocalc-public-prerender="feature"');
+    expect(body).toContain("<h1>Online Jupyter Notebooks</h1>");
+    expect(body).toContain("Real-time collaborative editing");
+    expect(body).toContain('href="/features/terminal"');
+    expect(body).not.toContain(PUBLIC_BODY_PLACEHOLDER);
+  });
+
+  it("removes the body placeholder from routes without a prerender", async () => {
+    const { html: body } = await renderPublicShell(request("/pricing"));
+
+    expect(body).not.toContain(PUBLIC_BODY_PLACEHOLDER);
+    expect(body).not.toContain("data-cocalc-public-prerender");
+  });
+
   it("canonicalizes static shell target URLs to the clean public URL", async () => {
     const { html: body, status } = await renderPublicShell(
       request("/static/public.html", {

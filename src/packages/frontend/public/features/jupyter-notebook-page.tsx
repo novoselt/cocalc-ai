@@ -88,6 +88,7 @@ export default function JupyterNotebookFeaturePage({
         <div style={{ margin: "0 auto", maxWidth: 940 }}>
           <ZoomableImage
             alt="A Jupyter notebook in CoCalc with code cells, printed output, and a matplotlib plot"
+            priority
             src={featureAsset("jupyter-regular-20260730.png")}
           />
         </div>

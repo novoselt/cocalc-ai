@@ -244,8 +244,8 @@ export default function SoftwareEnvironmentFeaturePage({
           <Paragraph>
             Prefer reproducible builds? Describe an image as a{" "}
             <strong>declarative recipe</strong> and let CoCalc build it for you.
-            You can even import a Binder-style repository. Published images are
-            vulnerability-scanned and can stay private, be shared with
+            You can even import a Binder-style repository. Published images can
+            be vulnerability-scanned and can stay private, be shared with
             collaborators, or made public.
           </Paragraph>
           <Paragraph>

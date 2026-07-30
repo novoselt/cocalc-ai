@@ -22,6 +22,7 @@ import {
   getPublicRouteMetadata,
   pageTitle,
   parseNewsIdFromSlug,
+  PUBLIC_BODY_PLACEHOLDER,
   PUBLIC_HEAD_PLACEHOLDER,
   PUBLIC_STATIC_BASE_PLACEHOLDER,
   type PublicRouteMetadataConfig,
@@ -40,6 +41,7 @@ import {
   getCocalcProduct,
   isLaunchpadProduct,
 } from "@cocalc/server/launchpad/mode";
+import { renderPublicRoutePrerender } from "./public-prerender";
 
 const logger = getLogger("hub:servers:public-shell");
 
@@ -57,7 +59,7 @@ const FALLBACK_PUBLIC_HTML = `<!DOCTYPE html>
   <div id="cocalc-crash-container"></div>
   <div id="cocalc-load-container"></div>
   <div id="cocalc-scripts-container"></div>
-  <div id="cocalc-webapp-container"></div>
+  <div id="cocalc-webapp-container">${PUBLIC_BODY_PLACEHOLDER}</div>
 </body>
 </html>`;
 
@@ -322,6 +324,7 @@ function newsRedirectPath(
 }
 
 async function buildHead(req: Request): Promise<{
+  body: string;
   head: string;
   notFound: boolean;
   redirectTo?: string;
@@ -422,6 +425,7 @@ async function buildHead(req: Request): Promise<{
   ].join("\n  ");
 
   return {
+    body: renderPublicRoutePrerender(route, basePath),
     head: `${basePathMetaTag()}\n  <title>${htmlEscape(
       metadata.title,
     )}</title>\n  ${socialTags}`,
@@ -429,6 +433,50 @@ async function buildHead(req: Request): Promise<{
     ...(redirectPath ? { redirectTo: `${redirectPath}${search}` } : {}),
     serviceUnavailable: !!metadata.serviceUnavailable,
   };
+}
+
+let warnedAboutMissingBodyPlaceholder = false;
+
+function injectBody(html: string, body: string): string {
+  const index = html.indexOf(PUBLIC_BODY_PLACEHOLDER);
+  const duplicate =
+    index >= 0
+      ? html.indexOf(
+          PUBLIC_BODY_PLACEHOLDER,
+          index + PUBLIC_BODY_PLACEHOLDER.length,
+        )
+      : -1;
+  if (index >= 0 && duplicate < 0) {
+    return (
+      html.slice(0, index) +
+      body +
+      html.slice(index + PUBLIC_BODY_PLACEHOLDER.length)
+    );
+  }
+
+  // Older static artifacts have an empty application container. Supporting
+  // them keeps hub/static rollouts order-independent.
+  const legacyContainer = '<div id="cocalc-webapp-container"></div>';
+  const legacyIndex = html.indexOf(legacyContainer);
+  if (
+    legacyIndex >= 0 &&
+    html.indexOf(legacyContainer, legacyIndex + legacyContainer.length) < 0
+  ) {
+    const replacement = `<div id="cocalc-webapp-container">${body}</div>`;
+    return (
+      html.slice(0, legacyIndex) +
+      replacement +
+      html.slice(legacyIndex + legacyContainer.length)
+    );
+  }
+
+  if (!warnedAboutMissingBodyPlaceholder) {
+    warnedAboutMissingBodyPlaceholder = true;
+    logger.warn(
+      "public.html has no unique public body placeholder; serving without crawler-visible fallback content",
+    );
+  }
+  return html;
 }
 
 function staticBasePath(): string {
@@ -570,10 +618,10 @@ export async function renderPublicShell(req: Request): Promise<{
   const customize = await getCustomize();
   (req as any).cocalcPublicCustomize = customize;
   const html = await publicHtml();
-  const { head, notFound, redirectTo, serviceUnavailable } =
+  const { body, head, notFound, redirectTo, serviceUnavailable } =
     await buildHead(req);
   return {
-    html: injectHead(html, head),
+    html: injectBody(injectHead(html, head), body),
     redirectTo,
     status: serviceUnavailable ? 503 : notFound ? 404 : 200,
   };
