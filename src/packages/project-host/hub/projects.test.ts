@@ -59,6 +59,8 @@ const markProjectVolumeQuotaApplied = jest.fn();
 const markProjectVolumeQuotaApplying = jest.fn();
 const markProjectVolumeQuotaFailed = jest.fn();
 const projectVolumeQuotaIsApplied = jest.fn();
+const getProjectVolumeQuota = jest.fn();
+const invalidateProjectVolumeQuota = jest.fn();
 
 jest.mock("@cocalc/lite/hub/api", () => ({ hubApi: { projects: {} as any } }));
 jest.mock("@cocalc/backend/data", () => ({
@@ -199,6 +201,9 @@ jest.mock("../sqlite/port-leases", () => ({
 jest.mock("../sqlite/volume-quotas", () => ({
   acceptProjectVolumeQuotaDesired: (...args: any[]) =>
     acceptProjectVolumeQuotaDesired(...args),
+  getProjectVolumeQuota: (...args: any[]) => getProjectVolumeQuota(...args),
+  invalidateProjectVolumeQuota: (...args: any[]) =>
+    invalidateProjectVolumeQuota(...args),
   markProjectVolumeQuotaApplied: (...args: any[]) =>
     markProjectVolumeQuotaApplied(...args),
   markProjectVolumeQuotaApplying: (...args: any[]) =>
@@ -302,6 +307,8 @@ describe("project host start ACP rehydrate ordering", () => {
     markProjectVolumeQuotaFailed.mockReset();
     projectVolumeQuotaIsApplied.mockReset();
     projectVolumeQuotaIsApplied.mockReturnValue(false);
+    getProjectVolumeQuota.mockReset();
+    invalidateProjectVolumeQuota.mockReset();
     projectPortOffsetFromSshPort.mockReset();
     projectPortOffsetFromHttpPort.mockReset();
     projectPortOffsetFromSshPort.mockImplementation((port?: number | null) => {
@@ -436,6 +443,169 @@ describe("project host start ACP rehydrate ordering", () => {
         ssh_port: null,
       }),
     );
+  });
+
+  it("prepares scratch after stop without blocking stop or repeating reset on restart", async () => {
+    const previousMode = process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+    process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = "enforce";
+    let resolveScratch:
+      | ((value: {
+          path: string;
+          quota: {
+            get: () => Promise<{ used: number; size: number }>;
+            set: () => Promise<void>;
+          };
+        }) => void)
+      | undefined;
+    const scratchReset = new Promise<any>((resolve) => {
+      resolveScratch = resolve;
+    });
+    let scratchPrepared = false;
+    getProject.mockReturnValue({
+      image: DEFAULT_PROJECT_IMAGE,
+      run_quota: { disk_quota: 65_000 },
+      run_quota_revision: 9,
+    });
+    getVolume.mockResolvedValue({
+      path: `/mnt/cocalc/project-${project_id}`,
+      quota: {
+        get: jest.fn(async () => ({
+          used: 1_000,
+          size: 65_000_000_000,
+        })),
+        set: jest.fn(async () => undefined),
+      },
+    });
+    resetScratchVolume.mockReturnValueOnce(scratchReset);
+    projectVolumeQuotaIsApplied.mockImplementation(
+      (row) => row?.volume_kind === "home" || scratchPrepared,
+    );
+    markProjectVolumeQuotaApplied.mockImplementation(({ volume_kind }) => {
+      if (volume_kind === "scratch") {
+        scratchPrepared = true;
+      }
+    });
+    getProjectVolumeQuota.mockImplementation((_project_id, volume_kind) =>
+      volume_kind === "scratch" ? { volume_kind } : undefined,
+    );
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(async () => ({ state: "opened" })),
+      status: jest.fn(async () => ({ state: "opened" })),
+    } as any;
+
+    try {
+      const { wireProjectsApi } = await import("./projects");
+      wireProjectsApi(runnerApi);
+
+      const stopPromise = hubApi.projects.stop({ project_id });
+      await flushMicrotasks();
+      expect(resetScratchVolume).toHaveBeenCalledTimes(1);
+      await expect(stopPromise).resolves.toBeUndefined();
+
+      const startPromise = hubApi.projects.start({ project_id });
+      await flushMicrotasks();
+      expect(runnerApi.start).not.toHaveBeenCalled();
+
+      resolveScratch?.({
+        path: `/mnt/cocalc/project-${project_id}-scratch`,
+        quota: {
+          get: jest.fn(async () => ({ used: 0, size: 65_000_000_000 })),
+          set: jest.fn(async () => undefined),
+        },
+      });
+      await startPromise;
+
+      expect(invalidateProjectVolumeQuota).toHaveBeenCalledWith({
+        project_id,
+        volume_kind: "scratch",
+        reason: "project stopped; scratch reset pending",
+      });
+      expect(resetScratchVolume).toHaveBeenCalledTimes(1);
+      expect(runnerApi.start).toHaveBeenCalledWith({
+        project_id,
+        config: expect.objectContaining({
+          storage_quota_prepared: true,
+          scratch_prepared: true,
+        }),
+      });
+    } finally {
+      if (previousMode == null) {
+        delete process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+      } else {
+        process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = previousMode;
+      }
+    }
+  });
+
+  it("falls back to synchronous scratch preparation after post-stop preparation fails", async () => {
+    const previousMode = process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+    process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = "enforce";
+    let scratchPrepared = false;
+    getProject.mockReturnValue({
+      image: DEFAULT_PROJECT_IMAGE,
+      run_quota: { disk_quota: 65_000 },
+      run_quota_revision: 9,
+    });
+    resetScratchVolume
+      .mockRejectedValueOnce(new Error("injected post-stop reset failure"))
+      .mockResolvedValueOnce({
+        path: `/mnt/cocalc/project-${project_id}-scratch`,
+        quota: {
+          get: jest.fn(async () => ({
+            used: 0,
+            size: 65_000_000_000,
+          })),
+          set: jest.fn(async () => undefined),
+        },
+      });
+    projectVolumeQuotaIsApplied.mockImplementation(
+      (row) => row?.volume_kind === "home" || scratchPrepared,
+    );
+    markProjectVolumeQuotaApplied.mockImplementation(({ volume_kind }) => {
+      if (volume_kind === "scratch") {
+        scratchPrepared = true;
+      }
+    });
+    getProjectVolumeQuota.mockImplementation((_project_id, volume_kind) =>
+      volume_kind === "scratch" ? { volume_kind } : undefined,
+    );
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(async () => ({ state: "opened" })),
+      status: jest.fn(async () => ({ state: "opened" })),
+    } as any;
+
+    try {
+      const { wireProjectsApi } = await import("./projects");
+      wireProjectsApi(runnerApi);
+
+      await hubApi.projects.stop({ project_id });
+      await hubApi.projects.start({ project_id });
+
+      expect(resetScratchVolume).toHaveBeenCalledTimes(2);
+      expect(runnerApi.start).toHaveBeenCalledWith({
+        project_id,
+        config: expect.objectContaining({
+          storage_quota_prepared: true,
+          scratch_prepared: true,
+        }),
+      });
+    } finally {
+      if (previousMode == null) {
+        delete process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+      } else {
+        process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = previousMode;
+      }
+    }
   });
 
   it("reports host-pressure stops with a durable runtime exit reason", async () => {

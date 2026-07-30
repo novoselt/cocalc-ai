@@ -148,6 +148,8 @@ import { normalizeRunQuota, runnerConfigFromQuota } from "../run-quota";
 import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
 import {
   acceptProjectVolumeQuotaDesired,
+  getProjectVolumeQuota,
+  invalidateProjectVolumeQuota,
   markProjectVolumeQuotaApplied,
   markProjectVolumeQuotaApplying,
   markProjectVolumeQuotaFailed,
@@ -1430,6 +1432,72 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         promise: Promise<SyntheticRuntimeProbeResult>;
       }
     | undefined;
+  const stoppedVolumePreparationInFlight = new Map<string, Promise<boolean>>();
+
+  function scratchVolumeQuotaIsPrepared(project_id: string): boolean {
+    const row = getProjectVolumeQuota(project_id, "scratch");
+    return row != null && projectVolumeQuotaIsApplied(row);
+  }
+
+  function scheduleStoppedVolumePreparation(project_id: string): void {
+    if (
+      projectQuotaLedgerMode() !== "enforce" ||
+      syntheticRuntimeProbeProjects.has(project_id)
+    ) {
+      return;
+    }
+    const project = getProject(project_id);
+    if (
+      project == null ||
+      requestedDiskQuotaBytes(project.run_quota) == null ||
+      runnerConfigFromQuota(normalizeRunQuota(project.run_quota)).scratch === 0
+    ) {
+      return;
+    }
+    invalidateProjectVolumeQuota({
+      project_id,
+      volume_kind: "scratch",
+      reason: "project stopped; scratch reset pending",
+    });
+    if (stoppedVolumePreparationInFlight.has(project_id)) {
+      return;
+    }
+    const operation_id = `post-stop-volume-prepare:${project_id}:${uuid()}`;
+    const preparation = withBtrfsMutationContext(
+      {
+        operation_id,
+        project_id,
+        priority: "interactive",
+        operation_class: "post_stop_volume_prepare",
+      },
+      async () => {
+        const prepared = await assertStartDiskQuotaAllowed({
+          project_id,
+          run_quota: project.run_quota,
+          run_quota_revision: project.run_quota_revision,
+          reset_scratch: true,
+        });
+        return (
+          prepared.storage_quota_prepared && prepared.scratch_prepared === true
+        );
+      },
+    )
+      .catch((err) => {
+        logger.warn("post-stop project volume preparation failed", {
+          project_id,
+          operation_id,
+          err: `${err}`,
+        });
+        return false;
+      })
+      .finally(() => {
+        if (stoppedVolumePreparationInFlight.get(project_id) === preparation) {
+          stoppedVolumePreparationInFlight.delete(project_id);
+        }
+      });
+    stoppedVolumePreparationInFlight.set(project_id, preparation);
+    void preparation;
+  }
 
   async function performSyntheticRuntimeProbe(): Promise<SyntheticRuntimeProbeResult> {
     const project_id = uuid();
@@ -1744,6 +1812,14 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           projectQuotaLedgerMode() === "enforce" && runnerApi.status
             ? (await runnerApi.status({ project_id }))?.state
             : undefined;
+        const stoppedPreparation =
+          stoppedVolumePreparationInFlight.get(project_id);
+        if (runtimeState !== "running" && stoppedPreparation != null) {
+          await stoppedPreparation;
+        }
+        const resetScratch =
+          runtimeState !== "running" &&
+          !scratchVolumeQuotaIsPrepared(project_id);
         await withBtrfsMutationContext(
           {
             operation_id: op_id,
@@ -1756,7 +1832,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
               project_id,
               run_quota: startMetadata.run_quota,
               run_quota_revision: startMetadata.run_quota_revision,
-              reset_scratch: runtimeState !== "running",
+              reset_scratch: resetScratch,
             });
           },
         );
@@ -2039,6 +2115,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           `project stop did not converge; runner still reports state='${finalState}'`,
         );
       }
+      scheduleStoppedVolumePreparation(project_id);
       if (!syntheticRuntimeProbeProjects.has(project_id)) {
         try {
           const base = getMountPoint();
