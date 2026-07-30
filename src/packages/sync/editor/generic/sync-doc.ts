@@ -75,6 +75,7 @@ import { type Filesystem, type Stats } from "@cocalc/conat/files/fs";
 import { getLogger } from "@cocalc/conat/logger";
 import * as remote from "./remote";
 import type { JSONValue } from "@cocalc/util/types";
+import { rebaseLocalDocument } from "./rebase-local-document";
 
 const fallbackCursorPresence = new PatchflowMemoryPresenceAdapter();
 
@@ -3377,8 +3378,8 @@ export class SyncDoc extends EventEmitter {
     if (!this.patchflowReady() || this.patchflowSession == null) {
       throw new Error("patchflow session is not initialized");
     }
-    const next = this.doc;
-    if (next == null) {
+    const draft = this.doc;
+    if (draft == null) {
       return false;
     }
     let current: Document | undefined;
@@ -3394,6 +3395,14 @@ export class SyncDoc extends EventEmitter {
       // session not initialized yet
       return false;
     }
+    // A remote patch can advance the committed graph while this.doc still
+    // contains a local draft. Replay only the local delta onto that graph.
+    const next = rebaseLocalDocument({
+      base: this.last,
+      draft,
+      committed: current,
+    });
+    this.doc = next;
     const compareAgainst = current;
     if (
       !allowDuplicate &&
