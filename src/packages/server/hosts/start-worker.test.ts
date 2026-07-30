@@ -314,6 +314,7 @@ describe("hosts start-worker billing drain completion metadata", () => {
       error: new Error(
         "failed to drain workspace project-1: final backup failed",
       ),
+      final_backup_status: "failed",
     });
 
     expect(alert.subject).toBe("Dedicated host billing drain failed (host-1)");
@@ -323,5 +324,25 @@ describe("hosts start-worker billing drain completion metadata", () => {
     expect(alert.body).toContain("Automatic disk deprovisioning is disabled");
     expect(alert.dedupMinutes).toBe(24 * 60);
     expect(alert.dedupBySubject).toBe(true);
+  });
+
+  test("preserves successful-backup messaging when only the compute stop fails", () => {
+    const alert = __test__.billingEnforcementDrainFailureAdminAlert({
+      host_id: "host-1",
+      account_id: "account-1",
+      op_id: "op-1",
+      error: new Error("cloud stop failed"),
+      stop_error: new Error("provider unavailable"),
+      final_backup_status: "succeeded",
+    });
+
+    expect(alert.body).toContain("Final backup status: succeeded");
+    expect(alert.body).toContain("Normal backup-backed disk grace");
+    expect(alert.body).toContain(
+      "compute stop request also failed: Error: provider unavailable",
+    );
+    expect(alert.body).not.toContain(
+      "Automatic disk deprovisioning is disabled",
+    );
   });
 });

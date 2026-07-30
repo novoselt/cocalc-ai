@@ -1373,12 +1373,18 @@ async function markBillingEnforcementDrainFailed({
 }: {
   host_id: string;
   error: unknown;
-}) {
+}): Promise<"failed" | "succeeded"> {
   const { rows } = await getPool().query<{ metadata: any }>(
     "SELECT metadata FROM project_hosts WHERE id=$1 AND deleted IS NULL",
     [host_id],
   );
-  const metadata = rows[0]?.metadata ?? {};
+  if (!rows[0]) {
+    throw new Error(`host ${host_id} not found`);
+  }
+  const metadata = rows[0].metadata ?? {};
+  if (metadata.billing?.enforcement?.final_backup_status === "succeeded") {
+    return "succeeded";
+  }
   await getPool().query(
     `
       UPDATE project_hosts
@@ -1387,6 +1393,7 @@ async function markBillingEnforcementDrainFailed({
     `,
     [host_id, billingEnforcementDrainFailedMetadata(metadata, error)],
   );
+  return "failed";
 }
 
 function billingEnforcementDrainCompleteMetadata(
@@ -1480,16 +1487,24 @@ function billingEnforcementDrainFailureAdminAlert({
   op_id,
   error,
   stop_error,
+  final_backup_status,
 }: {
   host_id: string;
   account_id: string;
   op_id: string;
   error: unknown;
   stop_error?: unknown;
+  final_backup_status: "failed" | "succeeded" | "unknown";
 }) {
   const computeStatus = stop_error
     ? `The compute stop request also failed: ${stop_error}`
     : "The compute stop request succeeded.";
+  const recoveryStatus =
+    final_backup_status === "succeeded"
+      ? "The project drain and final backups completed. Normal backup-backed disk grace remains in effect."
+      : final_backup_status === "failed"
+        ? "Unmoved project placement and the provider disk were retained. Automatic disk deprovisioning is disabled because the final backup failed."
+        : "The final backup state could not be recorded or confirmed. Inspect project placement and the provider disk immediately.";
   return {
     subject: `Dedicated host billing drain failed (${host_id})`,
     body: [
@@ -1501,8 +1516,8 @@ function billingEnforcementDrainFailureAdminAlert({
       `Drain error: ${error}`,
       "",
       computeStatus,
-      "Project placement and the provider disk were retained.",
-      "Automatic disk deprovisioning is disabled because the final backup failed.",
+      `Final backup status: ${final_backup_status}`,
+      recoveryStatus,
     ].join("\n"),
     dedupMinutes: 24 * 60,
     dedupBySubject: true,
@@ -2498,8 +2513,12 @@ async function handleOp(op: LroSummary): Promise<void> {
         err !== null &&
         (err as { code?: string }).code === "host-op-canceled");
     if (kind === "host-drain" && input?.billing_enforcement === true) {
+      let finalBackupStatus: "failed" | "succeeded" | "unknown" = "unknown";
       try {
-        await markBillingEnforcementDrainFailed({ host_id, error: err });
+        finalBackupStatus = await markBillingEnforcementDrainFailed({
+          host_id,
+          error: err,
+        });
       } catch (metadataErr) {
         logger.error(
           "failed to record billing-enforcement drain failure before stopping host",
@@ -2537,6 +2556,7 @@ async function handleOp(op: LroSummary): Promise<void> {
           op_id,
           error: err,
           stop_error: stopError,
+          final_backup_status: finalBackupStatus,
         }),
       );
     }
