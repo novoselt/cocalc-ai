@@ -216,6 +216,29 @@ describe("project-host public route migration", () => {
     });
   });
 
+  it("repairs stale DNS before a transient ingress reconciliation failure", async () => {
+    const { reconcileDirectCloudflareRouteForHost } =
+      await import("./public-route");
+    getCloudflareIpv4CidrsMock.mockRejectedValueOnce(
+      new TypeError("fetch failed"),
+    );
+
+    await expect(reconcileDirectCloudflareRouteForHost(row)).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(ensureHostDnsMock).toHaveBeenCalledWith({
+      host_id: row.id,
+      ipAddress: "203.0.113.20",
+      record_id: "stable-record",
+    });
+    expect(row.metadata.dns).toEqual({
+      name: "host-37782b66-190d-41c3-a7e5-f5662e34cd4a-staging.example.com",
+      record_id: "stable-record",
+    });
+    expect(ensurePublicIngressMock).not.toHaveBeenCalled();
+  });
+
   it("restores the tunnel route when direct-route preparation fails", async () => {
     ensurePublicIngressMock.mockRejectedValueOnce(
       new Error("firewall reconciliation failed"),
