@@ -318,6 +318,53 @@ describe("PublicTopNav", () => {
     ).toBeNull();
   });
 
+  it("turns the Features entry into a dropdown on feature pages", async () => {
+    await renderTopNav(<PublicTopNav active="features" />);
+
+    const publicPages = screen.getByRole("menu", { name: "Public pages" });
+    expect(
+      within(publicPages).queryByRole("link", { name: "Features" }),
+    ).toBeNull();
+    const submenu = publicPages.querySelector(
+      ".ant-menu-submenu:not(.ant-menu-overflow-item-rest)",
+    );
+    expect(submenu).not.toBeNull();
+    expect(submenu!.textContent).toContain("Features");
+  });
+
+  it("keeps Features a plain link on other pages", async () => {
+    await renderTopNav(<PublicTopNav active="pricing" />);
+
+    const publicPages = screen.getByRole("menu", { name: "Public pages" });
+    expect(
+      within(publicPages).getByRole("link", { name: "Features" }),
+    ).toHaveAttribute("href", "/features");
+    // only the always-present hidden overflow "..." submenu, no dropdown
+    expect(
+      publicPages.querySelector(
+        ".ant-menu-submenu:not(.ant-menu-overflow-item-rest)",
+      ),
+    ).toBeNull();
+  });
+
+  it("expands the feature pages inline in the compact drawer", async () => {
+    setViewportWidth(480);
+    await renderTopNav(<PublicTopNav active="features" />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open navigation menu" }),
+    );
+    fireEvent.click(screen.getByText("Features"));
+
+    expect(
+      await screen.findByRole("link", { name: "All features" }),
+    ).toHaveAttribute("href", "/features");
+    expect(screen.getByRole("link", { name: "Jupyter" })).toHaveAttribute(
+      "href",
+      "/features/jupyter-notebook",
+    );
+  });
+
   it("ignores stale legacy policy visibility settings", async () => {
     await render(
       <PublicConfigProvider
