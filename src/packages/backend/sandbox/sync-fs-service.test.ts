@@ -791,6 +791,36 @@ describe("SyncFsService", () => {
     svc.close();
   }, 10_000);
 
+  it("does not publish a disk patch if history appears after baseline initialization", async () => {
+    const path = join(dir, "late-history.txt");
+    writeFileSync(path, "existing document");
+
+    const head = legacyPatchId(100);
+    const fake = new FakeAStream([
+      { mesg: { time: head, parents: [], version: 1 }, seq: 1 },
+    ]);
+    let reads = 0;
+    (fake as any).getAll = async function* (opts: { start_seq?: number }) {
+      fake.lastStartSeq = opts.start_seq;
+      reads += 1;
+      if (reads === 1) return;
+      for (const message of fake.messages) {
+        yield message;
+      }
+    };
+    const svc = new SyncFsService();
+    (svc as any).getPatchWriter = async () => fake;
+
+    const initialized = await (svc as any).initPath(path, {
+      project_id: "p-late-history",
+      syncPath: "late-history.txt",
+    });
+
+    expect(initialized).toBe(false);
+    expect(fake.messages).toHaveLength(1);
+    svc.close();
+  }, 10_000);
+
   it("does not reconcile an older on-disk file over newer patchflow history on init", async () => {
     const path = join(dir, "older-disk.txt");
     writeFileSync(path, "disk-old");

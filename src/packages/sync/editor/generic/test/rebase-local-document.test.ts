@@ -136,4 +136,30 @@ describe("rebaseLocalDocument", () => {
     expect(cell.get("exec_count")).toBe(1);
     await doc.close();
   });
+
+  it("preserves a local draft when the committed document advances", async () => {
+    const { client_id, project_id, path, init_queries } = a_txt();
+    const doc = new SyncString({
+      project_id,
+      path,
+      client: new Client(init_queries, client_id),
+      fs,
+    });
+    await once(doc, "ready");
+    const target = doc as any;
+    const base = target.doc;
+    const draft = base.set("local sentence");
+    const committed = base.set("filesystem update");
+    target.doc = draft;
+    target.last = base;
+    target.emit_change = jest.fn();
+
+    target.handlePatchflowChange(committed);
+
+    expect(target.last.is_equal(committed)).toBe(true);
+    expect(target.doc.to_str()).toContain("local sentence");
+    expect(target.doc.to_str()).toContain("filesystem update");
+    expect(target.emit_change).toHaveBeenCalledTimes(1);
+    await doc.close();
+  });
 });

@@ -1867,16 +1867,7 @@ export class SyncDoc extends EventEmitter {
       this.patchflowSession.on("cursors", this.handlePatchflowCursors);
     }
     this.patchflowSession.on("patch", this.handlePatchflowPatch);
-    this.patchflowSession.on("change", (doc) => {
-      const next = doc as Document;
-      if (!this.doc || !this.doc.is_equal(next)) {
-        this.last = this.doc = next;
-        if (this.state === "ready") {
-          this.emit("after-change");
-          this.emit_change();
-        }
-      }
-    });
+    this.patchflowSession.on("change", this.handlePatchflowChange);
     try {
       await this.patchflowSession.init();
     } catch (err) {
@@ -3211,6 +3202,28 @@ export class SyncDoc extends EventEmitter {
     }
     if (env.file && !env.meta?.deleted) {
       this.emit("filesystem-change", env);
+    }
+  };
+
+  private handlePatchflowChange = (doc: Document): void => {
+    const committed = doc as Document;
+    const previous = this.doc;
+    const next =
+      previous == null
+        ? committed
+        : rebaseLocalDocument({
+            base: this.last,
+            draft: previous,
+            committed,
+          });
+    this.last = committed;
+    this.doc = next;
+    if (previous != null && previous.is_equal(next) && this.state === "ready") {
+      return;
+    }
+    if (this.state === "ready") {
+      this.emit("after-change");
+      this.emit_change();
     }
   };
 

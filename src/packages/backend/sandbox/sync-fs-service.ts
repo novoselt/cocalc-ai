@@ -624,7 +624,13 @@ export class SyncFsService extends EventEmitter {
       );
       if (hasNonEmptyPatch(change.patch)) {
         const payload: ExternalChange = { ...change, deleted: false };
-        await this.appendPatch({ ...meta, string_id }, "change", payload);
+        if (
+          !(await this.appendPatch({ ...meta, string_id }, "change", payload, {
+            expectedHeads: heads,
+          }))
+        ) {
+          return false;
+        }
       }
       return true;
     } catch (err) {
@@ -1234,11 +1240,16 @@ export class SyncFsService extends EventEmitter {
     meta: WatchMeta,
     type: "change" | "delete",
     change: ExternalChange,
-  ): Promise<void> {
+    {
+      expectedHeads,
+    }: {
+      expectedHeads?: PatchId[];
+    } = {},
+  ): Promise<boolean> {
     if (this.closed) {
-      return;
+      return false;
     }
-    if (!this.canInitMeta(meta)) return;
+    if (!this.canInitMeta(meta)) return false;
     const syncPath = meta.syncPath;
     if (process.env.SYNC_FS_DEBUG) {
       console.log("sync-fs appendPatch start", {
@@ -1251,7 +1262,13 @@ export class SyncFsService extends EventEmitter {
       project_id: meta.project_id,
       string_id,
       path: syncPath,
+      requireComplete: expectedHeads != null,
     });
+    if (expectedHeads != null && !this.samePatchIds(expectedHeads, heads)) {
+      // The patch was computed against a filesystem baseline established from
+      // different stream heads. Applying it now can duplicate the entire file.
+      return false;
+    }
     const parents = heads;
     const parentMaxMs =
       parents.length > 0
@@ -1306,7 +1323,7 @@ export class SyncFsService extends EventEmitter {
         headers != null ? { headers } : undefined,
       );
       if (this.closed) {
-        return;
+        return false;
       }
       this.store.setFsHead({
         string_id,
@@ -1324,12 +1341,21 @@ export class SyncFsService extends EventEmitter {
           parents,
         });
       }
+      return true;
     } catch (err) {
       if (process.env.SYNC_FS_DEBUG) {
         console.log("sync-fs appendPatch error", err);
       }
       this.emit("error", err);
+      return false;
     }
+  }
+
+  private samePatchIds(left: PatchId[], right: PatchId[]): boolean {
+    if (left.length !== right.length) return false;
+    const a = [...left].sort(comparePatchId);
+    const b = [...right].sort(comparePatchId);
+    return a.every((value, index) => value === b[index]);
   }
 
   private async getPatchWriter({
