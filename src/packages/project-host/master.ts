@@ -1439,6 +1439,7 @@ export async function startMasterRegistration({
       project_id,
       authorized_keys,
       run_quota,
+      run_quota_revision,
       image,
       restore,
       restore_backup_id,
@@ -1453,6 +1454,7 @@ export async function startMasterRegistration({
         project_id,
         authorized_keys,
         run_quota,
+        run_quota_revision,
         image,
         restore,
         restore_backup_id,
@@ -1503,9 +1505,9 @@ export async function startMasterRegistration({
         users,
       });
     },
-    async updateProjectRunQuota({ project_id, run_quota }) {
+    async updateProjectRunQuota({ project_id, run_quota, run_quota_revision }) {
       await awaitReadyForControl("updateProjectRunQuota", waitUntilReady);
-      upsertProject({ project_id, run_quota });
+      upsertProject({ project_id, run_quota, run_quota_revision });
       if (getProject(project_id)?.state !== "running") {
         return { status: "not_running" };
       }

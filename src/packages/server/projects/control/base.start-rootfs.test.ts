@@ -139,6 +139,9 @@ describe("BaseProject.start RootFS sealing", () => {
       ) {
         return { rows: [{ host_id: HOST_ID, state: "running" }] };
       }
+      if (sql.includes("SET run_quota_revision =")) {
+        return { rows: [{ run_quota_revision: "1" }] };
+      }
       if (sql.includes("project_hosts.id IS NOT NULL AS host_found")) {
         return {
           rows: [
@@ -312,8 +315,6 @@ describe("BaseProject.start RootFS sealing", () => {
     const OWNER_ID = "33333333-3333-4333-8333-333333333333";
     const RUNTIME_SPONSOR_ID = "44444444-4444-4444-8444-444444444444";
     const ACTOR_ID = "55555555-5555-4555-8555-555555555555";
-    const updateCalls: any[] = [];
-
     queryTableMock = jest.fn(async (opts: any) => {
       if (opts?.select?.includes("runtime_sponsor_account_id")) {
         return {
@@ -327,10 +328,6 @@ describe("BaseProject.start RootFS sealing", () => {
           usage_account_id: null,
           host_id: HOST_ID,
         };
-      }
-      if (opts?.query === "UPDATE projects") {
-        updateCalls.push(opts);
-        return {};
       }
       throw new Error(`unexpected query table call: ${JSON.stringify(opts)}`);
     });
@@ -360,16 +357,17 @@ describe("BaseProject.start RootFS sealing", () => {
 
     await project.computeQuota(ACTOR_ID);
 
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].set).toMatchObject({
-      last_started_by: ACTOR_ID,
-      run_quota: {
-        memory_limit: 2000,
-        disk_quota: 10000,
-        network: true,
-        member_host: true,
-      },
+    const quotaUpdate = queryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("SET run_quota_revision ="),
+    );
+    expect(quotaUpdate).toBeDefined();
+    expect(JSON.parse(quotaUpdate![1][1])).toMatchObject({
+      memory_limit: 2000,
+      disk_quota: 10000,
+      network: true,
+      member_host: true,
     });
+    expect(quotaUpdate![1][2]).toBe(ACTOR_ID);
     expect(hostRunQuota.applyHostRuntimePolicyToRunQuota).toHaveBeenCalledWith(
       expect.objectContaining({ memory_limit: 2000, disk_quota: 10000 }),
       HOST_ID,
@@ -378,8 +376,6 @@ describe("BaseProject.start RootFS sealing", () => {
 
   it("recomputes stored run_quota for stopped projects without restarting", async () => {
     const OWNER_ID = "33333333-3333-4333-8333-333333333333";
-    const updateCalls: any[] = [];
-
     queryTableMock = jest.fn(async (opts: any) => {
       if (opts?.select?.includes("state")) {
         return {
@@ -395,10 +391,6 @@ describe("BaseProject.start RootFS sealing", () => {
           runtime_sponsor_account_id: null,
           usage_account_id: null,
         };
-      }
-      if (opts?.query === "UPDATE projects") {
-        updateCalls.push(opts);
-        return {};
       }
       throw new Error(`unexpected query table call: ${JSON.stringify(opts)}`);
     });
@@ -424,16 +416,17 @@ describe("BaseProject.start RootFS sealing", () => {
 
     await project.setAllQuotas();
 
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].set).toEqual({
-      run_quota: {
-        memory_limit: 4000,
-        disk_quota: 5000,
-        io_class: "standard",
-        shared_compute_priority: 0,
-        network: true,
-        member_host: true,
-      },
+    const quotaUpdate = queryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("SET run_quota_revision ="),
+    );
+    expect(quotaUpdate).toBeDefined();
+    expect(JSON.parse(quotaUpdate![1][1])).toEqual({
+      memory_limit: 4000,
+      disk_quota: 5000,
+      io_class: "standard",
+      shared_compute_priority: 0,
+      network: true,
+      member_host: true,
     });
     expect(startProjectOnHostMock).not.toHaveBeenCalled();
     expect(stopProjectOnHostMock).not.toHaveBeenCalled();
@@ -499,6 +492,7 @@ describe("BaseProject.start RootFS sealing", () => {
         memory_limit: 4000,
         disk_quota: 5000,
       }),
+      run_quota_revision: 1,
     });
     expect(restartMock).not.toHaveBeenCalled();
 

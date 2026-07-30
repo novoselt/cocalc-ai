@@ -144,6 +144,14 @@ import {
   isProjectDiskQuotaStartBlocked,
 } from "../project-start-quota";
 import { normalizeRunQuota, runnerConfigFromQuota } from "../run-quota";
+import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
+import {
+  acceptProjectVolumeQuotaDesired,
+  markProjectVolumeQuotaApplied,
+  markProjectVolumeQuotaApplying,
+  markProjectVolumeQuotaFailed,
+  projectVolumeQuotaIsApplied,
+} from "../sqlite/volume-quotas";
 
 const logger = getLogger("project-host:hub:projects");
 const CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS = 45_000;
@@ -586,6 +594,7 @@ type StartMetadata = {
   image?: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   env?: ProjectEnv;
   autostart_enabled?: boolean | null;
   secrets?: Record<string, string>;
@@ -598,6 +607,7 @@ type LocalProjectOptions = CreateProjectOptions & {
   users?: any;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
 };
 
 async function loadProjectStartMetadataFromMaster(
@@ -637,12 +647,14 @@ async function resolveStartMetadata({
   project_id,
   authorized_keys,
   run_quota,
+  run_quota_revision,
   image,
   autostart,
 }: {
   project_id: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   image?: string;
   autostart?: boolean;
 }): Promise<StartMetadata> {
@@ -669,6 +681,8 @@ async function resolveStartMetadata({
   let resolved: StartMetadata = {
     authorized_keys: authorized_keys ?? existing?.authorized_keys ?? undefined,
     run_quota: run_quota ?? (existing as any)?.run_quota,
+    run_quota_revision:
+      run_quota_revision ?? (existing as any)?.run_quota_revision,
     image: image ?? existing?.image ?? undefined,
     env: (existing as any)?.env,
     autostart_enabled: (existing as any)?.autostart_enabled,
@@ -711,6 +725,8 @@ async function resolveStartMetadata({
           authorized_keys:
             resolved.authorized_keys ?? authoritative.authorized_keys,
           run_quota: resolved.run_quota ?? authoritative.run_quota,
+          run_quota_revision:
+            resolved.run_quota_revision ?? authoritative.run_quota_revision,
           env: resolved.env ?? authoritative.env,
           autostart_enabled:
             authoritative.autostart_enabled ?? resolved.autostart_enabled,
@@ -797,6 +813,7 @@ export function ensureProjectRow({
   const run_quota = normalizeRunQuota((opts as any)?.run_quota);
   if (run_quota) {
     row.run_quota = run_quota;
+    row.run_quota_revision = (opts as any)?.run_quota_revision;
     if (run_quota.disk_quota != null) {
       const disk = Math.floor(run_quota.disk_quota * MB);
       row.disk = disk;
@@ -1009,41 +1026,109 @@ function requestedDiskQuotaBytes(run_quota?: any): number | undefined {
   return Math.floor(value * MB);
 }
 
+function projectQuotaLedgerMode(): "off" | "observe" | "enforce" {
+  switch (
+    `${process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE ?? "observe"}`
+      .trim()
+      .toLowerCase()
+  ) {
+    case "off":
+      return "off";
+    case "enforce":
+      return "enforce";
+    default:
+      return "observe";
+  }
+}
+
 async function assertStartDiskQuotaAllowed({
   project_id,
   run_quota,
+  run_quota_revision,
 }: {
   project_id: string;
   run_quota?: any;
+  run_quota_revision?: number;
 }): Promise<void> {
   const requestedDiskBytes = requestedDiskQuotaBytes(run_quota);
   if (requestedDiskBytes != null) {
+    const ledgerMode = projectQuotaLedgerMode();
+    const acceptance =
+      ledgerMode === "off"
+        ? undefined
+        : acceptProjectVolumeQuotaDesired({
+            project_id,
+            volume_kind: "home",
+            desired_bytes: requestedDiskBytes,
+            desired_revision: run_quota_revision,
+          });
+    const desired = acceptance?.row;
+    const targetDiskBytes = desired?.desired_bytes ?? requestedDiskBytes;
+    if (
+      ledgerMode === "enforce" &&
+      desired != null &&
+      acceptance?.status !== "stale" &&
+      projectVolumeQuotaIsApplied(desired)
+    ) {
+      logger.debug("project disk quota ledger fast path", {
+        project_id,
+        requested_size: targetDiskBytes,
+        desired_revision: desired.desired_revision,
+      });
+      return;
+    }
     try {
       const vol = await getVolume(project_id);
       const quota = await vol.quota.get();
       if (
         isProjectDiskQuotaStartBlocked({
           used: quota.used,
-          size: requestedDiskBytes,
+          size: targetDiskBytes,
         })
       ) {
+        if (desired) {
+          markProjectVolumeQuotaFailed({
+            project_id,
+            volume_kind: "home",
+            state: "blocked",
+            error: `quota usage ${quota.used} exceeds desired limit ${targetDiskBytes}`,
+          });
+        }
         throw new ProjectDiskQuotaExceededError({
           used: quota.used,
-          size: requestedDiskBytes,
+          size: targetDiskBytes,
         });
       }
       const currentSize = Number(quota.size);
       if (
         !Number.isFinite(currentSize) ||
         currentSize <= 0 ||
-        requestedDiskBytes > currentSize
+        targetDiskBytes !== currentSize
       ) {
-        await vol.quota.set(requestedDiskBytes);
-        logger.info("raised project disk quota before start", {
+        if (desired) {
+          markProjectVolumeQuotaApplying({
+            project_id,
+            volume_kind: "home",
+          });
+        }
+        await vol.quota.set(targetDiskBytes, {
+          project_id,
+          volume_kind: "home",
+          operation_class: "project_volume_prepare",
+        });
+        logger.info("reconciled project disk quota before start", {
           project_id,
           previous_size: quota.size,
-          requested_size: requestedDiskBytes,
+          requested_size: targetDiskBytes,
           used: quota.used,
+        });
+      }
+      if (desired) {
+        markProjectVolumeQuotaApplied({
+          project_id,
+          volume_kind: "home",
+          desired_bytes: desired.desired_bytes,
+          desired_revision: desired.desired_revision,
         });
       }
       return;
@@ -1051,11 +1136,21 @@ async function assertStartDiskQuotaAllowed({
       if (err instanceof ProjectDiskQuotaExceededError) {
         throw err;
       }
+      if (desired) {
+        markProjectVolumeQuotaFailed({
+          project_id,
+          volume_kind: "home",
+          error: err,
+        });
+      }
       logger.warn("unable to reconcile project disk quota before start", {
         project_id,
-        requested_size: requestedDiskBytes,
+        requested_size: targetDiskBytes,
         err: `${err}`,
       });
+      if (ledgerMode === "enforce") {
+        throw err;
+      }
       return;
     }
   }
@@ -1415,6 +1510,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         project_id,
         authorized_keys: (opts as any)?.authorized_keys,
         run_quota: (opts as any)?.run_quota,
+        run_quota_revision: (opts as any)?.run_quota_revision,
         image: opts?.image,
       });
       upsertProjectStopState({
@@ -1484,6 +1580,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     project_id,
     authorized_keys,
     run_quota,
+    run_quota_revision,
     image,
     restore,
     restore_backup_id,
@@ -1494,6 +1591,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     project_id: string;
     authorized_keys?: string;
     run_quota?: any;
+    run_quota_revision?: number;
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
@@ -1524,6 +1622,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         project_id,
         authorized_keys,
         run_quota,
+        run_quota_revision,
         image,
         autostart,
       });
@@ -1561,10 +1660,21 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         message: "checking project disk quota",
       });
       await timings.measure("check_quota", async () => {
-        await assertStartDiskQuotaAllowed({
-          project_id,
-          run_quota: startMetadata.run_quota,
-        });
+        await withBtrfsMutationContext(
+          {
+            operation_id: op_id,
+            project_id,
+            priority: "lifecycle",
+            operation_class: "project_volume_prepare",
+          },
+          async () => {
+            await assertStartDiskQuotaAllowed({
+              project_id,
+              run_quota: startMetadata.run_quota,
+              run_quota_revision: startMetadata.run_quota_revision,
+            });
+          },
+        );
       });
       upsertProjectStopState({
         project_id,
@@ -1578,6 +1688,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           users: startMetadata.users,
           authorized_keys: startMetadata.authorized_keys,
           run_quota: startMetadata.run_quota,
+          run_quota_revision: startMetadata.run_quota_revision,
           image: startMetadata.image,
         },
         state: "starting",

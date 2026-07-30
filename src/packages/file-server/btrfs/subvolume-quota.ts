@@ -163,7 +163,15 @@ export class SubvolumeQuota {
     };
   };
 
-  set = async (size: string | number) => {
+  set = async (
+    size: string | number,
+    opts?: {
+      project_id?: string;
+      volume_kind?: string;
+      operation_id?: string;
+      operation_class?: string;
+    },
+  ) => {
     if (btrfsQuotasDisabled()) {
       logger.debug("setQuota skipped because btrfs quotas are disabled", {
         path: this.subvolume.path,
@@ -180,6 +188,7 @@ export class SubvolumeQuota {
       path: this.subvolume.path,
       size,
       wait: true,
+      ...opts,
     });
     invalidateBtrfsQgroupShowRaw(this.subvolume.filesystem.opts.mount);
   };

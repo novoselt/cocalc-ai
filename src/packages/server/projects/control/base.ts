@@ -184,6 +184,7 @@ export class BaseProject extends EventEmitter {
   public is_freed: boolean = false;
   protected stateChanging: ProjectState | undefined = undefined;
   private localOwnershipChecked?: Promise<void>;
+  private runQuotaRevision?: number;
 
   constructor(project_id: string) {
     super();
@@ -550,6 +551,7 @@ export class BaseProject extends EventEmitter {
           await updateProjectRunQuotaOnHost({
             project_id: this.project_id,
             run_quota: nextRunQuota,
+            run_quota_revision: this.runQuotaRevision,
           });
           dbg("live quota reconfiguration worked");
         } catch (err) {
@@ -655,19 +657,52 @@ export class BaseProject extends EventEmitter {
       throw new Error("unable to compute project run_quota");
     }
 
-    const set: Record<string, unknown> = { run_quota: nextRunQuota };
-    if (account_id) {
-      set.last_started_by = account_id;
+    const serialized = JSON.stringify(nextRunQuota);
+    try {
+      const { rows } = await getPool().query<{ run_quota_revision: string }>(
+        `
+          UPDATE projects
+          SET run_quota_revision =
+                CASE
+                  WHEN run_quota IS DISTINCT FROM $2::jsonb
+                    THEN COALESCE(run_quota_revision, 0) + 1
+                  ELSE COALESCE(run_quota_revision, 0)
+                END,
+              run_quota = $2::jsonb,
+              last_started_by = CASE WHEN $3::uuid IS NULL
+                                     THEN last_started_by
+                                     ELSE $3::uuid END
+          WHERE project_id = $1
+          RETURNING COALESCE(run_quota_revision, 0)::text AS run_quota_revision
+        `,
+        [this.project_id, serialized, account_id ?? null],
+      );
+      if (!rows[0]) {
+        throw new Error(`project ${this.project_id} not found`);
+      }
+      this.runQuotaRevision = Number(rows[0].run_quota_revision);
+    } catch (err) {
+      if ((err as { code?: string })?.code !== "42703") {
+        throw err;
+      }
+      // Mixed-version rollout compatibility until the additive column exists.
+      await query({
+        db: db(),
+        query: "UPDATE projects",
+        where: { project_id: this.project_id },
+        set: {
+          run_quota: nextRunQuota,
+          ...(account_id ? { last_started_by: account_id } : {}),
+        },
+      });
+      this.runQuotaRevision = 0;
     }
 
-    await query({
-      db: db(),
-      query: "UPDATE projects",
-      where: { project_id: this.project_id },
-      set,
+    logger.debug("updated run_quota", {
+      project_id: this.project_id,
+      run_quota_revision: this.runQuotaRevision,
+      run_quota: nextRunQuota,
     });
-
-    logger.debug("updated run_quota=", JSON.stringify(nextRunQuota));
     return nextRunQuota;
   };
 }

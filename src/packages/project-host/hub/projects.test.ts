@@ -53,6 +53,11 @@ const getProjectPortLeaseBySshPort = jest.fn();
 const getProjectPortLeaseByHttpPort = jest.fn();
 const projectPortOffsetFromSshPort = jest.fn();
 const projectPortOffsetFromHttpPort = jest.fn();
+const acceptProjectVolumeQuotaDesired = jest.fn();
+const markProjectVolumeQuotaApplied = jest.fn();
+const markProjectVolumeQuotaApplying = jest.fn();
+const markProjectVolumeQuotaFailed = jest.fn();
+const projectVolumeQuotaIsApplied = jest.fn();
 
 jest.mock("@cocalc/lite/hub/api", () => ({ hubApi: { projects: {} as any } }));
 jest.mock("@cocalc/backend/data", () => ({
@@ -189,6 +194,18 @@ jest.mock("../sqlite/port-leases", () => ({
   projectPortOffsetFromHttpPort: (...args: any[]) =>
     projectPortOffsetFromHttpPort(...args),
 }));
+jest.mock("../sqlite/volume-quotas", () => ({
+  acceptProjectVolumeQuotaDesired: (...args: any[]) =>
+    acceptProjectVolumeQuotaDesired(...args),
+  markProjectVolumeQuotaApplied: (...args: any[]) =>
+    markProjectVolumeQuotaApplied(...args),
+  markProjectVolumeQuotaApplying: (...args: any[]) =>
+    markProjectVolumeQuotaApplying(...args),
+  markProjectVolumeQuotaFailed: (...args: any[]) =>
+    markProjectVolumeQuotaFailed(...args),
+  projectVolumeQuotaIsApplied: (...args: any[]) =>
+    projectVolumeQuotaIsApplied(...args),
+}));
 jest.mock("@cocalc/conat/files/file-server", () => ({
   __esModule: true,
   client: jest.fn(() => ({
@@ -264,6 +281,24 @@ describe("project host start ACP rehydrate ordering", () => {
     coolDownProjectPortOffset.mockReset();
     getCoolingProjectPortOffsets.mockReset();
     getCoolingProjectPortOffsets.mockReturnValue(new Set());
+    acceptProjectVolumeQuotaDesired.mockReset();
+    acceptProjectVolumeQuotaDesired.mockImplementation(
+      ({ project_id, volume_kind, desired_bytes, desired_revision = 0 }) => ({
+        status: "accepted",
+        row: {
+          project_id,
+          volume_kind,
+          desired_bytes,
+          desired_revision,
+          state: "pending",
+        },
+      }),
+    );
+    markProjectVolumeQuotaApplied.mockReset();
+    markProjectVolumeQuotaApplying.mockReset();
+    markProjectVolumeQuotaFailed.mockReset();
+    projectVolumeQuotaIsApplied.mockReset();
+    projectVolumeQuotaIsApplied.mockReturnValue(false);
     projectPortOffsetFromSshPort.mockReset();
     projectPortOffsetFromHttpPort.mockReset();
     projectPortOffsetFromSshPort.mockImplementation((port?: number | null) => {
@@ -822,13 +857,58 @@ describe("project host start ACP rehydrate ordering", () => {
 
     await hubApi.projects.start({ project_id });
 
-    expect(quotaSet).toHaveBeenCalledWith(65_000_000_000);
+    expect(quotaSet).toHaveBeenCalledWith(65_000_000_000, {
+      operation_class: "project_volume_prepare",
+      project_id,
+      volume_kind: "home",
+    });
     expect(runnerApi.start).toHaveBeenCalledWith({
       project_id,
       config: expect.objectContaining({
         disk: 65_000_000_000,
       }),
     });
+  });
+
+  it("skips Btrfs quota work for an applied authoritative revision", async () => {
+    const previousMode = process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+    process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = "enforce";
+    projectVolumeQuotaIsApplied.mockReturnValue(true);
+    getProject.mockReturnValue({
+      image: DEFAULT_PROJECT_IMAGE,
+      run_quota: { disk_quota: 65_000 },
+      run_quota_revision: 9,
+    });
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+
+    try {
+      const { wireProjectsApi } = await import("./projects");
+      wireProjectsApi(runnerApi);
+
+      await hubApi.projects.start({ project_id });
+
+      expect(acceptProjectVolumeQuotaDesired).toHaveBeenCalledWith({
+        project_id,
+        volume_kind: "home",
+        desired_bytes: 65_000_000_000,
+        desired_revision: 9,
+      });
+      expect(getVolume).not.toHaveBeenCalled();
+      expect(runnerApi.start).toHaveBeenCalled();
+    } finally {
+      if (previousMode == null) {
+        delete process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+      } else {
+        process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = previousMode;
+      }
+    }
   });
 
   it("rejects invalid persisted rootfs image names on start()", async () => {

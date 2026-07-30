@@ -2232,6 +2232,7 @@ export async function getProjectStartMetadata({
   image?: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   env?: ProjectEnv;
   autostart_enabled?: boolean | null;
   project_secrets_cache?: ProjectSecretsRuntimeCache;
@@ -2275,6 +2276,7 @@ export async function getProjectStartMetadataLocal({
   image?: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   env?: ProjectEnv;
   autostart_enabled?: boolean | null;
   project_secrets_cache?: ProjectSecretsRuntimeCache;
@@ -2285,16 +2287,34 @@ export async function getProjectStartMetadataLocal({
   if (!project_id) {
     throw new Error("project_id must be specified");
   }
-  const { rows } = await pool().query(
-    `SELECT title, users, rootfs_image AS image, run_quota, env,
-            autostart_enabled
-       FROM projects
-      WHERE project_id=$1
-        AND host_id=$2
-        AND deleted IS NOT true
-      LIMIT 1`,
-    [project_id, host_id],
-  );
+  let rows: any[];
+  try {
+    ({ rows } = await pool().query(
+      `SELECT title, users, rootfs_image AS image, run_quota,
+              COALESCE(run_quota_revision, 0)::bigint AS run_quota_revision, env,
+              autostart_enabled
+         FROM projects
+        WHERE project_id=$1
+          AND host_id=$2
+          AND deleted IS NOT true
+        LIMIT 1`,
+      [project_id, host_id],
+    ));
+  } catch (err) {
+    if ((err as { code?: string })?.code !== "42703") {
+      throw err;
+    }
+    ({ rows } = await pool().query(
+      `SELECT title, users, rootfs_image AS image, run_quota, env,
+              autostart_enabled
+         FROM projects
+        WHERE project_id=$1
+          AND host_id=$2
+          AND deleted IS NOT true
+        LIMIT 1`,
+      [project_id, host_id],
+    ));
+  }
   const row = rows[0];
   if (!row) {
     if (allowMissing) {
@@ -2315,6 +2335,7 @@ export async function getProjectStartMetadataLocal({
     image,
     authorized_keys: authorized_keys || undefined,
     run_quota: row.run_quota ?? undefined,
+    run_quota_revision: Number(row.run_quota_revision ?? 0),
     env: row.env ?? undefined,
     autostart_enabled: row.autostart_enabled,
     project_secrets_cache: await getProjectSecretsRuntimeCache({ project_id }),
