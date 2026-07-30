@@ -22,6 +22,7 @@ import {
   estimateNebiusCatalogRateUsdPerHour,
   getDedicatedHostSurchargeFraction,
   gcpCatalogMachineTypeSortKey,
+  hostPriceBreakdownForBillingState,
   isSupportedCatalogGcpMachineType,
   getNebiusPlatformAliases,
   normalizeNebiusPricingProduct,
@@ -887,10 +888,15 @@ function stoppedHostPriceEstimate(
   running: ProviderPriceEstimate | undefined,
 ): ProviderPriceEstimate | undefined {
   if (!running) return undefined;
+  const stopped = hostPriceBreakdownForBillingState(
+    {
+      items: running.line_items,
+      total_usd_per_hour: running.usd_per_hour,
+    },
+    "stopped",
+  );
   return buildProviderPriceEstimateFromLineItems(
-    running.line_items.filter(
-      (item) => item.key === "disk" || item.key === "shared_scratch_disk",
-    ),
+    stopped?.items ?? [],
     running.notes,
   );
 }

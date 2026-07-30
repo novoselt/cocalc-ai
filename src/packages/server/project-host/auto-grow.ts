@@ -31,10 +31,11 @@ import {
   selectDedicatedHostFundingLane,
 } from "@cocalc/server/project-host/admission";
 import {
-  estimateDedicatedHostRateUsdPerHour,
+  estimateDedicatedHostRate,
   reconcileDedicatedHostPurchaseSessionForAccount,
 } from "@cocalc/server/project-host/spend";
 import { evaluateDedicatedHostBillingEnforcement } from "@cocalc/server/project-host/spend-enforcement";
+import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
 import type { MoneyValue } from "@cocalc/util/money";
 import { getRoutedHostControlClient } from "./client";
 
@@ -123,11 +124,13 @@ type BillableAutoGrowSession =
       funding_mode: "account-prepaid";
       funding_lane: "prepaid";
       hourly_cost_usd: MoneyValue;
+      pricing_snapshot: DedicatedHostPricingSnapshot;
     }
   | {
       funding_mode: "account-postpaid";
       funding_lane: "credit";
       hourly_cost_usd: MoneyValue;
+      pricing_snapshot: DedicatedHostPricingSnapshot;
     }
   | {
       funding_mode: "site-funded";
@@ -479,7 +482,7 @@ async function resolveBillableSharedScratchAutoGrowSession({
   if (!account_id) {
     throw new Error("billable shared scratch auto-grow requires a host owner");
   }
-  const hourly_cost_usd = await estimateDedicatedHostRateUsdPerHour({
+  const rate = await estimateDedicatedHostRate({
     provider,
     region: row.region,
     zone: machine.zone,
@@ -492,8 +495,9 @@ async function resolveBillableSharedScratchAutoGrowSession({
     gpu_type: machine.gpu_type,
     gpu_count: machine.gpu_count,
     pricing_model: metadata.pricing_model ?? "on_demand",
+    billing_state: "running",
   });
-  if (!hourly_cost_usd) {
+  if (!rate) {
     throw Object.assign(
       new Error(
         `unable to determine shared scratch auto-grow hourly rate for provider '${provider}'`,
@@ -520,7 +524,7 @@ async function resolveBillableSharedScratchAutoGrowSession({
   const enforcement = evaluateDedicatedHostBillingEnforcement({
     snapshot,
     funding_lane: fundingLane,
-    hourly_cost_usd,
+    hourly_cost_usd: rate.hourly_cost_usd,
     lane_allowed: true,
   });
   if (enforcement.action === "request_drain") {
@@ -543,7 +547,8 @@ async function resolveBillableSharedScratchAutoGrowSession({
     return {
       funding_mode: "account-prepaid",
       funding_lane: fundingLane,
-      hourly_cost_usd,
+      hourly_cost_usd: rate.hourly_cost_usd,
+      pricing_snapshot: rate.pricing_snapshot,
     };
   }
   if (fundingLane !== "credit") {
@@ -554,7 +559,8 @@ async function resolveBillableSharedScratchAutoGrowSession({
   return {
     funding_mode: "account-postpaid",
     funding_lane: fundingLane,
-    hourly_cost_usd,
+    hourly_cost_usd: rate.hourly_cost_usd,
+    pricing_snapshot: rate.pricing_snapshot,
   };
 }
 
@@ -913,11 +919,12 @@ async function performSharedScratchAutoGrow(
       host_bay_id: getConfiguredBayId(),
       provider: providerId,
       region: row.region,
+      billing_state: "running",
       machine_type: machine.machine_type ?? row.metadata?.size,
       pricing_model: row.metadata?.pricing_model ?? "on_demand",
       funding_lane: billableSession.funding_lane,
       hourly_cost_usd: billableSession.hourly_cost_usd,
-      started_at: nextMetadata.billing?.started_at,
+      pricing_snapshot: billableSession.pricing_snapshot,
     });
   }
   await logCloudVmEvent({

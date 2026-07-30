@@ -18,7 +18,7 @@ import {
 } from "./admission";
 import {
   closeDedicatedHostPurchaseSessionForAccount,
-  estimateDedicatedHostRateUsdPerHour,
+  estimateDedicatedHostRate,
   getDedicatedHostWindowUsageForHostLocal,
   isDedicatedHostLaneCurrentlyAllowed,
   reconcileDedicatedHostPurchaseSessionForAccount,
@@ -682,7 +682,7 @@ async function maybeClearRecoveredInactiveEnforcement({
     return false;
   }
   const machine = metadata?.machine ?? {};
-  const hourly_cost_usd = await estimateDedicatedHostRateUsdPerHour({
+  const rate = await estimateDedicatedHostRate({
     provider,
     region: row.region,
     zone: machine.zone,
@@ -695,8 +695,9 @@ async function maybeClearRecoveredInactiveEnforcement({
     gpu_type: machine.gpu_type,
     gpu_count: machine.gpu_count,
     pricing_model: currentPricingModel(metadata),
+    billing_state: "running",
   });
-  if (!hourly_cost_usd) return false;
+  if (!rate) return false;
 
   const nextEnforcement = { state: "ok" as const };
   await updateHostBillingMetadata({
@@ -707,7 +708,7 @@ async function maybeClearRecoveredInactiveEnforcement({
         ...(metadata.billing ?? {}),
         funding_mode: effectiveSnapshot.funding_mode,
         funding_lane,
-        hourly_cost_usd,
+        hourly_cost_usd: rate.hourly_cost_usd,
         enforcement: nextEnforcement,
       },
     },
@@ -843,7 +844,7 @@ async function runPass(): Promise<void> {
     }
 
     const pricing_model = currentPricingModel(metadata);
-    const hourly_cost_usd = await estimateDedicatedHostRateUsdPerHour({
+    const rate = await estimateDedicatedHostRate({
       provider,
       region: row.region,
       zone: machine.zone,
@@ -856,8 +857,9 @@ async function runPass(): Promise<void> {
       gpu_type: machine.gpu_type,
       gpu_count: machine.gpu_count,
       pricing_model,
+      billing_state: "running",
     });
-    if (!hourly_cost_usd) {
+    if (!rate) {
       await requestHostDrainForBilling({
         row,
         enforcement: nextDrainingEnforcement({
@@ -902,11 +904,12 @@ async function runPass(): Promise<void> {
       host_bay_id: getConfiguredBayId(),
       provider,
       region: row.region ?? undefined,
+      billing_state: "running",
       machine_type: machine.machine_type ?? metadata?.size,
       pricing_model,
       funding_lane,
-      hourly_cost_usd,
-      started_at: preserveStartedAt,
+      hourly_cost_usd: rate.hourly_cost_usd,
+      pricing_snapshot: rate.pricing_snapshot,
     });
 
     deleteSnapshotCacheForAccount(owner);
@@ -948,7 +951,7 @@ async function runPass(): Promise<void> {
               ...(metadata.billing ?? {}),
               funding_mode: snapshot.funding_mode,
               funding_lane,
-              hourly_cost_usd,
+              hourly_cost_usd: rate.hourly_cost_usd,
               started_at: preserveStartedAt ?? new Date().toISOString(),
               ...retainedOwnerSpendPolicy(metadata),
               owner_spend_limit_status: ownerSpendStatus,
@@ -964,13 +967,13 @@ async function runPass(): Promise<void> {
     const enforcementDecision = evaluateDedicatedHostBillingEnforcement({
       snapshot: refreshedSnapshot,
       funding_lane,
-      hourly_cost_usd,
+      hourly_cost_usd: rate.hourly_cost_usd,
       lane_allowed: laneAllowed,
     });
     const nextEnforcement = buildDedicatedHostBillingEnforcementMetadata({
       previous: currentEnforcement(metadata),
       decision: enforcementDecision,
-      hourly_cost_usd,
+      hourly_cost_usd: rate.hourly_cost_usd,
     });
 
     const nextMetadata = {
@@ -978,7 +981,7 @@ async function runPass(): Promise<void> {
       billing: {
         funding_mode: snapshot.funding_mode,
         funding_lane,
-        hourly_cost_usd,
+        hourly_cost_usd: rate.hourly_cost_usd,
         started_at: preserveStartedAt ?? new Date().toISOString(),
         ...retainedOwnerSpendPolicy(metadata),
         ...(ownerSpendStatus

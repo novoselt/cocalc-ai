@@ -62,6 +62,7 @@ import type {
   TeamLicenseQuote,
 } from "@cocalc/conat/hub/api/purchases";
 import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
+import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
 import type {
   AuthorizePublicDirectoryShareReadOptions,
   AuthorizePublicDirectoryShareReadResponse,
@@ -1027,10 +1028,12 @@ export interface AccountLocalReconcileDedicatedHostPurchaseSessionRequest {
   host_bay_id?: string | null;
   provider: string;
   region?: string | null;
+  billing_state: DedicatedHostPricingSnapshot["billing_state"];
   machine_type?: string | null;
   pricing_model?: "on_demand" | "spot" | null;
   funding_lane: "prepaid" | "credit";
   hourly_cost_usd: MoneyValue;
+  pricing_snapshot: DedicatedHostPricingSnapshot;
   started_at?: Date | string | number | null;
 }
 
