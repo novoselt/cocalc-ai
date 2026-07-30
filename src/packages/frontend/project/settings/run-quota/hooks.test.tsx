@@ -6,7 +6,7 @@ import {
   PLATFORM_MODE_SINGLE_NODE,
   PLATFORM_MODE_ON_PREMISES,
 } from "@cocalc/util/db-schema/site-defaults";
-import { useDisplayedFields } from "./hooks";
+import { formatRunQuotaForDisplay, useDisplayedFields } from "./hooks";
 
 let mockPlatformMode = PLATFORM_MODE_SINGLE_NODE;
 
@@ -41,5 +41,21 @@ describe("run quota displayed fields", () => {
     render(<DisplayedFields />);
 
     expect(screen.getByText("disk_quota,memory,ext_rw,patch,gpu")).toBeTruthy();
+  });
+});
+
+describe("run quota formatting", () => {
+  it("omits internal project-host scheduling fields", () => {
+    const result = formatRunQuotaForDisplay({
+      cpu_limit: 2,
+      network: true,
+      io_class: "standard",
+      shared_compute_priority: 400,
+    });
+
+    expect(result.cpu_limit).toBe("2 cores");
+    expect(result.network).toBe(true);
+    expect(result).not.toHaveProperty("io_class");
+    expect(result).not.toHaveProperty("shared_compute_priority");
   });
 });

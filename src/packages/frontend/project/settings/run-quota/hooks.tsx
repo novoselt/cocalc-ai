@@ -27,10 +27,39 @@ import {
   DisplayQuota,
   MAX_UPGRADES,
   PARAMS,
+  RunQuotaType,
   Usage,
   booleanValueStr,
   renderValueUnit,
 } from "./misc";
+
+export function formatRunQuotaForDisplay(rq: RunQuotaType): DisplayQuota {
+  return Object.fromEntries(
+    Object.entries(rq).flatMap(([key, val]) => {
+      const up_key = quota2upgrade_key(key);
+      const param = PARAMS[up_key];
+      // run_quota also carries project-host scheduling metadata. Only upgrade
+      // parameters belong in the user-visible quota display.
+      if (param == null) {
+        return [];
+      }
+      if (key === "gpu") {
+        if (typeof val === "boolean") {
+          return [[key, val ? 1 : null]];
+        } else if (typeof val === "object" && val != null) {
+          return [[key, "num" in val ? (val.num ?? 0) : 0]];
+        } else {
+          return [[key, 0]];
+        }
+      } else if (typeof val !== "number") {
+        return [[key, val]];
+      } else {
+        // no display factor!
+        return [[key, renderValueUnit(val, param.display_unit)]];
+      }
+    }),
+  ) as DisplayQuota;
+}
 
 export function useRunQuota(
   project_id: string,
@@ -47,26 +76,7 @@ export function useRunQuota(
     if (rq == null || projectIsRunning === false) {
       return {};
     } else {
-      return Object.fromEntries(
-        Object.entries(rq).map(([key, val]) => {
-          if (key === "gpu") {
-            if (typeof val === "boolean") {
-              return [key, val ? 1 : null];
-            } else if (typeof val === "object" && val != null) {
-              return [key, "num" in val ? (val.num ?? 0) : 0];
-            } else {
-              return [key, 0];
-            }
-          } else if (typeof val !== "number") {
-            return [key, val];
-          } else {
-            const up_key = quota2upgrade_key(key);
-            // no display factor!
-            const unit = PARAMS[up_key].display_unit;
-            return [key, renderValueUnit(val, unit)];
-          }
-        }),
-      );
+      return formatRunQuotaForDisplay(rq);
     }
   }, [rq, projectIsRunning]);
   if (!isEqual(next, runQuota)) {
@@ -84,8 +94,10 @@ export function useMaxUpgrades(): DisplayQuota {
     for (const [key, val] of Object.entries(maxUpgradesData)) {
       if (typeof val !== "number") continue;
       const up_key = quota2upgrade_key(key);
-      const dval = PARAMS[up_key].display_factor * val;
-      const unit = PARAMS[up_key].display_unit;
+      const param = PARAMS[up_key];
+      if (param == null) continue;
+      const dval = param.display_factor * val;
+      const unit = param.display_unit;
       next[key] = renderValueUnit(dval, unit);
     }
     if (!isEqual(next, maxUpgrades)) setMaxUpgrades(next);
