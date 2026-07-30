@@ -16,6 +16,7 @@ const getCloudflareZoneSslModeMock = jest.fn();
 const ensurePublicIngressMock = jest.fn();
 const reconcileBootstrapMock = jest.fn();
 const probePublicRouteMock = jest.fn();
+const enqueueHostDnsReconciliationMock = jest.fn();
 
 process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_CONFIRMATION_MS = "0";
 process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_SUCCESS_INTERVAL_MS = "0";
@@ -57,6 +58,11 @@ jest.mock("./provider-context", () => ({
     },
     creds: { project_id: "staging-project" },
   }),
+}));
+
+jest.mock("./host-dns-reconciliation", () => ({
+  enqueueHostDnsReconciliation: (...args: any[]) =>
+    enqueueHostDnsReconciliationMock(...args),
 }));
 
 jest.mock("@cocalc/server/conat/api/hosts-bootstrap-reconcile", () => ({
@@ -205,6 +211,10 @@ describe("project-host public route migration", () => {
     });
 
     expect(ensurePublicIngressMock).toHaveBeenCalledTimes(1);
+    expect(enqueueHostDnsReconciliationMock).toHaveBeenCalledWith(
+      row.id,
+      "public-route-auto-repair",
+    );
     expect(ensureHostDnsMock).toHaveBeenCalledWith({
       host_id: row.id,
       ipAddress: "203.0.113.20",
@@ -214,6 +224,29 @@ describe("project-host public route migration", () => {
       name: "host-37782b66-190d-41c3-a7e5-f5662e34cd4a-staging.example.com",
       record_id: "stable-record",
     });
+  });
+
+  it("repairs stale DNS before a transient ingress reconciliation failure", async () => {
+    const { reconcileDirectCloudflareRouteForHost } =
+      await import("./public-route");
+    getCloudflareIpv4CidrsMock.mockRejectedValueOnce(
+      new TypeError("fetch failed"),
+    );
+
+    await expect(reconcileDirectCloudflareRouteForHost(row)).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(ensureHostDnsMock).toHaveBeenCalledWith({
+      host_id: row.id,
+      ipAddress: "203.0.113.20",
+      record_id: "stable-record",
+    });
+    expect(row.metadata.dns).toEqual({
+      name: "host-37782b66-190d-41c3-a7e5-f5662e34cd4a-staging.example.com",
+      record_id: "stable-record",
+    });
+    expect(ensurePublicIngressMock).not.toHaveBeenCalled();
   });
 
   it("restores the tunnel route when direct-route preparation fails", async () => {

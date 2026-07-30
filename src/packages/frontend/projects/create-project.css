@@ -48,7 +48,6 @@
   font-weight: 600;
   line-height: 1.2;
   padding: 3px 9px;
-  text-transform: lowercase;
 }
 
 .cc-project-create-preset-tag:disabled {
@@ -61,10 +60,17 @@
   outline-offset: 2px;
 }
 
+.cc-project-create-preset-description {
+  display: block;
+  line-height: 18px;
+  min-height: 18px;
+}
+
 .cc-project-create-image-list {
+  align-content: start;
   display: grid;
   gap: 8px;
-  max-height: 260px;
+  height: 260px;
   overflow-y: auto;
   padding-right: 2px;
 }

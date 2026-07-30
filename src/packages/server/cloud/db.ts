@@ -5,6 +5,7 @@ const pool = () => getPool();
 
 const DEFAULT_STALE_IN_PROGRESS_MS = 30 * 60 * 1000;
 const FAST_LIFECYCLE_STALE_IN_PROGRESS_MS = 3 * 60 * 1000;
+const DNS_RECONCILIATION_STALE_IN_PROGRESS_MS = 2 * 60 * 1000;
 const NORMAL_LIFECYCLE_STALE_IN_PROGRESS_MS = 5 * 60 * 1000;
 const SPOT_PROBE_STALE_IN_PROGRESS_MS = 12 * 60 * 1000;
 
@@ -15,6 +16,7 @@ export const CLOUD_VM_WORK_STALE_IN_PROGRESS_MS_BY_ACTION: Record<
   start: FAST_LIFECYCLE_STALE_IN_PROGRESS_MS,
   verify_host_ready: FAST_LIFECYCLE_STALE_IN_PROGRESS_MS,
   refresh_runtime: FAST_LIFECYCLE_STALE_IN_PROGRESS_MS,
+  reconcile_dns: DNS_RECONCILIATION_STALE_IN_PROGRESS_MS,
   stop: NORMAL_LIFECYCLE_STALE_IN_PROGRESS_MS,
   restart: NORMAL_LIFECYCLE_STALE_IN_PROGRESS_MS,
   hard_restart: NORMAL_LIFECYCLE_STALE_IN_PROGRESS_MS,
@@ -362,6 +364,27 @@ export async function markCloudVmWorkFailed(
       WHERE id=$1
     `,
     [id, error],
+  );
+}
+
+export async function deferCloudVmWork(opts: {
+  id: string;
+  error: string;
+  not_before: Date;
+}): Promise<void> {
+  await pool().query(
+    `
+      UPDATE cloud_vm_work
+      SET state='queued',
+          not_before=$2,
+          attempt=COALESCE(attempt, 0) + 1,
+          error=$3,
+          locked_by=NULL,
+          locked_at=NULL,
+          updated_at=NOW()
+      WHERE id=$1
+    `,
+    [opts.id, opts.not_before, opts.error],
   );
 }
 

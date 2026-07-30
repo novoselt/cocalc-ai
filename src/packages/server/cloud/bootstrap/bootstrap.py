@@ -8645,6 +8645,29 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
         raise
 
 
+def run_reconcile_environment(cfg: BootstrapConfig) -> int:
+    log_line(cfg, "bootstrap: starting environment-only reconcile")
+    report_bootstrap_status(
+        cfg, "running", "Reconciling managed project-host environment"
+    )
+    record_operation_start(cfg, "reconcile")
+    try:
+        ensure_runtime_user(cfg)
+        ensure_bootstrap_paths(cfg)
+        image_size_gb = compute_image_size(cfg)
+        write_env(cfg, image_size_gb)
+        write_bootstrap_state_files(cfg)
+        record_operation_success(cfg, "reconcile")
+        report_bootstrap_status(
+            cfg, "done", "Managed project-host environment reconciled"
+        )
+        log_line(cfg, "bootstrap: environment-only reconcile completed successfully")
+        return 0
+    except Exception as exc:
+        record_operation_failure(cfg, "reconcile", str(exc))
+        raise
+
+
 def run_bootstrap(cfg: BootstrapConfig) -> int:
     run_provision(cfg)
     run_reconcile(cfg)
@@ -8664,7 +8687,14 @@ def main(argv: list[str]) -> int:
         "mode",
         nargs="?",
         default="bootstrap",
-        choices=["bootstrap", "provision", "reconcile", "helpers", "status"],
+        choices=[
+            "bootstrap",
+            "provision",
+            "reconcile",
+            "helpers",
+            "environment",
+            "status",
+        ],
     )
     parser.add_argument("--bootstrap-dir")
     parser.add_argument("--config", help=argparse.SUPPRESS)
@@ -8717,6 +8747,9 @@ def main(argv: list[str]) -> int:
         if args.mode == "helpers":
             with bootstrap_operation_lock(cfg):
                 return run_reconcile_helpers(cfg)
+        if args.mode == "environment":
+            with bootstrap_operation_lock(cfg):
+                return run_reconcile_environment(cfg)
         with bootstrap_operation_lock(cfg):
             return run_bootstrap(cfg)
     except Exception as exc:

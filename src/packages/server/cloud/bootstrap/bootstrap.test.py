@@ -3552,6 +3552,76 @@ class BootstrapModesTest(unittest.TestCase):
                 ],
             )
 
+    def test_environment_reconcile_only_writes_managed_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            events: list[str] = []
+            originals = {}
+
+            def patch(name: str, replacement) -> None:
+                originals[name] = getattr(bootstrap, name)
+                setattr(bootstrap, name, replacement)
+
+            patch(
+                "ensure_runtime_user",
+                lambda _cfg: events.append("ensure_runtime_user"),
+            )
+            patch(
+                "ensure_bootstrap_paths",
+                lambda _cfg: events.append("ensure_bootstrap_paths"),
+            )
+            patch("compute_image_size", lambda _cfg: 123)
+            patch(
+                "write_env",
+                lambda _cfg, image_size_gb: events.append(
+                    f"write_env:{image_size_gb}"
+                ),
+            )
+            patch(
+                "write_bootstrap_state_files",
+                lambda _cfg: events.append("write_bootstrap_state_files"),
+            )
+            patch(
+                "start_project_host",
+                lambda _cfg: self.fail(
+                    "environment reconcile restarted project-host"
+                ),
+            )
+            patch(
+                "record_operation_start",
+                lambda _cfg, operation: events.append(f"start:{operation}"),
+            )
+            patch(
+                "record_operation_success",
+                lambda _cfg, operation: events.append(f"success:{operation}"),
+            )
+            patch(
+                "record_operation_failure",
+                lambda _cfg, operation, error: events.append(
+                    f"failure:{operation}:{error}"
+                ),
+            )
+            patch("report_bootstrap_status", lambda *_args, **_kwargs: None)
+            patch("log_line", lambda *_args, **_kwargs: None)
+            try:
+                result = bootstrap.run_reconcile_environment(cfg)
+            finally:
+                for name, original in originals.items():
+                    setattr(bootstrap, name, original)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                events,
+                [
+                    "start:reconcile",
+                    "ensure_runtime_user",
+                    "ensure_bootstrap_paths",
+                    "write_env:123",
+                    "write_bootstrap_state_files",
+                    "success:reconcile",
+                ],
+            )
+
     def test_reconcile_mode_records_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = make_cfg(tmpdir)

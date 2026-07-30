@@ -564,8 +564,10 @@ export async function reconcileCloudHostBootstrapOverSsh(opts: {
   scope?: HostBootstrapReconcileScope;
 }): Promise<void> {
   const scope = opts.scope ?? "full";
-  if (scope !== "full" && scope !== "helpers") {
-    throw new Error("bootstrap reconcile scope must be full or helpers");
+  if (scope !== "full" && scope !== "helpers" && scope !== "environment") {
+    throw new Error(
+      "bootstrap reconcile scope must be full, helpers, or environment",
+    );
   }
   const row =
     (await loadHostRowForBootstrapReconcile(opts.host_id)) ?? opts.row;

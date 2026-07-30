@@ -170,6 +170,45 @@ describe("bootstrap-host promoted artifact defaults", () => {
     };
   }
 
+  it("enforces storage admission for site-funded hosts", async () => {
+    const { resolveBootstrapStorageAdmissionMode } = await loadBootstrapHost();
+
+    expect(
+      resolveBootstrapStorageAdmissionMode({
+        billing: { funding_mode: "site-funded" },
+      }),
+    ).toBe("enforce");
+  });
+
+  it("observes storage admission for account-funded hosts by default", async () => {
+    const { resolveBootstrapStorageAdmissionMode } = await loadBootstrapHost();
+
+    expect(
+      resolveBootstrapStorageAdmissionMode({
+        billing: { funding_mode: "account-prepaid" },
+      }),
+    ).toBe("observe");
+  });
+
+  it("honors explicit storage admission overrides", async () => {
+    const { resolveBootstrapStorageAdmissionMode } = await loadBootstrapHost();
+
+    expect(
+      resolveBootstrapStorageAdmissionMode({
+        billing: { funding_mode: "site-funded" },
+        storage_admission_mode: "observe",
+      }),
+    ).toBe("observe");
+    expect(
+      resolveBootstrapStorageAdmissionMode({
+        billing: { funding_mode: "account-postpaid" },
+        machine: {
+          metadata: { storage_admission_mode: "enforce" },
+        },
+      }),
+    ).toBe("enforce");
+  });
+
   it("uses promoted global artifact versions for bootstrap of new hosts", async () => {
     loadEffectiveProjectHostRuntimeDeploymentsMock.mockResolvedValue([
       {

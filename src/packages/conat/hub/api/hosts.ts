@@ -1294,7 +1294,7 @@ export type HostSoftwareArtifact =
   | "bootstrap-environment";
 
 export type HostSoftwareChannel = "latest" | "staging";
-export type HostBootstrapReconcileScope = "full" | "helpers";
+export type HostBootstrapReconcileScope = "full" | "helpers" | "environment";
 
 export interface HostSoftwareUpgradeTarget {
   artifact: HostSoftwareArtifact;

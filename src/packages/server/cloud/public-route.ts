@@ -24,6 +24,7 @@ import {
   getCloudflareIpv4Cidrs,
   getCloudflareZoneSslMode,
 } from "./dns";
+import { enqueueHostDnsReconciliation } from "./host-dns-reconciliation";
 import { getProviderContext } from "./provider-context";
 import { reconcileCloudHostBootstrapOverSsh } from "@cocalc/server/conat/api/hosts-bootstrap-reconcile";
 import {
@@ -245,11 +246,15 @@ export async function reconcileDirectCloudflareRouteForHost(row: {
   region?: string;
   metadata?: Record<string, any>;
 }) {
-  const publicIngress = await ensureDirectCloudflareIngressForHost(row);
   const runtime = row.metadata?.runtime;
   if (!runtime?.public_ip) {
     throw new Error("host runtime does not have a public GCP address");
   }
+  await enqueueHostDnsReconciliation(row.id, "public-route-auto-repair");
+  // A replacement VM can have a new public IP while the stable Cloudflare
+  // record still points at its predecessor. Repair DNS first: ingress
+  // reconciliation fetches Cloudflare's current edge ranges and must not
+  // prevent the authoritative runtime address from being published.
   const dns = await ensureHostDns({
     host_id: row.id,
     ipAddress: runtime.public_ip,
@@ -258,6 +263,7 @@ export async function reconcileDirectCloudflareRouteForHost(row: {
       row.metadata?.cloudflare_tunnel?.record_id,
   });
   await setMetadataField(row.id, "dns", dns);
+  const publicIngress = await ensureDirectCloudflareIngressForHost(row);
   return {
     public_ip: runtime.public_ip,
     public_ingress: publicIngress,
