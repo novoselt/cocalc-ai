@@ -121,6 +121,40 @@ describe("cloud dns", () => {
     expect(record.proxied).toBe(true);
   });
 
+  it("observes the authoritative host route record for read-back verification", async () => {
+    fetchMock.mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/zones?")) {
+        return zoneResponse;
+      }
+      if (init?.method === "GET" && url.includes("/dns_records?")) {
+        return responseWith([
+          {
+            id: "record-observed",
+            name: "host-abc-dev.example.com",
+            type: "A",
+            content: "203.0.113.15",
+            proxied: true,
+          },
+        ]);
+      }
+      return responseWith({});
+    });
+
+    const { inspectHostDns } = await import("./dns");
+    await expect(inspectHostDns({ host_id: "abc" })).resolves.toEqual({
+      name: "host-abc-dev.example.com",
+      records: [
+        {
+          record_id: "record-observed",
+          type: "A",
+          content: "203.0.113.15",
+          proxied: true,
+        },
+      ],
+    });
+  });
+
   it("reads the Cloudflare zone SSL mode without exposing credentials", async () => {
     fetchMock.mockImplementation(async (input: any) => {
       const url = String(input);

@@ -53,6 +53,10 @@ import { computeHostOperationalAvailability } from "@cocalc/server/conat/api/hos
 import { enqueueRootfsPrepullForHost } from "./rootfs-prepull";
 import { removeHostSshKnownHostAlias } from "./host-ssh-known-hosts";
 import {
+  enqueueHostDnsReconciliation,
+  handleHostDnsReconciliationWork,
+} from "./host-dns-reconciliation";
+import {
   activeHostPublicRouteMode,
   ensureDirectCloudflareIngressForHost,
   hostPublicRouteMigrationInProgress,
@@ -940,8 +944,8 @@ async function ensureDnsForHost(row: any) {
   if (activeHostPublicRouteMode(row) === "cloudflare-proxy") {
     if (!row?.metadata?.runtime?.public_ip) return;
     if (!(await hasDns())) return;
+    await enqueueHostDnsReconciliation(row.id, "ensure-dns-for-host");
     try {
-      await ensureDirectCloudflareIngressForHost(row);
       const dns = await ensureHostDns({
         host_id: row.id,
         ipAddress: row.metadata.runtime.public_ip,
@@ -959,7 +963,18 @@ async function ensureDnsForHost(row: any) {
           `https://${dns.name}`,
       });
     } catch (err) {
-      logger.warn("direct project-host ingress/DNS update failed", {
+      logger.warn(
+        "direct project-host DNS update failed; durable retry queued",
+        {
+          host_id: row.id,
+          err,
+        },
+      );
+    }
+    try {
+      await ensureDirectCloudflareIngressForHost(row);
+    } catch (err) {
+      logger.warn("direct project-host ingress update failed", {
         host_id: row.id,
         err,
       });
@@ -3313,6 +3328,9 @@ export const cloudHostHandlers: CloudVmWorkHandlers = {
       await markHostError(host, err);
       throw err;
     }
+  },
+  reconcile_dns: async (row) => {
+    await handleHostDnsReconciliationWork(row);
   },
   verify_host_ready: async (row) => {
     try {

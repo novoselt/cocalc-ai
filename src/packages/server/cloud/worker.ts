@@ -20,6 +20,7 @@ import {
   getEffectiveParallelOpsLimit,
   getEffectiveParallelOpsLimits,
 } from "@cocalc/server/lro/worker-config";
+import { enqueueDueHostDnsReconciliation } from "./host-dns-reconciliation";
 
 const logger = getLogger("server:cloud:worker");
 const pool = () => getPool();
@@ -217,7 +218,9 @@ export function startCloudVmWorker(opts: {
 }) {
   const interval_ms = opts.interval_ms ?? 2000;
   const refreshScanIntervalMs = 30_000;
+  const dnsReconciliationScanIntervalMs = 30_000;
   let lastRefreshScan = 0;
+  let lastDnsReconciliationScan = 0;
   let stopped = false;
 
   const tick = async () => {
@@ -258,6 +261,18 @@ export function startCloudVmWorker(opts: {
         const refreshed = await enqueueMissingRuntimeRefresh({ limit: 50 });
         if (refreshed) {
           logger.debug("refresh_runtime enqueue scan", { refreshed });
+        }
+      }
+      if (
+        Date.now() - lastDnsReconciliationScan >=
+        dnsReconciliationScanIntervalMs
+      ) {
+        lastDnsReconciliationScan = Date.now();
+        const enqueued = await enqueueDueHostDnsReconciliation({ limit: 100 });
+        if (enqueued) {
+          logger.info("project-host DNS reconciliation enqueue scan", {
+            enqueued,
+          });
         }
       }
     } catch (err) {

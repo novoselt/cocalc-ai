@@ -16,6 +16,7 @@ const getCloudflareZoneSslModeMock = jest.fn();
 const ensurePublicIngressMock = jest.fn();
 const reconcileBootstrapMock = jest.fn();
 const probePublicRouteMock = jest.fn();
+const enqueueHostDnsReconciliationMock = jest.fn();
 
 process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_CONFIRMATION_MS = "0";
 process.env.COCALC_HOST_PUBLIC_ROUTE_STABLE_SUCCESS_INTERVAL_MS = "0";
@@ -57,6 +58,11 @@ jest.mock("./provider-context", () => ({
     },
     creds: { project_id: "staging-project" },
   }),
+}));
+
+jest.mock("./host-dns-reconciliation", () => ({
+  enqueueHostDnsReconciliation: (...args: any[]) =>
+    enqueueHostDnsReconciliationMock(...args),
 }));
 
 jest.mock("@cocalc/server/conat/api/hosts-bootstrap-reconcile", () => ({
@@ -205,6 +211,10 @@ describe("project-host public route migration", () => {
     });
 
     expect(ensurePublicIngressMock).toHaveBeenCalledTimes(1);
+    expect(enqueueHostDnsReconciliationMock).toHaveBeenCalledWith(
+      row.id,
+      "public-route-auto-repair",
+    );
     expect(ensureHostDnsMock).toHaveBeenCalledWith({
       host_id: row.id,
       ipAddress: "203.0.113.20",
