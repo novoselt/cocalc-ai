@@ -34,31 +34,31 @@ import {
 } from "./misc";
 
 export function formatRunQuotaForDisplay(rq: RunQuotaType): DisplayQuota {
-  return Object.fromEntries(
-    Object.entries(rq).flatMap(([key, val]) => {
-      const up_key = quota2upgrade_key(key);
-      const param = PARAMS[up_key];
-      // run_quota also carries project-host scheduling metadata. Only upgrade
-      // parameters belong in the user-visible quota display.
-      if (param == null) {
-        return [];
-      }
-      if (key === "gpu") {
-        if (typeof val === "boolean") {
-          return [[key, val ? 1 : null]];
-        } else if (typeof val === "object" && val != null) {
-          return [[key, "num" in val ? (val.num ?? 0) : 0]];
-        } else {
-          return [[key, 0]];
-        }
-      } else if (typeof val !== "number") {
-        return [[key, val]];
+  const entries: [string, unknown][] = [];
+  for (const [key, val] of Object.entries(rq)) {
+    const up_key = quota2upgrade_key(key);
+    const param = PARAMS[up_key];
+    // run_quota also carries project-host scheduling metadata. Only upgrade
+    // parameters belong in the user-visible quota display.
+    if (param == null) {
+      continue;
+    }
+    if (key === "gpu") {
+      if (typeof val === "boolean") {
+        entries.push([key, val ? 1 : null]);
+      } else if (typeof val === "object" && val != null) {
+        entries.push([key, "num" in val ? (val.num ?? 0) : 0]);
       } else {
-        // no display factor!
-        return [[key, renderValueUnit(val, param.display_unit)]];
+        entries.push([key, 0]);
       }
-    }),
-  ) as DisplayQuota;
+    } else if (typeof val !== "number") {
+      entries.push([key, val]);
+    } else {
+      // no display factor!
+      entries.push([key, renderValueUnit(val, param.display_unit)]);
+    }
+  }
+  return Object.fromEntries(entries) as DisplayQuota;
 }
 
 export function useRunQuota(
