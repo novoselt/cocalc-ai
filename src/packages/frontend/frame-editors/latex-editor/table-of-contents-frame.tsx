@@ -25,8 +25,14 @@ import {
 } from "@cocalc/frontend/components";
 import { COLORS } from "@cocalc/util/theme";
 import { Fragment } from "react";
+import useResizeObserver from "use-resize-observer";
 
 import type { Actions as LatexActions } from "./actions";
+
+// Below this container width (e.g. the TOC frame tucked as a slim strip
+// beside the document) the per-level indentation wastes too much room —
+// all rows collapse to the level-1 gutter instead.
+const NARROW_WIDTH_PX = 300;
 
 export function LatexTableOfContents({
   font_size,
@@ -79,6 +85,8 @@ export function LatexTOCBody({
   openAnchorChat?: (hash: string, path: string) => void;
   ifEmpty?: React.ReactNode;
 }) {
+  const { ref, width } = useResizeObserver<HTMLDivElement>();
+  const narrow = (width ?? Infinity) < NARROW_WIDTH_PX;
   if (contents == null) {
     return <Loading theme="medium" />;
   }
@@ -87,6 +95,7 @@ export function LatexTOCBody({
   }
   return (
     <div
+      ref={ref}
       style={{
         overflowY: "auto",
         height: "100%",
@@ -120,6 +129,7 @@ export function LatexTOCBody({
             <ChatRow
               entry={entry}
               hash={hash}
+              narrow={narrow}
               project_id={project_id}
               masterPath={masterPath}
               onScrollTo={() => scrollTo(entry.toJS())}
@@ -138,7 +148,11 @@ export function LatexTOCBody({
           );
         } else {
           row = (
-            <PlainRow entry={entry} onClick={() => scrollTo(entry.toJS())} />
+            <PlainRow
+              entry={entry}
+              narrow={narrow}
+              onClick={() => scrollTo(entry.toJS())}
+            />
           );
         }
         if (typeof tocGroupPath !== "string") {
@@ -174,15 +188,18 @@ export function LatexTOCBody({
 
 function PlainRow({
   entry,
+  narrow,
   onClick,
 }: {
   entry: TableOfContentsEntryMap;
+  narrow?: boolean;
   onClick: () => void;
 }) {
   return (
     <div onClick={onClick} style={{ cursor: "pointer" }}>
       <RowHeader
         level={entry.get("level", 1)}
+        narrow={narrow}
         value={entry.get("value")}
         icon={entry.get("icon")}
         iconColor={entry.get("iconColor")}
@@ -194,6 +211,7 @@ function PlainRow({
 function ChatRow({
   entry,
   hash,
+  narrow,
   project_id,
   masterPath,
   onScrollTo,
@@ -201,6 +219,7 @@ function ChatRow({
 }: {
   entry: TableOfContentsEntryMap;
   hash: string;
+  narrow?: boolean;
   project_id: string;
   masterPath: string;
   onScrollTo: () => void;
@@ -237,6 +256,7 @@ function ChatRow({
     >
       <RowHeader
         level={entry.get("level", 6)}
+        narrow={narrow}
         value={entry.get("value")}
         icon={entry.get("icon", "comment")}
         iconColor={entry.get("iconColor")}
@@ -280,11 +300,13 @@ function ChatRow({
 
 function RowHeader({
   level,
+  narrow,
   value,
   icon,
   iconColor,
 }: {
   level: 1 | 2 | 3 | 4 | 5 | 6;
+  narrow?: boolean;
   value: string;
   icon?: IconName;
   iconColor?: string;
@@ -296,7 +318,10 @@ function RowHeader({
     | 4
     | 5
     | 6;
-  const indent = INDENTS[normalizedLevel];
+  // In a narrow container the per-level indentation eats too much of
+  // the little width there is — collapse all levels to the flat
+  // level-1 gutter.
+  const indent = narrow ? INDENTS[1] : INDENTS[normalizedLevel];
   const headingUnicode =
     icon == null && normalizedLevel < 6 ? 0x00a7 : undefined;
   return (
