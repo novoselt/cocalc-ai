@@ -4,7 +4,7 @@ import { queueSetSubvolumeQuota } from "./quota-queue";
 import getLogger from "@cocalc/backend/logger";
 import { btrfsQuotasDisabled } from "./config";
 import {
-  cachedBtrfsQgroupShowRaw,
+  cachedBtrfsQgroupShowRawForPath,
   invalidateBtrfsQgroupShowRaw,
 } from "./operation-cache";
 
@@ -120,8 +120,7 @@ export class SubvolumeQuota {
   private qgroup = async () => {
     const id = await this.subvolume.getSubvolumeId();
     let groups: QgroupShowRow[];
-    const path = this.subvolume.filesystem.opts.mount;
-    const result = await cachedBtrfsQgroupShowRaw(path);
+    const result = await cachedBtrfsQgroupShowRawForPath(this.subvolume.path);
     groups = parsePlainQgroupShow(result.stdout);
     const warning = quotaWarning(result.stderr);
     const match = selectQgroup(groups, id);

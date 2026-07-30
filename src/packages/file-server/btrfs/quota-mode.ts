@@ -4,6 +4,7 @@ import { type BtrfsQuotaMode, btrfsQuotaMode } from "./config";
 import { btrfs } from "./util";
 
 const logger = getLogger("file-server:btrfs:quota-mode");
+const DEFAULT_QUOTA_MODE_CACHE_MS = 5 * 60_000;
 
 type LegacyRuntimeQuotaMode = "legacy-qgroup";
 export type ActiveBtrfsQuotaMode = Exclude<BtrfsQuotaMode, "disabled">;
@@ -17,6 +18,25 @@ export type BtrfsQuotaRuntimeStatus =
       enabled: true;
       mode: ActiveBtrfsQuotaMode | LegacyRuntimeQuotaMode;
     };
+
+type QuotaModeCacheEntry = {
+  expires: number;
+  status: BtrfsQuotaRuntimeStatus;
+};
+
+const quotaModeCache = new Map<string, QuotaModeCacheEntry>();
+const quotaModeInflight = new Map<string, Promise<BtrfsQuotaRuntimeStatus>>();
+
+function quotaModeCacheMs(): number {
+  const configured = Number.parseInt(
+    `${process.env.COCALC_BTRFS_QUOTA_MODE_CACHE_MS ?? ""}`,
+    10,
+  );
+  if (Number.isFinite(configured) && configured >= 0) {
+    return configured;
+  }
+  return DEFAULT_QUOTA_MODE_CACHE_MS;
+}
 
 function quotasNotEnabled(text: string): boolean {
   const normalized = text.trim().toLowerCase();
@@ -128,7 +148,7 @@ export async function getBtrfsQuotaRuntimeStatus(
   };
 }
 
-export async function ensureBtrfsQuotaMode(
+async function reconcileBtrfsQuotaMode(
   mount: string,
 ): Promise<BtrfsQuotaRuntimeStatus> {
   const desiredMode = btrfsQuotaMode();
@@ -170,4 +190,44 @@ export async function ensureBtrfsQuotaMode(
     );
   }
   return status;
+}
+
+export async function ensureBtrfsQuotaMode(
+  mount: string,
+): Promise<BtrfsQuotaRuntimeStatus> {
+  const now = Date.now();
+  const cached = quotaModeCache.get(mount);
+  if (cached && cached.expires > now) {
+    return cached.status;
+  }
+  const pending = quotaModeInflight.get(mount);
+  if (pending) {
+    return await pending;
+  }
+  const promise = reconcileBtrfsQuotaMode(mount);
+  quotaModeInflight.set(mount, promise);
+  try {
+    const status = await promise;
+    const ttlMs = quotaModeCacheMs();
+    if (ttlMs > 0) {
+      quotaModeCache.set(mount, {
+        expires: Date.now() + ttlMs,
+        status,
+      });
+    }
+    return status;
+  } finally {
+    if (quotaModeInflight.get(mount) === promise) {
+      quotaModeInflight.delete(mount);
+    }
+  }
+}
+
+export function invalidateBtrfsQuotaMode(mount: string): void {
+  quotaModeCache.delete(mount);
+}
+
+export function clearBtrfsQuotaModeCacheForTest(): void {
+  quotaModeCache.clear();
+  quotaModeInflight.clear();
 }

@@ -144,24 +144,30 @@ async function cached<T>({
   }
 }
 
-export async function cachedBtrfsQgroupShowRaw(
-  mount: string,
+export async function cachedBtrfsQgroupShowRawForPath(
+  path: string,
 ): Promise<BtrfsOutput> {
   return await cached({
     cache: qgroupShowCache,
     inflight: qgroupShowInflight,
-    key: mount,
+    key: path,
     ttlMs: qgroupShowCacheMs(),
     run: async () =>
       await btrfs({
         verbose: false,
-        args: ["qgroup", "show", "-prc", "--raw", mount],
+        // -f restricts output to qgroups affecting this subvolume. Without it,
+        // qgroup show enumerates every qgroup on the filesystem.
+        args: ["qgroup", "show", "-prcf", "--raw", path],
       }),
   });
 }
 
-export function invalidateBtrfsQgroupShowRaw(mount: string): void {
-  qgroupShowCache.delete(mount);
+export function invalidateBtrfsQgroupShowRaw(pathOrMount: string): void {
+  for (const key of qgroupShowCache.keys()) {
+    if (key === pathOrMount || key.startsWith(`${pathOrMount}/`)) {
+      qgroupShowCache.delete(key);
+    }
+  }
 }
 
 export async function cachedBtrfsSubvolumeShow(
