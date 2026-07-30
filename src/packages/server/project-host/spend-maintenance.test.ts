@@ -242,7 +242,7 @@ describe("dedicated host spend maintenance", () => {
       input: {
         id: "host-1",
         account_id: "acc-1",
-        allow_offline: true,
+        allow_offline: false,
         force: false,
         managed_egress_override: "admin-host-drain",
         billing_enforcement: true,

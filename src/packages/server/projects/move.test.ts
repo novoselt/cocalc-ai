@@ -767,6 +767,75 @@ describe("moveProjectToHost", () => {
     expect(hasMoveSentinel(routedFsByHost.get(SOURCE_HOST_ID))).toBe(false);
   });
 
+  it("backs up a freshly connected draining source instead of treating it as offline", async () => {
+    queryMock = jest.fn(async (sql: string) => {
+      if (
+        sql.includes("COALESCE(projects.owning_bay_id, $2)") &&
+        sql.includes("COALESCE(project_hosts.bay_id, $2)")
+      ) {
+        return {
+          rows: [
+            {
+              project_id: PROJECT_ID,
+              host_id: SOURCE_HOST_ID,
+              region: "wnam",
+              project_state: "running",
+              provisioned: true,
+              last_backup: new Date("2026-07-29T02:36:47.729Z"),
+              last_edited: new Date("2026-07-29T21:20:00.000Z"),
+              last_changed: new Date("2026-07-29T21:20:00.000Z"),
+              project_owning_bay_id: "bay-0",
+              host_bay_id: "bay-0",
+            },
+          ],
+        };
+      }
+      if (
+        sql.includes(
+          "SELECT status, deleted, last_seen, name FROM project_hosts",
+        )
+      ) {
+        return {
+          rows: [
+            {
+              status: "draining",
+              deleted: null,
+              last_seen: new Date(),
+              name: SOURCE_HOST_NAME,
+            },
+          ],
+        };
+      }
+      if (sql.includes("SELECT host_id, state->>'state' AS project_state")) {
+        return { rows: [postTimeoutState] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { moveProjectToHost } = await import("./move");
+    await expect(
+      moveProjectToHost({
+        project_id: PROJECT_ID,
+        dest_host_id: DEST_HOST_ID,
+        account_id: "account-id",
+        allow_offline: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(stopProjectOnHostMock).toHaveBeenCalled();
+    expect(createBackupLroMock).toHaveBeenCalledTimes(1);
+    expect(startProjectLroMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: PROJECT_ID,
+        restore_backup_id: "backup-1",
+      }),
+    );
+    expect(deleteProjectDataOnHostMock).toHaveBeenCalledWith({
+      project_id: PROJECT_ID,
+      host_id: SOURCE_HOST_ID,
+    });
+  });
+
   it("ignores stale legacy fixed-path move sentinel files", async () => {
     routedFsByHost.get(SOURCE_HOST_ID)?.set(
       LEGACY_MOVE_SENTINEL_PATH,
