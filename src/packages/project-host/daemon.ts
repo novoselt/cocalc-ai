@@ -39,6 +39,10 @@ export type ProjectHostRuntimeInspection = {
 const DEFAULT_ENV_FILE = "/etc/cocalc/project-host.env";
 const DEFAULT_LOCAL_ENV_FILE = "/etc/cocalc/project-host.local.env";
 const RELOAD_ENV_FILES = "COCALC_PROJECT_HOST_RELOAD_ENV_FILES";
+const ENV_FILE_SELECTORS = new Set([
+  "COCALC_PROJECT_HOST_DAEMON_ENV_FILE",
+  "COCALC_PROJECT_HOST_DAEMON_LOCAL_ENV_FILE",
+]);
 const processRuntime = {
   spawn: childProcess.spawn,
   spawnSync: childProcess.spawnSync,
@@ -188,6 +192,41 @@ function loadEnvFromFile(envFile: string): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+function inheritedEnvForFileReload(
+  inheritedEnv: Record<string, string>,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(inheritedEnv)) {
+    if (key === RELOAD_ENV_FILES) {
+      continue;
+    }
+    if (ENV_FILE_SELECTORS.has(key)) {
+      env[key] = value;
+      continue;
+    }
+    if (
+      key.startsWith("COCALC_") ||
+      key.startsWith("PROJECT_HOST_") ||
+      key.startsWith("PROJECT_RUNNER_") ||
+      [
+        "DATA",
+        "DEBUG",
+        "DEBUG_CONSOLE",
+        "HOST",
+        "MASTER_CONAT_SERVER",
+        "PORT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+      ].includes(key)
+    ) {
+      continue;
+    }
+    env[key] = value;
+  }
+  return env;
 }
 
 function decodeProcMountPath(path: string): string {
@@ -669,7 +708,11 @@ function resolveEnv(index: number): {
   const localFileEnv = loadEnvFromFile(daemonLocalEnvFilePath());
   const inheritedEnv = normalizeEnv(process.env);
   const env = envIsTrue(inheritedEnv[RELOAD_ENV_FILES])
-    ? { ...inheritedEnv, ...fileEnv, ...localFileEnv }
+    ? {
+        ...inheritedEnvForFileReload(inheritedEnv),
+        ...fileEnv,
+        ...localFileEnv,
+      }
     : { ...fileEnv, ...localFileEnv, ...inheritedEnv };
   delete env[RELOAD_ENV_FILES];
   const dataDir = env.COCALC_DATA ?? env.DATA;
