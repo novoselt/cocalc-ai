@@ -2,11 +2,150 @@
 
 Date: 2026-07-30
 
-Status: implementation plan; no production changes authorized
+Status: core implementation deployed and stress-tested on staging; no
+production changes authorized
 
 Related plan:
 
 - `src/.agents/project-host-io-phase-2-plan-2026-07-29.md`
+
+## Implementation and Staging Evidence
+
+### Completed on 2026-07-30
+
+The core lifecycle/startup implementation is committed on branch `ops`:
+
+- `71da6b9b8b` targets project quota reads instead of enumerating all qgroups;
+- `44d895ce7a` adds durable priority, attribution, timing, aging, and
+  coalescing to quota work;
+- `595b9fee85` adds owning-bay revisions and the host desired/applied ledger;
+- `f82e37f719` removes RootFS and port-allocation population scans from start
+  and replaces full quota repair with a bounded cursor auditor;
+- `45fbf0b71a` adds a host-ID-gated, exactly reversible staging corpus tool;
+- `95e63a4421` prepares scratch asynchronously after stop and retains a
+  synchronous fail-closed start fallback;
+- `cb0352d0ab` makes deletion win races with background scratch preparation by
+  using per-project lifecycle serialization and invalidation generations.
+
+Validation completed:
+
+- project-host: 106 suites and 660 tests passed;
+- project-runner: 14 suites and 92 tests passed;
+- focused server quota/revision tests: 28 tests passed;
+- project-host, project-runner, server, database, and Conat package
+  typechecks/builds passed;
+- deterministic 10K-row SQLite port lease and quota-auditor tests passed.
+
+### Staging Deployment
+
+The final staging artifact is:
+
+```text
+20260730T223250Z-cb0352d0-quota-startup-20260730-cb0352d
+```
+
+Deployment record:
+
+```text
+20260730T224446Z-20260730T223250Z-cb0352d0-quota-startup-20260730-cb0352d
+```
+
+The rollout used `host2` as a 60-second canary, then rolled the second staging
+host with concurrency one and a 30-second stabilization period. Both hosts
+passed. The project-host staging smoke test passed representative-host,
+deployment-version, and RootFS RPC checks. Both public `/healthz` routes
+reported ready with the correct host identity.
+
+No production API, host, database, DNS, or storage resource was touched.
+
+### 10K Population Test
+
+The staging corpus on `host2` contained:
+
+```text
+10,000 synthetic dormant project rows
+10,000 synthetic project subvolumes
+10,162 total host subvolumes
+10,169 total host qgroups
+```
+
+The corpus tool reserves UUIDs under
+`70000000-0000-4000-8000-*`, records a durable marker, verifies the installed
+host ID, and deletes only its reserved rows and paths during cleanup.
+
+The owning bay correctly classifies host-local fake volumes as stale. To
+prevent that cleanup from contaminating the scalability measurement, the test
+temporarily changed only `host2`'s provisioned-inventory interval, restarted
+the project-host with no corpus present so its initial inventory was clean,
+then seeded the corpus. The temporary override and all 10K rows/subvolumes were
+removed after the test.
+
+This isolation is required for future repetitions. An unisolated inventory
+test caused the host to delete more than 1,000 fake projects per minute,
+raising CPU and I/O pressure and producing invalid 12-13 second startup
+samples. Those samples measure deliberate orphan reclamation, not startup
+complexity.
+
+### Measured Result
+
+The same disposable project was stopped and cold-started repeatedly with the
+full corpus present. Ten clean samples on the pre-race-guard artifact produced:
+
+```text
+phase                         mean       median      min       max
+control total                 2265.6 ms  2242.5 ms   2110 ms   2473 ms
+project-host total            2011.9 ms  1969.5 ms   1899 ms   2241 ms
+quota check                     74.0 ms    70.5 ms     60 ms    108 ms
+runner start                  1879.5 ms  1825.5 ms   1775 ms   2073 ms
+Podman run                     818.2 ms   781.0 ms    747 ms    981 ms
+```
+
+Five final-artifact samples were then taken while BEES was actively generating
+background small-write pressure:
+
+```text
+phase                         mean       median      min       max
+control total                 2379.4 ms  2371 ms     2220 ms   2638 ms
+project-host total            2095.6 ms  2019 ms     1952 ms   2368 ms
+quota check                     86.2 ms    82 ms        77 ms    102 ms
+runner start                  1959.4 ms  1896 ms     1836 ms   2225 ms
+Podman run                     823.2 ms   791 ms      771 ms    946 ms
+```
+
+Before post-stop preparation, the same project's quota phase was 521-1055 ms
+and project-host total was 2770-3552 ms. The final quota phase remained bounded
+at 77-102 ms with 10K unrelated project volumes and active background I/O.
+This is direct evidence that normal unchanged startup no longer performs a
+whole-filesystem quota operation.
+
+### Additional Finding
+
+Creating or deleting 10K Btrfs subvolumes/qgroups creates substantial
+short-lived kernel I/O pressure. Repeated unfiltered `btrfs qgroup show` from a
+test observer also sustained pressure and must not be used as a frequent
+metric. BEES ran in `/cocalc-bees` with I/O weight 1 and a bandwidth cap, but
+had no IOPS cap and generated hundreds of small writes per second against the
+fresh corpus. Startup remained near two seconds internally, so this does not
+block the core result, but BEES IOPS policy remains a separate follow-up.
+
+### Remaining Before Production Review
+
+The following plan items are not complete and must not be implied by the
+staging latency result:
+
+- replace the process-local quota epoch with durable filesystem identity and
+  quota-mode epoch handling;
+- persist and verify stable Btrfs volume identity for applied ledger claims;
+- migrate every temporary quota raise to the durable override model;
+- complete operator diagnostics for desired/applied revision, identity, epoch,
+  queue state, and fast-path status;
+- add or verify lifecycle-context guards for every unfiltered global Btrfs
+  command;
+- decide whether BEES needs an explicit IOPS ceiling;
+- review all remaining recurring full-host loops and either bound, index, or
+  isolate them;
+- perform an explicit production-readiness review and obtain separate
+  production authorization.
 
 ## Executive Decision
 
