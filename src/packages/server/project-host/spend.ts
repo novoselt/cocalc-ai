@@ -878,7 +878,7 @@ export async function estimateDedicatedHostRate(
         return undefined;
     }
   })();
-  if (!breakdown || breakdown.total_usd_per_hour <= 0) {
+  if (!breakdown) {
     return undefined;
   }
   const hourly_cost_usd = moneyToDbString(breakdown.total_usd_per_hour);
