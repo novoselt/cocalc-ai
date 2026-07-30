@@ -47,6 +47,7 @@ import {
   releaseProjectRuntimeSlot,
   reserveProjectRuntimeSlot,
 } from "@cocalc/server/projects/runtime-slots";
+import adminAlert from "@cocalc/server/messages/admin-alert";
 import { stopSelfHostReverseTunnel } from "@cocalc/server/self-host/ssh-target";
 import {
   beginPlannedProjectHostRuntimeTransition,
@@ -1366,6 +1367,28 @@ async function markBillingEnforcementDrainComplete({
   );
 }
 
+async function markBillingEnforcementDrainFailed({
+  host_id,
+  error,
+}: {
+  host_id: string;
+  error: unknown;
+}) {
+  const { rows } = await getPool().query<{ metadata: any }>(
+    "SELECT metadata FROM project_hosts WHERE id=$1 AND deleted IS NULL",
+    [host_id],
+  );
+  const metadata = rows[0]?.metadata ?? {};
+  await getPool().query(
+    `
+      UPDATE project_hosts
+      SET metadata=$2, updated=NOW()
+      WHERE id=$1 AND deleted IS NULL
+    `,
+    [host_id, billingEnforcementDrainFailedMetadata(metadata, error)],
+  );
+}
+
 function billingEnforcementDrainCompleteMetadata(
   metadata: any,
   now: Date = new Date(),
@@ -1407,6 +1430,82 @@ function billingEnforcementDrainCompleteMetadata(
       stop_reason: reason,
       stop_requested_at: billing.stop_requested_at ?? nowIso,
     },
+  };
+}
+
+function billingEnforcementDrainFailedMetadata(
+  metadata: any,
+  error: unknown,
+  now: Date = new Date(),
+) {
+  const billing = metadata.billing ?? {};
+  const enforcement = billing.enforcement ?? {};
+  const retainedEnforcement = { ...enforcement };
+  delete retainedEnforcement.deprovision_after;
+  delete retainedEnforcement.final_backup_completed_at;
+  delete retainedEnforcement.grace_until;
+  const nowIso = now.toISOString();
+  const reason =
+    typeof enforcement.reason === "string" && enforcement.reason
+      ? enforcement.reason
+      : "billing enforcement drain failed";
+  return {
+    ...metadata,
+    desired_state: "stopped",
+    billing: {
+      ...billing,
+      enforcement: {
+        ...retainedEnforcement,
+        state: "stopped_billing_blocked",
+        reason,
+        stopped_at: enforcement.stopped_at ?? nowIso,
+        final_backup_status: "failed",
+        final_backup_failed_at: nowIso,
+        final_backup_error: `${error}`,
+        recovery_actions: enforcement.recovery_actions ?? [
+          "add_funds",
+          "fix_payment",
+          "support_limit_increase",
+        ],
+      },
+      stop_reason: reason,
+      stop_requested_at: billing.stop_requested_at ?? nowIso,
+    },
+  };
+}
+
+function billingEnforcementDrainFailureAdminAlert({
+  host_id,
+  account_id,
+  op_id,
+  error,
+  stop_error,
+}: {
+  host_id: string;
+  account_id: string;
+  op_id: string;
+  error: unknown;
+  stop_error?: unknown;
+}) {
+  const computeStatus = stop_error
+    ? `The compute stop request also failed: ${stop_error}`
+    : "The compute stop request succeeded.";
+  return {
+    subject: `Dedicated host billing drain failed (${host_id})`,
+    body: [
+      "A billing-enforced dedicated-host drain failed.",
+      "",
+      `Host ID: \`${host_id}\``,
+      `Owner account ID: \`${account_id}\``,
+      `Drain operation ID: \`${op_id}\``,
+      `Drain error: ${error}`,
+      "",
+      computeStatus,
+      "Project placement and the provider disk were retained.",
+      "Automatic disk deprovisioning is disabled because the final backup failed.",
+    ].join("\n"),
+    dedupMinutes: 24 * 60,
+    dedupBySubject: true,
   };
 }
 
@@ -2398,6 +2497,49 @@ async function handleOp(op: LroSummary): Promise<void> {
       (typeof err === "object" &&
         err !== null &&
         (err as { code?: string }).code === "host-op-canceled");
+    if (kind === "host-drain" && input?.billing_enforcement === true) {
+      try {
+        await markBillingEnforcementDrainFailed({ host_id, error: err });
+      } catch (metadataErr) {
+        logger.error(
+          "failed to record billing-enforcement drain failure before stopping host",
+          {
+            op_id,
+            host_id,
+            err: `${metadataErr}`,
+          },
+        );
+      }
+      let stopError: unknown;
+      try {
+        await progressStep(
+          "stopping",
+          "stopping host after failed billing-enforcement drain; preserving disk and project placement",
+          { host_id, error: `${err}` },
+          90,
+        );
+        await stopHostInternal({ account_id, id: host_id });
+      } catch (stopErr) {
+        stopError = stopErr;
+        logger.error(
+          "failed to stop host after billing-enforcement drain failure",
+          {
+            op_id,
+            host_id,
+            err: `${stopErr}`,
+          },
+        );
+      }
+      await adminAlert(
+        billingEnforcementDrainFailureAdminAlert({
+          host_id,
+          account_id,
+          op_id,
+          error: err,
+          stop_error: stopError,
+        }),
+      );
+    }
     if (canceled) {
       logger.info("host op canceled", { op_id, kind });
       const updated = await updateLro({
@@ -2536,4 +2678,6 @@ export const __test__ = {
   redundantProjectHostRollbackReason,
   waitForHostStatus,
   billingEnforcementDrainCompleteMetadata,
+  billingEnforcementDrainFailedMetadata,
+  billingEnforcementDrainFailureAdminAlert,
 };
