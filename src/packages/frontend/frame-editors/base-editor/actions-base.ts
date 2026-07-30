@@ -30,6 +30,7 @@ const FAST_OPEN_SYNCSTRING_DISABLE_LOCAL_STORAGE_KEY =
 const FAST_OPEN_SYNCSTRING_STATUS = "Loading live collaboration...";
 const FAST_OPEN_HANDOFF_DIFF_STATUS =
   "Updated to the latest live collaboration state.";
+const ANCHOR_CHAT_READY_TIMEOUT_MS = 8000;
 
 function parseBooleanFlag(value?: string | null): boolean | undefined {
   if (value == null) return;
@@ -123,10 +124,8 @@ import { normalizeUserFacingError } from "@cocalc/frontend/components/user-facin
 import { get_buffer, set_buffer } from "@cocalc/frontend/copy-paste-buffer";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import { filenameMode } from "@cocalc/frontend/file-associations";
-import {
-  chat,
-  getSideChatActions,
-} from "@cocalc/frontend/frame-editors/generic/chat";
+import { ensureSideChatActions } from "@cocalc/frontend/chat/unread";
+import { chat } from "@cocalc/frontend/frame-editors/generic/chat";
 import { syncdocDiagnosticLog } from "@cocalc/frontend/syncdoc-diagnostics";
 import { open_new_tab } from "@cocalc/frontend/misc";
 import type { FragmentId } from "@cocalc/frontend/misc/fragment-id";
@@ -4202,6 +4201,99 @@ export class BaseEditorActions<
     this.redux.getActions("page").settings("editor-settings");
   };
 
+  // Anchored side-chat threads: newest call wins when several opens race.
+  private _openAnchorChatGeneration: number = 0;
+
+  // Wait until the side chat frame's ChatActions are usable (syncdb
+  // initialized and mounted in the frame tree).
+  private async waitForSideChatActions(
+    generation: number,
+    frameId: string,
+  ): Promise<ReturnType<typeof ensureSideChatActions> | undefined> {
+    const deadline = Date.now() + ANCHOR_CHAT_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (generation !== this._openAnchorChatGeneration || this.isClosed()) {
+        return undefined;
+      }
+      let actions: ReturnType<typeof ensureSideChatActions>;
+      try {
+        actions = ensureSideChatActions(this.project_id, this.path);
+      } catch {
+        return undefined;
+      }
+      actions.frameTreeActions = this as any;
+      actions.frameId = frameId;
+      const syncdb = actions.syncdb;
+      if (syncdb == null) return undefined;
+      if (syncdb.get_state?.() !== "ready") {
+        try {
+          await once(syncdb, "ready", Math.max(1, deadline - Date.now()));
+        } catch {
+          // A closed syncdb is replaced by ensureSideChatActions on the next
+          // iteration. A timeout naturally exits at the deadline.
+          continue;
+        }
+      }
+      if (
+        generation === this._openAnchorChatGeneration &&
+        !this.isClosed() &&
+        actions.syncdb === syncdb &&
+        syncdb.get_state?.() === "ready"
+      ) {
+        // Anchor lookups need hydrated thread-config rows; otherwise a stale
+        // hash could be revived as a fresh thread.
+        return actions;
+      }
+    }
+    return undefined;
+  }
+
+  // Open the side chat showing the newest thread anchored to anchorId,
+  // creating a new empty anchored thread when none exists.  Editors
+  // provide the anchor semantics via getAnchorLabel/jumpToAnchor.
+  async openAnchorChat(anchorId: string, path?: string): Promise<void> {
+    if (isChatPath(this.path)) return;
+    const generation = ++this._openAnchorChatGeneration;
+    this.redux
+      .getProjectActions(this.project_id)
+      .open_chat({ path: this.path });
+    const frameId = this.show_focused_frame_of_type(chat.type);
+    const label = (this as any).getAnchorLabel?.(anchorId);
+    const actions = await this.waitForSideChatActions(generation, frameId);
+    actions?.findOrCreateAnchorThread({ anchorId, label, path });
+  }
+
+  // Open the side chat with a fresh empty thread anchored to anchorId,
+  // even if other threads for this anchor exist.
+  async openAnchorChatNewThread(
+    anchorId: string,
+    path?: string,
+  ): Promise<void> {
+    if (isChatPath(this.path)) return;
+    const generation = ++this._openAnchorChatGeneration;
+    this.redux
+      .getProjectActions(this.project_id)
+      .open_chat({ path: this.path });
+    const frameId = this.show_focused_frame_of_type(chat.type);
+    const label = (this as any).getAnchorLabel?.(anchorId);
+    const actions = await this.waitForSideChatActions(generation, frameId);
+    actions?.createAnchorThread({ anchorId, label, path });
+  }
+
+  // Open the side chat showing one specific (typically anchored) thread.
+  async openAnchorChatThread(threadKey: string): Promise<void> {
+    if (isChatPath(this.path)) return;
+    const generation = ++this._openAnchorChatGeneration;
+    this.redux
+      .getProjectActions(this.project_id)
+      .open_chat({ path: this.path });
+    const frameId = this.show_focused_frame_of_type(chat.type);
+    const actions = await this.waitForSideChatActions(generation, frameId);
+    if (actions == null) return;
+    actions.clearAllFilters();
+    actions.setSelectedThread(threadKey);
+  }
+
   // NOTE: can't be an arrow function because gets called in derived classes
   async gotoFragment(fragmentId: FragmentId) {
     if (fragmentId == null) {
@@ -4215,18 +4307,20 @@ export class BaseEditorActions<
 
     if (fragmentId.chat && !isChatPath(this.path)) {
       // open side chat
+      const generation = ++this._openAnchorChatGeneration;
       this.redux
         .getProjectActions(this.project_id)
         .open_chat({ path: this.path });
-      this.show_focused_frame_of_type(chat.type);
-      for (const d of [1, 10, 50, 500, 1000]) {
-        const actions = getSideChatActions({
-          project_id: this.project_id,
-          path: this.path,
-        });
-        actions?.scrollToDate(fragmentId.chat);
-        await delay(d);
+      const frameId = this.show_focused_frame_of_type(chat.type);
+      const actions = await this.waitForSideChatActions(generation, frameId);
+      if (actions == null) return;
+      if (fragmentId.thread) {
+        actions.clearAllFilters();
+        actions.setSelectedThread(fragmentId.thread);
       }
+      // open_file already installed the complete fragment, including its
+      // explicit thread target. Do not replace it with a chat-only fragment.
+      actions.scrollToDate(fragmentId.chat, { persistFragment: false });
     }
   }
 

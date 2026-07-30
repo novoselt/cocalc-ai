@@ -6,7 +6,6 @@
 import {
   Alert,
   Button,
-  Card,
   Divider,
   Flex,
   Input,
@@ -652,7 +651,7 @@ export function AdminBalanceAdjustment({
   }
 
   return (
-    <Card size="small" title="Admin balance adjustment">
+    <>
       <Space orientation="vertical" size="small" style={{ width: "100%" }}>
         <BalanceAdjustmentFields
           adminNote={adminNote}
@@ -674,26 +673,6 @@ export function AdminBalanceAdjustment({
         </Button>
       </Space>
       <FreshAuthModal {...freshAuthModalProps} />
-    </Card>
-  );
-}
-
-export function AdminBalanceAdjustmentButton({
-  account_id,
-}: {
-  account_id: string;
-}) {
-  const [show, setShow] = useState<boolean>(false);
-  return (
-    <div>
-      <Button onClick={() => setShow(!show)} type={show ? "dashed" : undefined}>
-        Balance Adjustment
-      </Button>
-      {show ? (
-        <div style={{ marginTop: "8px" }}>
-          <AdminBalanceAdjustment account_id={account_id} />
-        </div>
-      ) : null}
-    </div>
+    </>
   );
 }

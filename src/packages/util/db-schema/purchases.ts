@@ -205,6 +205,13 @@ export interface Purchase {
   notes?: string;
 }
 
+export interface AccountBillingSummary {
+  balance: MoneyValue;
+  spend_30d: MoneyValue;
+  spend_365d: MoneyValue;
+  last_transaction_at: string | null;
+}
+
 Table({
   name: "purchases",
   fields: {

@@ -6,7 +6,7 @@
  */
 
 import { fromJS, Map } from "immutable";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { IntlProvider } from "react-intl";
 
 let mockCellOutputProps: any;
@@ -71,6 +71,11 @@ jest.mock("@cocalc/frontend/jupyter/cell-toolbar", () => ({
 
 jest.mock("@cocalc/frontend/jupyter/cell-input", () => ({
   CellInput: () => null,
+}));
+
+jest.mock("@cocalc/frontend/jupyter/cell-chat-button", () => ({
+  CellChatButton: () => <span data-testid="cell-chat-button" />,
+  CellChatCompactButton: () => <span data-testid="cell-chat-compact-button" />,
 }));
 
 jest.mock("@cocalc/frontend/jupyter/ai", () => ({
@@ -153,6 +158,27 @@ describe("MinimalCell transient output states", () => {
       complete: fromJS({ matches: [] }),
     });
     expect(mockCellOutputProps.complete).toBe(true);
+  });
+});
+
+describe.each([
+  ["standard", false],
+  ["zen", true],
+])("MinimalCell compact chat affordance in %s mode", (_label, zenMode) => {
+  it("shows only compact chat until the cell is hovered", () => {
+    renderMinimalCell({
+      actions: {},
+      read_only: true,
+      zenMode,
+    });
+
+    expect(screen.getByTestId("cell-chat-compact-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("cell-chat-button")).toBeNull();
+
+    fireEvent.mouseEnter(document.getElementById("cell-1")!);
+
+    expect(screen.queryByTestId("cell-chat-compact-button")).toBeNull();
+    expect(screen.getByTestId("cell-chat-button")).toBeInTheDocument();
   });
 });
 
