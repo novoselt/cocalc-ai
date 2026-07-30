@@ -47,8 +47,10 @@ export interface Configuration {
   secrets?: { [key: string]: string };
   // Authoritative generation represented by the complete secrets map.
   secrets_generation?: number;
-  // cpu priority: 1, 2 or 3, with 3 being highest
+  // hard CPU limit measured in cores
   cpu?: number;
+  // relative, work-conserving CPU scheduling priority
+  cpu_priority?: number;
   // Authoritative storage service class resolved by the owning bay. Unknown
   // or missing values are treated as the safest normal shared-host class.
   io_class?: "standard" | "member" | "premium";

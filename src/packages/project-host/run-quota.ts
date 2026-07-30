@@ -55,6 +55,10 @@ export function runnerConfigFromQuota(
       ? run_quota.io_class
       : "standard";
 
+  const cpuPriority = Number(run_quota.shared_compute_priority);
+  if (Number.isFinite(cpuPriority) && cpuPriority >= 0) {
+    limits.cpu_priority = Math.floor(cpuPriority);
+  }
   if (run_quota.cpu_limit != null) {
     limits.cpu = run_quota.cpu_limit;
   }

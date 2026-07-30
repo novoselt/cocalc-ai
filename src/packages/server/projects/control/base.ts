@@ -55,8 +55,8 @@ import {
   upsertPublishedRootfsRelease,
 } from "@cocalc/server/rootfs/releases";
 import {
-  getMembershipIoClassForAccount,
   getMembershipProjectDefaultsForAccount,
+  getMembershipRuntimeSchedulingForAccount,
 } from "@cocalc/server/membership/project-defaults";
 import { applyProjectEntitlementOverrideToRunQuota } from "@cocalc/server/membership/project-entitlement-overrides";
 import { assertLocalProjectOwnership } from "@cocalc/server/conat/project-local-access";
@@ -622,13 +622,15 @@ export class BaseProject extends EventEmitter {
         last_active,
         last_started_by,
       });
-      const [runtimeDefaults, ioClass] = await Promise.all([
+      const [runtimeDefaults, runtimeScheduling] = await Promise.all([
         getMembershipProjectDefaultsForAccount(runtime_account_id),
-        getMembershipIoClassForAccount(runtime_account_id),
+        getMembershipRuntimeSchedulingForAccount(runtime_account_id),
       ]);
       const site_settings = await getQuotaSiteSettings(); // quick, usually cached
       nextRunQuota = quota(runtimeDefaults, undefined, site_settings);
-      nextRunQuota.io_class = ioClass;
+      nextRunQuota.io_class = runtimeScheduling.io_class;
+      nextRunQuota.shared_compute_priority =
+        runtimeScheduling.shared_compute_priority;
 
       if (storage_account_id && storage_account_id !== runtime_account_id) {
         const storageDefaults =
