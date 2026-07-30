@@ -41,6 +41,10 @@ export class ChatMessageCache extends EventEmitter {
   private threadKeyByThreadId: Map<string, string> = new Map();
   private threadConfigByThreadId: Map<string, Record<string, unknown>> =
     new Map();
+  // Disk preview rows bridge the period before the live syncdb connects.
+  // Keep them until the first live rebuild so an empty initial snapshot
+  // cannot withdraw already-confirmed chat history.
+  private initialPreviewRows?: unknown[];
   private version = 0;
   private disposed = false;
   private lastEvent = "constructor";
@@ -151,6 +155,7 @@ export class ChatMessageCache extends EventEmitter {
     this.dateIndex = new Map();
     this.threadKeyByThreadId = new Map();
     this.threadConfigByThreadId = new Map();
+    this.initialPreviewRows = undefined;
     this.removeAllListeners();
   }
 
@@ -425,6 +430,7 @@ export class ChatMessageCache extends EventEmitter {
     if (this.syncdb.get_state() === "ready") {
       return { applied: false, chatRows: 0 };
     }
+    this.initialPreviewRows = Array.isArray(rows) ? [...rows] : [];
     const snapshot = this.buildSnapshotFromRows(rows);
     this.applySnapshot(snapshot);
     this.noteEvent("preview");
@@ -619,7 +625,32 @@ export class ChatMessageCache extends EventEmitter {
     const rows = this.syncdb.get() ?? [];
     log("rebuildFromDoc: got rows", rows);
     this.noteEvent("rebuildFromDoc");
-    this.applySnapshot(this.buildSnapshotFromRows(rows));
+    let snapshot = this.buildSnapshotFromRows(rows);
+    const previewRows = this.initialPreviewRows;
+    this.initialPreviewRows = undefined;
+    if (
+      snapshot.chatRows === 0 &&
+      previewRows != null &&
+      previewRows.length > 0
+    ) {
+      // Deliberate trade-off: this is a union, not a reconciliation, so it
+      // cannot honor a deletion that happened between the disk read and this
+      // rebuild. It is bounded to the single case where the first live
+      // snapshot claims the chat is entirely empty -- far more often a
+      // not-yet-streamed doc than a genuinely emptied one -- and it runs at
+      // most once, since initialPreviewRows is consumed above. Later reloads
+      // stay authoritative.
+      const combined = this.buildSnapshotFromRows([...previewRows, ...rows]);
+      if (combined.chatRows > 0) {
+        snapshot = combined;
+        syncdocDiagnosticLog("chat message cache retained initial preview", {
+          liveRows: rows.length,
+          previewRows: previewRows.length,
+          chatRows: combined.chatRows,
+        });
+      }
+    }
+    this.applySnapshot(snapshot);
   }
 
   // assumed is an => function (so bound)

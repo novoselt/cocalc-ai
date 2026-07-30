@@ -90,6 +90,7 @@ import {
   type AgentSessionRecord,
 } from "./agent-session-index";
 import { resolveAgentSessionIdForThread } from "./thread-session";
+import { ResolvedThreadNotice } from "./thread-resolve-button";
 import { findInChatAndOpenFirstResult } from "./find-in-chat";
 import { sendGitCommitAgentTurn } from "./git-commit-agent-turn";
 import type {
@@ -1105,6 +1106,8 @@ export function ChatPanel({
         : undefined,
     [actions, selectedThreadKey, selectedThreadId, docVersion],
   );
+  const selectedThreadResolved = selectedThreadMetadata?.resolved;
+  const effectiveReadOnly = readOnly || selectedThreadResolved != null;
   const notifyOnSelectedTurnFinish = useMemo(
     () => threadNotifyOnTurnFinishEnabled(selectedThreadMetadata?.acp_config),
     [selectedThreadMetadata?.acp_config],
@@ -2513,10 +2516,12 @@ export function ChatPanel({
         topRightControlsPrefix={threadPanelTopRightPrefix}
         compactTopRightControls={effectiveThreadPanelCompactTopRightControls}
         topRightControlsPortal={threadPanelTopRightControlsPortal}
-        readOnly={readOnly}
+        readOnly={effectiveReadOnly}
       />
       {automationBanner}
-      {!readOnly ? (
+      {selectedThreadResolved != null ? (
+        <ResolvedThreadNotice resolved={selectedThreadResolved} />
+      ) : !readOnly ? (
         <>
           <ChatRoomComposer
             actions={actions}

@@ -30,6 +30,7 @@ import {
   RUN_ALL_CELLS_BELOW_ICON,
 } from "./consts";
 import { AgentCellTool } from "./ai/agent-cell-tool";
+import { CellChatButton, CellChatUnreadBadge } from "./cell-chat-button";
 
 export function PlaceholderButtonBar() {
   return <div style={CODE_BAR_BTN_STYLE} />;
@@ -89,7 +90,9 @@ export const CellButtonBar: React.FC<Props> = React.memo(
     // visible while any of the dropdown menus is open.
     const [runMenuOpen, setRunMenuOpen] = useState<boolean>(false);
     const [actionMenuOpen, setActionMenuOpen] = useState<boolean>(false);
-    const controlsVisible = showControls || runMenuOpen || actionMenuOpen;
+    const [chatMenuOpen, setChatMenuOpen] = useState<boolean>(false);
+    const controlsVisible =
+      showControls || runMenuOpen || actionMenuOpen || chatMenuOpen;
 
     const isCodeCell = cell_type === "code";
     const isMarkdownCell = cell_type === "markdown";
@@ -225,6 +228,11 @@ export const CellButtonBar: React.FC<Props> = React.memo(
       );
     }
 
+    function renderCodeBarChatButton() {
+      if (actions == null) return;
+      return <CellChatButton cellId={id} onOpenChange={setChatMenuOpen} />;
+    }
+
     function renderCodeBarFormatButton() {
       // Should only show formatter button if there is a way to format this code.
       if (!isCodeCell || is_readonly || actions == null || input_is_readonly) {
@@ -319,13 +327,20 @@ export const CellButtonBar: React.FC<Props> = React.memo(
             gap: "3px",
           }}
         >
-          {controlsVisible ? renderCodeBarRunStop() : null}
-          {controlsVisible ? renderCodeBarAIButtons() : null}
-          {controlsVisible ? renderMarkdownEditButton() : null}
-          {controlsVisible ? renderCodeBarFormatButton() : null}
-          {controlsVisible ? renderDropdownMenu() : null}
-          {renderCodeBarCellTiming()}
-          <CellIndexNumber index={index} />
+          {controlsVisible ? (
+            <>
+              {renderCodeBarRunStop()}
+              {renderCodeBarAIButtons()}
+              {renderCodeBarChatButton()}
+              {renderMarkdownEditButton()}
+              {renderCodeBarFormatButton()}
+              {renderDropdownMenu()}
+              {renderCodeBarCellTiming()}
+              <CellIndexNumber index={index} />
+            </>
+          ) : (
+            <CellChatUnreadBadge cellId={id} />
+          )}
         </div>
       </div>
     );
