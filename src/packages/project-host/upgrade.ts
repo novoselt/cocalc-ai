@@ -1367,7 +1367,7 @@ export async function scheduleProjectHostRestart() {
 }
 
 function scheduledProjectHostReconcileCommand(bin: string): string {
-  return `sleep 3; ${bin} daemon restart-project-host || true`;
+  return `sleep 3; COCALC_PROJECT_HOST_RELOAD_ENV_FILES=1 ${bin} daemon restart-project-host || true`;
 }
 
 export async function activateInstalledProjectHostVersion(

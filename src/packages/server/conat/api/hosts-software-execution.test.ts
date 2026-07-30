@@ -12,6 +12,31 @@ import { runtimeDeploymentsForUpgradeResults } from "./hosts-runtime-deployment-
 let getServerSettingsMock: jest.Mock;
 let originalFetch: typeof globalThis.fetch | undefined;
 
+function projectHostStatus({
+  desiredVersion,
+  runningVersion = desiredVersion,
+  pid,
+  versionState = runningVersion === desiredVersion ? "aligned" : "drifted",
+}: {
+  desiredVersion: string;
+  runningVersion?: string;
+  pid: number;
+  versionState?: "aligned" | "drifted";
+}) {
+  return {
+    component: "project-host" as const,
+    artifact: "project-host" as const,
+    upgrade_policy: "restart_now" as const,
+    enabled: true,
+    managed: true,
+    desired_version: desiredVersion,
+    runtime_state: "running" as const,
+    version_state: versionState,
+    running_versions: [runningVersion],
+    running_pids: [pid],
+  };
+}
+
 jest.mock("@cocalc/database/settings/server-settings", () => ({
   __esModule: true,
   getServerSettings: (...args: any[]) => getServerSettingsMock(...args),
@@ -799,6 +824,10 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
     const setLastKnownGoodArtifactVersionInternal = jest.fn(
       async () => undefined,
     );
+    const getManagedComponentStatus = jest
+      .fn()
+      .mockResolvedValueOnce([projectHostStatus({ desiredVersion, pid: 123 })])
+      .mockResolvedValue([projectHostStatus({ desiredVersion, pid: 456 })]);
 
     await expect(
       rolloutHostManagedComponentsInternalHelper({
@@ -822,20 +851,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
               },
             ],
           }),
-          getManagedComponentStatus: async () => [
-            {
-              component: "project-host",
-              artifact: "project-host",
-              upgrade_policy: "restart_now",
-              enabled: true,
-              managed: true,
-              desired_version: desiredVersion,
-              runtime_state: "running",
-              version_state: "aligned",
-              running_versions: [desiredVersion],
-              running_pids: [456],
-            },
-          ],
+          getManagedComponentStatus,
           getHostAgentStatus: async () => ({
             project_host: {
               last_known_good_version: "ph-v1",
@@ -875,6 +891,68 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
       artifact: "project-host",
       version: desiredVersion,
     });
+  });
+
+  it("rejects a same-version rollout when the project-host pid does not change", async () => {
+    const desiredVersion = "ph-v2";
+    const row = {
+      id: "host-1",
+      status: "running",
+      version: desiredVersion,
+      last_seen: new Date(),
+      metadata: {
+        owner: "account-1",
+        software: {
+          project_host: desiredVersion,
+        },
+      },
+    };
+
+    await expect(
+      rolloutHostManagedComponentsInternalHelper({
+        account_id: "account-1",
+        id: "host-1",
+        components: ["project-host"],
+        reason: "host_software_upgrade",
+        loadHostForStartStop: async () => row,
+        assertHostRunningForUpgrade: () => undefined,
+        hostControlClient: async () => ({
+          getRuntimeLog: async ({ source }) => ({
+            source: source ?? "project-host",
+            lines: 25,
+            text: "",
+          }),
+          rolloutManagedComponents: async () => ({
+            results: [
+              {
+                component: "project-host",
+                action: "restart_scheduled",
+              },
+            ],
+          }),
+          getManagedComponentStatus: async () => [
+            projectHostStatus({ desiredVersion, pid: 123 }),
+          ],
+        }),
+        waitForHostHeartbeatAfter: async () => undefined,
+        installedProjectHostArtifactVersion: () => desiredVersion,
+        recordProjectHostLocalRollbackInternal: async () => ({
+          host_id: "host-1",
+          rollback_version: "ph-v1",
+          source: "host-agent",
+        }),
+        project_host_local_rollback_error_code: "PROJECT_HOST_LOCAL_ROLLBACK",
+        setLastKnownGoodArtifactVersionInternal: async () => undefined,
+        runtimeDeploymentsForComponentRollout: () => [],
+        requestedByForRuntimeDeployments: () => "account-1",
+        setProjectHostRuntimeDeployments: async () => undefined,
+        loadEffectiveRuntimeDeployments: async () => [],
+        projectHostRolloutSettleTimeoutMs: 5,
+        projectHostRolloutPollMs: 0,
+      }),
+    ).rejects.toThrow(
+      "project-host rollout did not replace the running process",
+    );
   });
 
   it("waits for project-host handoff when the old daemon still answers during pending rollout", async () => {
@@ -925,6 +1003,9 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
           lines: 25,
           text: "",
         }),
+        getManagedComponentStatus: async () => [
+          projectHostStatus({ desiredVersion, pid: 100 }),
+        ],
         rolloutManagedComponents: async () => ({
           results: [
             {
@@ -1122,6 +1203,9 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
           lines: 25,
           text: "",
         }),
+        getManagedComponentStatus: async () => [
+          projectHostStatus({ desiredVersion, pid: 100 }),
+        ],
         rolloutManagedComponents: async () => ({
           results: [
             {
@@ -1346,6 +1430,9 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
           lines: 25,
           text: "",
         }),
+        getManagedComponentStatus: async () => [
+          projectHostStatus({ desiredVersion, pid: 100 }),
+        ],
         rolloutManagedComponents: async () => ({
           results: [
             {
@@ -1528,6 +1615,9 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
           lines: 25,
           text: "",
         }),
+        getManagedComponentStatus: async () => [
+          projectHostStatus({ desiredVersion, pid: 100 }),
+        ],
         rolloutManagedComponents: async () => new Promise(() => undefined),
       })
       .mockResolvedValueOnce({
@@ -1684,6 +1774,9 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
           lines: 25,
           text: "",
         }),
+        getManagedComponentStatus: async () => [
+          projectHostStatus({ desiredVersion, pid: 100 }),
+        ],
         rolloutManagedComponents: async () => new Promise(() => undefined),
       })
       .mockResolvedValue({
@@ -1898,18 +1991,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
           project_host_build_id: "build-v2",
         },
         observed_components: [
-          {
-            component: "project-host",
-            artifact: "project-host",
-            upgrade_policy: "restart_now",
-            enabled: true,
-            managed: true,
-            desired_version: "build-v2",
-            runtime_state: "running",
-            version_state: "aligned",
-            running_versions: ["build-v2"],
-            running_pids: [123],
-          },
+          projectHostStatus({ desiredVersion: "ph-v2", pid: 123 }),
           {
             component: "conat-router",
             artifact: "project-host",
@@ -1925,6 +2007,12 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
         ],
       },
     };
+    const getManagedComponentStatus = jest
+      .fn()
+      .mockResolvedValueOnce([
+        projectHostStatus({ desiredVersion: "ph-v2", pid: 100 }),
+      ])
+      .mockImplementation(() => new Promise(() => undefined));
 
     const response = await rolloutHostManagedComponentsInternalHelper({
       account_id: "account-1",
@@ -1940,7 +2028,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
           text: "",
         }),
         rolloutManagedComponents: async () => new Promise(() => undefined),
-        getManagedComponentStatus: async () => new Promise(() => undefined),
+        getManagedComponentStatus,
         getHostAgentStatus: async () => new Promise(() => undefined),
       }),
       waitForHostHeartbeatAfter: async () => undefined,
@@ -1993,7 +2081,6 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
     const setLastKnownGoodArtifactVersionInternal = jest.fn(
       async () => undefined,
     );
-
     await expect(
       rolloutHostManagedComponentsInternalHelper({
         account_id: "account-1",
@@ -2056,18 +2143,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
           }),
           upgradeSoftware,
           getManagedComponentStatus: async () => [
-            {
-              component: "project-host",
-              artifact: "project-host",
-              upgrade_policy: "restart_now",
-              enabled: true,
-              managed: true,
-              desired_version: "ph-v2",
-              runtime_state: "running",
-              version_state: "aligned",
-              running_versions: ["ph-v2"],
-              running_pids: [123],
-            },
+            projectHostStatus({ desiredVersion: "ph-v2", pid: 123 }),
           ],
         }),
         waitForHostHeartbeatAfter: async () => undefined,
@@ -2220,6 +2296,14 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
     const setLastKnownGoodArtifactVersionInternal = jest.fn(
       async () => undefined,
     );
+    const getManagedComponentStatus = jest
+      .fn()
+      .mockResolvedValueOnce([
+        projectHostStatus({ desiredVersion: "ph-v2", pid: 100 }),
+      ])
+      .mockResolvedValue([
+        projectHostStatus({ desiredVersion: "ph-v2", pid: 123 }),
+      ]);
 
     await expect(
       rolloutHostManagedComponentsInternalHelper({
@@ -2244,20 +2328,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
               },
             ],
           }),
-          getManagedComponentStatus: async () => [
-            {
-              component: "project-host",
-              artifact: "project-host",
-              upgrade_policy: "restart_now",
-              enabled: true,
-              managed: true,
-              desired_version: "ph-v2",
-              runtime_state: "running",
-              version_state: "aligned",
-              running_versions: ["ph-v2"],
-              running_pids: [123],
-            },
-          ],
+          getManagedComponentStatus,
         }),
         waitForHostHeartbeatAfter: async () => undefined,
         installedProjectHostArtifactVersion: (row) =>
@@ -2298,6 +2369,12 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
     const setLastKnownGoodArtifactVersionInternal = jest.fn(
       async () => undefined,
     );
+    const getManagedComponentStatus = jest
+      .fn()
+      .mockResolvedValueOnce([
+        projectHostStatus({ desiredVersion: "ph-v2", pid: 100 }),
+      ])
+      .mockRejectedValue(new Error("project-host still reconnecting"));
 
     await expect(
       rolloutHostManagedComponentsInternalHelper({
@@ -2337,6 +2414,9 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
                   },
                 ],
               },
+              observed_components: [
+                projectHostStatus({ desiredVersion: "ph-v2", pid: 200 }),
+              ],
             },
           }),
         assertHostRunningForUpgrade: () => undefined,
@@ -2355,9 +2435,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
               },
             ],
           }),
-          getManagedComponentStatus: async () => {
-            throw new Error("project-host still reconnecting");
-          },
+          getManagedComponentStatus,
         }),
         waitForHostHeartbeatAfter: async () => undefined,
         installedProjectHostArtifactVersion: (row) =>
@@ -2400,6 +2478,14 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
     const setLastKnownGoodArtifactVersionInternal = jest.fn(
       async () => undefined,
     );
+    const getManagedComponentStatus = jest
+      .fn()
+      .mockResolvedValueOnce([
+        projectHostStatus({ desiredVersion: buildId, pid: 100 }),
+      ])
+      .mockResolvedValue([
+        projectHostStatus({ desiredVersion: buildId, pid: 123 }),
+      ]);
 
     await expect(
       rolloutHostManagedComponentsInternalHelper({
@@ -2457,20 +2543,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
               },
             ],
           }),
-          getManagedComponentStatus: async () => [
-            {
-              component: "project-host",
-              artifact: "project-host",
-              upgrade_policy: "restart_now",
-              enabled: true,
-              managed: true,
-              desired_version: buildId,
-              runtime_state: "running",
-              version_state: "aligned",
-              running_versions: [buildId],
-              running_pids: [123],
-            },
-          ],
+          getManagedComponentStatus,
         }),
         waitForHostHeartbeatAfter: async () => undefined,
         installedProjectHostArtifactVersion: () => desiredVersion,

@@ -38,6 +38,7 @@ export type ProjectHostRuntimeInspection = {
 
 const DEFAULT_ENV_FILE = "/etc/cocalc/project-host.env";
 const DEFAULT_LOCAL_ENV_FILE = "/etc/cocalc/project-host.local.env";
+const RELOAD_ENV_FILES = "COCALC_PROJECT_HOST_RELOAD_ENV_FILES";
 const processRuntime = {
   spawn: childProcess.spawn,
   spawnSync: childProcess.spawnSync,
@@ -666,7 +667,11 @@ function resolveEnv(index: number): {
 } {
   const fileEnv = loadEnvFromFile(daemonEnvFilePath());
   const localFileEnv = loadEnvFromFile(daemonLocalEnvFilePath());
-  const env = { ...fileEnv, ...localFileEnv, ...normalizeEnv(process.env) };
+  const inheritedEnv = normalizeEnv(process.env);
+  const env = envIsTrue(inheritedEnv[RELOAD_ENV_FILES])
+    ? { ...inheritedEnv, ...fileEnv, ...localFileEnv }
+    : { ...fileEnv, ...localFileEnv, ...inheritedEnv };
+  delete env[RELOAD_ENV_FILES];
   const dataDir = env.COCALC_DATA ?? env.DATA;
   if (!dataDir) {
     throw new Error(
