@@ -48,7 +48,6 @@
   font-weight: 600;
   line-height: 1.2;
   padding: 3px 9px;
-  text-transform: lowercase;
 }
 
 .cc-project-create-preset-tag:disabled {

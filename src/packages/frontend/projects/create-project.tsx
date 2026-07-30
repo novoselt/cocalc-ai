@@ -50,6 +50,7 @@ import { isNewProjectRootfsSelectable } from "./create-project-rootfs";
 import {
   type ProjectCreateMode,
   projectDraftToCreateOptions,
+  rootfsEntryMatchesProjectMode,
 } from "./create/project-create-draft";
 import { ProjectCreateHealthCard } from "./create/project-create-health-card";
 import { useProjectCreateDraft } from "./create/use-project-create-draft";
@@ -72,22 +73,23 @@ const PROJECT_PRESETS: {
   {
     mode: "standard",
     title: "Standard",
-    description: "General-purpose image, automatic host.",
+    description:
+      "Show general-purpose CPU images with automatic host placement.",
   },
   {
     mode: "gpu",
     title: "GPU",
-    description: "GPU-tagged image when one is available.",
+    description: "Show GPU-ready software images and GPU-capable hosts.",
   },
   {
     mode: "teaching",
     title: "Teaching",
-    description: "Teaching-tagged image for classes and workshops.",
+    description: "Show images curated for classes and workshops.",
   },
   {
     mode: "custom",
     title: "Custom",
-    description: "Choose your own image and host.",
+    description: "Show all compatible images and choose the host yourself.",
   },
 ];
 
@@ -143,9 +145,12 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
   const filteredRootfsImages = useMemo(
     () =>
       rootfsImages.filter((entry) => {
-        return isNewProjectRootfsSelectable({ entry, isGpu, isAdmin });
+        return (
+          rootfsEntryMatchesProjectMode(entry, draft.mode) &&
+          isNewProjectRootfsSelectable({ entry, isGpu, isAdmin })
+        );
       }),
-    [rootfsImages, isGpu, isAdmin],
+    [draft.mode, rootfsImages, isGpu, isAdmin],
   );
   const pickerRootfsImages = useMemo(
     () =>
@@ -292,6 +297,12 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
     setRootfsMode("catalog");
   }
 
+  function handleApplyPreset(mode: ProjectCreateMode) {
+    applyPreset(mode);
+    setRootfsMode("catalog");
+    setRootfsSearch("");
+  }
+
   function renderRootfsHelp(): React.JSX.Element {
     return (
       <Space orientation="vertical" size="small" style={{ maxWidth: 420 }}>
@@ -299,9 +310,10 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
           An image defines the software installed in the project.
         </Paragraph>
         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          Choose SageMath for Sage/Python/math work, R for R projects, GPU
-          images for CUDA workloads, and minimal images only when you want a
-          small base to customize yourself.
+          Choose SageMath for Sage/Python/math work, R for R projects, and
+          minimal images only when you want a small base to customize yourself.
+          GPU images provide CUDA-ready software, but GPU hardware also requires
+          a GPU project host.
         </Paragraph>
         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
           Managed catalog images are recommended.
@@ -475,7 +487,7 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
               {selectedRootfsEntry?.channel && (
                 <Tag color="cyan">{selectedRootfsEntry.channel}</Tag>
               )}
-              {selectedRootfsEntry?.gpu && <Tag color="purple">GPU</Tag>}
+              {summary.gpu && <Tag color="purple">GPU</Tag>}
               {!selectedRootfsEntry && displayImage && (
                 <Tag color={isAdmin ? "orange" : "red"}>
                   {isAdmin ? "Advanced OCI" : "Unavailable image"}
@@ -493,7 +505,7 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
                     aria-pressed={active}
                     title={projectPresetDescription(preset)}
                     disabled={saving}
-                    onClick={() => applyPreset(preset.mode)}
+                    onClick={() => handleApplyPreset(preset.mode)}
                     style={{
                       borderColor: active
                         ? COLORS.BS_BLUE_BGRND
@@ -505,12 +517,21 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
                         : undefined,
                     }}
                   >
-                    {preset.mode}
+                    {preset.title}
                   </button>
                 );
               })}
             </Space>
           </Space>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {projectPresetDescription(
+              PROJECT_PRESETS.find((preset) => preset.mode === draft.mode) ??
+                PROJECT_PRESETS[0],
+            )}
+            {draft.mode === "gpu"
+              ? " This selects GPU-ready software and GPU-capable hosts; actual GPU access requires selecting a GPU project host."
+              : ""}
+          </Typography.Text>
           {!selectedRootfsEntry && displayImage && (
             <code style={{ fontSize: "11px", overflowWrap: "anywhere" }}>
               {displayImage}
