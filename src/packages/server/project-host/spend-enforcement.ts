@@ -46,6 +46,7 @@ export interface DedicatedHostBillingEnforcementMetadata {
   stopped_at?: string;
   grace_until?: string;
   deprovision_after?: string;
+  deprovision_reminder_sent_at?: string;
   deprovision_requested_at?: string;
   deprovisioned_at?: string;
   recovery_actions?: DedicatedHostBillingRecoveryAction[];

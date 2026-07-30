@@ -31,7 +31,10 @@ import {
   evaluateDedicatedHostBillingEnforcement,
   type DedicatedHostBillingEnforcementMetadata,
 } from "./spend-enforcement";
-import { notifyDedicatedHostBillingEnforcementBestEffort } from "./billing-notifications";
+import {
+  notifyDedicatedHostBillingEnforcementBestEffort,
+  notifyDedicatedHostDeprovisionReminderBestEffort,
+} from "./billing-notifications";
 import {
   moneyToDbString,
   toDecimal,
@@ -57,6 +60,7 @@ const RUNNING_BILLING_STATUSES = new Set([
 ]);
 const HOST_DRAIN_LRO_KIND = "host-drain";
 const HOST_DEPROVISION_LRO_KIND = "host-deprovision";
+const DEPROVISION_REMINDER_LEAD_MS = 24 * 3600_000;
 
 let started = false;
 
@@ -832,6 +836,55 @@ async function requestHostDeprovisionForBilling({
   });
 }
 
+async function maybeSendDeprovisionReminder({
+  row,
+}: {
+  row: CandidateHostRow;
+}): Promise<boolean> {
+  const metadata = row.metadata ?? {};
+  const enforcement = currentEnforcement(metadata);
+  if (
+    enforcement?.state !== "stopped_billing_blocked" ||
+    enforcement.final_backup_status !== "succeeded" ||
+    enforcement.deprovision_reminder_sent_at ||
+    !enforcement.deprovision_after
+  ) {
+    return false;
+  }
+  const deprovisionAfter = new Date(enforcement.deprovision_after).getTime();
+  const now = Date.now();
+  if (
+    !Number.isFinite(deprovisionAfter) ||
+    deprovisionAfter <= now ||
+    deprovisionAfter - now > DEPROVISION_REMINDER_LEAD_MS
+  ) {
+    return false;
+  }
+  const owner = `${metadata?.owner ?? ""}`.trim();
+  if (!owner) return false;
+  const sent = await notifyDedicatedHostDeprovisionReminderBestEffort({
+    owner_account_id: owner,
+    host_id: row.id,
+    host_name: row.name,
+    deprovision_after: enforcement.deprovision_after,
+  });
+  if (!sent) return false;
+  await updateHostBillingMetadata({
+    host_id: row.id,
+    metadata: {
+      ...metadata,
+      billing: {
+        ...(metadata.billing ?? {}),
+        enforcement: {
+          ...enforcement,
+          deprovision_reminder_sent_at: new Date().toISOString(),
+        },
+      },
+    },
+  });
+  return true;
+}
+
 async function maybeProgressInactiveEnforcement({
   row,
 }: {
@@ -874,6 +927,9 @@ async function maybeProgressInactiveEnforcement({
     !enforcement.deprovision_after
   ) {
     return false;
+  }
+  if (await maybeSendDeprovisionReminder({ row })) {
+    return true;
   }
   const deprovisionAfter = new Date(enforcement.deprovision_after).getTime();
   if (!Number.isFinite(deprovisionAfter) || deprovisionAfter > Date.now()) {
