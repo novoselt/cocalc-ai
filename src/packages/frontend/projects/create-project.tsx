@@ -73,23 +73,22 @@ const PROJECT_PRESETS: {
   {
     mode: "standard",
     title: "Standard",
-    description:
-      "Show general-purpose CPU images with automatic host placement.",
+    description: "General-purpose CPU images; automatic host placement.",
   },
   {
     mode: "gpu",
     title: "GPU",
-    description: "Show GPU-ready software images and GPU-capable hosts.",
+    description: "GPU-ready software; requires a GPU project host.",
   },
   {
     mode: "teaching",
     title: "Teaching",
-    description: "Show images curated for classes and workshops.",
+    description: "Images curated for classes and workshops.",
   },
   {
     mode: "custom",
-    title: "Custom",
-    description: "Show all compatible images and choose the host yourself.",
+    title: "All images",
+    description: "All compatible images; choose the host yourself.",
   },
 ];
 
@@ -488,6 +487,12 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
                 <Tag color="cyan">{selectedRootfsEntry.channel}</Tag>
               )}
               {summary.gpu && <Tag color="purple">GPU</Tag>}
+              {selectedRootfsEntry && (
+                <RootfsScanSummaryButton
+                  entry={selectedRootfsEntry}
+                  title={`Image scan details: ${selectedRootfsEntry.label}`}
+                />
+              )}
               {!selectedRootfsEntry && displayImage && (
                 <Tag color={isAdmin ? "orange" : "red"}>
                   {isAdmin ? "Advanced OCI" : "Unavailable image"}
@@ -523,14 +528,15 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
               })}
             </Space>
           </Space>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          <Typography.Text
+            className="cc-project-create-preset-description"
+            type="secondary"
+            style={{ fontSize: 12 }}
+          >
             {projectPresetDescription(
               PROJECT_PRESETS.find((preset) => preset.mode === draft.mode) ??
                 PROJECT_PRESETS[0],
             )}
-            {draft.mode === "gpu"
-              ? " This selects GPU-ready software and GPU-capable hosts; actual GPU access requires selecting a GPU project host."
-              : ""}
           </Typography.Text>
           {!selectedRootfsEntry && displayImage && (
             <code style={{ fontSize: "11px", overflowWrap: "anywhere" }}>
@@ -538,12 +544,6 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
             </code>
           )}
           {selectedRootfsEntry && renderRootfsWarning(selectedRootfsEntry)}
-          {selectedRootfsEntry && (
-            <RootfsScanSummaryButton
-              entry={selectedRootfsEntry}
-              title={`Image scan details: ${selectedRootfsEntry.label}`}
-            />
-          )}
           {rootfsMode === "catalog"
             ? renderRootfsCatalogSelector()
             : renderCustomRootfsSelector()}
