@@ -7,7 +7,7 @@ import { Fragment, type CSSProperties, useEffect } from "react";
 
 import { Button, Col, Empty, Flex, Row, Typography } from "antd";
 
-import { Icon, type IconName } from "@cocalc/frontend/components/icon";
+import { Icon } from "@cocalc/frontend/components/icon";
 import type { PublicPolicyPages } from "@cocalc/frontend/public/config";
 import {
   PublicPage,
@@ -19,9 +19,11 @@ import {
   PUBLIC_RADIUS,
   PUBLIC_TYPE,
 } from "@cocalc/frontend/public/theme";
+import { PUBLIC_FEATURE_NAV_ITEMS as FEATURE_NAV_ITEMS } from "@cocalc/util/public-feature-pages";
 import { COLORS, SITE_NAME } from "@cocalc/util/theme";
 import AIFeaturePage from "./ai-page";
 import ApiFeaturePage from "./api-page";
+import { FEATURE_INDEX_CSS, FEATURE_SUBNAV_CSS } from "./app-css";
 import {
   getFeatureIndexPages,
   getFeaturePage,
@@ -33,13 +35,14 @@ import JuliaFeaturePage from "./julia-page";
 import LatexEditorFeaturePage from "./latex-editor-page";
 import LinuxFeaturePage from "./linux-page";
 import OctaveFeaturePage from "./octave-page";
+import { featureMeta } from "./nav-meta";
 import { FeatureImage, featureAppPath as appPath } from "./page-components";
 import RStatisticalSoftwareFeaturePage from "./r-statistical-software-page";
 import type { PublicFeaturesRoute } from "./routes";
 import { featurePath } from "./routes";
 import SageFeaturePage from "./sage-page";
+import SoftwareEnvironmentFeaturePage from "./software-environment-page";
 import PythonFeaturePage from "./python-page";
-import { FEATURE_ACCENTS } from "./feature-accents";
 import SlidesFeaturePage from "./slides-page";
 import TeachingFeaturePage from "./teaching-page";
 import TerminalFeaturePage from "./terminal-page";
@@ -73,6 +76,7 @@ const FEATURE_DETAIL_COMPONENTS = {
   "r-statistical-software": RStatisticalSoftwareFeaturePage,
   sage: SageFeaturePage,
   slides: SlidesFeaturePage,
+  "software-environment": SoftwareEnvironmentFeaturePage,
   teaching: TeachingFeaturePage,
   terminal: TerminalFeaturePage,
   whiteboard: WhiteboardFeaturePage,
@@ -95,7 +99,7 @@ const FEATURE_GROUPS = [
     description:
       "Use a persistent Linux environment for shells, packages, processes, and services.",
     icon: "terminal",
-    slugs: ["terminal", "linux"],
+    slugs: ["terminal", "linux", "software-environment"],
     title: "Runtime",
     variant: "cards",
   },
@@ -128,164 +132,54 @@ const FEATURE_GROUPS = [
   },
 ] as const;
 
-const FEATURE_META = {
-  ai: { accent: FEATURE_ACCENTS.ai, icon: "robot" },
-  api: { accent: COLORS.ANTD_LINK_BLUE_DARK, icon: "api" },
-  compare: { accent: COLORS.BLUE_D, icon: "swap" },
-  "jupyter-notebook": {
-    accent: COLORS.BLUE_D,
-    icon: "jupyter",
-  },
-  julia: { accent: FEATURE_ACCENTS.julia, icon: "julia" },
-  "latex-editor": { accent: COLORS.YELL_D, icon: "tex" },
-  linux: {
-    accent: COLORS.ANTD_LINK_BLUE_DARK,
-    icon: "linux",
-  },
-  octave: { accent: COLORS.FG_RED, icon: "octave" },
-  python: { accent: COLORS.BLUE_D, icon: "python" },
-  "r-statistical-software": {
-    accent: COLORS.BLUE_DD,
-    icon: "r",
-  },
-  sage: { accent: COLORS.RUN, icon: "sagemath" },
-  slides: { accent: COLORS.BG_WARNING, icon: "slides" },
-  teaching: { accent: FEATURE_ACCENTS.teaching, icon: "graduation-cap" },
-  terminal: {
-    accent: COLORS.ANTD_LINK_BLUE_DARK,
-    icon: "terminal",
-  },
-  whiteboard: { accent: COLORS.FG_RED, icon: "layout" },
-} satisfies Record<string, { accent: string; icon: IconName }>;
-
 const FEATURE_PANEL_SHADOW = `0 14px 34px ${alpha(
   PUBLIC_COLORS.heading,
   0.07,
 )}`;
 
-const FEATURE_INDEX_CSS = `
-  .cocalc-feature-index-hero {
-    padding: 32px 0 12px;
-  }
-
-  .cocalc-feature-index-title {
-    font-size: 58px !important;
-    line-height: 1.02 !important;
-    max-width: 900px;
-    text-wrap: balance;
-  }
-
-  .cocalc-feature-link-card,
-  .cocalc-feature-list-link {
-    cursor: pointer;
-    transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-  }
-
-  .cocalc-feature-link-card:hover,
-  .cocalc-feature-list-link:hover {
-    border-color: ${PUBLIC_COLORS.linkHover} !important;
-    box-shadow: 0 18px 44px ${alpha(PUBLIC_COLORS.brandDark, 0.1)} !important;
-    transform: translateY(-1px);
-  }
-
-  .cocalc-feature-link-card:focus-visible,
-  .cocalc-feature-list-link:focus-visible {
-    outline: 2px solid ${PUBLIC_COLORS.linkHover};
-    outline-offset: 3px;
-  }
-
-  .cocalc-feature-link-card-combined {
-    cursor: default;
-  }
-
-  .cocalc-feature-link-card-primary {
-    color: inherit;
-    display: block;
-    flex: 1 1 auto;
-    text-decoration: none;
-  }
-
-  .cocalc-feature-link-card-secondary {
-    align-items: center;
-    align-self: flex-start;
-    color: ${PUBLIC_COLORS.link};
-    display: inline-flex;
-    font-weight: 600;
-    gap: 6px;
-    margin-top: 14px;
-    text-decoration: none;
-  }
-
-  .cocalc-feature-link-card-secondary:hover {
-    color: ${PUBLIC_COLORS.linkHover};
-    text-decoration: underline;
-  }
-
-  .cocalc-feature-link-card-primary:focus-visible,
-  .cocalc-feature-link-card-secondary:focus-visible {
-    outline: 2px solid ${PUBLIC_COLORS.linkHover};
-    outline-offset: 3px;
-  }
-
-  .cocalc-feature-link-list {
-    display: grid;
-    gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  }
-
-  .cocalc-feature-teaching-callout {
-    padding-bottom: 28px;
-  }
-
-  @media (max-width: 920px) {
-    .cocalc-feature-index-title {
-      font-size: 42px !important;
-      line-height: 1.08 !important;
-    }
-  }
-
-  @media (max-width: 560px) {
-    .cocalc-feature-index-hero {
-      gap: 28px;
-      padding: 20px 0 4px;
-    }
-
-    .cocalc-feature-index-title {
-      font-size: 34px !important;
-    }
-
-    .cocalc-feature-link-card {
-      min-height: 0 !important;
-      padding: 14px !important;
-    }
-
-    .cocalc-feature-list-link {
-      min-height: 82px !important;
-      padding: 12px !important;
-    }
-
-    .cocalc-feature-link-list {
-      grid-template-columns: minmax(0, 1fr) !important;
-    }
-
-    .cocalc-feature-teaching-callout {
-      padding-bottom: 20px;
-    }
-  }
-`;
-
-function featureMeta(slug: string) {
+function FeatureSubNav({ active }: { active?: string }) {
   return (
-    FEATURE_META[slug as keyof typeof FEATURE_META] ?? {
-      accent: PUBLIC_COLORS.brand,
-      icon: "star",
-    }
+    <nav aria-label="Feature pages" className="cocalc-feature-subnav">
+      <style>{FEATURE_SUBNAV_CSS}</style>
+      <div className="cocalc-feature-subnav-list">
+        <a
+          aria-current={active == null ? "page" : undefined}
+          className="cocalc-feature-subnav-pill"
+          href={featurePath()}
+        >
+          <Icon name="star" style={{ fontSize: 13 }} />
+          <span>All features</span>
+        </a>
+        {FEATURE_NAV_ITEMS.filter(({ slug }) => getFeaturePage(slug)).map(
+          ({ label, slug }) => {
+            const meta = featureMeta(slug);
+            return (
+              <a
+                aria-current={active === slug ? "page" : undefined}
+                className="cocalc-feature-subnav-pill"
+                href={featurePath(slug)}
+                key={slug}
+              >
+                <Icon
+                  name={meta.icon}
+                  style={{ color: meta.accent, fontSize: 13 }}
+                />
+                <span>{label}</span>
+              </a>
+            );
+          },
+        )}
+      </div>
+    </nav>
   );
 }
 
 function titleForRoute(route: PublicFeaturesRoute, siteName: string): string {
   if (route.view === "detail" && route.slug) {
-    return `${getFeaturePage(route.slug)?.title ?? "Features"} – ${siteName}`;
+    const page = getFeaturePage(route.slug);
+    // prefer metadataTitle so the client-side document.title matches the
+    // server-injected SEO <title> after hydration
+    return `${page?.metadataTitle ?? page?.title ?? "Features"} – ${siteName}`;
   }
   return `${siteName} Features`;
 }
@@ -823,6 +717,14 @@ function FeatureDetail({
       />
     );
   }
+  if (slug === "software-environment") {
+    return (
+      <SoftwareEnvironmentFeaturePage
+        helpEmail={helpEmail}
+        isAuthenticated={isAuthenticated}
+      />
+    );
+  }
   if (slug === "whiteboard") {
     return (
       <WhiteboardFeaturePage
@@ -958,6 +860,13 @@ export default function PublicFeaturesApp({
   return (
     <PublicPage
       active="features"
+      beforeTitle={
+        <FeatureSubNav
+          active={
+            initialRoute.view === "detail" ? initialRoute.slug : undefined
+          }
+        />
+      }
       config={config}
       title={
         initialRoute.view === "index"

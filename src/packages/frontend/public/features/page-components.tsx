@@ -19,6 +19,12 @@ export function featureAppPath(path: string): string {
   return joinUrlPath(appBasePath, path);
 }
 
+// URL for a screenshot/video served by the assets package
+// (src/packages/assets/public/features/).
+export function featureAsset(file: string): string {
+  return featureAppPath(joinUrlPath("public/features", file));
+}
+
 export function featureSupportPath({
   body,
   context,
