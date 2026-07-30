@@ -120,8 +120,6 @@ describe("BaseProject.start RootFS sealing", () => {
   const HOST_ID = "33333333-3333-4333-8333-333333333333";
   const ORIGINAL_DISABLE_ROOTFS_PORTABILITY_SEAL =
     process.env.COCALC_DISABLE_ROOTFS_PORTABILITY_SEAL;
-  const ORIGINAL_PROJECT_RESTART_SETTLE_MS =
-    process.env.COCALC_PROJECT_RESTART_SETTLE_MS;
 
   beforeEach(() => {
     jest.resetModules();
@@ -215,30 +213,43 @@ describe("BaseProject.start RootFS sealing", () => {
       process.env.COCALC_DISABLE_ROOTFS_PORTABILITY_SEAL =
         ORIGINAL_DISABLE_ROOTFS_PORTABILITY_SEAL;
     }
-    if (ORIGINAL_PROJECT_RESTART_SETTLE_MS == null) {
-      delete process.env.COCALC_PROJECT_RESTART_SETTLE_MS;
-    } else {
-      process.env.COCALC_PROJECT_RESTART_SETTLE_MS =
-        ORIGINAL_PROJECT_RESTART_SETTLE_MS;
-    }
   });
 
-  it("settles briefly between stop and start during restart", async () => {
+  it("starts only after stop completes during restart", async () => {
     process.env.COCALC_DISABLE_ROOTFS_PORTABILITY_SEAL = "1";
-    process.env.COCALC_PROJECT_RESTART_SETTLE_MS = "1";
+    let resolveStop: (() => void) | undefined;
+    stopProjectOnHostMock.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          resolveStop = resolve;
+        }),
+    );
     const { BaseProject } = await import("./base");
     const project = new BaseProject(PROJECT_ID);
+    project.computeQuota = jest.fn(async () => undefined);
 
-    await project.restart({ account_id: ACCOUNT_ID, lro_op_id: "op-restart" });
+    const restarting = project.restart({
+      account_id: ACCOUNT_ID,
+      lro_op_id: "op-restart",
+    });
+    for (
+      let attempt = 0;
+      attempt < 20 && !stopProjectOnHostMock.mock.calls.length;
+      attempt += 1
+    ) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
 
     expect(stopProjectOnHostMock).toHaveBeenCalledWith(PROJECT_ID);
+    expect(startProjectOnHostMock).not.toHaveBeenCalled();
+
+    resolveStop?.();
+    await restarting;
+
     expect(startProjectOnHostMock).toHaveBeenCalledWith(PROJECT_ID, {
       account_id: ACCOUNT_ID,
       lro_op_id: "op-restart",
     });
-    expect(stopProjectOnHostMock.mock.invocationCallOrder[0]).toBeLessThan(
-      startProjectOnHostMock.mock.invocationCallOrder[0],
-    );
   });
 
   it("restarts on a sealed managed RootFS when the current binding is unsealed", async () => {
