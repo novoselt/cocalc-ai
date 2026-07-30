@@ -492,7 +492,11 @@ async function requestHostDrainForBilling({
     input: {
       id: row.id,
       account_id: owner,
-      allow_offline: true,
+      // Never let automated billing enforcement replace newer project data
+      // with a stale backup. If the source is genuinely offline, preserve its
+      // placement and disk until the host can be recovered or an operator
+      // explicitly authorizes an offline move.
+      allow_offline: false,
       force: false,
       managed_egress_override: "admin-host-drain",
       billing_enforcement: true,
