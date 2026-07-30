@@ -70,6 +70,7 @@ import {
   resetScratchVolume,
   resolveProjectContainerPath,
 } from "../file-server";
+import { currentProjectVolumeLifecycleGeneration } from "../project-volume-lifecycle";
 import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
 import type { Configuration } from "@cocalc/conat/project/runner/types";
 import { lroStreamName } from "@cocalc/conat/lro/names";
@@ -1050,11 +1051,13 @@ async function assertStartDiskQuotaAllowed({
   run_quota,
   run_quota_revision,
   reset_scratch = false,
+  scratch_lifecycle_generation,
 }: {
   project_id: string;
   run_quota?: any;
   run_quota_revision?: number;
   reset_scratch?: boolean;
+  scratch_lifecycle_generation?: number;
 }): Promise<{
   storage_quota_prepared: boolean;
   scratch_prepared: boolean;
@@ -1087,7 +1090,12 @@ async function assertStartDiskQuotaAllowed({
   }): Promise<boolean> => {
     let resetVolume: Awaited<ReturnType<typeof resetScratchVolume>> | undefined;
     if (ledgerMode === "enforce" && volume_kind === "scratch" && reset) {
-      resetVolume = await resetScratchVolume(project_id);
+      resetVolume =
+        scratch_lifecycle_generation == null
+          ? await resetScratchVolume(project_id)
+          : await resetScratchVolume(project_id, {
+              expected_lifecycle_generation: scratch_lifecycle_generation,
+            });
     }
     const acceptance =
       ledgerMode === "off"
@@ -1463,6 +1471,8 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
       return;
     }
     const operation_id = `post-stop-volume-prepare:${project_id}:${uuid()}`;
+    const scratch_lifecycle_generation =
+      currentProjectVolumeLifecycleGeneration(project_id);
     const preparation = withBtrfsMutationContext(
       {
         operation_id,
@@ -1476,6 +1486,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           run_quota: project.run_quota,
           run_quota_revision: project.run_quota_revision,
           reset_scratch: true,
+          scratch_lifecycle_generation,
         });
         return (
           prepared.storage_quota_prepared && prepared.scratch_prepared === true

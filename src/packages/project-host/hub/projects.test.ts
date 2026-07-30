@@ -61,6 +61,7 @@ const markProjectVolumeQuotaFailed = jest.fn();
 const projectVolumeQuotaIsApplied = jest.fn();
 const getProjectVolumeQuota = jest.fn();
 const invalidateProjectVolumeQuota = jest.fn();
+const currentProjectVolumeLifecycleGeneration = jest.fn(() => 0);
 
 jest.mock("@cocalc/lite/hub/api", () => ({ hubApi: { projects: {} as any } }));
 jest.mock("@cocalc/backend/data", () => ({
@@ -213,6 +214,10 @@ jest.mock("../sqlite/volume-quotas", () => ({
   projectVolumeQuotaIsApplied: (...args: any[]) =>
     projectVolumeQuotaIsApplied(...args),
 }));
+jest.mock("../project-volume-lifecycle", () => ({
+  currentProjectVolumeLifecycleGeneration: (...args: any[]) =>
+    currentProjectVolumeLifecycleGeneration(...args),
+}));
 jest.mock("@cocalc/conat/files/file-server", () => ({
   __esModule: true,
   client: jest.fn(() => ({
@@ -309,6 +314,8 @@ describe("project host start ACP rehydrate ordering", () => {
     projectVolumeQuotaIsApplied.mockReturnValue(false);
     getProjectVolumeQuota.mockReset();
     invalidateProjectVolumeQuota.mockReset();
+    currentProjectVolumeLifecycleGeneration.mockReset();
+    currentProjectVolumeLifecycleGeneration.mockReturnValue(0);
     projectPortOffsetFromSshPort.mockReset();
     projectPortOffsetFromHttpPort.mockReset();
     projectPortOffsetFromSshPort.mockImplementation((port?: number | null) => {
@@ -505,6 +512,9 @@ describe("project host start ACP rehydrate ordering", () => {
       const stopPromise = hubApi.projects.stop({ project_id });
       await flushMicrotasks();
       expect(resetScratchVolume).toHaveBeenCalledTimes(1);
+      expect(resetScratchVolume).toHaveBeenCalledWith(project_id, {
+        expected_lifecycle_generation: 0,
+      });
       await expect(stopPromise).resolves.toBeUndefined();
 
       const startPromise = hubApi.projects.start({ project_id });

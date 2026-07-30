@@ -130,6 +130,11 @@ import {
   markProjectVolumeQuotaApplying,
   markProjectVolumeQuotaFailed,
 } from "./sqlite/volume-quotas";
+import {
+  assertProjectVolumeLifecycleGeneration,
+  invalidateProjectVolumeLifecycle,
+  withProjectVolumeLifecycleLock,
+} from "./project-volume-lifecycle";
 import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
 import { ensureSshpiperdKey } from "./ssh/sshpiperd-key";
 import { requireManagedSshKeyAccount } from "./ssh/managed-key-account";
@@ -1054,24 +1059,35 @@ export async function ensureVolume(
   return vol;
 }
 
-export async function resetScratchVolume(project_id: string) {
+export async function resetScratchVolume(
+  project_id: string,
+  opts: { expected_lifecycle_generation?: number } = {},
+) {
   if (fs == null) {
     throw Error("file server not initialized");
   }
-  const name = scratchVolName(project_id);
-  const vol = await fs.subvolumes.get(name);
-  if (await exists(vol.path)) {
-    await fs.subvolumes.delete(name);
-  }
-  const next = await fs.subvolumes.ensure(name);
-  invalidateProjectFsServer(project_id);
-  invalidateQuotaCache(project_id, true);
-  invalidateProjectVolumeQuota({
-    project_id,
-    volume_kind: "scratch",
-    reason: "scratch volume reset",
+  return await withProjectVolumeLifecycleLock(project_id, async () => {
+    if (opts.expected_lifecycle_generation != null) {
+      assertProjectVolumeLifecycleGeneration(
+        project_id,
+        opts.expected_lifecycle_generation,
+      );
+    }
+    const name = scratchVolName(project_id);
+    const vol = await fs!.subvolumes.get(name);
+    if (await exists(vol.path)) {
+      await fs!.subvolumes.delete(name);
+    }
+    const next = await fs!.subvolumes.ensure(name);
+    invalidateProjectFsServer(project_id);
+    invalidateQuotaCache(project_id, true);
+    invalidateProjectVolumeQuota({
+      project_id,
+      volume_kind: "scratch",
+      reason: "scratch volume reset",
+    });
+    return next;
   });
-  return next;
 }
 
 export async function deleteVolume(
@@ -1081,36 +1097,39 @@ export async function deleteVolume(
   if (fs == null) {
     throw Error("file server not initialized");
   }
-  const deleteIfExists = async ({
-    name,
-    clearSnapshots = false,
-  }: {
-    name: string;
-    clearSnapshots?: boolean;
-  }) => {
-    const vol = await fs!.subvolumes.get(name);
-    if (!(await exists(vol.path))) return;
-    if (clearSnapshots) {
-      try {
-        const snapshots = await vol.snapshots.readdir();
-        for (const snapshot of snapshots) {
-          await vol.snapshots.delete(snapshot);
+  invalidateProjectVolumeLifecycle(project_id);
+  await withProjectVolumeLifecycleLock(project_id, async () => {
+    const deleteIfExists = async ({
+      name,
+      clearSnapshots = false,
+    }: {
+      name: string;
+      clearSnapshots?: boolean;
+    }) => {
+      const vol = await fs!.subvolumes.get(name);
+      if (!(await exists(vol.path))) return;
+      if (clearSnapshots) {
+        try {
+          const snapshots = await vol.snapshots.readdir();
+          for (const snapshot of snapshots) {
+            await vol.snapshots.delete(snapshot);
+          }
+        } catch (err) {
+          logger.warn("deleteVolume: snapshot cleanup failed", {
+            project_id,
+            name,
+            err: `${err}`,
+          });
         }
-      } catch (err) {
-        logger.warn("deleteVolume: snapshot cleanup failed", {
-          project_id,
-          name,
-          err: `${err}`,
-        });
       }
-    }
-    await fs!.subvolumes.delete(name);
-  };
+      await fs!.subvolumes.delete(name);
+    };
 
-  await deleteIfExists({ name: volName(project_id), clearSnapshots: true });
-  await deleteIfExists({ name: scratchVolName(project_id) });
-  deleteProjectVolumeQuotas(project_id);
-  invalidateProjectFsServer(project_id);
+    await deleteIfExists({ name: volName(project_id), clearSnapshots: true });
+    await deleteIfExists({ name: scratchVolName(project_id) });
+    deleteProjectVolumeQuotas(project_id);
+    invalidateProjectFsServer(project_id);
+  });
   if (opts.reportProvisioned !== false) {
     queueProjectProvisioned(project_id, false);
   }
