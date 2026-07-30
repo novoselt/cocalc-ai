@@ -99,10 +99,30 @@ let hasActiveSecondFactorMock: jest.Mock;
 let hasPaymentMethodMock: jest.Mock;
 let getBalanceMock: jest.Mock;
 let resolveAccountHomeBayMock: jest.Mock;
-let estimateDedicatedHostRateUsdPerHourMock: jest.Mock;
+let estimateDedicatedHostRateMock: jest.Mock;
 let reconcileDedicatedHostPurchaseSessionForAccountMock: jest.Mock;
 let getDedicatedHostWindowUsageForHostLocalMock: jest.Mock;
 const originalFetch = global.fetch;
+
+function dedicatedHostRateEstimate(hourly_cost_usd: string) {
+  return {
+    hourly_cost_usd,
+    pricing_snapshot: {
+      version: 1,
+      billing_state: "running",
+      hourly_cost_usd,
+      components: [
+        {
+          key: "vm",
+          label: "VM",
+          hourly_cost_usd,
+          billing_states: ["running"],
+        },
+      ],
+      configuration: {},
+    },
+  };
+}
 
 jest.mock("node:child_process", () => {
   const actual = jest.requireActual("node:child_process");
@@ -476,8 +496,8 @@ jest.mock("@cocalc/server/membership/project-usage", () => ({
 
 jest.mock("@cocalc/server/project-host/spend", () => ({
   __esModule: true,
-  estimateDedicatedHostRateUsdPerHour: (...args: any[]) =>
-    estimateDedicatedHostRateUsdPerHourMock(...args),
+  estimateDedicatedHostRate: (...args: any[]) =>
+    estimateDedicatedHostRateMock(...args),
   getDedicatedHostWindowUsageLocal: jest.fn(async () => ({
     prepaid_5h_usd: "0",
     prepaid_7d_usd: "0",
@@ -585,7 +605,9 @@ beforeEach(() => {
     home_bay_id: "bay-0",
     epoch: 1,
   }));
-  estimateDedicatedHostRateUsdPerHourMock = jest.fn(async () => "1.25");
+  estimateDedicatedHostRateMock = jest.fn(async () =>
+    dedicatedHostRateEstimate("1.25"),
+  );
   reconcileDedicatedHostPurchaseSessionForAccountMock = jest.fn(
     async () => undefined,
   );
@@ -1975,7 +1997,9 @@ describe("hosts browser fresh auth gating", () => {
     getServerSettingsMock = jest.fn(async () => ({
       project_hosts_funding_mode: "account-prepaid",
     }));
-    estimateDedicatedHostRateUsdPerHourMock = jest.fn(async () => "100");
+    estimateDedicatedHostRateMock = jest.fn(async () =>
+      dedicatedHostRateEstimate("100"),
+    );
     const resizeSharedScratchDisk = jest.fn(async () => undefined);
     const growSharedScratch = jest.fn(async () => ({ ok: true }));
     routedHostControlClientMock = jest.fn(async () => ({
@@ -2146,7 +2170,7 @@ describe("hosts browser fresh auth gating", () => {
       data: "data-disk",
     });
     expect(savedMetadata.runtime.metadata.shared_disk_id).toBeUndefined();
-    expect(estimateDedicatedHostRateUsdPerHourMock).toHaveBeenCalledWith(
+    expect(estimateDedicatedHostRateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "nebius",
         shared_disk_gb: undefined,
@@ -2159,8 +2183,11 @@ describe("hosts browser fresh auth gating", () => {
       expect.objectContaining({
         account_id: ACCOUNT_ID,
         host_id: HOST_ID,
+        billing_state: "running",
         hourly_cost_usd: "1.25",
-        started_at: "2026-05-29T00:00:00.000Z",
+        pricing_snapshot: expect.objectContaining({
+          billing_state: "running",
+        }),
       }),
     );
   });
