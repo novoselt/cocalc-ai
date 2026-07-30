@@ -181,6 +181,36 @@ describe("planProjectHostAcpWorkerRollout", () => {
     });
   });
 
+  it("preserves an older-bundle worker during steady-state project-host startup", () => {
+    const workers = [
+      {
+        pid: 201,
+        env: {
+          COCALC_PROJECT_HOST_ACP_WORKER: "1",
+          COCALC_PROJECT_HOST_ACP_WORKER_CAPABILITY: "rolling-v1",
+          COCALC_ACP_INSTANCE_ID: "worker-old",
+        },
+        cmdline: [
+          "/usr/bin/node",
+          "/opt/cocalc/project-host/bundles/old/main/index.js",
+        ],
+      },
+    ];
+
+    expect(
+      planProjectHostAcpWorkerRollout({
+        workers: workers as any,
+        launch: launch as any,
+        preserveMismatchedActive: true,
+      }),
+    ).toEqual({
+      activePid: 201,
+      drainingPids: [],
+      terminatePids: [],
+      spawnNewActive: false,
+    });
+  });
+
   it("spawns a new active worker when the only current-bundle worker is already draining", () => {
     const workers = [
       {
