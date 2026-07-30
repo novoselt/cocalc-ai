@@ -86,6 +86,9 @@ describe("rolloutManagedComponents", () => {
       ],
     });
     expect(scheduleProjectHostRestartMock).toHaveBeenCalledTimes(1);
+    expect(restartManagedLocalConatRouterMock).not.toHaveBeenCalled();
+    expect(restartManagedLocalConatPersistMock).not.toHaveBeenCalled();
+    expect(rolloutProjectHostAcpWorkerMock).not.toHaveBeenCalled();
   });
 
   it("restarts managed local router and persist components", async () => {

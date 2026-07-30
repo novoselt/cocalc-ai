@@ -164,7 +164,7 @@ describe("project host upgrade installer", () => {
         "/opt/cocalc/project-host/current/cocalc-project-host",
       ),
     ).toBe(
-      "sleep 3; /opt/cocalc/project-host/current/cocalc-project-host daemon restart-project-host || true",
+      "sleep 3; COCALC_PROJECT_HOST_RELOAD_ENV_FILES=1 /opt/cocalc/project-host/current/cocalc-project-host daemon restart-project-host || true",
     );
   });
 

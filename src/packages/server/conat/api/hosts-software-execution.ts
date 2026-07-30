@@ -327,6 +327,35 @@ function observedRunningProjectHostVersion(
   return versions.length === 1 ? versions[0] : undefined;
 }
 
+function observedRunningProjectHostPids(
+  statuses?: HostManagedComponentStatus[],
+): number[] {
+  const projectHost = (statuses ?? []).find(
+    (status) => status.component === "project-host",
+  );
+  return [
+    ...new Set(
+      (projectHost?.running_pids ?? []).filter(
+        (pid) => Number.isInteger(pid) && pid > 0,
+      ),
+    ),
+  ].sort((a, b) => a - b);
+}
+
+function projectHostProcessWasReplaced({
+  baselinePids,
+  observedPids,
+}: {
+  baselinePids: number[];
+  observedPids: number[];
+}): boolean {
+  return (
+    baselinePids.length > 0 &&
+    observedPids.length > 0 &&
+    baselinePids.every((pid) => !observedPids.includes(pid))
+  );
+}
+
 function observedManagedComponentStatusFromRow(
   row: any,
 ): HostManagedComponentStatus[] | undefined {
@@ -1098,6 +1127,10 @@ export async function rolloutHostManagedComponentsInternalHelper({
     loadEffectiveRuntimeDeployments,
   });
   const installedProjectHostVersion = installedProjectHostArtifactVersion(row);
+  const requiresProjectHostProcessReplacement =
+    requestedProjectHostRollout &&
+    desiredProjectHostVersion != null &&
+    installedProjectHostVersion === desiredProjectHostVersion;
   if (
     desiredProjectHostVersion &&
     installedProjectHostVersion !== desiredProjectHostVersion
@@ -1148,6 +1181,25 @@ export async function rolloutHostManagedComponentsInternalHelper({
       row = await loadHostForStartStop(id, account_id);
     }
   }
+  let baselineProjectHostPids: number[] = [];
+  if (requiresProjectHostProcessReplacement) {
+    if (typeof client.getManagedComponentStatus !== "function") {
+      throw new Error(
+        "cannot verify project-host process replacement; host control client does not support managed component status",
+      );
+    }
+    baselineProjectHostPids = observedRunningProjectHostPids(
+      await withTimeout({
+        promise: client.getManagedComponentStatus(),
+        timeoutMs: managedComponentRolloutRpcTimeoutMs,
+      }),
+    );
+    if (baselineProjectHostPids.length === 0) {
+      throw new Error(
+        "cannot verify project-host process replacement; no running project-host pid was reported before rollout",
+      );
+    }
+  }
   const rolloutStartedAt = Date.now();
   let response: HostManagedComponentRolloutResponse;
   let rolloutRequestError: unknown;
@@ -1187,6 +1239,7 @@ export async function rolloutHostManagedComponentsInternalHelper({
     ? desiredProjectHostVersion
     : undefined;
   let observedProjectHostVersion: string | undefined;
+  let observedProjectHostPids: number[] = [];
   let fallbackProjectHostVersion: string | undefined;
   let projectHostRollbackVersion: string | undefined;
   let pendingProjectHostRollout = false;
@@ -1196,15 +1249,16 @@ export async function rolloutHostManagedComponentsInternalHelper({
       | undefined = undefined;
     let runningVersion: string | undefined;
     let hostAgentStatus: HostAgentStatus | undefined;
+    observedProjectHostPids = [];
     try {
       statusClient = await hostControlClient(id, 30_000);
       if (typeof statusClient.getManagedComponentStatus === "function") {
-        runningVersion = observedRunningProjectHostVersion(
-          await withTimeout({
-            promise: statusClient.getManagedComponentStatus(),
-            timeoutMs: managedComponentRolloutRpcTimeoutMs,
-          }),
-        );
+        const statuses = await withTimeout({
+          promise: statusClient.getManagedComponentStatus(),
+          timeoutMs: managedComponentRolloutRpcTimeoutMs,
+        });
+        runningVersion = observedRunningProjectHostVersion(statuses);
+        observedProjectHostPids = observedRunningProjectHostPids(statuses);
       }
       if (typeof statusClient.getHostAgentStatus === "function") {
         hostAgentStatus = await withTimeout({
@@ -1215,6 +1269,9 @@ export async function rolloutHostManagedComponentsInternalHelper({
     } catch {
       // The host control RPC can still be coming back after project-host
       // restart; fall back to bootstrap/runtime observations in that case.
+      const statuses = observedManagedComponentStatusFromRow(refreshedRow);
+      runningVersion = observedRunningProjectHostVersion(statuses);
+      observedProjectHostPids = observedRunningProjectHostPids(statuses);
     }
     observedProjectHostVersion = normalizeObservedProjectHostRolloutVersion({
       row: refreshedRow,
@@ -1267,13 +1324,19 @@ export async function rolloutHostManagedComponentsInternalHelper({
   await refreshProjectHostObservation();
   if (requestedProjectHostRollout && desiredVersion) {
     const settleStartedAt = Date.now();
+    let replacementObserved = projectHostProcessWasReplaced({
+      baselinePids: baselineProjectHostPids,
+      observedPids: observedProjectHostPids,
+    });
     while (
       projectHostRollbackVersion == null &&
-      observedProjectHostVersion !== desiredVersion &&
+      ((requiresProjectHostProcessReplacement && !replacementObserved) ||
+        observedProjectHostVersion !== desiredVersion) &&
       Date.now() - settleStartedAt < projectHostRolloutSettleTimeoutMs
     ) {
       const settleElapsedMs = Date.now() - settleStartedAt;
       if (
+        (!requiresProjectHostProcessReplacement || replacementObserved) &&
         settleElapsedMs >= projectHostRolloutMinObservationMs &&
         !pendingProjectHostRollout &&
         observedProjectHostVersion &&
@@ -1285,6 +1348,10 @@ export async function rolloutHostManagedComponentsInternalHelper({
       await delay(projectHostRolloutPollMs);
       refreshedRow = await loadHostForStartStop(id, account_id);
       await refreshProjectHostObservation();
+      replacementObserved = projectHostProcessWasReplaced({
+        baselinePids: baselineProjectHostPids,
+        observedPids: observedProjectHostPids,
+      });
     }
     if (projectHostRollbackVersion) {
       const automaticRollback = await recordProjectHostLocalRollbackInternal({
@@ -1303,6 +1370,11 @@ export async function rolloutHostManagedComponentsInternalHelper({
         },
       );
       throw err;
+    }
+    if (requiresProjectHostProcessReplacement && !replacementObserved) {
+      throw new Error(
+        `project-host rollout did not replace the running process; baseline pids=${baselineProjectHostPids.join(",")}, observed pids=${observedProjectHostPids.join(",") || "none"}`,
+      );
     }
     if (
       observedProjectHostVersion &&
