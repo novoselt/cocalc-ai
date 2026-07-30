@@ -9,6 +9,7 @@ import { btrfs } from "./util";
 export {
   type BtrfsMutationContext,
   type BtrfsMutationPriority,
+  effectiveBtrfsMutationContext,
   getBtrfsMutationContext,
   withBtrfsMutationContext,
 } from "./mutation-context";
