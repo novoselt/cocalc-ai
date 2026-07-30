@@ -20,9 +20,10 @@ import {
 interface Props {
   account_id: string;
   display_name: string;
+  embedded?: boolean;
 }
 
-export function Impersonate({ display_name, account_id }: Props) {
+export function Impersonate({ display_name, account_id, embedded }: Props) {
   const [impersonationUrl, setImpersonationUrl] = useState<string | null>(null);
   const [err, set_err] = useState<string | null>(null);
   const [extraWarning, setExtraWarning] = useState<boolean>(false);
@@ -123,11 +124,16 @@ export function Impersonate({ display_name, account_id }: Props) {
     }
   }
 
-  return (
-    <Card title={<>Impersonate user "{display_name}"</>}>
+  const content = (
+    <>
       {render_err()}
       {render_link()}
       <FreshAuthModal {...freshAuthModalProps} />
-    </Card>
+    </>
+  );
+  return embedded ? (
+    content
+  ) : (
+    <Card title={<>Impersonate user "{display_name}"</>}>{content}</Card>
   );
 }
