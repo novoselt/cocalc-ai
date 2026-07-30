@@ -33,14 +33,17 @@ import {
   renderValueUnit,
 } from "./misc";
 
+const INTERNAL_RUN_QUOTA_FIELDS = new Set([
+  "io_class",
+  "shared_compute_priority",
+]);
+
 export function formatRunQuotaForDisplay(rq: RunQuotaType): DisplayQuota {
   const entries: [string, unknown][] = [];
   for (const [key, val] of Object.entries(rq)) {
-    const up_key = quota2upgrade_key(key);
-    const param = PARAMS[up_key];
-    // run_quota also carries project-host scheduling metadata. Only upgrade
-    // parameters belong in the user-visible quota display.
-    if (param == null) {
+    // run_quota also carries project-host scheduling metadata that does not
+    // belong in the user-visible quota display.
+    if (INTERNAL_RUN_QUOTA_FIELDS.has(key)) {
       continue;
     }
     if (key === "gpu") {
@@ -54,8 +57,7 @@ export function formatRunQuotaForDisplay(rq: RunQuotaType): DisplayQuota {
     } else if (typeof val !== "number") {
       entries.push([key, val]);
     } else {
-      // no display factor!
-      entries.push([key, renderValueUnit(val, param.display_unit)]);
+      entries.push([key, formatNumericRunQuotaValue(key, val)]);
     }
   }
   return Object.fromEntries(entries) as DisplayQuota;
@@ -103,6 +105,16 @@ export function useMaxUpgrades(): DisplayQuota {
     if (!isEqual(next, maxUpgrades)) setMaxUpgrades(next);
   }, [customMaxUpgrades]);
   return maxUpgrades;
+}
+
+export function formatNumericRunQuotaValue(
+  key: string,
+  value: number,
+): string | number {
+  const parameter = PARAMS[quota2upgrade_key(key)];
+  if (parameter == null) return value;
+  // Run quota values already use display units, so do not apply display_factor.
+  return renderValueUnit(value, parameter.display_unit);
 }
 
 function valPct(val, total): number {

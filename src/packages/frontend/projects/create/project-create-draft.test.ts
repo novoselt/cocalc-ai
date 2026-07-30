@@ -6,6 +6,7 @@ import {
   createInitialProjectDraft,
   projectDraftSummary,
   projectDraftToCreateOptions,
+  rootfsEntryMatchesProjectMode,
   setProjectDraftHost,
   setProjectDraftRegion,
   setProjectDraftRootfs,
@@ -50,15 +51,18 @@ function context(
       image("standard", "cocalc.local/rootfs/standard", {
         official: true,
         release_id: "release-standard",
+        tags: ["preset:standard"],
       }),
       image("sage", "cocalc.local/rootfs/sage", {
         official: true,
         release_id: "release-sage",
+        tags: ["preset:standard", "preset:teaching"],
       }),
       image("gpu", "cocalc.local/rootfs/gpu", {
         official: true,
         gpu: true,
         release_id: "release-gpu",
+        tags: ["preset:gpu"],
       }),
       image("hidden", "cocalc.local/rootfs/hidden", {
         hidden: true,
@@ -105,6 +109,7 @@ describe("project create draft", () => {
           image("standard", "cocalc.local/rootfs/standard", {
             official: true,
             release_id: "release-standard",
+            tags: ["preset:standard"],
           }),
         ],
       }),
@@ -237,7 +242,7 @@ describe("project create draft", () => {
     expect(renamed.rootfs_image_id).toBeUndefined();
   });
 
-  it("applies the GPU preset without silently choosing an image", () => {
+  it("applies the GPU preset and selects its only matching image", () => {
     const draft = applyProjectPreset(
       createInitialProjectDraft(context()),
       "gpu",
@@ -245,8 +250,27 @@ describe("project create draft", () => {
     );
 
     expect(draft.mode).toBe("gpu");
-    expect(draft.rootfs_image).toBe("");
-    expect(draft.rootfs_image_id).toBeUndefined();
+    expect(draft.rootfs_image).toBe("cocalc.local/rootfs/gpu");
+    expect(draft.rootfs_image_id).toBe("gpu");
+  });
+
+  it("clears a selected CPU host when applying the GPU preset", () => {
+    const selectedHost = host({ id: "cpu-host", gpu: false });
+    const ctx = context({ selectedHost });
+    const withHost = setProjectDraftHost(
+      createInitialProjectDraft(ctx),
+      selectedHost,
+      ctx,
+    );
+
+    const draft = applyProjectPreset(withHost, "gpu", {
+      ...ctx,
+      selectedHost,
+    });
+
+    expect(draft.mode).toBe("gpu");
+    expect(draft.host_id).toBeUndefined();
+    expect(draft.rootfs_image_id).toBe("gpu");
   });
 
   it("does not silently choose a teaching-tagged image when other images exist", () => {
@@ -334,6 +358,17 @@ describe("project create draft", () => {
 
     expect(draft.rootfs_image).toBe("");
     expect(draft.rootfs_image_id).toBeUndefined();
+  });
+
+  it("filters catalog entries by project mode", () => {
+    const [standard, teaching, gpu] = context().rootfsImages;
+
+    expect(rootfsEntryMatchesProjectMode(standard, "standard")).toBe(true);
+    expect(rootfsEntryMatchesProjectMode(standard, "teaching")).toBe(false);
+    expect(rootfsEntryMatchesProjectMode(teaching, "teaching")).toBe(true);
+    expect(rootfsEntryMatchesProjectMode(gpu, "gpu")).toBe(true);
+    expect(rootfsEntryMatchesProjectMode(gpu, "standard")).toBe(false);
+    expect(rootfsEntryMatchesProjectMode(teaching, "custom")).toBe(true);
   });
 
   it("requires a managed image when no catalog image exists for ordinary users", () => {

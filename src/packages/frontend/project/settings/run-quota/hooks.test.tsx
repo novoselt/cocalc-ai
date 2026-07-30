@@ -6,7 +6,11 @@ import {
   PLATFORM_MODE_SINGLE_NODE,
   PLATFORM_MODE_ON_PREMISES,
 } from "@cocalc/util/db-schema/site-defaults";
-import { formatRunQuotaForDisplay, useDisplayedFields } from "./hooks";
+import {
+  formatNumericRunQuotaValue,
+  formatRunQuotaForDisplay,
+  useDisplayedFields,
+} from "./hooks";
 
 let mockPlatformMode = PLATFORM_MODE_SINGLE_NODE;
 
@@ -57,5 +61,18 @@ describe("run quota formatting", () => {
     expect(result.network).toBe(true);
     expect(result).not.toHaveProperty("io_class");
     expect(result).not.toHaveProperty("shared_compute_priority");
+  });
+
+  it("preserves unknown numeric runtime fields instead of crashing", () => {
+    const result = formatRunQuotaForDisplay({
+      cpu_limit: 2,
+      ...{ future_runtime_limit: 12 },
+    });
+
+    expect(result).toHaveProperty("future_runtime_limit", 12);
+  });
+
+  it("formats known numeric runtime fields", () => {
+    expect(formatNumericRunQuotaValue("memory_limit", 2_000)).toBe("2 GB");
   });
 });
