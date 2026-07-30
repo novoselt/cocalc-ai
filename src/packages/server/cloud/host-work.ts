@@ -802,12 +802,7 @@ function gcpAlternateSpotMachineTypes(opts: {
 }): string[] {
   const desired = `${opts.desiredMachineType ?? ""}`.trim();
   const configured = opts.policy.alternate_spot_machine_types;
-  const derived: string[] = [];
-  const match = /^t2d-standard-(\d+)$/.exec(desired);
-  if (match) derived.push(`n2d-standard-${match[1]}`);
-  return Array.from(
-    new Set([desired, ...configured, ...derived].filter(Boolean)),
-  );
+  return Array.from(new Set([desired, ...configured].filter(Boolean)));
 }
 
 function hostFundingMode(row: any): HostFundingMode | undefined {
