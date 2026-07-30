@@ -33,7 +33,12 @@ jest.mock("./cell-buttonbar-menu", () => ({
 
 jest.mock("./cell-chat-button", () => ({
   CellChatButton: () => <span data-testid="cell-chat-button" />,
-  CellChatUnreadBadge: () => <span data-testid="cell-chat-unread-badge" />,
+  CellChatCompactButton: ({ showIdleButton }) => (
+    <span
+      data-testid="cell-chat-compact-button"
+      data-show-idle-button={showIdleButton ? "true" : "false"}
+    />
+  ),
 }));
 
 jest.mock("./cell-index-number", () => ({
@@ -66,11 +71,11 @@ function renderButtonBar(showControls: boolean) {
   );
 }
 
-describe("CellButtonBar unread chat affordance", () => {
-  it("shows only the unread badge while idle, then the controls on hover", () => {
+describe("CellButtonBar compact chat affordance", () => {
+  it("shows only compact chat while idle, then the controls on hover", () => {
     const { rerender } = renderButtonBar(false);
 
-    expect(screen.getByTestId("cell-chat-unread-badge")).toBeInTheDocument();
+    expect(screen.getByTestId("cell-chat-compact-button")).toBeInTheDocument();
     expect(screen.queryByTestId("cell-chat-button")).toBeNull();
     expect(screen.queryByTestId("cell-actions-menu")).toBeNull();
     expect(screen.queryByTestId("cell-index")).toBeNull();
@@ -81,8 +86,21 @@ describe("CellButtonBar unread chat affordance", () => {
       </IntlProvider>,
     );
 
-    expect(screen.queryByTestId("cell-chat-unread-badge")).toBeNull();
+    expect(screen.queryByTestId("cell-chat-compact-button")).toBeNull();
     expect(screen.getByTestId("cell-chat-button")).toBeInTheDocument();
     expect(screen.getByTestId("cell-index")).toBeInTheDocument();
+  });
+
+  it("keeps chat discoverable on the selected cell while idle", () => {
+    render(
+      <IntlProvider locale="en" messages={{}} onError={() => {}}>
+        <CellButtonBar {...BASE_PROPS} is_current showControls={false} />
+      </IntlProvider>,
+    );
+
+    expect(screen.getByTestId("cell-chat-compact-button")).toHaveAttribute(
+      "data-show-idle-button",
+      "true",
+    );
   });
 });

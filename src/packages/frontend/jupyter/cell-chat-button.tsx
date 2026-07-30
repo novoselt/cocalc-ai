@@ -10,8 +10,8 @@ anchor id is the cell's UUID; see @cocalc/frontend/chat/anchors.
 */
 
 import type { MenuProps } from "antd";
-import { Badge, Dropdown } from "antd";
-import { useMemo } from "react";
+import { Badge, Button, Dropdown } from "antd";
+import { type MouseEvent, useMemo } from "react";
 
 import { useAnchoredThreads } from "@cocalc/frontend/chat/anchors";
 import type { AnchorEditorActions } from "@cocalc/frontend/chat/anchors";
@@ -21,35 +21,68 @@ import { COLORS } from "@cocalc/util/theme";
 
 import { CODE_BAR_BTN_STYLE } from "./consts";
 
-// Always-visible unread badge for a cell; renders nothing when there is
-// nothing unread.  Used where the full chat button is not shown (e.g.
-// the minimal view's zen mode).
-export function CellChatUnreadBadge({ cellId }: { cellId: string }) {
+// Compact chat affordance used where the full cell controls are hidden.
+// Cells with discussions retain an icon/count; the selected cell also keeps a
+// subtle Chat label visible so anchored discussions are discoverable.
+export function CellChatCompactButton({
+  cellId,
+  showIdleButton = false,
+}: {
+  cellId: string;
+  showIdleButton?: boolean;
+}) {
   const frameContext = useFrameContext();
   const { project_id, path } = frameContext;
-  const { threads, totalUnread } = useAnchoredThreads(project_id, path, cellId);
-  if (totalUnread <= 0) return null;
+  const { threads, totalMessages, totalUnread } = useAnchoredThreads(
+    project_id,
+    path,
+    cellId,
+  );
+  if (totalMessages <= 0 && totalUnread <= 0 && !showIdleButton) return null;
 
   const newestUnread = threads.filter((t) => t.unreadCount > 0)[0];
+  const handleClick = (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    const editorActions = frameContext.actions as AnchorEditorActions;
+    if (newestUnread) {
+      editorActions.openAnchorChatThread?.(newestUnread.key);
+    } else {
+      editorActions.openAnchorChat?.(cellId);
+    }
+  };
+
+  const hasUnread = totalUnread > 0;
+  const badgeCount = hasUnread ? totalUnread : totalMessages;
+  const title = hasUnread
+    ? `${totalUnread} unread cell chat message${totalUnread > 1 ? "s" : ""}`
+    : totalMessages > 0
+      ? `${totalMessages} cell chat message${totalMessages > 1 ? "s" : ""}`
+      : "Discuss this cell in side chat";
 
   return (
-    <Tooltip
-      title={`${totalUnread} unread cell chat message${totalUnread > 1 ? "s" : ""}`}
-    >
+    <Tooltip title={title}>
       <Badge
         size="small"
-        count={totalUnread}
-        style={{ cursor: "pointer" }}
-        onClick={(e) => {
-          e.stopPropagation();
-          const editorActions = frameContext.actions as AnchorEditorActions;
-          if (newestUnread) {
-            editorActions.openAnchorChatThread?.(newestUnread.key);
-          } else {
-            editorActions.openAnchorChat?.(cellId);
-          }
-        }}
-      />
+        count={badgeCount}
+        color={hasUnread ? undefined : COLORS.GRAY_L}
+      >
+        <Button
+          aria-label="Discuss this cell in side chat"
+          size="small"
+          type="text"
+          onClick={handleClick}
+          style={{
+            ...CODE_BAR_BTN_STYLE,
+            height: "auto",
+            minWidth: showIdleButton ? undefined : 24,
+            opacity: 0.7,
+            paddingInline: showIdleButton ? undefined : 4,
+          }}
+        >
+          <Icon name="comment" />
+          {showIdleButton ? " Chat" : null}
+        </Button>
+      </Badge>
     </Tooltip>
   );
 }

@@ -33,7 +33,7 @@ import { AgentCellTool } from "@cocalc/frontend/jupyter/ai";
 import { CodeBarDropdownMenu } from "@cocalc/frontend/jupyter/cell-buttonbar-menu";
 import {
   CellChatButton,
-  CellChatUnreadBadge,
+  CellChatCompactButton,
 } from "@cocalc/frontend/jupyter/cell-chat-button";
 import { MinimalCodePreview } from "./minimal-code-preview";
 import {
@@ -724,7 +724,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                         />
                       </>
                     ) : (
-                      <CellChatUnreadBadge cellId={id} />
+                      <CellChatCompactButton cellId={id} />
                     )}
                   </div>
                 )}
@@ -988,7 +988,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                             />
                           </>
                         ) : (
-                          <CellChatUnreadBadge cellId={id} />
+                          <CellChatCompactButton cellId={id} />
                         )}
                       </div>
                     )}
@@ -1172,7 +1172,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                             />
                           </>
                         ) : (
-                          <CellChatUnreadBadge cellId={id} />
+                          <CellChatCompactButton cellId={id} />
                         )}
                       </div>
                     )}

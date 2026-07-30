@@ -30,7 +30,7 @@ import {
   RUN_ALL_CELLS_BELOW_ICON,
 } from "./consts";
 import { AgentCellTool } from "./ai/agent-cell-tool";
-import { CellChatButton, CellChatUnreadBadge } from "./cell-chat-button";
+import { CellChatButton, CellChatCompactButton } from "./cell-chat-button";
 
 export function PlaceholderButtonBar() {
   return <div style={CODE_BAR_BTN_STYLE} />;
@@ -73,6 +73,7 @@ export const CellButtonBar: React.FC<Props> = React.memo(
     cell,
     aiTools,
     index,
+    is_current,
     is_readonly,
     input_is_readonly,
     haveAICellTools,
@@ -339,7 +340,10 @@ export const CellButtonBar: React.FC<Props> = React.memo(
               <CellIndexNumber index={index} />
             </>
           ) : (
-            <CellChatUnreadBadge cellId={id} />
+            <CellChatCompactButton
+              cellId={id}
+              showIdleButton={is_current && actions != null}
+            />
           )}
         </div>
       </div>
