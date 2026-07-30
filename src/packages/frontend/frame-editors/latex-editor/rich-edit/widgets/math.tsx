@@ -9,16 +9,16 @@ Math widgets — Phase 4.
 Three flavors:
  - MathInline       $…$ and \(…\)
  - MathDisplay      \[…\] and $$…$$ (single-line variants)
- - MathEnv          \begin{equation|align|gather|multline}…\end{…}
-                    (multi-line, starred variants supported)
+ - MathEnv          \begin{equation|align|gather|multline|displaymath|
+                    eqnarray}…\end{…} (multi-line, starred variants
+                    supported; \label is stripped for the preview)
 
 All three render via `mathToHtml` (KaTeX). A plain click dissolves a
 widget to raw source for manual editing. Shift+click opens the cocalc-ai
 Agent flyout with the selected formula and bounded nearby source context.
 
-A KaTeX render error doesn't break the widget — we fall back to a
-muted red "?math?" so the user sees something is off and can hover
-to inspect the source.
+A KaTeX render error doesn't break the widget — we fall back to the
+raw LaTeX source, with the KaTeX error available on hover.
 */
 
 import { ReactNode, useContext } from "react";
@@ -28,6 +28,7 @@ import mathToHtml from "@cocalc/frontend/misc/math-to-html";
 import { MathMacrosContext } from "../math-macros-context";
 import { WidgetProps } from "../types";
 import { EmptyPlaceholder, Widget } from "./common";
+import { prepareMathEnvSource, stripMathLabels } from "./math-source";
 
 function renderMath(
   source: string,
@@ -107,39 +108,30 @@ export function MathDisplay(props: WidgetProps) {
       {content === "" ? (
         <EmptyPlaceholder label="empty display math" />
       ) : (
-        renderMath(content, false, macros, props.descriptor.source)
+        renderMath(
+          stripMathLabels(content),
+          false,
+          macros,
+          props.descriptor.source,
+        )
       )}
     </DisplayMath>
   );
 }
 
-/**
- * Convert non-starred math envs to their starred variants so KaTeX
- * doesn't render fake auto-numbered tags like `(2)` `(3)` in the
- * in-buffer preview. The actual equation numbers come from the real
- * LaTeX compilation in the PDF pane; showing placeholder numbers
- * here is misleading and the float positioning collides with the
- * inline widget's reflow (the visible `( )` looks "out of place").
- *
- * Only `\begin{env}` / `\end{env}` markers are rewritten — the CM
- * source itself is untouched, and user-explicit `\tag{…}` inside
- * the body keeps working.
- */
-function stripEnvNumbering(source: string): string {
-  return source.replace(
-    /\\(begin|end)\{(equation|align|gather|multline)\}/g,
-    "\\$1{$2*}",
-  );
-}
-
 export function MathEnv(props: WidgetProps) {
   const macros = useContext(MathMacrosContext);
-  // For envs, hand the full source (including \begin / \end) to
-  // KaTeX — it knows align/gather/equation/multline natively.
+  // For envs, hand the full source (including \begin / \end) to KaTeX —
+  // it knows align/gather/equation/multline natively. The source is
+  // preprocessed (see math-source.ts): \label stripped, displaymath
+  // mapped, and non-starred envs starred so KaTeX doesn't render fake
+  // auto-numbered tags; the real numbers come from the PDF build. The
+  // CM source itself is untouched and user-explicit \tag{…} keeps
+  // working.
   return (
     <DisplayMath props={props}>
       {renderMath(
-        stripEnvNumbering(props.descriptor.source),
+        prepareMathEnvSource(props.descriptor.source),
         false,
         macros,
         props.descriptor.source,
