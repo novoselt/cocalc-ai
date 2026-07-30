@@ -38,7 +38,10 @@ import {
   serviceToDisplay,
   type Service,
 } from "@cocalc/util/db-schema/purchase-quotas";
-import type { Purchase } from "@cocalc/util/db-schema/purchases";
+import type {
+  DedicatedHostPurchase,
+  Purchase,
+} from "@cocalc/util/db-schema/purchases";
 import { getAmountStyle } from "@cocalc/util/db-schema/purchases";
 import {
   formatMembershipDebitPurchaseDescription,
@@ -753,9 +756,11 @@ function purchaseDescriptionLinesForPrint({
   purchase: PurchaseItem;
 }) {
   const descriptionAny = description as any;
-  const lines = [
-    descriptionTextForPrint({ description, membershipTierLabels, service }),
-  ].filter(Boolean);
+  const lines =
+    dedicatedHostDescriptionLines(description) ??
+    [
+      descriptionTextForPrint({ description, membershipTierLabels, service }),
+    ].filter(Boolean);
   if (descriptionAny?.credit_id != null) {
     lines.push(`Credit Id: ${descriptionAny.credit_id}`);
   }
@@ -774,6 +779,106 @@ function purchaseDescriptionLinesForPrint({
     lines.push(`Notes: ${notes}`);
   }
   return lines;
+}
+
+function dedicatedHostProviderLabel(provider: string): string {
+  switch (provider.trim().toLowerCase()) {
+    case "gcp":
+      return "GCP";
+    case "nebius":
+      return "Nebius";
+    default:
+      return capitalize(provider);
+  }
+}
+
+function dedicatedHostDiskTypeLabel(diskType?: string | null): string {
+  const value = `${diskType ?? ""}`.trim().toLowerCase();
+  switch (value) {
+    case "pd-balanced":
+    case "balanced":
+      return "balanced";
+    case "pd-standard":
+    case "standard":
+      return "standard";
+    case "pd-ssd":
+    case "ssd":
+      return "SSD";
+    default:
+      return value.replace(/[-_]+/g, " ");
+  }
+}
+
+function dedicatedHostDiskLabel({
+  size,
+  type,
+  fallback,
+}: {
+  size?: number | null;
+  type?: string | null;
+  fallback: string;
+}): string {
+  const sizeLabel =
+    typeof size === "number" && Number.isFinite(size) && size > 0
+      ? `${size} GB`
+      : "";
+  const typeLabel = dedicatedHostDiskTypeLabel(type);
+  return [sizeLabel, typeLabel, fallback].filter(Boolean).join(" ");
+}
+
+function dedicatedHostDescriptionLines(value: unknown): string[] | undefined {
+  const description = value as DedicatedHostPurchase | undefined;
+  if (
+    description?.type !== "dedicated-host" ||
+    !description.billing_state ||
+    !description.pricing_snapshot
+  ) {
+    return undefined;
+  }
+  const title = `${description.host_name ?? ""}`.trim() || "Dedicated host";
+  const details = [
+    description.billing_state === "running" ? "Running" : "Stopped",
+    dedicatedHostProviderLabel(description.provider),
+  ];
+  const config = description.pricing_snapshot.configuration;
+  if (description.billing_state === "running") {
+    if (config.machine_type) {
+      details.push(config.machine_type);
+    }
+  } else {
+    const componentKeys = new Set(
+      description.pricing_snapshot.components.map(({ key }) => key),
+    );
+    const disks: string[] = [];
+    if (componentKeys.has("disk")) {
+      disks.push(
+        dedicatedHostDiskLabel({
+          size: config.disk_gb,
+          type: config.disk_type,
+          fallback: "disk",
+        }),
+      );
+    }
+    if (componentKeys.has("shared_scratch_disk")) {
+      disks.push(
+        dedicatedHostDiskLabel({
+          size: config.shared_disk_gb,
+          type: config.shared_disk_type,
+          fallback: "shared disk",
+        }),
+      );
+    }
+    if (disks.length > 0) {
+      details.push(disks.join(" + "));
+    }
+  }
+  if (description.region) {
+    details.push(description.region);
+  }
+  if (description.billing_state === "running" && config.pricing_model != null) {
+    details.push(config.pricing_model === "spot" ? "Spot" : "Standard");
+  }
+  return [title, details.join(" · ")];
 }
 
 function descriptionTextForPrint({
@@ -1345,6 +1450,16 @@ function Description({
         </span>
         <span>Reason: {capitalize(reason.replace(/_/g, " "))}</span>
         {!!notes && <span>Notes: {notes}</span>}
+      </Space>
+    );
+  }
+  const dedicatedHostLines = dedicatedHostDescriptionLines(description);
+  if (dedicatedHostLines) {
+    return (
+      <Space vertical size={0}>
+        {dedicatedHostLines.map((line) => (
+          <span key={line}>{line}</span>
+        ))}
       </Space>
     );
   }
