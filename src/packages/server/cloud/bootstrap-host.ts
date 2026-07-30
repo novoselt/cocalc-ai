@@ -815,6 +815,25 @@ export function resolveBootstrapRootReserveGb(raw?: unknown): string {
   return "25";
 }
 
+export function resolveBootstrapStorageAdmissionMode(
+  metadata?: HostMetadata,
+): "enforce" | "observe" {
+  const configured = `${
+    metadata?.storage_admission_mode ??
+    metadata?.machine?.metadata?.storage_admission_mode ??
+    ""
+  }`
+    .trim()
+    .toLowerCase();
+  if (configured === "enforce" || configured === "observe") {
+    return configured;
+  }
+  return `${metadata?.billing?.funding_mode ?? ""}`.trim().toLowerCase() ===
+    "site-funded"
+    ? "enforce"
+    : "observe";
+}
+
 export async function buildBootstrapScripts(
   row: ProjectHostRow,
   opts: {
@@ -1184,6 +1203,9 @@ export async function buildBootstrapScripts(
     `COCALC_PROJECT_HOST_MANAGED_EGRESS_MODE=${providerId === "gcp" ? "enforce" : "off"}`,
   );
   envLines.push(`COCALC_PROJECT_HOST_CPU_USAGE_MODE=observe`);
+  envLines.push(
+    `COCALC_PROJECT_HOST_STORAGE_ADMISSION_MODE=${resolveBootstrapStorageAdmissionMode(metadata)}`,
+  );
   const appPublicWildcard = buildAppPublicWildcardHostname({
     hostHostname: tunnel?.hostname,
   });
