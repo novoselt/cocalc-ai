@@ -3490,7 +3490,7 @@ test("software deploy host-bootstrap requires scope only with rollout", async ()
       "host-bootstrap",
       "staging",
     ]),
-    /--rollout requires --bootstrap-scope full or helpers/,
+    /--rollout requires --bootstrap-scope full, helpers, or environment/,
   );
   await assert.rejects(
     program.parseAsync([

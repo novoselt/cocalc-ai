@@ -45,6 +45,25 @@ function localPath(root: string): LocalPathFunction {
   };
 }
 
+async function waitForProcessExitOrZombie(
+  pid: number,
+  timeoutMs = 1_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const stat = await readFile(`/proc/${pid}/stat`, "utf8").catch(
+      () => undefined,
+    );
+    if (stat == null || stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z")) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 async function createServer(): Promise<ConatServer> {
   const server = createConatServer({
     id: "workspace-runtime",
@@ -393,13 +412,7 @@ describe("workspace runtime backend", () => {
         http_port: 12345,
       });
       await backend.stop({ project_id: PROJECT_A, localPath: paths });
-      const stoppedStat = await readFile(`/proc/${pid}/stat`, "utf8").catch(
-        () => undefined,
-      );
-      expect(
-        stoppedStat == null ||
-          stoppedStat.slice(stoppedStat.lastIndexOf(")") + 2).startsWith("Z"),
-      ).toBe(true);
+      expect(await waitForProcessExitOrZombie(pid)).toBe(true);
     } finally {
       try {
         process.kill(-pid, "SIGKILL");

@@ -4690,7 +4690,7 @@ describe("hosts.upgradeHostSoftware", () => {
           id: HOST_ID,
           force_bootstrap: true,
         }),
-        dedupe_key: `host-reconcile-software:${HOST_ID}:force-bootstrap`,
+        dedupe_key: `host-reconcile-software:${HOST_ID}:force-bootstrap:full`,
       }),
     );
   });
