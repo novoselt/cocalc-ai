@@ -2,8 +2,9 @@
 
 Date: 2026-07-29 PDT / 2026-07-30 UTC
 
-Status: deployed to all 13 site-owned production project hosts. Customer and
-private hosts were not changed.
+Status: hard I/O containment is deployed to all 13 site-owned production
+project hosts. Storage admission enforcement is enabled only on the
+`us-south-1` and `wstein` canaries.
 
 ## Deployed Artifacts
 
@@ -18,7 +19,7 @@ private hosts were not changed.
 - Capacity source:
   `gcp-pd-balanced-size-formula-2026-07-24`
 - Storage admission mode:
-  `observe`
+  `observe` by default; `enforce` on `us-south-1` and `wstein`
 
 ## Canary Evidence
 
@@ -95,6 +96,61 @@ Several hosts showed simultaneous maintenance-cgroup pressure with zero
 project-pool pressure. This is expected and provides natural production
 evidence that scheduled maintenance is being isolated from project workloads.
 
+## Admission Enforcement Canary
+
+On 2026-07-30 UTC, storage admission enforcement was enabled on:
+
+- `us-south-1`
+  (`7bd699f8-e20b-4b13-9dfa-f7358f85544e`);
+- `wstein`
+  (`d0102bef-c8f8-4f63-9c70-450162bac80b`).
+
+The setting is a durable host-local override in
+`/etc/cocalc/project-host.local.env`:
+
+```text
+COCALC_PROJECT_HOST_STORAGE_ADMISSION_MODE=enforce
+```
+
+The pre-change files are preserved on each host as
+`/etc/cocalc/project-host.local.env.pre-admission-enforce-20260730`.
+Bootstrap reads the local file and preserves it across normal reconcile and
+spot stop/start cycles. This is still not durable control-plane policy and can
+be lost if the root disk is reprovisioned.
+
+Activation required a controlled restart of the project-host control daemon.
+A same-version `host rollout --component project-host` on `us-south-1`
+reported success but did not change the running PID or process environment.
+The supported host-local
+`sudo -u cocalc-host -H /opt/cocalc/project-host/bin/ctl restart` path was
+therefore used on both canaries. Project containers were not restarted.
+
+Post-activation gates passed:
+
+- both supervisor and app processes inherited admission mode `enforce`;
+- metrics reported `storage_admission.mode=enforce`;
+- public `/healthz` returned ready with the expected `host_id`;
+- the monitoring-equivalent `podman ps -a --format json` probe completed in
+  0.04 seconds on `us-south-1` and 0.03 seconds on `wstein`;
+- `us-south-1` retained all 47 running projects;
+- `wstein` retained all 5 running projects;
+- no project was starting or stopping;
+- both hosts moved from initial `emergency` pressure to `recovery` during the
+  short validation window, with zero current project and maintenance full
+  pressure.
+
+At activation, neither host had a new scheduled or scavenger operation to
+defer, so `deferred_total` remained zero. The canary must remain in observation
+until a real pressure episode confirms that background work is deferred while
+interactive and lifecycle operations remain available.
+
+Rollback is:
+
+1. restore the preserved local environment file;
+2. restart only the project-host control daemon once with `ctl restart`;
+3. verify process environment, public identity health, container-runtime
+   health, and unchanged running-project count.
+
 ## Important Remaining Gaps
 
 ### Policy assignment is not durable control-plane state
@@ -124,12 +180,17 @@ though the cgroups were valid and capped. This field means "not sampled in this
 interval", not "stale cgroup", and should be renamed or corrected without
 breaking telemetry compatibility.
 
-### Admission remains observe-only
+### Admission enforcement is canary-only
 
-Phase 2 records work that would have been deferred under pressure, but
-`deferred_total` remains zero because production storage admission is still in
-`observe` mode. This rollout provides hard project and maintenance I/O
-containment without enabling active admission deferral.
+The production fleet remains in `observe` mode except for `us-south-1` and
+`wstein`. Fleet rollout must wait for canary evidence from real pressure and
+maintenance cycles. The desired mode is also not yet assigned by durable
+control-plane policy.
+
+The same-version managed rollout no-op must be fixed or explicitly rejected
+before using that path for a fleet-wide environment-only activation. A rollout
+must not report success unless the requested component actually restarted and
+the new process inherited the desired configuration.
 
 ## Unrelated Observation
 
