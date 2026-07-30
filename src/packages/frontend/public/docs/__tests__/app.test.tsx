@@ -228,6 +228,41 @@ describe("public/docs", () => {
     ).toBeNull();
   });
 
+  it("renders crawlable navigation on public docs detail pages", () => {
+    const entry = getDocsEntry("projects/create-project");
+    if (entry == null) throw new Error("missing create-project docs entry");
+    const categoryEntries = listDocsEntries().filter(
+      (candidate) => candidate.category === entry.category,
+    );
+    const currentIndex = categoryEntries.findIndex(
+      (candidate) => candidate.id === entry.id,
+    );
+    const nextEntry = categoryEntries[currentIndex + 1];
+    if (nextEntry == null) throw new Error("missing next projects docs entry");
+
+    render(
+      <PublicDocsApp
+        config={{ site_name: "Launchpad" }}
+        initialRoute={{
+          slug: entry.slug,
+          view: "docs-detail",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "All docs index" }),
+    ).toHaveAttribute("href", "/docs");
+    expect(
+      screen.getAllByText(
+        `Page ${currentIndex + 1} of ${categoryEntries.length} in ${entry.category}`,
+      ),
+    ).toHaveLength(2);
+    for (const nextLink of screen.getAllByRole("link", { name: "Next" })) {
+      expect(nextLink).toHaveAttribute("href", docsPath(nextEntry.slug));
+    }
+  });
+
   it("renders the cocalc.ai-only RStudio docs page when host-gated", () => {
     render(
       <PublicDocsApp
