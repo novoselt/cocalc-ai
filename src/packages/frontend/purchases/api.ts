@@ -6,6 +6,7 @@ Some of these are only used by the nextjs app!
 
 import api0 from "@cocalc/frontend/client/api";
 import type {
+  AccountBillingSummary,
   Purchase,
   Reason,
   Service,
@@ -163,6 +164,12 @@ export async function getPurchasesAdmin(
   opts: PurchasesOptions & { account_id?: string },
 ): Promise<{ purchases: Purchase[]; balance: MoneyValue }> {
   return parsePurchaseDates(await api("purchases/get-purchases-admin", opts));
+}
+
+export async function getBillingSummaryAdmin(
+  account_id: string,
+): Promise<AccountBillingSummary> {
+  return await api("purchases/get-billing-summary-admin", { account_id });
 }
 
 export async function getSubscriptions(opts: {

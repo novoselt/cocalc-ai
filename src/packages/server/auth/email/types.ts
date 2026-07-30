@@ -45,6 +45,7 @@ export interface EmailAuthChallengePublicStatus {
   send_count: number;
   message_sent: boolean;
   message_failed: boolean;
+  message_sent_now: boolean;
 }
 
 export interface StartEmailAuthChallengeOptions {

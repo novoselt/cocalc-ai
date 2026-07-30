@@ -25,51 +25,48 @@ export function UserSearch({}) {
   }
 
   return (
-    <div style={{ margin: "0 30px" }}>
-      <div>
-        <Flex style={{ maxWidth: "100%" }}>
-          <Input.Search
-            allowClear
-            autoFocus
-            style={{ flex: 1, marginRight: "15px" }}
-            value={query}
-            placeholder="Search for users by partial name, email, account_id or project_id..."
-            onChange={(e) => actions.set_query(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.keyCode === 13) {
-                actions.search();
-              }
-            }}
-            enterButton="Search"
-            size="large"
-            onSearch={() => {
+    <div>
+      <Flex style={{ maxWidth: "100%" }}>
+        <Input.Search
+          allowClear
+          autoFocus
+          style={{ flex: 1, marginRight: "15px" }}
+          value={query}
+          placeholder="Search for users by partial name, email, account_id or project_id..."
+          onChange={(e) => actions.set_query(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.keyCode === 13) {
               actions.search();
-            }}
-          />
-          <InputNumber
-            style={{ width: "150px" }}
-            size="large"
-            defaultValue={limit}
-            min={1}
-            max={ADMIN_SEARCH_LIMIT}
-            step={10}
-            onChange={(limit) => {
-              if (limit) {
-                actions.setState({ limit });
-              }
-            }}
-            suffix="Limit"
-          />
-        </Flex>
-        {!!status && (
-          <div>
-            <pre>{status}</pre>
-            <Button onClick={() => actions.clear_status()}>Clear</Button>
-          </div>
-        )}
-        {(result?.size ?? 0) > 0 &&
-          result.map((user) => renderUser(user.toJS()))}
-      </div>
+            }
+          }}
+          enterButton="Search"
+          size="large"
+          onSearch={() => {
+            actions.search();
+          }}
+        />
+        <InputNumber
+          style={{ width: "150px" }}
+          size="large"
+          defaultValue={limit}
+          min={1}
+          max={ADMIN_SEARCH_LIMIT}
+          step={10}
+          onChange={(limit) => {
+            if (limit) {
+              actions.setState({ limit });
+            }
+          }}
+          suffix="Limit"
+        />
+      </Flex>
+      {!!status && (
+        <div>
+          <pre>{status}</pre>
+          <Button onClick={() => actions.clear_status()}>Clear</Button>
+        </div>
+      )}
+      {(result?.size ?? 0) > 0 && result.map((user) => renderUser(user.toJS()))}
     </div>
   );
 }

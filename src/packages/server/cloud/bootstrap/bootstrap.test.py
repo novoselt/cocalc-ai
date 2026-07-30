@@ -1562,6 +1562,14 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
             self.assertEqual(row["limits"]["riops"], 1293)
             self.assertEqual(row["limits"]["wiops"], 646)
 
+        maintenance = self.run_calculation(devices, "maintenance")
+        self.assertEqual(maintenance.returncode, 0, maintenance.stderr)
+        for row in json.loads(maintenance.stdout)["rows"]:
+            self.assertEqual(row["limits"]["rbps"], 6 * 1024**2)
+            self.assertEqual(row["limits"]["wbps"], 2_621_440)
+            self.assertEqual(row["limits"]["riops"], 172)
+            self.assertEqual(row["limits"]["wiops"], 86)
+
     def test_dynamic_capacity_rejects_unmodeled_storage(self) -> None:
         result = self.run_calculation(
             [
@@ -1708,7 +1716,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertNotEqual(parser_result.returncode, 0)
             self.assertIn("leaf rbps exceeds pool rbps", parser_result.stderr)
             self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
-            self.assertIn("project-rustic-backup)", script)
+            self.assertIn(
+                "project-rustic-backup|project-rustic-backup-maintenance)",
+                script,
+            )
             self.assertIn("project-rustic-restore)", script)
             self.assertIn(
                 '--glob "!.snapshots" --glob "!.snapshots/**"',
@@ -1772,6 +1783,25 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("verify-project-io-limits)", script)
             self.assertIn("verify-project-io-policy)", script)
             self.assertIn("project-io-status)", script)
+            self.assertIn("configure_maintenance_cgroup", script)
+            self.assertIn("attach_maintenance_worker", script)
+            self.assertIn("btrfs|btrfs-maintenance)", script)
+            self.assertIn(
+                "project-rustic-backup|project-rustic-backup-maintenance)",
+                script,
+            )
+            self.assertIn(
+                'MAINTENANCE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-maintenance"',
+                script,
+            )
+            self.assertIn(
+                'apply_io_max "$MAINTENANCE_CGROUP_DEFAULT" "maintenance" "$mode"',
+                script,
+            )
+            self.assertIn(
+                '"maintenance_process_count": len(maintenance_processes.split())',
+                script,
+            )
             self.assertIn('result["capability"] = "validated"', script)
             self.assertIn(
                 'PROJECT_IO_CAPACITY_DEFAULT="/etc/cocalc/project-io-capacity.json"',

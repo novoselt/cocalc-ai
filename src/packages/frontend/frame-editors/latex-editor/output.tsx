@@ -32,7 +32,6 @@ import { defineMessage, useIntl } from "react-intl";
 import { React, useEffect, useRedux } from "@cocalc/frontend/app-framework";
 import {
   Icon,
-  TableOfContents,
   TableOfContentsEntryList,
   Text,
   Tip,
@@ -52,6 +51,7 @@ import { PDFControls } from "./output-control";
 import { OutputFiles } from "./output-files";
 import { OutputStats } from "./output-stats";
 import { PDFJS } from "./pdfjs";
+import { LatexTOCBody } from "./table-of-contents-frame";
 import { BuildLogs } from "./types";
 import { useTexSummaries } from "./use-summarize";
 import { OUTPUT_HEADER_STYLE } from "./util";
@@ -413,10 +413,18 @@ export function Output(props: OutputProps) {
             </Button>
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
-            <TableOfContents
+            <LatexTOCBody
               contents={contents}
               fontSize={uiFontSize}
+              project_id={project_id}
+              masterPath={actions.path}
               scrollTo={actions.scrollToHeading.bind(actions)}
+              openAnchorChat={(hash, sourcePath) => {
+                void actions.openAnchorChat(
+                  hash,
+                  sourcePath === actions.path ? undefined : sourcePath,
+                );
+              }}
               ifEmpty={
                 <Alert
                   type="info"

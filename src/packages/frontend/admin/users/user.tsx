@@ -17,26 +17,18 @@ import { Impersonate } from "./impersonate";
 import { PasswordReset } from "./password-reset";
 import { AdminRole } from "./admin-role";
 import { Ban } from "./ban";
-import { PurchasesButton } from "@cocalc/frontend/purchases/purchases";
-import { PaymentsButton } from "@cocalc/frontend/purchases/payments";
-import { CreatePaymentButton } from "./create-payment";
-import { AdminBalanceAdjustmentButton } from "../admin-purchase";
 import { CopyToClipBoard } from "@cocalc/frontend/components";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import { COLORS } from "@cocalc/util/theme";
-import Money from "./money";
 import { AdminMembership } from "./admin-membership";
-import {
-  ManagedEgressHistoryButton,
-  ManagedEgressRateSummary,
-  ManagedEgressTopProjectsSummary,
-} from "@cocalc/frontend/purchases/managed-egress-history";
+import { AdminBilling } from "./billing";
+import { ManagedEgressHistoryPanel } from "@cocalc/frontend/purchases/managed-egress-history";
 import { AccountStatusTags } from "../account-status-tags";
 import { LegacyMigrationAdmin } from "./legacy-migration";
 
 type More =
   | "projects"
-  | "purchases"
+  | "billing"
   | "egress"
   | "activity"
   | "impersonate"
@@ -95,11 +87,14 @@ export function UserResult({
     );
   };
 
+  const showActiveContent = details && activeMore != null;
+
   return (
     <Card
-      style={{ margin: "15px 0", background: COLORS.GRAY_LLL }}
+      style={{ margin: "15px 0" }}
       styles={{
-        body: { padding: "0 24px" },
+        body: { padding: showActiveContent ? undefined : 0 },
+        header: { background: COLORS.GRAY_LLL },
         title: {
           overflow: "visible",
           padding: "0",
@@ -108,99 +103,38 @@ export function UserResult({
         },
       }}
       title={
-        <div
-          style={{
-            alignItems: "center",
-            cursor: "pointer",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "8px 16px",
-            minWidth: 0,
-          }}
-          onClick={details ? undefined : () => setDetails(true)}
-        >
-          <Icon
-            onClick={() => setDetails(!details)}
-            name={details ? "minus-square" : "plus-square"}
-            style={{ flex: "0 0 auto" }}
-          />
-          <Space
-            wrap
-            style={{ color: COLORS.GRAY_M, flex: "1 1 360px", minWidth: 0 }}
-          >
-            {userName}{" "}
-            {email_address ? (
-              <CopyToClipBoard
-                style={{ color: COLORS.GRAY_M }}
-                value={email_address}
-              />
-            ) : (
-              "NO Email"
-            )}
-            {home_bay_id && <Tag>Home bay: {home_bay_id}</Tag>}
-            <AccountStatusTags
-              account={{
-                banned,
-                membership_class,
-                membership_label,
-                membership_source,
-              }}
-            />
-            {is_admin && <Tag color="gold">ADMIN</Tag>}
-          </Space>
+        <Space orientation="vertical" size="small" style={{ width: "100%" }}>
           <div
             style={{
               alignItems: "center",
-              color: COLORS.GRAY_M,
+              cursor: "pointer",
               display: "flex",
-              flex: "0 1 auto",
               flexWrap: "wrap",
-              gap: "8px",
-              justifyContent: "flex-end",
-              marginLeft: "auto",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <ManagedEgressHistoryButton
-              user_account_id={account_id}
-              buttonText="Egress history"
-              size="small"
-            />
-            <span>
-              Active {renderLastActive()} (Created {renderCreated()})
-            </span>
-          </div>
-        </div>
-      }
-    >
-      {details && (
-        <div>
-          <div
-            style={{
-              alignItems: "center",
-              display: "flex",
-              flexWrap: "wrap-reverse",
               gap: "8px 16px",
-              justifyContent: "space-between",
-              marginTop: "5px",
+              minWidth: 0,
             }}
+            onClick={() => setDetails((value) => !value)}
           >
-            <Space wrap>
-              {renderMoreLink("impersonate")}
-              {renderMoreLink("password")}
-              {renderMoreLink("ban")}
-              {renderMoreLink("projects")}
-              {renderMoreLink("purchases")}
-              {renderMoreLink("egress")}
-              {renderMoreLink("membership")}
-              {renderMoreLink("migration")}
-            </Space>
-            <Space wrap>
-              <CopyToClipBoard
-                copyTip={"Copied account_id!"}
-                style={{ color: COLORS.GRAY_M }}
-                value={account_id}
-              />
+            <Icon
+              name={details ? "minus-square" : "plus-square"}
+              style={{ flex: "0 0 auto" }}
+            />
+            <Space
+              wrap
+              style={{ color: COLORS.GRAY_M, flex: "1 1 360px", minWidth: 0 }}
+            >
+              {userName}{" "}
+              {email_address ? (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <CopyToClipBoard
+                    style={{ color: COLORS.GRAY_M }}
+                    value={email_address}
+                  />
+                </div>
+              ) : (
+                "NO Email"
+              )}
+              {home_bay_id && <Tag>Home bay: {home_bay_id}</Tag>}
               <AccountStatusTags
                 account={{
                   banned,
@@ -209,13 +143,67 @@ export function UserResult({
                   membership_source,
                 }}
               />
+              {is_admin && <Tag color="gold">ADMIN</Tag>}
             </Space>
+            <div
+              style={{
+                alignItems: "center",
+                color: COLORS.GRAY_M,
+                display: "flex",
+                flex: "0 1 auto",
+                flexWrap: "wrap",
+                gap: "8px",
+                justifyContent: "flex-end",
+                marginLeft: "auto",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span>
+                Active {renderLastActive()} (Created {renderCreated()})
+              </span>
+            </div>
           </div>
+          {details && (
+            <div
+              style={{
+                alignItems: "center",
+                display: "flex",
+                flexWrap: "wrap-reverse",
+                gap: "8px 16px",
+                justifyContent: "space-between",
+              }}
+            >
+              <Space wrap>
+                {renderMoreLink("impersonate")}
+                {renderMoreLink("password")}
+                {renderMoreLink("ban")}
+                {renderMoreLink("projects")}
+                {renderMoreLink("billing")}
+                {renderMoreLink("egress")}
+                {renderMoreLink("membership")}
+                {renderMoreLink("migration")}
+              </Space>
+              <CopyToClipBoard
+                copyTip={"Copied account_id!"}
+                style={{ color: COLORS.GRAY_M }}
+                value={account_id}
+              />
+            </div>
+          )}
+        </Space>
+      }
+    >
+      {showActiveContent && (
+        <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
           {activeMore === "impersonate" && (
-            <Impersonate account_id={account_id} display_name={userName} />
+            <Impersonate
+              account_id={account_id}
+              display_name={userName}
+              embedded
+            />
           )}
           {activeMore === "password" && (
-            <Card title="Profile">
+            <>
               <PasswordReset
                 account_id={account_id}
                 email_address={email_address ?? ""}
@@ -228,69 +216,33 @@ export function UserResult({
                   is_admin={is_admin}
                 />
               </div>
-            </Card>
+            </>
           )}
           {activeMore === "ban" && (
-            <Card
-              title={
-                <>
-                  Ban {userName} {email_address}
-                </>
-              }
-            >
-              <Ban
-                account_id={account_id}
-                banned={banned}
-                name={`${userName} ${email_address ?? ""}`}
-              />
-            </Card>
+            <Ban
+              account_id={account_id}
+              banned={banned}
+              name={`${userName} ${email_address ?? ""}`}
+            />
           )}
           {activeMore === "projects" && (
             <Projects
               account_id={account_id}
+              embedded
               title={`Recently active projects that ${userName} collaborates on`}
             />
           )}
-          {activeMore === "purchases" && (
-            <Card title="Purchases">
-              <div style={{ margin: "15px 0" }}>
-                <Money account_id={account_id} />
-                <div style={{ height: "15px" }} />
-                <PurchasesButton account_id={account_id} />
-                <div style={{ height: "15px" }} />
-                <PaymentsButton account_id={account_id} />
-                <div style={{ height: "15px" }} />
-                <CreatePaymentButton account_id={account_id} />
-                <div style={{ height: "15px" }} />
-                <AdminBalanceAdjustmentButton account_id={account_id} />
-              </div>
-            </Card>
-          )}
+          {activeMore === "billing" && <AdminBilling account_id={account_id} />}
           {activeMore === "egress" && (
-            <Card title="Network Egress">
-              <Space
-                direction="vertical"
-                size="middle"
-                style={{ width: "100%" }}
-              >
-                <ManagedEgressRateSummary user_account_id={account_id} />
-                <ManagedEgressTopProjectsSummary user_account_id={account_id} />
-                <ManagedEgressHistoryButton
-                  user_account_id={account_id}
-                  buttonText="View egress history"
-                />
-              </Space>
-            </Card>
+            <ManagedEgressHistoryPanel user_account_id={account_id} />
           )}
           {activeMore === "membership" && (
-            <Card title="Membership">
-              <AdminMembership account_id={account_id} />
-            </Card>
+            <AdminMembership account_id={account_id} />
           )}
           {activeMore === "migration" && (
             <LegacyMigrationAdmin account_id={account_id} />
           )}
-        </div>
+        </Space>
       )}
     </Card>
   );

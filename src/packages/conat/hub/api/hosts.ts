@@ -777,7 +777,67 @@ export interface HostIoContainmentMetrics {
   truncated: boolean;
   sampling_error?: string;
   legacy_process_count?: number;
+  maintenance_cgroup?: string;
+  maintenance_io_max?: string;
+  maintenance_io_weight?: string;
+  maintenance_pressure_some_percent?: number;
+  maintenance_pressure_full_percent?: number;
+  maintenance_pressure_some_total?: number;
+  maintenance_pressure_full_total?: number;
+  maintenance_process_count?: number;
+  maintenance_cpu_max?: string;
+  maintenance_memory_high?: string;
+  maintenance_memory_max?: string;
+  maintenance_pids_max?: string;
   last_reconcile_error?: string;
+}
+
+export type HostStorageAdmissionMode = "disabled" | "observe" | "enforce";
+
+export type HostStoragePressureState =
+  | "normal"
+  | "contended"
+  | "emergency"
+  | "recovery";
+
+export interface HostStorageAdmissionDecision {
+  decided_at: string;
+  operation_kind: string;
+  priority: "lifecycle" | "interactive" | "scheduled" | "scavenger";
+  project_id?: string;
+  admitted: boolean;
+  would_defer: boolean;
+  reason?: string;
+  pressure_state: HostStoragePressureState;
+}
+
+export interface HostStorageAdmissionMetrics {
+  schema_version: 1;
+  collected_at: string;
+  mode: HostStorageAdmissionMode;
+  pressure_state: HostStoragePressureState;
+  state_since: string;
+  host_io_full_avg10?: number;
+  project_pool_io_full_avg10?: number;
+  effective_io_full_avg10?: number;
+  lifecycle_active: number;
+  starting_projects: number;
+  stopping_projects: number;
+  active_by_priority: {
+    lifecycle: number;
+    interactive: number;
+    scheduled: number;
+    scavenger: number;
+  };
+  btrfs_mutation_locks: number;
+  btrfs_mutation_waiters: number;
+  admitted_total: number;
+  deferred_total: number;
+  observed_deferral_total: number;
+  transition_count: number;
+  last_transition_reason?: string;
+  last_decision?: HostStorageAdmissionDecision;
+  sample_error?: string;
 }
 
 export interface HostConatPersistMetrics {
@@ -858,6 +918,7 @@ export interface HostCurrentMetrics {
   kernel_sysctls?: HostKernelSysctlSnapshot;
   resource_pressure?: HostResourcePressureMetrics;
   io_containment?: HostIoContainmentMetrics;
+  storage_admission?: HostStorageAdmissionMetrics;
   conat_persist?: HostConatPersistMetrics;
 }
 

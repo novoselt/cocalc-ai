@@ -35,6 +35,7 @@ interface Project {
 
 interface Props {
   account_id?: string; // account_id must be given
+  embedded?: boolean;
   title?: string | Rendered; // Defaults to "Projects"
 }
 
@@ -223,6 +224,14 @@ export class Projects extends Component<Props, State> {
         {content}
       </div>
     );
+    if (this.props.embedded) {
+      return (
+        <Space orientation="vertical" style={{ width: "100%" }}>
+          {content}
+          {this.render_projects()}
+        </Space>
+      );
+    }
     return <Card title={title}>{this.render_projects()}</Card>;
   }
 }

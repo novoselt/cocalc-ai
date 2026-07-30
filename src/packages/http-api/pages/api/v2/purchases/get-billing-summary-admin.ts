@@ -1,19 +1,19 @@
 /*
-Allows admins to get useful stats about a user's spending behavior.
-This is the same data we put in salesloft about them.
-*/
+ *  This file is part of CoCalc: Copyright © 2026 Sagemath, Inc.
+ *  License: MS-RSL – see LICENSE.md for details
+ */
 
-import { getMoneyData } from "@cocalc/server/salesloft/money";
 import getAccountId from "@cocalc/http-api/lib/account/get-account";
 import getParams from "@cocalc/http-api/lib/api/get-params";
 import userIsInGroup from "@cocalc/server/accounts/is-in-group";
+import getBillingSummary from "@cocalc/server/purchases/get-billing-summary";
+import throttle from "@cocalc/util/api/throttle";
 
 export default async function handle(req, res) {
   try {
     res.json(await get(req));
   } catch (err) {
     res.json({ error: `${err.message}` });
-    return;
   }
 }
 
@@ -25,12 +25,17 @@ async function get(req) {
   if (admin_account_id == null) {
     throw Error("must be signed in");
   }
-  // This user MUST be an admin:
   if (!(await userIsInGroup(admin_account_id, "admin"))) {
-    throw Error("only admins can use the salesloft/money endpoint");
+    throw Error("only admins can use the get-billing-summary-admin endpoint");
   }
+  throttle({
+    account_id: admin_account_id,
+    endpoint: "purchases/get-billing-summary-admin",
+  });
 
   const { account_id } = getParams(req);
-
-  return await getMoneyData(account_id);
+  if (!account_id) {
+    throw Error("account_id is required");
+  }
+  return await getBillingSummary({ account_id });
 }

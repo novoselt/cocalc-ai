@@ -1,19 +1,9 @@
-import {
-  Alert,
-  Button,
-  Card,
-  Flex,
-  Input,
-  InputNumber,
-  Space,
-  Spin,
-} from "antd";
+import { Alert, Button, Flex, Input, InputNumber, Space, Spin } from "antd";
 import {
   FreshAuthModal,
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
 import { createPaymentIntent } from "@cocalc/frontend/purchases/api";
-import { Icon } from "@cocalc/frontend/components/icon";
 import { useRef, useState } from "react";
 import { currency } from "@cocalc/util/misc";
 import ShowError from "@cocalc/frontend/components/error";
@@ -24,10 +14,9 @@ const DEFAULT_PAYMENT = 10;
 
 interface Props {
   account_id: string;
-  onClose?: () => void;
 }
 
-export default function CreatePayment({ account_id, onClose }: Props) {
+export default function CreatePayment({ account_id }: Props) {
   const [paymentDescription, setPaymentDescription] = useState<string>(
     "Manually entered payment initiated by CoCalc staff",
   );
@@ -71,7 +60,7 @@ export default function CreatePayment({ account_id, onClose }: Props) {
   };
 
   return (
-    <Card title={"Create Payment"}>
+    <>
       <Input
         disabled={done || loading}
         style={{ flex: 1, maxWidth: "700px", marginBottom: "15px" }}
@@ -116,9 +105,6 @@ export default function CreatePayment({ account_id, onClose }: Props) {
         </Button>
       </Flex>
       <Space style={{ marginBottom: "15px" }}>
-        {onClose != null && (
-          <Button onClick={onClose}>{done ? "Close" : "Cancel"}</Button>
-        )}{" "}
         <Button
           disabled={
             !!error ||
@@ -170,22 +156,6 @@ export default function CreatePayment({ account_id, onClose }: Props) {
         />
       </div>
       <FreshAuthModal {...freshAuthModalProps} />
-    </Card>
-  );
-}
-
-export function CreatePaymentButton(props: Props) {
-  const [show, setShow] = useState<boolean>(false);
-  return (
-    <div>
-      <Button onClick={() => setShow(!show)} type={show ? "dashed" : undefined}>
-        <Icon name="credit-card" /> Create Payment
-      </Button>
-      {show && (
-        <div style={{ marginTop: "8px" }}>
-          <CreatePayment {...props} onClose={() => setShow(false)} />
-        </div>
-      )}
-    </div>
+    </>
   );
 }

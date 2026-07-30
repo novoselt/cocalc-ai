@@ -576,22 +576,6 @@ function AdminCancelPayment({ id, onFinished }) {
   );
 }
 
-export function PaymentsButton(props: Props) {
-  const [show, setShow] = useState<boolean>(false);
-  return (
-    <div>
-      <Button onClick={() => setShow(!show)} type={show ? "dashed" : undefined}>
-        <Icon name="credit-card" /> Payments
-      </Button>
-      {show && (
-        <div style={{ marginTop: "8px" }}>
-          <Payments {...props} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 // Removed for now so it will work on the nextjs site with SSR:
 
 // function PaymentsPlot({ data: data0 }) {

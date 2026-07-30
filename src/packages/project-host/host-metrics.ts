@@ -15,6 +15,7 @@ import { readProjectHostKernelSysctls } from "./host-sysctl";
 import { refreshResourcePressureMetrics } from "./resource-pressure";
 import { readIoContainmentMetrics } from "./io-metrics";
 import { readConatPersistMetrics } from "./conat-persist-metrics";
+import { getStorageAdmissionStatus } from "./storage-admission";
 
 const logger = getLogger("project-host:host-metrics");
 
@@ -180,6 +181,7 @@ async function collectSnapshot(
     disk,
     reservation_bytes,
   );
+  const storageAdmission = getStorageAdmissionStatus();
   return {
     cpuSample,
     snapshot: {
@@ -197,6 +199,7 @@ async function collectSnapshot(
       kernel_sysctls,
       ...(resource_pressure ? { resource_pressure } : {}),
       io_containment,
+      ...(storageAdmission ? { storage_admission: storageAdmission } : {}),
       ...(conat_persist ? { conat_persist } : {}),
     },
   };

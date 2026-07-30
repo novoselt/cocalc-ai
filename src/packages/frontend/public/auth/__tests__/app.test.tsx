@@ -554,6 +554,35 @@ describe("PublicAuthApp", () => {
     expect(screen.getByLabelText("Six-digit email code")).not.toBeNull();
   });
 
+  it("explains when an existing email challenge is reused", async () => {
+    mockedPostAuthApi.mockResolvedValueOnce({
+      challenge_id: "11111111-1111-4111-8111-111111111111",
+      state: "pending",
+      masked_email: "pe…@example.edu",
+      expires_at: "2026-07-29T01:15:00.000Z",
+      resend_available_at: "2026-07-29T01:00:30.000Z",
+      message_sent_now: false,
+    });
+    render(
+      <PublicAuthApp
+        config={config({ email_authentication_mode: "email_first" })}
+        initialRoute={{ kind: "auth-form", view: "sign-in" }}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "Person@Example.EDU" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
+    );
+
+    expect(
+      await screen.findByText(/A sign-in email is already pending/),
+    ).not.toBeNull();
+    expect(screen.getByText(/We did not send another message/)).not.toBeNull();
+  });
+
   it("asks a newly created email-first account for its display name", async () => {
     mockedApi.mockResolvedValueOnce(false);
     mockedPostAuthApi

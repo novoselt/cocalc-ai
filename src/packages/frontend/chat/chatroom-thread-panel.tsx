@@ -47,7 +47,9 @@ import type { AcpAutomationConfig } from "@cocalc/conat/ai/acp/types";
 import { ChatLog } from "./chat-log";
 import { AgentMessageStatus } from "./agent-message-status";
 import CodexConfigButton from "./codex";
+import { ThreadAnchorButton } from "./thread-anchor-button";
 import { ThreadBadge } from "./thread-badge";
+import { ThreadResolveButton } from "./thread-resolve-button";
 import type { ChatActions } from "./actions";
 import type { ChatMessages } from "./types";
 import type * as immutable from "immutable";
@@ -2001,7 +2003,15 @@ export function ChatRoomThreadPanel({
                 size={compactThreadBadgeSize}
               />
             )}
-            {compactThreadLabel}
+            <ThreadAnchorButton
+              actions={actions}
+              threadKey={selectedThreadId}
+              label={compactThreadLabel}
+            />
+            <ThreadResolveButton
+              actions={actions}
+              threadKey={selectedThreadId}
+            />
           </div>
         )}
       {topRightControls}

@@ -1229,6 +1229,15 @@ test("software push publishes an immutable host bootstrap selector", async () =>
     r2.objects.get(`${key}.sha256`)!.toString("utf8"),
     `${sha256}  bootstrap.py\n`,
   );
+  const contentAddressedKey = `software/bootstrap/${sha256}/bootstrap.py`;
+  assert.equal(
+    r2.objects.get(contentAddressedKey)!.toString("utf8"),
+    bootstrapBody,
+  );
+  assert.equal(
+    r2.objects.get(`${contentAddressedKey}.sha256`)!.toString("utf8"),
+    `${sha256}  bootstrap.py\n`,
+  );
   assert.equal(r2.objects.has("software/bootstrap/latest/bootstrap.py"), false);
 });
 
@@ -3359,6 +3368,12 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
       .toString("utf8"),
     `${sha256}  bootstrap.py\n`,
   );
+  assert.equal(
+    r2.objects
+      .get(`software/bootstrap/${sha256}/bootstrap.py`)!
+      .toString("utf8"),
+    bootstrapBody,
+  );
   assert.equal(runs.length, 2);
   assert.deepEqual(runs[0].args, [
     "--profile",
@@ -4143,6 +4158,7 @@ test("software smoke static runs HTTP checks against the profile API", async () 
   assert.deepEqual(urls, [
     "https://staging.cocalc.ai/",
     "https://staging.cocalc.ai/static/app.html",
+    "https://staging.cocalc.ai/auth/email/continue/00000000-0000-4000-8000-000000000000",
     "https://staging.cocalc.ai/webapp/favicon.ico",
   ]);
 });

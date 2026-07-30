@@ -231,6 +231,7 @@ function publicStatus(row: ChallengeRow): EmailAuthChallengePublicStatus {
     send_count: Number(row.send_count ?? 0),
     message_sent: row.message_sent_at != null,
     message_failed: row.message_failed_at != null,
+    message_sent_now: false,
   };
 }
 
@@ -582,6 +583,7 @@ export async function startEmailAuthChallengeDirect(
     ...publicStatus(row),
     message_sent: true,
     message_failed: false,
+    message_sent_now: true,
   };
 }
 
@@ -739,6 +741,7 @@ export async function resendEmailAuthChallengeDirect(
     ...publicStatus(row),
     message_sent: true,
     message_failed: false,
+    message_sent_now: true,
   };
 }
 
