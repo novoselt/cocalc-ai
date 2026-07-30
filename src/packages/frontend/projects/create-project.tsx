@@ -38,7 +38,6 @@ import { labels } from "@cocalc/frontend/i18n";
 import { R2_REGION_LABELS } from "@cocalc/util/consts";
 import { COLORS } from "@cocalc/util/theme";
 import { SelectNewHost } from "@cocalc/frontend/hosts/select-new-host";
-import { RootfsScanSummaryButton } from "@cocalc/frontend/rootfs/scan-status";
 import {
   latestRootfsVersionEntries,
   renderRootfsCatalogOption,
@@ -475,29 +474,6 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
                   {displayLabel}
                 </Typography.Text>
               </span>
-              {selectedRootfsEntry?.section && (
-                <Tag color={sectionTagColor(selectedRootfsEntry.section)}>
-                  {sectionLabel(selectedRootfsEntry.section)}
-                </Tag>
-              )}
-              {selectedRootfsEntry?.version && (
-                <Tag>{selectedRootfsEntry.version}</Tag>
-              )}
-              {selectedRootfsEntry?.channel && (
-                <Tag color="cyan">{selectedRootfsEntry.channel}</Tag>
-              )}
-              {summary.gpu && <Tag color="purple">GPU</Tag>}
-              {selectedRootfsEntry && (
-                <RootfsScanSummaryButton
-                  entry={selectedRootfsEntry}
-                  title={`Image scan details: ${selectedRootfsEntry.label}`}
-                />
-              )}
-              {!selectedRootfsEntry && displayImage && (
-                <Tag color={isAdmin ? "orange" : "red"}>
-                  {isAdmin ? "Advanced OCI" : "Unavailable image"}
-                </Tag>
-              )}
             </Space>
             <Space size={4} wrap className="cc-project-create-preset-tags">
               {PROJECT_PRESETS.map((preset) => {
