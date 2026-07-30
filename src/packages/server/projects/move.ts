@@ -824,7 +824,9 @@ function isSourceHostAvailable(context: MoveProjectContext): boolean {
   if (!context.project_host_id) return false;
   if (context.source_host_deleted) return false;
   const status = String(context.source_host_status ?? "");
-  if (!["running", "starting", "restarting", "error"].includes(status)) {
+  if (
+    !["running", "starting", "restarting", "draining", "error"].includes(status)
+  ) {
     return false;
   }
   const lastSeenMs = context.source_host_last_seen?.getTime?.() ?? 0;
