@@ -15,6 +15,20 @@ describe("stripMathLabels", () => {
     expect(stripMathLabels("\\label {eq:x}c")).toBe("c");
     expect(stripMathLabels("no labels")).toBe("no labels");
   });
+
+  it("handles labels with nested/grouped arguments", () => {
+    expect(stripMathLabels("a \\label{eq:\\arabic{section}} b")).toBe("a  b");
+    expect(stripMathLabels("\\label{x{y}z}w \\label{q}")).toBe("w ");
+  });
+
+  it("leaves longer control words and malformed labels alone", () => {
+    expect(stripMathLabels("\\labelwidth{5pt} x")).toBe("\\labelwidth{5pt} x");
+    expect(stripMathLabels("\\label without braces")).toBe(
+      "\\label without braces",
+    );
+    // mid-edit, unbalanced — keep source untouched
+    expect(stripMathLabels("a \\label{eq:open b")).toBe("a \\label{eq:open b");
+  });
 });
 
 describe("prepareMathEnvSource", () => {

@@ -23,7 +23,60 @@ looks like "the widget parser ignored my formula".
 */
 
 export function stripMathLabels(source: string): string {
-  return source.replace(/\\label\s*\{[^{}]*\}/g, "");
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const j = source.indexOf("\\label", i);
+    if (j === -1) {
+      out += source.slice(i);
+      break;
+    }
+    let k = j + "\\label".length;
+    if (/[a-zA-Z]/.test(source[k] ?? "")) {
+      // longer control word, e.g. \labelwidth — not a label
+      out += source.slice(i, k);
+      i = k;
+      continue;
+    }
+    while (k < source.length && /\s/.test(source[k])) {
+      k++;
+    }
+    if (source[k] !== "{") {
+      out += source.slice(i, k);
+      i = k;
+      continue;
+    }
+    // consume the balanced {…} argument; labels may contain grouped
+    // macro args like \label{eq:\arabic{section}}, so a flat regex is
+    // not enough. \{ and \} escapes don't affect the depth.
+    let depth = 0;
+    let m = k;
+    while (m < source.length) {
+      const c = source[m];
+      if (c === "\\") {
+        m += 2;
+        continue;
+      }
+      if (c === "{") {
+        depth++;
+      } else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          m++;
+          break;
+        }
+      }
+      m++;
+    }
+    if (depth !== 0) {
+      // unbalanced (formula is mid-edit) — keep the source as-is
+      out += source.slice(i);
+      break;
+    }
+    out += source.slice(i, j);
+    i = m;
+  }
+  return out;
 }
 
 export function prepareMathEnvSource(source: string): string {
