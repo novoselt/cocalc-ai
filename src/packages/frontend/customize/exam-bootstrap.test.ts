@@ -5,8 +5,17 @@
 
 import { Map } from "immutable";
 import { applyExamSessionBootstrap } from "./exam-bootstrap";
+import { webapp_client as mockWebappClient } from "@cocalc/frontend/webapp-client";
+
+jest.mock("@cocalc/frontend/webapp-client", () => ({
+  webapp_client: {},
+}));
 
 describe("applyExamSessionBootstrap", () => {
+  beforeEach(() => {
+    mockWebappClient.account_id = "normal-site-account";
+  });
+
   it("hydrates the temporary account and project stores", () => {
     const accountSetState = jest.fn();
     const projectSetState = jest.fn();
@@ -41,6 +50,7 @@ describe("applyExamSessionBootstrap", () => {
     );
     expect(accountSetState).toHaveBeenNthCalledWith(2, { is_ready: true });
     expect(emit).toHaveBeenCalledWith("is_ready");
+    expect(mockWebappClient.account_id).toBe("account-1");
     const projectMap = projectSetState.mock.calls[0][0].project_map;
     expect(projectMap.getIn(["project-1", "title"])).toBe("Exam Scratchpad");
   });
@@ -49,5 +59,6 @@ describe("applyExamSessionBootstrap", () => {
     const redux = { getStore: jest.fn(), getActions: jest.fn() };
     applyExamSessionBootstrap({ redux });
     expect(redux.getStore).not.toHaveBeenCalled();
+    expect(mockWebappClient.account_id).toBe("normal-site-account");
   });
 });

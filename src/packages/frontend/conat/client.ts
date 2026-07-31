@@ -2899,7 +2899,12 @@ export class ConatClient extends EventEmitter {
           console.warn(`failed to start browser session automation: ${err}`),
         );
         const cookie = Cookies.get(ACCOUNT_ID_COOKIE);
-        if (!lite && cookie && cookie != client.info.user.account_id) {
+        if (
+          !lite &&
+          !isExamMode() &&
+          cookie &&
+          cookie != client.info.user.account_id
+        ) {
           // make sure account_id cookie is set to the actual account we're
           // signed in as, then refresh since some things are going to be
           // broken otherwise. To test this use dev tools and just change the account_id
