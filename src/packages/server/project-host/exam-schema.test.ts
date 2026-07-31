@@ -29,6 +29,13 @@ describe("project-host exam schema", () => {
     expect(sql).toContain("ALTER COLUMN updated_at SET DEFAULT NOW()");
     expect(sql).toContain("ALTER COLUMN updated_at SET NOT NULL");
     expect(sql).toContain(
+      "CREATE UNIQUE INDEX IF NOT EXISTS project_host_exam_runs_active_host_idx",
+    );
+    expect(sql).toContain("WHERE status <> 'stopped'");
+    expect(sql).toContain(
+      "CREATE UNIQUE INDEX IF NOT EXISTS project_host_exam_runs_create_key_idx",
+    );
+    expect(sql).toContain(
       "ADD COLUMN IF NOT EXISTS stop_host_at_deadline BOOLEAN DEFAULT TRUE",
     );
     expect(sql).toContain("ALTER COLUMN stop_host_at_deadline SET NOT NULL");

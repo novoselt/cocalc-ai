@@ -513,10 +513,29 @@ async function loadCurrentRun(
       SELECT *
       FROM ${RUN_TABLE}
       WHERE host_id=$1
-      ORDER BY COALESCE(created_at, updated_at) DESC, updated_at DESC, run_id DESC
+      ORDER BY
+        (status = 'stopped') ASC,
+        COALESCE(created_at, updated_at) DESC,
+        updated_at DESC,
+        run_id DESC
       LIMIT 1
     `,
     [host_id],
+  );
+  return rows[0] ? mapRun(rows[0]) : undefined;
+}
+
+async function loadRunById({
+  host_id,
+  run_id,
+}: {
+  host_id: string;
+  run_id: string;
+}): Promise<HostExamRun | undefined> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT * FROM ${RUN_TABLE} WHERE host_id=$1 AND run_id=$2`,
+    [host_id, run_id],
   );
   return rows[0] ? mapRun(rows[0]) : undefined;
 }
@@ -532,9 +551,11 @@ async function loadRuntimeStatus(
       timeout: 15_000,
       fresh: true,
     });
-    const runtime = (await client.getExamRunStatus({
-      run_id: run?.run_id,
-    })) as HostExamRuntimeStatus & Record<string, unknown>;
+    // The project host is authoritative for which run is actually active.
+    // Do not constrain this query using potentially stale central state.
+    const runtime = (await client.getExamRunStatus(
+      {},
+    )) as HostExamRuntimeStatus & Record<string, unknown>;
     return {
       ...runtime,
       active_projects: Number(
@@ -572,16 +593,22 @@ export async function getExamStateLocal({
   eligible: boolean;
   eligibility_reason?: string;
 }): Promise<HostExamState> {
-  const [config, run] = await Promise.all([
+  const [config, centralRun] = await Promise.all([
     loadConfig(host.id),
     loadCurrentRun(host.id),
   ]);
+  const runtime = await loadRuntimeStatus(host, centralRun);
+  let run = centralRun;
+  if (runtime?.run_id && runtime.run_id !== run?.run_id) {
+    run =
+      (await loadRunById({ host_id: host.id, run_id: runtime.run_id })) ?? run;
+  }
   return {
     eligible,
     eligibility_reason,
     config,
     run,
-    runtime: await loadRuntimeStatus(host, run),
+    runtime,
   };
 }
 
@@ -761,26 +788,6 @@ export async function createExamRunLocal({
     );
   }
 
-  const existingByKey = await getPool().query(
-    `
-      SELECT *
-      FROM ${RUN_TABLE}
-      WHERE host_id=$1 AND created_by=$2 AND create_idempotency_key=$3
-      LIMIT 1
-    `,
-    [host.id, actor_account_id, key],
-  );
-  if (existingByKey.rows[0]) {
-    const run = mapRun(existingByKey.rows[0]);
-    return {
-      run,
-      token: deterministicToken({
-        run_id: run.run_id,
-        idempotency_key: key,
-      }),
-    };
-  }
-
   const run_id = randomUUID();
   const token = deterministicToken({ run_id, idempotency_key: key });
   const token_hash = hashToken(token);
@@ -790,39 +797,94 @@ export async function createExamRunLocal({
     disk_quota: config.project_disk_mb,
     pids_limit: 4_096,
   };
-  const { rows } = await getPool().query(
-    `
-      INSERT INTO ${RUN_TABLE} (
-        run_id, host_id, config_generation, status, token_hash,
-        create_idempotency_key, token_idempotency_key, rootfs_image,
-        rootfs_digest, run_quota, max_projects, terminal_enabled,
-        network_mode, scheduled_stop_at, stop_host_at_deadline,
-        owner_account_id, created_by
-      )
-      VALUES (
-        $1, $2, $3, 'preparing', $4, $5, $5, $6, $7, $8::JSONB,
-        $9, $10, 'disabled', $11, $12, $13, $14
-      )
-      RETURNING *
-    `,
-    [
-      run_id,
+  const db = await getPool().connect();
+  let transactionOpen = false;
+  let run: HostExamRun;
+  try {
+    await db.query("BEGIN");
+    transactionOpen = true;
+    await db.query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))", [
+      "project-host-exam-run-create",
       host.id,
-      config.generation,
-      token_hash,
-      key,
-      selected.image,
-      selected.digest,
-      JSON.stringify(run_quota),
-      config.max_projects,
-      config.terminal_enabled,
-      deadline,
-      stop_host_at_deadline !== false,
-      ownerAccountId(host),
-      actor_account_id,
-    ],
-  );
-  let run = mapRun(rows[0]);
+    ]);
+    const existingByKey = await db.query(
+      `
+        SELECT *
+        FROM ${RUN_TABLE}
+        WHERE host_id=$1 AND created_by=$2 AND create_idempotency_key=$3
+        LIMIT 1
+      `,
+      [host.id, actor_account_id, key],
+    );
+    if (existingByKey.rows[0]) {
+      run = mapRun(existingByKey.rows[0]);
+      await db.query("COMMIT");
+      transactionOpen = false;
+      return {
+        run,
+        token: deterministicToken({
+          run_id: run.run_id,
+          idempotency_key: key,
+        }),
+      };
+    }
+    const active = await db.query(
+      `
+        SELECT run_id
+        FROM ${RUN_TABLE}
+        WHERE host_id=$1 AND status <> 'stopped'
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [host.id],
+    );
+    if (active.rows[0]) {
+      throw new Error("another exam run is still active on this host");
+    }
+    const { rows } = await db.query(
+      `
+        INSERT INTO ${RUN_TABLE} (
+          run_id, host_id, config_generation, status, token_hash,
+          create_idempotency_key, token_idempotency_key, rootfs_image,
+          rootfs_digest, run_quota, max_projects, terminal_enabled,
+          network_mode, scheduled_stop_at, stop_host_at_deadline,
+          owner_account_id, created_by
+        )
+        VALUES (
+          $1, $2, $3, 'preparing', $4, $5, $5, $6, $7, $8::JSONB,
+          $9, $10, 'disabled', $11, $12, $13, $14
+        )
+        RETURNING *
+      `,
+      [
+        run_id,
+        host.id,
+        config.generation,
+        token_hash,
+        key,
+        selected.image,
+        selected.digest,
+        JSON.stringify(run_quota),
+        config.max_projects,
+        config.terminal_enabled,
+        deadline,
+        stop_host_at_deadline !== false,
+        ownerAccountId(host),
+        actor_account_id,
+      ],
+    );
+    run = mapRun(rows[0]);
+    await db.query("COMMIT");
+    transactionOpen = false;
+  } catch (err) {
+    if (transactionOpen) {
+      await db.query("ROLLBACK");
+    }
+    throw err;
+  } finally {
+    db.release();
+  }
+
   try {
     const runtime = await control.applyExamRun({
       config,
@@ -831,13 +893,33 @@ export async function createExamRunLocal({
     });
     run = await updateRunFromRuntime({ run_id, runtime });
   } catch (err) {
+    let runtime: HostExamRuntimeStatus | undefined;
+    let inspectedRuntime = false;
+    try {
+      runtime = await control.getExamRunStatus({});
+      inspectedRuntime = true;
+    } catch (statusErr) {
+      logger.warn("unable to inspect exam runtime after apply failure", {
+        host_id: host.id,
+        run_id,
+        err: `${statusErr}`,
+      });
+    }
+    const rejectedBeforeActivation =
+      inspectedRuntime && runtime?.run_id !== run_id;
     await getPool().query(
       `
         UPDATE ${RUN_TABLE}
-        SET status='error', last_error=$2, updated_at=NOW()
+        SET status=$2,
+            admission_closed_at=CASE WHEN $2='stopped' THEN COALESCE(admission_closed_at, NOW()) ELSE admission_closed_at END,
+            cleanup_started_at=CASE WHEN $2='stopped' THEN COALESCE(cleanup_started_at, NOW()) ELSE cleanup_started_at END,
+            cleaned_at=CASE WHEN $2='stopped' THEN COALESCE(cleaned_at, NOW()) ELSE cleaned_at END,
+            stopped_at=CASE WHEN $2='stopped' THEN COALESCE(stopped_at, NOW()) ELSE stopped_at END,
+            last_error=$3,
+            updated_at=NOW()
         WHERE run_id=$1
       `,
-      [run_id, `${err}`],
+      [run_id, rejectedBeforeActivation ? "stopped" : "error", `${err}`],
     );
     throw err;
   }

@@ -10,6 +10,22 @@ Table({
   rules: {
     primary_key: "run_id",
     pg_indexes: ["host_id", "status", "scheduled_stop_at", "updated_at"],
+    pg_custom_indexes: [
+      {
+        name: "project_host_exam_runs_active_host_idx",
+        query: "(host_id) WHERE status <> 'stopped'",
+        unique: true,
+      },
+      {
+        name: "project_host_exam_runs_create_key_idx",
+        query: "(host_id, created_by, create_idempotency_key)",
+        unique: true,
+      },
+      {
+        name: "project_host_exam_runs_due_idx",
+        query: "(scheduled_stop_at) WHERE status <> 'stopped'",
+      },
+    ],
   },
   fields: {
     run_id: {

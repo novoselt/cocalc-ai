@@ -294,9 +294,22 @@ export function HostExamPanel({
       }
     } catch (err) {
       const text = `${(err as Error)?.message ?? err}`;
+      await refresh();
       setError(text);
       message.error(text);
     }
+  };
+
+  const mutateIdempotently = (
+    prefix: string,
+    action: (
+      idempotency_key: string,
+    ) => Promise<HostExamState & { token?: string }>,
+  ) => {
+    // A fresh-auth challenge may invoke the action again after elevation. One
+    // click is still one logical mutation, so every retry must reuse its key.
+    const idempotency_key = idempotencyKey(prefix);
+    return mutate(() => action(idempotency_key));
   };
 
   const run = state?.run;
@@ -484,7 +497,10 @@ export function HostExamPanel({
             <Button
               type="primary"
               disabled={
-                hasActiveRun || state?.eligible === false || !configDirty
+                loading ||
+                hasActiveRun ||
+                state?.eligible === false ||
+                !configDirty
               }
               onClick={() =>
                 void mutate(() =>
@@ -553,19 +569,19 @@ export function HostExamPanel({
               )}
               <Button
                 type="primary"
-                disabled={!canPrepare}
-                onClick={() =>
-                  void mutate(() =>
+                disabled={loading || !canPrepare}
+                onClick={() => {
+                  void mutateIdempotently("create", (idempotency_key) =>
                     api.createHostExamRun({
                       id: host.id,
                       browser_id: webapp_client.browser_id,
                       rootfs_image: rootfsImage!,
                       scheduled_stop_at: deadline.toISOString(),
                       stop_host_at_deadline: stopHostAtDeadline,
-                      idempotency_key: idempotencyKey("create"),
+                      idempotency_key,
                     }),
-                  )
-                }
+                  );
+                }}
               >
                 Prepare and test run
               </Button>
@@ -655,30 +671,32 @@ export function HostExamPanel({
                 <>
                   <Button
                     type="primary"
-                    onClick={() =>
-                      void mutate(() =>
+                    disabled={loading}
+                    onClick={() => {
+                      void mutateIdempotently("open", (idempotency_key) =>
                         api.openHostExamRun({
                           id: host.id,
                           browser_id: webapp_client.browser_id,
                           run_id: run.run_id,
-                          idempotency_key: idempotencyKey("open"),
+                          idempotency_key,
                         }),
-                      )
-                    }
+                      );
+                    }}
                   >
                     Open admission
                   </Button>
                   <Button
-                    onClick={() =>
-                      void mutate(() =>
+                    disabled={loading}
+                    onClick={() => {
+                      void mutateIdempotently("rotate", (idempotency_key) =>
                         api.rotateHostExamToken({
                           id: host.id,
                           browser_id: webapp_client.browser_id,
                           run_id: run.run_id,
-                          idempotency_key: idempotencyKey("rotate"),
+                          idempotency_key,
                         }),
-                      )
-                    }
+                      );
+                    }}
                   >
                     Rotate token
                   </Button>
@@ -711,20 +729,23 @@ export function HostExamPanel({
                   </Checkbox>
                   <Button
                     disabled={
-                      !runScheduleDirty || deadlineTooSoon || deadlineTooLate
+                      loading ||
+                      !runScheduleDirty ||
+                      deadlineTooSoon ||
+                      deadlineTooLate
                     }
-                    onClick={() =>
-                      void mutate(() =>
+                    onClick={() => {
+                      void mutateIdempotently("deadline", (idempotency_key) =>
                         api.updateHostExamDeadline({
                           id: host.id,
                           browser_id: webapp_client.browser_id,
                           run_id: run.run_id,
                           scheduled_stop_at: deadline.toISOString(),
                           stop_host_at_deadline: stopHostAtDeadline,
-                          idempotency_key: idempotencyKey("deadline"),
+                          idempotency_key,
                         }),
-                      )
-                    }
+                      );
+                    }}
                   >
                     Update cleanup time
                   </Button>
@@ -743,20 +764,22 @@ export function HostExamPanel({
                       : "This permanently deletes every temporary exam project but leaves the project host running."
                   }
                   okText={stopHostAtDeadline ? "Erase and shut down" : "Erase"}
-                  okButtonProps={{ danger: true }}
+                  okButtonProps={{ danger: true, disabled: loading }}
                   onConfirm={() =>
-                    mutate(() =>
+                    mutateIdempotently("stop", (idempotency_key) =>
                       api.stopAndEraseHostExamRun({
                         id: host.id,
                         browser_id: webapp_client.browser_id,
                         run_id: run.run_id,
                         stop_host: stopHostAtDeadline,
-                        idempotency_key: idempotencyKey("stop"),
+                        idempotency_key,
                       }),
                     )
                   }
                 >
-                  <Button danger>End exam and erase now</Button>
+                  <Button danger disabled={loading}>
+                    End exam and erase now
+                  </Button>
                 </Popconfirm>
               )}
             </Space>

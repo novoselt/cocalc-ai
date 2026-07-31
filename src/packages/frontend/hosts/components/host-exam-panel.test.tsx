@@ -207,6 +207,45 @@ describe("HostExamPanel", () => {
     );
   });
 
+  it("reuses one idempotency key when fresh auth retries preparation", async () => {
+    mockGetHostExamState.mockResolvedValueOnce({
+      eligible: true,
+      config: savedConfig,
+    });
+    mockCreateHostExamRun.mockResolvedValue({
+      eligible: true,
+      config: savedConfig,
+    });
+    mockRunFreshAuthAction.mockImplementation(async (action) => {
+      await action();
+      await action();
+      return true;
+    });
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[
+          {
+            image: "cocalc.local/rootfs/exam",
+            digest: "sha256:abc",
+          } as any,
+        ]}
+      />,
+    );
+
+    const prepare = screen.getByRole("button", {
+      name: "Prepare and test run",
+    });
+    await waitFor(() => expect(prepare).toBeEnabled());
+    fireEvent.click(prepare);
+    await waitFor(() => expect(mockCreateHostExamRun).toHaveBeenCalledTimes(2));
+
+    const firstKey = mockCreateHostExamRun.mock.calls[0][0].idempotency_key;
+    const secondKey = mockCreateHostExamRun.mock.calls[1][0].idempotency_key;
+    expect(firstKey).toMatch(/^create:/);
+    expect(secondKey).toBe(firstKey);
+  });
+
   it("does not present a stopped historical run as the current run", async () => {
     mockGetHostExamState.mockResolvedValueOnce({
       eligible: true,
