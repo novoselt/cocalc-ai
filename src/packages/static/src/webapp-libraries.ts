@@ -1,4 +1,8 @@
 import jQuery from "jquery";
+import { installBrowserCompatibility } from "./browser-compat";
+
+installBrowserCompatibility();
+
 // This is assumed in some of the ancient libraries we're still loading:
 (window as any).$ = (window as any).jQuery = jQuery;
 
