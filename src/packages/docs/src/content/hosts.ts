@@ -155,13 +155,34 @@ exam host through the single student origin.
 Create and rehearse the host well in advance. For each exam, start that same
 trusted host 30 to 60 minutes before candidates arrive.
 
+### Host sizing guidance
+
+Use the configured **Maximum projects** as the maximum number of simultaneous
+students: each admitted browser session receives one project. As a conservative
+starting point, choose a host with:
+
+- at least 8 vCPU
+- RAM in GB greater than \`3 + number of students / 2\`
+
+For example, 20 students calls for at least 8 vCPU and 14 GB RAM, while 200
+students calls for at least 8 vCPU and 104 GB RAM. The Exams panel performs this
+calculation from **Maximum projects** and compares it with the actual host; the
+result is advisory and never blocks setup or admission.
+
+This formula deliberately leaves substantial headroom. Exam projects are often
+much lighter than their configured per-project memory ceiling, so do not
+estimate host capacity by multiplying that ceiling by the student count. A
+smaller host may work well for a known workload, but rehearse the exact RootFS,
+notebooks, and expected concurrency before relying on it. Short exam windows
+usually make deliberate overprovisioning the safest choice.
+
 ## Step 1: configure the host
 
 1. Open **Project Hosts**, select the private host, and open its **Exams** tab.
 2. Turn on **Enable exam mode**.
 3. Set **Maximum projects** to the largest number of browser sessions that may
-   be admitted. Leave headroom for instructor testing and accidental extra
-   sessions.
+   be admitted. This is also the student count used by the host-sizing guidance.
+   Leave headroom for instructor testing and accidental extra sessions.
 4. Set CPU, memory, and disk limits for each project.
 5. Set **Maximum run** to the longest permitted project lifetime.
 6. Set **Cleanup grace**. This is the spending-safety interval before forced

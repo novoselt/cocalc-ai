@@ -3,7 +3,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { openAppDocs } from "@cocalc/frontend/docs/navigation";
-import { HostExamPanel } from "./host-exam-panel";
+import { assessExamHostCapacity, HostExamPanel } from "./host-exam-panel";
 
 const mockGetHostExamState = jest.fn(async () => ({ eligible: true }));
 const mockSetHostExamConfig = jest.fn();
@@ -53,6 +53,38 @@ describe("HostExamPanel", () => {
     );
   });
 
+  it("translates maximum projects into conservative host guidance", () => {
+    expect(
+      assessExamHostCapacity({ maxProjects: 200, cpu: 8, ramGiB: 104 }),
+    ).toEqual({
+      level: "success",
+      recommendedCpu: 8,
+      recommendedRamGiB: 104,
+    });
+    expect(
+      assessExamHostCapacity({ maxProjects: 200, cpu: 8, ramGiB: 50 }),
+    ).toEqual({
+      level: "close",
+      recommendedCpu: 8,
+      recommendedRamGiB: 104,
+    });
+    expect(
+      assessExamHostCapacity({ maxProjects: 200, cpu: 2, ramGiB: 32 }),
+    ).toEqual({
+      level: "warning",
+      recommendedCpu: 8,
+      recommendedRamGiB: 104,
+    });
+  });
+
+  it("does not claim that capacity is sufficient without host metrics", () => {
+    expect(assessExamHostCapacity({ maxProjects: 20 })).toEqual({
+      level: "unknown",
+      recommendedCpu: 8,
+      recommendedRamGiB: 14,
+    });
+  });
+
   it("opens the exam scratchpad documentation entry", () => {
     render(
       <HostExamPanel
@@ -68,6 +100,29 @@ describe("HostExamPanel", () => {
     );
 
     expect(openAppDocs).toHaveBeenCalledWith("hosts/exam-scratchpads");
+  });
+
+  it("shows a successful host capacity check", () => {
+    render(
+      <HostExamPanel
+        host={
+          {
+            id: "host-1",
+            status: "running",
+            host_cpu_count: 16,
+            host_ram_gb: 64,
+          } as any
+        }
+        rootfsImages={[]}
+      />,
+    );
+
+    expect(
+      screen.getByText("Host capacity meets the exam guideline"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/For 100 simultaneous students.*54 GB RAM/),
+    ).toBeInTheDocument();
   });
 
   it("leaves fresh-auth challenges for the fresh-auth flow", async () => {

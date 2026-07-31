@@ -36,6 +36,10 @@ import {
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
 import { openAppDocs } from "@cocalc/frontend/docs/navigation";
+import {
+  getHostCpuCount,
+  getHostRamGiB,
+} from "@cocalc/frontend/hosts/utils/format";
 
 const DEFAULT_CONFIG: HostExamConfigInput = {
   enabled: false,
@@ -48,6 +52,104 @@ const DEFAULT_CONFIG: HostExamConfigInput = {
   terminal_enabled: false,
   network_mode: "disabled",
 };
+
+const RECOMMENDED_EXAM_CPU = 8;
+const SUBSTANTIALLY_LOW_CPU = 4;
+const SUBSTANTIALLY_LOW_RAM_RATIO = 0.4;
+
+export type ExamHostCapacityAssessment = {
+  level: "success" | "close" | "warning" | "unknown";
+  recommendedCpu: number;
+  recommendedRamGiB: number;
+};
+
+export function assessExamHostCapacity({
+  maxProjects,
+  cpu,
+  ramGiB,
+}: {
+  maxProjects: number;
+  cpu?: number;
+  ramGiB?: number;
+}): ExamHostCapacityAssessment {
+  // The strict guidance is RAM (GB) > 3 + students / 2. Host sizes use
+  // whole GiB, so round up to the smallest integer that satisfies it.
+  const recommendedRamGiB = Math.floor(3 + Math.max(1, maxProjects) / 2) + 1;
+  const recommendation = {
+    recommendedCpu: RECOMMENDED_EXAM_CPU,
+    recommendedRamGiB,
+  };
+  if (cpu == null || ramGiB == null) {
+    return { level: "unknown", ...recommendation };
+  }
+  if (cpu >= RECOMMENDED_EXAM_CPU && ramGiB >= recommendedRamGiB) {
+    return { level: "success", ...recommendation };
+  }
+  if (
+    cpu < SUBSTANTIALLY_LOW_CPU ||
+    ramGiB < recommendedRamGiB * SUBSTANTIALLY_LOW_RAM_RATIO
+  ) {
+    return { level: "warning", ...recommendation };
+  }
+  return { level: "close", ...recommendation };
+}
+
+function ExamHostCapacityAlert({
+  host,
+  maxProjects,
+}: {
+  host: Host;
+  maxProjects: number;
+}) {
+  const cpu = getHostCpuCount(host);
+  const ramGiB = getHostRamGiB(host);
+  const assessment = assessExamHostCapacity({ maxProjects, cpu, ramGiB });
+  const students = Math.max(1, maxProjects);
+  const guidance = `For ${students} simultaneous students, we recommend at least ${assessment.recommendedCpu} vCPU and ${assessment.recommendedRamGiB} GB RAM.`;
+  const actual =
+    cpu != null && ramGiB != null
+      ? ` This host has ${cpu} vCPU and ${ramGiB} GB RAM.`
+      : " CoCalc cannot determine this host's CPU and RAM yet.";
+
+  if (assessment.level === "success") {
+    return (
+      <Alert
+        type="success"
+        showIcon
+        title="Host capacity meets the exam guideline"
+        description={`${guidance}${actual}`}
+      />
+    );
+  }
+  if (assessment.level === "unknown") {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        title="Confirm host capacity before the exam"
+        description={`${guidance}${actual} This advisory does not block exam setup.`}
+      />
+    );
+  }
+  if (assessment.level === "warning") {
+    return (
+      <Alert
+        type="error"
+        showIcon
+        title="Host capacity is substantially below exam guidance"
+        description={`${guidance}${actual} Resize the host or complete a representative full-load rehearsal before a live exam. This advisory does not block exam setup.`}
+      />
+    );
+  }
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      title="Host capacity is below the recommended headroom"
+      description={`${guidance}${actual} The workload may still fit, but complete a representative full-load rehearsal before the exam. This advisory does not block exam setup.`}
+    />
+  );
+}
 
 function idempotencyKey(prefix: string): string {
   return `${prefix}:${crypto.randomUUID()}`;
@@ -125,7 +227,7 @@ export function HostExamPanel({
 
   useEffect(() => {
     if (rootfsImage || rootfsImages.length === 0) return;
-    setRootfsImage(rootfsImages[0].image);
+    setRootfsImage(rootfsImages.find((entry) => !!entry.digest)?.image);
   }, [rootfsImage, rootfsImages]);
 
   const mutate = async (
@@ -155,12 +257,20 @@ export function HostExamPanel({
   const run = state?.run;
   const runtime = state?.runtime;
   const hasActiveRun = !!run && run.status !== "stopped";
-  const canPrepare =
-    config.enabled &&
-    host.status === "running" &&
-    !hasActiveRun &&
-    !!rootfsImage &&
-    deadline.valueOf() > Date.now();
+  const selectedRootfsIsReady = rootfsImages.some(
+    (entry) => entry.image === rootfsImage && !!entry.digest,
+  );
+  const prepareBlockers = [
+    !config.enabled ? "Enable and save exam mode." : undefined,
+    host.status !== "running" ? "Start the project host." : undefined,
+    !selectedRootfsIsReady
+      ? "Select a cached RootFS that has a digest."
+      : undefined,
+    deadline.valueOf() <= Date.now()
+      ? "Choose an automatic stop time in the future."
+      : undefined,
+  ].filter((value): value is string => !!value);
+  const canPrepare = !hasActiveRun && prepareBlockers.length === 0;
 
   return (
     <Spin spinning={loading}>
@@ -211,7 +321,7 @@ export function HostExamPanel({
             </Space>
             <Space wrap>
               <label>
-                Maximum projects
+                Maximum projects (students)
                 <InputNumber
                   min={1}
                   max={1000}
@@ -294,6 +404,10 @@ export function HostExamPanel({
                 />
               </label>
             </Space>
+            <ExamHostCapacityAlert
+              host={host}
+              maxProjects={config.max_projects}
+            />
             <Space wrap>
               <Switch
                 checked={config.terminal_enabled}
@@ -344,10 +458,20 @@ export function HostExamPanel({
               />
               <DatePicker
                 showTime
+                showNow={false}
                 value={deadline}
                 onChange={(value) => value && setDeadline(value)}
                 minDate={dayjs()}
+                status={deadline.valueOf() <= Date.now() ? "error" : undefined}
               />
+              {prepareBlockers.length > 0 && (
+                <Alert
+                  type="info"
+                  showIcon
+                  title="Complete these steps before preparing the run"
+                  description={prepareBlockers.join(" ")}
+                />
+              )}
               <Button
                 type="primary"
                 disabled={!canPrepare}
