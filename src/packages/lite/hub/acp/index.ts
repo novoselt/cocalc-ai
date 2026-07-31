@@ -5810,7 +5810,11 @@ export async function recoverTerminalStaleAcpTurns(
           message_id: turn.message_id,
           thread_id: turn.thread_id,
           account_id: request?.account_id ?? job?.account_id,
-          session_id: turn.session_id ?? request?.session_id,
+          session_id:
+            turn.session_id ??
+            (request?.request_kind === "command"
+              ? undefined
+              : request?.session_id),
         };
         if (hasQueuedCompletedAcpPayloads(completedTurn)) {
           if (
