@@ -82,6 +82,27 @@ describe("PersistStreamReleaseQueue", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
+  it("drains immediately while still yielding between releases", async () => {
+    const queue = new PersistStreamReleaseQueue({ graceMs: 60_000 });
+    const first = jest.fn();
+    const second = jest.fn();
+
+    queue.schedule({ close: first });
+    queue.schedule({ close: second });
+    const drained = queue.drain();
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    jest.runOnlyPendingTimers();
+    await drained;
+
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(queue.diagnostics()).toMatchObject({
+      pending: 0,
+      released_total: 2,
+    });
+  });
+
   it("uses a safe default for invalid grace values", () => {
     expect(
       resolvePersistStreamReleaseGraceMs({
@@ -93,5 +114,12 @@ describe("PersistStreamReleaseQueue", () => {
         CONAT_PERSIST_STREAM_RELEASE_GRACE_MS: "1200",
       }),
     ).toBe(1_200);
+  });
+
+  it("releases immediately by default in tests", () => {
+    expect(resolvePersistStreamReleaseGraceMs({ NODE_ENV: "test" })).toBe(0);
+    expect(
+      resolvePersistStreamReleaseGraceMs({ COCALC_TEST_MODE: "true" }),
+    ).toBe(0);
   });
 });

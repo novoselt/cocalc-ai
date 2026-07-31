@@ -33,6 +33,14 @@ export function resolvePersistStreamReleaseGraceMs(
 ): number {
   const raw = `${env[PERSIST_STREAM_RELEASE_GRACE_MS_ENV] ?? ""}`.trim();
   if (!raw) {
+    if (
+      env.NODE_ENV === "test" ||
+      ["1", "true"].includes(
+        `${env.COCALC_TEST_MODE ?? ""}`.trim().toLowerCase(),
+      )
+    ) {
+      return 0;
+    }
     return DEFAULT_PERSIST_STREAM_RELEASE_GRACE_MS;
   }
   const value = Number(raw);
@@ -50,6 +58,7 @@ export class PersistStreamReleaseQueue {
   private pending: PendingRelease[] = [];
   private timeout?: ReturnType<typeof setTimeout>;
   private immediate?: ReturnType<typeof setImmediate>;
+  private drainPromise?: Promise<void>;
   private scheduledTotal = 0;
   private releasedTotal = 0;
   private errorsTotal = 0;
@@ -99,8 +108,23 @@ export class PersistStreamReleaseQueue {
     };
   }
 
+  drain({ ignoreGrace = true }: { ignoreGrace?: boolean } = {}): Promise<void> {
+    if (this.drainPromise != null) {
+      return this.drainPromise;
+    }
+    this.drainPromise = this.drainPending({ ignoreGrace }).finally(() => {
+      this.drainPromise = undefined;
+      this.arm();
+    });
+    return this.drainPromise;
+  }
+
   private arm(): void {
-    if (this.timeout != null || this.immediate != null) {
+    if (
+      this.drainPromise != null ||
+      this.timeout != null ||
+      this.immediate != null
+    ) {
       return;
     }
     const next = this.pending[0];
@@ -111,25 +135,27 @@ export class PersistStreamReleaseQueue {
     if (delay > 0) {
       this.timeout = setTimeout(() => {
         this.timeout = undefined;
-        this.releaseOne();
+        this.releaseOne({ rearm: true });
       }, delay);
       this.timeout.unref?.();
       return;
     }
     this.immediate = setImmediate(() => {
       this.immediate = undefined;
-      this.releaseOne();
+      this.releaseOne({ rearm: true });
     });
     this.immediate.unref?.();
   }
 
-  private releaseOne(): void {
+  private releaseOne({ rearm }: { rearm: boolean }): void {
     const next = this.pending[0];
     if (next == null) {
       return;
     }
     if (next.dueAt > this.now()) {
-      this.arm();
+      if (rearm) {
+        this.arm();
+      }
       return;
     }
     this.pending.shift();
@@ -154,6 +180,39 @@ export class PersistStreamReleaseQueue {
     }
     // Always yield before releasing another SQLite reference. The final
     // reference closes synchronously to preserve close/reopen exclusion.
-    this.arm();
+    if (rearm) {
+      this.arm();
+    }
+  }
+
+  private async drainPending({
+    ignoreGrace,
+  }: {
+    ignoreGrace: boolean;
+  }): Promise<void> {
+    if (this.timeout != null) {
+      clearTimeout(this.timeout);
+      this.timeout = undefined;
+    }
+    if (this.immediate != null) {
+      clearImmediate(this.immediate);
+      this.immediate = undefined;
+    }
+    if (ignoreGrace) {
+      const now = this.now();
+      for (const pending of this.pending) {
+        pending.dueAt = now;
+      }
+    }
+    while (this.pending.length > 0) {
+      const delay = Math.max(0, this.pending[0].dueAt - this.now());
+      if (delay > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      }
+      this.releaseOne({ rearm: false });
+      if (this.pending.length > 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
   }
 }

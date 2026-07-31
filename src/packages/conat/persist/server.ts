@@ -111,6 +111,10 @@ export function getPersistStreamReleaseQueueDiagnostics(): PersistStreamReleaseQ
   return streamReleaseQueue.diagnostics();
 }
 
+export async function drainPersistStreamReleaseQueue(): Promise<void> {
+  await streamReleaseQueue.drain();
+}
+
 export function classifyPersistStorageErrorCode(
   err: unknown,
 ): string | undefined {
