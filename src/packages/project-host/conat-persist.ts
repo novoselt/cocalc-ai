@@ -13,6 +13,7 @@ import type { Application } from "express";
 import getPort from "@cocalc/backend/get-port";
 import getLogger from "@cocalc/backend/logger";
 import { server as createPersistServer } from "@cocalc/backend/conat/persist";
+import { getPersistStreamReleaseQueueDiagnostics } from "@cocalc/conat/persist/server";
 import {
   connect as connectToConat,
   type Client as ConatClient,
@@ -259,6 +260,7 @@ export async function startStandaloneProjectHostConatPersist({
           maintenance: getMaintenanceDiagnostics(),
           ready: persistReady,
           serverId: id,
+          streamReleases: getPersistStreamReleaseQueueDiagnostics(),
         }),
       );
     } catch (err) {

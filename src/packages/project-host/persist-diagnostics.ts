@@ -8,6 +8,7 @@ import {
   getPersistentStreamDiagnostics,
   getPersistentStreamSqliteDiagnostics,
 } from "@cocalc/conat/persist/storage";
+import type { PersistStreamReleaseQueueDiagnostics } from "@cocalc/conat/persist/release-queue";
 import { performance } from "node:perf_hooks";
 import {
   getHeapCodeStatistics,
@@ -42,6 +43,7 @@ export function collectProjectHostPersistDiagnostics({
   maintenance,
   ready = true,
   serverId,
+  streamReleases,
 }: {
   includePersistenceDetail?: boolean;
   maintenance?: {
@@ -63,6 +65,7 @@ export function collectProjectHostPersistDiagnostics({
   };
   ready?: boolean;
   serverId?: string;
+  streamReleases?: PersistStreamReleaseQueueDiagnostics;
 } = {}) {
   const persistence = getPersistentStreamDiagnostics();
   return {
@@ -90,6 +93,7 @@ export function collectProjectHostPersistDiagnostics({
       persistence: {
         local_open_streams: persistence.open_total,
         local_streams: persistence,
+        ...(streamReleases ? { deferred_releases: streamReleases } : {}),
         ...(maintenance
           ? {
               maintenance: {
