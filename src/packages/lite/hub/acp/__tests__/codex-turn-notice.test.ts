@@ -7,6 +7,7 @@ jest.mock("@cocalc/conat/hub/call-hub", () => jest.fn());
 
 import {
   buildCodexTurnNoticeOptions,
+  codexTurnNotifyPreference,
   publishCodexTurnNotice,
   shouldNotifyOnCodexTurnFinish,
 } from "../codex-turn-notice";
@@ -19,6 +20,15 @@ describe("codex turn completion notices", () => {
     expect(shouldNotifyOnCodexTurnFinish({ notifyOnTurnFinish: true })).toBe(
       true,
     );
+    expect(codexTurnNotifyPreference({ notifyOnTurnFinish: false })).toBe(
+      false,
+    );
+    expect(codexTurnNotifyPreference({})).toBeUndefined();
+    expect(
+      codexTurnNotifyPreference({
+        get: (key: string) => (key === "notifyOnTurnFinish" ? true : undefined),
+      } as any),
+    ).toBe(true);
   });
 
   it("builds a success notice payload", () => {
@@ -93,6 +103,7 @@ describe("codex turn completion notices", () => {
           thread_id: "thread-1",
         }),
       ],
+      timeout: 5_000,
     });
   });
 });

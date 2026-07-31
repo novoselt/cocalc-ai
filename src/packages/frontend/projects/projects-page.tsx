@@ -35,6 +35,7 @@ import { ProjectsOperations } from "./projects-operations";
 import { StarredProjectsBar } from "./projects-starred";
 import { ProjectsTable } from "./projects-table";
 import { ProjectsTableControls } from "./projects-table-controls";
+import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
 import { ProjectDrawer } from "./project-drawer";
 import ProjectsPageTour from "./tour";
 import { getVisibleProjects } from "./util";
@@ -643,28 +644,30 @@ export const ProjectsPage: React.FC = () => {
                     overflow: mobileProjectsList ? undefined : "hidden",
                   }}
                 >
-                  {mobileProjectsList ? (
-                    <MobileProjectsList
-                      visible_projects={visible_projects}
-                      rootfsImages={rootfsImages}
-                      rootfsImagesLoading={rootfsImagesLoading}
-                      selectedProjectIds={selectedProjectIds}
-                      onSelectedProjectIdsChange={setSelectedProjectIds}
-                    />
-                  ) : (
-                    <ProjectsTable
-                      visible_projects={visible_projects}
-                      rootfsImages={rootfsImages}
-                      rootfsImagesLoading={rootfsImagesLoading}
-                      height={tableHeight}
-                      narrow={narrow}
-                      filteredCollaborators={filteredCollaborators}
-                      onFilteredCollaboratorsChange={setFilteredCollaborators}
-                      selectedProjectIds={selectedProjectIds}
-                      onSelectedProjectIdsChange={setSelectedProjectIds}
-                      freezeOrder={backendWindowDirty}
-                    />
-                  )}
+                  <CocalcErrorBoundary scope="projects.list">
+                    {mobileProjectsList ? (
+                      <MobileProjectsList
+                        visible_projects={visible_projects}
+                        rootfsImages={rootfsImages}
+                        rootfsImagesLoading={rootfsImagesLoading}
+                        selectedProjectIds={selectedProjectIds}
+                        onSelectedProjectIdsChange={setSelectedProjectIds}
+                      />
+                    ) : (
+                      <ProjectsTable
+                        visible_projects={visible_projects}
+                        rootfsImages={rootfsImages}
+                        rootfsImagesLoading={rootfsImagesLoading}
+                        height={tableHeight}
+                        narrow={narrow}
+                        filteredCollaborators={filteredCollaborators}
+                        onFilteredCollaboratorsChange={setFilteredCollaborators}
+                        selectedProjectIds={selectedProjectIds}
+                        onSelectedProjectIdsChange={setSelectedProjectIds}
+                        freezeOrder={backendWindowDirty}
+                      />
+                    )}
+                  </CocalcErrorBoundary>
                 </div>
               </div>
             </div>

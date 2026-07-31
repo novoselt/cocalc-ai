@@ -54,11 +54,7 @@ export class DBDocument extends PFDbDocument implements Document {
 
   public is_equal(other?: Document): boolean {
     if (other == null) return false;
-    const otherStr =
-      other instanceof DBDocument
-        ? other.to_str()
-        : (other as unknown as PFDbDocument).toString();
-    return this.to_str() === otherStr;
+    return super.isEqual(other as unknown as PFDbDocument);
   }
 
   public override applyPatch(patch: unknown): DBDocument {
