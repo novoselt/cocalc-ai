@@ -27,6 +27,7 @@ function createMockEditor(node?: HTMLTextAreaElement | null) {
   let currentValue = "";
   let renderedHeightOverride: number | null = null;
   let currentCursor = { line: 0, ch: 0 };
+  let currentHistory: any = { done: [], undone: [] };
   let currentSelections = [
     {
       anchor: { line: 0, ch: 0 },
@@ -91,6 +92,9 @@ function createMockEditor(node?: HTMLTextAreaElement | null) {
     __setRenderedHeight(height: number | null) {
       renderedHeightOverride = height;
     },
+    __setHistory(history: any) {
+      currentHistory = history;
+    },
     __setScrollInfo(info: Partial<typeof currentScrollInfo>) {
       currentScrollInfo = { ...currentScrollInfo, ...info };
       if (info.top != null) {
@@ -112,6 +116,7 @@ function createMockEditor(node?: HTMLTextAreaElement | null) {
       listSelections: () => currentSelections,
     })),
     getGutterElement: jest.fn(() => document.createElement("div")),
+    getHistory: jest.fn(() => currentHistory),
     getInputField: jest.fn(() => inputField),
     getLine: jest.fn((line: number) => currentValue.split("\n")[line] ?? ""),
     getScrollerElement: jest.fn(() => scroller),
@@ -133,11 +138,17 @@ function createMockEditor(node?: HTMLTextAreaElement | null) {
     setCursor: jest.fn((cursor: { line: number; ch: number }) => {
       currentCursor = cursor;
     }),
+    clearHistory: jest.fn(() => {
+      currentHistory = { done: [], undone: [] };
+    }),
     setOption: jest.fn((key: string, value: any) => {
       editor.options[key] = value;
     }),
     setSelections: jest.fn((selections: any) => {
       currentSelections = selections;
+    }),
+    setHistory: jest.fn((history: any) => {
+      currentHistory = history;
     }),
     setSize: jest.fn(),
     setValue: jest.fn((value: string) => {
@@ -410,6 +421,66 @@ describe("MarkdownInput CodeMirror wrapper contract", () => {
 
     expect(latestEditor.undo).toBeUndefined();
     expect(latestEditor.redo).toBeUndefined();
+  });
+
+  it("restores local undo history after the editor unmounts", async () => {
+    const first = await renderMarkdownInput(
+      <MarkdownInput
+        value="edited"
+        onChange={() => {}}
+        saveDebounceMs={0}
+        undoMode="local"
+        redoMode="local"
+        localHistoryCacheId="markdown-cell-history"
+      />,
+    );
+    const history = { done: [{ changes: ["typed"] }], undone: [] };
+    latestEditor.__setHistory(history);
+
+    first.unmount();
+    latestEditor = null;
+
+    await renderMarkdownInput(
+      <MarkdownInput
+        value="edited"
+        onChange={() => {}}
+        saveDebounceMs={0}
+        undoMode="local"
+        redoMode="local"
+        localHistoryCacheId="markdown-cell-history"
+      />,
+    );
+
+    expect(latestEditor.setHistory).toHaveBeenCalledWith(history);
+  });
+
+  it("invalidates local undo history when the upstream value changes", async () => {
+    const { rerender } = await renderMarkdownInput(
+      <MarkdownInput
+        value="local"
+        onChange={() => {}}
+        saveDebounceMs={0}
+        undoMode="local"
+        redoMode="local"
+        localHistoryCacheId="markdown-cell-external-change"
+      />,
+    );
+    latestEditor.__setHistory({ done: [{ changes: ["typed"] }], undone: [] });
+    latestEditor.clearHistory.mockClear();
+
+    rerender(
+      <MarkdownInput
+        value="remote"
+        onChange={() => {}}
+        saveDebounceMs={0}
+        undoMode="local"
+        redoMode="local"
+        localHistoryCacheId="markdown-cell-external-change"
+      />,
+    );
+
+    expect(latestEditor.getValue()).toBe("remote");
+    expect(latestEditor.clearHistory).toHaveBeenCalledTimes(1);
   });
 
   it("reclamps the markdown wrapper height when an auto-grow editor is resized smaller", async () => {

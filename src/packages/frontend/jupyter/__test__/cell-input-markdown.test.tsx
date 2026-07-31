@@ -126,6 +126,8 @@ describe("Jupyter markdown cell input", () => {
     expect(latestMarkdownInputProps).toBeTruthy();
     expect(latestMarkdownInputProps.height).toBe("auto");
     expect(latestMarkdownInputProps.unboundedAutoGrow).toBe(true);
+    expect(latestMarkdownInputProps.undoMode).toBe("local");
+    expect(latestMarkdownInputProps.redoMode).toBe("local");
   });
 
   it("does not autofocus a markdown editor merely because the cell is current", () => {
