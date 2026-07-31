@@ -203,7 +203,10 @@ describe("HostExamPanel", () => {
     fireEvent.click(prepare);
     await waitFor(() => expect(mockCreateHostExamRun).toHaveBeenCalled());
     expect(mockCreateHostExamRun).toHaveBeenCalledWith(
-      expect.objectContaining({ stop_host_at_deadline: false }),
+      expect.objectContaining({
+        stop_host_at_deadline: false,
+        timeout: 12 * 60_000,
+      }),
     );
   });
 
@@ -309,7 +312,10 @@ describe("HostExamPanel", () => {
       expect(mockRunFreshAuthAction).toHaveBeenCalledTimes(1),
     );
     expect(mockSetHostExamConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ browser_id: "browser-1" }),
+      expect.objectContaining({
+        browser_id: "browser-1",
+        timeout: 2 * 60_000,
+      }),
     );
     expect(screen.queryByText(/fresh auth is required/)).toBeNull();
   });

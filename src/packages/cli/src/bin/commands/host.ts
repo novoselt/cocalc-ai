@@ -13,6 +13,7 @@ import { humanSize } from "@cocalc/util/misc";
 import { isValidUUID } from "@cocalc/util/misc";
 
 import { printArrayTable } from "../core/cli-output";
+import { registerHostExamCommands } from "./host-exam";
 
 type HostRuntimeLogRow = {
   host_id: string;
@@ -1578,6 +1579,7 @@ export function registerHostCommand(
     });
   }
   const host = program.command("host").description("host operations");
+  registerHostExamCommands({ hostCommand: host, deps });
 
   host
     .command("list")

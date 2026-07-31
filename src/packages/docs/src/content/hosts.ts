@@ -194,6 +194,43 @@ usually make deliberate overprovisioning the safest choice.
 
 Outbound networking is fixed to **disabled** in the current version.
 
+### CLI and agent automation
+
+Every instructor control in the Exams panel is also available through
+\`cocalc host exam\`. This is useful for repeatable rehearsals, institutional
+runbooks, and asking a CoCalc agent to prepare or inspect an exam. Use
+\`cocalc host rootfs <host>\` to list the images already cached on a host.
+
+~~~bash
+# Inspect the current configuration, run, readiness checks, and student URL.
+cocalc host exam status <host>
+
+# Enable exam mode and configure per-project limits.
+cocalc host exam configure <host> --enable --max-projects 100 \
+  --project-cpu 1 --project-memory-mb 2000 --project-disk-mb 5000 \
+  --maximum-run-minutes 360 --cleanup-grace-minutes 10 --deny-terminal
+
+# Prepare the run and wait for its smoke test to finish.
+cocalc host exam prepare <host> --rootfs <image> \
+  --delete-at 2026-08-01T15:00:00Z --stop-host
+
+# Admit students, rotate a lost token, or inspect a transition in progress.
+cocalc host exam open <host>
+cocalc host exam rotate-token <host>
+cocalc host exam status <host> --wait
+
+# Change cleanup policy, or end early and permanently erase all exam projects.
+cocalc host exam deadline <host> --delete-at 2026-08-01T15:30:00Z --stop-host
+cocalc host exam end <host> --stop-host --yes
+~~~
+
+Preparation and token rotation print the plaintext admission token once. Store
+it securely. Mutation commands require fresh authentication; run
+\`cocalc auth bootstrap\` first when the current CLI session is not elevated.
+Pass \`--keep-host-running\` instead of \`--stop-host\` when cleanup should leave
+the reusable project host online. Destructive early cleanup always requires
+\`--yes\`.
+
 ## Step 2: prepare and test a run
 
 1. Start the host and wait until it reports **running** and online.

@@ -58,6 +58,11 @@ const DEFAULT_CONFIG: HostExamConfigInput = {
 const RECOMMENDED_EXAM_CPU = 8;
 const SUBSTANTIALLY_LOW_CPU = 4;
 const SUBSTANTIALLY_LOW_RAM_RATIO = 0.4;
+const EXAM_STATE_TIMEOUT_MS = 30_000;
+const EXAM_MUTATION_TIMEOUT_MS = 2 * 60_000;
+const EXAM_LIFECYCLE_TIMEOUT_MS = 12 * 60_000;
+const EXAM_TRANSIENT_POLL_MS = 2_000;
+const EXAM_TRANSIENT_STATUSES = new Set(["preparing", "closing", "cleaning"]);
 
 function defaultExamDeadline(projectTtlMinutes: number): Dayjs {
   // Keep clear of both server boundaries: at least one minute ahead and no
@@ -236,7 +241,10 @@ export function HostExamPanel({
     setLoading(true);
     setError("");
     try {
-      const next = await api.getHostExamState({ id: host.id });
+      const next = await api.getHostExamState({
+        id: host.id,
+        timeout: EXAM_STATE_TIMEOUT_MS,
+      });
       setState(next);
       if (next.config) {
         setConfig(editableExamConfig(next.config));
@@ -267,6 +275,17 @@ export function HostExamPanel({
   useEffect(() => {
     void refresh();
   }, [host.id]);
+
+  useEffect(() => {
+    const status = state?.run?.status;
+    if (loading || status == null || !EXAM_TRANSIENT_STATUSES.has(status)) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void refresh();
+    }, EXAM_TRANSIENT_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [host.id, loading, state?.run?.status]);
 
   useEffect(() => {
     if (rootfsImage || rootfsImages.length === 0) return;
@@ -508,6 +527,7 @@ export function HostExamPanel({
                     id: host.id,
                     browser_id: webapp_client.browser_id,
                     config,
+                    timeout: EXAM_MUTATION_TIMEOUT_MS,
                   }),
                 )
               }
@@ -579,6 +599,7 @@ export function HostExamPanel({
                       scheduled_stop_at: deadline.toISOString(),
                       stop_host_at_deadline: stopHostAtDeadline,
                       idempotency_key,
+                      timeout: EXAM_LIFECYCLE_TIMEOUT_MS,
                     }),
                   );
                 }}
@@ -679,6 +700,7 @@ export function HostExamPanel({
                           browser_id: webapp_client.browser_id,
                           run_id: run.run_id,
                           idempotency_key,
+                          timeout: EXAM_MUTATION_TIMEOUT_MS,
                         }),
                       );
                     }}
@@ -694,6 +716,7 @@ export function HostExamPanel({
                           browser_id: webapp_client.browser_id,
                           run_id: run.run_id,
                           idempotency_key,
+                          timeout: EXAM_MUTATION_TIMEOUT_MS,
                         }),
                       );
                     }}
@@ -743,6 +766,7 @@ export function HostExamPanel({
                           scheduled_stop_at: deadline.toISOString(),
                           stop_host_at_deadline: stopHostAtDeadline,
                           idempotency_key,
+                          timeout: EXAM_MUTATION_TIMEOUT_MS,
                         }),
                       );
                     }}
@@ -773,6 +797,7 @@ export function HostExamPanel({
                         run_id: run.run_id,
                         stop_host: stopHostAtDeadline,
                         idempotency_key,
+                        timeout: EXAM_LIFECYCLE_TIMEOUT_MS,
                       }),
                     )
                   }

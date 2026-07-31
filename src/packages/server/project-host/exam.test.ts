@@ -119,4 +119,35 @@ describe("project-host exam configuration", () => {
     expect(encoded).toMatch(/^scrypt-v1\$[^$]+\$[^$]+$/);
     expect(encoded).not.toContain("do-not-store-this-token");
   });
+
+  it("reconciles central lifecycle state from the authoritative host", () => {
+    const run = {
+      run_id: "00000000-2000-4000-8000-000000000002",
+      status: "preparing",
+    } as any;
+    expect(
+      __test__.shouldReconcileRunWithRuntime(run, {
+        run_id: run.run_id,
+        status: "ready",
+        admission_open: false,
+        active_projects: 0,
+      }),
+    ).toBe(true);
+    expect(
+      __test__.shouldReconcileRunWithRuntime(run, {
+        run_id: run.run_id,
+        status: "preparing",
+        admission_open: false,
+        active_projects: 0,
+      }),
+    ).toBe(false);
+    expect(
+      __test__.shouldReconcileRunWithRuntime(run, {
+        run_id: "00000000-3000-4000-8000-000000000003",
+        status: "ready",
+        admission_open: false,
+        active_projects: 0,
+      }),
+    ).toBe(false);
+  });
 });

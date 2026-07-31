@@ -603,6 +603,16 @@ export async function getExamStateLocal({
     run =
       (await loadRunById({ host_id: host.id, run_id: runtime.run_id })) ?? run;
   }
+  if (shouldReconcileRunWithRuntime(run, runtime)) {
+    if (run && runtime) {
+      // The project host owns execution state. Heal the central row when a
+      // hub restart or lost RPC response interrupted the original mutation.
+      run = await updateRunFromRuntime({
+        run_id: run.run_id,
+        runtime,
+      });
+    }
+  }
   return {
     eligible,
     eligibility_reason,
@@ -610,6 +620,18 @@ export async function getExamStateLocal({
     run,
     runtime,
   };
+}
+
+function shouldReconcileRunWithRuntime(
+  run?: HostExamRun,
+  runtime?: HostExamRuntimeStatus,
+): boolean {
+  return !!(
+    run &&
+    runtime?.run_id === run.run_id &&
+    runtime.status &&
+    runtime.status !== run.status
+  );
 }
 
 async function ensureExamDns({
@@ -1282,5 +1304,6 @@ export const __test__ = {
   isHostOnDemand,
   normalizeConfig,
   publicIp,
+  shouldReconcileRunWithRuntime,
   validateDeadline,
 };

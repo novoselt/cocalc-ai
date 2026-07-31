@@ -1918,6 +1918,7 @@ export interface Hosts {
   getHostExamState: (opts: {
     account_id?: string;
     id: string;
+    timeout?: number;
   }) => Promise<HostExamState>;
   setHostExamConfig: (opts: {
     account_id?: string;
@@ -1925,6 +1926,7 @@ export interface Hosts {
     session_hash?: string | null;
     id: string;
     config: HostExamConfigInput;
+    timeout?: number;
   }) => Promise<HostExamState>;
   createHostExamRun: (opts: {
     account_id?: string;
@@ -1935,6 +1937,7 @@ export interface Hosts {
     scheduled_stop_at: string;
     stop_host_at_deadline?: boolean;
     idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState & { token: string }>;
   rotateHostExamToken: (opts: {
     account_id?: string;
@@ -1943,6 +1946,7 @@ export interface Hosts {
     id: string;
     run_id: string;
     idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState & { token: string }>;
   openHostExamRun: (opts: {
     account_id?: string;
@@ -1951,6 +1955,7 @@ export interface Hosts {
     id: string;
     run_id: string;
     idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState>;
   updateHostExamDeadline: (opts: {
     account_id?: string;
@@ -1961,6 +1966,7 @@ export interface Hosts {
     scheduled_stop_at: string;
     stop_host_at_deadline?: boolean;
     idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState>;
   stopAndEraseHostExamRun: (opts: {
     account_id?: string;
@@ -1970,6 +1976,7 @@ export interface Hosts {
     run_id: string;
     stop_host?: boolean;
     idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState>;
   listHostSshAuthorizedKeys: (opts: {
     account_id?: string;
