@@ -214,9 +214,9 @@ cocalc host exam configure <host> --enable --max-projects 100 \
 cocalc host exam prepare <host> --rootfs <image> \
   --delete-at 2026-08-01T15:00:00Z --stop-host
 
-# Admit students, rotate a lost token, or inspect a transition in progress.
-cocalc host exam open <host>
+# Rotate a lost token before opening admission, then admit students.
 cocalc host exam rotate-token <host>
+cocalc host exam open <host>
 cocalc host exam status <host> --wait
 
 # Change cleanup policy, or end early and permanently erase all exam projects.

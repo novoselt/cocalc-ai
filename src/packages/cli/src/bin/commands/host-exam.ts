@@ -427,7 +427,7 @@ export function registerHostExamCommands({
 
   exam
     .command("rotate-token <host>")
-    .description("rotate and display the exam admission token")
+    .description("rotate and display the token before admission opens")
     .option("--run <run_id>", "exam run id; defaults to the active run")
     .option("--idempotency-key <key>", "reuse a previous logical request key")
     .option("--browser-id <id>", "browser session id for fresh-auth checks")
@@ -441,8 +441,13 @@ export function registerHostExamCommands({
         await withContext(command, "host exam rotate-token", async (ctx) => {
           const host = await resolveHost(ctx, hostIdentifier);
           const current = await getState(ctx, host.id);
-          const run_id =
-            `${opts.run ?? ""}`.trim() || activeRun(current).run_id;
+          const run = activeRun(current);
+          if (run.status !== "ready") {
+            throw new Error(
+              "the exam token can only be rotated while the run is ready, before admission opens",
+            );
+          }
+          const run_id = `${opts.run ?? ""}`.trim() || run.run_id;
           const state = await ctx.hub.hosts.rotateHostExamToken({
             id: host.id,
             run_id,

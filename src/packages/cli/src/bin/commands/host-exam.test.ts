@@ -235,11 +235,15 @@ describe("host exam commands", () => {
     assert.equal(prepareCall.stop_host_at_deadline, false);
     assert.equal(prepareCall.idempotency_key, "exam-test-prepare");
 
-    assert.equal((await harness.run(["open", "exam-test"])).run.status, "open");
-    assert.equal(harness.calls.open.at(-1).timeout, 120_000);
     assert.equal(
       (await harness.run(["rotate-token", "exam-test"])).token,
       "rotated-token",
+    );
+    assert.equal((await harness.run(["open", "exam-test"])).run.status, "open");
+    assert.equal(harness.calls.open.at(-1).timeout, 120_000);
+    await assert.rejects(
+      harness.run(["rotate-token", "exam-test"]),
+      /before admission opens/,
     );
 
     const newDeleteAt = "2026-07-31T23:30:00.000Z";
