@@ -12,11 +12,31 @@ let assertDedicatedHostAdmissionForAccountMock: jest.Mock;
 let getDedicatedHostPolicySnapshotForAccountMock: jest.Mock;
 let isBillableDedicatedHostCloudMock: jest.Mock;
 let selectDedicatedHostFundingLaneMock: jest.Mock;
-let estimateDedicatedHostRateUsdPerHourMock: jest.Mock;
+let estimateDedicatedHostRateMock: jest.Mock;
 let reconcileDedicatedHostPurchaseSessionForAccountMock: jest.Mock;
 let requireFreshAuthForSessionHashMock: jest.Mock;
 
 const ACCOUNT_ID = "81e787c4-8705-46c5-86df-9d07bc424a01";
+
+function dedicatedHostRateEstimate(hourly_cost_usd: string) {
+  return {
+    hourly_cost_usd,
+    pricing_snapshot: {
+      version: 1,
+      billing_state: "running",
+      hourly_cost_usd,
+      components: [
+        {
+          key: "vm",
+          label: "VM",
+          hourly_cost_usd,
+          billing_states: ["running"],
+        },
+      ],
+      configuration: {},
+    },
+  };
+}
 
 function maybeHandleAccountDirectoryQuery(sql: string, params: any[]) {
   if (
@@ -116,8 +136,8 @@ jest.mock("@cocalc/server/project-host/admission", () => ({
 
 jest.mock("@cocalc/server/project-host/spend", () => ({
   __esModule: true,
-  estimateDedicatedHostRateUsdPerHour: (...args: any[]) =>
-    estimateDedicatedHostRateUsdPerHourMock(...args),
+  estimateDedicatedHostRate: (...args: any[]) =>
+    estimateDedicatedHostRateMock(...args),
   reconcileDedicatedHostPurchaseSessionForAccount: (...args: any[]) =>
     reconcileDedicatedHostPurchaseSessionForAccountMock(...args),
 }));
@@ -200,7 +220,9 @@ describe("hosts.createHost", () => {
       (provider?: string | null) => provider === "gcp",
     );
     selectDedicatedHostFundingLaneMock = jest.fn(() => "prepaid");
-    estimateDedicatedHostRateUsdPerHourMock = jest.fn(async () => "1.25");
+    estimateDedicatedHostRateMock = jest.fn(async () =>
+      dedicatedHostRateEstimate("1.25"),
+    );
     reconcileDedicatedHostPurchaseSessionForAccountMock = jest.fn(
       async () => undefined,
     );
@@ -218,6 +240,9 @@ describe("hosts.createHost", () => {
           funding_mode: "account-prepaid",
           funding_lane: "prepaid",
           hourly_cost_usd: "1.25",
+          pricing_snapshot: expect.objectContaining({
+            billing_state: "running",
+          }),
           started_at: expect.any(String),
         });
         expect(params[5]).toBeNull();
@@ -382,7 +407,7 @@ describe("hosts.createHost", () => {
     expect(
       reconcileDedicatedHostPurchaseSessionForAccountMock,
     ).not.toHaveBeenCalled();
-    expect(estimateDedicatedHostRateUsdPerHourMock).not.toHaveBeenCalled();
+    expect(estimateDedicatedHostRateMock).not.toHaveBeenCalled();
   });
 
   it("creates site-funded cloud hosts without opening an account-funded purchase session", async () => {
@@ -481,7 +506,7 @@ describe("hosts.createHost", () => {
         credit_7d_usd: "0",
       },
     }));
-    estimateDedicatedHostRateUsdPerHourMock = jest.fn(async () => undefined);
+    estimateDedicatedHostRateMock = jest.fn(async () => undefined);
 
     const { createHost } = await import("./hosts");
     await expect(
@@ -505,7 +530,9 @@ describe("hosts.createHost", () => {
   });
 
   it("rejects billable cloud host creation when the estimated rate has no billing runway", async () => {
-    estimateDedicatedHostRateUsdPerHourMock = jest.fn(async () => "100");
+    estimateDedicatedHostRateMock = jest.fn(async () =>
+      dedicatedHostRateEstimate("100"),
+    );
 
     const { createHost } = await import("./hosts");
     await expect(
@@ -543,7 +570,7 @@ describe("hosts.createHost", () => {
         },
       }),
     ).rejects.toThrow("disk_gb must be at least 75 GB");
-    expect(estimateDedicatedHostRateUsdPerHourMock).not.toHaveBeenCalled();
+    expect(estimateDedicatedHostRateMock).not.toHaveBeenCalled();
     expect(queryMock).not.toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO project_hosts"),
       expect.anything(),
@@ -636,7 +663,7 @@ describe("hosts.createHost", () => {
         },
       }),
     ).rejects.toThrow("shared_disk_gb must be at most 10,044 GB");
-    expect(estimateDedicatedHostRateUsdPerHourMock).not.toHaveBeenCalled();
+    expect(estimateDedicatedHostRateMock).not.toHaveBeenCalled();
     expect(queryMock).not.toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO project_hosts"),
       expect.anything(),
@@ -660,7 +687,7 @@ describe("hosts.createHost", () => {
     ).rejects.toThrow(
       "shared scratch disks are not supported for provider 'lambda'",
     );
-    expect(estimateDedicatedHostRateUsdPerHourMock).not.toHaveBeenCalled();
+    expect(estimateDedicatedHostRateMock).not.toHaveBeenCalled();
   });
 
   it("creates postpaid cloud hosts with a credit-funded purchase session", async () => {
@@ -695,6 +722,9 @@ describe("hosts.createHost", () => {
           funding_mode: "account-postpaid",
           funding_lane: "credit",
           hourly_cost_usd: "1.25",
+          pricing_snapshot: expect.objectContaining({
+            billing_state: "running",
+          }),
           started_at: expect.any(String),
         });
         return { rowCount: 1 };
@@ -824,7 +854,9 @@ describe("hosts.startHostInternal", () => {
     selectDedicatedHostFundingLaneMock = jest.fn(() => {
       throw new Error("should not select an account-funded lane");
     });
-    estimateDedicatedHostRateUsdPerHourMock = jest.fn(async () => "1.25");
+    estimateDedicatedHostRateMock = jest.fn(async () =>
+      dedicatedHostRateEstimate("1.25"),
+    );
     reconcileDedicatedHostPurchaseSessionForAccountMock = jest.fn(
       async () => undefined,
     );
@@ -920,7 +952,7 @@ describe("hosts.startHostInternal", () => {
 
   it("rejects site-funded starts when pricing is unavailable", async () => {
     let selectCount = 0;
-    estimateDedicatedHostRateUsdPerHourMock = jest.fn(async () => undefined);
+    estimateDedicatedHostRateMock = jest.fn(async () => undefined);
     queryMock = jest.fn(async (sql: string, params: any[]) => {
       if (
         sql.includes(

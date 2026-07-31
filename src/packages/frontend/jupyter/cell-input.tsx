@@ -296,7 +296,9 @@ export const CellInput: React.FC<CellInputProps> = React.memo(
         <MarkdownInput
           fontSize={props.font_size}
           enableMentions={true}
-          cacheId={`${props.id}${frameActions.current?.frame_id}`}
+          cacheId={`jupyter:${frameActions.current?.frame_id ?? ""}:${
+            props.id
+          }`}
           value={localValue}
           height="auto"
           unboundedAutoGrow
@@ -323,6 +325,8 @@ export const CellInput: React.FC<CellInputProps> = React.memo(
                   props.actions?.redo();
                 }
           }
+          undoMode="local"
+          redoMode="local"
           onSave={
             props.actions == null
               ? undefined

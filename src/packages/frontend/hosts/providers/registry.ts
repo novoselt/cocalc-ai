@@ -888,8 +888,8 @@ function stoppedHostPriceEstimate(
 ): ProviderPriceEstimate | undefined {
   if (!running) return undefined;
   return buildProviderPriceEstimateFromLineItems(
-    running.line_items.filter(
-      (item) => item.key === "disk" || item.key === "shared_scratch_disk",
+    running.line_items.filter((item) =>
+      item.billing_states.includes("stopped"),
     ),
     running.notes,
   );

@@ -13,12 +13,13 @@ import getPool, { type PoolClient } from "@cocalc/database/pool";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { resolveAccountHomeBay } from "@cocalc/server/bay-directory";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
+import { isDeepStrictEqual } from "node:util";
 import { loadNebiusInstanceTypes } from "@cocalc/server/cloud/providers";
 import { nextCalendarMonthStartAfter } from "@cocalc/server/purchases/billing-period";
 import createPurchase from "@cocalc/server/purchases/create-purchase";
 import {
-  DEDICATED_HOST_USAGE,
   type DedicatedHostPurchase,
+  type DedicatedHostPricingSnapshot,
 } from "@cocalc/util/db-schema/purchases";
 import {
   moneyToDbString,
@@ -31,11 +32,14 @@ import {
   getActiveAccountUsageWindows,
 } from "@cocalc/server/membership/usage-windows";
 import {
-  applyDedicatedHostSurchargeToHourlyRate,
-  estimateGcpCatalogRateUsdPerHour,
-  estimateNebiusCatalogRateUsdPerHour,
+  applyDedicatedHostSurchargeToBreakdown,
+  estimateGcpCatalogRateBreakdown,
+  estimateNebiusCatalogRateBreakdown,
   getDedicatedHostSurchargeFraction,
+  hostPriceBreakdownForBillingState,
+  type DedicatedHostBillingState,
   type GcpCatalogPrices,
+  type HostPriceBreakdown,
   type NebiusCatalogInstanceType,
   type NebiusCatalogPriceItem,
 } from "@cocalc/util/project-host-pricing";
@@ -67,12 +71,115 @@ export interface DedicatedHostRateEstimateInput {
   gpu_type?: string | null;
   gpu_count?: number | null;
   pricing_model?: "on_demand" | "spot" | null;
+  billing_state?: DedicatedHostBillingState;
+}
+
+export interface DedicatedHostRateEstimate {
+  hourly_cost_usd: MoneyValue;
+  pricing_snapshot: DedicatedHostPricingSnapshot;
 }
 
 const HOST_PURCHASE_TAG_PREFIX = "dedicated-host:";
+const localPurchaseMutationTails = new Map<string, Promise<void>>();
 
 function purchaseTag(host_id: string): string {
   return `${HOST_PURCHASE_TAG_PREFIX}${host_id}`;
+}
+
+export function dedicatedHostRateFromPricingSnapshot({
+  pricing_snapshot,
+  billing_state,
+}: {
+  pricing_snapshot?: DedicatedHostPricingSnapshot | null;
+  billing_state: DedicatedHostBillingState;
+}): DedicatedHostRateEstimate | undefined {
+  if (
+    pricing_snapshot?.version !== 1 ||
+    !Array.isArray(pricing_snapshot.components)
+  ) {
+    return undefined;
+  }
+  const components = pricing_snapshot.components.filter((component) =>
+    component.billing_states?.includes(billing_state),
+  );
+  let total = toDecimal(0);
+  try {
+    for (const component of components) {
+      const amount = toDecimal(component.hourly_cost_usd);
+      if (amount.lt(0)) return undefined;
+      total = total.add(amount);
+    }
+  } catch {
+    return undefined;
+  }
+  const hourly_cost_usd = moneyToDbString(total);
+  const configuration = { ...(pricing_snapshot.configuration ?? {}) };
+  if (billing_state === "stopped") {
+    delete configuration.machine_type;
+    delete configuration.pricing_model;
+  }
+  return {
+    hourly_cost_usd,
+    pricing_snapshot: {
+      version: 1,
+      billing_state,
+      hourly_cost_usd,
+      components,
+      configuration,
+    },
+  };
+}
+
+async function withDedicatedHostPurchaseMutation<T>({
+  account_id,
+  host_id,
+  client,
+  fn,
+}: {
+  account_id: string;
+  host_id: string;
+  client?: PoolClient;
+  fn: (client: PoolClient) => Promise<T>;
+}): Promise<T> {
+  const mutationKey = `${account_id}:${host_id}`;
+  const previous = localPurchaseMutationTails.get(mutationKey);
+  let releaseLocal!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseLocal = resolve;
+  });
+  const tail = (previous ?? Promise.resolve()).then(() => current);
+  localPurchaseMutationTails.set(mutationKey, tail);
+  await previous;
+  try {
+    if (client) {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+        [account_id, purchaseTag(host_id)],
+      );
+      return await fn(client);
+    }
+    const transactionClient = await getPool().connect();
+    try {
+      await transactionClient.query("BEGIN");
+      await transactionClient.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+        [account_id, purchaseTag(host_id)],
+      );
+      const result = await fn(transactionClient);
+      await transactionClient.query("COMMIT");
+      return result;
+    } catch (err) {
+      await transactionClient.query("ROLLBACK");
+      throw err;
+    } finally {
+      transactionClient.release();
+    }
+  } finally {
+    releaseLocal();
+    if (localPurchaseMutationTails.get(mutationKey) === tail) {
+      localPurchaseMutationTails.delete(mutationKey);
+    }
+  }
 }
 
 function hasPositiveLimit(value: unknown): boolean {
@@ -519,11 +626,10 @@ async function insertDedicatedHostPurchaseSegmentLocal({
     period_start,
     period_end,
     tag: purchaseTag(host_id),
-    notes: DEDICATED_HOST_USAGE,
   });
 }
 
-export async function rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
+async function rotateDedicatedHostPostpaidSegmentForCalendarMonthUnlocked({
   account_id,
   host_id,
   through,
@@ -532,7 +638,7 @@ export async function rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
   account_id: string;
   host_id: string;
   through?: Date;
-  client?: PoolClient;
+  client: PoolClient;
 }): Promise<void> {
   const open = await listOpenDedicatedHostPurchasesLocal({
     account_id,
@@ -569,13 +675,30 @@ export async function rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
   });
 }
 
-export async function closeDedicatedHostPurchaseSessionLocal({
+export async function rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal(opts: {
+  account_id: string;
+  host_id: string;
+  through?: Date;
+  client?: PoolClient;
+}): Promise<void> {
+  await withDedicatedHostPurchaseMutation({
+    ...opts,
+    fn: async (client) => {
+      await rotateDedicatedHostPostpaidSegmentForCalendarMonthUnlocked({
+        ...opts,
+        client,
+      });
+    },
+  });
+}
+
+async function closeDedicatedHostPurchaseSessionUnlocked({
   account_id,
   host_id,
   ended_at,
   client,
 }: AccountLocalCloseDedicatedHostPurchaseSessionRequest & {
-  client?: PoolClient;
+  client: PoolClient;
 }): Promise<void> {
   const now = ended_at == null ? new Date() : new Date(ended_at as any);
   while (true) {
@@ -630,36 +753,44 @@ export async function closeDedicatedHostPurchaseSessionLocal({
   }
 }
 
-export async function reconcileDedicatedHostPurchaseSessionLocal({
+export async function closeDedicatedHostPurchaseSessionLocal(
+  opts: AccountLocalCloseDedicatedHostPurchaseSessionRequest & {
+    client?: PoolClient;
+  },
+): Promise<void> {
+  await withDedicatedHostPurchaseMutation({
+    ...opts,
+    fn: async (client) => {
+      await closeDedicatedHostPurchaseSessionUnlocked({
+        ...opts,
+        client,
+      });
+    },
+  });
+}
+
+async function reconcileDedicatedHostPurchaseSessionUnlocked({
   account_id,
   host_id,
   host_name,
   host_bay_id,
   provider,
   region,
+  billing_state,
   machine_type,
   pricing_model,
   funding_lane,
   hourly_cost_usd,
+  pricing_snapshot,
   started_at,
   client,
 }: AccountLocalReconcileDedicatedHostPurchaseSessionRequest & {
-  client?: PoolClient;
+  client: PoolClient;
 }): Promise<void> {
   const periodStart =
     started_at == null
       ? new Date()
       : new Date(started_at as string | number | Date);
-  await ensureAccountUsageWindowsForEvent({
-    account_id,
-    occurred_at: periodStart,
-  });
-  if (periodStart.getTime() < Date.now()) {
-    await ensureAccountUsageWindowsForEvent({
-      account_id,
-      occurred_at: new Date(),
-    });
-  }
   const open = await listOpenDedicatedHostPurchasesLocal({
     account_id,
     host_id,
@@ -671,10 +802,15 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
     open.length === 1 &&
     newest &&
     moneyToDbString(newest.cost_per_hour ?? 0) === normalizedRate &&
-    newest.description?.funding_lane === funding_lane
+    newest.description?.funding_lane === funding_lane &&
+    newest.description?.billing_state === billing_state &&
+    isDeepStrictEqual(
+      newest.description?.pricing_snapshot ?? null,
+      pricing_snapshot,
+    )
   ) {
     if (funding_lane === "credit") {
-      await rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
+      await rotateDedicatedHostPostpaidSegmentForCalendarMonthUnlocked({
         account_id,
         host_id,
         through:
@@ -686,7 +822,7 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
     }
     return;
   }
-  await closeDedicatedHostPurchaseSessionLocal({
+  await closeDedicatedHostPurchaseSessionUnlocked({
     account_id,
     host_id,
     ended_at: started_at ?? null,
@@ -699,10 +835,12 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
     host_bay_id: host_bay_id ?? null,
     provider,
     region: region ?? null,
-    machine_type: machine_type ?? null,
-    pricing_model: pricing_model ?? null,
+    billing_state,
+    machine_type: billing_state === "running" ? (machine_type ?? null) : null,
+    pricing_model: billing_state === "running" ? (pricing_model ?? null) : null,
     funding_lane,
     hourly_cost_usd: normalizedRate,
+    pricing_snapshot,
   };
   await createPurchase({
     account_id,
@@ -712,10 +850,9 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
     cost_per_hour: normalizedRate,
     period_start: periodStart,
     tag: purchaseTag(host_id),
-    notes: DEDICATED_HOST_USAGE,
   });
   if (funding_lane === "credit") {
-    await rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
+    await rotateDedicatedHostPostpaidSegmentForCalendarMonthUnlocked({
       account_id,
       host_id,
       through:
@@ -725,6 +862,36 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
       client,
     });
   }
+}
+
+export async function reconcileDedicatedHostPurchaseSessionLocal(
+  opts: AccountLocalReconcileDedicatedHostPurchaseSessionRequest & {
+    client?: PoolClient;
+  },
+): Promise<void> {
+  const periodStart =
+    opts.started_at == null
+      ? new Date()
+      : new Date(opts.started_at as string | number | Date);
+  await ensureAccountUsageWindowsForEvent({
+    account_id: opts.account_id,
+    occurred_at: periodStart,
+  });
+  if (periodStart.getTime() < Date.now()) {
+    await ensureAccountUsageWindowsForEvent({
+      account_id: opts.account_id,
+      occurred_at: new Date(),
+    });
+  }
+  await withDedicatedHostPurchaseMutation({
+    ...opts,
+    fn: async (client) => {
+      await reconcileDedicatedHostPurchaseSessionUnlocked({
+        ...opts,
+        client,
+      });
+    },
+  });
 }
 
 export async function reconcileDedicatedHostPurchaseSessionForAccount(
@@ -783,18 +950,113 @@ async function loadGcpPriceCatalog(): Promise<GcpCatalogPrices | undefined> {
     : undefined;
 }
 
-async function estimateGcpRateUsdPerHour(
+async function estimateGcpRateBreakdown(
   input: DedicatedHostRateEstimateInput,
-): Promise<MoneyValue | undefined> {
+): Promise<HostPriceBreakdown | undefined> {
   const data = await loadGcpPriceCatalog();
   const settings = await getServerSettings();
-  const estimate = applyDedicatedHostSurchargeToHourlyRate(
-    estimateGcpCatalogRateUsdPerHour(data, input),
-    getDedicatedHostSurchargeFraction("gcp", settings),
+  return hostPriceBreakdownForBillingState(
+    applyDedicatedHostSurchargeToBreakdown(
+      estimateGcpCatalogRateBreakdown(data, input),
+      getDedicatedHostSurchargeFraction("gcp", settings),
+    ),
+    input.billing_state ?? "running",
   );
-  return estimate == null ? undefined : moneyToDbString(estimate);
 }
 
+async function estimateNebiusRateBreakdown(
+  input: DedicatedHostRateEstimateInput,
+): Promise<HostPriceBreakdown | undefined> {
+  const region = `${input.region ?? ""}`.trim();
+  const machineType = `${input.machine_type ?? ""}`.trim();
+  if (!region || !machineType) return undefined;
+  const [instances, prices] = await Promise.all([
+    loadNebiusInstanceTypes(),
+    loadNebiusPriceItems(),
+  ]);
+  const instance = (instances as NebiusCatalogInstanceType[]).find(
+    (entry) => entry.name === machineType,
+  );
+  if (!instance) return undefined;
+  const settings = await getServerSettings();
+  return hostPriceBreakdownForBillingState(
+    applyDedicatedHostSurchargeToBreakdown(
+      estimateNebiusCatalogRateBreakdown({
+        prices,
+        region,
+        pricing_model: input.pricing_model,
+        instance,
+        disk_type: input.disk_type,
+        disk_gb: input.disk_gb,
+        shared_disk_type: input.shared_disk_type,
+        shared_disk_gb: input.shared_disk_gb,
+        storage_mode: input.storage_mode,
+      }),
+      getDedicatedHostSurchargeFraction("nebius", settings),
+    ),
+    input.billing_state ?? "running",
+  );
+}
+
+function pricingConfiguration(
+  input: DedicatedHostRateEstimateInput,
+): DedicatedHostPricingSnapshot["configuration"] {
+  const billingState = input.billing_state ?? "running";
+  return {
+    ...(billingState === "running"
+      ? {
+          machine_type: input.machine_type ?? null,
+          pricing_model: input.pricing_model ?? null,
+        }
+      : {}),
+    disk_gb: input.disk_gb ?? null,
+    disk_type: input.disk_type ?? null,
+    shared_disk_gb: input.shared_disk_gb ?? null,
+    shared_disk_type: input.shared_disk_type ?? null,
+    storage_mode: input.storage_mode ?? null,
+  };
+}
+
+export async function estimateDedicatedHostRate(
+  input: DedicatedHostRateEstimateInput,
+): Promise<DedicatedHostRateEstimate | undefined> {
+  const billingState = input.billing_state ?? "running";
+  const breakdown = await (async () => {
+    switch (`${input.provider ?? ""}`.trim()) {
+      case "gcp":
+        return await estimateGcpRateBreakdown(input);
+      case "nebius":
+        return await estimateNebiusRateBreakdown(input);
+      default:
+        return undefined;
+    }
+  })();
+  if (!breakdown) {
+    return undefined;
+  }
+  const hourly_cost_usd = moneyToDbString(breakdown.total_usd_per_hour);
+  return {
+    hourly_cost_usd,
+    pricing_snapshot: {
+      version: 1,
+      billing_state: billingState,
+      hourly_cost_usd,
+      components: breakdown.items.map((item) => ({
+        key: item.key,
+        label: item.label,
+        hourly_cost_usd: moneyToDbString(item.usd_per_hour),
+        billing_states: item.billing_states,
+      })),
+      configuration: pricingConfiguration(input),
+    },
+  };
+}
+
+export async function estimateDedicatedHostRateUsdPerHour(
+  input: DedicatedHostRateEstimateInput,
+): Promise<MoneyValue | undefined> {
+  return (await estimateDedicatedHostRate(input))?.hourly_cost_usd;
+}
 async function loadNebiusPriceItems(): Promise<NebiusCatalogPriceItem[]> {
   const { rows } = await getPool("medium").query(
     `
@@ -809,49 +1071,4 @@ async function loadNebiusPriceItems(): Promise<NebiusCatalogPriceItem[]> {
   );
   const payload = rows[0]?.payload;
   return Array.isArray(payload) ? payload : [];
-}
-
-async function estimateNebiusRateUsdPerHour(
-  input: DedicatedHostRateEstimateInput,
-): Promise<MoneyValue | undefined> {
-  const region = `${input.region ?? ""}`.trim();
-  const machineType = `${input.machine_type ?? ""}`.trim();
-  if (!region || !machineType) return undefined;
-  const [instances, prices] = await Promise.all([
-    loadNebiusInstanceTypes(),
-    loadNebiusPriceItems(),
-  ]);
-  const instance = (instances as NebiusCatalogInstanceType[]).find(
-    (entry) => entry.name === machineType,
-  );
-  if (!instance) return undefined;
-  const settings = await getServerSettings();
-  const estimate = applyDedicatedHostSurchargeToHourlyRate(
-    estimateNebiusCatalogRateUsdPerHour({
-      prices,
-      region,
-      pricing_model: input.pricing_model,
-      instance,
-      disk_type: input.disk_type,
-      disk_gb: input.disk_gb,
-      shared_disk_type: input.shared_disk_type,
-      shared_disk_gb: input.shared_disk_gb,
-      storage_mode: input.storage_mode,
-    }),
-    getDedicatedHostSurchargeFraction("nebius", settings),
-  );
-  return estimate == null ? undefined : moneyToDbString(estimate);
-}
-
-export async function estimateDedicatedHostRateUsdPerHour(
-  input: DedicatedHostRateEstimateInput,
-): Promise<MoneyValue | undefined> {
-  switch (`${input.provider ?? ""}`.trim()) {
-    case "gcp":
-      return await estimateGcpRateUsdPerHour(input);
-    case "nebius":
-      return await estimateNebiusRateUsdPerHour(input);
-    default:
-      return undefined;
-  }
 }

@@ -1,6 +1,3 @@
-import supportURL from "@cocalc/frontend/support/url";
-import A from "./link";
-
 export default function CrashMessage({
   msg,
   lineNo,
@@ -9,19 +6,6 @@ export default function CrashMessage({
   stack,
   showLoadFail,
 }) {
-  const getSupport = supportURL({
-    subject: showLoadFail
-      ? "Crash Report: CoCalc Failed to Load"
-      : "CoCalc Crash Report",
-    context: `\n\nCONTEXT:\n\n${JSON.stringify(
-      { msg, lineNo, columnNo, stack, url },
-      undefined,
-      2,
-    )}`,
-    type: "problem",
-    hideExtra: true,
-  });
-
   return (
     <div>
       <div>
@@ -40,11 +24,8 @@ export default function CrashMessage({
         }}
       >
         {showLoadFail && <h3>CoCalc Failed to Load</h3>}
-        <A href={getSupport}>
-          <b>Report the full error.</b>
-        </A>{" "}
-        In the meantime, try switching to another web browser, updating to the
-        latest version of your browser, or{" "}
+        <b>This error was reported automatically.</b> In the meantime, try
+        reloading this browser tab or{" "}
         <a
           onClick={() => {
             const crash = document.getElementById("cocalc-react-crash");
@@ -52,7 +33,7 @@ export default function CrashMessage({
             crash.style.display = "none";
           }}
         >
-          dismissing this error
+          dismissing this message
         </a>{" "}
         and continuing.
       </div>

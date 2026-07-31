@@ -480,6 +480,7 @@ describe("MultiMarkdownInput wrapper contract", () => {
 
     render(
       <MultiMarkdownInput
+        cacheId="cell-1:frame-1"
         value=""
         onChange={() => {}}
         defaultMode="editor"
@@ -493,6 +494,9 @@ describe("MultiMarkdownInput wrapper contract", () => {
     expect(latestEditableProps.actions.undo).toBeUndefined();
     expect(latestEditableProps.actions.redo).toBeUndefined();
     expect(latestEditableProps.localHistory).toBe(true);
+    expect(latestEditableProps.localHistoryCacheId).toBe(
+      "project-1:path-1:cell-1:frame-1:editor",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "markdown" }));
 
@@ -500,5 +504,8 @@ describe("MultiMarkdownInput wrapper contract", () => {
     expect(latestMarkdownProps.onRedo).toBe(onRedo);
     expect(latestMarkdownProps.undoMode).toBe("local");
     expect(latestMarkdownProps.redoMode).toBe("local");
+    expect(latestMarkdownProps.localHistoryCacheId).toBe(
+      "project-1:path-1:cell-1:frame-1:markdown",
+    );
   });
 });

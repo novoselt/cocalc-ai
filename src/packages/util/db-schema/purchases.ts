@@ -19,6 +19,10 @@ import type { CourseInfo } from "./projects";
 import { Table } from "./types";
 import type { LineItem } from "@cocalc/util/stripe/types";
 import type { MoneyValue } from "@cocalc/util/money";
+import type {
+  DedicatedHostBillingState,
+  HostPriceBreakdownItemKey,
+} from "@cocalc/util/project-host-pricing";
 
 // various specific payment purposes
 
@@ -131,10 +135,37 @@ export interface DedicatedHostPurchase {
   host_bay_id?: string | null;
   provider: string;
   region?: string | null;
+  billing_state?: DedicatedHostBillingState;
   machine_type?: string | null;
   pricing_model?: "on_demand" | "spot" | null;
   funding_lane: "prepaid" | "credit";
   hourly_cost_usd: MoneyValue;
+  pricing_snapshot?: DedicatedHostPricingSnapshot;
+}
+
+export interface DedicatedHostPricingComponent {
+  key: HostPriceBreakdownItemKey;
+  label: string;
+  hourly_cost_usd: MoneyValue;
+  billing_states: DedicatedHostBillingState[];
+}
+
+export interface DedicatedHostPricingConfiguration {
+  machine_type?: string | null;
+  pricing_model?: "on_demand" | "spot" | null;
+  disk_gb?: number | null;
+  disk_type?: string | null;
+  shared_disk_gb?: number | null;
+  shared_disk_type?: string | null;
+  storage_mode?: string | null;
+}
+
+export interface DedicatedHostPricingSnapshot {
+  version: 1;
+  billing_state: DedicatedHostBillingState;
+  hourly_cost_usd: MoneyValue;
+  components: DedicatedHostPricingComponent[];
+  configuration: DedicatedHostPricingConfiguration;
 }
 
 export interface Credit {

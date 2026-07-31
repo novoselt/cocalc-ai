@@ -8,32 +8,31 @@ import Crash from "./crash";
 import CrashMessage from "./crash-message";
 import React from "react";
 import { createRoot } from "react-dom/client";
+import {
+  COCALC_REACT_ERROR_EVENT,
+  COCALC_REACT_ROOT_READY_EVENT,
+  type ReactErrorEventDetail,
+} from "@cocalc/frontend/app/react-error-reporting";
 import { isIgnorableBrowserError } from "./webapp-error-filter";
 
 let crashDisplayed = false;
+let managedReactRoot = false;
 
-function handleError(event) {
-  if (event.defaultPrevented) {
-    // see https://github.com/sagemathinc/cocalc/issues/5963
-    return;
-  }
-  const { message: msg, filename: url, lineno, colno, error } = event;
-  if (isIgnorableBrowserError(msg)) {
-    return;
-  }
-  if (error == null) {
-    // Sometimes this window.onerror gets called with error null.
-    // We ignore that here.  E.g., this happens when you open
-    // a project sometimes with this input:
-    // {msg: "ResizeObserver loop limit exceeded",
-    // url: "https://cocalc.ai/45f...44a1-b842-6eaf5ee07f8f/files/?session=default", lineno: 0, colno: 0, error: null}
-    return;
-  }
-  console.warn("handleError", { msg, url, lineno, colno, error });
-  if (isWhitelisted({ error })) {
-    console.warn("handleError -- whitelisted");
-    return;
-  }
+function showCrash({
+  msg,
+  url,
+  lineno,
+  colno,
+  error,
+  showLoadFail,
+}: {
+  msg: string;
+  url?: string;
+  lineno?: number;
+  colno?: number;
+  error: unknown;
+  showLoadFail: boolean;
+}): void {
   if (crashDisplayed) {
     return;
   }
@@ -42,16 +41,17 @@ function handleError(event) {
   crashDisplayed = true;
   crash.style.display = "block";
 
-  let errorbox = document.getElementById("cocalc-error-report-startup");
-  let showLoadFail = true;
-  if (errorbox == null) {
-    // app did startup, hence the banner is removed from the DOM
-    // instead, check if there is the react error report banner and insert it there.
-    errorbox = document.getElementById("cocalc-error-report-react");
-    showLoadFail = false;
-    if (errorbox == null) return;
-  }
-  const stack = error?.stack ?? "<no stacktrace>"; // note: we actually ignore error == null above.
+  const errorbox = document.getElementById(
+    showLoadFail ? "cocalc-error-report-startup" : "cocalc-error-report-react",
+  );
+  if (errorbox == null) return;
+  const stack =
+    error != null &&
+    typeof error === "object" &&
+    "stack" in error &&
+    typeof error.stack === "string"
+      ? error.stack
+      : "<no stacktrace>";
   console.warn({ errorbox }, "rendering", { msg, lineno });
   createRoot(errorbox).render(
     React.createElement(CrashMessage, {
@@ -63,6 +63,53 @@ function handleError(event) {
       showLoadFail,
     }),
   );
+}
+
+function handleError(event: ErrorEvent): void {
+  if (event.defaultPrevented) {
+    // see https://github.com/sagemathinc/cocalc/issues/5963
+    return;
+  }
+  const { message: msg, filename: url, lineno, colno, error } = event;
+  if (isIgnorableBrowserError(msg)) {
+    return;
+  }
+  if (error == null) {
+    // Sometimes this window.onerror gets called with error null.
+    return;
+  }
+  console.warn("handleError", { msg, url, lineno, colno, error });
+  if (isWhitelisted({ error })) {
+    console.warn("handleError -- whitelisted");
+    return;
+  }
+  const showLoadFail =
+    document.getElementById("cocalc-error-report-startup") != null;
+  if (managedReactRoot && !showLoadFail) {
+    // React 19 classifies render failures via the root callbacks. A generic
+    // browser error after startup is still reported, but is not proof that the
+    // application root is unusable.
+    return;
+  }
+  showCrash({ msg, url, lineno, colno, error, showLoadFail });
+}
+
+function handleReactError(event: Event): void {
+  const detail = (event as CustomEvent<ReactErrorEventDetail>).detail;
+  if (detail?.kind !== "uncaught") return;
+  const error = detail.error;
+  const msg =
+    error != null &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string"
+      ? error.message
+      : `${error}`;
+  showCrash({
+    msg,
+    error,
+    showLoadFail: false,
+  });
 }
 
 export default function init() {
@@ -79,6 +126,10 @@ export default function init() {
 
   // Install error handler.
   window.addEventListener("error", handleError);
+  window.addEventListener(COCALC_REACT_ROOT_READY_EVENT, () => {
+    managedReactRoot = true;
+  });
+  window.addEventListener(COCALC_REACT_ERROR_EVENT, handleReactError);
 }
 
 export function startedUp() {

@@ -16,7 +16,12 @@ import { addEditorMenus } from "@cocalc/frontend/frame-editors/frame-tree/comman
 import { FORMAT_SOURCE_ICON } from "@cocalc/frontend/frame-editors/frame-tree/config";
 import { labels, menu } from "@cocalc/frontend/i18n";
 import { editor, jupyter } from "@cocalc/frontend/i18n/common";
-import { AllActions, commands } from "@cocalc/frontend/jupyter/commands";
+import {
+  commands,
+  GLOBAL_REDO_LABEL,
+  GLOBAL_UNDO_LABEL,
+} from "@cocalc/frontend/jupyter/commands";
+import type { AllActions } from "@cocalc/frontend/jupyter/commands";
 import { shortcut_to_string } from "@cocalc/frontend/jupyter/keyboard-shortcuts";
 import { capitalize, field_cmp, set } from "@cocalc/util/misc";
 import { createEditor } from "../frame-tree/editor";
@@ -52,6 +57,19 @@ const jupyterCommands = set([
   "show_search",
 ]);
 
+const globalUndoRedoCommands = {
+  undo: {
+    label: GLOBAL_UNDO_LABEL,
+    keyboard: "Z",
+    title: "Undo your last notebook-wide change",
+  },
+  redo: {
+    label: GLOBAL_REDO_LABEL,
+    keyboard: "shift + Z",
+    title: "Redo your last notebook-wide change",
+  },
+} as const;
+
 const jupyter_cell_notebook: EditorDescription = {
   type: "jupyter",
   short: "Jupyter",
@@ -72,6 +90,7 @@ const jupyter_cell_notebook: EditorDescription = {
     "show_search",
   ]),
   customizeCommands: {
+    ...globalUndoRedoCommands,
     shell: {
       label: jupyter.editor.console_label,
       icon: "ipynb",
@@ -96,6 +115,7 @@ const jupyter_minimal: EditorDescription = {
     "decrease_font_size",
     "show_search",
   ]),
+  customizeCommands: globalUndoRedoCommands,
 } as const;
 
 const jupyter_slideshow_revealjs: EditorDescription = {

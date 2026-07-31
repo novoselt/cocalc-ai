@@ -84,11 +84,18 @@ describe("create a blank minimal string SyncDoc and call public methods on it", 
   });
 
   it("undo/redo -- nothing to undo yet...", () => {
+    const resetUndo = jest.spyOn(
+      (syncstring as any).patchflowSession,
+      "resetUndo",
+    );
     expect(syncstring.in_undo_mode()).toBe(false);
+    syncstring.exit_undo_mode();
+    expect(resetUndo).not.toHaveBeenCalled();
     syncstring.undo();
     expect(syncstring.in_undo_mode()).toBe(true);
     syncstring.exit_undo_mode();
     expect(syncstring.in_undo_mode()).toBe(false);
+    expect(resetUndo).toHaveBeenCalledTimes(1);
     syncstring.redo(); // no error
   });
 

@@ -17,7 +17,7 @@ Scope (Phase 5):
    \href{url}{text}
  - Inline verbatim: \verb<DELIM>...<DELIM>
  - Math (single-line): $…$ \(…\) \[…\] $$…$$
- - Math envs (multi-line): \begin{equation|align|gather|multline}…
+ - Math envs (multi-line): \begin{equation|align|gather|multline|displaymath|eqnarray}…
  - List envs (multi-line, nested-aware): \begin{itemize|enumerate|description}…
    emitted as three descriptor types: list-env-begin, list-env-end, list-item
  - Verbatim envs (multi-line): \begin{verbatim|Verbatim}…\end{…}
@@ -164,6 +164,11 @@ const MATH_ENV_NAMES: ReadonlySet<string> = new Set([
   "gather*",
   "multline",
   "multline*",
+  // classic LaTeX display envs; rendered via equation* / the darray
+  // compat hack (see widgets/math-source.ts and katex-compat-hacks.ts)
+  "displaymath",
+  "eqnarray",
+  "eqnarray*",
 ]);
 
 const LIST_ENV_NAMES: ReadonlySet<string> = new Set([

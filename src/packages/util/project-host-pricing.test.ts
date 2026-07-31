@@ -5,11 +5,47 @@ import {
   estimateNebiusCatalogRateBreakdown,
   estimateNebiusCatalogRateUsdPerHour,
   getDedicatedHostSurchargeFraction,
+  hostPriceBreakdownForBillingState,
   isSupportedCatalogGcpMachineType,
   type GcpCatalogPrices,
 } from "./project-host-pricing";
 
 describe("project host pricing", () => {
+  it("selects stopped costs from explicit billing-state metadata", () => {
+    const stopped = hostPriceBreakdownForBillingState(
+      {
+        items: [
+          {
+            key: "vm",
+            label: "Retained provider reservation",
+            usd_per_hour: 2,
+            billing_states: ["running", "stopped"],
+          },
+          {
+            key: "disk",
+            label: "Ephemeral disk",
+            usd_per_hour: 1,
+            billing_states: ["running"],
+          },
+        ],
+        total_usd_per_hour: 3,
+      },
+      "stopped",
+    );
+
+    expect(stopped).toEqual({
+      items: [
+        {
+          key: "vm",
+          label: "Retained provider reservation",
+          usd_per_hour: 2,
+          billing_states: ["running", "stopped"],
+        },
+      ],
+      total_usd_per_hour: 2,
+    });
+  });
+
   it("filters out local-SSD GCP machine variants from the frozen catalog", () => {
     expect(isSupportedCatalogGcpMachineType("c3d-standard-8")).toBe(true);
     expect(isSupportedCatalogGcpMachineType("c3d-standard-8-lssd")).toBe(false);

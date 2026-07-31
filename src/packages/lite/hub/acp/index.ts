@@ -133,8 +133,8 @@ import {
 } from "./admission";
 import {
   buildCodexTurnNoticeOptions,
+  codexTurnNotifyPreference,
   publishCodexTurnNotice,
-  shouldNotifyOnCodexTurnFinish,
 } from "./codex-turn-notice";
 import { resolveLiteCodexHome } from "../codex-auth";
 import type { SyncDB } from "@cocalc/conat/sync-doc/syncdb";
@@ -2004,7 +2004,10 @@ export class ChatStreamWriter {
     return true;
   }
 
-  private markTerminalStorageFailure(err: unknown, phase: string): void {
+  private async markTerminalStorageFailure(
+    err: unknown,
+    phase: string,
+  ): Promise<void> {
     if (
       shouldCompleteAcpTurnAfterTerminalStorageFailure({
         err,
@@ -2028,7 +2031,7 @@ export class ChatStreamWriter {
       // Preserve the successfully written summary instead of replacing it with
       // a generic storage error. Record the storage failure after finalization
       // so cleanup will not block on the same stuck save chain.
-      this.finalizeFinishedTurn();
+      await this.finalizeFinishedTurn();
       this.noteProjectStorageFailure(err, phase);
       return;
     }
@@ -2036,7 +2039,7 @@ export class ChatStreamWriter {
     this.finished = true;
     this.finishedBy = "error";
     this.lastErrorText = projectStorageFailureMessage(err);
-    this.finalizeFinishedTurn();
+    await this.finalizeFinishedTurn();
   }
 
   private throwProjectStorageFailureIfPresent(phase: string): void {
@@ -2117,13 +2120,13 @@ export class ChatStreamWriter {
     });
   }
 
-  private finalizeFinishedTurn(): void {
+  private async finalizeFinishedTurn(): Promise<void> {
     if (!this.finished || this.leaseFinalized) return;
     switch (this.finishedBy) {
       case "error":
         this.setThreadState("error");
-        void this.publishCodexTurnCompletionNoticeBestEffort("error");
         this.finalizeLease("error", this.lastErrorText ?? undefined);
+        await this.publishCodexTurnCompletionNoticeBestEffort("error");
         return;
       case "interrupt":
         this.setThreadState("interrupted");
@@ -2131,8 +2134,8 @@ export class ChatStreamWriter {
         return;
       case "summary":
         this.setThreadState("complete");
-        void this.publishCodexTurnCompletionNoticeBestEffort("complete");
         this.finalizeLease("completed");
+        await this.publishCodexTurnCompletionNoticeBestEffort("complete");
         return;
       default:
         return;
@@ -2155,7 +2158,10 @@ export class ChatStreamWriter {
       const config = this.recordField<any>(threadConfig, "acp_config") as
         | undefined
         | null;
-      if (!shouldNotifyOnCodexTurnFinish(config)) {
+      const currentPreference = codexTurnNotifyPreference(config);
+      const shouldNotify =
+        currentPreference ?? this.metadata.notify_on_turn_finish === true;
+      if (!shouldNotify) {
         return;
       }
       const threadLabel =
@@ -2414,9 +2420,9 @@ export class ChatStreamWriter {
         await this.runTerminalPersistence(
           this.finishedBy === "error" ? "error" : "summary",
         );
-        this.finalizeFinishedTurn();
+        await this.finalizeFinishedTurn();
       } catch (err) {
-        this.markTerminalStorageFailure(err, "init-terminal-replay");
+        await this.markTerminalStorageFailure(err, "init-terminal-replay");
       }
     } else {
       this.setThreadState("running");
@@ -2465,13 +2471,13 @@ export class ChatStreamWriter {
         );
       } catch (err) {
         terminalPersistenceFailed = true;
-        this.markTerminalStorageFailure(
+        await this.markTerminalStorageFailure(
           err,
           message.type === "error" ? "terminal-error" : "terminal-summary",
         );
       }
       if (!terminalPersistenceFailed) {
-        this.finalizeFinishedTurn();
+        await this.finalizeFinishedTurn();
         if (shouldAutoRotate) {
           try {
             await maybeAutoRotateChatStore({

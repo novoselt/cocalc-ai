@@ -23,4 +23,25 @@ describe("NotebookFrameActions lifecycle", () => {
       ).toBeUndefined();
     }).not.toThrow();
   });
+
+  it("moves DOM focus back to the notebook in command mode", () => {
+    const focus = jest.fn();
+    const target = {
+      cell_list_div: {
+        get: () => ({ focus }),
+      },
+      enable_key_handler: jest.fn(),
+      jupyter_actions: {
+        store: {
+          get: jest.fn(),
+        },
+      },
+      setState: jest.fn(),
+    } as any;
+
+    NotebookFrameActions.prototype.set_mode.call(target, "escape");
+
+    expect(target.setState).toHaveBeenCalledWith({ mode: "escape" });
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
 });

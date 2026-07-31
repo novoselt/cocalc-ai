@@ -14,6 +14,7 @@ const MIN_INPUT_HEIGHT = 38;
 const MAX_INPUT_HEIGHT = "50vh";
 
 interface MarkdownTextAdapterProps {
+  localHistoryCacheId?: string;
   editorDivRef?: RefObject<HTMLDivElement>;
   selectionRef: MutableRefObject<SelectionController | null>;
   value?: string;
@@ -66,6 +67,7 @@ interface MarkdownTextAdapterProps {
 }
 
 export function MarkdownTextAdapter({
+  localHistoryCacheId,
   editorDivRef,
   selectionRef,
   value,
@@ -167,11 +169,13 @@ export function MarkdownTextAdapter({
       refresh={refresh}
       compact={compact}
       dirtyRef={dirtyRef}
+      localHistoryCacheId={localHistoryCacheId}
     />
   );
 }
 
 interface SlateRichTextAdapterProps {
+  localHistoryCacheId?: string;
   selectionRef: MutableRefObject<SelectionController | null>;
   editorDivRef?: RefObject<HTMLDivElement>;
   noVfill?: boolean;
@@ -219,6 +223,7 @@ interface SlateRichTextAdapterProps {
 }
 
 export function SlateRichTextAdapter({
+  localHistoryCacheId,
   selectionRef,
   editorDivRef,
   noVfill,
@@ -372,6 +377,7 @@ export function SlateRichTextAdapter({
         preserveBlankLines={preserveBlankLines}
         externalMultilinePasteAsCodeBlock={externalMultilinePasteAsCodeBlock}
         localHistory={useLocalRichTextHistory}
+        localHistoryCacheId={localHistoryCacheId}
       />
     </div>
   );

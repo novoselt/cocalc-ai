@@ -92,6 +92,59 @@ describe("NotificationRow", () => {
     expect(markMany).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "with a requester note",
+      body_markdown:
+        "Project: **Private Project**\n\nNote from the requester: Please let me view this.",
+      hasNote: true,
+    },
+    {
+      label: "without a requester note",
+      body_markdown: "Project: **Private Project**",
+      hasNote: false,
+    },
+  ])(
+    "renders project access notification $label",
+    async ({ body_markdown, hasNote }) => {
+      const title = "Ada Lovelace (ada@example.com) requested viewer access";
+      render(
+        <NotificationRow
+          id="notice-1"
+          user_map={{}}
+          mention={
+            fromJS({
+              kind: "account_notice",
+              project_id: "project-1",
+              target: "approver-1",
+              time: new Date("2026-05-07T00:00:00.000Z"),
+              title,
+              body_markdown,
+              origin_label: "Project access",
+              notice_type: "project_access_request",
+              request_id: "request-1",
+              requested_role: "viewer",
+              users: { "approver-1": { read: false, saved: false } },
+            }) as any
+          }
+        />,
+      );
+
+      expect(screen.getByText(title)).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          (_, element) => element?.textContent === body_markdown,
+        ),
+      ).toBeInTheDocument();
+      if (!hasNote) {
+        expect(
+          screen.queryByText(/Note from the requester:/),
+        ).not.toBeInTheDocument();
+      }
+      expect(await screen.findByText("Approve viewer")).toBeInTheDocument();
+    },
+  );
+
   it("opens file-target notifications and marks them read", () => {
     render(
       <NotificationRow

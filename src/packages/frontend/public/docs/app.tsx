@@ -6,11 +6,17 @@
 import { useEffect, useState } from "react";
 
 import { Button, Empty, Flex, Typography } from "antd";
-import { docsPath, getDocsEntry, type DocsEntry } from "@cocalc/docs";
+import {
+  docsPath,
+  getDocsEntry,
+  listDocsEntries,
+  type DocsEntry,
+} from "@cocalc/docs";
 import {
   DocsDetailContent,
   DocsIndexContent,
   DocsPrintContent,
+  getDocsLinearNavigation,
 } from "@cocalc/frontend/docs/browser";
 import { downloadStandaloneDocsHtml } from "@cocalc/frontend/docs/download-html";
 import {
@@ -22,6 +28,7 @@ import {
   PublicSectionShell,
 } from "../common";
 import { PUBLIC_COLORS, PUBLIC_TYPE } from "../theme";
+import { navigatePublic } from "../navigation";
 import type { PublicDocsRoute } from "./routes";
 
 const { Paragraph, Text, Title } = Typography;
@@ -137,6 +144,16 @@ function DocsDetail({
   entry: DocsEntry;
 }) {
   const siteName = getPublicMarketingSiteName(config);
+  const docsAccess = getPublicDocsAccess(config);
+  const onSelectEntry = (nextEntry: DocsEntry) => {
+    navigatePublic(appPath(docsPath(nextEntry.slug)));
+  };
+  const linearNavigation = getDocsLinearNavigation({
+    entries: listDocsEntries(docsAccess),
+    entry,
+    hrefForEntry: (nextEntry) => appPath(docsPath(nextEntry.slug)),
+    onSelectEntry,
+  });
 
   useEffect(() => {
     document.title = `${entry.title} - Documentation - ${siteName}`;
@@ -145,7 +162,11 @@ function DocsDetail({
   return (
     <PublicSectionShell active="docs" config={config}>
       <section>
-        <DocsDetailContent entry={entry} />
+        <DocsDetailContent
+          entry={entry}
+          linearNavigation={linearNavigation}
+          onBackHref={appPath(docsPath())}
+        />
       </section>
     </PublicSectionShell>
   );
