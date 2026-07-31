@@ -34,6 +34,7 @@ import {
   FreshAuthModal,
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
+import { DocsLink } from "@cocalc/frontend/docs/link";
 
 const DEFAULT_CONFIG: HostExamConfigInput = {
   enabled: false,
@@ -165,7 +166,16 @@ export function HostExamPanel({
           type="info"
           showIcon
           message="Ephemeral exam scratchpads"
-          description="Students get anonymous local workspaces on this on-demand host. Outbound project networking is disabled. Existing private-host billing applies."
+          description={
+            <>
+              Students get anonymous local workspaces on this on-demand host.
+              Outbound project networking is disabled. Existing private-host
+              billing applies.{" "}
+              <DocsLink slug="hosts/exam-scratchpads">
+                Read the setup, testing, and cleanup guide.
+              </DocsLink>
+            </>
+          }
         />
         {error && <Alert type="error" showIcon message={error} />}
         {state && !state.eligible && (

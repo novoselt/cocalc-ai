@@ -104,74 +104,197 @@ give agents a stable Linux environment to work in.
 `;
 
 export const PROJECT_HOST_EXAMS_BODY = String.raw`
-## Exam scratchpad hosts
+## A computational scratchpad for exams
 
-Exam mode turns a private on-demand project host into a temporary,
-browser-based computational scratchpad for an in-person exam. Each browser gets
-a clean anonymous CoCalc project with the RootFS, CPU, memory, and disk limits
-chosen by the instructor.
+Exam mode turns a private, on-demand project host into a temporary browser-based
+computational scratchpad. Each browser session receives a clean anonymous CoCalc
+project with the exact RootFS and CPU, memory, and disk limits selected by the
+instructor.
 
-The first version is intentionally not an assessment system. It does not
-deliver questions, identify students, collect submissions, grade work, or
-provide proctoring. Students use notebooks and files as scratch space, then
-copy answers to paper or the institution's separate assessment system.
+This is useful when an in-person exam permits computation but requires a clean,
+predictable environment. Students can use Jupyter notebooks, files, installed
+mathematical software, and optionally terminals without signing into a normal
+CoCalc account or reaching the public Internet. They copy their answers to
+paper or to the institution's separate assessment system.
 
-## Prepare a host
+Exam mode deliberately does **not** deliver questions, identify candidates,
+collect submissions, grade work, or provide proctoring. It complements a
+lockdown browser or assessment platform; it does not replace one.
 
-1. Create a private GCP project host using on-demand pricing, not spot pricing.
-2. Size the host for the expected number of simultaneous students. A
-   short-running exam host can be deliberately overprovisioned.
-3. Start it well before the exam and cache the exact RootFS students will use.
-4. Open the host drawer and select **Exams**.
-5. Enable exam mode, set workspace capacity and quotas, and decide whether
-   terminals are allowed. Terminals are disabled by default.
-6. Save the configuration.
+## What one exam run guarantees
 
-Exam access is initially restricted to accounts with the exam-mode entitlement.
-Normal private-host billing and spending enforcement still apply.
+When the instructor prepares a run, CoCalc freezes its configuration:
 
-## Prepare and run an exam
+- one stable student hostname suitable for a lockdown-browser allowlist
+- one exact RootFS image and digest for every workspace
+- fixed per-workspace CPU, memory, and disk quotas
+- a maximum number of simultaneous workspaces
+- outbound project networking disabled and checked during readiness
+- terminal access either allowed or disabled for the entire run
+- backups and snapshots disabled for temporary workspaces
+- a required automatic stop time
 
-Choose a cached RootFS and a required automatic stop time, then select
-**Prepare and test run**. CoCalc freezes the image digest and configuration,
-creates a real smoke-test workspace, verifies the disabled-network policy, and
-erases the test workspace before reporting the run ready.
+The central CoCalc service remains the instructor control plane. Student files,
+Jupyter kernels, browser traffic, and other project traffic go directly to the
+exam host through the single student origin.
 
-Copy the stable student URL and the newly displayed shared token. The plaintext
-token is shown only after run creation or explicit rotation. Open admission
-only when students should be allowed to create workspaces.
+## Before the first rehearsal
 
-Every student workspace:
+1. Create a private managed GCP project host using **on-demand** pricing, not
+   spot pricing. An exam must not depend on spot capacity surviving.
+2. Size the host for the expected number of simultaneous candidates. Because
+   the host runs for a short window, deliberately overprovisioning it is often
+   the simplest way to obtain predictable performance.
+3. Start the host well before the exam and cache the exact RootFS that candidates
+   will use. The RootFS must appear in the host's cached-image inventory with a
+   digest before it can be selected for a run.
+4. Ensure the project-host owner has enough account credit for the complete
+   exam window. Existing billing and spending enforcement still apply.
+5. Confirm that the instructor's account has the exam-mode entitlement.
 
-- exists only on the selected project host
-- has outbound project networking disabled
-- uses the frozen RootFS and resource limits
-- has backups and snapshots disabled
-- is billed for CPU and egress through the project-host owner
-- is erased when the run ends
+Create and rehearse the host well in advance. For each exam, start that same
+trusted host 30 to 60 minutes before candidates arrive.
 
-## Deadline and cleanup
+## Step 1: configure the host
 
-Every run has a durable deadline. Both the central control plane and a
-host-local persisted watchdog reconcile it. At the deadline, admission closes,
-all temporary workspaces and their TimeTravel history are erased, and the VM
-is powered off. The project-host record, persistent host disk, and cached
-RootFS remain so the same trusted host can be started for a later exam.
+1. Open **Project Hosts**, select the private host, and open its **Exams** tab.
+2. Turn on **Enable exam mode**.
+3. Set **Maximum workspaces** to the largest number of browser sessions that may
+   be admitted. Leave headroom for instructor testing and accidental extra
+   sessions.
+4. Set CPU, memory, and disk limits for each workspace.
+5. Set **Maximum run** to the longest permitted workspace lifetime.
+6. Set **Cleanup grace**. This is the spending-safety interval before forced
+   VM poweroff if cleanup cannot complete; it is not additional candidate time.
+7. Decide whether to allow terminals. They are disabled by default. This choice
+   is frozen when a run is prepared.
+8. Save the configuration and complete the fresh-authentication prompt.
 
-Use **Stop and erase now** for early termination. Updating the deadline requires
-fresh authentication.
+Outbound networking is fixed to **disabled** in the current version.
 
-The cleanup grace setting is a spending-safety bound for failed cleanup before
-forced poweroff; it is not extra student working time. Billing exhaustion can
-still stop a host before the exam deadline, so ensure the billing account has
-sufficient funds or trusted credit.
+## Step 2: prepare and test a run
 
-## Lockdown browsers
+1. Start the host and wait until it reports **running** and online.
+2. In the **Exams** tab, select a cached RootFS.
+3. Choose the required automatic stop date and time. Allow enough time for the
+   rehearsal as well as the candidate session.
+4. Select **Prepare and test run** and complete fresh authentication.
+5. Wait for the run to reach **ready**. Do not open admission unless every
+   readiness check is green.
 
-Allowlist the single exam hostname shown in the instructor panel, including
-secure WebSockets to that hostname. The student application, project traffic,
-files, and kernels are served from that project-host origin. Rehearse the exact
-institutional lockdown-browser configuration before the first live exam.
+Preparation freezes the image digest and resource policy, creates a real smoke
+test workspace, starts a Jupyter kernel, checks the disabled-network policy and
+local cleanup machinery, and then erases the smoke-test workspace.
+
+The panel displays a stable student URL and a newly generated shared token.
+Copy the token immediately and store it securely. Its plaintext is shown only
+after run creation or an explicit token rotation. If it is lost while the run
+is ready, rotate it before opening admission.
+
+## Step 3: run a candidate rehearsal
+
+1. Select **Open admission** only when new workspaces should be accepted.
+2. Open the student URL in an incognito window or, preferably, a separate
+   browser profile.
+3. Enter the shared token. The browser should open directly into a new anonymous
+   project without a normal CoCalc sign-in.
+4. Create a Jupyter notebook and evaluate a simple expression such as
+   \`2 + 2\`.
+5. Save and refresh the page. It should reconnect to the same workspace.
+6. Confirm that terminal controls match the run setting.
+7. Confirm that outbound networking fails from a notebook, for example:
+
+~~~python
+import urllib.request
+urllib.request.urlopen("https://example.com", timeout=5)
+~~~
+
+8. Return to the instructor panel, select **Refresh status**, and confirm that
+   the active workspace count increased.
+9. To test workspace isolation, repeat the token flow in a genuinely separate
+   browser profile. Separate tabs or incognito windows in the same browser
+   session may share the same cookie and therefore the same workspace.
+
+For the institutional rehearsal, use the exact operating system, lockdown
+browser configuration, RootFS, and expected concurrent load planned for the
+real exam.
+
+## Step 4: monitor and adjust the deadline
+
+While admission is open, the panel shows public-route health, the frozen RootFS,
+active workspace count, capacity, terminal policy, network policy, and stop
+deadline. Refresh the panel during a rehearsal to confirm that candidate
+sessions appear.
+
+The instructor may move the deadline while the run is ready or open. Updating
+it requires fresh authentication. Treat the displayed deadline as authoritative;
+cleanup grace is not working time.
+
+## Step 5: end the run safely
+
+The normal end is automatic. At the deadline, admission closes, temporary
+workspaces are erased, and the VM powers off. A durable central reconciler and
+a persisted host-local watchdog both enforce the deadline across service and
+VM restarts.
+
+For an early end, select **Stop and erase now** and confirm the destructive
+action. Do not manually stop the VM first: exam cleanup must erase candidate
+workspaces before the host powers off.
+
+After cleanup:
+
+- candidate projects and their TimeTravel history are gone
+- anonymous local session records are gone
+- the VM is off, so compute billing stops
+- the reusable project-host record, disk, hostname, and cached RootFS remain
+
+The instructor can later start the same trusted host and prepare a new run.
+
+## Data retention and recovery
+
+Exam workspaces are local-only projects. They are not normal global CoCalc
+projects, and Rustic backups and project snapshots are disabled. TimeTravel
+works while a workspace exists because it is stored with the project files;
+it is erased with those files when the run ends.
+
+Candidates must copy anything they need to retain into the institution's
+assessment system or onto their answer sheet before the deadline. Exam mode is
+designed for zero retention, not recovery after cleanup.
+
+## Lockdown-browser configuration
+
+Allowlist the single HTTPS exam hostname shown in the instructor panel,
+including secure WebSockets to that same hostname. The student application,
+authentication, files, kernels, and project traffic all use this origin.
+
+Lockdown-browser products differ in URL, certificate, popup, clipboard, and
+WebSocket rules. CoCalc cannot infer those local policies. Rehearse the exact
+institutional configuration before the first live exam, and verify that page
+refresh, notebook execution, autosave, and reconnect all work.
+
+## Operational checklist
+
+At least one day before the exam:
+
+- confirm the on-demand host size and account credit
+- start the host and confirm bootstrap and public-route health
+- cache and rehearse the exact RootFS
+- test the institution's lockdown browser from the exam room network
+- run representative notebook concurrency
+- complete a full timed stop-and-erase rehearsal
+
+Thirty to sixty minutes before the exam:
+
+- start the trusted host and wait for it to become healthy
+- prepare a new run and require all readiness checks to pass
+- securely record the one-time shared token
+- test one candidate workspace using the actual lockdown browser
+- confirm the stop deadline and active-workspace capacity
+- open admission only when the room is ready
+
+Normal private-host CPU and network-egress billing is charged to the host owner.
+There is no special exam billing or automatic overage protection in this
+version.
 `;
 
 export const PROJECT_HOST_ACCESS_BODY = String.raw`

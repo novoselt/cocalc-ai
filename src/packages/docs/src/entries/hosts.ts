@@ -35,7 +35,11 @@ export const HOSTS_ENTRIES: DocsEntry[] = [
     body: PROJECT_HOST_EXAMS_BODY.trim(),
     category: "Project hosts",
     id: "hosts.exam-scratchpads",
-    lastReviewed: "2026-07-30",
+    image: docsIcon(
+      "/public/docs/exam-scratchpad-301d1929.webp",
+      "A locked computational exam workspace with a notebook, timer, and disabled Internet access",
+    ),
+    lastReviewed: "2026-07-31",
     slug: "hosts/exam-scratchpads",
     status: "ready",
     summary:
