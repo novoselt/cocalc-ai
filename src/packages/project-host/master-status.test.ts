@@ -80,7 +80,7 @@ describe("master-status provisioned inventory", () => {
     jest.useRealTimers();
   });
 
-  it("reports a de-duplicated provisioned inventory immediately and periodically", async () => {
+  it("reports legacy inventory once and runs only bounded audits periodically", async () => {
     jest.useFakeTimers();
     const { setMasterStatusClient, startProvisionedInventoryReporter } =
       await import("./master-status");
@@ -88,15 +88,17 @@ describe("master-status provisioned inventory", () => {
       client: {} as any,
       host_id: "host-1",
     });
-    const listProjectIds = jest.fn(async () => [
+    const bootstrapProjectIds = jest.fn(async () => [
       "project-1",
       "project-1",
       "project-2",
       "",
     ]);
+    const verifyBatch = jest.fn(async () => undefined);
 
     const stop = startProvisionedInventoryReporter({
-      listProjectIds,
+      bootstrapProjectIds,
+      verifyBatch,
       intervalMs: 60_000,
     });
     await Promise.resolve();
@@ -113,13 +115,15 @@ describe("master-status provisioned inventory", () => {
     jest.advanceTimersByTime(60_000);
     await Promise.resolve();
     await Promise.resolve();
-    expect(reportHostProvisionedInventoryMock).toHaveBeenCalledTimes(2);
+    expect(reportHostProvisionedInventoryMock).toHaveBeenCalledTimes(1);
+    expect(verifyBatch).toHaveBeenCalledTimes(1);
 
     stop();
     jest.advanceTimersByTime(60_000);
     await Promise.resolve();
     await Promise.resolve();
-    expect(reportHostProvisionedInventoryMock).toHaveBeenCalledTimes(2);
+    expect(reportHostProvisionedInventoryMock).toHaveBeenCalledTimes(1);
+    expect(verifyBatch).toHaveBeenCalledTimes(1);
   });
 
   it("does not report an empty inventory when listing provisioned projects fails", async () => {
@@ -130,7 +134,7 @@ describe("master-status provisioned inventory", () => {
       host_id: "host-1",
     });
     const stop = startProvisionedInventoryReporter({
-      listProjectIds: async () => {
+      bootstrapProjectIds: async () => {
         throw new Error("btrfs list failed");
       },
       intervalMs: 60_000,

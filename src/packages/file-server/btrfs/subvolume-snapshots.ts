@@ -291,6 +291,18 @@ export class SubvolumeSnapshots {
     }
     const reliefSize =
       Math.max(quota.size, quota.used) + cleanupQuotaReliefBytes();
+    const managedOverride =
+      this.subvolume.filesystem.opts.withTemporaryQuotaOverride?.({
+        subvolume_name: this.subvolume.name,
+        operation,
+        minimum_bytes: reliefSize,
+        current_size: quota.size,
+        current_used: quota.used,
+        run: runLocked,
+      });
+    if (managedOverride != null) {
+      return await managedOverride;
+    }
     let result: T;
     let actionError: unknown;
     logger.info("temporarily increasing quota for snapshot cleanup", {

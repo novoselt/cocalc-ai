@@ -73,6 +73,10 @@ import { UsageMonitor } from "@cocalc/conat/monitor/usage";
 import { getLogger } from "@cocalc/conat/logger";
 import { initLoadBalancer } from "./load-balancer";
 import type { PersistMaintenanceHooks } from "./maintenance/types";
+import {
+  PersistStreamReleaseQueue,
+  type PersistStreamReleaseQueueDiagnostics,
+} from "./release-queue";
 
 const logger = getLogger("persist:server");
 
@@ -91,6 +95,25 @@ const DEFAULT_MESSAGES_THRESH = 20 * 1e6;
 const ENABLE_SQLITE_GENERAL_QUERIES = false;
 
 const SEND_THROTTLE = 30;
+
+const streamReleaseQueue = new PersistStreamReleaseQueue({
+  onError: (err) => {
+    logger.warn("error releasing deferred persistent stream", { err });
+  },
+  onSlowRelease: (durationMs) => {
+    logger.warn("slow deferred persistent stream release", {
+      duration_ms: durationMs,
+    });
+  },
+});
+
+export function getPersistStreamReleaseQueueDiagnostics(): PersistStreamReleaseQueueDiagnostics {
+  return streamReleaseQueue.diagnostics();
+}
+
+export async function drainPersistStreamReleaseQueue(): Promise<void> {
+  await streamReleaseQueue.drain();
+}
 
 export function classifyPersistStorageErrorCode(
   err: unknown,
@@ -213,7 +236,9 @@ export function server({
     socket.on("closed", () => {
       log("socket closed", id, socket.subject);
       storage = undefined;
-      stream?.close();
+      if (stream != null) {
+        streamReleaseQueue.schedule(stream);
+      }
       stream = undefined;
       if (added) {
         usage.delete(user);

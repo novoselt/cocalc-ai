@@ -3,8 +3,8 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { randomUUID } from "node:crypto";
 import { getDatabase, initDatabase } from "@cocalc/lite/hub/sqlite/database";
+import { currentProjectVolumeQuotaEpoch } from "./filesystem-quota-state";
 
 export type ProjectVolumeKind = "home" | "scratch";
 export type ProjectVolumeQuotaState =
@@ -37,12 +37,9 @@ export type DesiredQuotaAcceptance =
   | { status: "stale"; row: ProjectVolumeQuotaRow };
 
 const TABLE = "project_volume_quotas";
-const processQuotaEpoch = randomUUID();
 let initialized = false;
 
-export function currentProjectVolumeQuotaEpoch(): string {
-  return processQuotaEpoch;
-}
+export { currentProjectVolumeQuotaEpoch };
 
 function ensureTable(): void {
   if (initialized) return;
@@ -196,10 +193,12 @@ export function projectVolumeQuotaIsApplied(
   row: ProjectVolumeQuotaRow,
   {
     volume_identity,
-    epoch = processQuotaEpoch,
+    epoch = currentProjectVolumeQuotaEpoch(),
   }: { volume_identity?: string; epoch?: string } = {},
 ): boolean {
   return (
+    epoch != null &&
+    volume_identity != null &&
     row.state === "applied" &&
     row.applied_bytes === row.desired_bytes &&
     row.applied_revision === row.desired_revision &&
@@ -232,7 +231,7 @@ export function markProjectVolumeQuotaApplied({
   desired_bytes,
   desired_revision,
   volume_identity,
-  epoch = processQuotaEpoch,
+  epoch = currentProjectVolumeQuotaEpoch(),
 }: {
   project_id: string;
   volume_kind: ProjectVolumeKind;
@@ -241,6 +240,12 @@ export function markProjectVolumeQuotaApplied({
   volume_identity?: string;
   epoch?: string;
 }): boolean {
+  if (!epoch) {
+    throw new Error("project filesystem quota state is not initialized");
+  }
+  if (!volume_identity) {
+    throw new Error("project volume identity is required");
+  }
   ensureTable();
   const now = Date.now();
   const result = getDatabase()
@@ -265,7 +270,7 @@ export function markProjectVolumeQuotaApplied({
       desired_bytes,
       desired_revision,
       epoch,
-      volume_identity ?? null,
+      volume_identity,
       now,
       now,
       project_id,

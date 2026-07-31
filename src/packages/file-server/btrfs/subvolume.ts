@@ -156,6 +156,47 @@ export async function getSubvolumeId(path: string): Promise<number> {
   return parseInt(await getSubvolumeField(path, "Subvolume ID"));
 }
 
+export interface BtrfsSubvolumeIdentity {
+  subvolume_id: number;
+  volume_uuid: string;
+  generation?: number;
+}
+
+export function parseBtrfsSubvolumeIdentity(
+  stdout: string,
+): BtrfsSubvolumeIdentity {
+  const field = (name: string): string | undefined => {
+    const match = stdout.match(new RegExp(`^\\s*${name}\\s*:\\s*(.+)$`, "im"));
+    return match?.[1]?.trim();
+  };
+  const subvolume_id = Number.parseInt(field("Subvolume ID") ?? "", 10);
+  const volume_uuid = `${field("UUID") ?? ""}`.toLowerCase();
+  const generation = Number.parseInt(field("Generation") ?? "", 10);
+  if (!Number.isInteger(subvolume_id) || subvolume_id <= 0 || !volume_uuid) {
+    throw new Error("unable to parse Btrfs subvolume identity");
+  }
+  return {
+    subvolume_id,
+    volume_uuid,
+    generation: Number.isInteger(generation) ? generation : undefined,
+  };
+}
+
+export async function getSubvolumeIdentity(
+  path: string,
+  opts?: { cache?: boolean },
+): Promise<BtrfsSubvolumeIdentity> {
+  const { stdout } =
+    opts?.cache === false
+      ? await btrfs({
+          args: ["subvolume", "show", path],
+          err_on_exit: true,
+          verbose: false,
+        })
+      : await cachedBtrfsSubvolumeShow(path);
+  return parseBtrfsSubvolumeIdentity(stdout);
+}
+
 export function invalidateSubvolumeMetadata(path: string): void {
   invalidateBtrfsSubvolumeShow(path);
 }

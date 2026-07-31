@@ -26,6 +26,8 @@ const getLocalHostId = jest.fn(() => "host-1");
 const getMasterConatClient = jest.fn();
 const fileServerCreateBackup = jest.fn();
 const ensureVolume = jest.fn();
+const ensureProjectVolumeIdentity = jest.fn();
+const reconcileManagedProjectVolumeQuota = jest.fn();
 const resetScratchVolume = jest.fn();
 const deleteVolume = jest.fn();
 const sandboxExec = jest.fn();
@@ -115,6 +117,10 @@ jest.mock("../file-server", () => ({
     writeManagedAuthorizedKeys(...args),
   getVolume: (...args: any[]) => getVolume(...args),
   ensureVolume: (...args: any[]) => ensureVolume(...args),
+  ensureProjectVolumeIdentity: (...args: any[]) =>
+    ensureProjectVolumeIdentity(...args),
+  reconcileManagedProjectVolumeQuota: (...args: any[]) =>
+    reconcileManagedProjectVolumeQuota(...args),
   resetScratchVolume: (...args: any[]) => resetScratchVolume(...args),
   deleteVolume: (...args: any[]) => deleteVolume(...args),
   getMountPoint: jest.fn(() => "/mnt/cocalc"),
@@ -214,6 +220,19 @@ jest.mock("../sqlite/volume-quotas", () => ({
   projectVolumeQuotaIsApplied: (...args: any[]) =>
     projectVolumeQuotaIsApplied(...args),
 }));
+jest.mock("../sqlite/project-volumes", () => ({
+  getRecordedProjectVolumeIdentity: jest.fn(() => "volume-identity"),
+}));
+jest.mock("../sqlite/volume-quota-overrides", () => ({
+  effectiveProjectVolumeQuotaBytes: ({
+    persistent_bytes,
+  }: {
+    persistent_bytes: number;
+  }) => ({
+    effective_bytes: persistent_bytes,
+    overrides: [],
+  }),
+}));
 jest.mock("../project-volume-lifecycle", () => ({
   currentProjectVolumeLifecycleGeneration: (...args: any[]) =>
     currentProjectVolumeLifecycleGeneration(...args),
@@ -256,6 +275,10 @@ describe("project host start ACP rehydrate ordering", () => {
     getOrCreateProjectLocalSecretToken.mockReturnValue("secret");
     applyPendingCopies.mockResolvedValue(undefined);
     writeManagedAuthorizedKeys.mockResolvedValue(undefined);
+    ensureProjectVolumeIdentity.mockReset();
+    ensureProjectVolumeIdentity.mockResolvedValue("volume-identity");
+    reconcileManagedProjectVolumeQuota.mockReset();
+    reconcileManagedProjectVolumeQuota.mockResolvedValue(10_000_000_000);
     resetScratchVolume.mockReset();
     pullRootfsCacheEntry.mockResolvedValue(undefined);
     prepareOciPullReservationEstimate.mockResolvedValue(undefined);
@@ -487,6 +510,14 @@ describe("project host start ACP rehydrate ordering", () => {
     projectVolumeQuotaIsApplied.mockImplementation(
       (row) => row?.volume_kind === "home" || scratchPrepared,
     );
+    reconcileManagedProjectVolumeQuota.mockImplementation(
+      async ({ volume_kind }) => {
+        if (volume_kind === "scratch") {
+          scratchPrepared = true;
+        }
+        return 65_000_000_000;
+      },
+    );
     markProjectVolumeQuotaApplied.mockImplementation(({ volume_kind }) => {
       if (volume_kind === "scratch") {
         scratchPrepared = true;
@@ -575,6 +606,14 @@ describe("project host start ACP rehydrate ordering", () => {
       });
     projectVolumeQuotaIsApplied.mockImplementation(
       (row) => row?.volume_kind === "home" || scratchPrepared,
+    );
+    reconcileManagedProjectVolumeQuota.mockImplementation(
+      async ({ volume_kind }) => {
+        if (volume_kind === "scratch") {
+          scratchPrepared = true;
+        }
+        return 65_000_000_000;
+      },
     );
     markProjectVolumeQuotaApplied.mockImplementation(({ volume_kind }) => {
       if (volume_kind === "scratch") {
@@ -1041,9 +1080,10 @@ describe("project host start ACP rehydrate ordering", () => {
 
     await hubApi.projects.start({ project_id });
 
-    expect(quotaSet).toHaveBeenCalledWith(65_000_000_000, {
+    expect(reconcileManagedProjectVolumeQuota).toHaveBeenCalledWith({
       operation_class: "project_volume_prepare",
       project_id,
+      priority: "lifecycle",
       volume_kind: "home",
     });
     expect(runnerApi.start).toHaveBeenCalledWith({
@@ -1140,10 +1180,11 @@ describe("project host start ACP rehydrate ordering", () => {
       await hubApi.projects.start({ project_id });
 
       expect(resetScratchVolume).toHaveBeenCalledWith(project_id);
-      expect(scratchQuotaSet).toHaveBeenCalledWith(65_000_000_000, {
+      expect(reconcileManagedProjectVolumeQuota).toHaveBeenCalledWith({
         project_id,
         volume_kind: "scratch",
         operation_class: "project_volume_prepare",
+        priority: "lifecycle",
       });
       expect(runnerApi.start).toHaveBeenCalledWith({
         project_id,

@@ -76,6 +76,26 @@ def btrfs_qgroup_count(mount: Path) -> int:
     return max(0, len(output.splitlines()) - 2)
 
 
+def wait_for_qgroup_cleanup(
+    mount: Path,
+    *,
+    target: int,
+    timeout_seconds: int,
+) -> tuple[int, float]:
+    started = time.monotonic()
+    current = btrfs_qgroup_count(mount)
+    while current > target:
+        elapsed = time.monotonic() - started
+        if elapsed >= timeout_seconds:
+            raise RuntimeError(
+                "timed out waiting for qgroup cleanup "
+                f"(target={target}, current={current}, timeout={timeout_seconds}s)"
+            )
+        time.sleep(min(5, max(0.1, timeout_seconds - elapsed)))
+        current = btrfs_qgroup_count(mount)
+    return current, time.monotonic() - started
+
+
 def sqlite_file_owners(db_path: Path) -> dict[Path, tuple[int, int]]:
     owners: dict[Path, tuple[int, int]] = {}
     db_stat = db_path.stat()
@@ -103,6 +123,37 @@ def corpus_row_count(db_path: Path) -> int:
                 "SELECT count(*) FROM projects WHERE title = ?", (TITLE_PREFIX,)
             ).fetchone()[0]
         )
+    finally:
+        connection.close()
+
+
+def table_exists(connection: sqlite3.Connection, table: str) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        is not None
+    )
+
+
+def corpus_dependent_row_counts(db_path: Path) -> dict[str, int]:
+    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        counts: dict[str, int] = {}
+        for table in (
+            "btrfs_quota_queue",
+            "project_volume_quotas",
+            "project_volumes",
+        ):
+            if table_exists(connection, table):
+                counts[table] = int(
+                    connection.execute(
+                        f"SELECT count(*) FROM {table} WHERE project_id LIKE ?",
+                        (f"{PROJECT_PREFIX}%",),
+                    ).fetchone()[0]
+                )
+        return counts
     finally:
         connection.close()
 
@@ -159,12 +210,19 @@ def seed(args: argparse.Namespace, host_id: str) -> dict[str, Any]:
         "project_prefix": PROJECT_PREFIX,
         "title": TITLE_PREFIX,
         "created_at": time.time(),
+        "baseline_subvolumes": btrfs_subvolume_count(args.mount),
+        "baseline_qgroups": btrfs_qgroup_count(args.mount),
         "created_subvolumes": 0,
         "inserted_rows": 0,
     }
     if not existing_marker:
         if corpus_row_count(args.db):
             raise RuntimeError("reserved corpus rows exist without a marker")
+        dependent_rows = corpus_dependent_row_counts(args.db)
+        if any(dependent_rows.values()):
+            raise RuntimeError(
+                f"reserved corpus ledger rows exist without a marker: {dependent_rows}"
+            )
         conflicts = [
             str(project_path(args.mount, index))
             for index in range(1, args.count + 1)
@@ -200,13 +258,11 @@ def seed(args: argparse.Namespace, host_id: str) -> dict[str, Any]:
                 INSERT OR IGNORE INTO projects
                   (project_id, title, state, disk, scratch, last_seen, updated_at,
                    run_quota, run_quota_revision)
-                VALUES (?, ?, 'closed', ?, ?, ?, ?, ?, 1)
+                VALUES (?, ?, 'closed', 0, 0, ?, ?, ?, 1)
                 """,
                 (
                     project_id(index),
                     TITLE_PREFIX,
-                    args.quota_bytes,
-                    args.quota_bytes,
                     now,
                     now,
                     json.dumps(
@@ -256,12 +312,29 @@ def cleanup(args: argparse.Namespace, host_id: str) -> dict[str, Any]:
             run(["btrfs", "subvolume", "delete", str(path)], quiet=True)
             deleted += 1
     run(["btrfs", "filesystem", "sync", str(args.mount)], quiet=True)
+    baseline_qgroups = int(marker.get("baseline_qgroups", 0))
+    final_qgroups, qgroup_cleanup_seconds = wait_for_qgroup_cleanup(
+        args.mount,
+        target=baseline_qgroups,
+        timeout_seconds=args.cleanup_timeout_seconds,
+    )
 
     owners = sqlite_file_owners(args.db)
     connection = sqlite3.connect(args.db, timeout=30)
+    removed_dependent_rows: dict[str, int] = {}
     try:
         connection.execute("PRAGMA busy_timeout=30000")
         connection.execute("BEGIN IMMEDIATE")
+        for table in (
+            "btrfs_quota_queue",
+            "project_volume_quotas",
+            "project_volumes",
+        ):
+            if table_exists(connection, table):
+                removed_dependent_rows[table] = connection.execute(
+                    f"DELETE FROM {table} WHERE project_id LIKE ?",
+                    (f"{PROJECT_PREFIX}%",),
+                ).rowcount
         removed_rows = connection.execute(
             "DELETE FROM projects WHERE title = ? AND project_id LIKE ?",
             (TITLE_PREFIX, f"{PROJECT_PREFIX}%"),
@@ -276,8 +349,10 @@ def cleanup(args: argparse.Namespace, host_id: str) -> dict[str, Any]:
         "host_id": host_id,
         "deleted_subvolumes": deleted,
         "deleted_rows": removed_rows,
+        "deleted_dependent_rows": removed_dependent_rows,
         "total_subvolumes": btrfs_subvolume_count(args.mount),
-        "total_qgroups": btrfs_qgroup_count(args.mount),
+        "total_qgroups": final_qgroups,
+        "qgroup_cleanup_seconds": round(qgroup_cleanup_seconds, 3),
         "duration_seconds": round(time.monotonic() - started, 3),
     }
 
@@ -308,6 +383,7 @@ def main() -> int:
     parser.add_argument("--quota-bytes", type=int, default=1_000_000_000)
     parser.add_argument("--runtime-uid", type=int, default=2000)
     parser.add_argument("--runtime-gid", type=int, default=2000)
+    parser.add_argument("--cleanup-timeout-seconds", type=int, default=300)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--mount", type=Path, default=DEFAULT_MOUNT)
     parser.add_argument("--env", type=Path, default=DEFAULT_ENV)

@@ -2,12 +2,17 @@
 
 Date: 2026-07-30
 
-Status: core implementation deployed and stress-tested on staging; no
-production changes authorized
+Status: implementation, durable temporary overrides, and bounded override
+history deployed and stress-tested on staging; no production changes
+authorized
 
 Related plan:
 
 - `src/.agents/project-host-io-phase-2-plan-2026-07-29.md`
+
+Staging result:
+
+- `src/.agents/project-host-storage-scalability-staging-results-2026-07-30.md`
 
 ## Implementation and Staging Evidence
 
@@ -25,7 +30,11 @@ The core lifecycle/startup implementation is committed on branch `ops`:
 - `95e63a4421` prepares scratch asynchronously after stop and retains a
   synchronous fail-closed start fallback;
 - `cb0352d0ab` makes deletion win races with background scratch preparation by
-  using per-project lifecycle serialization and invalidation generations.
+  using per-project lifecycle serialization and invalidation generations;
+- `35e4ac703a` makes temporary quota raises durable and centralizes all managed
+  raw quota writes behind one coordinator; and
+- `3a73fe7956` bounds released override history with an indexed seven-day
+  retention policy and 512-row scavenger batches.
 
 Validation completed:
 
@@ -36,25 +45,34 @@ Validation completed:
   typechecks/builds passed;
 - deterministic 10K-row SQLite port lease and quota-auditor tests passed.
 
+The final temporary-override follow-up passed:
+
+- project-host: 111 suites and 674 tests;
+- project-host package typecheck;
+- full monorepo TypeScript build during artifact creation; and
+- live staging expiry/recovery and project lifecycle qualification.
+
 ### Staging Deployment
 
 The final staging artifact is:
 
 ```text
-20260730T223250Z-cb0352d0-quota-startup-20260730-cb0352d
+20260731T022110Z-3a73fe79-quota-overrides-retention-3a73fe79
 ```
 
 Deployment record:
 
 ```text
-20260730T224446Z-20260730T223250Z-cb0352d0-quota-startup-20260730-cb0352d
+20260731T022151Z-20260731T022110Z-3a73fe79-quota-overrides-retention-3a73fe79
 ```
 
 The rollout used `host2` as a 60-second canary, then rolled the second staging
 host with concurrency one and a 30-second stabilization period. Both hosts
-passed. The project-host staging smoke test passed representative-host,
+passed in rollout operation `661d85f8-03a3-47fc-88af-d08118012504`. The
+project-host staging smoke test passed representative-host,
 deployment-version, and RootFS RPC checks. Both public `/healthz` routes
-reported ready with the correct host identity.
+reported ready with the correct host identity. Conat router, Conat persistence,
+and ACP worker processes were preserved by the component-specific rollout.
 
 No production API, host, database, DNS, or storage resource was touched.
 
@@ -133,19 +151,35 @@ block the core result, but BEES IOPS policy remains a separate follow-up.
 The following plan items are not complete and must not be implied by the
 staging latency result:
 
-- replace the process-local quota epoch with durable filesystem identity and
-  quota-mode epoch handling;
-- persist and verify stable Btrfs volume identity for applied ledger claims;
-- migrate every temporary quota raise to the durable override model;
 - complete operator diagnostics for desired/applied revision, identity, epoch,
-  queue state, and fast-path status;
+  override state, queue state, and fast-path status;
 - add or verify lifecycle-context guards for every unfiltered global Btrfs
   command;
 - decide whether BEES needs an explicit IOPS ceiling;
-- review all remaining recurring full-host loops and either bound, index, or
-  isolate them;
 - perform an explicit production-readiness review and obtain separate
   production authorization.
+
+Completed by `98ec785257` and qualified in the staging result:
+
+- durable filesystem identity and quota-mode epoch handling;
+- stable Btrfs volume identity for applied ledger claims;
+- one-time legacy inventory bootstrap keyed by filesystem UUID;
+- bounded persisted-cursor volume verification;
+- removal of the recurring full Btrfs inventory;
+- indexed/aggregate replacements for normal recurring full-project loops; and
+- an exact 10K-row/subvolume staging test and cleanup.
+
+Completed by `35e4ac703a` and `3a73fe7956`:
+
+- durable temporary quota claims for snapshot cleanup and legacy archive
+  restore;
+- finite restore headroom instead of disabling managed quotas;
+- maximum-of-persistent-and-active-override effective quota semantics;
+- restart and expiry recovery with a two-stage release;
+- one private raw managed quota setter behind per-volume transition
+  serialization;
+- bounded retention for released override history; and
+- deletion cleanup for persistent quota and override rows.
 
 ## Executive Decision
 

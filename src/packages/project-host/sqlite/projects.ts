@@ -461,6 +461,71 @@ export function listProjects(): ProjectRow[] {
   })) as ProjectRow[];
 }
 
+export function listProjectsByStates(states: string[]): ProjectRow[] {
+  ensureProjectsTable();
+  const normalized = Array.from(
+    new Set(states.map((state) => `${state}`.trim()).filter(Boolean)),
+  );
+  if (normalized.length === 0) return [];
+  const placeholders = normalized.map(() => "?").join(",");
+  return getDatabase()
+    .prepare(
+      `SELECT project_id, title, state, state_reported, runtime_exit_reason,
+              image, disk, scratch, last_seen, updated_at, http_port, ssh_port,
+              project_bundle_version, tools_version, secret_token, run_quota,
+              run_quota_revision, secret_names
+         FROM projects
+        WHERE state IN (${placeholders})`,
+    )
+    .all(...normalized)
+    .map((row: any) => ({
+      ...row,
+      run_quota: parseRunQuota(row.run_quota),
+      secret_names: parseStringArray(row.secret_names),
+    })) as ProjectRow[];
+}
+
+export function countProjectsByStates(
+  states: string[],
+): Record<string, number> {
+  ensureProjectsTable();
+  const normalized = Array.from(
+    new Set(states.map((state) => `${state}`.trim()).filter(Boolean)),
+  );
+  const counts: Record<string, number> = {};
+  for (const state of normalized) counts[state] = 0;
+  if (normalized.length === 0) return counts;
+  const placeholders = normalized.map(() => "?").join(",");
+  const rows = getDatabase()
+    .prepare(
+      `SELECT state, COUNT(*) AS count
+         FROM projects
+        WHERE state IN (${placeholders})
+        GROUP BY state`,
+    )
+    .all(...normalized) as Array<{ state: string; count: number }>;
+  for (const row of rows) counts[row.state] = Number(row.count);
+  return counts;
+}
+
+export function getProjectStateCounts(): {
+  total: number;
+  by_state: Record<string, number>;
+} {
+  ensureProjectsTable();
+  const rows = getDatabase()
+    .prepare("SELECT state, COUNT(*) AS count FROM projects GROUP BY state")
+    .all() as Array<{ state?: string | null; count: number }>;
+  const by_state: Record<string, number> = {};
+  let total = 0;
+  for (const row of rows) {
+    const count = Number(row.count);
+    total += count;
+    if (row.state) by_state[row.state] = count;
+  }
+  return { total, by_state };
+}
+
 export function listProjectQuotaRepairBatch({
   after_project_id = "",
   limit = 32,
@@ -633,7 +698,7 @@ export function listRuntimeArtifactReferences(): {
   project_bundle: ProjectRuntimeArtifactReference[];
   tools: ProjectRuntimeArtifactReference[];
 } {
-  const rows = listProjects();
+  const rows = listProjectsByStates(["running", "starting"]);
   return {
     project_bundle: summarizeReferences(rows, "project_bundle_version"),
     tools: summarizeReferences(rows, "tools_version"),

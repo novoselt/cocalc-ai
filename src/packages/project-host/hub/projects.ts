@@ -69,6 +69,8 @@ import {
   getMountPoint,
   resetScratchVolume,
   resolveProjectContainerPath,
+  ensureProjectVolumeIdentity,
+  reconcileManagedProjectVolumeQuota,
 } from "../file-server";
 import { currentProjectVolumeLifecycleGeneration } from "../project-volume-lifecycle";
 import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
@@ -151,11 +153,11 @@ import {
   acceptProjectVolumeQuotaDesired,
   getProjectVolumeQuota,
   invalidateProjectVolumeQuota,
-  markProjectVolumeQuotaApplied,
-  markProjectVolumeQuotaApplying,
   markProjectVolumeQuotaFailed,
   projectVolumeQuotaIsApplied,
 } from "../sqlite/volume-quotas";
+import { getRecordedProjectVolumeIdentity } from "../sqlite/project-volumes";
+import { effectiveProjectVolumeQuotaBytes } from "../sqlite/volume-quota-overrides";
 
 const logger = getLogger("project-host:hub:projects");
 const CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS = 45_000;
@@ -1097,22 +1099,30 @@ async function assertStartDiskQuotaAllowed({
               expected_lifecycle_generation: scratch_lifecycle_generation,
             });
     }
-    const acceptance =
-      ledgerMode === "off"
-        ? undefined
-        : acceptProjectVolumeQuotaDesired({
-            project_id,
-            volume_kind,
-            desired_bytes,
-            desired_revision: run_quota_revision,
-          });
-    const desired = acceptance?.row;
-    const targetDiskBytes = desired?.desired_bytes ?? desired_bytes;
+    const acceptance = acceptProjectVolumeQuotaDesired({
+      project_id,
+      volume_kind,
+      desired_bytes,
+      desired_revision: run_quota_revision,
+    });
+    const desired = acceptance.row;
+    const effective = effectiveProjectVolumeQuotaBytes({
+      project_id,
+      volume_kind,
+      persistent_bytes: desired.desired_bytes,
+    });
+    const targetDiskBytes = effective.effective_bytes;
+    let volumeIdentity = getRecordedProjectVolumeIdentity(
+      project_id,
+      volume_kind,
+    );
     if (
       ledgerMode === "enforce" &&
-      desired != null &&
+      effective.overrides.length === 0 &&
       acceptance?.status !== "stale" &&
-      projectVolumeQuotaIsApplied(desired)
+      projectVolumeQuotaIsApplied(desired, {
+        volume_identity: volumeIdentity,
+      })
     ) {
       logger.debug("project disk quota ledger fast path", {
         project_id,
@@ -1125,6 +1135,10 @@ async function assertStartDiskQuotaAllowed({
     try {
       const vol =
         resetVolume ?? (await getVolume(project_id, volume_kind === "scratch"));
+      volumeIdentity = await ensureProjectVolumeIdentity(
+        project_id,
+        volume_kind === "scratch",
+      );
       const quota = await vol.quota.get();
       if (
         isProjectDiskQuotaStartBlocked({
@@ -1151,17 +1165,6 @@ async function assertStartDiskQuotaAllowed({
         currentSize <= 0 ||
         targetDiskBytes !== currentSize
       ) {
-        if (desired) {
-          markProjectVolumeQuotaApplying({
-            project_id,
-            volume_kind,
-          });
-        }
-        await vol.quota.set(targetDiskBytes, {
-          project_id,
-          volume_kind,
-          operation_class: "project_volume_prepare",
-        });
         logger.info("reconciled project disk quota before start", {
           project_id,
           volume_kind,
@@ -1170,15 +1173,13 @@ async function assertStartDiskQuotaAllowed({
           used: quota.used,
         });
       }
-      if (desired) {
-        markProjectVolumeQuotaApplied({
-          project_id,
-          volume_kind,
-          desired_bytes: desired.desired_bytes,
-          desired_revision: desired.desired_revision,
-        });
-      }
-      return ledgerMode === "enforce" && desired != null;
+      await reconcileManagedProjectVolumeQuota({
+        project_id,
+        volume_kind,
+        operation_class: "project_volume_prepare",
+        priority: "lifecycle",
+      });
+      return ledgerMode === "enforce";
     } catch (err) {
       if (err instanceof ProjectDiskQuotaExceededError) {
         throw err;
@@ -1444,7 +1445,15 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
 
   function scratchVolumeQuotaIsPrepared(project_id: string): boolean {
     const row = getProjectVolumeQuota(project_id, "scratch");
-    return row != null && projectVolumeQuotaIsApplied(row);
+    return (
+      row != null &&
+      projectVolumeQuotaIsApplied(row, {
+        volume_identity: getRecordedProjectVolumeIdentity(
+          project_id,
+          "scratch",
+        ),
+      })
+    );
   }
 
   function scheduleStoppedVolumePreparation(project_id: string): void {

@@ -36,9 +36,10 @@ import {
   ensureShareFileDownloadReadServer,
   ensureFileUploadWriteServer,
   ensureViewerFileDownloadReadServer,
+  bootstrapProvisionedProjectInventory,
   initFileServer,
   initFsServer,
-  listProvisionedProjects,
+  verifyProvisionedProjectInventoryBatch,
   PROJECT_HOST_FILE_UPLOAD_WRITE_SERVICE,
 } from "./file-server";
 import { handleProjectHostUpload } from "./upload";
@@ -48,7 +49,6 @@ import {
   getOrCreateProjectLocalSecretToken,
   getProject,
   getProjectPorts,
-  listProjects,
 } from "./sqlite/projects";
 import {
   PROJECT_PROXY_ACCOUNT_ID_HEADER,
@@ -86,7 +86,6 @@ import {
   rehydrateAcpAutomationsForProject,
   setAcpAdmissionLimitsProvider,
 } from "@cocalc/lite/hub/acp";
-import { partitionAcpStartupProjectIds } from "./acp-startup-rehydrate";
 import { setContainerExec } from "@cocalc/lite/hub/acp/executor/container";
 import { initCodexProjectRunner } from "./codex/codex-project";
 import { initCodexSiteKeyGovernor } from "./codex/codex-site-metering";
@@ -395,15 +394,16 @@ async function waitForProjectHttpPort(project_id: string): Promise<number> {
 }
 
 async function rehydrateAcpAutomationsOnStartup(): Promise<void> {
-  const provisionedProjectIds = listProjects()
-    .map((row) => `${row.project_id ?? ""}`.trim())
-    .filter(Boolean);
   const localAutomationProjectIds = listAcpAutomationProjectIds();
-  const { rehydrateProjectIds, staleProjectIds } =
-    partitionAcpStartupProjectIds({
-      provisionedProjectIds,
-      localAutomationProjectIds,
-    });
+  const rehydrateProjectIds: string[] = [];
+  const staleProjectIds: string[] = [];
+  for (const project_id of localAutomationProjectIds) {
+    if (getProject(project_id)) {
+      rehydrateProjectIds.push(project_id);
+    } else {
+      staleProjectIds.push(project_id);
+    }
+  }
 
   for (const project_id of staleProjectIds) {
     try {
@@ -427,7 +427,6 @@ async function rehydrateAcpAutomationsOnStartup(): Promise<void> {
   let restored = 0;
   let failed = 0;
   logger.info("starting ACP automation rehydrate after startup", {
-    provisioned_projects: provisionedProjectIds.length,
     local_automation_projects: localAutomationProjectIds.length,
     stale_local_projects: staleProjectIds.length,
     projects: rehydrateProjectIds.length,
@@ -452,7 +451,6 @@ async function rehydrateAcpAutomationsOnStartup(): Promise<void> {
     Array.from({ length: concurrency }, async () => await worker()),
   );
   logger.info("completed ACP automation rehydrate after startup", {
-    provisioned_projects: provisionedProjectIds.length,
     local_automation_projects: localAutomationProjectIds.length,
     stale_local_projects: staleProjectIds.length,
     projects: rehydrateProjectIds.length,
@@ -1673,9 +1671,6 @@ export async function main(
       });
     }
     stopRuntimePostureMonitor = startRuntimePostureMonitor();
-    stopProvisionedInventoryReporter = startProvisionedInventoryReporter({
-      listProjectIds: listProvisionedProjects,
-    });
     stopStorageAdmissionController = startStorageAdmissionController();
     stopSnapshotBackupMaintenance = startProjectSnapshotBackupMaintenance({
       hostId,
@@ -1695,6 +1690,10 @@ export async function main(
   resolveStartupReady();
   await masterRegistration?.heartbeat();
   logger.info("project-host ready");
+  stopProvisionedInventoryReporter = startProvisionedInventoryReporter({
+    bootstrapProjectIds: bootstrapProvisionedProjectInventory,
+    verifyBatch: verifyProvisionedProjectInventoryBatch,
+  });
   void rehydrateAcpAutomationsOnStartup().catch((err) => {
     logger.warn("startup ACP automation rehydrate failed", {
       err: `${err}`,

@@ -5,6 +5,7 @@
 
 import getLogger from "@cocalc/backend/logger";
 import { setConatPassword } from "@cocalc/backend/data";
+import { drainPersistStreamReleaseQueue } from "@cocalc/conat/persist/server";
 import { getOrCreateProjectHostConatPassword } from "./local-conat-password";
 import { startStandaloneProjectHostConatPersist } from "./conat-persist";
 import { startEventLoopStallMonitor } from "./event-loop-stalls";
@@ -40,6 +41,7 @@ export async function main(): Promise<ProjectHostConatPersistDaemonContext> {
     closed = true;
     try {
       await persistServer.end();
+      await drainPersistStreamReleaseQueue();
     } finally {
       maintenance?.close();
       stopEventLoopStallMonitor();

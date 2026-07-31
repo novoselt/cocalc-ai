@@ -21,11 +21,17 @@ export type BtrfsQuotaRuntimeStatus =
 
 type QuotaModeCacheEntry = {
   expires: number;
-  status: BtrfsQuotaRuntimeStatus;
+  details: BtrfsQuotaRuntimeDetails;
 };
 
 const quotaModeCache = new Map<string, QuotaModeCacheEntry>();
-const quotaModeInflight = new Map<string, Promise<BtrfsQuotaRuntimeStatus>>();
+const quotaModeInflight = new Map<string, Promise<BtrfsQuotaRuntimeDetails>>();
+
+export interface BtrfsQuotaRuntimeDetails {
+  status: BtrfsQuotaRuntimeStatus;
+  filesystem_uuid: string;
+  reconciled: boolean;
+}
 
 function quotaModeCacheMs(): number {
   const configured = Number.parseInt(
@@ -46,27 +52,27 @@ function quotasNotEnabled(text: string): boolean {
   );
 }
 
-function parseBtrfsFilesystemUuid(stdout: string): string | undefined {
+export function parseBtrfsFilesystemUuid(stdout: string): string | undefined {
   const match = stdout.match(/\buuid:\s*([0-9a-f-]{36})\b/i);
   return match?.[1]?.toLowerCase();
 }
 
-async function getBtrfsQuotaSysfsStatus(
-  mount: string,
-): Promise<BtrfsQuotaRuntimeStatus | undefined> {
+export async function getBtrfsFilesystemUuid(mount: string): Promise<string> {
   const { stdout } = await btrfs({
     args: ["filesystem", "show", mount],
     verbose: false,
   });
   const uuid = parseBtrfsFilesystemUuid(stdout);
   if (!uuid) {
-    logger.warn("unable to parse btrfs filesystem UUID", {
-      mount,
-      stdout: stdout.trim(),
-    });
-    return;
+    throw new Error(`unable to parse Btrfs filesystem UUID for ${mount}`);
   }
-  const base = `/sys/fs/btrfs/${uuid}/qgroups`;
+  return uuid;
+}
+
+async function getBtrfsQuotaSysfsStatus(
+  filesystemUuid: string,
+): Promise<BtrfsQuotaRuntimeStatus | undefined> {
+  const base = `/sys/fs/btrfs/${filesystemUuid}/qgroups`;
   try {
     const enabled = (await readFile(`${base}/enabled`, "utf8"))
       .trim()
@@ -115,8 +121,11 @@ export function btrfsQuotaEnableArgs(mount: string): string[] {
 
 export async function getBtrfsQuotaRuntimeStatus(
   mount: string,
+  filesystemUuid?: string,
 ): Promise<BtrfsQuotaRuntimeStatus> {
-  const sysfsStatus = await getBtrfsQuotaSysfsStatus(mount);
+  const sysfsStatus = await getBtrfsQuotaSysfsStatus(
+    filesystemUuid ?? (await getBtrfsFilesystemUuid(mount)),
+  );
   if (sysfsStatus) {
     return sysfsStatus;
   }
@@ -150,9 +159,10 @@ export async function getBtrfsQuotaRuntimeStatus(
 
 async function reconcileBtrfsQuotaMode(
   mount: string,
-): Promise<BtrfsQuotaRuntimeStatus> {
+): Promise<BtrfsQuotaRuntimeDetails> {
+  const filesystem_uuid = await getBtrfsFilesystemUuid(mount);
   const desiredMode = btrfsQuotaMode();
-  const current = await getBtrfsQuotaRuntimeStatus(mount);
+  const current = await getBtrfsQuotaRuntimeStatus(mount, filesystem_uuid);
 
   if (desiredMode === "disabled") {
     if (current.enabled) {
@@ -161,11 +171,15 @@ async function reconcileBtrfsQuotaMode(
         verbose: false,
       });
     }
-    return { enabled: false, mode: "disabled" };
+    return {
+      status: { enabled: false, mode: "disabled" },
+      filesystem_uuid,
+      reconciled: current.enabled,
+    };
   }
 
   if (current.enabled && current.mode === desiredMode) {
-    return current;
+    return { status: current, filesystem_uuid, reconciled: false };
   }
 
   // Deliberately migrate any existing qgroup-based filesystem to simple quotas.
@@ -183,22 +197,22 @@ async function reconcileBtrfsQuotaMode(
     verbose: false,
   });
 
-  const status = await getBtrfsQuotaRuntimeStatus(mount);
+  const status = await getBtrfsQuotaRuntimeStatus(mount, filesystem_uuid);
   if (!status.enabled || status.mode !== desiredMode) {
     throw new Error(
       `btrfs quota mode ${desiredMode} was not active after enable on ${mount}`,
     );
   }
-  return status;
+  return { status, filesystem_uuid, reconciled: true };
 }
 
-export async function ensureBtrfsQuotaMode(
+export async function ensureBtrfsQuotaModeDetails(
   mount: string,
-): Promise<BtrfsQuotaRuntimeStatus> {
+): Promise<BtrfsQuotaRuntimeDetails> {
   const now = Date.now();
   const cached = quotaModeCache.get(mount);
   if (cached && cached.expires > now) {
-    return cached.status;
+    return cached.details;
   }
   const pending = quotaModeInflight.get(mount);
   if (pending) {
@@ -212,7 +226,7 @@ export async function ensureBtrfsQuotaMode(
     if (ttlMs > 0) {
       quotaModeCache.set(mount, {
         expires: Date.now() + ttlMs,
-        status,
+        details: status,
       });
     }
     return status;
@@ -221,6 +235,12 @@ export async function ensureBtrfsQuotaMode(
       quotaModeInflight.delete(mount);
     }
   }
+}
+
+export async function ensureBtrfsQuotaMode(
+  mount: string,
+): Promise<BtrfsQuotaRuntimeStatus> {
+  return (await ensureBtrfsQuotaModeDetails(mount)).status;
 }
 
 export function invalidateBtrfsQuotaMode(mount: string): void {

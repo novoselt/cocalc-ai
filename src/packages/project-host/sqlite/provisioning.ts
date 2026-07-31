@@ -70,13 +70,20 @@ export function setProjectProvisioned(
   return true;
 }
 
-export function listUnreportedProvisioning(): ProvisioningRow[] {
+export function listUnreportedProvisioning(limit = 256): ProvisioningRow[] {
   ensureProvisioningTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, provisioned FROM project_provisioning WHERE provisioned_reported = 0",
+    `SELECT project_id, provisioned
+       FROM project_provisioning
+      WHERE provisioned_reported = 0
+      ORDER BY updated_at, project_id
+      LIMIT ?`,
   );
-  const rows = stmt.all() as { project_id: string; provisioned?: number }[];
+  const rows = stmt.all(Math.max(1, Math.floor(limit))) as {
+    project_id: string;
+    provisioned?: number;
+  }[];
   return rows.map((row) => ({
     project_id: row.project_id,
     provisioned: !!row.provisioned,
