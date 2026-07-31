@@ -36,7 +36,7 @@ describe("CocalcErrorBoundary", () => {
     }
 
     render(
-      <CocalcErrorBoundary scope="test.transient">
+      <CocalcErrorBoundary autoRetry scope="test.transient">
         <TransientFailure />
       </CocalcErrorBoundary>,
       {
@@ -49,6 +49,31 @@ describe("CocalcErrorBoundary", () => {
     expect(
       screen.queryByText("This part of CoCalc could not be displayed."),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not automatically remount a failed subtree by default", async () => {
+    let failures = 0;
+    function Failure() {
+      failures += 1;
+      throw new Error("persistent");
+    }
+
+    render(
+      <CocalcErrorBoundary scope="test.manual">
+        <Failure />
+      </CocalcErrorBoundary>,
+      {
+        onCaughtError: () => {},
+        onRecoverableError: () => {},
+      },
+    );
+
+    expect(
+      await screen.findByText("This part of CoCalc could not be displayed."),
+    ).toBeInTheDocument();
+    const failuresAfterFallback = failures;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(failures).toBe(failuresAfterFallback);
   });
 
   it("shows a local fallback and supports a manual retry", async () => {
@@ -135,5 +160,56 @@ describe("CocalcErrorBoundary", () => {
     );
 
     expect(await screen.findByText("Healthy route")).toBeInTheDocument();
+  });
+
+  it("waits for resetWhen before consuming a reset-key change", async () => {
+    function Content({ connected }: { connected: boolean }) {
+      if (!connected) {
+        throw new Error("disconnected render failure");
+      }
+      return <div>Connected content</div>;
+    }
+
+    const { rerender } = render(
+      <CocalcErrorBoundary
+        resetKeys={["connected"]}
+        resetWhen={false}
+        scope="project.editor"
+      >
+        <Content connected={false} />
+      </CocalcErrorBoundary>,
+      {
+        onCaughtError: () => {},
+        onRecoverableError: () => {},
+      },
+    );
+
+    expect(
+      await screen.findByText("This part of CoCalc could not be displayed."),
+    ).toBeInTheDocument();
+
+    rerender(
+      <CocalcErrorBoundary
+        resetKeys={["disconnected"]}
+        resetWhen={false}
+        scope="project.editor"
+      >
+        <Content connected={false} />
+      </CocalcErrorBoundary>,
+    );
+    expect(
+      screen.getByText("This part of CoCalc could not be displayed."),
+    ).toBeInTheDocument();
+
+    rerender(
+      <CocalcErrorBoundary
+        resetKeys={["connected"]}
+        resetWhen
+        scope="project.editor"
+      >
+        <Content connected />
+      </CocalcErrorBoundary>,
+    );
+    expect(await screen.findByText("Connected content")).toBeInTheDocument();
   });
 });
