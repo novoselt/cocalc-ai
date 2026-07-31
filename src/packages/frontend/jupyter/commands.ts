@@ -48,6 +48,16 @@ export const CLEAR_CELL_OUTPUT_LABEL = defineMessage({
   defaultMessage: "Clear Output",
 });
 
+export const GLOBAL_UNDO_LABEL = defineMessage({
+  id: "jupyter.commands.global-undo",
+  defaultMessage: "Global Undo",
+});
+
+export const GLOBAL_REDO_LABEL = defineMessage({
+  id: "jupyter.commands.global-redo",
+  defaultMessage: "Global Redo",
+});
+
 export interface KeyboardCommand {
   mode?: NotebookMode;
   which: number;
@@ -527,26 +537,18 @@ export function commands(actions: AllActions): {
     },
 
     "global undo": {
-      m: labels.undo,
+      m: GLOBAL_UNDO_LABEL,
       i: "undo",
-      d: "Global user-aware undo.  Undo the last change *you* made to the notebook.",
-      k: [
-        { alt: true, mode: "escape", which: 90 },
-        { ctrl: true, mode: "escape", which: 90 },
-      ],
+      d: "Undo your last notebook-wide change, which may restore, delete, move, or change the type of a cell.",
+      k: [{ mode: "escape", which: 90 }],
       f: () => actions.frame_actions?.undo(),
     },
 
     "global redo": {
-      m: labels.redo,
+      m: GLOBAL_REDO_LABEL,
       i: "repeat",
-      d: "Global user-aware redo.  Redo the last change *you* made to the notebook.",
-      k: [
-        { alt: true, mode: "escape", which: 90, shift: true },
-        { ctrl: true, mode: "escape", which: 90, shift: true },
-        { alt: true, mode: "escape", which: 89 },
-        { ctrl: true, mode: "escape", which: 89 },
-      ],
+      d: "Redo your last notebook-wide change, which may restore, delete, move, or change the type of a cell.",
+      k: [{ mode: "escape", which: 90, shift: true }],
       f: () => actions.frame_actions?.redo(),
     },
 

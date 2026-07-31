@@ -1035,6 +1035,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
             overflowX: "hidden",
           }}
           ref={handleCellListRef}
+          tabIndex={-1}
           onClick={actions != null && complete != null ? on_click : undefined}
           onScroll={() => {
             cancelScrollRestoreIfUserScrolled();

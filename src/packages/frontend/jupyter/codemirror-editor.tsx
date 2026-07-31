@@ -37,6 +37,8 @@ import { initFold, saveFold } from "@cocalc/frontend/codemirror/util";
 interface CachedInfo {
   sel?: any[]; // only cache the selections right now...
   last_introspect_pos?: { line: number; ch: number };
+  history?: any;
+  historyValue?: string;
 }
 
 const cache = new LRU<string, CachedInfo>({ max: 1000 });
@@ -156,9 +158,9 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
 
   useEffect(() => {
     if (frameActions.current?.frame_id != null) {
-      key.current = `${(actions as any)?.path}${
+      key.current = `${(actions as any)?.path ?? ""}:${
         frameActions.current.frame_id
-      }${id}`;
+      }:${id}`;
     }
     init_codemirror(options, value);
 
@@ -168,6 +170,12 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
           saveFold(cm.current, key.current);
         }
         cm_save();
+        if (key.current != null) {
+          const cached = cache.get(key.current) ?? {};
+          cached.history = cm.current.getHistory();
+          cached.historyValue = cm.current.getValue();
+          cache.set(key.current, cached);
+        }
         cm_destroy();
       }
     };
@@ -212,7 +220,19 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       return;
     }
     if (cm.current != null) {
-      cm.current.setValueNoJump(value);
+      if (cm.current.getValue() !== value) {
+        cm.current.setValueNoJump(value);
+        cm.current.clearHistory();
+        cm_last_remote.current = value;
+        if (key.current != null) {
+          const cached = cache.get(key.current);
+          if (cached != null) {
+            delete cached.history;
+            delete cached.historyValue;
+            cache.set(key.current, cached);
+          }
+        }
+      }
     }
   }, [value]);
 
@@ -427,35 +447,6 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       onSetCellInput?.(value);
     }
     return value;
-  }
-
-  function cm_undo(): void {
-    if (cm.current == null || actions == null) {
-      return;
-    }
-    if (
-      !actions.in_undo_mode() ||
-      cm.current.getValue() !== cm_last_remote.current
-    ) {
-      cm_save();
-    }
-    if (frameActions.current) {
-      // prefer this, because can update selection
-      frameActions.current.undo();
-    } else {
-      actions.undo();
-    }
-  }
-
-  function cm_redo(): void {
-    if (cm.current == null || actions == null) {
-      return;
-    }
-    if (frameActions.current) {
-      frameActions.current.redo();
-    } else {
-      actions.redo();
-    }
   }
 
   function shift_tab_key(): void {
@@ -727,6 +718,16 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
     cm.current.setValue(value);
     if (key.current != null) {
       const info = cache.get(key.current);
+      if (info?.history != null && info.historyValue === value) {
+        cm.current.setHistory(info.history);
+      } else {
+        cm.current.clearHistory();
+      }
+      if (info != null) {
+        delete info.history;
+        delete info.historyValue;
+        cache.set(key.current, info);
+      }
       if (info != null && info.sel != null) {
         cm.current
           .getDoc()
@@ -753,9 +754,6 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       cm.current.on("keydown", (cm, e) => onKeyDown(cm, e));
     }
 
-    // replace undo/redo by our sync aware versions
-    cm.current.undo = cm_undo;
-    cm.current.redo = cm_redo;
     const editor = {
       focus: focus_cm,
       save: cm_save,
