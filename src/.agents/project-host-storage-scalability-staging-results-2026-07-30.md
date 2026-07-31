@@ -19,6 +19,8 @@ the quota queue and desired/applied ledger implementation:
 - removal of recurring full subvolume inventory from project-host startup;
 - removal of remaining normal-path loops over all hosted projects;
 - project lifecycle behavior with 10,000 dormant projects and subvolumes;
+- durable temporary quota overrides and crash recovery;
+- one centralized raw managed quota setter;
 - low-disruption project-host restart behavior; and
 - exact, reversible staging corpus cleanup.
 
@@ -31,6 +33,8 @@ The implementation is in:
 ```text
 98ec785257 project-host/storage: make volume state durable and bounded
 f7dce9527f project-host/storage: make staging cleanup exact
+35e4ac703a project-host/storage: make temporary quota raises durable
+3a73fe7956 project-host/storage: bound quota override history
 ```
 
 The durable state records:
@@ -45,6 +49,13 @@ The durable state records:
 
 An applied quota claim is valid only when desired bytes, desired revision,
 filesystem epoch, and current volume identity all match.
+
+Temporary raises are separate durable claims keyed by project, volume,
+operation, and kind. The effective target is the maximum of persistent desired
+bytes and all active override minima. Release first enters `release_pending`,
+then restores the current effective target and marks the claim `released` only
+after the physical write succeeds. Released audit history is retained for seven
+days by default and pruned in indexed 512-row batches.
 
 The legacy full Btrfs inventory runs once per filesystem UUID, after the host
 has already become ready. Normal operation records volume creation,
@@ -69,9 +80,9 @@ The final source state passed:
 
 ```text
 file-server build
-file-server: 14 suites, 54 tests
+file-server: 14 suites, 55 tests
 project-host build
-project-host: 108 suites, 664 tests
+project-host: 111 suites, 674 tests
 Python corpus tool bytecode compilation
 git diff --check
 ```
@@ -101,15 +112,21 @@ cleanup, is:
 20260731T012718Z-f7dce952-storage-scale-cleanup-20260730
 ```
 
+The final temporary-override artifact is:
+
+```text
+20260731T022110Z-3a73fe79-quota-overrides-retention-3a73fe79
+```
+
 Final deployment:
 
 ```text
-20260731T012814Z-20260731T012718Z-f7dce952-storage-scale-cleanup-20260730
+20260731T022151Z-20260731T022110Z-3a73fe79-quota-overrides-retention-3a73fe79
 ```
 
 The final rollout used `host2` as a 60-second canary, then rolled the other
 staging host with concurrency one and a 30-second stabilization period.
-Rollout operation `e750f5dd-4e61-45c2-af8c-0f55af403ab1` succeeded.
+Rollout operation `661d85f8-03a3-47fc-88af-d08118012504` succeeded.
 
 Both public routes return ready with the correct host identity.
 
@@ -223,16 +240,47 @@ the trusted staging path has been verified empty.
 The failure condition was recreated on `host2` before the final canary. The
 new artifact removed the directory without a warning.
 
+## Durable Override Qualification
+
+Both staging SQLite databases created the persistent quota and override tables
+and all required indexes. After rollout, there were no active, applied, or
+release-pending overrides and sampled persistent quota rows had matching
+desired/applied bytes and revisions with no errors.
+
+A controlled staging-only recovery probe inserted an already-expired override
+for the disposable `host2` project at its existing 50 GB quota. This did not
+change the effective limit. The deployed coordinator moved the claim through:
+
+```text
+active -> applied -> released
+```
+
+The expiry scavenger completed release without an error, then restored the
+persistent desired/applied revision, filesystem epoch, and volume identity
+exactly. The ledger had zero unreleased claims afterward.
+
+The same disposable project was stopped and started after the final rollout:
+
+```text
+stop to opened: 1.254 s
+start to running: 2.782 s
+```
+
+Both home and scratch quota rows remained applied at 50 GB with matching
+revision `1`, stable volume identities, and no last error. Project-runner left
+both quotas unchanged during startup.
+
+The component-specific rollout preserved Conat router, Conat persistence, and
+ACP worker PIDs. It restarted the project-host app and lightweight host-agent;
+it did not perform a fleet project-container restart.
+
 ## Remaining Before Production
 
 The normal project-start scalability objective is met. The following
 correctness and observability work remains explicit:
 
-- temporary quota raises in snapshot cleanup and legacy migration are not yet
-  represented by a durable override ledger;
-- the raw Btrfs quota setter is not yet private to one quota manager;
 - operator diagnostics do not yet expose every desired/applied revision,
-  identity, epoch, and fast-path decision;
+  identity, epoch, override, and fast-path decision;
 - completely out-of-band subvolumes are not discovered by normal bounded
   inventory verification and require explicit full reconciliation;
 - old applied-ledger rows with process-random epochs converge lazily when
