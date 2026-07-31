@@ -717,9 +717,11 @@ export interface HostExamRuntimeStatus {
 export interface HostExamState {
   eligible: boolean;
   eligibility_reason?: string;
+  host_status?: string;
   config?: HostExamConfig;
   run?: HostExamRun;
   runtime?: HostExamRuntimeStatus;
+  token?: string;
 }
 
 export interface HostExamConfigInput {

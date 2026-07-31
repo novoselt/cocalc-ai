@@ -224,8 +224,9 @@ cocalc host exam deadline <host> --delete-at 2026-08-01T15:30:00Z --stop-host
 cocalc host exam end <host> --stop-host --yes
 ~~~
 
-Preparation and token rotation print the plaintext admission token once. Store
-it securely. Mutation commands require fresh authentication; run
+Preparation and token rotation print the plaintext admission token. The
+authenticated status command also shows the current token while a run is
+active. Mutation commands require fresh authentication; run
 \`cocalc auth bootstrap\` first when the current CLI session is not elevated.
 Pass \`--keep-host-running\` instead of \`--stop-host\` when cleanup should leave
 the reusable project host online. Destructive early cleanup always requires
@@ -250,10 +251,10 @@ the smoke-test project. A successful preparation leaves the run **ready** with
 admission closed; students can enter a token only after you select **Open
 admission**.
 
-The panel displays a stable student URL and a newly generated shared token.
-Copy the token immediately and store it securely. Its plaintext is shown only
-after run creation or an explicit token rotation. If it is lost while the run
-is ready, rotate it before opening admission.
+The panel displays a stable student URL and a newly generated shared token. The
+token remains visible to the authenticated instructor while the run is active;
+it grants only one temporary project per candidate browser for this run. Rotate
+it before opening admission if it was shared prematurely.
 
 ## Step 3: run a candidate rehearsal
 

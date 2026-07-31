@@ -7,7 +7,11 @@ jest.mock("./exam/controller", () => ({
   joinExamRun: jest.fn(),
 }));
 
-import { getExamJoinPage, getProjectHostCustomizePayload } from "./web";
+import {
+  getExamJoinPage,
+  getProjectHostCustomizePayload,
+  isExamPostOriginAllowed,
+} from "./web";
 
 describe("project-host customize payload", () => {
   it("does not expose account scoped data", () => {
@@ -44,6 +48,30 @@ describe("project-host customize payload", () => {
 });
 
 describe("project-host exam admission page", () => {
+  it("accepts the public HTTPS origin behind an HTTP reverse proxy", () => {
+    expect(
+      isExamPostOriginAllowed({
+        origin: "https://exam-host.example.test",
+        host: "exam-host.example.test",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects cross-host and malformed admission origins", () => {
+    expect(
+      isExamPostOriginAllowed({
+        origin: "https://attacker.example.test",
+        host: "exam-host.example.test",
+      }),
+    ).toBe(false);
+    expect(
+      isExamPostOriginAllowed({
+        origin: "not a URL",
+        host: "exam-host.example.test",
+      }),
+    ).toBe(false);
+  });
+
   it("only asks for the token while admission is open", () => {
     const open = getExamJoinPage({ admission_open: true });
     expect(open).toContain("Enter the token provided by your instructor");

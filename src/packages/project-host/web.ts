@@ -143,16 +143,38 @@ function setExamResponseHeaders(res: express.Response): void {
   res.setHeader("X-Frame-Options", "DENY");
 }
 
-function requestOrigin(req: express.Request): string {
-  const protocol = `${req.headers["x-forwarded-proto"] ?? req.protocol}`
-    .split(",")[0]
-    .trim();
-  return `${protocol}://${requestHostname(req)}`;
+export function isExamPostOriginAllowed({
+  origin,
+  host,
+}: {
+  origin?: string;
+  host?: string;
+}): boolean {
+  const requestHost = `${host ?? ""}`.trim().toLowerCase();
+  if (!requestHost) return false;
+  try {
+    const parsed = new URL(`${origin ?? ""}`.trim());
+    if (parsed.host.toLowerCase() !== requestHost) return false;
+    if (parsed.protocol === "https:") return true;
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      parsed.protocol === "http:" &&
+      (hostname === "localhost" || hostname === "127.0.0.1")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function requireSameOriginPost(req: express.Request): void {
-  const origin = `${req.headers.origin ?? ""}`.trim().toLowerCase();
-  if (!origin || origin !== requestOrigin(req).toLowerCase()) {
+  if (
+    !isExamPostOriginAllowed({
+      origin: Array.isArray(req.headers.origin)
+        ? req.headers.origin[0]
+        : req.headers.origin,
+      host: req.headers.host,
+    })
+  ) {
     throw new Error("exam admission requires a same-origin request");
   }
 }

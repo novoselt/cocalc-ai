@@ -9,7 +9,11 @@ import {
 } from "@testing-library/react";
 
 import { openAppDocs } from "@cocalc/frontend/docs/navigation";
-import { assessExamHostCapacity, HostExamPanel } from "./host-exam-panel";
+import {
+  assessExamHostCapacity,
+  examRootfsCatalogEntries,
+  HostExamPanel,
+} from "./host-exam-panel";
 
 const mockGetHostExamState = jest.fn(async () => ({ eligible: true }));
 const mockSetHostExamConfig = jest.fn();
@@ -23,6 +27,11 @@ const mockRunFreshAuthAction = jest.fn(
 
 jest.mock("@cocalc/frontend/docs/navigation", () => ({
   openAppDocs: jest.fn(),
+}));
+
+jest.mock("@cocalc/frontend/rootfs/manifest", () => ({
+  managedRootfsCatalogUrl: () => "/rootfs/manifest.json",
+  useRootfsImages: () => ({ images: [], loading: false }),
 }));
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
@@ -113,6 +122,33 @@ describe("HostExamPanel", () => {
     });
   });
 
+  it("enriches cached host images with project-creation catalog metadata", () => {
+    expect(
+      examRootfsCatalogEntries({
+        cachedImages: [
+          {
+            image: "cocalc.local/rootfs/sage",
+            digest: "sha256:cached",
+          } as any,
+        ],
+        catalogImages: [
+          {
+            id: "sage",
+            label: "SageMath",
+            image: "cocalc.local/rootfs/sage",
+            description: "Computational mathematics",
+          },
+        ],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        id: "sage",
+        label: "SageMath",
+        digest: "sha256:cached",
+      }),
+    ]);
+  });
+
   it("opens the exam scratchpad documentation entry", () => {
     render(
       <HostExamPanel
@@ -172,6 +208,32 @@ describe("HostExamPanel", () => {
       target: { value: "101" },
     });
     expect(save).toBeEnabled();
+  });
+
+  it("uses authoritative exam state to disable preparation when stopped", async () => {
+    mockGetHostExamState.mockResolvedValueOnce({
+      eligible: true,
+      host_status: "off",
+      config: savedConfig,
+    });
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[
+          {
+            image: "cocalc.local/rootfs/exam",
+            digest: "sha256:abc",
+          } as any,
+        ]}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Start the project host to prepare an exam"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Prepare and test run" }),
+    ).toBeDisabled();
   });
 
   it("labels cleanup and defaults to shutting down the host", async () => {
@@ -289,7 +351,7 @@ describe("HostExamPanel", () => {
     fireEvent.click(prepare);
 
     expect(
-      await screen.findByText(/Preparing and testing: creating a smoke-test/),
+      await screen.findByText(/Creating a smoke-test project/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/This usually takes about one minute/),
@@ -300,7 +362,7 @@ describe("HostExamPanel", () => {
     });
     await waitFor(() =>
       expect(
-        screen.queryByText(/Preparing and testing: creating a smoke-test/),
+        screen.queryByText(/Creating a smoke-test project/),
       ).not.toBeInTheDocument(),
     );
   });
@@ -336,6 +398,40 @@ describe("HostExamPanel", () => {
     );
     expect(screen.queryByText("Current run")).not.toBeInTheDocument();
     expect(screen.queryByText("stopped")).not.toBeInTheDocument();
+  });
+
+  it("shows the recoverable token after refreshing an active run", async () => {
+    mockGetHostExamState.mockResolvedValueOnce({
+      eligible: true,
+      host_status: "running",
+      config: savedConfig,
+      token: "exam-token-visible-later",
+      run: {
+        run_id: "ready-run",
+        status: "ready",
+        rootfs_image: "cocalc.local/rootfs/exam",
+        scheduled_stop_at: "2026-08-01T00:00:00.000Z",
+        stop_host_at_deadline: true,
+        max_projects: 100,
+        terminal_enabled: false,
+      },
+      runtime: {
+        admission_open: false,
+        active_projects: 0,
+      },
+    });
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[]}
+      />,
+    );
+
+    expect(await screen.findByText("Shared exam token")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("exam-token-visible-later")).toBeVisible();
+    expect(
+      screen.getByText(/remains visible here while the run is active/),
+    ).toBeInTheDocument();
   });
 
   it("leaves fresh-auth challenges for the fresh-auth flow", async () => {

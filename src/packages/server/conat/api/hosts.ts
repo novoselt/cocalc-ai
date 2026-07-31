@@ -5398,7 +5398,15 @@ export async function stopAndEraseHostExamRun({
   if (stop_host) {
     await stopHostInternal({ account_id, id });
   }
-  return await getExamStateLocal({ host: row, eligible: true });
+  // The row loaded before cleanup still says "running". Reload it after a
+  // requested shutdown so state rendering does not try to contact the now
+  // disconnected project-host or briefly re-enable preparation controls.
+  const { row: currentRow } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  return await getExamStateLocal({ host: currentRow, eligible: true });
 }
 
 export async function listHostSshAuthorizedKeys({

@@ -40,10 +40,10 @@ import { COLORS } from "@cocalc/util/theme";
 import { SelectNewHost } from "@cocalc/frontend/hosts/select-new-host";
 import {
   latestRootfsVersionEntries,
-  renderRootfsCatalogOption,
   sectionLabel,
   sectionTagColor,
 } from "@cocalc/frontend/rootfs/catalog-ui";
+import { RootfsCatalogPicker } from "@cocalc/frontend/rootfs/catalog-picker";
 import type { RootfsImageEntry } from "@cocalc/util/rootfs-images";
 import { isNewProjectRootfsSelectable } from "./create-project-rootfs";
 import {
@@ -158,13 +158,6 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
       }),
     [draft.rootfs_image_id, filteredRootfsImages, showOlderRootfsVersions],
   );
-  const visibleRootfsImages = useMemo(() => {
-    const query = rootfsSearch.trim().toLowerCase();
-    if (!query) return pickerRootfsImages;
-    return pickerRootfsImages.filter((entry) =>
-      rootfsEntrySearchText(entry).includes(query),
-    );
-  }, [pickerRootfsImages, rootfsSearch]);
   const selectedRootfsEntry = useMemo(() => {
     const imageId = draft.rootfs_image_id?.trim();
     if (imageId) {
@@ -323,44 +316,18 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
   function renderRootfsCatalogSelector(): React.JSX.Element {
     return (
       <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-        <Input.Search
-          allowClear
-          value={rootfsSearch}
-          placeholder="Search images, e.g. SageMath, R, Python, GPU..."
-          onChange={(e) => setRootfsSearch(e.target.value)}
-          disabled={saving || rootfsLoading}
+        <RootfsCatalogPicker
+          images={pickerRootfsImages}
+          selectedImage={draft.rootfs_image}
+          selectedId={draft.rootfs_image_id}
+          onSelect={(entry) =>
+            setRootfs({ image: entry.image, image_id: entry.id })
+          }
+          loading={rootfsLoading}
+          disabled={saving}
+          search={rootfsSearch}
+          onSearchChange={setRootfsSearch}
         />
-        <div className="cc-project-create-image-list">
-          {visibleRootfsImages.map((entry) => {
-            const selected =
-              entry.id === draft.rootfs_image_id ||
-              entry.image === draft.rootfs_image;
-            return (
-              <button
-                key={entry.id}
-                type="button"
-                className="cc-project-create-image-option"
-                aria-pressed={selected}
-                disabled={saving}
-                onClick={() =>
-                  setRootfs({ image: entry.image, image_id: entry.id })
-                }
-              >
-                {renderRootfsCatalogOption(entry)}
-              </button>
-            );
-          })}
-          {!rootfsLoading && visibleRootfsImages.length === 0 && (
-            <Paragraph type="secondary" style={{ margin: 0, padding: 12 }}>
-              No matching images. Try a different search.
-            </Paragraph>
-          )}
-          {rootfsLoading && visibleRootfsImages.length === 0 && (
-            <Paragraph type="secondary" style={{ margin: 0, padding: 12 }}>
-              Loading images...
-            </Paragraph>
-          )}
-        </div>
         <Space wrap>
           <Checkbox
             checked={showOlderRootfsVersions}
@@ -827,25 +794,6 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
 
 function presetTitle(mode: ProjectCreateMode): string {
   return PROJECT_PRESETS.find((preset) => preset.mode === mode)?.title ?? mode;
-}
-
-function rootfsEntrySearchText(entry: RootfsImageEntry): string {
-  return [
-    entry.label,
-    entry.image,
-    entry.description,
-    entry.theme?.title,
-    entry.theme?.description,
-    entry.section,
-    entry.version,
-    entry.channel,
-    entry.owner_name,
-    "rootfs",
-    ...(entry.tags ?? []),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
 }
 
 function renderRootfsWarning(

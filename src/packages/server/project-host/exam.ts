@@ -540,6 +540,36 @@ async function loadRunById({
   return rows[0] ? mapRun(rows[0]) : undefined;
 }
 
+async function loadRunToken({
+  host_id,
+  run_id,
+}: {
+  host_id: string;
+  run_id: string;
+}): Promise<string | undefined> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT run_id, status, token_idempotency_key FROM ${RUN_TABLE} WHERE host_id=$1 AND run_id=$2`,
+    [host_id, run_id],
+  );
+  const row = rows[0];
+  return tokenForRunRecord(row);
+}
+
+function tokenForRunRecord(row?: {
+  run_id?: string;
+  status?: string;
+  token_idempotency_key?: string;
+}): string | undefined {
+  if (!row?.run_id || row.status === "stopped" || !row.token_idempotency_key) {
+    return;
+  }
+  return deterministicToken({
+    run_id: row.run_id,
+    idempotency_key: row.token_idempotency_key,
+  });
+}
+
 async function loadRuntimeStatus(
   host: ExamHostRow,
   run?: HostExamRun,
@@ -613,12 +643,17 @@ export async function getExamStateLocal({
       });
     }
   }
+  const token = run
+    ? await loadRunToken({ host_id: host.id, run_id: run.run_id })
+    : undefined;
   return {
     eligible,
     eligibility_reason,
+    host_status: host.status,
     config,
     run,
     runtime,
+    token,
   };
 }
 
@@ -1305,5 +1340,6 @@ export const __test__ = {
   normalizeConfig,
   publicIp,
   shouldReconcileRunWithRuntime,
+  tokenForRunRecord,
   validateDeadline,
 };

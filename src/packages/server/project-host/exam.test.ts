@@ -120,6 +120,20 @@ describe("project-host exam configuration", () => {
     expect(encoded).not.toContain("do-not-store-this-token");
   });
 
+  it("recovers the current instructor token without storing plaintext", () => {
+    const row = {
+      run_id: "00000000-2000-4000-8000-000000000002",
+      status: "ready",
+      token_idempotency_key: "rotate:stable-key",
+    };
+    const first = __test__.tokenForRunRecord(row);
+    expect(first).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(__test__.tokenForRunRecord(row)).toBe(first);
+    expect(
+      __test__.tokenForRunRecord({ ...row, status: "stopped" }),
+    ).toBeUndefined();
+  });
+
   it("reconciles central lifecycle state from the authoritative host", () => {
     const run = {
       run_id: "00000000-2000-4000-8000-000000000002",

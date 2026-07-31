@@ -14,7 +14,6 @@ import {
   Input,
   InputNumber,
   Popconfirm,
-  Select,
   Space,
   Spin,
   Switch,
@@ -24,7 +23,7 @@ import {
 } from "antd";
 import { BookOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
-import { useEffect, useState } from "@cocalc/frontend/app-framework";
+import { useEffect, useMemo, useState } from "@cocalc/frontend/app-framework";
 import type {
   Host,
   HostExamConfig,
@@ -38,10 +37,19 @@ import {
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
 import { openAppDocs } from "@cocalc/frontend/docs/navigation";
+import { RootfsCatalogPicker } from "@cocalc/frontend/rootfs/catalog-picker";
+import {
+  managedRootfsCatalogUrl,
+  useRootfsImages,
+} from "@cocalc/frontend/rootfs/manifest";
 import {
   getHostCpuCount,
   getHostRamGiB,
 } from "@cocalc/frontend/hosts/utils/format";
+import {
+  managedRootfsContentKey,
+  type RootfsImageEntry,
+} from "@cocalc/util/rootfs-images";
 
 const DEFAULT_CONFIG: HostExamConfigInput = {
   enabled: false,
@@ -217,6 +225,44 @@ function statusColor(status?: string): string {
   }
 }
 
+export function examRootfsCatalogEntries({
+  cachedImages,
+  catalogImages,
+}: {
+  cachedImages: HostRootfsImage[];
+  catalogImages: RootfsImageEntry[];
+}): RootfsImageEntry[] {
+  const cached = cachedImages.filter((entry) => !!entry.digest);
+  const used = new Set<string>();
+  const entries: RootfsImageEntry[] = [];
+  for (const catalog of catalogImages) {
+    const match = cached.find(
+      (entry) =>
+        !used.has(entry.image) &&
+        (entry.image === catalog.image ||
+          (!!entry.release_id && entry.release_id === catalog.release_id)),
+    );
+    if (!match) continue;
+    used.add(match.image);
+    entries.push({ ...catalog, digest: match.digest ?? catalog.digest });
+  }
+  for (const entry of cached) {
+    if (used.has(entry.image)) continue;
+    const contentKey = managedRootfsContentKey(entry.image);
+    entries.push({
+      id: entry.release_id || entry.image,
+      release_id: entry.release_id,
+      image: entry.image,
+      digest: entry.digest,
+      label: contentKey
+        ? `Cached RootFS ${contentKey.slice(0, 12)}…`
+        : entry.image,
+      description: "This immutable RootFS is cached on the project host.",
+    });
+  }
+  return entries;
+}
+
 export function HostExamPanel({
   host,
   rootfsImages,
@@ -235,8 +281,22 @@ export function HostExamPanel({
   const [loading, setLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState<"prepare">();
   const [error, setError] = useState("");
+  const [rootfsSearch, setRootfsSearch] = useState("");
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
   const api = webapp_client.conat_client.hub.hosts;
+  const {
+    images: rootfsCatalog,
+    loading: rootfsCatalogLoading,
+    error: rootfsCatalogError,
+  } = useRootfsImages([managedRootfsCatalogUrl()], { limit: 200 });
+  const selectableRootfsImages = useMemo(
+    () =>
+      examRootfsCatalogEntries({
+        cachedImages: rootfsImages,
+        catalogImages: rootfsCatalog,
+      }),
+    [rootfsCatalog, rootfsImages],
+  );
 
   const refresh = async () => {
     setLoading(true);
@@ -247,6 +307,7 @@ export function HostExamPanel({
         timeout: EXAM_STATE_TIMEOUT_MS,
       });
       setState(next);
+      setToken(next.token ?? "");
       if (next.config) {
         setConfig(editableExamConfig(next.config));
       }
@@ -275,7 +336,7 @@ export function HostExamPanel({
 
   useEffect(() => {
     void refresh();
-  }, [host.id]);
+  }, [host.id, host.status]);
 
   useEffect(() => {
     const status = state?.run?.status;
@@ -306,7 +367,7 @@ export function HostExamPanel({
         try {
           const next = await action();
           setState(next);
-          if (next.token) setToken(next.token);
+          setToken(next.token ?? "");
         } finally {
           setLoading(false);
           setPendingAction(undefined);
@@ -342,6 +403,8 @@ export function HostExamPanel({
 
   const run = state?.run;
   const runtime = state?.runtime;
+  const hostStatus = state?.host_status ?? host.status;
+  const hostRunning = hostStatus === "running";
   const hasActiveRun = !!run && run.status !== "stopped";
   const configDirty =
     state != null &&
@@ -358,7 +421,7 @@ export function HostExamPanel({
   const prepareBlockers = [
     !config.enabled ? "Enable and save exam mode." : undefined,
     configDirty ? "Save the exam configuration changes." : undefined,
-    host.status !== "running" ? "Start the project host." : undefined,
+    !hostRunning ? "Start the project host." : undefined,
     !selectedRootfsIsReady
       ? "Select a cached RootFS that has a digest."
       : undefined,
@@ -379,9 +442,15 @@ export function HostExamPanel({
     <Spin
       spinning={loading}
       tip={
-        pendingAction === "prepare"
-          ? "Preparing and testing: creating a smoke-test project, starting Jupyter, checking network isolation and cleanup, then erasing the test project. This usually takes about one minute."
-          : undefined
+        pendingAction === "prepare" ? (
+          <Alert
+            type="info"
+            showIcon
+            title="Preparing and testing the exam environment"
+            description="Creating a smoke-test project, starting Jupyter, checking network isolation and cleanup, then erasing the test project. This usually takes about one minute."
+            style={{ maxWidth: 560, textAlign: "left" }}
+          />
+        ) : undefined
       }
     >
       <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
@@ -408,6 +477,14 @@ export function HostExamPanel({
           }
         />
         {error && <Alert type="error" showIcon message={error} />}
+        {!hostRunning && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Start the project host to prepare an exam"
+            description={`The host is currently ${hostStatus || "unavailable"}. Saved exam configuration remains available, but preparation and live status checks require the host to be running.`}
+          />
+        )}
         {state && !state.eligible && (
           <Alert
             type="warning"
@@ -560,18 +637,26 @@ export function HostExamPanel({
               size="middle"
               style={{ width: "100%" }}
             >
-              <Select
-                style={{ width: "100%" }}
-                value={rootfsImage}
-                placeholder="Select a cached RootFS"
-                onChange={setRootfsImage}
-                options={rootfsImages
-                  .filter((entry) => !!entry.digest)
-                  .map((entry) => ({
-                    value: entry.image,
-                    label: `${entry.image} (${entry.digest?.slice(0, 18)}...)`,
-                  }))}
+              <RootfsCatalogPicker
+                images={selectableRootfsImages}
+                selectedImage={rootfsImage}
+                onSelect={(entry) => setRootfsImage(entry.image)}
+                loading={
+                  rootfsCatalogLoading && selectableRootfsImages.length === 0
+                }
+                disabled={loading || !hostRunning}
+                search={rootfsSearch}
+                onSearchChange={setRootfsSearch}
+                searchPlaceholder="Search cached exam images..."
+                emptyText="No cached RootFS images match this search. Cache an image on the host before preparing the exam."
+                height={320}
               />
+              {rootfsCatalogError && (
+                <Typography.Text type="secondary">
+                  Catalog metadata is unavailable; cached images are shown by
+                  immutable reference. {rootfsCatalogError}
+                </Typography.Text>
+              )}
               <Space wrap align="center">
                 <Typography.Text strong>
                   Delete all exam projects at
@@ -693,14 +778,13 @@ export function HostExamPanel({
               <>
                 <Divider />
                 <Alert
-                  type="warning"
-                  message="Shared token"
-                  description="This plaintext is shown only after creation or rotation. Store it securely before leaving this page."
+                  type="info"
+                  title="Shared exam token"
+                  description="Share this token with students when admission opens. It grants only a temporary project for this exam and remains visible here while the run is active."
                 />
-                <Input.Password
+                <Input
                   value={token}
                   readOnly
-                  visibilityToggle
                   addonAfter={
                     <Button
                       type="text"
