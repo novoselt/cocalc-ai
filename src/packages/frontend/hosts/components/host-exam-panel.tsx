@@ -132,21 +132,23 @@ export function HostExamPanel({
     action: () => Promise<HostExamState & { token?: string }>,
   ) => {
     setError("");
-    const completed = await runFreshAuthAction(async () => {
-      setLoading(true);
-      try {
-        const next = await action();
-        setState(next);
-        if (next.token) setToken(next.token);
-      } catch (err) {
-        setError(`${(err as Error)?.message ?? err}`);
-        throw err;
-      } finally {
-        setLoading(false);
+    try {
+      const completed = await runFreshAuthAction(async () => {
+        setLoading(true);
+        setError("");
+        try {
+          const next = await action();
+          setState(next);
+          if (next.token) setToken(next.token);
+        } finally {
+          setLoading(false);
+        }
+      });
+      if (completed) {
+        message.success("Exam host updated");
       }
-    });
-    if (completed) {
-      message.success("Exam host updated");
+    } catch (err) {
+      setError(`${(err as Error)?.message ?? err}`);
     }
   };
 

@@ -54,6 +54,12 @@ describe("DocsBrowser", () => {
     );
   });
 
+  it("includes the exam scratchpad guide in the app docs registry", () => {
+    expect(getDocsEntry("hosts/exam-scratchpads")?.id).toBe(
+      "hosts.exam-scratchpads",
+    );
+  });
+
   it("notifies when the detail view returns to the index", () => {
     const entry = getDocsEntry("terminal/use-terminal");
     if (entry == null) throw new Error("missing terminal docs entry");

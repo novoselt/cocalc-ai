@@ -27,8 +27,9 @@ export const HOSTS_ENTRIES: DocsEntry[] = [
         description:
           "Open project hosts and select a private host's Exams tab.",
         executable: true,
-        id: "hosts.open",
+        id: "hosts.exam.open",
         label: "Open project hosts",
+        parameters: projectHostActionParameters(),
       },
     ],
     audiences: ["agents", "instructors"],
