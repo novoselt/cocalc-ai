@@ -26,7 +26,10 @@ import bees, {
 import { type ChildProcess } from "node:child_process";
 import { install } from "@cocalc/backend/sandbox/install";
 import { getBtrfsQuotaQueueStatus, startBtrfsQuotaQueue } from "./quota-queue";
-import { ensureBtrfsQuotaMode } from "./quota-mode";
+import {
+  ensureBtrfsQuotaModeDetails,
+  type BtrfsQuotaRuntimeDetails,
+} from "./quota-mode";
 import {
   collectBeesTelemetry,
   recordBeesTelemetryError,
@@ -84,6 +87,7 @@ export class Filesystem {
   private beesTelemetryRunning = false;
   private beesDisabledByConfig = false;
   private beesStopping = false;
+  private quotaRuntime?: BtrfsQuotaRuntimeDetails;
   private beesLastExit?: {
     code: number | null;
     signal: NodeJS.Signals | null;
@@ -106,7 +110,8 @@ export class Filesystem {
     // hangs, and daemon failures under our snapshot-heavy workload. Keep this
     // startup reconciliation so old hosts are forced away from qgroups even if
     // somebody tries to re-enable them via stale config.
-    const quotaStatus = await ensureBtrfsQuotaMode(this.opts.mount);
+    this.quotaRuntime = await ensureBtrfsQuotaModeDetails(this.opts.mount);
+    const quotaStatus = this.quotaRuntime.status;
     if (!quotaStatus.enabled) {
       logger.warn("Btrfs quota operations disabled by configuration", {
         mount: this.opts.mount,
@@ -222,6 +227,13 @@ export class Filesystem {
 
   getQuotaQueueStatus = () => {
     return getBtrfsQuotaQueueStatus(this.opts.mount);
+  };
+
+  getQuotaRuntime = (): BtrfsQuotaRuntimeDetails => {
+    if (!this.quotaRuntime) {
+      throw new Error("Btrfs quota runtime has not been initialized");
+    }
+    return this.quotaRuntime;
   };
 
   private scheduleBeesRestart(reason: string) {

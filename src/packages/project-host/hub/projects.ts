@@ -69,6 +69,7 @@ import {
   getMountPoint,
   resetScratchVolume,
   resolveProjectContainerPath,
+  ensureProjectVolumeIdentity,
 } from "../file-server";
 import { currentProjectVolumeLifecycleGeneration } from "../project-volume-lifecycle";
 import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
@@ -156,6 +157,7 @@ import {
   markProjectVolumeQuotaFailed,
   projectVolumeQuotaIsApplied,
 } from "../sqlite/volume-quotas";
+import { getRecordedProjectVolumeIdentity } from "../sqlite/project-volumes";
 
 const logger = getLogger("project-host:hub:projects");
 const CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS = 45_000;
@@ -1108,11 +1110,17 @@ async function assertStartDiskQuotaAllowed({
           });
     const desired = acceptance?.row;
     const targetDiskBytes = desired?.desired_bytes ?? desired_bytes;
+    let volumeIdentity = getRecordedProjectVolumeIdentity(
+      project_id,
+      volume_kind,
+    );
     if (
       ledgerMode === "enforce" &&
       desired != null &&
       acceptance?.status !== "stale" &&
-      projectVolumeQuotaIsApplied(desired)
+      projectVolumeQuotaIsApplied(desired, {
+        volume_identity: volumeIdentity,
+      })
     ) {
       logger.debug("project disk quota ledger fast path", {
         project_id,
@@ -1125,6 +1133,10 @@ async function assertStartDiskQuotaAllowed({
     try {
       const vol =
         resetVolume ?? (await getVolume(project_id, volume_kind === "scratch"));
+      volumeIdentity = await ensureProjectVolumeIdentity(
+        project_id,
+        volume_kind === "scratch",
+      );
       const quota = await vol.quota.get();
       if (
         isProjectDiskQuotaStartBlocked({
@@ -1176,6 +1188,7 @@ async function assertStartDiskQuotaAllowed({
           volume_kind,
           desired_bytes: desired.desired_bytes,
           desired_revision: desired.desired_revision,
+          volume_identity: volumeIdentity,
         });
       }
       return ledgerMode === "enforce" && desired != null;
@@ -1444,7 +1457,15 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
 
   function scratchVolumeQuotaIsPrepared(project_id: string): boolean {
     const row = getProjectVolumeQuota(project_id, "scratch");
-    return row != null && projectVolumeQuotaIsApplied(row);
+    return (
+      row != null &&
+      projectVolumeQuotaIsApplied(row, {
+        volume_identity: getRecordedProjectVolumeIdentity(
+          project_id,
+          "scratch",
+        ),
+      })
+    );
   }
 
   function scheduleStoppedVolumePreparation(project_id: string): void {

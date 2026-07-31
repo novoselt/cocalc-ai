@@ -14,6 +14,32 @@ const RESERVED = new Set([RUSTIC, SNAPSHOTS]);
 
 const logger = getLogger("file-server:btrfs:subvolumes");
 
+export interface ListedBtrfsSubvolume {
+  path: string;
+  subvolume_id: number;
+  volume_uuid: string;
+  generation?: number;
+}
+
+export function parseBtrfsSubvolumeList(
+  stdout: string,
+): ListedBtrfsSubvolume[] {
+  const rows: ListedBtrfsSubvolume[] = [];
+  for (const line of stdout.split("\n")) {
+    const match = line.match(
+      /^ID\s+(\d+)\s+gen\s+(\d+)\s+top level\s+\d+\s+uuid\s+(\S+)\s+path\s+(.+)$/,
+    );
+    if (!match) continue;
+    rows.push({
+      subvolume_id: Number.parseInt(match[1], 10),
+      generation: Number.parseInt(match[2], 10),
+      volume_uuid: match[3].toLowerCase(),
+      path: match[4],
+    });
+  }
+  return rows;
+}
+
 export class Subvolumes {
   public readonly fs: SandboxedFilesystem;
 
@@ -85,5 +111,12 @@ export class Subvolumes {
       .map((x) => x.split(" ").slice(-1)[0])
       .filter((x) => x)
       .sort();
+  };
+
+  listWithIdentity = async (): Promise<ListedBtrfsSubvolume[]> => {
+    const { stdout } = await btrfs({
+      args: ["subvolume", "list", "-u", this.filesystem.opts.mount],
+    });
+    return parseBtrfsSubvolumeList(stdout);
   };
 }

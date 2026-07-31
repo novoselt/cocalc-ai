@@ -76,7 +76,10 @@ import {
   releaseRestoreStaging as releaseRestoreStagingBtrfs,
   cleanupRestoreStaging as cleanupRestoreStagingBtrfs,
 } from "@cocalc/file-server/btrfs/restore-staging";
-import { isBtrfsSubvolume } from "@cocalc/file-server/btrfs/subvolume";
+import {
+  getSubvolumeIdentity,
+  isBtrfsSubvolume,
+} from "@cocalc/file-server/btrfs/subvolume";
 import { getGeneration } from "@cocalc/file-server/btrfs/subvolume-snapshots";
 import { exists } from "@cocalc/backend/misc/async-utils-node";
 import { type SnapshotCounts } from "@cocalc/util/db-schema/projects";
@@ -130,6 +133,21 @@ import {
   markProjectVolumeQuotaApplying,
   markProjectVolumeQuotaFailed,
 } from "./sqlite/volume-quotas";
+import {
+  currentProjectFilesystemQuotaState,
+  reconcileProjectFilesystemQuotaState,
+} from "./sqlite/filesystem-quota-state";
+import {
+  bootstrapProjectVolumeInventory,
+  getProjectVolume,
+  getRecordedProjectVolumeIdentity,
+  listProvisionedProjectIds as listProvisionedProjectIdsFromInventory,
+  markProjectVolumeAbsent,
+  nextProjectVolumeVerificationBatch,
+  projectVolumeInventoryBootstrapped,
+  projectVolumeIdentityKey,
+  recordProjectVolume,
+} from "./sqlite/project-volumes";
 import {
   assertProjectVolumeLifecycleGeneration,
   invalidateProjectVolumeLifecycle,
@@ -423,6 +441,83 @@ function scratchVolName(project_id: string) {
 
 function volumeName(project_id: string, scratch?: boolean) {
   return scratch ? scratchVolName(project_id) : volName(project_id);
+}
+
+function managedVolumeKind(scratch?: boolean): "home" | "scratch" {
+  return scratch ? "scratch" : "home";
+}
+
+function currentFilesystemState() {
+  const state = currentProjectFilesystemQuotaState();
+  if (!state || fs == null || state.mountpoint !== fs.opts.mount) {
+    throw new Error("project filesystem quota state is not initialized");
+  }
+  return state;
+}
+
+async function recordManagedProjectVolume({
+  project_id,
+  scratch,
+  path,
+  force = false,
+}: {
+  project_id: string;
+  scratch?: boolean;
+  path: string;
+  force?: boolean;
+}): Promise<string> {
+  if (fs == null) {
+    throw Error("file server not initialized");
+  }
+  const volume_kind = managedVolumeKind(scratch);
+  const existing = getProjectVolume(project_id, volume_kind);
+  const filesystem = currentFilesystemState();
+  if (
+    !force &&
+    existing?.present &&
+    existing.mountpoint === fs.opts.mount &&
+    existing.relative_path === volumeName(project_id, scratch) &&
+    existing.filesystem_uuid === filesystem.filesystem_uuid
+  ) {
+    return projectVolumeIdentityKey(existing);
+  }
+  const identity = await getSubvolumeIdentity(path, { cache: !force });
+  const recorded = recordProjectVolume({
+    project_id,
+    volume_kind,
+    mountpoint: fs.opts.mount,
+    relative_path: volumeName(project_id, scratch),
+    identity: {
+      ...identity,
+      filesystem_uuid: filesystem.filesystem_uuid,
+    },
+  });
+  if (recorded.changed) {
+    invalidateProjectVolumeQuota({
+      project_id,
+      volume_kind,
+      reason: "managed volume identity changed",
+    });
+  }
+  return projectVolumeIdentityKey(recorded.row);
+}
+
+export async function ensureProjectVolumeIdentity(
+  project_id: string,
+  scratch?: boolean,
+): Promise<string> {
+  const recorded = getRecordedProjectVolumeIdentity(
+    project_id,
+    managedVolumeKind(scratch),
+  );
+  if (recorded) return recorded;
+  const vol = await getVolume(project_id, scratch);
+  return await recordManagedProjectVolume({
+    project_id,
+    scratch,
+    path: vol.path,
+    force: true,
+  });
 }
 
 function requireHostId(): string {
@@ -957,12 +1052,18 @@ async function swapProjectHome({
     stagingRoot,
     `${volName(project_id)}.restore-old.${randomUUID()}`,
   );
-  await sudo({ command: "mv", args: [home, oldHomePath] });
-  await sudo({ command: "mv", args: [replacementPath, home] });
   invalidateProjectVolumeQuota({
     project_id,
     volume_kind: "home",
-    reason: "project home replaced",
+    reason: "project home replacement started",
+  });
+  markProjectVolumeAbsent(project_id, "home");
+  await sudo({ command: "mv", args: [home, oldHomePath] });
+  await sudo({ command: "mv", args: [replacementPath, home] });
+  await recordManagedProjectVolume({
+    project_id,
+    path: home,
+    force: true,
   });
   return { oldHomePath };
 }
@@ -985,6 +1086,11 @@ async function rollbackProjectHomeSwap({
   }
   if (await exists(oldHomePath)) {
     await sudo({ command: "mv", args: [oldHomePath, home] });
+    await recordManagedProjectVolume({
+      project_id,
+      path: home,
+      force: true,
+    });
   }
 }
 
@@ -1051,7 +1157,25 @@ export async function ensureVolume(
   if (fs == null) {
     throw Error("file server not initialized");
   }
+  const existing = getProjectVolume(project_id, managedVolumeKind(scratch));
+  const filesystem = currentFilesystemState();
+  const existed = await exists(
+    join(fs.opts.mount, volumeName(project_id, scratch)),
+  );
   const vol = await fs.subvolumes.ensure(volumeName(project_id, scratch));
+  if (
+    !existing?.present ||
+    !existed ||
+    existing.filesystem_uuid !== filesystem.filesystem_uuid ||
+    existing.mountpoint !== fs.opts.mount
+  ) {
+    await recordManagedProjectVolume({
+      project_id,
+      scratch,
+      path: vol.path,
+      force: true,
+    });
+  }
   invalidateProjectFsServer(project_id);
   if (!scratch && opts.reportProvisioned !== false) {
     queueProjectProvisioned(project_id, true);
@@ -1075,17 +1199,24 @@ export async function resetScratchVolume(
     }
     const name = scratchVolName(project_id);
     const vol = await fs!.subvolumes.get(name);
+    invalidateProjectVolumeQuota({
+      project_id,
+      volume_kind: "scratch",
+      reason: "scratch volume reset started",
+    });
+    markProjectVolumeAbsent(project_id, "scratch");
     if (await exists(vol.path)) {
       await fs!.subvolumes.delete(name);
     }
     const next = await fs!.subvolumes.ensure(name);
+    await recordManagedProjectVolume({
+      project_id,
+      scratch: true,
+      path: next.path,
+      force: true,
+    });
     invalidateProjectFsServer(project_id);
     invalidateQuotaCache(project_id, true);
-    invalidateProjectVolumeQuota({
-      project_id,
-      volume_kind: "scratch",
-      reason: "scratch volume reset",
-    });
     return next;
   });
 }
@@ -1101,13 +1232,18 @@ export async function deleteVolume(
   await withProjectVolumeLifecycleLock(project_id, async () => {
     const deleteIfExists = async ({
       name,
+      volume_kind,
       clearSnapshots = false,
     }: {
       name: string;
+      volume_kind: "home" | "scratch";
       clearSnapshots?: boolean;
     }) => {
       const vol = await fs!.subvolumes.get(name);
-      if (!(await exists(vol.path))) return;
+      if (!(await exists(vol.path))) {
+        markProjectVolumeAbsent(project_id, volume_kind);
+        return;
+      }
       if (clearSnapshots) {
         try {
           const snapshots = await vol.snapshots.readdir();
@@ -1123,10 +1259,18 @@ export async function deleteVolume(
         }
       }
       await fs!.subvolumes.delete(name);
+      markProjectVolumeAbsent(project_id, volume_kind);
     };
 
-    await deleteIfExists({ name: volName(project_id), clearSnapshots: true });
-    await deleteIfExists({ name: scratchVolName(project_id) });
+    await deleteIfExists({
+      name: volName(project_id),
+      volume_kind: "home",
+      clearSnapshots: true,
+    });
+    await deleteIfExists({
+      name: scratchVolName(project_id),
+      volume_kind: "scratch",
+    });
     deleteProjectVolumeQuotas(project_id);
     invalidateProjectFsServer(project_id);
   });
@@ -1183,18 +1327,121 @@ export function getFileServerRuntimeStatus():
 }
 
 export async function listProvisionedProjects(): Promise<string[]> {
+  return listProvisionedProjectIdsFromInventory();
+}
+
+export async function bootstrapProvisionedProjectInventory(): Promise<
+  string[] | undefined
+> {
   if (fs == null) {
     throw Error("file server not initialized");
   }
-  const names = await fs.subvolumes.list();
-  const ids = new Set<string>();
-  for (const name of names) {
-    if (!name.startsWith("project-")) continue;
-    const project_id = name.slice("project-".length);
-    if (!isValidUUID(project_id)) continue;
-    ids.add(project_id);
+  const filesystem = currentFilesystemState();
+  if (projectVolumeInventoryBootstrapped(filesystem.filesystem_uuid)) {
+    return;
   }
-  return Array.from(ids);
+  const listed = await fs.subvolumes.listWithIdentity();
+  const volumes: Parameters<
+    typeof bootstrapProjectVolumeInventory
+  >[0]["volumes"] = [];
+  for (const entry of listed) {
+    const match = entry.path.match(/^project-([0-9a-f-]{36})(-scratch)?$/i);
+    if (!match || !isValidUUID(match[1])) continue;
+    volumes.push({
+      project_id: match[1].toLowerCase(),
+      volume_kind: match[2] ? "scratch" : "home",
+      mountpoint: fs.opts.mount,
+      relative_path: entry.path,
+      identity: {
+        filesystem_uuid: filesystem.filesystem_uuid,
+        subvolume_id: entry.subvolume_id,
+        volume_uuid: entry.volume_uuid,
+        generation: entry.generation,
+      },
+    });
+  }
+  bootstrapProjectVolumeInventory({
+    filesystem_uuid: filesystem.filesystem_uuid,
+    mountpoint: fs.opts.mount,
+    volumes,
+  });
+  logger.info("bootstrapped managed project volume inventory", {
+    filesystem_uuid: filesystem.filesystem_uuid,
+    volumes: volumes.length,
+  });
+  return listProvisionedProjectIdsFromInventory();
+}
+
+export async function verifyProvisionedProjectInventoryBatch(
+  limit = 32,
+): Promise<{
+  checked: number;
+  missing: number;
+  identity_changed: number;
+  errors: number;
+}> {
+  if (fs == null) {
+    throw Error("file server not initialized");
+  }
+  const filesystem = currentFilesystemState();
+  const counts = {
+    checked: 0,
+    missing: 0,
+    identity_changed: 0,
+    errors: 0,
+  };
+  for (const row of nextProjectVolumeVerificationBatch(limit)) {
+    counts.checked += 1;
+    const path = join(row.mountpoint, row.relative_path);
+    try {
+      if (
+        row.mountpoint !== fs.opts.mount ||
+        row.filesystem_uuid !== filesystem.filesystem_uuid ||
+        !(await exists(path))
+      ) {
+        if (markProjectVolumeAbsent(row.project_id, row.volume_kind)) {
+          invalidateProjectVolumeQuota({
+            project_id: row.project_id,
+            volume_kind: row.volume_kind,
+            reason: "managed volume missing during bounded inventory audit",
+          });
+          if (row.volume_kind === "home") {
+            queueProjectProvisioned(row.project_id, false);
+          }
+        }
+        counts.missing += 1;
+        continue;
+      }
+      const identity = await getSubvolumeIdentity(path, { cache: false });
+      const recorded = recordProjectVolume({
+        project_id: row.project_id,
+        volume_kind: row.volume_kind,
+        mountpoint: fs.opts.mount,
+        relative_path: row.relative_path,
+        identity: {
+          ...identity,
+          filesystem_uuid: filesystem.filesystem_uuid,
+        },
+      });
+      if (recorded.changed) {
+        counts.identity_changed += 1;
+        invalidateProjectVolumeQuota({
+          project_id: row.project_id,
+          volume_kind: row.volume_kind,
+          reason: "managed volume identity changed during bounded audit",
+        });
+      }
+    } catch (err) {
+      counts.errors += 1;
+      logger.warn("managed project volume inventory verification failed", {
+        project_id: row.project_id,
+        volume_kind: row.volume_kind,
+        path,
+        err: `${err}`,
+      });
+    }
+  }
+  return counts;
 }
 
 function projectMountpoint(project_id: string): string {
@@ -1910,6 +2157,11 @@ async function clone({
     throw Error("file server not initialized");
   }
   await fs.subvolumes.clone(volName(src_project_id), volName(project_id));
+  await recordManagedProjectVolume({
+    project_id,
+    path: projectMountpoint(project_id),
+    force: true,
+  });
   await resetClonedProjectState(projectMountpoint(project_id));
   queueProjectProvisioned(project_id, true);
 }
@@ -2039,6 +2291,11 @@ async function repairProjectVolumeQuota({
     });
     return "missing";
   }
+  const volumeIdentity = await recordManagedProjectVolume({
+    project_id,
+    scratch,
+    path: vol.path,
+  });
   const current = await vol.quota.get();
   if (current.size === target) {
     markProjectVolumeQuotaApplied({
@@ -2046,6 +2303,7 @@ async function repairProjectVolumeQuota({
       volume_kind: scratch ? "scratch" : "home",
       desired_bytes: target,
       desired_revision: acceptance.row.desired_revision,
+      volume_identity: volumeIdentity,
     });
     return "ok";
   }
@@ -2071,6 +2329,7 @@ async function repairProjectVolumeQuota({
     volume_kind: scratch ? "scratch" : "home",
     desired_bytes: target,
     desired_revision: acceptance.row.desired_revision,
+    volume_identity: volumeIdentity,
   });
   invalidateQuotaCache(project_id, scratch);
   return "repaired";
@@ -5492,6 +5751,21 @@ export async function initFileServer({
       });
     }
   }
+
+  const quotaRuntime = fs.getQuotaRuntime();
+  const filesystemQuotaState = reconcileProjectFilesystemQuotaState({
+    mountpoint: fs.opts.mount,
+    filesystem_uuid: quotaRuntime.filesystem_uuid,
+    quota_mode: quotaRuntime.status.mode,
+    quota_mode_reconciled: quotaRuntime.reconciled,
+  });
+  logger.info("initialized durable project filesystem quota state", {
+    mountpoint: filesystemQuotaState.mountpoint,
+    filesystem_uuid: filesystemQuotaState.filesystem_uuid,
+    quota_mode: filesystemQuotaState.quota_mode,
+    quota_epoch: filesystemQuotaState.quota_epoch,
+    quota_mode_reconciled: quotaRuntime.reconciled,
+  });
 
   logger.debug("initFileServer: create conat server");
 

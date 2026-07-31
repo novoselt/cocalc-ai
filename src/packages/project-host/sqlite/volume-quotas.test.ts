@@ -97,6 +97,8 @@ describe("project volume quota ledger", () => {
         volume_kind: "home",
         desired_bytes: 9,
         desired_revision: 1,
+        volume_identity: "volume-1",
+        epoch: "filesystem-1:1",
       }),
     ).toBe(false);
     expect(
@@ -105,10 +107,22 @@ describe("project volume quota ledger", () => {
         volume_kind: "home",
         desired_bytes: 10,
         desired_revision: 2,
+        volume_identity: "volume-1",
+        epoch: "filesystem-1:1",
       }),
     ).toBe(true);
     const row = ledger.getProjectVolumeQuota("project-1", "home")!;
-    expect(ledger.projectVolumeQuotaIsApplied(row)).toBe(true);
+    expect(
+      ledger.projectVolumeQuotaIsApplied(row, {
+        epoch: "filesystem-1:1",
+      }),
+    ).toBe(false);
+    expect(
+      ledger.projectVolumeQuotaIsApplied(row, {
+        volume_identity: "volume-1",
+        epoch: "filesystem-1:1",
+      }),
+    ).toBe(true);
   });
 
   it("invalidates applied state across a process or volume epoch", async () => {
@@ -125,21 +139,25 @@ describe("project volume quota ledger", () => {
       desired_bytes: 10,
       desired_revision: 2,
       volume_identity: "volume-1",
+      epoch: "filesystem-1:1",
     });
     const row = ledger.getProjectVolumeQuota("project-1", "home")!;
     expect(
       ledger.projectVolumeQuotaIsApplied(row, {
         volume_identity: "volume-1",
+        epoch: "filesystem-1:1",
       }),
     ).toBe(true);
     expect(
       ledger.projectVolumeQuotaIsApplied(row, {
         volume_identity: "volume-2",
+        epoch: "filesystem-1:1",
       }),
     ).toBe(false);
     expect(
       ledger.projectVolumeQuotaIsApplied(row, {
-        epoch: "different-process",
+        volume_identity: "volume-1",
+        epoch: "filesystem-1:2",
       }),
     ).toBe(false);
   });

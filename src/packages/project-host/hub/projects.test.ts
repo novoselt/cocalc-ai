@@ -26,6 +26,7 @@ const getLocalHostId = jest.fn(() => "host-1");
 const getMasterConatClient = jest.fn();
 const fileServerCreateBackup = jest.fn();
 const ensureVolume = jest.fn();
+const ensureProjectVolumeIdentity = jest.fn();
 const resetScratchVolume = jest.fn();
 const deleteVolume = jest.fn();
 const sandboxExec = jest.fn();
@@ -115,6 +116,8 @@ jest.mock("../file-server", () => ({
     writeManagedAuthorizedKeys(...args),
   getVolume: (...args: any[]) => getVolume(...args),
   ensureVolume: (...args: any[]) => ensureVolume(...args),
+  ensureProjectVolumeIdentity: (...args: any[]) =>
+    ensureProjectVolumeIdentity(...args),
   resetScratchVolume: (...args: any[]) => resetScratchVolume(...args),
   deleteVolume: (...args: any[]) => deleteVolume(...args),
   getMountPoint: jest.fn(() => "/mnt/cocalc"),
@@ -214,6 +217,9 @@ jest.mock("../sqlite/volume-quotas", () => ({
   projectVolumeQuotaIsApplied: (...args: any[]) =>
     projectVolumeQuotaIsApplied(...args),
 }));
+jest.mock("../sqlite/project-volumes", () => ({
+  getRecordedProjectVolumeIdentity: jest.fn(() => "volume-identity"),
+}));
 jest.mock("../project-volume-lifecycle", () => ({
   currentProjectVolumeLifecycleGeneration: (...args: any[]) =>
     currentProjectVolumeLifecycleGeneration(...args),
@@ -256,6 +262,8 @@ describe("project host start ACP rehydrate ordering", () => {
     getOrCreateProjectLocalSecretToken.mockReturnValue("secret");
     applyPendingCopies.mockResolvedValue(undefined);
     writeManagedAuthorizedKeys.mockResolvedValue(undefined);
+    ensureProjectVolumeIdentity.mockReset();
+    ensureProjectVolumeIdentity.mockResolvedValue("volume-identity");
     resetScratchVolume.mockReset();
     pullRootfsCacheEntry.mockResolvedValue(undefined);
     prepareOciPullReservationEstimate.mockResolvedValue(undefined);
