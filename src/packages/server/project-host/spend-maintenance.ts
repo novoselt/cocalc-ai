@@ -6,6 +6,7 @@
 import getLogger from "@cocalc/backend/logger";
 import getPool, { withSessionAdvisoryLock } from "@cocalc/database/pool";
 import { normalizeProviderId } from "@cocalc/cloud";
+import adminAlert from "@cocalc/server/messages/admin-alert";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { enqueueCloudVmWork } from "@cocalc/server/cloud";
 import { createLro } from "@cocalc/server/lro/lro-db";
@@ -18,6 +19,7 @@ import {
 } from "./admission";
 import {
   closeDedicatedHostPurchaseSessionForAccount,
+  dedicatedHostRateFromPricingSnapshot,
   estimateDedicatedHostRate,
   getDedicatedHostWindowUsageForHostLocal,
   isDedicatedHostLaneCurrentlyAllowed,
@@ -80,7 +82,7 @@ function billingStateForHost(
     return "running";
   }
   if (
-    status === "off" &&
+    (status === "off" || status === "stopped") &&
     `${row.metadata?.runtime?.instance_id ?? ""}`.trim()
   ) {
     return "stopped";
@@ -591,22 +593,48 @@ async function reconcileStoppedHost({
     return;
   }
 
-  const rate = await estimateDedicatedHostRate(
+  const catalogRate = await estimateDedicatedHostRate(
     pricingInputForHost({
       row,
       provider,
       billing_state: "stopped",
     }),
   );
+  const rate =
+    catalogRate ??
+    dedicatedHostRateFromPricingSnapshot({
+      pricing_snapshot: metadata?.billing?.pricing_snapshot,
+      billing_state: "stopped",
+    });
   if (!rate) {
-    await closeDedicatedHostPurchaseSessionForAccount({
-      account_id: owner,
-      host_id: row.id,
-    });
-    logger.error("stopped dedicated-host pricing is unavailable", {
-      host_id: row.id,
-      provider,
-    });
+    // Keep any existing purchase open rather than failing free while retained
+    // provider disks continue to incur costs. Maintenance retries frequently.
+    logger.error(
+      "stopped dedicated-host pricing is unavailable; preserving billing session",
+      {
+        host_id: row.id,
+        provider,
+      },
+    );
+    try {
+      await adminAlert({
+        subject: `Stopped dedicated-host pricing unavailable: ${row.id}`,
+        body: [
+          `Host ID: ${row.id}`,
+          `Host name: ${row.name}`,
+          `Owner account ID: ${owner}`,
+          `Provider: ${provider}`,
+          "The existing purchase session was preserved. Check the cloud pricing catalog and host billing metadata.",
+        ].join("\n"),
+        dedupMinutes: 4 * 60,
+        dedupBySubject: true,
+      });
+    } catch (err) {
+      logger.error("failed to send stopped host pricing alert", {
+        host_id: row.id,
+        err: `${err}`,
+      });
+    }
     return;
   }
   if (toDecimal(rate.hourly_cost_usd).lte(0)) {
@@ -671,6 +699,7 @@ async function reconcileStoppedHost({
       funding_mode: snapshot.funding_mode,
       funding_lane,
       hourly_cost_usd: rate.hourly_cost_usd,
+      pricing_snapshot: rate.pricing_snapshot,
       started_at: metadata?.billing?.started_at ?? new Date().toISOString(),
       ...retainedOwnerSpendPolicy(metadata),
       enforcement: nextEnforcement,
@@ -1022,6 +1051,7 @@ async function maybeClearRecoveredInactiveEnforcement({
         funding_mode: effectiveSnapshot.funding_mode,
         funding_lane,
         hourly_cost_usd: rate.hourly_cost_usd,
+        pricing_snapshot: rate.pricing_snapshot,
         enforcement: nextEnforcement,
       },
     },
@@ -1235,6 +1265,21 @@ async function runPass(): Promise<void> {
 
     deleteSnapshotCacheForAccount(owner);
     if (status === "stopping") {
+      await updateHostBillingMetadata({
+        host_id: row.id,
+        metadata: {
+          ...metadata,
+          billing: {
+            ...(metadata.billing ?? {}),
+            funding_mode: snapshot.funding_mode,
+            funding_lane,
+            hourly_cost_usd: rate.hourly_cost_usd,
+            pricing_snapshot: rate.pricing_snapshot,
+            started_at: preserveStartedAt ?? new Date().toISOString(),
+            ...retainedOwnerSpendPolicy(metadata),
+          },
+        },
+      });
       continue;
     }
     const refreshedFundingMode = currentFundingMode({
@@ -1276,6 +1321,7 @@ async function runPass(): Promise<void> {
               funding_mode: snapshot.funding_mode,
               funding_lane,
               hourly_cost_usd: rate.hourly_cost_usd,
+              pricing_snapshot: rate.pricing_snapshot,
               started_at: preserveStartedAt ?? new Date().toISOString(),
               ...retainedOwnerSpendPolicy(metadata),
               owner_spend_limit_status: ownerSpendStatus,
@@ -1306,6 +1352,7 @@ async function runPass(): Promise<void> {
         funding_mode: snapshot.funding_mode,
         funding_lane,
         hourly_cost_usd: rate.hourly_cost_usd,
+        pricing_snapshot: rate.pricing_snapshot,
         started_at: preserveStartedAt ?? new Date().toISOString(),
         ...retainedOwnerSpendPolicy(metadata),
         ...(ownerSpendStatus

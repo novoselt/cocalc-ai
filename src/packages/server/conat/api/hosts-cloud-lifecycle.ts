@@ -105,6 +105,7 @@ function billingMetadataFromSession({
     funding_mode: billableSession.funding_mode,
     funding_lane: billableSession.funding_lane,
     hourly_cost_usd: billableSession.hourly_cost_usd,
+    pricing_snapshot: billableSession.pricing_snapshot,
     ...(started_at ? { started_at } : {}),
   };
 }

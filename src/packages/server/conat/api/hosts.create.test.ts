@@ -240,6 +240,9 @@ describe("hosts.createHost", () => {
           funding_mode: "account-prepaid",
           funding_lane: "prepaid",
           hourly_cost_usd: "1.25",
+          pricing_snapshot: expect.objectContaining({
+            billing_state: "running",
+          }),
           started_at: expect.any(String),
         });
         expect(params[5]).toBeNull();
@@ -719,6 +722,9 @@ describe("hosts.createHost", () => {
           funding_mode: "account-postpaid",
           funding_lane: "credit",
           hourly_cost_usd: "1.25",
+          pricing_snapshot: expect.objectContaining({
+            billing_state: "running",
+          }),
           started_at: expect.any(String),
         });
         return { rowCount: 1 };

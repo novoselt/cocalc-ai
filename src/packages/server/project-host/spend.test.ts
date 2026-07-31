@@ -11,6 +11,7 @@ import { after, before } from "@cocalc/server/test";
 import createPurchase from "@cocalc/server/purchases/create-purchase";
 import {
   closeDedicatedHostPurchaseSessionLocal,
+  dedicatedHostRateFromPricingSnapshot,
   estimateDedicatedHostRateUsdPerHour,
   getDedicatedHostPostpaidUnbilledExposureLocal,
   getDedicatedHostWindowUsageLocal,
@@ -48,6 +49,58 @@ function pricingSnapshot(
 }
 
 describe("dedicated host spend accounting", () => {
+  it("derives stopped disk pricing from a running immutable snapshot", () => {
+    const rate = dedicatedHostRateFromPricingSnapshot({
+      billing_state: "stopped",
+      pricing_snapshot: {
+        version: 1,
+        billing_state: "running",
+        hourly_cost_usd: "10.5",
+        components: [
+          {
+            key: "vm",
+            label: "VM",
+            hourly_cost_usd: "10",
+            billing_states: ["running"],
+          },
+          {
+            key: "disk",
+            label: "Persistent disk",
+            hourly_cost_usd: "0.5",
+            billing_states: ["running", "stopped"],
+          },
+        ],
+        configuration: {
+          machine_type: "n2d-standard-4",
+          pricing_model: "on_demand",
+          disk_gb: 100,
+          disk_type: "balanced",
+        },
+      },
+    });
+
+    expect(rate).toEqual({
+      hourly_cost_usd: "0.5000000000",
+      pricing_snapshot: {
+        version: 1,
+        billing_state: "stopped",
+        hourly_cost_usd: "0.5000000000",
+        components: [
+          {
+            key: "disk",
+            label: "Persistent disk",
+            hourly_cost_usd: "0.5",
+            billing_states: ["running", "stopped"],
+          },
+        ],
+        configuration: {
+          disk_gb: 100,
+          disk_type: "balanced",
+        },
+      },
+    });
+  });
+
   it("computes prepaid and credit spend from shared fixed account windows", async () => {
     const account_id = uuid();
     const windowStart = dayjs().subtract(3, "hour").toDate();
@@ -255,6 +308,43 @@ describe("dedicated host spend accounting", () => {
       [account_id, "dedicated-host", `dedicated-host:${host_id}`],
     );
     expect(finalRows.every((row) => row.cost != null)).toBe(true);
+  });
+
+  it("serializes concurrent purchase reconciliation per account and host", async () => {
+    const account_id = uuid();
+    const host_id = uuid();
+    const started_at = dayjs().subtract(1, "minute").toDate();
+    const reconcile = () =>
+      reconcileDedicatedHostPurchaseSessionLocal({
+        account_id,
+        host_id,
+        host_name: "Concurrent Host",
+        host_bay_id: "bay-0",
+        provider: "gcp",
+        region: "us-central1",
+        billing_state: "running",
+        machine_type: "n2d-standard-4",
+        pricing_model: "on_demand",
+        funding_lane: "prepaid",
+        hourly_cost_usd: "2",
+        pricing_snapshot: pricingSnapshot("2"),
+        started_at,
+      });
+
+    await Promise.all([reconcile(), reconcile(), reconcile()]);
+
+    const { rows } = await getPool().query<{ count: number }>(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM purchases
+        WHERE account_id=$1
+          AND service='dedicated-host'
+          AND tag=$2
+          AND period_end IS NULL
+      `,
+      [account_id, `dedicated-host:${host_id}`],
+    );
+    expect(rows[0]?.count).toBe(1);
   });
 
   it("rotates an unchanged running host exactly once when only its price changes", async () => {

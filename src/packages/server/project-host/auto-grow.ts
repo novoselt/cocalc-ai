@@ -580,6 +580,7 @@ function billingMetadataForAutoGrowSession(
     funding_mode: session.funding_mode,
     funding_lane: session.funding_lane,
     hourly_cost_usd: session.hourly_cost_usd,
+    pricing_snapshot: session.pricing_snapshot,
     ...(started_at ? { started_at } : {}),
   };
 }

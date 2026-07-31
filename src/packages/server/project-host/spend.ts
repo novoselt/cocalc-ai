@@ -80,9 +80,106 @@ export interface DedicatedHostRateEstimate {
 }
 
 const HOST_PURCHASE_TAG_PREFIX = "dedicated-host:";
+const localPurchaseMutationTails = new Map<string, Promise<void>>();
 
 function purchaseTag(host_id: string): string {
   return `${HOST_PURCHASE_TAG_PREFIX}${host_id}`;
+}
+
+export function dedicatedHostRateFromPricingSnapshot({
+  pricing_snapshot,
+  billing_state,
+}: {
+  pricing_snapshot?: DedicatedHostPricingSnapshot | null;
+  billing_state: DedicatedHostBillingState;
+}): DedicatedHostRateEstimate | undefined {
+  if (
+    pricing_snapshot?.version !== 1 ||
+    !Array.isArray(pricing_snapshot.components)
+  ) {
+    return undefined;
+  }
+  const components = pricing_snapshot.components.filter((component) =>
+    component.billing_states?.includes(billing_state),
+  );
+  let total = toDecimal(0);
+  try {
+    for (const component of components) {
+      const amount = toDecimal(component.hourly_cost_usd);
+      if (amount.lt(0)) return undefined;
+      total = total.add(amount);
+    }
+  } catch {
+    return undefined;
+  }
+  const hourly_cost_usd = moneyToDbString(total);
+  const configuration = { ...(pricing_snapshot.configuration ?? {}) };
+  if (billing_state === "stopped") {
+    delete configuration.machine_type;
+    delete configuration.pricing_model;
+  }
+  return {
+    hourly_cost_usd,
+    pricing_snapshot: {
+      version: 1,
+      billing_state,
+      hourly_cost_usd,
+      components,
+      configuration,
+    },
+  };
+}
+
+async function withDedicatedHostPurchaseMutation<T>({
+  account_id,
+  host_id,
+  client,
+  fn,
+}: {
+  account_id: string;
+  host_id: string;
+  client?: PoolClient;
+  fn: (client: PoolClient) => Promise<T>;
+}): Promise<T> {
+  const mutationKey = `${account_id}:${host_id}`;
+  const previous = localPurchaseMutationTails.get(mutationKey);
+  let releaseLocal!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseLocal = resolve;
+  });
+  const tail = (previous ?? Promise.resolve()).then(() => current);
+  localPurchaseMutationTails.set(mutationKey, tail);
+  await previous;
+  try {
+    if (client) {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+        [account_id, purchaseTag(host_id)],
+      );
+      return await fn(client);
+    }
+    const transactionClient = await getPool().connect();
+    try {
+      await transactionClient.query("BEGIN");
+      await transactionClient.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+        [account_id, purchaseTag(host_id)],
+      );
+      const result = await fn(transactionClient);
+      await transactionClient.query("COMMIT");
+      return result;
+    } catch (err) {
+      await transactionClient.query("ROLLBACK");
+      throw err;
+    } finally {
+      transactionClient.release();
+    }
+  } finally {
+    releaseLocal();
+    if (localPurchaseMutationTails.get(mutationKey) === tail) {
+      localPurchaseMutationTails.delete(mutationKey);
+    }
+  }
 }
 
 function hasPositiveLimit(value: unknown): boolean {
@@ -532,7 +629,7 @@ async function insertDedicatedHostPurchaseSegmentLocal({
   });
 }
 
-export async function rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
+async function rotateDedicatedHostPostpaidSegmentForCalendarMonthUnlocked({
   account_id,
   host_id,
   through,
@@ -541,7 +638,7 @@ export async function rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
   account_id: string;
   host_id: string;
   through?: Date;
-  client?: PoolClient;
+  client: PoolClient;
 }): Promise<void> {
   const open = await listOpenDedicatedHostPurchasesLocal({
     account_id,
@@ -578,13 +675,30 @@ export async function rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
   });
 }
 
-export async function closeDedicatedHostPurchaseSessionLocal({
+export async function rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal(opts: {
+  account_id: string;
+  host_id: string;
+  through?: Date;
+  client?: PoolClient;
+}): Promise<void> {
+  await withDedicatedHostPurchaseMutation({
+    ...opts,
+    fn: async (client) => {
+      await rotateDedicatedHostPostpaidSegmentForCalendarMonthUnlocked({
+        ...opts,
+        client,
+      });
+    },
+  });
+}
+
+async function closeDedicatedHostPurchaseSessionUnlocked({
   account_id,
   host_id,
   ended_at,
   client,
 }: AccountLocalCloseDedicatedHostPurchaseSessionRequest & {
-  client?: PoolClient;
+  client: PoolClient;
 }): Promise<void> {
   const now = ended_at == null ? new Date() : new Date(ended_at as any);
   while (true) {
@@ -639,7 +753,23 @@ export async function closeDedicatedHostPurchaseSessionLocal({
   }
 }
 
-export async function reconcileDedicatedHostPurchaseSessionLocal({
+export async function closeDedicatedHostPurchaseSessionLocal(
+  opts: AccountLocalCloseDedicatedHostPurchaseSessionRequest & {
+    client?: PoolClient;
+  },
+): Promise<void> {
+  await withDedicatedHostPurchaseMutation({
+    ...opts,
+    fn: async (client) => {
+      await closeDedicatedHostPurchaseSessionUnlocked({
+        ...opts,
+        client,
+      });
+    },
+  });
+}
+
+async function reconcileDedicatedHostPurchaseSessionUnlocked({
   account_id,
   host_id,
   host_name,
@@ -655,22 +785,12 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
   started_at,
   client,
 }: AccountLocalReconcileDedicatedHostPurchaseSessionRequest & {
-  client?: PoolClient;
+  client: PoolClient;
 }): Promise<void> {
   const periodStart =
     started_at == null
       ? new Date()
       : new Date(started_at as string | number | Date);
-  await ensureAccountUsageWindowsForEvent({
-    account_id,
-    occurred_at: periodStart,
-  });
-  if (periodStart.getTime() < Date.now()) {
-    await ensureAccountUsageWindowsForEvent({
-      account_id,
-      occurred_at: new Date(),
-    });
-  }
   const open = await listOpenDedicatedHostPurchasesLocal({
     account_id,
     host_id,
@@ -690,7 +810,7 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
     )
   ) {
     if (funding_lane === "credit") {
-      await rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
+      await rotateDedicatedHostPostpaidSegmentForCalendarMonthUnlocked({
         account_id,
         host_id,
         through:
@@ -702,7 +822,7 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
     }
     return;
   }
-  await closeDedicatedHostPurchaseSessionLocal({
+  await closeDedicatedHostPurchaseSessionUnlocked({
     account_id,
     host_id,
     ended_at: started_at ?? null,
@@ -732,7 +852,7 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
     tag: purchaseTag(host_id),
   });
   if (funding_lane === "credit") {
-    await rotateDedicatedHostPostpaidSegmentForCalendarMonthLocal({
+    await rotateDedicatedHostPostpaidSegmentForCalendarMonthUnlocked({
       account_id,
       host_id,
       through:
@@ -742,6 +862,36 @@ export async function reconcileDedicatedHostPurchaseSessionLocal({
       client,
     });
   }
+}
+
+export async function reconcileDedicatedHostPurchaseSessionLocal(
+  opts: AccountLocalReconcileDedicatedHostPurchaseSessionRequest & {
+    client?: PoolClient;
+  },
+): Promise<void> {
+  const periodStart =
+    opts.started_at == null
+      ? new Date()
+      : new Date(opts.started_at as string | number | Date);
+  await ensureAccountUsageWindowsForEvent({
+    account_id: opts.account_id,
+    occurred_at: periodStart,
+  });
+  if (periodStart.getTime() < Date.now()) {
+    await ensureAccountUsageWindowsForEvent({
+      account_id: opts.account_id,
+      occurred_at: new Date(),
+    });
+  }
+  await withDedicatedHostPurchaseMutation({
+    ...opts,
+    fn: async (client) => {
+      await reconcileDedicatedHostPurchaseSessionUnlocked({
+        ...opts,
+        client,
+      });
+    },
+  });
 }
 
 export async function reconcileDedicatedHostPurchaseSessionForAccount(

@@ -7093,6 +7093,7 @@ export async function updateHostMachine({
         funding_mode: activeBillableSession.funding_mode,
         funding_lane: activeBillableSession.funding_lane,
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
+        pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
           metadata.billing?.started_at ?? metadata.billing?.updated_at,
       };
@@ -7101,6 +7102,7 @@ export async function updateHostMachine({
         funding_mode: activeBillableSession.funding_mode,
         funding_lane: activeBillableSession.funding_lane,
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
+        pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
           metadata.billing?.started_at ?? metadata.billing?.updated_at,
       };
