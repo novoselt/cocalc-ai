@@ -37,11 +37,11 @@ const ACTIVE_RUN_STATUSES: HostExamRunStatus[] = [
 ];
 const PROJECT_HOST_RPC_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_EXAM_CONFIG: Omit<HostExamConfigInput, "enabled"> = {
-  max_workspaces: 100,
-  workspace_cpu: 1,
-  workspace_memory_mb: 2_000,
-  workspace_disk_mb: 5_000,
-  workspace_ttl_minutes: 6 * 60,
+  max_projects: 100,
+  project_cpu: 1,
+  project_memory_mb: 2_000,
+  project_disk_mb: 5_000,
+  project_ttl_minutes: 6 * 60,
   cleanup_grace_minutes: 10,
   terminal_enabled: false,
   network_mode: "disabled",
@@ -73,11 +73,11 @@ function mapConfig(row: any): HostExamConfig {
     dns_record_id: row.dns_record_id ?? null,
     dns_target: row.dns_target ?? null,
     generation: Number(row.generation),
-    max_workspaces: Number(row.max_workspaces),
-    workspace_cpu: Number(row.workspace_cpu),
-    workspace_memory_mb: Number(row.workspace_memory_mb),
-    workspace_disk_mb: Number(row.workspace_disk_mb),
-    workspace_ttl_minutes: Number(row.workspace_ttl_minutes),
+    max_projects: Number(row.max_projects),
+    project_cpu: Number(row.project_cpu),
+    project_memory_mb: Number(row.project_memory_mb),
+    project_disk_mb: Number(row.project_disk_mb),
+    project_ttl_minutes: Number(row.project_ttl_minutes),
     cleanup_grace_minutes: Number(row.cleanup_grace_minutes),
     terminal_enabled: row.terminal_enabled === true,
     network_mode: "disabled",
@@ -100,7 +100,7 @@ function mapRun(row: any): HostExamRun {
       typeof row.run_quota === "string"
         ? JSON.parse(row.run_quota)
         : row.run_quota,
-    max_workspaces: Number(row.max_workspaces),
+    max_projects: Number(row.max_projects),
     terminal_enabled: row.terminal_enabled === true,
     network_mode: "disabled",
     scheduled_stop_at: dateString(row.scheduled_stop_at)!,
@@ -117,6 +117,40 @@ function mapRun(row: any): HostExamRun {
   };
 }
 
+async function migrateLegacyExamColumnNames(): Promise<void> {
+  const renames = [
+    [CONFIG_TABLE, "max_workspaces", "max_projects"],
+    [CONFIG_TABLE, "workspace_cpu", "project_cpu"],
+    [CONFIG_TABLE, "workspace_memory_mb", "project_memory_mb"],
+    [CONFIG_TABLE, "workspace_disk_mb", "project_disk_mb"],
+    [CONFIG_TABLE, "workspace_ttl_minutes", "project_ttl_minutes"],
+    [RUN_TABLE, "max_workspaces", "max_projects"],
+  ] as const;
+  for (const [table, legacy, current] of renames) {
+    const { rows } = await getPool().query<{ column_name: string }>(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema=current_schema() AND table_name=$1
+          AND column_name IN ($2, $3)
+      `,
+      [table, legacy, current],
+    );
+    const columns = new Set(rows.map(({ column_name }) => column_name));
+    if (!columns.has(legacy)) continue;
+    if (!columns.has(current)) {
+      await getPool().query(
+        `ALTER TABLE ${table} RENAME COLUMN ${legacy} TO ${current}`,
+      );
+      continue;
+    }
+    await getPool().query(
+      `UPDATE ${table} SET ${current}=COALESCE(${current}, ${legacy})`,
+    );
+    await getPool().query(`ALTER TABLE ${table} DROP COLUMN ${legacy}`);
+  }
+}
+
 async function ensureSchema(): Promise<void> {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -128,11 +162,11 @@ async function ensureSchema(): Promise<void> {
           dns_record_id TEXT,
           dns_target TEXT,
           generation BIGINT NOT NULL DEFAULT 1,
-          max_workspaces INTEGER NOT NULL,
-          workspace_cpu DOUBLE PRECISION NOT NULL,
-          workspace_memory_mb INTEGER NOT NULL,
-          workspace_disk_mb INTEGER NOT NULL,
-          workspace_ttl_minutes INTEGER NOT NULL,
+          max_projects INTEGER NOT NULL,
+          project_cpu DOUBLE PRECISION NOT NULL,
+          project_memory_mb INTEGER NOT NULL,
+          project_disk_mb INTEGER NOT NULL,
+          project_ttl_minutes INTEGER NOT NULL,
           cleanup_grace_minutes INTEGER NOT NULL,
           terminal_enabled BOOLEAN NOT NULL DEFAULT FALSE,
           network_mode TEXT NOT NULL DEFAULT 'disabled',
@@ -154,7 +188,7 @@ async function ensureSchema(): Promise<void> {
           rootfs_image TEXT NOT NULL,
           rootfs_digest TEXT NOT NULL,
           run_quota JSONB NOT NULL,
-          max_workspaces INTEGER NOT NULL,
+          max_projects INTEGER NOT NULL,
           terminal_enabled BOOLEAN NOT NULL DEFAULT FALSE,
           network_mode TEXT NOT NULL DEFAULT 'disabled',
           scheduled_stop_at TIMESTAMPTZ NOT NULL,
@@ -169,6 +203,19 @@ async function ensureSchema(): Promise<void> {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           created_by UUID NOT NULL
         )
+      `);
+      await migrateLegacyExamColumnNames();
+      await getPool().query(`
+        ALTER TABLE ${CONFIG_TABLE}
+          ALTER COLUMN max_projects SET NOT NULL,
+          ALTER COLUMN project_cpu SET NOT NULL,
+          ALTER COLUMN project_memory_mb SET NOT NULL,
+          ALTER COLUMN project_disk_mb SET NOT NULL,
+          ALTER COLUMN project_ttl_minutes SET NOT NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${RUN_TABLE}
+          ALTER COLUMN max_projects SET NOT NULL
       `);
       // The shared schema synchronizer creates declared timestamp fields before
       // this feature-specific schema initializer runs. Those generic columns are
@@ -246,40 +293,53 @@ function requireFiniteRange(
 }
 
 function normalizeConfig(input: HostExamConfigInput): HostExamConfigInput {
+  const legacy = input as HostExamConfigInput & Record<string, unknown>;
   if (input.network_mode != null && input.network_mode !== "disabled") {
     throw new Error("the exam MVP supports only disabled project networking");
   }
   return {
     enabled: input.enabled === true,
-    max_workspaces: requireFiniteRange(input.max_workspaces, {
-      label: "max_workspaces",
-      min: 1,
-      max: 1_000,
-      integer: true,
-    }),
-    workspace_cpu: requireFiniteRange(input.workspace_cpu, {
-      label: "workspace_cpu",
+    max_projects: requireFiniteRange(
+      input.max_projects ?? legacy.max_workspaces,
+      {
+        label: "max_projects",
+        min: 1,
+        max: 1_000,
+        integer: true,
+      },
+    ),
+    project_cpu: requireFiniteRange(input.project_cpu ?? legacy.workspace_cpu, {
+      label: "project_cpu",
       min: 0.1,
       max: 128,
     }),
-    workspace_memory_mb: requireFiniteRange(input.workspace_memory_mb, {
-      label: "workspace_memory_mb",
-      min: 256,
-      max: 1_048_576,
-      integer: true,
-    }),
-    workspace_disk_mb: requireFiniteRange(input.workspace_disk_mb, {
-      label: "workspace_disk_mb",
-      min: 1_000,
-      max: 4_000_000,
-      integer: true,
-    }),
-    workspace_ttl_minutes: requireFiniteRange(input.workspace_ttl_minutes, {
-      label: "workspace_ttl_minutes",
-      min: 180,
-      max: 2 * 24 * 60,
-      integer: true,
-    }),
+    project_memory_mb: requireFiniteRange(
+      input.project_memory_mb ?? legacy.workspace_memory_mb,
+      {
+        label: "project_memory_mb",
+        min: 256,
+        max: 1_048_576,
+        integer: true,
+      },
+    ),
+    project_disk_mb: requireFiniteRange(
+      input.project_disk_mb ?? legacy.workspace_disk_mb,
+      {
+        label: "project_disk_mb",
+        min: 1_000,
+        max: 4_000_000,
+        integer: true,
+      },
+    ),
+    project_ttl_minutes: requireFiniteRange(
+      input.project_ttl_minutes ?? legacy.workspace_ttl_minutes,
+      {
+        label: "project_ttl_minutes",
+        min: 180,
+        max: 2 * 24 * 60,
+        integer: true,
+      },
+    ),
     cleanup_grace_minutes: requireFiniteRange(input.cleanup_grace_minutes, {
       label: "cleanup_grace_minutes",
       min: 1,
@@ -395,7 +455,7 @@ function hashToken(token: string): string {
 
 function validateDeadline(
   scheduled_stop_at: string,
-  workspace_ttl_minutes: number,
+  project_ttl_minutes: number,
 ): string {
   const deadline = new Date(scheduled_stop_at);
   const now = Date.now();
@@ -407,9 +467,9 @@ function validateDeadline(
       "scheduled_stop_at must be at least one minute in the future",
     );
   }
-  if (deadline.valueOf() > now + workspace_ttl_minutes * 60_000) {
+  if (deadline.valueOf() > now + project_ttl_minutes * 60_000) {
     throw new Error(
-      `scheduled_stop_at exceeds the configured ${workspace_ttl_minutes}-minute run limit`,
+      `scheduled_stop_at exceeds the configured ${project_ttl_minutes}-minute run limit`,
     );
   }
   return deadline.toISOString();
@@ -456,7 +516,19 @@ async function loadRuntimeStatus(
       timeout: 15_000,
       fresh: true,
     });
-    return await client.getExamRunStatus({ run_id: run?.run_id });
+    const runtime = (await client.getExamRunStatus({
+      run_id: run?.run_id,
+    })) as HostExamRuntimeStatus & Record<string, unknown>;
+    return {
+      ...runtime,
+      active_projects: Number(
+        runtime.active_projects ?? runtime.active_workspaces ?? 0,
+      ),
+      max_projects:
+        runtime.max_projects == null && runtime.max_workspaces == null
+          ? undefined
+          : Number(runtime.max_projects ?? runtime.max_workspaces),
+    };
   } catch (err) {
     logger.warn("unable to load project-host exam runtime status", {
       host_id: host.id,
@@ -467,8 +539,8 @@ async function loadRuntimeStatus(
       run_id: run?.run_id,
       status: run?.status,
       admission_open: false,
-      active_workspaces: 0,
-      max_workspaces: run?.max_workspaces,
+      active_projects: 0,
+      max_projects: run?.max_projects,
       scheduled_stop_at: run?.scheduled_stop_at,
       last_error: `project-host status unavailable: ${err}`,
     };
@@ -551,9 +623,9 @@ export async function setExamConfigLocal({
   const { rows } = await getPool().query(
     `
       INSERT INTO ${CONFIG_TABLE} (
-        host_id, enabled, hostname, generation, max_workspaces,
-        workspace_cpu, workspace_memory_mb, workspace_disk_mb,
-        workspace_ttl_minutes, cleanup_grace_minutes, terminal_enabled,
+        host_id, enabled, hostname, generation, max_projects,
+        project_cpu, project_memory_mb, project_disk_mb,
+        project_ttl_minutes, cleanup_grace_minutes, terminal_enabled,
         network_mode, created_by, updated_by
       )
       VALUES (
@@ -561,11 +633,11 @@ export async function setExamConfigLocal({
       )
       ON CONFLICT (host_id) DO UPDATE SET
         enabled=EXCLUDED.enabled,
-        max_workspaces=EXCLUDED.max_workspaces,
-        workspace_cpu=EXCLUDED.workspace_cpu,
-        workspace_memory_mb=EXCLUDED.workspace_memory_mb,
-        workspace_disk_mb=EXCLUDED.workspace_disk_mb,
-        workspace_ttl_minutes=EXCLUDED.workspace_ttl_minutes,
+        max_projects=EXCLUDED.max_projects,
+        project_cpu=EXCLUDED.project_cpu,
+        project_memory_mb=EXCLUDED.project_memory_mb,
+        project_disk_mb=EXCLUDED.project_disk_mb,
+        project_ttl_minutes=EXCLUDED.project_ttl_minutes,
         cleanup_grace_minutes=EXCLUDED.cleanup_grace_minutes,
         terminal_enabled=EXCLUDED.terminal_enabled,
         network_mode='disabled',
@@ -578,11 +650,11 @@ export async function setExamConfigLocal({
       host.id,
       config.enabled,
       hostname,
-      config.max_workspaces,
-      config.workspace_cpu,
-      config.workspace_memory_mb,
-      config.workspace_disk_mb,
-      config.workspace_ttl_minutes,
+      config.max_projects,
+      config.project_cpu,
+      config.project_memory_mb,
+      config.project_disk_mb,
+      config.project_ttl_minutes,
       config.cleanup_grace_minutes,
       config.terminal_enabled,
       actor_account_id,
@@ -656,7 +728,7 @@ export async function createExamRunLocal({
   const key = validateIdempotencyKey(idempotency_key);
   const deadline = validateDeadline(
     scheduled_stop_at,
-    config.workspace_ttl_minutes,
+    config.project_ttl_minutes,
   );
   const control = await getRoutedHostControlClient({
     host_id: host.id,
@@ -695,9 +767,9 @@ export async function createExamRunLocal({
   const token = deterministicToken({ run_id, idempotency_key: key });
   const token_hash = hashToken(token);
   const run_quota = {
-    cpu_limit: config.workspace_cpu,
-    memory_limit: config.workspace_memory_mb,
-    disk_quota: config.workspace_disk_mb,
+    cpu_limit: config.project_cpu,
+    memory_limit: config.project_memory_mb,
+    disk_quota: config.project_disk_mb,
     pids_limit: 4_096,
   };
   const { rows } = await getPool().query(
@@ -705,7 +777,7 @@ export async function createExamRunLocal({
       INSERT INTO ${RUN_TABLE} (
         run_id, host_id, config_generation, status, token_hash,
         create_idempotency_key, token_idempotency_key, rootfs_image,
-        rootfs_digest, run_quota, max_workspaces, terminal_enabled,
+        rootfs_digest, run_quota, max_projects, terminal_enabled,
         network_mode, scheduled_stop_at, owner_account_id, created_by
       )
       VALUES (
@@ -723,7 +795,7 @@ export async function createExamRunLocal({
       selected.image,
       selected.digest,
       JSON.stringify(run_quota),
-      config.max_workspaces,
+      config.max_projects,
       config.terminal_enabled,
       deadline,
       ownerAccountId(host),
@@ -859,7 +931,7 @@ export async function updateExamDeadlineLocal({
   }
   const deadline = validateDeadline(
     scheduled_stop_at,
-    config.workspace_ttl_minutes,
+    config.project_ttl_minutes,
   );
   const control = await getRoutedHostControlClient({
     host_id: host.id,
@@ -926,7 +998,7 @@ export async function eraseActiveExamRunBeforeHostStopLocal({
   if (!run || run.status === "stopped") return false;
   if (host.status !== "running") {
     throw new Error(
-      "the exam host must be running so its temporary workspaces can be erased before stopping",
+      "the exam host must be running so its temporary projects can be erased before stopping",
     );
   }
   await stopAndEraseExamRunLocal({

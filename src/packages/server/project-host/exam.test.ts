@@ -89,11 +89,11 @@ describe("project-host exam configuration", () => {
   it("keeps terminal access disabled unless explicitly enabled", () => {
     const base = {
       enabled: true,
-      max_workspaces: 100,
-      workspace_cpu: 1,
-      workspace_memory_mb: 2_000,
-      workspace_disk_mb: 5_000,
-      workspace_ttl_minutes: 360,
+      max_projects: 100,
+      project_cpu: 1,
+      project_memory_mb: 2_000,
+      project_disk_mb: 5_000,
+      project_ttl_minutes: 360,
       cleanup_grace_minutes: 10,
       network_mode: "disabled" as const,
     };

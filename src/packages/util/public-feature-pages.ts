@@ -254,7 +254,7 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     summary:
       "Run browser-based Jupyter and computational scratchpads with a frozen software environment, disabled outbound networking, configurable capacity, and automatic erasure.",
     metadataSummary:
-      "CoCalc exam scratchpad hosts provide ephemeral, network-isolated Jupyter workspaces for in-person university exams on instructor-controlled dedicated compute.",
+      "CoCalc exam scratchpad hosts provide ephemeral, network-isolated Jupyter projects for in-person university exams on instructor-controlled dedicated compute.",
     docsUrl: "/docs/hosts/exam-scratchpads",
     index: false,
     sections: [
@@ -268,7 +268,7 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
         title: "Predictable software and capacity",
         bullets: [
           "Freeze one RootFS image and digest for the whole exam",
-          "Choose CPU, memory, disk, and maximum simultaneous workspaces",
+          "Choose CPU, memory, disk, and maximum simultaneous projects",
           "Use Jupyter, files, kernels, and optionally terminals",
           "Run on an on-demand private host sized for the exam window",
         ],
@@ -277,8 +277,8 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
         title: "Ephemeral by design",
         bullets: [
           "Disable outbound project networking and verify it before admission opens",
-          "Disable backups and snapshots for exam workspaces",
-          "Erase every workspace and its TimeTravel history at the deadline",
+          "Disable backups and snapshots for exam projects",
+          "Erase every project and its TimeTravel history at the deadline",
           "Automatically power off compute while retaining the reusable host and cached software",
         ],
       },

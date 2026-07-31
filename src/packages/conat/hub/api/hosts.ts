@@ -638,11 +638,11 @@ export interface HostExamConfig {
   dns_record_id?: string | null;
   dns_target?: string | null;
   generation: number;
-  max_workspaces: number;
-  workspace_cpu: number;
-  workspace_memory_mb: number;
-  workspace_disk_mb: number;
-  workspace_ttl_minutes: number;
+  max_projects: number;
+  project_cpu: number;
+  project_memory_mb: number;
+  project_disk_mb: number;
+  project_ttl_minutes: number;
   cleanup_grace_minutes: number;
   terminal_enabled: boolean;
   network_mode: HostExamNetworkMode;
@@ -665,7 +665,7 @@ export interface HostExamRun {
     disk_quota: number;
     pids_limit: number;
   };
-  max_workspaces: number;
+  max_projects: number;
   terminal_enabled: boolean;
   network_mode: HostExamNetworkMode;
   scheduled_stop_at: string;
@@ -689,7 +689,7 @@ export interface HostExamReadinessCheck {
     | "rootfs"
     | "local_snapshot"
     | "network_policy"
-    | "workspace_smoke"
+    | "project_smoke"
     | "watchdog";
   ok: boolean;
   detail?: string;
@@ -700,8 +700,8 @@ export interface HostExamRuntimeStatus {
   status?: HostExamRunStatus;
   config_generation?: number;
   admission_open: boolean;
-  active_workspaces: number;
-  max_workspaces?: number;
+  active_projects: number;
+  max_projects?: number;
   scheduled_stop_at?: string;
   cleanup_deadline_at?: string;
   hostname?: string;
@@ -722,11 +722,11 @@ export interface HostExamState {
 
 export interface HostExamConfigInput {
   enabled: boolean;
-  max_workspaces: number;
-  workspace_cpu: number;
-  workspace_memory_mb: number;
-  workspace_disk_mb: number;
-  workspace_ttl_minutes: number;
+  max_projects: number;
+  project_cpu: number;
+  project_memory_mb: number;
+  project_disk_mb: number;
+  project_ttl_minutes: number;
   cleanup_grace_minutes: number;
   terminal_enabled?: boolean;
   network_mode?: HostExamNetworkMode;

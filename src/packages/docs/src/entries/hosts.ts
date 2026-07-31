@@ -38,7 +38,7 @@ export const HOSTS_ENTRIES: DocsEntry[] = [
     id: "hosts.exam-scratchpads",
     image: docsIcon(
       "/public/docs/exam-scratchpad-301d1929.webp",
-      "A locked computational exam workspace with a notebook, timer, and disabled Internet access",
+      "A locked computational exam project with a notebook, timer, and disabled Internet access",
     ),
     lastReviewed: "2026-07-31",
     slug: "hosts/exam-scratchpads",

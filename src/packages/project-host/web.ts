@@ -214,9 +214,9 @@ function joinPage({
   </style>
 </head>
 <body><main>
-  <div class="eyebrow">Private computational workspace</div>
+  <div class="eyebrow">Private computational project</div>
   <h1>Exam Scratchpad</h1>
-  <p>Enter the token provided by your instructor. Your temporary workspace is erased automatically after the exam.</p>
+  <p>Enter the token provided by your instructor. Your temporary project is erased automatically after the exam.</p>
   ${
     admission_open
       ? `<form method="post" action="/exam/join">
@@ -224,7 +224,7 @@ function joinPage({
     <input id="token" name="token" type="password" autocomplete="off" required autofocus>
     <button type="submit">Open scratchpad</button>
   </form>`
-      : `<div class="closed">This exam is not accepting new workspaces.</div>`
+      : `<div class="closed">This exam is not accepting new projects.</div>`
   }
   ${escaped ? `<div class="error" role="alert">${escaped}</div>` : ""}
 </main></body></html>`;

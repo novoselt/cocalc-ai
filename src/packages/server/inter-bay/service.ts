@@ -2328,13 +2328,36 @@ async function startHostConnectionService(): Promise<void> {
         id,
       }),
     getHostExamState: async (opts) => await getHostExamState(opts),
-    setHostExamConfig: async (opts) => await setHostExamConfig(opts),
-    createHostExamRun: async (opts) => await createHostExamRun(opts),
-    rotateHostExamToken: async (opts) => await rotateHostExamToken(opts),
-    openHostExamRun: async (opts) => await openHostExamRun(opts),
-    updateHostExamDeadline: async (opts) => await updateHostExamDeadline(opts),
+    setHostExamConfig: async (opts) =>
+      await setHostExamConfig({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    createHostExamRun: async (opts) =>
+      await createHostExamRun({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    rotateHostExamToken: async (opts) =>
+      await rotateHostExamToken({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    openHostExamRun: async (opts) =>
+      await openHostExamRun({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    updateHostExamDeadline: async (opts) =>
+      await updateHostExamDeadline({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
     stopAndEraseHostExamRun: async (opts) =>
-      await stopAndEraseHostExamRun(opts),
+      await stopAndEraseHostExamRun({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
     listHostSshAuthorizedKeys: async ({ account_id, id }) =>
       await listHostSshAuthorizedKeys({
         account_id,

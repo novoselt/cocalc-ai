@@ -98,7 +98,7 @@ cocalc host bootstrap-status <host>
 
 ## Why this matters in CoCalc
 
-Project hosts make CoCalc more than a shared web editor. They let the workspace
+Project hosts make CoCalc more than a shared web editor. They let the project
 own real compute, run persistent services, use cloud machines economically, and
 give agents a stable Linux environment to work in.
 `;
@@ -106,8 +106,8 @@ give agents a stable Linux environment to work in.
 export const PROJECT_HOST_EXAMS_BODY = String.raw`
 ## A computational scratchpad for exams
 
-Exam mode turns a private, on-demand project host into a temporary browser-based
-computational scratchpad. Each browser session receives a clean anonymous CoCalc
+Exam Mode adds a temporary browser-based computational scratchpad service to a
+private, on-demand project host. Each browser session receives a clean anonymous CoCalc
 project with the exact RootFS and CPU, memory, and disk limits selected by the
 instructor.
 
@@ -126,12 +126,12 @@ lockdown browser or assessment platform; it does not replace one.
 When the instructor prepares a run, CoCalc freezes its configuration:
 
 - one stable student hostname suitable for a lockdown-browser allowlist
-- one exact RootFS image and digest for every workspace
-- fixed per-workspace CPU, memory, and disk quotas
-- a maximum number of simultaneous workspaces
+- one exact RootFS image and digest for every project
+- fixed per-project CPU, memory, and disk quotas
+- a maximum number of simultaneous projects
 - outbound project networking disabled and checked during readiness
 - terminal access either allowed or disabled for the entire run
-- backups and snapshots disabled for temporary workspaces
+- backups and snapshots disabled for temporary projects
 - a required automatic stop time
 
 The central CoCalc service remains the instructor control plane. Student files,
@@ -159,11 +159,11 @@ trusted host 30 to 60 minutes before candidates arrive.
 
 1. Open **Project Hosts**, select the private host, and open its **Exams** tab.
 2. Turn on **Enable exam mode**.
-3. Set **Maximum workspaces** to the largest number of browser sessions that may
+3. Set **Maximum projects** to the largest number of browser sessions that may
    be admitted. Leave headroom for instructor testing and accidental extra
    sessions.
-4. Set CPU, memory, and disk limits for each workspace.
-5. Set **Maximum run** to the longest permitted workspace lifetime.
+4. Set CPU, memory, and disk limits for each project.
+5. Set **Maximum run** to the longest permitted project lifetime.
 6. Set **Cleanup grace**. This is the spending-safety interval before forced
    VM poweroff if cleanup cannot complete; it is not additional candidate time.
 7. Decide whether to allow terminals. They are disabled by default. This choice
@@ -183,8 +183,8 @@ Outbound networking is fixed to **disabled** in the current version.
    readiness check is green.
 
 Preparation freezes the image digest and resource policy, creates a real smoke
-test workspace, starts a Jupyter kernel, checks the disabled-network policy and
-local cleanup machinery, and then erases the smoke-test workspace.
+test project, starts a Jupyter kernel, checks the disabled-network policy and
+local cleanup machinery, and then erases the smoke-test project.
 
 The panel displays a stable student URL and a newly generated shared token.
 Copy the token immediately and store it securely. Its plaintext is shown only
@@ -193,14 +193,14 @@ is ready, rotate it before opening admission.
 
 ## Step 3: run a candidate rehearsal
 
-1. Select **Open admission** only when new workspaces should be accepted.
+1. Select **Open admission** only when new projects should be accepted.
 2. Open the student URL in an incognito window or, preferably, a separate
    browser profile.
 3. Enter the shared token. The browser should open directly into a new anonymous
    project without a normal CoCalc sign-in.
 4. Create a Jupyter notebook and evaluate a simple expression such as
    \`2 + 2\`.
-5. Save and refresh the page. It should reconnect to the same workspace.
+5. Save and refresh the page. It should reconnect to the same project.
 6. Confirm that terminal controls match the run setting.
 7. Confirm that outbound networking fails from a notebook, for example:
 
@@ -210,10 +210,10 @@ urllib.request.urlopen("https://example.com", timeout=5)
 ~~~
 
 8. Return to the instructor panel, select **Refresh status**, and confirm that
-   the active workspace count increased.
-9. To test workspace isolation, repeat the token flow in a genuinely separate
+   the active project count increased.
+9. To test project isolation, repeat the token flow in a genuinely separate
    browser profile. Separate tabs or incognito windows in the same browser
-   session may share the same cookie and therefore the same workspace.
+   session may share the same cookie and therefore the same project.
 
 For the institutional rehearsal, use the exact operating system, lockdown
 browser configuration, RootFS, and expected concurrent load planned for the
@@ -222,7 +222,7 @@ real exam.
 ## Step 4: monitor and adjust the deadline
 
 While admission is open, the panel shows public-route health, the frozen RootFS,
-active workspace count, capacity, terminal policy, network policy, and stop
+active project count, capacity, terminal policy, network policy, and stop
 deadline. Refresh the panel during a rehearsal to confirm that candidate
 sessions appear.
 
@@ -233,13 +233,13 @@ cleanup grace is not working time.
 ## Step 5: end the run safely
 
 The normal end is automatic. At the deadline, admission closes, temporary
-workspaces are erased, and the VM powers off. A durable central reconciler and
+projects are erased, and the VM powers off. A durable central reconciler and
 a persisted host-local watchdog both enforce the deadline across service and
 VM restarts.
 
 For an early end, select **Stop and erase now** and confirm the destructive
 action. Do not manually stop the VM first: exam cleanup must erase candidate
-workspaces before the host powers off.
+projects before the host powers off.
 
 After cleanup:
 
@@ -252,9 +252,9 @@ The instructor can later start the same trusted host and prepare a new run.
 
 ## Data retention and recovery
 
-Exam workspaces are local-only projects. They are not normal global CoCalc
+Exam projects are local-only projects. They are not normal global CoCalc
 projects, and Rustic backups and project snapshots are disabled. TimeTravel
-works while a workspace exists because it is stored with the project files;
+works while a project exists because it is stored with the project files;
 it is erased with those files when the run ends.
 
 Candidates must copy anything they need to retain into the institution's
@@ -288,8 +288,8 @@ Thirty to sixty minutes before the exam:
 - start the trusted host and wait for it to become healthy
 - prepare a new run and require all readiness checks to pass
 - securely record the one-time shared token
-- test one candidate workspace using the actual lockdown browser
-- confirm the stop deadline and active-workspace capacity
+- test one candidate project using the actual lockdown browser
+- confirm the stop deadline and active-project capacity
 - open admission only when the room is ready
 
 Normal private-host CPU and network-egress billing is charged to the host owner.

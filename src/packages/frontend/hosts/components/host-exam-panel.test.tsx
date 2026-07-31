@@ -20,6 +20,7 @@ jest.mock("@cocalc/frontend/docs/navigation", () => ({
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
+    browser_id: "browser-1",
     conat_client: {
       hub: {
         hosts: {
@@ -95,6 +96,9 @@ describe("HostExamPanel", () => {
 
     await waitFor(() =>
       expect(mockRunFreshAuthAction).toHaveBeenCalledTimes(1),
+    );
+    expect(mockSetHostExamConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ browser_id: "browser-1" }),
     );
     expect(screen.queryByText(/fresh auth is required/)).toBeNull();
   });

@@ -2,7 +2,7 @@ jest.mock("./exam/controller", () => ({
   getExamBrowserSession: jest.fn(),
   getExamRunStatusLocal: jest.fn(() => ({
     admission_open: false,
-    active_workspaces: 0,
+    active_projects: 0,
   })),
   joinExamRun: jest.fn(),
 }));

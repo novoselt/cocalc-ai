@@ -39,11 +39,11 @@ import { openAppDocs } from "@cocalc/frontend/docs/navigation";
 
 const DEFAULT_CONFIG: HostExamConfigInput = {
   enabled: false,
-  max_workspaces: 100,
-  workspace_cpu: 1,
-  workspace_memory_mb: 2_000,
-  workspace_disk_mb: 5_000,
-  workspace_ttl_minutes: 360,
+  max_projects: 100,
+  project_cpu: 1,
+  project_memory_mb: 2_000,
+  project_disk_mb: 5_000,
+  project_ttl_minutes: 360,
   cleanup_grace_minutes: 10,
   terminal_enabled: false,
   network_mode: "disabled",
@@ -98,11 +98,11 @@ export function HostExamPanel({
       if (next.config) {
         setConfig({
           enabled: next.config.enabled,
-          max_workspaces: next.config.max_workspaces,
-          workspace_cpu: next.config.workspace_cpu,
-          workspace_memory_mb: next.config.workspace_memory_mb,
-          workspace_disk_mb: next.config.workspace_disk_mb,
-          workspace_ttl_minutes: next.config.workspace_ttl_minutes,
+          max_projects: next.config.max_projects,
+          project_cpu: next.config.project_cpu,
+          project_memory_mb: next.config.project_memory_mb,
+          project_disk_mb: next.config.project_disk_mb,
+          project_ttl_minutes: next.config.project_ttl_minutes,
           cleanup_grace_minutes: next.config.cleanup_grace_minutes,
           terminal_enabled: next.config.terminal_enabled,
           network_mode: "disabled",
@@ -171,7 +171,7 @@ export function HostExamPanel({
           message="Ephemeral exam scratchpads"
           description={
             <>
-              Students get anonymous local workspaces on this on-demand host.
+              Students get anonymous local projects on this on-demand host.
               Outbound project networking is disabled. Existing private-host
               billing applies.
               <br />
@@ -211,30 +211,30 @@ export function HostExamPanel({
             </Space>
             <Space wrap>
               <label>
-                Maximum workspaces
+                Maximum projects
                 <InputNumber
                   min={1}
                   max={1000}
-                  value={config.max_workspaces}
+                  value={config.max_projects}
                   onChange={(value) =>
                     setConfig((current) => ({
                       ...current,
-                      max_workspaces: Number(value ?? 1),
+                      max_projects: Number(value ?? 1),
                     }))
                   }
                 />
               </label>
               <label>
-                CPU per workspace
+                CPU per project
                 <InputNumber
                   min={0.1}
                   max={128}
                   step={0.5}
-                  value={config.workspace_cpu}
+                  value={config.project_cpu}
                   onChange={(value) =>
                     setConfig((current) => ({
                       ...current,
-                      workspace_cpu: Number(value ?? 1),
+                      project_cpu: Number(value ?? 1),
                     }))
                   }
                 />
@@ -243,11 +243,11 @@ export function HostExamPanel({
                 Memory (MB)
                 <InputNumber
                   min={256}
-                  value={config.workspace_memory_mb}
+                  value={config.project_memory_mb}
                   onChange={(value) =>
                     setConfig((current) => ({
                       ...current,
-                      workspace_memory_mb: Number(value ?? 256),
+                      project_memory_mb: Number(value ?? 256),
                     }))
                   }
                 />
@@ -256,11 +256,11 @@ export function HostExamPanel({
                 Disk (MB)
                 <InputNumber
                   min={1000}
-                  value={config.workspace_disk_mb}
+                  value={config.project_disk_mb}
                   onChange={(value) =>
                     setConfig((current) => ({
                       ...current,
-                      workspace_disk_mb: Number(value ?? 1000),
+                      project_disk_mb: Number(value ?? 1000),
                     }))
                   }
                 />
@@ -270,11 +270,11 @@ export function HostExamPanel({
                 <InputNumber
                   min={180}
                   max={2880}
-                  value={config.workspace_ttl_minutes}
+                  value={config.project_ttl_minutes}
                   onChange={(value) =>
                     setConfig((current) => ({
                       ...current,
-                      workspace_ttl_minutes: Number(value ?? 180),
+                      project_ttl_minutes: Number(value ?? 180),
                     }))
                   }
                 />
@@ -312,6 +312,7 @@ export function HostExamPanel({
                 void mutate(() =>
                   api.setHostExamConfig({
                     id: host.id,
+                    browser_id: webapp_client.browser_id,
                     config,
                   }),
                 )
@@ -354,6 +355,7 @@ export function HostExamPanel({
                   void mutate(() =>
                     api.createHostExamRun({
                       id: host.id,
+                      browser_id: webapp_client.browser_id,
                       rootfs_image: rootfsImage!,
                       scheduled_stop_at: deadline.toISOString(),
                       idempotency_key: idempotencyKey("create"),
@@ -396,8 +398,8 @@ export function HostExamPanel({
               <Descriptions.Item label="Deadline">
                 {dayjs(run.scheduled_stop_at).format("YYYY-MM-DD HH:mm Z")}
               </Descriptions.Item>
-              <Descriptions.Item label="Workspaces">
-                {runtime?.active_workspaces ?? 0} / {run.max_workspaces}
+              <Descriptions.Item label="Projects">
+                {runtime?.active_projects ?? 0} / {run.max_projects}
               </Descriptions.Item>
               <Descriptions.Item label="Terminal">
                 {run.terminal_enabled ? "allowed" : "disabled"}
@@ -448,6 +450,7 @@ export function HostExamPanel({
                       void mutate(() =>
                         api.openHostExamRun({
                           id: host.id,
+                          browser_id: webapp_client.browser_id,
                           run_id: run.run_id,
                           idempotency_key: idempotencyKey("open"),
                         }),
@@ -461,6 +464,7 @@ export function HostExamPanel({
                       void mutate(() =>
                         api.rotateHostExamToken({
                           id: host.id,
+                          browser_id: webapp_client.browser_id,
                           run_id: run.run_id,
                           idempotency_key: idempotencyKey("rotate"),
                         }),
@@ -484,6 +488,7 @@ export function HostExamPanel({
                       void mutate(() =>
                         api.updateHostExamDeadline({
                           id: host.id,
+                          browser_id: webapp_client.browser_id,
                           run_id: run.run_id,
                           scheduled_stop_at: deadline.toISOString(),
                           idempotency_key: idempotencyKey("deadline"),
@@ -497,14 +502,15 @@ export function HostExamPanel({
               )}
               {run.status !== "stopped" && (
                 <Popconfirm
-                  title="Erase all exam workspaces and stop this host?"
-                  description="This permanently deletes every temporary exam workspace."
+                  title="Erase all exam projects and stop this host?"
+                  description="This permanently deletes every temporary exam project."
                   okText="Erase and stop"
                   okButtonProps={{ danger: true }}
                   onConfirm={() =>
                     mutate(() =>
                       api.stopAndEraseHostExamRun({
                         id: host.id,
+                        browser_id: webapp_client.browser_id,
                         run_id: run.run_id,
                         stop_host: true,
                         idempotency_key: idempotencyKey("stop"),

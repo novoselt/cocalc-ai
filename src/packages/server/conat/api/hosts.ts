@@ -5045,11 +5045,16 @@ async function requireFreshExamMutation({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
 }: {
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
 }): Promise<string | undefined> {
+  if (internalAuth === HOST_DANGEROUS_INTERNAL_AUTH) {
+    return session_hash ?? undefined;
+  }
   const auth = await maybeRequireFreshAuthForInteractiveHostAction({
     account_id,
     browser_id: browser_id ?? undefined,
@@ -5087,12 +5092,14 @@ export async function setHostExamConfig({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   config,
 }: {
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   config: HostExamConfigInput;
 }): Promise<HostExamState> {
@@ -5100,6 +5107,7 @@ export async function setHostExamConfig({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5130,6 +5138,7 @@ export async function createHostExamRun({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   rootfs_image,
   scheduled_stop_at,
@@ -5138,6 +5147,7 @@ export async function createHostExamRun({
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   rootfs_image: string;
   scheduled_stop_at: string;
@@ -5147,6 +5157,7 @@ export async function createHostExamRun({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5184,6 +5195,7 @@ export async function rotateHostExamToken({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   run_id,
   idempotency_key,
@@ -5191,6 +5203,7 @@ export async function rotateHostExamToken({
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   run_id: string;
   idempotency_key: string;
@@ -5199,6 +5212,7 @@ export async function rotateHostExamToken({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5233,6 +5247,7 @@ export async function openHostExamRun({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   run_id,
   idempotency_key,
@@ -5240,6 +5255,7 @@ export async function openHostExamRun({
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   run_id: string;
   idempotency_key: string;
@@ -5248,6 +5264,7 @@ export async function openHostExamRun({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5273,6 +5290,7 @@ export async function updateHostExamDeadline({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   run_id,
   scheduled_stop_at,
@@ -5281,6 +5299,7 @@ export async function updateHostExamDeadline({
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   run_id: string;
   scheduled_stop_at: string;
@@ -5290,6 +5309,7 @@ export async function updateHostExamDeadline({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5318,6 +5338,7 @@ export async function stopAndEraseHostExamRun({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   run_id,
   stop_host = true,
@@ -5326,6 +5347,7 @@ export async function stopAndEraseHostExamRun({
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   run_id: string;
   stop_host?: boolean;
@@ -5335,6 +5357,7 @@ export async function stopAndEraseHostExamRun({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {

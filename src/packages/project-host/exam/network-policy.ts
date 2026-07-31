@@ -28,7 +28,7 @@ async function runPolicyCommand(args: string[]): Promise<void> {
 
 function validateProjectId(project_id: string): void {
   if (!isValidUUID(project_id)) {
-    throw new Error("invalid exam workspace project id");
+    throw new Error("invalid exam project id");
   }
 }
 
