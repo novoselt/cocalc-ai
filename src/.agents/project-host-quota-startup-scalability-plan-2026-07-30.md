@@ -9,6 +9,10 @@ Related plan:
 
 - `src/.agents/project-host-io-phase-2-plan-2026-07-29.md`
 
+Staging result:
+
+- `src/.agents/project-host-storage-scalability-staging-results-2026-07-30.md`
+
 ## Implementation and Staging Evidence
 
 ### Completed on 2026-07-30
@@ -133,19 +137,24 @@ block the core result, but BEES IOPS policy remains a separate follow-up.
 The following plan items are not complete and must not be implied by the
 staging latency result:
 
-- replace the process-local quota epoch with durable filesystem identity and
-  quota-mode epoch handling;
-- persist and verify stable Btrfs volume identity for applied ledger claims;
 - migrate every temporary quota raise to the durable override model;
 - complete operator diagnostics for desired/applied revision, identity, epoch,
   queue state, and fast-path status;
 - add or verify lifecycle-context guards for every unfiltered global Btrfs
   command;
 - decide whether BEES needs an explicit IOPS ceiling;
-- review all remaining recurring full-host loops and either bound, index, or
-  isolate them;
 - perform an explicit production-readiness review and obtain separate
   production authorization.
+
+Completed by `98ec785257` and qualified in the staging result:
+
+- durable filesystem identity and quota-mode epoch handling;
+- stable Btrfs volume identity for applied ledger claims;
+- one-time legacy inventory bootstrap keyed by filesystem UUID;
+- bounded persisted-cursor volume verification;
+- removal of the recurring full Btrfs inventory;
+- indexed/aggregate replacements for normal recurring full-project loops; and
+- an exact 10K-row/subvolume staging test and cleanup.
 
 ## Executive Decision
 
