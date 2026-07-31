@@ -104,6 +104,7 @@ function mapRun(row: any): HostExamRun {
     terminal_enabled: row.terminal_enabled === true,
     network_mode: "disabled",
     scheduled_stop_at: dateString(row.scheduled_stop_at)!,
+    stop_host_at_deadline: row.stop_host_at_deadline !== false,
     owner_account_id: row.owner_account_id,
     opened_at: dateString(row.opened_at) ?? null,
     admission_closed_at: dateString(row.admission_closed_at) ?? null,
@@ -192,6 +193,7 @@ async function ensureSchema(): Promise<void> {
           terminal_enabled BOOLEAN NOT NULL DEFAULT FALSE,
           network_mode TEXT NOT NULL DEFAULT 'disabled',
           scheduled_stop_at TIMESTAMPTZ NOT NULL,
+          stop_host_at_deadline BOOLEAN NOT NULL DEFAULT TRUE,
           owner_account_id UUID NOT NULL,
           opened_at TIMESTAMPTZ,
           admission_closed_at TIMESTAMPTZ,
@@ -216,6 +218,20 @@ async function ensureSchema(): Promise<void> {
       await getPool().query(`
         ALTER TABLE ${RUN_TABLE}
           ALTER COLUMN max_projects SET NOT NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${RUN_TABLE}
+          ADD COLUMN IF NOT EXISTS stop_host_at_deadline BOOLEAN DEFAULT TRUE
+      `);
+      await getPool().query(`
+        UPDATE ${RUN_TABLE}
+        SET stop_host_at_deadline=TRUE
+        WHERE stop_host_at_deadline IS NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${RUN_TABLE}
+          ALTER COLUMN stop_host_at_deadline SET DEFAULT TRUE,
+          ALTER COLUMN stop_host_at_deadline SET NOT NULL
       `);
       // The shared schema synchronizer creates declared timestamp fields before
       // this feature-specific schema initializer runs. Those generic columns are
@@ -704,12 +720,14 @@ export async function createExamRunLocal({
   actor_account_id,
   rootfs_image,
   scheduled_stop_at,
+  stop_host_at_deadline = true,
   idempotency_key,
 }: {
   host: ExamHostRow;
   actor_account_id: string;
   rootfs_image: string;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
   idempotency_key: string;
 }): Promise<{ run: HostExamRun; token: string }> {
   await ensureSchema();
@@ -778,11 +796,12 @@ export async function createExamRunLocal({
         run_id, host_id, config_generation, status, token_hash,
         create_idempotency_key, token_idempotency_key, rootfs_image,
         rootfs_digest, run_quota, max_projects, terminal_enabled,
-        network_mode, scheduled_stop_at, owner_account_id, created_by
+        network_mode, scheduled_stop_at, stop_host_at_deadline,
+        owner_account_id, created_by
       )
       VALUES (
         $1, $2, $3, 'preparing', $4, $5, $5, $6, $7, $8::JSONB,
-        $9, $10, 'disabled', $11, $12, $13
+        $9, $10, 'disabled', $11, $12, $13, $14
       )
       RETURNING *
     `,
@@ -798,6 +817,7 @@ export async function createExamRunLocal({
       config.max_projects,
       config.terminal_enabled,
       deadline,
+      stop_host_at_deadline !== false,
       ownerAccountId(host),
       actor_account_id,
     ],
@@ -912,10 +932,12 @@ export async function updateExamDeadlineLocal({
   host,
   run_id,
   scheduled_stop_at,
+  stop_host_at_deadline,
 }: {
   host: ExamHostRow;
   run_id: string;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
 }): Promise<HostExamRun> {
   const [run, config] = await Promise.all([
     requireRunForMutation({ host_id: host.id, run_id }),
@@ -942,15 +964,16 @@ export async function updateExamDeadlineLocal({
     run_id,
     config_generation: run.config_generation,
     scheduled_stop_at: deadline,
+    stop_host_at_deadline: stop_host_at_deadline ?? run.stop_host_at_deadline,
   });
   const { rows } = await getPool().query(
     `
       UPDATE ${RUN_TABLE}
-      SET scheduled_stop_at=$2, updated_at=NOW()
+      SET scheduled_stop_at=$2, stop_host_at_deadline=$3, updated_at=NOW()
       WHERE run_id=$1
       RETURNING *
     `,
-    [run_id, deadline],
+    [run_id, deadline, stop_host_at_deadline ?? run.stop_host_at_deadline],
   );
   return mapRun(rows[0]);
 }
@@ -1067,6 +1090,7 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
         public_url: row.public_url,
         metadata: row.metadata,
       };
+      const stopHostAtDeadline = row.stop_host_at_deadline !== false;
       await db.query("BEGIN");
       try {
         await db.query(
@@ -1079,19 +1103,21 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
           `,
           [row.run_id],
         );
-        await db.query(
-          `
-            UPDATE project_hosts
-            SET metadata=jsonb_set(
-              COALESCE(metadata, '{}'::JSONB),
-              '{desired_state}',
-              '"stopped"'::JSONB,
-              true
-            )
-            WHERE id=$1
-          `,
-          [row.host_id],
-        );
+        if (stopHostAtDeadline) {
+          await db.query(
+            `
+              UPDATE project_hosts
+              SET metadata=jsonb_set(
+                COALESCE(metadata, '{}'::JSONB),
+                '{desired_state}',
+                '"stopped"'::JSONB,
+                true
+              )
+              WHERE id=$1
+            `,
+            [row.host_id],
+          );
+        }
         await db.query("COMMIT");
       } catch (err) {
         await db.query("ROLLBACK");
@@ -1100,14 +1126,16 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
       await stopAndEraseExamRunLocal({
         host,
         run_id: row.run_id,
-        poweroff: true,
+        poweroff: stopHostAtDeadline,
       });
-      const { stopHostInternal } =
-        await import("@cocalc/server/conat/api/hosts");
-      await stopHostInternal({
-        id: row.host_id,
-        account_id: row.owner_account_id,
-      });
+      if (stopHostAtDeadline) {
+        const { stopHostInternal } =
+          await import("@cocalc/server/conat/api/hosts");
+        await stopHostInternal({
+          id: row.host_id,
+          account_id: row.owner_account_id,
+        });
+      }
     } catch (err) {
       logger.error("scheduled exam cleanup failed", {
         host_id: row.host_id,
@@ -1124,7 +1152,7 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
       );
       void adminAlert({
         subject: `Exam cleanup failed on ${row.name ?? row.host_id}`,
-        body: `Run ${row.run_id} reached its deadline but cleanup or host stop failed:\n\n${err}`,
+        body: `Run ${row.run_id} reached its deadline but cleanup${row.stop_host_at_deadline !== false ? " or host stop" : ""} failed:\n\n${err}`,
         dedupMinutes: 15,
       });
     } finally {

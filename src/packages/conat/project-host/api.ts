@@ -541,6 +541,7 @@ export interface HostControlApi {
     run_id: string;
     config_generation: number;
     scheduled_stop_at: string;
+    stop_host_at_deadline?: boolean;
   }) => Promise<HostExamRuntimeStatus>;
   rotateExamRunToken: (opts: {
     run_id: string;

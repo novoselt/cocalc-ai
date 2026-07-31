@@ -132,7 +132,8 @@ When the instructor prepares a run, CoCalc freezes its configuration:
 - outbound project networking disabled and checked during readiness
 - terminal access either allowed or disabled for the entire run
 - backups and snapshots disabled for temporary projects
-- a required automatic stop time
+- a required automatic project-deletion time
+- optional project-host shutdown after cleanup, enabled by default
 
 The central CoCalc service remains the instructor control plane. Student files,
 Jupyter kernels, browser traffic, and other project traffic go directly to the
@@ -197,10 +198,12 @@ Outbound networking is fixed to **disabled** in the current version.
 
 1. Start the host and wait until it reports **running** and online.
 2. In the **Exams** tab, select a cached RootFS.
-3. Choose the required automatic stop date and time. Allow enough time for the
-   rehearsal as well as the candidate session.
-4. Select **Prepare and test run** and complete fresh authentication.
-5. Wait for the run to reach **ready**. Do not open admission unless every
+3. Choose **Delete all exam projects at**. Allow enough time for the rehearsal
+   as well as the candidate session.
+4. Leave **Also shut down the project host to save resources** selected unless
+   the host should remain running for unrelated work after exam cleanup.
+5. Select **Prepare and test run** and complete fresh authentication.
+6. Wait for the run to reach **ready**. Do not open admission unless every
    readiness check is green.
 
 Preparation freezes the image digest and resource policy, creates a real smoke
@@ -240,33 +243,38 @@ For the institutional rehearsal, use the exact operating system, lockdown
 browser configuration, RootFS, and expected concurrent load planned for the
 real exam.
 
-## Step 4: monitor and adjust the deadline
+## Step 4: monitor and adjust cleanup
 
 While admission is open, the panel shows public-route health, the frozen RootFS,
-active project count, capacity, terminal policy, network policy, and stop
-deadline. Refresh the panel during a rehearsal to confirm that candidate
-sessions appear.
+active project count, capacity, terminal policy, network policy, the time when
+all exam projects will be deleted, and whether the project host will then shut
+down. Refresh the panel during a rehearsal to confirm that candidate sessions
+appear.
 
-The instructor may move the deadline while the run is ready or open. Updating
-it requires fresh authentication. Treat the displayed deadline as authoritative;
+The instructor may move the cleanup time or change the subsequent host-shutdown
+choice while the run is ready or open. Updating either requires fresh
+authentication. Treat the displayed project-deletion time as authoritative;
 cleanup grace is not working time.
 
 ## Step 5: end the run safely
 
-The normal end is automatic. At the deadline, admission closes, temporary
-projects are erased, and the VM powers off. A durable central reconciler and
-a persisted host-local watchdog both enforce the deadline across service and
-VM restarts.
+The normal end is automatic. At the configured time, admission closes and all
+temporary projects are erased. If **Also shut down the project host to save
+resources** is selected, the VM then powers off; otherwise the reusable host
+keeps running. A durable central reconciler and a persisted host-local watchdog
+both enforce cleanup across service and VM restarts.
 
-For an early end, select **Stop and erase now** and confirm the destructive
-action. Do not manually stop the VM first: exam cleanup must erase candidate
-projects before the host powers off.
+For an early end, select **End exam and erase now** and confirm the destructive
+action. The same checkbox determines whether the host also shuts down. Do not
+manually stop the VM first: exam cleanup must erase candidate projects before
+any host shutdown.
 
 After cleanup:
 
 - candidate projects and their TimeTravel history are gone
 - anonymous local session records are gone
-- the VM is off, so compute billing stops
+- the VM is off and compute billing stops when automatic host shutdown was
+  selected; otherwise the host remains available for its normal projects
 - the reusable project-host record, disk, hostname, and cached RootFS remain
 
 The instructor can later start the same trusted host and prepare a new run.
@@ -310,7 +318,8 @@ Thirty to sixty minutes before the exam:
 - prepare a new run and require all readiness checks to pass
 - securely record the one-time shared token
 - test one candidate project using the actual lockdown browser
-- confirm the stop deadline and active-project capacity
+- confirm the project-deletion time, host-shutdown choice, and active-project
+  capacity
 - open admission only when the room is ready
 
 Normal private-host CPU and network-egress billing is charged to the host owner.

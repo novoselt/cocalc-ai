@@ -66,7 +66,11 @@ Table({
     },
     scheduled_stop_at: {
       type: "timestamp",
-      desc: "Mandatory deadline for admission closure, cleanup, and VM stop.",
+      desc: "Mandatory deadline for admission closure and project cleanup.",
+    },
+    stop_host_at_deadline: {
+      type: "boolean",
+      desc: "Whether the reusable project host also shuts down after deadline cleanup.",
     },
     owner_account_id: {
       type: "uuid",

@@ -7,6 +7,7 @@ import { assessExamHostCapacity, HostExamPanel } from "./host-exam-panel";
 
 const mockGetHostExamState = jest.fn(async () => ({ eligible: true }));
 const mockSetHostExamConfig = jest.fn();
+const mockCreateHostExamRun = jest.fn();
 const mockRunFreshAuthAction = jest.fn(
   async (action: () => Promise<unknown>) => {
     await action();
@@ -26,6 +27,7 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
         hosts: {
           getHostExamState: (...args: any[]) => mockGetHostExamState(...args),
           setHostExamConfig: (...args: any[]) => mockSetHostExamConfig(...args),
+          createHostExamRun: (...args: any[]) => mockCreateHostExamRun(...args),
         },
       },
     },
@@ -41,9 +43,29 @@ jest.mock("@cocalc/frontend/auth/fresh-auth", () => ({
 }));
 
 describe("HostExamPanel", () => {
+  const savedConfig = {
+    host_id: "host-1",
+    enabled: true,
+    hostname: "exam-host-1.example.test",
+    generation: 1,
+    max_projects: 100,
+    project_cpu: 1,
+    project_memory_mb: 2_000,
+    project_disk_mb: 5_000,
+    project_ttl_minutes: 360,
+    cleanup_grace_minutes: 10,
+    terminal_enabled: false,
+    network_mode: "disabled" as const,
+    created_at: "2026-07-31T00:00:00.000Z",
+    updated_at: "2026-07-31T00:00:00.000Z",
+    created_by: "account-1",
+    updated_by: "account-1",
+  };
+
   beforeEach(() => {
     mockGetHostExamState.mockClear();
     mockSetHostExamConfig.mockReset();
+    mockCreateHostExamRun.mockReset();
     mockRunFreshAuthAction.mockReset();
     mockRunFreshAuthAction.mockImplementation(
       async (action: () => Promise<unknown>) => {
@@ -125,6 +147,99 @@ describe("HostExamPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("only enables configuration saving after a field changes", async () => {
+    mockGetHostExamState.mockResolvedValueOnce({
+      eligible: true,
+      config: savedConfig,
+    });
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[]}
+      />,
+    );
+
+    const save = screen.getByRole("button", { name: "Save configuration" });
+    await waitFor(() => expect(save).toBeDisabled());
+
+    fireEvent.change(screen.getAllByRole("spinbutton")[0], {
+      target: { value: "101" },
+    });
+    expect(save).toBeEnabled();
+  });
+
+  it("labels cleanup and defaults to shutting down the host", async () => {
+    mockGetHostExamState.mockResolvedValueOnce({
+      eligible: true,
+      config: savedConfig,
+    });
+    mockCreateHostExamRun.mockResolvedValue({
+      eligible: true,
+      config: savedConfig,
+    });
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[
+          {
+            image: "cocalc.local/rootfs/exam",
+            digest: "sha256:abc",
+          } as any,
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Delete all exam projects at")).toBeInTheDocument();
+    const shutdown = screen.getByRole("checkbox", {
+      name: "Also shut down the project host to save resources",
+    });
+    expect(shutdown).toBeChecked();
+    const prepare = screen.getByRole("button", {
+      name: "Prepare and test run",
+    });
+    await waitFor(() => expect(prepare).toBeEnabled());
+    fireEvent.click(shutdown);
+    expect(shutdown).not.toBeChecked();
+    fireEvent.click(prepare);
+    await waitFor(() => expect(mockCreateHostExamRun).toHaveBeenCalled());
+    expect(mockCreateHostExamRun).toHaveBeenCalledWith(
+      expect.objectContaining({ stop_host_at_deadline: false }),
+    );
+  });
+
+  it("does not present a stopped historical run as the current run", async () => {
+    mockGetHostExamState.mockResolvedValueOnce({
+      eligible: true,
+      config: savedConfig,
+      run: {
+        run_id: "stopped-run",
+        status: "stopped",
+        rootfs_image: "cocalc.local/rootfs/exam",
+        scheduled_stop_at: "2026-07-30T00:00:00.000Z",
+        stop_host_at_deadline: true,
+      },
+    });
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[
+          {
+            image: "cocalc.local/rootfs/exam",
+            digest: "sha256:abc",
+          } as any,
+        ]}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Prepare and test run" }),
+      ).toBeEnabled(),
+    );
+    expect(screen.queryByText("Current run")).not.toBeInTheDocument();
+    expect(screen.queryByText("stopped")).not.toBeInTheDocument();
+  });
+
   it("leaves fresh-auth challenges for the fresh-auth flow", async () => {
     const freshAuthError = Object.assign(new Error("fresh auth is required"), {
       code: "fresh_auth_required",
@@ -147,7 +262,9 @@ describe("HostExamPanel", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    const save = screen.getByRole("button", { name: "Save configuration" });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save);
 
     await waitFor(() =>
       expect(mockRunFreshAuthAction).toHaveBeenCalledTimes(1),

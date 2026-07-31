@@ -669,6 +669,7 @@ export interface HostExamRun {
   terminal_enabled: boolean;
   network_mode: HostExamNetworkMode;
   scheduled_stop_at: string;
+  stop_host_at_deadline: boolean;
   owner_account_id: string;
   opened_at?: string | null;
   admission_closed_at?: string | null;
@@ -703,6 +704,7 @@ export interface HostExamRuntimeStatus {
   active_projects: number;
   max_projects?: number;
   scheduled_stop_at?: string;
+  stop_host_at_deadline?: boolean;
   cleanup_deadline_at?: string;
   hostname?: string;
   terminal_enabled?: boolean;
@@ -1931,6 +1933,7 @@ export interface Hosts {
     id: string;
     rootfs_image: string;
     scheduled_stop_at: string;
+    stop_host_at_deadline?: boolean;
     idempotency_key: string;
   }) => Promise<HostExamState & { token: string }>;
   rotateHostExamToken: (opts: {
@@ -1956,6 +1959,7 @@ export interface Hosts {
     id: string;
     run_id: string;
     scheduled_stop_at: string;
+    stop_host_at_deadline?: boolean;
     idempotency_key: string;
   }) => Promise<HostExamState>;
   stopAndEraseHostExamRun: (opts: {

@@ -5142,6 +5142,7 @@ export async function createHostExamRun({
   id,
   rootfs_image,
   scheduled_stop_at,
+  stop_host_at_deadline,
   idempotency_key,
 }: {
   account_id?: string;
@@ -5151,6 +5152,7 @@ export async function createHostExamRun({
   id: string;
   rootfs_image: string;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
   idempotency_key: string;
 }): Promise<HostExamState & { token: string }> {
   const freshSessionHash = await requireFreshExamMutation({
@@ -5170,6 +5172,7 @@ export async function createHostExamRun({
         id,
         rootfs_image,
         scheduled_stop_at,
+        stop_host_at_deadline,
         idempotency_key,
       });
   }
@@ -5183,6 +5186,7 @@ export async function createHostExamRun({
     actor_account_id: requireAccount(account_id),
     rootfs_image,
     scheduled_stop_at,
+    stop_host_at_deadline,
     idempotency_key,
   });
   return {
@@ -5294,6 +5298,7 @@ export async function updateHostExamDeadline({
   id,
   run_id,
   scheduled_stop_at,
+  stop_host_at_deadline,
   idempotency_key,
 }: {
   account_id?: string;
@@ -5303,6 +5308,7 @@ export async function updateHostExamDeadline({
   id: string;
   run_id: string;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
   idempotency_key: string;
 }): Promise<HostExamState> {
   const freshSessionHash = await requireFreshExamMutation({
@@ -5322,6 +5328,7 @@ export async function updateHostExamDeadline({
         id,
         run_id,
         scheduled_stop_at,
+        stop_host_at_deadline,
         idempotency_key,
       });
   }
@@ -5330,7 +5337,12 @@ export async function updateHostExamDeadline({
     account_id,
     require_entitlement: true,
   });
-  await updateExamDeadlineLocal({ host: row, run_id, scheduled_stop_at });
+  await updateExamDeadlineLocal({
+    host: row,
+    run_id,
+    scheduled_stop_at,
+    stop_host_at_deadline,
+  });
   return await getExamStateLocal({ host: row, eligible: true });
 }
 

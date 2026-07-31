@@ -133,6 +133,7 @@ function normalizeExamRun(raw: HostExamRun | Record<string, any>): HostExamRun {
   return {
     ...raw,
     max_projects: Number(raw.max_projects ?? legacy.max_workspaces),
+    stop_host_at_deadline: raw.stop_host_at_deadline !== false,
   } as HostExamRun;
 }
 
@@ -236,6 +237,7 @@ function runtimeStatus(row?: LocalExamRunRow): HostExamRuntimeStatus {
     active_projects: activeProjectCount(row.run_id),
     max_projects: run.max_projects,
     scheduled_stop_at: new Date(row.scheduled_stop_at_ms).toISOString(),
+    stop_host_at_deadline: run.stop_host_at_deadline,
     cleanup_deadline_at: new Date(row.cleanup_deadline_at_ms).toISOString(),
     hostname: config.hostname,
     terminal_enabled: run.terminal_enabled,
@@ -660,10 +662,12 @@ export function updateExamRunDeadlineLocal({
   run_id,
   config_generation,
   scheduled_stop_at,
+  stop_host_at_deadline,
 }: {
   run_id: string;
   config_generation: number;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
 }): HostExamRuntimeStatus {
   const row = assertRunIdentity({ run_id, config_generation });
   const { config, run } = decodeRun(row);
@@ -672,6 +676,8 @@ export function updateExamRunDeadlineLocal({
     throw new Error("exam deadline must be in the future");
   }
   run.scheduled_stop_at = new Date(deadline).toISOString();
+  run.stop_host_at_deadline =
+    stop_host_at_deadline ?? run.stop_host_at_deadline;
   getDatabase()
     .prepare(
       `UPDATE exam_runs
@@ -849,7 +855,7 @@ async function reconcileDeadline(): Promise<void> {
     await closeAndCleanupExamRunLocal({
       run_id: row.run_id,
       config_generation: row.config_generation,
-      poweroff: true,
+      poweroff: decodeRun(row).run.stop_host_at_deadline,
     });
   } catch (err) {
     logger.error("local exam deadline cleanup failed", {
@@ -857,7 +863,10 @@ async function reconcileDeadline(): Promise<void> {
       cleanup_deadline_at: new Date(row.cleanup_deadline_at_ms).toISOString(),
       err: `${err}`,
     });
-    if (Date.now() >= row.cleanup_deadline_at_ms) {
+    if (
+      decodeRun(row).run.stop_host_at_deadline &&
+      Date.now() >= row.cleanup_deadline_at_ms
+    ) {
       await privilegedExamCommand("poweroff-exam-host", row.run_id);
     }
   }

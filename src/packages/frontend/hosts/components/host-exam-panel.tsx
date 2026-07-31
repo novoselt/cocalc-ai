@@ -7,6 +7,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   DatePicker,
   Descriptions,
   Divider,
@@ -26,6 +27,7 @@ import dayjs, { type Dayjs } from "dayjs";
 import { useEffect, useState } from "@cocalc/frontend/app-framework";
 import type {
   Host,
+  HostExamConfig,
   HostExamConfigInput,
   HostExamState,
   HostRootfsImage,
@@ -56,6 +58,44 @@ const DEFAULT_CONFIG: HostExamConfigInput = {
 const RECOMMENDED_EXAM_CPU = 8;
 const SUBSTANTIALLY_LOW_CPU = 4;
 const SUBSTANTIALLY_LOW_RAM_RATIO = 0.4;
+
+function defaultExamDeadline(projectTtlMinutes: number): Dayjs {
+  // Keep clear of both server boundaries: at least one minute ahead and no
+  // later than the configured maximum run measured from request time.
+  const minutes = Math.max(2, Math.min(360, projectTtlMinutes - 1));
+  return dayjs().add(minutes, "minute").startOf("minute");
+}
+
+function editableExamConfig(config: HostExamConfig): HostExamConfigInput {
+  return {
+    enabled: config.enabled,
+    max_projects: config.max_projects,
+    project_cpu: config.project_cpu,
+    project_memory_mb: config.project_memory_mb,
+    project_disk_mb: config.project_disk_mb,
+    project_ttl_minutes: config.project_ttl_minutes,
+    cleanup_grace_minutes: config.cleanup_grace_minutes,
+    terminal_enabled: config.terminal_enabled,
+    network_mode: "disabled",
+  };
+}
+
+function sameExamConfig(
+  left: HostExamConfigInput,
+  right: HostExamConfigInput,
+): boolean {
+  return (
+    left.enabled === right.enabled &&
+    left.max_projects === right.max_projects &&
+    left.project_cpu === right.project_cpu &&
+    left.project_memory_mb === right.project_memory_mb &&
+    left.project_disk_mb === right.project_disk_mb &&
+    left.project_ttl_minutes === right.project_ttl_minutes &&
+    left.cleanup_grace_minutes === right.cleanup_grace_minutes &&
+    !!left.terminal_enabled === !!right.terminal_enabled &&
+    (left.network_mode ?? "disabled") === (right.network_mode ?? "disabled")
+  );
+}
 
 export type ExamHostCapacityAssessment = {
   level: "success" | "close" | "warning" | "unknown";
@@ -182,9 +222,10 @@ export function HostExamPanel({
   const [state, setState] = useState<HostExamState>();
   const [config, setConfig] = useState<HostExamConfigInput>(DEFAULT_CONFIG);
   const [rootfsImage, setRootfsImage] = useState<string>();
-  const [deadline, setDeadline] = useState<Dayjs>(
-    dayjs().add(6, "hour").startOf("minute"),
+  const [deadline, setDeadline] = useState<Dayjs>(() =>
+    defaultExamDeadline(DEFAULT_CONFIG.project_ttl_minutes),
   );
+  const [stopHostAtDeadline, setStopHostAtDeadline] = useState(true);
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -198,21 +239,23 @@ export function HostExamPanel({
       const next = await api.getHostExamState({ id: host.id });
       setState(next);
       if (next.config) {
-        setConfig({
-          enabled: next.config.enabled,
-          max_projects: next.config.max_projects,
-          project_cpu: next.config.project_cpu,
-          project_memory_mb: next.config.project_memory_mb,
-          project_disk_mb: next.config.project_disk_mb,
-          project_ttl_minutes: next.config.project_ttl_minutes,
-          cleanup_grace_minutes: next.config.cleanup_grace_minutes,
-          terminal_enabled: next.config.terminal_enabled,
-          network_mode: "disabled",
-        });
+        setConfig(editableExamConfig(next.config));
       }
-      if (next.run) {
+      if (next.run && next.run.status !== "stopped") {
         setRootfsImage(next.run.rootfs_image);
         setDeadline(dayjs(next.run.scheduled_stop_at));
+        setStopHostAtDeadline(next.run.stop_host_at_deadline !== false);
+      } else {
+        if (next.run?.rootfs_image) {
+          setRootfsImage(next.run.rootfs_image);
+        }
+        setDeadline(
+          defaultExamDeadline(
+            next.config?.project_ttl_minutes ??
+              DEFAULT_CONFIG.project_ttl_minutes,
+          ),
+        );
+        setStopHostAtDeadline(true);
       }
     } catch (err) {
       setError(`${(err as Error)?.message ?? err}`);
@@ -250,27 +293,46 @@ export function HostExamPanel({
         message.success("Exam host updated");
       }
     } catch (err) {
-      setError(`${(err as Error)?.message ?? err}`);
+      const text = `${(err as Error)?.message ?? err}`;
+      setError(text);
+      message.error(text);
     }
   };
 
   const run = state?.run;
   const runtime = state?.runtime;
   const hasActiveRun = !!run && run.status !== "stopped";
+  const configDirty =
+    state != null &&
+    (!state.config ||
+      !sameExamConfig(config, editableExamConfig(state.config)));
   const selectedRootfsIsReady = rootfsImages.some(
     (entry) => entry.image === rootfsImage && !!entry.digest,
   );
+  const now = Date.now();
+  const earliestDeadline = now + 60_000;
+  const latestDeadline = now + config.project_ttl_minutes * 60_000;
+  const deadlineTooSoon = deadline.valueOf() < earliestDeadline;
+  const deadlineTooLate = deadline.valueOf() > latestDeadline;
   const prepareBlockers = [
     !config.enabled ? "Enable and save exam mode." : undefined,
+    configDirty ? "Save the exam configuration changes." : undefined,
     host.status !== "running" ? "Start the project host." : undefined,
     !selectedRootfsIsReady
       ? "Select a cached RootFS that has a digest."
       : undefined,
-    deadline.valueOf() <= Date.now()
-      ? "Choose an automatic stop time in the future."
+    deadlineTooSoon
+      ? "Choose a project-deletion time at least one minute in the future."
+      : undefined,
+    deadlineTooLate
+      ? `Choose a project-deletion time within the configured ${config.project_ttl_minutes}-minute maximum run.`
       : undefined,
   ].filter((value): value is string => !!value);
   const canPrepare = !hasActiveRun && prepareBlockers.length === 0;
+  const runScheduleDirty =
+    !!run &&
+    (dayjs(run.scheduled_stop_at).valueOf() !== deadline.valueOf() ||
+      (run.stop_host_at_deadline !== false) !== stopHostAtDeadline);
 
   return (
     <Spin spinning={loading}>
@@ -421,7 +483,9 @@ export function HostExamPanel({
             </Space>
             <Button
               type="primary"
-              disabled={hasActiveRun || state?.eligible === false}
+              disabled={
+                hasActiveRun || state?.eligible === false || !configDirty
+              }
               onClick={() =>
                 void mutate(() =>
                   api.setHostExamConfig({
@@ -456,14 +520,29 @@ export function HostExamPanel({
                     label: `${entry.image} (${entry.digest?.slice(0, 18)}...)`,
                   }))}
               />
-              <DatePicker
-                showTime
-                showNow={false}
-                value={deadline}
-                onChange={(value) => value && setDeadline(value)}
-                minDate={dayjs()}
-                status={deadline.valueOf() <= Date.now() ? "error" : undefined}
-              />
+              <Space wrap align="center">
+                <Typography.Text strong>
+                  Delete all exam projects at
+                </Typography.Text>
+                <DatePicker
+                  showTime
+                  showNow={false}
+                  value={deadline}
+                  onChange={(value) => value && setDeadline(value)}
+                  minDate={dayjs()}
+                  status={
+                    deadlineTooSoon || deadlineTooLate ? "error" : undefined
+                  }
+                />
+              </Space>
+              <Checkbox
+                checked={stopHostAtDeadline}
+                onChange={(event) =>
+                  setStopHostAtDeadline(event.target.checked)
+                }
+              >
+                Also shut down the project host to save resources
+              </Checkbox>
               {prepareBlockers.length > 0 && (
                 <Alert
                   type="info"
@@ -482,6 +561,7 @@ export function HostExamPanel({
                       browser_id: webapp_client.browser_id,
                       rootfs_image: rootfsImage!,
                       scheduled_stop_at: deadline.toISOString(),
+                      stop_host_at_deadline: stopHostAtDeadline,
                       idempotency_key: idempotencyKey("create"),
                     }),
                   )
@@ -493,7 +573,7 @@ export function HostExamPanel({
           </Card>
         )}
 
-        {run && (
+        {hasActiveRun && run && (
           <Card
             size="small"
             title={
@@ -519,8 +599,13 @@ export function HostExamPanel({
               <Descriptions.Item label="RootFS">
                 <code>{run.rootfs_image}</code>
               </Descriptions.Item>
-              <Descriptions.Item label="Deadline">
+              <Descriptions.Item label="All exam projects deleted at">
                 {dayjs(run.scheduled_stop_at).format("YYYY-MM-DD HH:mm Z")}
+              </Descriptions.Item>
+              <Descriptions.Item label="Project host afterward">
+                {run.stop_host_at_deadline !== false
+                  ? "shuts down to save resources"
+                  : "keeps running"}
               </Descriptions.Item>
               <Descriptions.Item label="Projects">
                 {runtime?.active_projects ?? 0} / {run.max_projects}
@@ -601,13 +686,33 @@ export function HostExamPanel({
               )}
               {(run.status === "ready" || run.status === "open") && (
                 <>
-                  <DatePicker
-                    showTime
-                    value={deadline}
-                    onChange={(value) => value && setDeadline(value)}
-                    minDate={dayjs()}
-                  />
+                  <Space wrap align="center">
+                    <Typography.Text strong>
+                      Delete all exam projects at
+                    </Typography.Text>
+                    <DatePicker
+                      showTime
+                      showNow={false}
+                      value={deadline}
+                      onChange={(value) => value && setDeadline(value)}
+                      minDate={dayjs()}
+                      status={
+                        deadlineTooSoon || deadlineTooLate ? "error" : undefined
+                      }
+                    />
+                  </Space>
+                  <Checkbox
+                    checked={stopHostAtDeadline}
+                    onChange={(event) =>
+                      setStopHostAtDeadline(event.target.checked)
+                    }
+                  >
+                    Also shut down the project host to save resources
+                  </Checkbox>
                   <Button
+                    disabled={
+                      !runScheduleDirty || deadlineTooSoon || deadlineTooLate
+                    }
                     onClick={() =>
                       void mutate(() =>
                         api.updateHostExamDeadline({
@@ -615,20 +720,29 @@ export function HostExamPanel({
                           browser_id: webapp_client.browser_id,
                           run_id: run.run_id,
                           scheduled_stop_at: deadline.toISOString(),
+                          stop_host_at_deadline: stopHostAtDeadline,
                           idempotency_key: idempotencyKey("deadline"),
                         }),
                       )
                     }
                   >
-                    Update deadline
+                    Update cleanup time
                   </Button>
                 </>
               )}
               {run.status !== "stopped" && (
                 <Popconfirm
-                  title="Erase all exam projects and stop this host?"
-                  description="This permanently deletes every temporary exam project."
-                  okText="Erase and stop"
+                  title={
+                    stopHostAtDeadline
+                      ? "Erase all exam projects and shut down this host?"
+                      : "Erase all exam projects now?"
+                  }
+                  description={
+                    stopHostAtDeadline
+                      ? "This permanently deletes every temporary exam project, then shuts down the project host."
+                      : "This permanently deletes every temporary exam project but leaves the project host running."
+                  }
+                  okText={stopHostAtDeadline ? "Erase and shut down" : "Erase"}
                   okButtonProps={{ danger: true }}
                   onConfirm={() =>
                     mutate(() =>
@@ -636,13 +750,13 @@ export function HostExamPanel({
                         id: host.id,
                         browser_id: webapp_client.browser_id,
                         run_id: run.run_id,
-                        stop_host: true,
+                        stop_host: stopHostAtDeadline,
                         idempotency_key: idempotencyKey("stop"),
                       }),
                     )
                   }
                 >
-                  <Button danger>Stop and erase now</Button>
+                  <Button danger>End exam and erase now</Button>
                 </Popconfirm>
               )}
             </Space>
