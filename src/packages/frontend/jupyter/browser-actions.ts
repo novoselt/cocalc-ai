@@ -205,6 +205,8 @@ export class JupyterActions extends JupyterActions0 {
   private lastCursorMoveTime: number = 0;
   public jupyterEditorActions?;
   private hasUnsavedChanges: boolean = false;
+  private saveIpynbInFlight?: Promise<void>;
+  private saveIpynbRequested: boolean = false;
   private optimisticFastOpenToken: number = 0;
   private optimisticFastOpenApplied: boolean = false;
   private openInitStartedAt?: number;
@@ -3801,11 +3803,13 @@ export class JupyterActions extends JupyterActions0 {
     };
   };
 
-  private diskContentMatchesRtc = async (): Promise<{
+  private diskContentMatchesRtc = async (
+    preloadedDiskRead?: DiskIpynbRead,
+  ): Promise<{
     matches: boolean;
     diskRead: DiskIpynbRead;
   }> => {
-    const diskRead = await this.readIpynbFromDisk();
+    const diskRead = preloadedDiskRead ?? (await this.readIpynbFromDisk());
     if (diskRead.bytes == 0) {
       return { matches: false, diskRead };
     }
@@ -3820,8 +3824,10 @@ export class JupyterActions extends JupyterActions0 {
   // load the ipynb version of this notebook from disk
   loadFromDisk = async ({
     diskRead,
+    expectedRtcVersion,
   }: {
     diskRead?: DiskIpynbRead;
+    expectedRtcVersion?: string;
   } = {}) => {
     this.runDebug("ipynb.load.start");
     const read = diskRead ?? (await this.readIpynbFromDisk());
@@ -3831,6 +3837,20 @@ export class JupyterActions extends JupyterActions0 {
       return;
     }
     const { ipynb } = await this.syncdb.fs.jupyterImportIpynb!(read.ipynb);
+    if (
+      expectedRtcVersion != null &&
+      (this.hasPendingIpynbChanges() ||
+        this.getRtcVersion() !== expectedRtcVersion)
+    ) {
+      this.runDebug("ipynb.load.skipped.rtc_changed", {
+        expectedRtcVersion,
+        actualRtcVersion: this.getRtcVersion(),
+      });
+      if (this.saveIpynbInFlight == null) {
+        await this.saveIpynb();
+      }
+      return;
+    }
     await this.setToIpynb(ipynb);
     this.hasUnsavedChanges = false;
     this.runDebug("ipynb.load.done", { bytes: read.bytes });
@@ -3839,17 +3859,56 @@ export class JupyterActions extends JupyterActions0 {
   };
 
   public savedVersion: number = 0;
-  saveIpynb = async () => {
+  private getRtcVersion = (): string | undefined => {
+    try {
+      return this.syncdb?.newestVersion?.();
+    } catch {
+      return;
+    }
+  };
+
+  public hasPendingIpynbChanges = (): boolean => {
+    return (
+      this.hasUnsavedChanges ||
+      this.syncdb?.has_uncommitted_changes?.() === true
+    );
+  };
+
+  private saveIpynbOnce = async (): Promise<void> => {
     if (this.isClosed() || this.syncdb?.get_state() != "ready") return;
 
     this.runDebug("ipynb.save.start");
+    const versionBeforeSnapshot = this.getRtcVersion();
     const ipynb = await this.toIpynb();
     if (this.isClosed()) return;
     if (ipynb == null) {
       throw Error("notebook is not loaded");
     }
+    const snapshotVersion = this.getRtcVersion();
+    if (snapshotVersion !== versionBeforeSnapshot) {
+      this.hasUnsavedChanges = true;
+      this.saveIpynbRequested = true;
+      this.runDebug("ipynb.save.retry.snapshot_changed", {
+        versionBeforeSnapshot,
+        snapshotVersion,
+      });
+      return;
+    }
     const result = await this.syncdb.fs.jupyterSaveIpynb!(this.path, ipynb);
     if (this.isClosed()) return;
+    const versionAfterSave = this.getRtcVersion();
+    if (versionAfterSave !== snapshotVersion) {
+      // The file now contains an older snapshot. Keep the notebook dirty and
+      // immediately save the newer RTC state instead of letting the resulting
+      // filesystem event import the stale snapshot.
+      this.hasUnsavedChanges = true;
+      this.saveIpynbRequested = true;
+      this.runDebug("ipynb.save.retry.rtc_changed", {
+        snapshotVersion,
+        versionAfterSave,
+      });
+      return;
+    }
     if (result.converted) {
       await this.setToIpynb(result.ipynb);
       if (this.isClosed()) return;
@@ -3858,6 +3917,29 @@ export class JupyterActions extends JupyterActions0 {
     this.setState({ has_unsaved_changes: false });
     this.store.emit("has-unsaved-changes", false);
     this.runDebug("ipynb.save.done", { bytes: result.bytes });
+  };
+
+  private flushIpynbSaves = async (): Promise<void> => {
+    try {
+      while (this.saveIpynbRequested && !this.isClosed()) {
+        this.saveIpynbRequested = false;
+        await this.saveIpynbOnce();
+      }
+    } finally {
+      this.saveIpynbInFlight = undefined;
+      // A request can arrive after the loop condition but before cleanup.
+      if (this.saveIpynbRequested && !this.isClosed()) {
+        await this.saveIpynb();
+      }
+    }
+  };
+
+  saveIpynb = async (): Promise<void> => {
+    this.saveIpynbRequested = true;
+    if (this.saveIpynbInFlight == null) {
+      this.saveIpynbInFlight = this.flushIpynbSaves();
+    }
+    await this.saveIpynbInFlight;
   };
 
   setIpynbFromRawEditor = async (ipynb: object): Promise<void> => {
@@ -3870,20 +3952,59 @@ export class JupyterActions extends JupyterActions0 {
     patch,
     patchSeq,
     diskRead,
+    initial = false,
   }: {
     patch?;
     patchSeq?: number;
     diskRead?: DiskIpynbRead;
+    initial?: boolean;
   } = {}) => {
     this.runDebug("watch.load.start", () => ({
       patchSeq,
       ...this.summarizePatch(patch),
     }));
     try {
+      if (!initial) {
+        if (this.hasPendingIpynbChanges()) {
+          this.runDebug("watch.load.skipped.rtc_dirty", { patchSeq });
+          // A local save can emit its filesystem event before its RPC response
+          // reaches this browser. That in-flight save will perform its own RTC
+          // version check and retry if needed; requesting another save here
+          // would turn every local save event into a save loop.
+          if (this.saveIpynbInFlight == null) {
+            await this.saveIpynb();
+          }
+          return;
+        }
+        const expectedRtcVersion = this.getRtcVersion();
+        const { matches, diskRead: read } =
+          await this.diskContentMatchesRtc(diskRead);
+        if (
+          this.hasPendingIpynbChanges() ||
+          this.getRtcVersion() !== expectedRtcVersion
+        ) {
+          this.runDebug("watch.load.skipped.rtc_changed", { patchSeq });
+          if (this.saveIpynbInFlight == null) {
+            await this.saveIpynb();
+          }
+          return;
+        }
+        if (matches) {
+          this.isIpynbDeleted = false;
+          this.runDebug("watch.load.skipped.matches_rtc", { patchSeq });
+          return;
+        }
+        await this.loadFromDisk({
+          diskRead: read,
+          expectedRtcVersion,
+        });
+      } else {
+        // Initial source selection has already compared disk and RTC mtimes.
+        await this.loadFromDisk({ diskRead });
+      }
       // Disk notebooks contain native attachment bytes, whereas the live
       // syncdoc contains global blob URLs. Authoritative reload must therefore
       // run through the project-host converter instead of applying patches.
-      await this.loadFromDisk({ diskRead });
       this.isIpynbDeleted = false;
       this.runDebug("watch.load.full.done", { patchSeq });
     } catch {
@@ -3978,7 +4099,10 @@ export class JupyterActions extends JupyterActions0 {
         async () => {
           if (this.isClosed()) return true;
           try {
-            await this.watchLoadFromDisk({ diskRead: preloadedDiskRead });
+            await this.watchLoadFromDisk({
+              diskRead: preloadedDiskRead,
+              initial: true,
+            });
             this.runDebug("watch.initial_load.done");
             this.noteOpenInitPhase("initial_load_done", {
               mode: "disk",
