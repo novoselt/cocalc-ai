@@ -24,6 +24,29 @@ beforeAll(async () => {
 }, 15000);
 afterAll(after);
 
+function pricingSnapshot(
+  hourly_cost_usd: string,
+  billing_state: "running" | "stopped" = "running",
+) {
+  return {
+    version: 1 as const,
+    billing_state,
+    hourly_cost_usd,
+    components: [
+      {
+        key: billing_state === "running" ? ("vm" as const) : ("disk" as const),
+        label: billing_state === "running" ? "VM" : "Persistent disk",
+        hourly_cost_usd,
+        billing_states:
+          billing_state === "running"
+            ? (["running"] as const)
+            : (["running", "stopped"] as const),
+      },
+    ],
+    configuration: {},
+  };
+}
+
 describe("dedicated host spend accounting", () => {
   it("computes prepaid and credit spend from shared fixed account windows", async () => {
     const account_id = uuid();
@@ -131,10 +154,12 @@ describe("dedicated host spend accounting", () => {
       host_bay_id: "bay-0",
       provider: "gcp",
       region: "us-central1",
+      billing_state: "running",
       machine_type: "n1-standard-4",
       pricing_model: "on_demand",
       funding_lane: "prepaid",
       hourly_cost_usd: "12.5",
+      pricing_snapshot: pricingSnapshot("12.5"),
       started_at,
     });
     await reconcileDedicatedHostPurchaseSessionLocal({
@@ -144,10 +169,12 @@ describe("dedicated host spend accounting", () => {
       host_bay_id: "bay-0",
       provider: "gcp",
       region: "us-central1",
+      billing_state: "running",
       machine_type: "n1-standard-4",
       pricing_model: "on_demand",
       funding_lane: "prepaid",
       hourly_cost_usd: "12.5",
+      pricing_snapshot: pricingSnapshot("12.5"),
       started_at,
     });
 
@@ -172,10 +199,12 @@ describe("dedicated host spend accounting", () => {
       host_bay_id: "bay-0",
       provider: "gcp",
       region: "us-central1",
+      billing_state: "running",
       machine_type: "n1-standard-4",
       pricing_model: "spot",
       funding_lane: "credit",
       hourly_cost_usd: "8",
+      pricing_snapshot: pricingSnapshot("8"),
       started_at: dayjs().subtract(5, "minute").toDate(),
     });
 
@@ -226,6 +255,150 @@ describe("dedicated host spend accounting", () => {
       [account_id, "dedicated-host", `dedicated-host:${host_id}`],
     );
     expect(finalRows.every((row) => row.cost != null)).toBe(true);
+  });
+
+  it("rotates an unchanged running host exactly once when only its price changes", async () => {
+    const account_id = uuid();
+    const host_id = uuid();
+    const initialStart = dayjs().subtract(20, "minute").toDate();
+    const priceChange = dayjs().subtract(5, "minute").toDate();
+    const reconcile = async ({
+      hourly_cost_usd,
+      started_at,
+    }: {
+      hourly_cost_usd: string;
+      started_at: Date;
+    }) => {
+      await reconcileDedicatedHostPurchaseSessionLocal({
+        account_id,
+        host_id,
+        host_name: "GPU Host",
+        host_bay_id: "bay-0",
+        provider: "gcp",
+        region: "us-central1",
+        billing_state: "running",
+        machine_type: "n1-standard-4",
+        pricing_model: "on_demand",
+        funding_lane: "prepaid",
+        hourly_cost_usd,
+        pricing_snapshot: pricingSnapshot(hourly_cost_usd),
+        started_at,
+      });
+    };
+
+    await reconcile({
+      hourly_cost_usd: "12.5",
+      started_at: initialStart,
+    });
+    await reconcile({
+      hourly_cost_usd: "13",
+      started_at: priceChange,
+    });
+    await reconcile({
+      hourly_cost_usd: "13",
+      started_at: new Date(),
+    });
+
+    const { rows } = await getPool().query(
+      `
+        SELECT period_start, period_end, cost_per_hour, description
+        FROM purchases
+        WHERE account_id=$1
+          AND service=$2
+          AND tag=$3
+        ORDER BY id ASC
+      `,
+      [account_id, "dedicated-host", `dedicated-host:${host_id}`],
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      description: {
+        billing_state: "running",
+        funding_lane: "prepaid",
+        pricing_model: "on_demand",
+        pricing_snapshot: {
+          hourly_cost_usd: "12.5",
+        },
+      },
+    });
+    expect(toDecimal(rows[0].cost_per_hour).eq("12.5")).toBe(true);
+    expect(rows[0].period_end).toEqual(priceChange);
+    expect(rows[1]).toMatchObject({
+      description: {
+        billing_state: "running",
+        funding_lane: "prepaid",
+        pricing_model: "on_demand",
+        pricing_snapshot: {
+          hourly_cost_usd: "13",
+        },
+      },
+    });
+    expect(toDecimal(rows[1].cost_per_hour).eq("13")).toBe(true);
+    expect(rows[1].period_start).toEqual(priceChange);
+    expect(rows[1].period_end).toBeNull();
+  });
+
+  it("rotates from running to stopped with an auditable pricing snapshot", async () => {
+    const account_id = uuid();
+    const host_id = uuid();
+    await reconcileDedicatedHostPurchaseSessionLocal({
+      account_id,
+      host_id,
+      host_name: "Research GPU Host",
+      host_bay_id: "bay-0",
+      provider: "gcp",
+      region: "us-central1",
+      billing_state: "running",
+      machine_type: "n2d-standard-4",
+      pricing_model: "spot",
+      funding_lane: "prepaid",
+      hourly_cost_usd: "2",
+      pricing_snapshot: pricingSnapshot("2"),
+      started_at: dayjs().subtract(10, "minute").toDate(),
+    });
+    await reconcileDedicatedHostPurchaseSessionLocal({
+      account_id,
+      host_id,
+      host_name: "Research GPU Host",
+      host_bay_id: "bay-0",
+      provider: "gcp",
+      region: "us-central1",
+      billing_state: "stopped",
+      funding_lane: "prepaid",
+      hourly_cost_usd: "0.25",
+      pricing_snapshot: pricingSnapshot("0.25", "stopped"),
+    });
+
+    const { rows } = await getPool().query(
+      `
+        SELECT period_end, description, notes
+        FROM purchases
+        WHERE account_id=$1
+          AND service=$2
+          AND tag=$3
+        ORDER BY id ASC
+      `,
+      [account_id, "dedicated-host", `dedicated-host:${host_id}`],
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0].period_end).not.toBeNull();
+    expect(rows[0].description.billing_state).toBe("running");
+    expect(rows[1].period_end).toBeNull();
+    expect(rows[1].description).toMatchObject({
+      billing_state: "stopped",
+      machine_type: null,
+      pricing_model: null,
+      pricing_snapshot: {
+        billing_state: "stopped",
+        components: [
+          expect.objectContaining({
+            key: "disk",
+            billing_states: ["running", "stopped"],
+          }),
+        ],
+      },
+    });
+    expect(rows[1].notes).toBeNull();
   });
 
   it("computes postpaid unbilled exposure from credit-funded host segments", async () => {
@@ -377,10 +550,12 @@ describe("dedicated host spend accounting", () => {
       host_bay_id: "bay-0",
       provider: "gcp",
       region: "us-central1",
+      billing_state: "running",
       machine_type: "n1-standard-4",
       pricing_model: "on_demand",
       funding_lane: "credit",
       hourly_cost_usd: "12",
+      pricing_snapshot: pricingSnapshot("12"),
       started_at,
     });
 
@@ -391,10 +566,12 @@ describe("dedicated host spend accounting", () => {
       host_bay_id: "bay-0",
       provider: "gcp",
       region: "us-central1",
+      billing_state: "running",
       machine_type: "n1-standard-4",
       pricing_model: "on_demand",
       funding_lane: "credit",
       hourly_cost_usd: "12",
+      pricing_snapshot: pricingSnapshot("12"),
       started_at: new Date(Date.UTC(2026, 5, 1, 1, 0, 0)),
     });
 

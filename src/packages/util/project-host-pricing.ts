@@ -73,10 +73,13 @@ export type HostPriceBreakdownItemKey =
   | "shared_scratch_disk"
   | "public_ipv4";
 
+export type DedicatedHostBillingState = "running" | "stopped";
+
 export type HostPriceBreakdownItem = {
   key: HostPriceBreakdownItemKey;
   label: string;
   usd_per_hour: number;
+  billing_states: DedicatedHostBillingState[];
 };
 
 export type HostPriceBreakdown = {
@@ -85,6 +88,20 @@ export type HostPriceBreakdown = {
 };
 
 export type DedicatedHostPricedProvider = "gcp" | "nebius";
+
+export function hostPriceBreakdownForBillingState(
+  breakdown: HostPriceBreakdown | undefined,
+  billingState: DedicatedHostBillingState,
+): HostPriceBreakdown | undefined {
+  if (!breakdown) return undefined;
+  const items = breakdown.items.filter((item) =>
+    item.billing_states.includes(billingState),
+  );
+  return {
+    items,
+    total_usd_per_hour: items.reduce((sum, item) => sum + item.usd_per_hour, 0),
+  };
+}
 
 export type DedicatedHostSurchargeSettings = {
   project_hosts_gcp_surcharge_percent?: number | null;
@@ -359,6 +376,7 @@ export function estimateGcpCatalogRateBreakdown(
       key: "vm",
       label: "VM",
       usd_per_hour: cpuRate * cpus + ramRate * memoryGiB,
+      billing_states: ["running"],
     },
   ];
   const gpuType = `${input.gpu_type ?? ""}`.trim() as GcpGpuCatalogKey;
@@ -374,6 +392,7 @@ export function estimateGcpCatalogRateBreakdown(
       key: "gpu",
       label: "GPU",
       usd_per_hour: gpuRate * gpuCount,
+      billing_states: ["running"],
     });
   }
   const diskType = gcpDiskCatalogKeyFromSelection(input);
@@ -385,6 +404,7 @@ export function estimateGcpCatalogRateBreakdown(
       key: "disk",
       label: "Persistent disk",
       usd_per_hour: diskRate * diskGb,
+      billing_states: ["running", "stopped"],
     });
   }
   const sharedDiskGb = positiveDiskGb(input.shared_disk_gb);
@@ -399,12 +419,14 @@ export function estimateGcpCatalogRateBreakdown(
       key: "shared_scratch_disk",
       label: "Shared scratch disk",
       usd_per_hour: diskRate * sharedDiskGb,
+      billing_states: ["running", "stopped"],
     });
   }
   items.push({
     key: "public_ipv4",
     label: "Public IPv4",
     usd_per_hour: GCP_PUBLIC_IPV4_HOURLY_USD[pricingModel],
+    billing_states: ["running"],
   });
   return {
     items,
@@ -618,6 +640,7 @@ export function estimateNebiusCatalogRateBreakdown(opts: {
       key: "gpu",
       label: "GPU instance",
       usd_per_hour: family!.gpuRate! * gpuCount,
+      billing_states: ["running"],
     });
   } else {
     items.push({
@@ -626,6 +649,7 @@ export function estimateNebiusCatalogRateBreakdown(opts: {
       usd_per_hour:
         family!.cpuRate! * Number(instance.vcpus ?? 0) +
         family!.ramRate! * Number(instance.memory_gib ?? 0),
+      billing_states: ["running"],
     });
   }
   if (hasGpu && !hasUnifiedGpuRate) {
@@ -634,6 +658,7 @@ export function estimateNebiusCatalogRateBreakdown(opts: {
       key: "gpu",
       label: "GPU",
       usd_per_hour: family.gpuRate * gpuCount,
+      billing_states: ["running"],
     });
   }
   if (`${opts.storage_mode ?? "persistent"}`.trim() === "persistent") {
@@ -653,6 +678,7 @@ export function estimateNebiusCatalogRateBreakdown(opts: {
         key: "disk",
         label: "Persistent disk",
         usd_per_hour: diskRate * diskGb,
+        billing_states: ["running", "stopped"],
       });
     }
   }
@@ -672,6 +698,7 @@ export function estimateNebiusCatalogRateBreakdown(opts: {
       key: "shared_scratch_disk",
       label: "Shared scratch disk",
       usd_per_hour: diskRate * sharedDiskGb,
+      billing_states: ["running", "stopped"],
     });
   }
   return {

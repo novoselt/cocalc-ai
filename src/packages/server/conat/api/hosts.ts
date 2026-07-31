@@ -184,6 +184,7 @@ import { getAIUsageStatus } from "@cocalc/server/ai/usage-status";
 import { computeAIUsageUnits } from "@cocalc/server/ai/usage-units";
 import { saveAIResponse } from "@cocalc/server/ai/save-response";
 import { moneyToDbString, type MoneyValue } from "@cocalc/util/money";
+import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
 import {
   isCoreLanguageModel,
   type LanguageModelCore,
@@ -210,7 +211,7 @@ import {
 } from "@cocalc/server/project-host/admission";
 import {
   closeDedicatedHostPurchaseSessionForAccount,
-  estimateDedicatedHostRateUsdPerHour,
+  estimateDedicatedHostRate,
   getDedicatedHostWindowUsageForHostLocal,
   reconcileDedicatedHostPurchaseSessionForAccount,
   type DedicatedHostFundingLane,
@@ -6696,11 +6697,13 @@ export async function updateHostMachine({
         funding_mode: "account-prepaid";
         funding_lane: "prepaid";
         hourly_cost_usd: MoneyValue;
+        pricing_snapshot: DedicatedHostPricingSnapshot;
       }
     | {
         funding_mode: "account-postpaid";
         funding_lane: "credit";
         hourly_cost_usd: MoneyValue;
+        pricing_snapshot: DedicatedHostPricingSnapshot;
       }
     | {
         funding_mode: "site-funded";
@@ -6712,7 +6715,7 @@ export async function updateHostMachine({
     isBillableDedicatedHostCloud(nextMachineCloud) &&
     HOST_RUNNING_STATUSES.has(String(row.status ?? ""))
   ) {
-    const hourlyCostUsd = await estimateDedicatedHostRateUsdPerHour({
+    const rate = await estimateDedicatedHostRate({
       provider: nextMachineCloud,
       region: nextRegion,
       zone: nextMachine.zone,
@@ -6726,8 +6729,9 @@ export async function updateHostMachine({
       gpu_count: nextMachine.gpu_count,
       pricing_model:
         normalizeHostPricingModel(metadata.pricing_model) ?? "on_demand",
+      billing_state: "running",
     });
-    if (!hourlyCostUsd) {
+    if (!rate) {
       throw Object.assign(
         new Error(
           `unable to determine the resize hourly rate for provider '${nextMachineCloud}'`,
@@ -6754,7 +6758,7 @@ export async function updateHostMachine({
       const enforcement = evaluateDedicatedHostBillingEnforcement({
         snapshot,
         funding_lane: fundingLane as DedicatedHostFundingLane,
-        hourly_cost_usd: hourlyCostUsd,
+        hourly_cost_usd: rate.hourly_cost_usd,
         lane_allowed: true,
       });
       if (enforcement.action === "request_drain") {
@@ -6772,13 +6776,15 @@ export async function updateHostMachine({
         activeBillableSession = {
           funding_mode: "account-prepaid",
           funding_lane: "prepaid",
-          hourly_cost_usd: hourlyCostUsd,
+          hourly_cost_usd: rate.hourly_cost_usd,
+          pricing_snapshot: rate.pricing_snapshot,
         };
       } else {
         activeBillableSession = {
           funding_mode: "account-postpaid",
           funding_lane: "credit",
-          hourly_cost_usd: hourlyCostUsd,
+          hourly_cost_usd: rate.hourly_cost_usd,
+          pricing_snapshot: rate.pricing_snapshot,
         };
       }
     }
@@ -7131,12 +7137,13 @@ export async function updateHostMachine({
       host_bay_id: getConfiguredBayId(),
       provider: nextMachineCloud,
       region: nextRegion,
+      billing_state: "running",
       machine_type: nextMachine.machine_type ?? metadata.size,
       pricing_model:
         normalizeHostPricingModel(metadata.pricing_model) ?? "on_demand",
       funding_lane: activeBillableSession.funding_lane,
       hourly_cost_usd: activeBillableSession.hourly_cost_usd,
-      started_at: nextMetadata.billing?.started_at,
+      pricing_snapshot: activeBillableSession.pricing_snapshot,
     });
   }
   await logCloudVmEvent({

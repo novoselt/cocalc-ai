@@ -18,7 +18,7 @@ import {
 } from "./admission";
 import {
   closeDedicatedHostPurchaseSessionForAccount,
-  estimateDedicatedHostRateUsdPerHour,
+  estimateDedicatedHostRate,
   getDedicatedHostWindowUsageForHostLocal,
   isDedicatedHostLaneCurrentlyAllowed,
   reconcileDedicatedHostPurchaseSessionForAccount,
@@ -31,8 +31,16 @@ import {
   evaluateDedicatedHostBillingEnforcement,
   type DedicatedHostBillingEnforcementMetadata,
 } from "./spend-enforcement";
-import { notifyDedicatedHostBillingEnforcementBestEffort } from "./billing-notifications";
-import { moneyToDbString, toDecimal } from "@cocalc/util/money";
+import {
+  notifyDedicatedHostBillingEnforcementBestEffort,
+  notifyDedicatedHostDeprovisionReminderBestEffort,
+} from "./billing-notifications";
+import {
+  moneyToDbString,
+  toDecimal,
+  type MoneyValue,
+} from "@cocalc/util/money";
+import type { DedicatedHostBillingState } from "@cocalc/util/project-host-pricing";
 
 const logger = getLogger("server:project-host:spend-maintenance");
 const CHECK_INTERVAL_MS = Math.max(
@@ -42,17 +50,17 @@ const CHECK_INTERVAL_MS = Math.max(
   ),
 );
 const LOCK_KEY = "dedicated_host_spend_maintenance";
-const ACTIVE_BILLING_STATUSES = new Set([
+const RUNNING_BILLING_STATUSES = new Set([
   "starting",
   "running",
   "restarting",
   "draining",
   "stopping",
   "error",
-  "deprovisioning",
 ]);
 const HOST_DRAIN_LRO_KIND = "host-drain";
 const HOST_DEPROVISION_LRO_KIND = "host-deprovision";
+const DEPROVISION_REMINDER_LEAD_MS = 24 * 3600_000;
 
 let started = false;
 
@@ -63,6 +71,35 @@ type CandidateHostRow = {
   status: string | null;
   metadata: any;
 };
+
+function billingStateForHost(
+  row: CandidateHostRow,
+): DedicatedHostBillingState | undefined {
+  const status = `${row.status ?? ""}`.trim().toLowerCase();
+  if (RUNNING_BILLING_STATUSES.has(status)) {
+    return "running";
+  }
+  if (
+    status === "off" &&
+    `${row.metadata?.runtime?.instance_id ?? ""}`.trim()
+  ) {
+    return "stopped";
+  }
+  return undefined;
+}
+
+function fundingLaneForMode(
+  fundingMode: AccountLocalDedicatedHostPolicySnapshot["funding_mode"],
+): DedicatedHostFundingLane | undefined {
+  switch (fundingMode) {
+    case "account-prepaid":
+      return "prepaid";
+    case "account-postpaid":
+      return "credit";
+    default:
+      return undefined;
+  }
+}
 
 async function withMaintenanceLock<T>(
   fn: () => Promise<T>,
@@ -90,6 +127,34 @@ function currentPricingModel(metadata: any): "on_demand" | "spot" {
       .trim()
       .toLowerCase();
   return value === "spot" ? "spot" : "on_demand";
+}
+
+function pricingInputForHost({
+  row,
+  provider,
+  billing_state,
+}: {
+  row: CandidateHostRow;
+  provider: string;
+  billing_state: DedicatedHostBillingState;
+}) {
+  const metadata = row.metadata ?? {};
+  const machine = metadata.machine ?? {};
+  return {
+    provider,
+    region: row.region,
+    zone: machine.zone,
+    machine_type: machine.machine_type ?? metadata.size,
+    disk_gb: machine.disk_gb,
+    disk_type: machine.disk_type,
+    shared_disk_gb: machine.shared_disk_gb,
+    shared_disk_type: machine.shared_disk_type,
+    storage_mode: machine.storage_mode,
+    gpu_type: machine.gpu_type,
+    gpu_count: machine.gpu_count,
+    pricing_model: currentPricingModel(metadata),
+    billing_state,
+  } as const;
 }
 
 function currentFundingLane(
@@ -435,6 +500,202 @@ async function countProjectsAssignedToHost(host_id: string): Promise<number> {
   return Number(rows[0]?.count ?? 0);
 }
 
+async function stoppedBillingBlockedEnforcement({
+  row,
+  decision,
+  hourly_cost_usd,
+}: {
+  row: CandidateHostRow;
+  decision: ReturnType<typeof evaluateDedicatedHostBillingEnforcement>;
+  hourly_cost_usd: MoneyValue;
+}): Promise<DedicatedHostBillingEnforcementMetadata> {
+  const previous = currentEnforcement(row.metadata);
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const graceUntil =
+    previous?.state === "stopped_billing_blocked" && previous.deprovision_after
+      ? previous.deprovision_after
+      : new Date(
+          now.valueOf() + DEDICATED_HOST_BILLING_DISK_GRACE_HOURS * 3600_000,
+        ).toISOString();
+  const assignedProjects = await countProjectsAssignedToHost(row.id);
+  const finalBackupStatus =
+    previous?.final_backup_status === "succeeded" ||
+    previous?.final_backup_status === "failed"
+      ? previous.final_backup_status
+      : assignedProjects === 0
+        ? "succeeded"
+        : "unknown";
+  return {
+    ...(previous ?? {}),
+    state: "stopped_billing_blocked",
+    reason_code: decision.reason_code,
+    reason: decision.reason,
+    first_detected_at: previous?.first_detected_at ?? nowIso,
+    stopped_at: previous?.stopped_at ?? nowIso,
+    grace_until: previous?.grace_until ?? graceUntil,
+    deprovision_after: graceUntil,
+    final_backup_status: finalBackupStatus,
+    ...(finalBackupStatus === "succeeded"
+      ? {
+          final_backup_completed_at:
+            previous?.final_backup_completed_at ?? nowIso,
+        }
+      : {}),
+    recovery_actions: decision.recovery_actions,
+    hourly_cost_usd,
+    limiting_runway_hours: decision.limiting_runway_hours,
+    limiting_window: decision.limiting_window,
+  };
+}
+
+async function reconcileStoppedHost({
+  row,
+  owner,
+  provider,
+  snapshot,
+}: {
+  row: CandidateHostRow;
+  owner: string;
+  provider: string;
+  snapshot: AccountLocalDedicatedHostPolicySnapshot;
+}): Promise<void> {
+  const metadata = row.metadata ?? {};
+  const previousEnforcement = currentEnforcement(metadata);
+  if (snapshot.funding_mode === "site-funded") {
+    await closeDedicatedHostPurchaseSessionForAccount({
+      account_id: owner,
+      host_id: row.id,
+    });
+    const nextBilling = {
+      funding_mode: "site-funded" as const,
+      started_at: metadata?.billing?.started_at ?? new Date().toISOString(),
+      ...retainedOwnerSpendPolicy(metadata),
+    };
+    if (
+      JSON.stringify(nextBilling) !== JSON.stringify(metadata?.billing ?? {})
+    ) {
+      await updateHostBillingMetadata({
+        host_id: row.id,
+        metadata: { ...metadata, billing: nextBilling },
+      });
+    }
+    if (previousEnforcement && previousEnforcement.state !== "ok") {
+      await notifyBillingEnforcementTransition({
+        row,
+        owner,
+        previous: previousEnforcement,
+        next: { state: "ok" },
+      });
+    }
+    return;
+  }
+
+  const rate = await estimateDedicatedHostRate(
+    pricingInputForHost({
+      row,
+      provider,
+      billing_state: "stopped",
+    }),
+  );
+  if (!rate) {
+    await closeDedicatedHostPurchaseSessionForAccount({
+      account_id: owner,
+      host_id: row.id,
+    });
+    logger.error("stopped dedicated-host pricing is unavailable", {
+      host_id: row.id,
+      provider,
+    });
+    return;
+  }
+  if (toDecimal(rate.hourly_cost_usd).lte(0)) {
+    await closeDedicatedHostPurchaseSessionForAccount({
+      account_id: owner,
+      host_id: row.id,
+    });
+    return;
+  }
+
+  const funding_lane =
+    selectDedicatedHostFundingLane(snapshot) ??
+    currentFundingLane(metadata) ??
+    fundingLaneForMode(snapshot.funding_mode);
+  if (!funding_lane) {
+    await closeDedicatedHostPurchaseSessionForAccount({
+      account_id: owner,
+      host_id: row.id,
+    });
+    return;
+  }
+
+  await reconcileDedicatedHostPurchaseSessionForAccount({
+    account_id: owner,
+    host_id: row.id,
+    host_name: row.name ?? undefined,
+    host_bay_id: getConfiguredBayId(),
+    provider,
+    region: row.region ?? undefined,
+    billing_state: "stopped",
+    funding_lane,
+    hourly_cost_usd: rate.hourly_cost_usd,
+    pricing_snapshot: rate.pricing_snapshot,
+  });
+
+  const laneAllowed = isDedicatedHostLaneCurrentlyAllowed({
+    snapshot,
+    funding_lane,
+  });
+  const decision = evaluateDedicatedHostBillingEnforcement({
+    snapshot,
+    funding_lane,
+    hourly_cost_usd: rate.hourly_cost_usd,
+    lane_allowed: laneAllowed,
+  });
+  const nextEnforcement =
+    decision.action === "request_drain"
+      ? await stoppedBillingBlockedEnforcement({
+          row,
+          decision,
+          hourly_cost_usd: rate.hourly_cost_usd,
+        })
+      : buildDedicatedHostBillingEnforcementMetadata({
+          previous: previousEnforcement,
+          decision,
+          hourly_cost_usd: rate.hourly_cost_usd,
+        });
+  const nextMetadata = {
+    ...metadata,
+    billing: {
+      ...(metadata.billing ?? {}),
+      funding_mode: snapshot.funding_mode,
+      funding_lane,
+      hourly_cost_usd: rate.hourly_cost_usd,
+      started_at: metadata?.billing?.started_at ?? new Date().toISOString(),
+      ...retainedOwnerSpendPolicy(metadata),
+      enforcement: nextEnforcement,
+    },
+  };
+  if (
+    JSON.stringify(nextMetadata.billing) !==
+    JSON.stringify(metadata?.billing ?? {})
+  ) {
+    await updateHostBillingMetadata({
+      host_id: row.id,
+      metadata: nextMetadata,
+    });
+    await notifyBillingEnforcementTransition({
+      row,
+      owner,
+      previous: previousEnforcement,
+      next: nextEnforcement,
+    });
+  }
+  await maybeProgressInactiveEnforcement({
+    row: { ...row, metadata: nextMetadata },
+  });
+}
+
 async function updateHostStatusAndBillingMetadata({
   row,
   status,
@@ -575,6 +836,55 @@ async function requestHostDeprovisionForBilling({
   });
 }
 
+async function maybeSendDeprovisionReminder({
+  row,
+}: {
+  row: CandidateHostRow;
+}): Promise<boolean> {
+  const metadata = row.metadata ?? {};
+  const enforcement = currentEnforcement(metadata);
+  if (
+    enforcement?.state !== "stopped_billing_blocked" ||
+    enforcement.final_backup_status !== "succeeded" ||
+    enforcement.deprovision_reminder_sent_at ||
+    !enforcement.deprovision_after
+  ) {
+    return false;
+  }
+  const deprovisionAfter = new Date(enforcement.deprovision_after).getTime();
+  const now = Date.now();
+  if (
+    !Number.isFinite(deprovisionAfter) ||
+    deprovisionAfter <= now ||
+    deprovisionAfter - now > DEPROVISION_REMINDER_LEAD_MS
+  ) {
+    return false;
+  }
+  const owner = `${metadata?.owner ?? ""}`.trim();
+  if (!owner) return false;
+  const sent = await notifyDedicatedHostDeprovisionReminderBestEffort({
+    owner_account_id: owner,
+    host_id: row.id,
+    host_name: row.name,
+    deprovision_after: enforcement.deprovision_after,
+  });
+  if (!sent) return false;
+  await updateHostBillingMetadata({
+    host_id: row.id,
+    metadata: {
+      ...metadata,
+      billing: {
+        ...(metadata.billing ?? {}),
+        enforcement: {
+          ...enforcement,
+          deprovision_reminder_sent_at: new Date().toISOString(),
+        },
+      },
+    },
+  });
+  return true;
+}
+
 async function maybeProgressInactiveEnforcement({
   row,
 }: {
@@ -617,6 +927,9 @@ async function maybeProgressInactiveEnforcement({
     !enforcement.deprovision_after
   ) {
     return false;
+  }
+  if (await maybeSendDeprovisionReminder({ row })) {
+    return true;
   }
   const deprovisionAfter = new Date(enforcement.deprovision_after).getTime();
   if (!Number.isFinite(deprovisionAfter) || deprovisionAfter > Date.now()) {
@@ -682,7 +995,7 @@ async function maybeClearRecoveredInactiveEnforcement({
     return false;
   }
   const machine = metadata?.machine ?? {};
-  const hourly_cost_usd = await estimateDedicatedHostRateUsdPerHour({
+  const rate = await estimateDedicatedHostRate({
     provider,
     region: row.region,
     zone: machine.zone,
@@ -695,8 +1008,9 @@ async function maybeClearRecoveredInactiveEnforcement({
     gpu_type: machine.gpu_type,
     gpu_count: machine.gpu_count,
     pricing_model: currentPricingModel(metadata),
+    billing_state: "running",
   });
-  if (!hourly_cost_usd) return false;
+  if (!rate) return false;
 
   const nextEnforcement = { state: "ok" as const };
   await updateHostBillingMetadata({
@@ -707,7 +1021,7 @@ async function maybeClearRecoveredInactiveEnforcement({
         ...(metadata.billing ?? {}),
         funding_mode: effectiveSnapshot.funding_mode,
         funding_lane,
-        hourly_cost_usd,
+        hourly_cost_usd: rate.hourly_cost_usd,
         enforcement: nextEnforcement,
       },
     },
@@ -767,7 +1081,8 @@ async function runPass(): Promise<void> {
     }
 
     const status = `${row.status ?? ""}`.trim().toLowerCase();
-    if (!ACTIVE_BILLING_STATUSES.has(status)) {
+    const billingState = billingStateForHost(row);
+    if (!billingState) {
       const fundingMode = currentFundingMode(metadata);
       await closeDedicatedHostPurchaseSessionForAccount({
         account_id: owner,
@@ -797,6 +1112,21 @@ async function runPass(): Promise<void> {
           metadata: nextMetadata,
         });
       }
+      deleteSnapshotCacheForAccount(owner);
+      continue;
+    }
+
+    if (billingState === "stopped") {
+      const snapshot = applyDedicatedHostFundingModeOverride(
+        await getSnapshot(owner, currentFundingMode(metadata)),
+        currentFundingMode(metadata),
+      );
+      await reconcileStoppedHost({
+        row,
+        owner,
+        provider,
+        snapshot,
+      });
       deleteSnapshotCacheForAccount(owner);
       continue;
     }
@@ -843,21 +1173,14 @@ async function runPass(): Promise<void> {
     }
 
     const pricing_model = currentPricingModel(metadata);
-    const hourly_cost_usd = await estimateDedicatedHostRateUsdPerHour({
-      provider,
-      region: row.region,
-      zone: machine.zone,
-      machine_type: machine.machine_type ?? metadata?.size,
-      disk_gb: machine.disk_gb,
-      disk_type: machine.disk_type,
-      shared_disk_gb: machine.shared_disk_gb,
-      shared_disk_type: machine.shared_disk_type,
-      storage_mode: machine.storage_mode,
-      gpu_type: machine.gpu_type,
-      gpu_count: machine.gpu_count,
-      pricing_model,
-    });
-    if (!hourly_cost_usd) {
+    const rate = await estimateDedicatedHostRate(
+      pricingInputForHost({
+        row,
+        provider,
+        billing_state: "running",
+      }),
+    );
+    if (!rate || toDecimal(rate.hourly_cost_usd).lte(0)) {
       await requestHostDrainForBilling({
         row,
         enforcement: nextDrainingEnforcement({
@@ -902,14 +1225,18 @@ async function runPass(): Promise<void> {
       host_bay_id: getConfiguredBayId(),
       provider,
       region: row.region ?? undefined,
+      billing_state: "running",
       machine_type: machine.machine_type ?? metadata?.size,
       pricing_model,
       funding_lane,
-      hourly_cost_usd,
-      started_at: preserveStartedAt,
+      hourly_cost_usd: rate.hourly_cost_usd,
+      pricing_snapshot: rate.pricing_snapshot,
     });
 
     deleteSnapshotCacheForAccount(owner);
+    if (status === "stopping") {
+      continue;
+    }
     const refreshedFundingMode = currentFundingMode({
       ...metadata,
       billing: {
@@ -948,7 +1275,7 @@ async function runPass(): Promise<void> {
               ...(metadata.billing ?? {}),
               funding_mode: snapshot.funding_mode,
               funding_lane,
-              hourly_cost_usd,
+              hourly_cost_usd: rate.hourly_cost_usd,
               started_at: preserveStartedAt ?? new Date().toISOString(),
               ...retainedOwnerSpendPolicy(metadata),
               owner_spend_limit_status: ownerSpendStatus,
@@ -964,13 +1291,13 @@ async function runPass(): Promise<void> {
     const enforcementDecision = evaluateDedicatedHostBillingEnforcement({
       snapshot: refreshedSnapshot,
       funding_lane,
-      hourly_cost_usd,
+      hourly_cost_usd: rate.hourly_cost_usd,
       lane_allowed: laneAllowed,
     });
     const nextEnforcement = buildDedicatedHostBillingEnforcementMetadata({
       previous: currentEnforcement(metadata),
       decision: enforcementDecision,
-      hourly_cost_usd,
+      hourly_cost_usd: rate.hourly_cost_usd,
     });
 
     const nextMetadata = {
@@ -978,7 +1305,7 @@ async function runPass(): Promise<void> {
       billing: {
         funding_mode: snapshot.funding_mode,
         funding_lane,
-        hourly_cost_usd,
+        hourly_cost_usd: rate.hourly_cost_usd,
         started_at: preserveStartedAt ?? new Date().toISOString(),
         ...retainedOwnerSpendPolicy(metadata),
         ...(ownerSpendStatus

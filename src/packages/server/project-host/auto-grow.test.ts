@@ -14,8 +14,28 @@ let logCloudVmEventMock: jest.Mock;
 let getServerSettingsMock: jest.Mock;
 let getConfiguredBayIdMock: jest.Mock;
 let getDedicatedHostPolicySnapshotForAccountMock: jest.Mock;
-let estimateDedicatedHostRateUsdPerHourMock: jest.Mock;
+let estimateDedicatedHostRateMock: jest.Mock;
 let reconcileDedicatedHostPurchaseSessionForAccountMock: jest.Mock;
+
+function rateEstimate(hourly_cost_usd: string) {
+  return {
+    hourly_cost_usd,
+    pricing_snapshot: {
+      version: 1,
+      billing_state: "running",
+      hourly_cost_usd,
+      components: [
+        {
+          key: "vm",
+          label: "VM",
+          hourly_cost_usd,
+          billing_states: ["running"],
+        },
+      ],
+      configuration: {},
+    },
+  };
+}
 
 jest.mock("@cocalc/backend/logger", () => ({
   __esModule: true,
@@ -117,8 +137,8 @@ jest.mock("@cocalc/server/project-host/admission", () => {
 jest.mock("@cocalc/server/project-host/spend", () => {
   return {
     __esModule: true,
-    estimateDedicatedHostRateUsdPerHour: (...args: any[]) =>
-      estimateDedicatedHostRateUsdPerHourMock(...args),
+    estimateDedicatedHostRate: (...args: any[]) =>
+      estimateDedicatedHostRateMock(...args),
     reconcileDedicatedHostPurchaseSessionForAccount: (...args: any[]) =>
       reconcileDedicatedHostPurchaseSessionForAccountMock(...args),
   };
@@ -183,7 +203,7 @@ describe("guarded host auto-grow", () => {
       },
       dedicated_host_postpaid_unbilled_exposure: "0",
     }));
-    estimateDedicatedHostRateUsdPerHourMock = jest.fn(async () => "10");
+    estimateDedicatedHostRateMock = jest.fn(async () => rateEstimate("10"));
     reconcileDedicatedHostPurchaseSessionForAccountMock = jest.fn(
       async () => undefined,
     );
@@ -635,7 +655,7 @@ describe("guarded host auto-grow", () => {
       {},
     );
     expect(growSharedScratchMock).toHaveBeenCalledWith({ disk_gb: 250 });
-    expect(estimateDedicatedHostRateUsdPerHourMock).toHaveBeenCalledWith(
+    expect(estimateDedicatedHostRateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "gcp",
         shared_disk_gb: 250,
@@ -788,7 +808,7 @@ describe("guarded host auto-grow", () => {
       },
       creds: {},
     }));
-    estimateDedicatedHostRateUsdPerHourMock = jest.fn(async () => "500");
+    estimateDedicatedHostRateMock = jest.fn(async () => rateEstimate("500"));
     getDedicatedHostPolicySnapshotForAccountMock = jest.fn(async () => ({
       can_create_hosts: true,
       has_active_second_factor: true,
