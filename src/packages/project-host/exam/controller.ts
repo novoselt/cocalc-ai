@@ -37,6 +37,10 @@ import {
 } from "./network-policy";
 import { verifyExamPublicRoute } from "./public-route";
 import { verifyExamTokenHash } from "./token";
+import {
+  buildExamBrowserBootstrap,
+  type ExamBrowserBootstrap,
+} from "./browser-bootstrap";
 
 const logger = getLogger("project-host:exam:controller");
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
@@ -750,6 +754,21 @@ export function getExamBrowserSession(
     run_id: session.run_id,
     expires_at_ms: session.expires_at_ms,
   };
+}
+
+export function getExamBrowserBootstrap(
+  account_id: string,
+): ExamBrowserBootstrap | undefined {
+  const session = getExamBrowserSession(account_id);
+  if (!session) return;
+  return buildExamBrowserBootstrap({
+    session,
+    account: getRow("accounts", JSON.stringify({ account_id })),
+    project: getRow(
+      "projects",
+      JSON.stringify({ project_id: session.project_id }),
+    ),
+  });
 }
 
 export async function joinExamRun({

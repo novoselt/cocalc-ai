@@ -13,6 +13,7 @@ import {
   resolveProjectHostBrowserSessionFromCookieHeader,
 } from "./browser-session";
 import {
+  getExamBrowserBootstrap,
   getExamBrowserSession,
   getExamRunStatusLocal,
   joinExamRun,
@@ -57,6 +58,7 @@ export function getProjectHostCustomizePayload(opts?: {
   project_id?: string;
   exam_mode?: boolean;
   terminal_enabled?: boolean;
+  exam_session?: ReturnType<typeof getExamBrowserBootstrap>;
 }) {
   return {
     configuration: {
@@ -86,6 +88,7 @@ export function getProjectHostCustomizePayload(opts?: {
     software: null,
     ollama: {},
     custom_openai: {},
+    ...(opts?.exam_session ? { exam_session: opts.exam_session } : {}),
   };
 }
 
@@ -427,6 +430,9 @@ export async function initHttp({
         project_id: session?.project_id,
         exam_mode: true,
         terminal_enabled: runtime.terminal_enabled,
+        exam_session: session
+          ? getExamBrowserBootstrap(session.account_id)
+          : undefined,
       }),
     );
   });

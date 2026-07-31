@@ -1,4 +1,5 @@
 jest.mock("./exam/controller", () => ({
+  getExamBrowserBootstrap: jest.fn(),
   getExamBrowserSession: jest.fn(),
   getExamRunStatusLocal: jest.fn(() => ({
     admission_open: false,
@@ -27,11 +28,16 @@ describe("project-host customize payload", () => {
   });
 
   it("restricts the full frontend for an admitted exam session", () => {
+    const exam_session = {
+      account: { account_id: "00000000-1000-4000-8000-000000000001" },
+      project: { project_id: "00000000-1000-4000-8000-000000000002" },
+    } as any;
     const payload = getProjectHostCustomizePayload({
       account_id: "00000000-1000-4000-8000-000000000001",
       project_id: "00000000-1000-4000-8000-000000000002",
       exam_mode: true,
       terminal_enabled: false,
+      exam_session,
     });
     expect(payload.configuration).toMatchObject({
       exam_mode: true,
@@ -44,6 +50,7 @@ describe("project-host customize payload", () => {
       account_id: "00000000-1000-4000-8000-000000000001",
       project_id: "00000000-1000-4000-8000-000000000002",
     });
+    expect(payload.exam_session).toBe(exam_session);
   });
 });
 

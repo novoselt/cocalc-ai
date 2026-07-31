@@ -275,7 +275,7 @@ export function initAccountRealtime(opts: {
     return;
   }
   signedInListener = () => {
-    if (!lite) {
+    if (!lite && !isExamMode()) {
       opts.recreate_account_table(opts.redux);
     }
     void ensureRealtimeFeedForCurrentAccount();
