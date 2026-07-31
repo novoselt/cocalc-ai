@@ -6,10 +6,11 @@
 import { Tag } from "antd";
 import type { Map } from "immutable";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent } from "react";
+import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Tooltip } from "@cocalc/frontend/components";
 import useNotebookFrameActions from "@cocalc/frontend/frame-editors/jupyter-editor/cell-notebook/hook";
+import { COLORS } from "@cocalc/util/theme";
 
 // e.g., this is a subset of { JupyterActions } from "./browser-actions";
 export interface Actions {
@@ -26,15 +27,25 @@ interface Props {
   actions: Actions;
   id: string;
   complete: Map<string, any>;
+  code?: string;
+  cursorIndex?: number;
+  filterText?: string;
 }
 
 // WARNING: Complete closing when clicking outside the complete box
 // is handled in cell-list on_click.  This is ugly code (since not localized),
 // but seems to work well for now.  Could move.
-export function Complete({ actions, id, complete }: Props) {
+export function Complete({
+  actions,
+  id,
+  complete,
+  code,
+  cursorIndex,
+  filterText,
+}: Props) {
   const frameActions = useNotebookFrameActions();
   const menuRef = useRef<HTMLUListElement | null>(null);
-  const itemRefs = useRef<Array<HTMLAnchorElement | null>>([]);
+  const itemRefs = useRef<Array<HTMLLIElement | null>>([]);
   const anchorTop = complete.getIn(["offset", "top"], 0) as number;
   const anchorBottom = complete.getIn(
     ["offset", "bottom"],
@@ -45,6 +56,25 @@ export function Complete({ actions, id, complete }: Props) {
     top: anchorBottom,
     left: anchorLeft,
   });
+  const originalCode = complete.get("code", "") as string;
+  const cursorStart = complete.get("cursor_start", 0) as number;
+  const originalCursorEnd = complete.get("cursor_end", cursorStart) as number;
+  const currentCode = code ?? originalCode;
+  const currentCursorIndex = cursorIndex ?? originalCursorEnd;
+  const currentFilterText =
+    filterText ?? currentCode.slice(cursorStart, currentCursorIndex);
+  const allMatches = useMemo(
+    () => (complete.get("matches")?.toArray?.() ?? []) as string[],
+    [complete],
+  );
+  const matches = useMemo(
+    () =>
+      currentFilterText === ""
+        ? allMatches
+        : allMatches.filter((item) => item.startsWith(currentFilterText)),
+    [allMatches, currentFilterText],
+  );
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
   useEffect(() => {
     return () => {
@@ -55,8 +85,13 @@ export function Complete({ actions, id, complete }: Props) {
   }, []);
 
   useEffect(() => {
-    itemRefs.current[0]?.focus({ preventScroll: true });
-  }, [complete]);
+    setSelectedIndex(0);
+  }, [complete, currentFilterText]);
+
+  useEffect(() => {
+    const selected = itemRefs.current[selectedIndex];
+    selected?.scrollIntoView?.({ block: "nearest" });
+  }, [matches, selectedIndex]);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -77,7 +112,7 @@ export function Complete({ actions, id, complete }: Props) {
       Math.max(margin, viewportWidth - rect.width - margin),
     );
     setPosition({ top, left });
-  }, [anchorBottom, anchorLeft, anchorTop, complete]);
+  }, [anchorBottom, anchorLeft, anchorTop, complete, matches.length]);
 
   const typeInfo = useMemo(() => {
     const types = complete?.getIn(["metadata", "_jupyter_types_experimental"]);
@@ -105,34 +140,39 @@ export function Complete({ actions, id, complete }: Props) {
     frameActions.current?.save_input_editor(id);
 
     // Actually insert the completion:
-    actions.select_complete(id, item);
+    const currentComplete = complete
+      .set("base", currentCode)
+      .set("code", currentCode)
+      .set("cursor_end", currentCursorIndex);
+    actions.select_complete(id, item, currentComplete);
     setTimeout(() => actions.focus_complete?.(), 0);
   }
 
-  const matches = (complete.get("matches")?.toArray?.() ?? []) as string[];
   itemRefs.current.length = matches.length;
 
   function renderItem(item: string, index: number) {
+    const selected = index === selectedIndex;
     return (
-      <li key={item} role="none">
-        <a
-          role="menuitem"
-          style={{ display: "flex", fontSize: "13px" }}
-          tabIndex={-1}
-          ref={(node) => {
-            itemRefs.current[index] = node;
-          }}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            select(item);
-          }}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          data-item={item}
-        >
+      <li
+        aria-selected={selected}
+        key={item}
+        ref={(node) => {
+          itemRefs.current[index] = node;
+        }}
+        role="option"
+        style={{ background: selected ? COLORS.BLUE_LLLL : undefined }}
+        onMouseEnter={() => setSelectedIndex(index)}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          select(item);
+        }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      >
+        <a role="presentation" style={{ display: "flex", fontSize: "13px" }}>
           {item}
           {typeInfo[item]?.type ? (
             <Tooltip title={`${item}${typeInfo[item].signature}`}>
@@ -157,60 +197,61 @@ export function Complete({ actions, id, complete }: Props) {
     );
   }
 
-  function focusItem(index: number): void {
+  function moveSelection(index: number): void {
     const count = matches.length;
     if (count === 0) return;
-    const normalized = ((index % count) + count) % count;
-    const item = itemRefs.current[normalized];
-    item?.focus({ preventScroll: true });
-    item?.scrollIntoView?.({ block: "nearest" });
+    setSelectedIndex(((index % count) + count) % count);
   }
 
-  function focusedIndex(): number {
-    const index = itemRefs.current.findIndex(
-      (item) => item === document.activeElement,
-    );
-    return index < 0 ? 0 : index;
-  }
-
-  function consume(e: KeyboardEvent<HTMLUListElement>): void {
-    e.preventDefault();
-    e.stopPropagation();
-  }
-
-  function key(e: KeyboardEvent<HTMLUListElement>): void {
-    switch (e.key) {
-      case "Escape":
-        consume(e);
-        actions.clear_complete();
-        return;
-      case "ArrowDown":
-        consume(e);
-        focusItem(focusedIndex() + 1);
-        return;
-      case "ArrowUp":
-        consume(e);
-        focusItem(focusedIndex() - 1);
-        return;
-      case "Home":
-        consume(e);
-        focusItem(0);
-        return;
-      case "End":
-        consume(e);
-        focusItem(matches.length - 1);
-        return;
-      case "Enter":
-      case "Tab": {
-        consume(e);
-        const item = matches[focusedIndex()] ?? matches[0];
-        if (item != null) {
-          select(item);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      const consume = () => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+      switch (e.key) {
+        case "Escape":
+          consume();
+          actions.clear_complete();
+          return;
+        case "ArrowDown":
+          consume();
+          moveSelection(selectedIndex + 1);
+          return;
+        case "ArrowUp":
+          consume();
+          moveSelection(selectedIndex - 1);
+          return;
+        case "Home":
+          consume();
+          moveSelection(0);
+          return;
+        case "End":
+          consume();
+          moveSelection(matches.length - 1);
+          return;
+        case "Enter":
+        case "Tab": {
+          consume();
+          const item = matches[selectedIndex] ?? matches[0];
+          if (item != null) {
+            select(item);
+          }
+          return;
         }
-        return;
       }
-    }
-  }
+    };
+    document.addEventListener("keydown", key, true);
+    return () => document.removeEventListener("keydown", key, true);
+  }, [
+    actions,
+    complete,
+    currentCode,
+    currentCursorIndex,
+    id,
+    matches,
+    selectedIndex,
+  ]);
 
   function getStyle(): CSSProperties {
     return {
@@ -230,14 +271,23 @@ export function Complete({ actions, id, complete }: Props) {
         ref={menuRef}
         aria-label="Code completions"
         className="dropdown-menu cocalc-complete"
-        onKeyDown={key}
-        role="menu"
+        role="listbox"
         style={{
           maxHeight: "min(50vh, 24rem)",
           overflowY: "auto",
         }}
       >
-        {matches.map(renderItem)}
+        {matches.length > 0 ? (
+          matches.map(renderItem)
+        ) : (
+          <li
+            aria-disabled="true"
+            role="option"
+            style={{ padding: "3px 20px" }}
+          >
+            No matching completions
+          </li>
+        )}
       </ul>
     </div>
   );
