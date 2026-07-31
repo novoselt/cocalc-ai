@@ -145,7 +145,7 @@ describe("MinimalCell transient output states", () => {
     expect(mockCellOutputProps.isDragging).toBe(true);
   });
 
-  it("passes completion state through to CellOutput for the current cell", () => {
+  it("does not resize CellOutput when completions are open", () => {
     const cell = fromJS({
       id: "cell-1",
       cell_type: "code",
@@ -157,7 +157,7 @@ describe("MinimalCell transient output states", () => {
       is_current: true,
       complete: fromJS({ matches: [] }),
     });
-    expect(mockCellOutputProps.complete).toBe(true);
+    expect(mockCellOutputProps.complete).toBeUndefined();
   });
 });
 
