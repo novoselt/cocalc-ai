@@ -91,10 +91,11 @@ type LegacyProjectArchiveDeps = {
     used: number;
     warning?: string;
   }>;
-  setProjectQuota?: (
-    project_id: string,
-    size: number | string,
-  ) => Promise<void>;
+  beginProjectQuotaOverride?: (opts: {
+    project_id: string;
+    operation_id: string;
+    minimum_bytes: number;
+  }) => Promise<{ release: () => Promise<void> }>;
   setProjectQuotaGraceActive?: (project_id: string, active: boolean) => void;
   setProjectArchiveRestoreActive?: (
     project_id: string,
@@ -181,6 +182,24 @@ function restoredProjectQuotaBytes({
       RESTORED_PROJECT_QUOTA_HEADROOM_BYTES,
   );
   return Math.max(previous_quota_bytes ?? 0, restoredSize);
+}
+
+export function legacyRestoreTemporaryQuotaBytes({
+  previous_quota_bytes,
+  current_used_bytes,
+  archive_uncompressed_bytes,
+}: {
+  previous_quota_bytes?: number;
+  current_used_bytes: number;
+  archive_uncompressed_bytes: number;
+}): number {
+  return restoredProjectQuotaBytes({
+    previous_quota_bytes,
+    // Extraction can add the entire archive before replacing or removing any
+    // existing extents. Use the additive upper bound rather than assuming
+    // archive bytes replace current usage.
+    restored_bytes: current_used_bytes + archive_uncompressed_bytes,
+  });
 }
 
 function archivePathMatchesRoot(path: string, root: string): boolean {
@@ -829,7 +848,7 @@ function defaultSafetySnapshotName(): string {
 export function createLegacyProjectArchiveHandlers({
   getOrEnsureVolume,
   getProjectQuota,
-  setProjectQuota,
+  beginProjectQuotaOverride,
   setProjectQuotaGraceActive,
   setProjectArchiveRestoreActive,
   markProjectArchiveInitialBackupExempt,
@@ -1091,6 +1110,7 @@ export function createLegacyProjectArchiveHandlers({
       let quotaSizeToRestore: number | undefined;
       let quotaGraceEnabled = false;
       let quotaGraceMarkedActive = false;
+      let quotaOverride: { release: () => Promise<void> } | undefined;
       const tmpRoot = archiveRestoreTmpRoot();
       await mkdir(tmpRoot, { recursive: true });
       tmpDir = await mkdtemp(join(tmpRoot, `${project_id}-`));
@@ -1102,42 +1122,6 @@ export function createLegacyProjectArchiveHandlers({
           dest: archivePath,
           lro,
         });
-        if (temporary_quota_grace) {
-          if (getProjectQuota == null || setProjectQuota == null) {
-            throw new Error(
-              "legacy project archive restore requested quota grace without quota helpers",
-            );
-          } else {
-            try {
-              setProjectQuotaGraceActive?.(project_id, true);
-              quotaGraceMarkedActive = true;
-              const quota = await getProjectQuota(project_id);
-              if (quota.size > 0) {
-                savedQuotaSize = quota.size;
-                quotaSizeToRestore = savedQuotaSize;
-                publishArchiveProgress({
-                  lro,
-                  phase: "quota",
-                  message: "temporarily lifting project quota for migration",
-                  progress: 47,
-                  detail: {
-                    previous_quota_bytes: quota.size,
-                    used_bytes: quota.used,
-                    warning: quota.warning,
-                  },
-                });
-                await setProjectQuota(project_id, "none");
-                quotaGraceEnabled = true;
-              }
-            } catch (err) {
-              logger.warn(
-                "legacy project archive restore failed to enable quota grace",
-                { project_id, err: `${err}` },
-              );
-              throw err;
-            }
-          }
-        }
         const exclude = normalizeProjectArchivePathRoots(
           LEGACY_PROJECT_ARCHIVE_MANAGED_EXCLUDE_ROOTS,
         );
@@ -1174,6 +1158,50 @@ export function createLegacyProjectArchiveHandlers({
         }
         if (member_list_path != null) {
           await chmod(member_list_path, 0o644);
+        }
+        if (temporary_quota_grace) {
+          if (getProjectQuota == null || beginProjectQuotaOverride == null) {
+            throw new Error(
+              "legacy project archive restore requested quota grace without quota helpers",
+            );
+          }
+          try {
+            setProjectQuotaGraceActive?.(project_id, true);
+            quotaGraceMarkedActive = true;
+            const quota = await getProjectQuota(project_id);
+            if (quota.size > 0) {
+              savedQuotaSize = quota.size;
+              quotaSizeToRestore = legacyRestoreTemporaryQuotaBytes({
+                previous_quota_bytes: savedQuotaSize,
+                current_used_bytes: quota.used,
+                archive_uncompressed_bytes: uncompressed_bytes,
+              });
+              publishArchiveProgress({
+                lro,
+                phase: "quota",
+                message: "temporarily increasing project quota for migration",
+                progress: 47,
+                detail: {
+                  previous_quota_bytes: quota.size,
+                  used_bytes: quota.used,
+                  temporary_minimum_bytes: quotaSizeToRestore,
+                  warning: quota.warning,
+                },
+              });
+              quotaOverride = await beginProjectQuotaOverride({
+                project_id,
+                operation_id: lro?.op_id ?? randomUUID(),
+                minimum_bytes: quotaSizeToRestore,
+              });
+              quotaGraceEnabled = true;
+            }
+          } catch (err) {
+            logger.warn(
+              "legacy project archive restore failed to enable quota grace",
+              { project_id, err: `${err}` },
+            );
+            throw err;
+          }
         }
         const homeStat = await stat(home);
         const extraction = await extractProjectArchiveTar({
@@ -1251,16 +1279,16 @@ export function createLegacyProjectArchiveHandlers({
         };
       } finally {
         setProjectArchiveRestoreActive?.(project_id, false);
-        if (quotaGraceEnabled && quotaSizeToRestore != null) {
+        if (quotaOverride != null) {
           try {
-            await setProjectQuota?.(project_id, quotaSizeToRestore);
+            await quotaOverride.release();
             publishArchiveProgress({
               lro,
               phase: "quota",
-              message: "set project quota after migration",
+              message: "restored persistent project quota after migration",
               progress: 98,
               detail: {
-                quota_bytes: quotaSizeToRestore,
+                temporary_minimum_bytes: quotaSizeToRestore,
               },
             });
           } catch (err) {

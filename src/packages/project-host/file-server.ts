@@ -129,10 +129,12 @@ import {
   acceptProjectVolumeQuotaDesired,
   deleteProjectVolumeQuotas,
   invalidateProjectVolumeQuota,
-  markProjectVolumeQuotaApplied,
-  markProjectVolumeQuotaApplying,
   markProjectVolumeQuotaFailed,
 } from "./sqlite/volume-quotas";
+import {
+  deleteProjectVolumeQuotaOverrides,
+  effectiveProjectVolumeQuotaBytes,
+} from "./sqlite/volume-quota-overrides";
 import {
   currentProjectFilesystemQuotaState,
   reconcileProjectFilesystemQuotaState,
@@ -227,6 +229,7 @@ import {
   uploadBackupIndexObject,
 } from "./backup-index-object-store";
 import { createLegacyProjectArchiveHandlers } from "./legacy-migration/project-archive";
+import { ProjectVolumeQuotaManager } from "./project-volume-quota-manager";
 
 type SshTarget = { type: "project"; project_id: string };
 
@@ -266,6 +269,14 @@ const PROJECT_QUOTA_REPAIR_BATCH_SIZE = Math.max(
   1,
   Math.min(256, envToInt("COCALC_PROJECT_QUOTA_REPAIR_BATCH_SIZE", 32)),
 );
+const PROJECT_QUOTA_OVERRIDE_SCAVENGE_MS = Math.max(
+  60_000,
+  envToInt("COCALC_PROJECT_QUOTA_OVERRIDE_SCAVENGE_MS", 5 * 60_000),
+);
+const PROJECT_QUOTA_OVERRIDE_DEFAULT_TTL_MS = Math.max(
+  60 * 60_000,
+  envToInt("COCALC_PROJECT_QUOTA_OVERRIDE_DEFAULT_TTL_MS", 12 * 60 * 60_000),
+);
 const sshWakeInFlight = new Map<string, Promise<number | null>>();
 const quotaCache = new Map<
   string,
@@ -300,11 +311,33 @@ const LEGACY_MIGRATION_INITIAL_BACKUP_TAGS = [
   "legacy-migration-initial",
   "scheduled",
 ];
+const projectVolumeQuotaManager = new ProjectVolumeQuotaManager(
+  {
+    observe: async (project_id, volume_kind) => {
+      const vol = await getVolume(project_id, volume_kind === "scratch");
+      return await vol.quota.get();
+    },
+    applyRaw: async (opts) => await applyManagedProjectVolumeQuotaRaw(opts),
+  },
+  logger,
+);
 const legacyProjectArchiveHandlers = createLegacyProjectArchiveHandlers({
   getOrEnsureVolume,
   getProjectQuota: async (project_id) => await getQuota({ project_id }),
-  setProjectQuota: async (project_id, size) =>
-    await setQuota({ project_id, size }),
+  beginProjectQuotaOverride: async ({
+    project_id,
+    operation_id,
+    minimum_bytes,
+  }) =>
+    await projectVolumeQuotaManager.beginTemporaryOverride({
+      project_id,
+      operation_id,
+      kind: "legacy_project_archive_restore",
+      minimum_bytes,
+      expires_at: Date.now() + PROJECT_QUOTA_OVERRIDE_DEFAULT_TTL_MS,
+      operation_class: "legacy_project_archive_restore",
+      priority: "lifecycle",
+    }),
   setProjectQuotaGraceActive: (project_id, active) => {
     if (active) {
       projectQuotaGraceActive.add(project_id);
@@ -445,6 +478,46 @@ function volumeName(project_id: string, scratch?: boolean) {
 
 function managedVolumeKind(scratch?: boolean): "home" | "scratch" {
   return scratch ? "scratch" : "home";
+}
+
+function managedProjectVolumeName(
+  name: string,
+): { project_id: string; volume_kind: "home" | "scratch" } | undefined {
+  if (!name.startsWith("project-")) return;
+  const raw = name.slice("project-".length);
+  const scratch = raw.endsWith("-scratch");
+  const project_id = scratch ? raw.slice(0, -"-scratch".length) : raw;
+  if (!isValidUUID(project_id)) return;
+  return {
+    project_id,
+    volume_kind: scratch ? "scratch" : "home",
+  };
+}
+
+function withManagedTemporaryQuotaOverride<T>({
+  subvolume_name,
+  operation,
+  minimum_bytes,
+  run,
+}: {
+  subvolume_name: string;
+  operation: string;
+  minimum_bytes: number;
+  run: () => Promise<T>;
+}): Promise<T> | undefined {
+  const managed = managedProjectVolumeName(subvolume_name);
+  if (!managed) return;
+  return projectVolumeQuotaManager.withTemporaryOverride(
+    {
+      ...managed,
+      kind: "snapshot_cleanup",
+      minimum_bytes,
+      expires_at: Date.now() + PROJECT_QUOTA_OVERRIDE_DEFAULT_TTL_MS,
+      operation_class: operation,
+      priority: "interactive",
+    },
+    run,
+  );
 }
 
 function currentFilesystemState() {
@@ -1272,6 +1345,7 @@ export async function deleteVolume(
       volume_kind: "scratch",
     });
     deleteProjectVolumeQuotas(project_id);
+    deleteProjectVolumeQuotaOverrides(project_id);
     invalidateProjectFsServer(project_id);
   });
   if (opts.reportProvisioned !== false) {
@@ -2229,6 +2303,67 @@ async function getQuota({
   }
 }
 
+async function applyManagedProjectVolumeQuotaRaw({
+  project_id,
+  volume_kind,
+  size,
+  operation_id,
+  operation_class,
+  priority = "interactive",
+}: {
+  project_id: string;
+  volume_kind: "home" | "scratch";
+  size: number;
+  operation_id?: string;
+  operation_class: string;
+  priority?: "lifecycle" | "interactive" | "scheduled" | "scavenger";
+}): Promise<{ volume_identity: string }> {
+  const target = Math.floor(size);
+  if (!Number.isFinite(target) || target <= 0) {
+    throw new Error("raw managed project quota must be finite and positive");
+  }
+  const scratch = volume_kind === "scratch";
+  const vol = await getVolume(project_id, scratch);
+  const volume_identity = await recordManagedProjectVolume({
+    project_id,
+    scratch,
+    path: vol.path,
+  });
+  if ((await vol.quota.get()).size !== target) {
+    await vol.quota.set(target, {
+      project_id,
+      volume_kind,
+      operation_id,
+      operation_class,
+      priority,
+    });
+  }
+  invalidateQuotaCache(project_id, scratch);
+  return { volume_identity };
+}
+
+export async function reconcileManagedProjectVolumeQuota({
+  project_id,
+  volume_kind,
+  operation_id,
+  operation_class,
+  priority,
+}: {
+  project_id: string;
+  volume_kind: "home" | "scratch";
+  operation_id?: string;
+  operation_class: string;
+  priority?: "lifecycle" | "interactive" | "scheduled" | "scavenger";
+}): Promise<number> {
+  return await projectVolumeQuotaManager.applyEffectiveQuota({
+    project_id,
+    volume_kind,
+    operation_id,
+    operation_class,
+    priority,
+  });
+}
+
 async function setQuota({
   project_id,
   size,
@@ -2239,12 +2374,21 @@ async function setQuota({
   scratch?: boolean;
 }): Promise<void> {
   logger.debug("setQuota", { project_id, scratch });
-  if (fs == null) {
-    throw Error("file server not initialized");
+  const bytes = Number(size);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    throw new Error("managed project quotas must be finite and positive");
   }
-  const vol = await fs.subvolumes.get(volumeName(project_id, scratch));
-  await vol.quota.set(size);
-  invalidateQuotaCache(project_id, scratch);
+  const volume_kind = managedVolumeKind(scratch);
+  acceptProjectVolumeQuotaDesired({
+    project_id,
+    volume_kind,
+    desired_bytes: Math.floor(bytes),
+  });
+  await reconcileManagedProjectVolumeQuota({
+    project_id,
+    volume_kind,
+    operation_class: "interactive_quota_update",
+  });
 }
 
 function projectQuotaRepairEnabled(): boolean {
@@ -2280,7 +2424,12 @@ async function repairProjectVolumeQuota({
     desired_bytes: desired,
     desired_revision,
   });
-  const target = acceptance.row.desired_bytes;
+  const effective = effectiveProjectVolumeQuotaBytes({
+    project_id,
+    volume_kind: scratch ? "scratch" : "home",
+    persistent_bytes: acceptance.row.desired_bytes,
+  });
+  const target = effective.effective_bytes;
   const vol = await fs.subvolumes.get(volumeName(project_id, scratch));
   if (!(await exists(vol.path))) {
     markProjectVolumeQuotaFailed({
@@ -2291,53 +2440,59 @@ async function repairProjectVolumeQuota({
     });
     return "missing";
   }
-  const volumeIdentity = await recordManagedProjectVolume({
-    project_id,
-    scratch,
-    path: vol.path,
-  });
   const current = await vol.quota.get();
-  if (current.size === target) {
-    markProjectVolumeQuotaApplied({
+  const repaired = current.size !== target;
+  if (repaired) {
+    logger.warn("repairing project btrfs quota limit", {
       project_id,
-      volume_kind: scratch ? "scratch" : "home",
-      desired_bytes: target,
-      desired_revision: acceptance.row.desired_revision,
-      volume_identity: volumeIdentity,
+      scratch: scratch === true,
+      current_size: current.size,
+      desired_size: target,
+      warning: current.warning,
     });
-    return "ok";
   }
-  logger.warn("repairing project btrfs quota limit", {
-    project_id,
-    scratch: scratch === true,
-    current_size: current.size,
-    desired_size: target,
-    warning: current.warning,
-  });
-  markProjectVolumeQuotaApplying({
-    project_id,
-    volume_kind: scratch ? "scratch" : "home",
-  });
-  await vol.quota.set(target, {
+  await reconcileManagedProjectVolumeQuota({
     project_id,
     volume_kind: scratch ? "scratch" : "home",
     operation_class: "scheduled_quota_audit",
     priority: "scheduled",
   });
-  markProjectVolumeQuotaApplied({
-    project_id,
-    volume_kind: scratch ? "scratch" : "home",
-    desired_bytes: target,
-    desired_revision: acceptance.row.desired_revision,
-    volume_identity: volumeIdentity,
-  });
-  invalidateQuotaCache(project_id, scratch);
-  return "repaired";
+  return repaired ? "repaired" : "ok";
 }
 
 let quotaRepairRunning = false;
 let quotaRepairTimer: ReturnType<typeof setInterval> | undefined;
 let quotaRepairCursor = "";
+let quotaOverrideScavengerRunning = false;
+let quotaOverrideScavengerTimer: ReturnType<typeof setInterval> | undefined;
+
+async function scavengeExpiredProjectQuotaOverrides(): Promise<void> {
+  if (quotaOverrideScavengerRunning) return;
+  quotaOverrideScavengerRunning = true;
+  try {
+    const result = await projectVolumeQuotaManager.recoverUnreleasedOverrides({
+      reason: "expired",
+      expired_before: Date.now(),
+      limit: 256,
+    });
+    if (result.released > 0 || result.errors > 0 || result.remaining > 0) {
+      logger.warn("scavenged expired project quota overrides", result);
+    }
+  } finally {
+    quotaOverrideScavengerRunning = false;
+  }
+}
+
+function startProjectQuotaOverrideScavenger(): void {
+  if (quotaOverrideScavengerTimer != null) return;
+  quotaOverrideScavengerTimer = setInterval(() => {
+    void scavengeExpiredProjectQuotaOverrides();
+  }, PROJECT_QUOTA_OVERRIDE_SCAVENGE_MS);
+  quotaOverrideScavengerTimer.unref?.();
+  logger.info("started project quota override scavenger", {
+    sweepMs: PROJECT_QUOTA_OVERRIDE_SCAVENGE_MS,
+  });
+}
 
 async function repairProjectQuotaLimits(
   context: "periodic" | "manual",
@@ -5728,6 +5883,7 @@ export async function initFileServer({
       fs = await filesystem({
         mount: fileServerMountpoint,
         rustic: resolvedRusticRepo,
+        withTemporaryQuotaOverride: withManagedTemporaryQuotaOverride,
       });
     } else {
       const imageDir = join(data, "btrfs", "image");
@@ -5748,6 +5904,7 @@ export async function initFileServer({
         size: "25G",
         mount: mountPoint,
         rustic: resolvedRusticRepo,
+        withTemporaryQuotaOverride: withManagedTemporaryQuotaOverride,
       });
     }
   }
@@ -5766,6 +5923,21 @@ export async function initFileServer({
     quota_epoch: filesystemQuotaState.quota_epoch,
     quota_mode_reconciled: quotaRuntime.reconciled,
   });
+  const overrideRecovery =
+    await projectVolumeQuotaManager.recoverUnreleasedOverrides({
+      reason: "restart",
+      limit: 4096,
+    });
+  if (
+    overrideRecovery.released > 0 ||
+    overrideRecovery.errors > 0 ||
+    overrideRecovery.remaining > 0
+  ) {
+    logger.warn("recovered temporary project volume quota overrides", {
+      ...overrideRecovery,
+    });
+  }
+  startProjectQuotaOverrideScavenger();
 
   logger.debug("initFileServer: create conat server");
 

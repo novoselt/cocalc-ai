@@ -71,6 +71,17 @@ export interface Options {
   // Otherwise, if this path does not exist, it will be created a new rustic repo
   // initialized here.
   rustic: string;
+
+  // Managed callers can durably account for temporary quota headroom. Return
+  // undefined for subvolumes that are not managed by the caller.
+  withTemporaryQuotaOverride?: <T>(opts: {
+    subvolume_name: string;
+    operation: string;
+    minimum_bytes: number;
+    current_size: number;
+    current_used: number;
+    run: () => Promise<T>;
+  }) => Promise<T> | undefined;
 }
 
 let mountLock = false;

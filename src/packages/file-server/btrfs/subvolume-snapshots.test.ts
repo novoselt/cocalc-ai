@@ -209,6 +209,32 @@ describe("SubvolumeSnapshots simple-quota snapshot policy", () => {
     expect(deleteOrder).toBeLessThan(restoreOrder);
   });
 
+  it("delegates temporary quota relief to a managed override hook", async () => {
+    const subvolume = createSubvolumeWithSnapshots(["snap1"]) as any;
+    const withTemporaryQuotaOverride = jest.fn(
+      async ({ run }: { run: () => Promise<void> }) => await run(),
+    );
+    subvolume.filesystem.opts.withTemporaryQuotaOverride =
+      withTemporaryQuotaOverride;
+    const snapshots = new SubvolumeSnapshots(subvolume);
+
+    await snapshots.delete("snap1");
+
+    expect(withTemporaryQuotaOverride).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subvolume_name: "project-1",
+        operation: "delete-snapshot",
+        minimum_bytes: 150,
+        current_size: 100,
+        current_used: 100,
+      }),
+    );
+    expect(subvolume.quota.set).not.toHaveBeenCalled();
+    expect(btrfsMock).toHaveBeenCalledWith({
+      args: ["subvolume", "delete", "/mnt/test/project-1/.snapshots/snap1"],
+    });
+  });
+
   it("restores project quota when snapshot deletion fails", async () => {
     btrfsMock.mockRejectedValueOnce(new Error("delete failed"));
     const subvolume = createSubvolumeWithSnapshots(["snap1"]) as any;
