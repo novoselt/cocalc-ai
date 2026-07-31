@@ -21,7 +21,6 @@ interface Props {
   autoRetry?: boolean;
   fallback?: ReactNode | ((props: FallbackProps) => ReactNode);
   resetKeys?: readonly unknown[];
-  resetWhen?: boolean;
 }
 
 interface State {
@@ -73,7 +72,6 @@ export class CocalcErrorBoundary extends Component<Props, State> {
   componentDidUpdate(previousProps: Props): void {
     if (
       this.state.hasError &&
-      this.props.resetWhen !== false &&
       resetKeysChanged(previousProps.resetKeys, this.props.resetKeys)
     ) {
       this.reset(0);

@@ -372,7 +372,6 @@ const EditorContent: React.FC<EditorContentProps> = ({
   component,
 }: EditorContentProps) => {
   const { projectAccess } = useProjectContext();
-  const connectionStatus = useTypedRedux("page", "connection_status");
   const editor_container_ref = useRef<any>(null);
   const sideChatDesc = useMemo(
     () => getExternalSideChatDesc(project_id, path),
@@ -387,31 +386,17 @@ const EditorContent: React.FC<EditorContentProps> = ({
   const editor = (
     <CocalcErrorBoundary
       autoRetry={false}
-      resetKeys={[
-        component.redux_name,
-        component.runtime_generation,
-        connectionStatus,
-      ]}
-      resetWhen={connectionStatus === "connected"}
+      resetKeys={[component.redux_name, component.runtime_generation]}
       scope="project.editor"
-      fallback={({ retry }) =>
-        connectionStatus === "connected" ? (
-          <Alert
-            action={<Button onClick={retry}>Reload editor</Button>}
-            description="The error was reported automatically. Other project tools remain available."
-            message="This editor could not be displayed"
-            showIcon
-            type="warning"
-          />
-        ) : (
-          <Alert
-            description="The editor will retry automatically after CoCalc reconnects."
-            message="Connection interrupted"
-            showIcon
-            type="warning"
-          />
-        )
-      }
+      fallback={({ retry }) => (
+        <Alert
+          action={<Button onClick={retry}>Reload editor</Button>}
+          description="The error was reported automatically. Other project tools remain available."
+          message="This editor could not be displayed"
+          showIcon
+          type="warning"
+        />
+      )}
     >
       <Editor
         key={`${component.redux_name ?? "loading"}:${
