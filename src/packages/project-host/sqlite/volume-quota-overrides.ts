@@ -61,6 +61,10 @@ function ensureTable(): void {
     `CREATE INDEX IF NOT EXISTS ${TABLE}_active_expiry_idx
        ON ${TABLE}(state, expires_at, created_at)`,
   );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS ${TABLE}_released_updated_idx
+       ON ${TABLE}(state, updated_at)`,
+  );
   initialized = true;
 }
 
@@ -323,6 +327,30 @@ export function completeProjectVolumeQuotaOverrideRelease(
     )
     .run(Date.now(), override_id);
   return Number(result.changes) === 1;
+}
+
+export function pruneReleasedProjectVolumeQuotaOverrides({
+  released_before,
+  limit = 512,
+}: {
+  released_before: number;
+  limit?: number;
+}): number {
+  ensureTable();
+  const boundedLimit = Math.max(1, Math.min(4096, Math.floor(limit)));
+  const result = getDatabase()
+    .prepare(
+      `DELETE FROM ${TABLE}
+        WHERE override_id IN (
+          SELECT override_id
+          FROM ${TABLE}
+          WHERE state='released' AND updated_at < ?
+          ORDER BY updated_at ASC
+          LIMIT ?
+        )`,
+    )
+    .run(released_before, boundedLimit);
+  return Number(result.changes);
 }
 
 export function deleteProjectVolumeQuotaOverrides(project_id: string): void {

@@ -134,6 +134,7 @@ import {
 import {
   deleteProjectVolumeQuotaOverrides,
   effectiveProjectVolumeQuotaBytes,
+  pruneReleasedProjectVolumeQuotaOverrides,
 } from "./sqlite/volume-quota-overrides";
 import {
   currentProjectFilesystemQuotaState,
@@ -276,6 +277,13 @@ const PROJECT_QUOTA_OVERRIDE_SCAVENGE_MS = Math.max(
 const PROJECT_QUOTA_OVERRIDE_DEFAULT_TTL_MS = Math.max(
   60 * 60_000,
   envToInt("COCALC_PROJECT_QUOTA_OVERRIDE_DEFAULT_TTL_MS", 12 * 60 * 60_000),
+);
+const PROJECT_QUOTA_OVERRIDE_HISTORY_RETENTION_MS = Math.max(
+  24 * 60 * 60_000,
+  envToInt(
+    "COCALC_PROJECT_QUOTA_OVERRIDE_HISTORY_RETENTION_MS",
+    7 * 24 * 60 * 60_000,
+  ),
 );
 const sshWakeInFlight = new Map<string, Promise<number | null>>();
 const quotaCache = new Map<
@@ -2477,6 +2485,16 @@ async function scavengeExpiredProjectQuotaOverrides(): Promise<void> {
     });
     if (result.released > 0 || result.errors > 0 || result.remaining > 0) {
       logger.warn("scavenged expired project quota overrides", result);
+    }
+    const pruned = pruneReleasedProjectVolumeQuotaOverrides({
+      released_before: Date.now() - PROJECT_QUOTA_OVERRIDE_HISTORY_RETENTION_MS,
+      limit: 512,
+    });
+    if (pruned > 0) {
+      logger.info("pruned released project quota override history", {
+        pruned,
+        retention_ms: PROJECT_QUOTA_OVERRIDE_HISTORY_RETENTION_MS,
+      });
     }
   } finally {
     quotaOverrideScavengerRunning = false;

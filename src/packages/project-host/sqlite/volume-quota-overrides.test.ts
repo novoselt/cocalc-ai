@@ -113,4 +113,56 @@ describe("project volume quota overrides", () => {
       }).effective_bytes,
     ).toBe(150);
   });
+
+  it("prunes released history in bounded batches", async () => {
+    const overrides = await import("./volume-quota-overrides");
+    for (const operation_id of ["old-1", "old-2", "keep"]) {
+      const row = overrides.createProjectVolumeQuotaOverride({
+        project_id: "project-1",
+        volume_kind: "home",
+        operation_id,
+        kind: "snapshot_cleanup",
+        minimum_bytes: 150,
+      });
+      overrides.releaseProjectVolumeQuotaOverride(row.override_id);
+      overrides.completeProjectVolumeQuotaOverrideRelease(row.override_id);
+    }
+    const { getDatabase } = await import("@cocalc/lite/hub/sqlite/database");
+    getDatabase()
+      .prepare(
+        `UPDATE project_volume_quota_overrides
+            SET updated_at=?
+          WHERE operation_id IN ('old-1', 'old-2')`,
+      )
+      .run(100);
+
+    expect(
+      overrides.pruneReleasedProjectVolumeQuotaOverrides({
+        released_before: 200,
+        limit: 1,
+      }),
+    ).toBe(1);
+    expect(
+      overrides.pruneReleasedProjectVolumeQuotaOverrides({
+        released_before: 200,
+        limit: 10,
+      }),
+    ).toBe(1);
+    expect(
+      overrides.pruneReleasedProjectVolumeQuotaOverrides({
+        released_before: 200,
+        limit: 10,
+      }),
+    ).toBe(0);
+    const keep = getDatabase()
+      .prepare(
+        `SELECT override_id
+           FROM project_volume_quota_overrides
+          WHERE operation_id='keep'`,
+      )
+      .get() as { override_id: string };
+    expect(
+      overrides.getProjectVolumeQuotaOverride(keep.override_id)?.state,
+    ).toBe("released");
+  });
 });
