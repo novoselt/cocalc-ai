@@ -23,10 +23,7 @@ import { ACCOUNT_ID_COOKIE } from "@cocalc/frontend/client/client";
 import { parseManagedEgressBlockedError } from "@cocalc/frontend/purchases/managed-egress-blocked";
 import { getControlPlaneAuthBootstrap } from "@cocalc/frontend/auth/api";
 import { waitForAccountTableConnectedForSignIn } from "./wait-for-account-table-connected";
-import {
-  isExamMode,
-  waitForExamModeConfiguration,
-} from "@cocalc/frontend/customize/exam-mode";
+import { waitForExamModeConfiguration } from "@cocalc/frontend/customize/exam-mode";
 
 export function init(redux) {
   // Register account store
@@ -68,7 +65,7 @@ export function init(redux) {
     if (!account_id) {
       return;
     }
-    if (isExamMode()) {
+    if (await waitForExamModeConfiguration()) {
       authBootstrapLoadedFor = account_id;
       return;
     }

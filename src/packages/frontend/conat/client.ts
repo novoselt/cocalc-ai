@@ -135,6 +135,11 @@ const AGENT_PLAN_TIMEOUT = 10 * 60_000;
 const AGENT_RUN_TIMEOUT = 20 * 60_000;
 
 const DEBUG = false;
+
+function usesDefaultProjectConnection(): boolean {
+  return lite || usesHubProjectRuntime() || isExamMode();
+}
+
 const PROJECT_HOST_ROUTED_HUB_METHODS = new Set<string>([
   "projects.codexDeviceAuthStart",
   "projects.codexDeviceAuthStatus",
@@ -1291,7 +1296,7 @@ export class ConatClient extends EventEmitter {
   private getProjectRoutingInfo(
     project_id: string,
   ): HostRoutingInfo | undefined {
-    if (lite || usesHubProjectRuntime()) {
+    if (usesDefaultProjectConnection()) {
       return;
     }
     const publicShareRouting =
@@ -1329,7 +1334,7 @@ export class ConatClient extends EventEmitter {
   }
 
   private getProjectHostId(project_id: string): string | undefined {
-    if (lite || usesHubProjectRuntime()) {
+    if (usesDefaultProjectConnection()) {
       return;
     }
     const project_map = redux.getStore("projects")?.get("project_map");
@@ -1353,7 +1358,7 @@ export class ConatClient extends EventEmitter {
   private ensureProjectRoutingInfo = async (
     project_id: string,
   ): Promise<HostRoutingInfo | undefined> => {
-    if (lite || usesHubProjectRuntime()) {
+    if (usesDefaultProjectConnection()) {
       return;
     }
     const project_map = redux.getStore("projects")?.get("project_map");
@@ -3147,7 +3152,7 @@ export class ConatClient extends EventEmitter {
     if (!isValidUUID(project_id)) {
       throw Error(`project_id = '${project_id}' must be a valid uuid`);
     }
-    if (lite || usesHubProjectRuntime()) {
+    if (usesDefaultProjectConnection()) {
       return this.conat();
     }
     const routing = await this.ensureProjectRoutingInfo(project_id);
@@ -3185,7 +3190,7 @@ export class ConatClient extends EventEmitter {
     if (!isValidUUID(project_id)) {
       throw Error(`project_id = '${project_id}' must be a valid uuid`);
     }
-    if (lite || usesHubProjectRuntime()) {
+    if (usesDefaultProjectConnection()) {
       return this.conat();
     }
     const routing = this.getProjectRoutingInfo(project_id);
@@ -3229,8 +3234,7 @@ export class ConatClient extends EventEmitter {
     }
     const subject = `hub.account.${account_id}.${service}`;
     const routeToProjectHost =
-      !lite &&
-      !usesHubProjectRuntime() &&
+      !usesDefaultProjectConnection() &&
       !!project_id &&
       PROJECT_HOST_ROUTED_HUB_METHODS.has(name) &&
       isValidUUID(project_id);
@@ -3337,7 +3341,7 @@ export class ConatClient extends EventEmitter {
     if (!isValidUUID(project_id)) {
       throw Error(`project_id='${project_id}' must be a valid uuid`);
     }
-    if (lite || usesHubProjectRuntime()) {
+    if (usesDefaultProjectConnection()) {
       try {
         const { bytes, count } = await this.conat().publish(subject, mesg, {
           timeout,
