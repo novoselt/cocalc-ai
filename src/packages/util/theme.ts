@@ -126,7 +126,14 @@ const MAIN_COLORS = {
   RUN: "#389e0d", // the green color of the run button
 
   FEATURE_BLUE: "#096dd9",
+  FEATURE_LATEX_GOLD: "#bf7b00",
   FEATURE_JULIA_PURPLE: "#9558b2",
+  FEATURE_OCTAVE_BLUE: "#2f6fda",
+  FEATURE_ORANGE: "#ad6800",
+  FEATURE_PURPLE: "#7c3aed",
+  FEATURE_R_BLUE: "#1d6fb8",
+  FEATURE_RED: "#d4380d",
+  FEATURE_SAGE_BLUE: "#0f80c1",
   FEATURE_TEAL: "#278c83",
 } as const;
 

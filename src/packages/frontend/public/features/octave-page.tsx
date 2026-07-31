@@ -7,6 +7,7 @@ import { Button, Col, Flex, Row, Typography } from "antd";
 
 import type { IconName } from "@cocalc/frontend/components/icon";
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
+import { COLORS } from "@cocalc/util/theme";
 import {
   PUBLIC_ELEVATION,
   PUBLIC_COLORS,
@@ -151,7 +152,7 @@ export default function OctaveFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#2f6fda"
+          accent={COLORS.FEATURE_OCTAVE_BLUE}
           alt="A Jupyter notebook running the GNU Octave kernel in CoCalc"
           anchor="a-notebooks"
           icon="jupyter"
@@ -174,7 +175,7 @@ export default function OctaveFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#389e0d"
+          accent={COLORS.RUN}
           anchor="a-scripts"
           icon="terminal"
           title=".m files, plots, and the command line"

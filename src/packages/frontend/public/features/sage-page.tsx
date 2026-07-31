@@ -7,6 +7,7 @@ import { Button, Col, Flex, Row, Typography } from "antd";
 
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
 import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
+import { COLORS } from "@cocalc/util/theme";
 import {
   BulletList,
   featureAppPath as appPath,
@@ -61,7 +62,7 @@ export default function SageFeaturePage({
           </Col>
           <Col xs={24} lg={10}>
             <ContextList
-              accent="#389e0d"
+              accent={COLORS.RUN}
               items={[
                 {
                   icon: "sagemath",
@@ -104,7 +105,7 @@ export default function SageFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#389e0d"
+          accent={COLORS.RUN}
           alt="Using the SageMath kernel in a Jupyter notebook"
           anchor="a-notebooks"
           icon="jupyter"
@@ -133,7 +134,7 @@ export default function SageFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#7c3aed"
+          accent={COLORS.FEATURE_PURPLE}
           anchor="a-versions"
           icon="server"
           title="SageMath preinstalled"
@@ -160,7 +161,7 @@ export default function SageFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#ad6800"
+          accent={COLORS.FEATURE_ORANGE}
           alt="A LaTeX document with SageMath computations embedded via SageTeX"
           anchor="a-sagetex"
           icon="tex"
@@ -184,7 +185,7 @@ export default function SageFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#096dd9"
+          accent={COLORS.FEATURE_BLUE}
           anchor="a-commandline"
           icon="terminal"
           title="The sage REPL and .sage scripts"
@@ -205,7 +206,7 @@ export default function SageFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#d4380d"
+          accent={COLORS.FEATURE_RED}
           alt="Grading a SageMath notebook with nbgrader in a CoCalc course"
           anchor="a-teaching"
           icon="graduation-cap"

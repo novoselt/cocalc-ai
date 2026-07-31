@@ -7,6 +7,7 @@ import { Button, Col, Flex, Row, Typography } from "antd";
 
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
 import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
+import { COLORS } from "@cocalc/util/theme";
 import {
   BulletList,
   featureAppPath as appPath,
@@ -62,7 +63,7 @@ export default function RStatisticalSoftwareFeaturePage({
           </Col>
           <Col xs={24} lg={10}>
             <ContextList
-              accent="#1d6fb8"
+              accent={COLORS.FEATURE_R_BLUE}
               items={[
                 { icon: "r", label: "R with the IRkernel in notebooks" },
                 { icon: "server", label: "Browser-based R IDE with one click" },
@@ -102,7 +103,7 @@ export default function RStatisticalSoftwareFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#1d6fb8"
+          accent={COLORS.FEATURE_R_BLUE}
           alt="The same R Jupyter notebook synchronized across two views"
           anchor="a-notebooks"
           icon="jupyter"
@@ -125,7 +126,7 @@ export default function RStatisticalSoftwareFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#389e0d"
+          accent={COLORS.RUN}
           alt="A Quarto document with R and Python code next to its rendered HTML"
           anchor="a-rmarkdown"
           icon="markdown"
@@ -150,7 +151,7 @@ export default function RStatisticalSoftwareFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#ad6800"
+          accent={COLORS.FEATURE_ORANGE}
           alt="A knitr .Rnw document with R code next to its compiled PDF"
           anchor="a-knitr"
           icon="tex"
@@ -175,7 +176,7 @@ export default function RStatisticalSoftwareFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#7c3aed"
+          accent={COLORS.FEATURE_PURPLE}
           anchor="a-ide"
           icon="server"
           title="A full R IDE and Shiny apps"
@@ -196,7 +197,7 @@ export default function RStatisticalSoftwareFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#096dd9"
+          accent={COLORS.FEATURE_BLUE}
           alt="Rscript running an R file in a CoCalc terminal next to the editor"
           anchor="a-commandline"
           icon="terminal"

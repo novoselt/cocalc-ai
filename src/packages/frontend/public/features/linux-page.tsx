@@ -8,6 +8,7 @@ import { Button, Col, Flex, Row, Typography } from "antd";
 import { Icon, type IconName } from "@cocalc/frontend/components/icon";
 import { CodeBlock } from "@cocalc/frontend/public/common";
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
+import { COLORS } from "@cocalc/util/theme";
 import {
   PUBLIC_COLORS,
   PUBLIC_RADIUS,
@@ -167,7 +168,7 @@ export default function LinuxFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#096dd9"
+          accent={COLORS.FEATURE_BLUE}
           anchor="a-environment"
           icon="linux"
           title="A real Ubuntu-based system, not a restricted shell"
@@ -200,7 +201,7 @@ export default function LinuxFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#389e0d"
+          accent={COLORS.RUN}
           anchor="a-root"
           icon="wrench"
           title="Root access with sudo, and installs that persist"
@@ -226,7 +227,7 @@ export default function LinuxFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#7c3aed"
+          accent={COLORS.FEATURE_PURPLE}
           anchor="a-workflow"
           icon="code"
           imageComponent={
@@ -279,7 +280,7 @@ kill $SERVER_PID`}
 
       <PublicSection>
         <FeatureInfo
-          accent="#ad6800"
+          accent={COLORS.FEATURE_ORANGE}
           anchor="a-snapshots"
           icon="history"
           title="Snapshots every 15 minutes, backups off the host"
@@ -304,7 +305,7 @@ kill $SERVER_PID`}
 
       <PublicSection>
         <FeatureInfo
-          accent="#d4380d"
+          accent={COLORS.FEATURE_RED}
           anchor="a-servers"
           icon="server"
           title="Run web apps and services"
@@ -328,7 +329,7 @@ kill $SERVER_PID`}
 
       <PublicSection>
         <FeatureInfo
-          accent="#1d6fb8"
+          accent={COLORS.FEATURE_R_BLUE}
           anchor="a-ssh"
           icon="network-wired"
           title="SSH, scp, and rsync"
@@ -349,7 +350,7 @@ kill $SERVER_PID`}
 
       <PublicSection>
         <FeatureInfo
-          accent="#096dd9"
+          accent={COLORS.FEATURE_BLUE}
           anchor="a-monitoring"
           icon="tachometer-alt"
           title="Know what the machine is doing"
