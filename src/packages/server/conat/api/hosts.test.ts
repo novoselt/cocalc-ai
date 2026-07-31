@@ -102,6 +102,7 @@ let resolveAccountHomeBayMock: jest.Mock;
 let estimateDedicatedHostRateMock: jest.Mock;
 let reconcileDedicatedHostPurchaseSessionForAccountMock: jest.Mock;
 let getDedicatedHostWindowUsageForHostLocalMock: jest.Mock;
+let eraseActiveExamRunBeforeHostStopLocalMock: jest.Mock;
 const originalFetch = global.fetch;
 
 function dedicatedHostRateEstimate(hourly_cost_usd: string) {
@@ -293,6 +294,16 @@ jest.mock("@cocalc/server/project-host/control", () => ({
   syncProjectUsersOnHost: (...args: any[]) =>
     syncProjectUsersOnHostMock(...args),
 }));
+
+jest.mock("@cocalc/server/project-host/exam", () => {
+  const actual = jest.requireActual("@cocalc/server/project-host/exam");
+  return {
+    __esModule: true,
+    ...actual,
+    eraseActiveExamRunBeforeHostStopLocal: (...args: any[]) =>
+      eraseActiveExamRunBeforeHostStopLocalMock(...args),
+  };
+});
 
 jest.mock("@cocalc/server/project-host/bootstrap-token", () => ({
   __esModule: true,
@@ -617,6 +628,7 @@ beforeEach(() => {
     spend_5h_usd: "0",
     spend_7d_usd: "0",
   }));
+  eraseActiveExamRunBeforeHostStopLocalMock = jest.fn(async () => false);
   fetchMock = jest.fn();
   global.fetch = fetchMock as any;
   hostConnectionGetMock = jest.fn();
@@ -3002,6 +3014,9 @@ describe("hosts browser fresh auth gating", () => {
       account_id: ACCOUNT_ID,
       allow_actor_impersonation: true,
       session_hash: "session-hash",
+    });
+    expect(eraseActiveExamRunBeforeHostStopLocalMock).toHaveBeenCalledWith({
+      host: expect.objectContaining({ id: HOST_ID }),
     });
     expect(createLroMock).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "host-stop" }),

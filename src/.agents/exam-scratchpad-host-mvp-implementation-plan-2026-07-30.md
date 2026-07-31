@@ -48,8 +48,9 @@ The first version is complete only if it provides all of the following:
 8. Every workspace has a fixed CPU, memory, and disk quota.
 9. The instructor sets a maximum number of workspaces.
 10. Outbound project network access is disabled and verified fail-closed.
-11. Jupyter notebooks, files, terminals, kernels, autosave, and TimeTravel work
-    locally while the workspace exists.
+11. Jupyter notebooks, files, kernels, autosave, and TimeTravel work locally
+    while the workspace exists. Terminals are configurable per run and disabled
+    by default.
 12. Rustic backups and project snapshots are disabled.
 13. A required, editable, and cancellable automatic stop time is persisted.
 14. Deadline handling survives hub, project-host process, and VM restarts.
@@ -1173,15 +1174,18 @@ The MVP is done when:
 
 The following decisions should be confirmed before implementation starts:
 
-1. Confirm the exact UCL lockdown browser and its hostname/WebSocket rules.
+1. Confirm the exact UCL lockdown browser and its hostname/WebSocket rules.  I don't know, but test.cocalc.com worked fine with websockets
 2. Confirm whether the terminal must be enabled in the first UCL run.
-3. Choose safe minimum and maximum workspace TTL values.
-4. Choose the cleanup grace period before forced VM poweroff.
-5. Confirm the first supported managed GCP private-host configurations.
-6. Confirm the stable exam hostname suffix.
+   RESOLVED: terminal access is an instructor-configurable run setting and is
+   disabled by default.
+3. Choose safe minimum and maximum workspace TTL values.  They selected them before each exam; i.e., this should be configurable.  I think it was between 3 hours and 2 days (?).  See the cocalc source code.
+4. Choose the cleanup grace period before forced VM poweroff.     I'm not sure I understand.  Configurabe?
+5. Confirm the first supported managed GCP private-host configurations.    (?)  The instructor can just define any host they want using our existing UI for creating a project host.
+6. Confirm the stable exam hostname suffix.  I think it should be just prefix-exam-{host_id}.xxx on a host that has dns prefix-host-{host_id}.xxx, i.e., just replace "host" by "exam".  it's simple.  Alternatively just use something random like we do now with the dev server proxy. that's fine too.
 7. Confirm whether the initial production feature flag is account allowlisted
-   or admin enabled per host.
-8. Confirm the minimum operational capacity rehearsal for UCL's first exam.
+   or admin enabled per host.    My preference is explicit allowlist.  One way would be to have this be part of membership entitlement.
+8. Confirm the minimum operational capacity rehearsal for UCL's first exam.   Unknown but it doesn't matter since they make the project host to match their need and our project hosts can handle several hundred active projects at once.
+9. USER: One issue not mentioned is EGRESS.  All egress I think from all these workspace projects should be accounted for to the owner of the project host.
 
 None of these decisions should expand the MVP into identity, assessment
 delivery, submission, grading, special billing, or proctoring.

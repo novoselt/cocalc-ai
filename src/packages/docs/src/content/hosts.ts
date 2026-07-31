@@ -103,6 +103,77 @@ own real compute, run persistent services, use cloud machines economically, and
 give agents a stable Linux environment to work in.
 `;
 
+export const PROJECT_HOST_EXAMS_BODY = String.raw`
+## Exam scratchpad hosts
+
+Exam mode turns a private on-demand project host into a temporary,
+browser-based computational scratchpad for an in-person exam. Each browser gets
+a clean anonymous CoCalc project with the RootFS, CPU, memory, and disk limits
+chosen by the instructor.
+
+The first version is intentionally not an assessment system. It does not
+deliver questions, identify students, collect submissions, grade work, or
+provide proctoring. Students use notebooks and files as scratch space, then
+copy answers to paper or the institution's separate assessment system.
+
+## Prepare a host
+
+1. Create a private GCP project host using on-demand pricing, not spot pricing.
+2. Size the host for the expected number of simultaneous students. A
+   short-running exam host can be deliberately overprovisioned.
+3. Start it well before the exam and cache the exact RootFS students will use.
+4. Open the host drawer and select **Exams**.
+5. Enable exam mode, set workspace capacity and quotas, and decide whether
+   terminals are allowed. Terminals are disabled by default.
+6. Save the configuration.
+
+Exam access is initially restricted to accounts with the exam-mode entitlement.
+Normal private-host billing and spending enforcement still apply.
+
+## Prepare and run an exam
+
+Choose a cached RootFS and a required automatic stop time, then select
+**Prepare and test run**. CoCalc freezes the image digest and configuration,
+creates a real smoke-test workspace, verifies the disabled-network policy, and
+erases the test workspace before reporting the run ready.
+
+Copy the stable student URL and the newly displayed shared token. The plaintext
+token is shown only after run creation or explicit rotation. Open admission
+only when students should be allowed to create workspaces.
+
+Every student workspace:
+
+- exists only on the selected project host
+- has outbound project networking disabled
+- uses the frozen RootFS and resource limits
+- has backups and snapshots disabled
+- is billed for CPU and egress through the project-host owner
+- is erased when the run ends
+
+## Deadline and cleanup
+
+Every run has a durable deadline. Both the central control plane and a
+host-local persisted watchdog reconcile it. At the deadline, admission closes,
+all temporary workspaces and their TimeTravel history are erased, and the VM
+is powered off. The project-host record, persistent host disk, and cached
+RootFS remain so the same trusted host can be started for a later exam.
+
+Use **Stop and erase now** for early termination. Updating the deadline requires
+fresh authentication.
+
+The cleanup grace setting is a spending-safety bound for failed cleanup before
+forced poweroff; it is not extra student working time. Billing exhaustion can
+still stop a host before the exam deadline, so ensure the billing account has
+sufficient funds or trusted credit.
+
+## Lockdown browsers
+
+Allowlist the single exam hostname shown in the instructor panel, including
+secure WebSockets to that hostname. The student application, project traffic,
+files, and kernels are served from that project-host origin. Rehearse the exact
+institutional lockdown-browser configuration before the first live exam.
+`;
+
 export const PROJECT_HOST_ACCESS_BODY = String.raw`
 ## What host access controls
 

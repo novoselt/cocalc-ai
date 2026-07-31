@@ -316,6 +316,9 @@ describe("bootstrap-host promoted artifact defaults", () => {
     expect(scripts.envLines).toContain("PORT=9002");
     expect(scripts.envLines).toContain("COCALC_PROJECT_HOST_HTTPS=0");
     expect(scripts.cloudflaredConfig.enabled).toBe(true);
+    expect(scripts.cloudflaredConfig.examHostname).toBe(
+      "exam-host-123-staging.example.com",
+    );
   });
 
   it("does not let bootstrap replace an active direct route with a tunnel cname", async () => {

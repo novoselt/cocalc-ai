@@ -614,6 +614,10 @@ type LocalProjectOptions = CreateProjectOptions & {
   authorized_keys?: string;
   run_quota?: any;
   run_quota_revision?: number;
+  local_only?: boolean;
+  exam_run_id?: string;
+  usage_account_id?: string;
+  terminal_enabled?: boolean;
 };
 
 async function loadProjectStartMetadataFromMaster(
@@ -882,10 +886,18 @@ export function ensureProjectRow({
       // this is obviously temporary
       row.users[account_id] = { group: "owner" };
     }
+    row.local_only = opts.local_only === true;
+    row.exam_run_id = opts.exam_run_id ?? null;
+    row.usage_account_id = opts.usage_account_id ?? null;
+    row.terminal_enabled = opts.terminal_enabled === true;
   }
   upsertProject(row);
   if (state) {
-    if (syntheticRuntimeProbeProjects.has(project_id)) {
+    if (
+      syntheticRuntimeProbeProjects.has(project_id) ||
+      opts?.local_only === true ||
+      getProject(project_id)?.local_only === true
+    ) {
       markProjectStateReported(project_id, state);
     } else {
       reportProjectStateToMaster(
@@ -2190,6 +2202,9 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     if (!isValidUUID(project_id)) {
       throw Error("invalid project_id");
     }
+    if (getProject(project_id)?.local_only) {
+      throw Error("snapshots are disabled for ephemeral exam workspaces");
+    }
     if (!snapshot?.trim()) {
       throw Error("snapshot is required");
     }
@@ -3025,6 +3040,9 @@ export async function createBackup({
   if (!isValidUUID(project_id)) {
     throw Error("invalid project_id");
   }
+  if (getProject(project_id)?.local_only) {
+    throw Error("backups are disabled for ephemeral exam workspaces");
+  }
   const createdBy = _account_id ?? account_id ?? null;
   const op_id = uuid();
   const now = new Date();
@@ -3346,6 +3364,9 @@ export async function getBackups({
   project_id: string;
   indexed_only?: boolean;
 }) {
+  if (getProject(project_id)?.local_only) {
+    throw Error("backups are disabled for ephemeral exam workspaces");
+  }
   if (!isValidUUID(project_id)) {
     throw Error("invalid project_id");
   }

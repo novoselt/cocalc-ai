@@ -245,6 +245,46 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     ],
   },
   {
+    slug: "exam-scratchpads",
+    title: "Computational Exam Scratchpads",
+    navLabel: "Exams",
+    metadataTitle: "Secure Computational Scratchpads for In-Person Exams",
+    tagline:
+      "Give every student a clean, temporary notebook environment on dedicated compute.",
+    summary:
+      "Run browser-based Jupyter and computational scratchpads with a frozen software environment, disabled outbound networking, configurable capacity, and automatic erasure.",
+    metadataSummary:
+      "CoCalc exam scratchpad hosts provide ephemeral, network-isolated Jupyter workspaces for in-person university exams on instructor-controlled dedicated compute.",
+    docsUrl: "/docs/hosts/exam-scratchpads",
+    index: false,
+    sections: [
+      {
+        title: "A calculator, not another assessment platform",
+        paragraphs: [
+          "Students receive anonymous computational scratch space and copy answers into the institution's existing assessment workflow or onto paper. CoCalc does not require exam questions, student identities, submissions, grading, or proctoring.",
+        ],
+      },
+      {
+        title: "Predictable software and capacity",
+        bullets: [
+          "Freeze one RootFS image and digest for the whole exam",
+          "Choose CPU, memory, disk, and maximum simultaneous workspaces",
+          "Use Jupyter, files, kernels, and optionally terminals",
+          "Run on an on-demand private host sized for the exam window",
+        ],
+      },
+      {
+        title: "Ephemeral by design",
+        bullets: [
+          "Disable outbound project networking and verify it before admission opens",
+          "Disable backups and snapshots for exam workspaces",
+          "Erase every workspace and its TimeTravel history at the deadline",
+          "Automatically power off compute while retaining the reusable host and cached software",
+        ],
+      },
+    ],
+  },
+  {
     slug: "python",
     title: "Python",
     navLabel: "Python",

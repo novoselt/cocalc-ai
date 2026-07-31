@@ -35,6 +35,17 @@ export async function getRoutedHostControlClient({
         await bridge.restartCloudflared({ host_id, restart }),
       runSyntheticRuntimeProbe: async () =>
         await bridge.runSyntheticRuntimeProbe({ host_id }),
+      applyExamRun: async (apply) =>
+        await bridge.applyExamRun({ host_id, apply }),
+      getExamRunStatus: async (get) =>
+        await bridge.getExamRunStatus({ host_id, get }),
+      openExamRun: async (open) => await bridge.openExamRun({ host_id, open }),
+      updateExamRunDeadline: async (update) =>
+        await bridge.updateExamRunDeadline({ host_id, update }),
+      rotateExamRunToken: async (rotate) =>
+        await bridge.rotateExamRunToken({ host_id, rotate }),
+      closeAndCleanupExamRun: async (close) =>
+        await bridge.closeAndCleanupExamRun({ host_id, close }),
       createProject: async (create) => {
         if (!account_id) {
           throw new Error(

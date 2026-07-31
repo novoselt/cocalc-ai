@@ -343,6 +343,13 @@ import {
   drainHost,
   forceDeprovisionHost,
   gcDeletedHostRootfsImages,
+  getHostExamState,
+  setHostExamConfig,
+  createHostExamRun,
+  rotateHostExamToken,
+  openHostExamRun,
+  updateHostExamDeadline,
+  stopAndEraseHostExamRun,
   getBackupConfigLocal,
   getHostAvailability,
   getHostLog,
@@ -2320,6 +2327,14 @@ async function startHostConnectionService(): Promise<void> {
         internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
         id,
       }),
+    getHostExamState: async (opts) => await getHostExamState(opts),
+    setHostExamConfig: async (opts) => await setHostExamConfig(opts),
+    createHostExamRun: async (opts) => await createHostExamRun(opts),
+    rotateHostExamToken: async (opts) => await rotateHostExamToken(opts),
+    openHostExamRun: async (opts) => await openHostExamRun(opts),
+    updateHostExamDeadline: async (opts) => await updateHostExamDeadline(opts),
+    stopAndEraseHostExamRun: async (opts) =>
+      await stopAndEraseHostExamRun(opts),
     listHostSshAuthorizedKeys: async ({ account_id, id }) =>
       await listHostSshAuthorizedKeys({
         account_id,
@@ -2579,6 +2594,22 @@ async function startHostControlService(): Promise<void> {
       await (
         await getHostClient(host_id, 15 * 60 * 1000)
       ).runSyntheticRuntimeProbe(),
+    applyExamRun: async ({ host_id, apply }) =>
+      await (await getHostClient(host_id, 10 * 60 * 1000)).applyExamRun(apply),
+    getExamRunStatus: async ({ host_id, get }) =>
+      await (await getHostClient(host_id, 30_000)).getExamRunStatus(get),
+    openExamRun: async ({ host_id, open }) =>
+      await (await getHostClient(host_id, 60_000)).openExamRun(open),
+    updateExamRunDeadline: async ({ host_id, update }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).updateExamRunDeadline(update),
+    rotateExamRunToken: async ({ host_id, rotate }) =>
+      await (await getHostClient(host_id, 30_000)).rotateExamRunToken(rotate),
+    closeAndCleanupExamRun: async ({ host_id, close }) =>
+      await (
+        await getHostClient(host_id, 10 * 60 * 1000)
+      ).closeAndCleanupExamRun(close),
     createProject: async ({ account_id, host_id, create }) => {
       const connection = await resolveHostConnectionLocal({
         account_id,

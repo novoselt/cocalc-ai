@@ -130,14 +130,20 @@ function browserSessionSameSite(req: IncomingMessage): "Lax" | "None" {
 export function createProjectHostBrowserSessionToken({
   account_id,
   now_ms = Date.now(),
+  ttl_seconds = BROWSER_SESSION_TTL_SECONDS,
 }: {
   account_id: string;
   now_ms?: number;
+  ttl_seconds?: number;
 }): string {
+  const ttl = Math.max(
+    60,
+    Math.min(BROWSER_SESSION_TTL_SECONDS, Math.floor(ttl_seconds)),
+  );
   const payload = JSON.stringify({
     account_id,
     iat: Math.floor(now_ms / 1000),
-    exp: Math.floor(now_ms / 1000) + BROWSER_SESSION_TTL_SECONDS,
+    exp: Math.floor(now_ms / 1000) + ttl,
     nonce: randomBytes(12).toString("hex"),
   });
   const encoded = base64UrlEncode(payload);
@@ -203,16 +209,22 @@ export function resolveProjectHostBrowserSessionFromCookieHeader(
 export function buildProjectHostBrowserSessionCookie({
   req,
   sessionToken,
+  max_age_seconds = BROWSER_SESSION_TTL_SECONDS,
 }: {
   req: IncomingMessage;
   sessionToken: string;
+  max_age_seconds?: number;
 }): string {
+  const maxAge = Math.max(
+    60,
+    Math.min(BROWSER_SESSION_TTL_SECONDS, Math.floor(max_age_seconds)),
+  );
   const attrs = [
     `${PROJECT_HOST_BROWSER_SESSION_COOKIE_NAME}=${encodeURIComponent(sessionToken)}`,
     "Path=/",
     "HttpOnly",
     `SameSite=${browserSessionSameSite(req)}`,
-    `Max-Age=${BROWSER_SESSION_TTL_SECONDS}`,
+    `Max-Age=${maxAge}`,
   ];
   if (isSecureRequest(req)) {
     attrs.push("Secure");

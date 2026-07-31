@@ -10,6 +10,7 @@ import express from "express";
 import {
   attachProjectHostHttpFallbackProxy,
   attachProjectHostConatRouterProxy,
+  examHostnameFromProjectHostPublicUrl,
   isProjectHostExternalConatRouterEnabled,
   isProjectHostManagedLocalConatRouter,
   projectHostConatRouterHealthState,
@@ -197,7 +198,13 @@ describe("project-host conat router helpers", () => {
       shouldRouteProjectHostIngressToApp(request("HOST-123.EXAMPLE.COM.:443")),
     ).toBe(false);
     expect(
+      shouldRouteProjectHostIngressToApp(request("exam-123.example.com")),
+    ).toBe(false);
+    expect(
       shouldRouteProjectHostIngressToApp(request("dev-123.example.com")),
+    ).toBe(true);
+    expect(
+      shouldRouteProjectHostIngressToApp(request("exam-other.example.com")),
     ).toBe(true);
     expect(
       shouldRouteProjectHostIngressToApp(
@@ -218,6 +225,17 @@ describe("project-host conat router helpers", () => {
     expect(
       shouldRouteProjectHostIngressToApp(request("dev-123.example.com")),
     ).toBe(false);
+  });
+
+  it("derives the paired exam hostname from the public host URL", () => {
+    expect(
+      examHostnameFromProjectHostPublicUrl(
+        "https://host-123.example.com/some/path",
+      ),
+    ).toBe("exam-123.example.com");
+    expect(
+      examHostnameFromProjectHostPublicUrl("https://custom.example.com"),
+    ).toBeUndefined();
   });
 
   it("gives a custom hostname its root Conat HTTP namespace", async () => {
@@ -274,6 +292,15 @@ describe("project-host conat router helpers", () => {
       ).toEqual({
         statusCode: 200,
         body: { source: "project-host-upstream", url: "/conat/" },
+      });
+      expect(
+        await requestJson({
+          url: `http://127.0.0.1:${ingressPort}/conat/`,
+          headers: { host: "exam-123.example.com" },
+        }),
+      ).toEqual({
+        statusCode: 200,
+        body: { source: "outer-conat" },
       });
     } finally {
       await new Promise<void>((resolve) =>
@@ -348,6 +375,9 @@ describe("project-host conat router helpers", () => {
       expect(
         (await requestUpgrade("dev-123.example.com")).toLowerCase(),
       ).toContain("x-proxy-source: project-host-upstream");
+      expect(
+        (await requestUpgrade("exam-123.example.com")).toLowerCase(),
+      ).toContain("x-proxy-source: outer-conat");
     } finally {
       await new Promise<void>((resolve) =>
         ingressServer.close(() => resolve()),

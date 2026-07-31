@@ -181,6 +181,8 @@ export interface CustomizeState {
   i18n?: List<Locale>;
 
   lite?: boolean;
+  exam_mode?: boolean;
+  terminal_enabled?: boolean;
   account_id?: string;
   project_id?: string;
   project_runtime?: ProjectRuntimeConfiguration;

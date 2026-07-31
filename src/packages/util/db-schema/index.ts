@@ -71,6 +71,8 @@ import "./organizations";
 import "./password-reset";
 import "./pg-system";
 import "./project-hosts";
+import "./project-host-exam-configs";
+import "./project-host-exam-runs";
 import "./project-host-access";
 import "./project-host-bootstrap-tokens";
 import "./project-backup-repos";

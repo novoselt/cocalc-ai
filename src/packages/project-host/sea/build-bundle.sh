@@ -149,6 +149,21 @@ else
   echo "  (skipping dist; not found)"
 fi
 
+echo "- Copy static frontend and browser assets"
+if [ ! -f "packages/static/dist/app.html" ]; then
+  echo "ERROR: packages/static/dist/app.html is required for exam mode" >&2
+  exit 1
+fi
+mkdir -p "$OUT"/static "$OUT"/assets
+cp -r packages/static/dist/. "$OUT"/static/
+for asset in favicon.ico serviceWorker.js public; do
+  if [ -e "packages/assets/$asset" ]; then
+    cp -r "packages/assets/$asset" "$OUT"/assets/
+  elif [ -e "packages/assets/dist/$asset" ]; then
+    cp -r "packages/assets/dist/$asset" "$OUT"/assets/
+  fi
+done
+
 echo "- Write build identity"
 node "$ROOT/scripts/dev/write-build-identity.js" \
   --root "$ROOT" \

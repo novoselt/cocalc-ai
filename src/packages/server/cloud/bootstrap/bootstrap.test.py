@@ -1855,6 +1855,20 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("ensure_project_network_rule", script)
             self.assertIn("emit_project_metadata_rules", script)
             self.assertIn("emit_project_network_rules", script)
+            self.assertIn("set-project-network-policy)", script)
+            self.assertIn("verify-project-network-policy)", script)
+            self.assertIn("set-current-exam-run)", script)
+            self.assertIn("poweroff-exam-host)", script)
+            emit_network_body = script.split(
+                "emit_project_network_rules() {", 1
+            )[1].split("\n}\n\napply_pasta_resource_limits()", 1)[0]
+            self.assertIn('comment "%s-disabled-dns"', emit_network_body)
+            self.assertIn('comment "%s-disabled-local"', emit_network_body)
+            self.assertIn('comment "%s-disabled-reject"', emit_network_body)
+            self.assertLess(
+                emit_network_body.index('comment "%s-disabled-dns"'),
+                emit_network_body.index('comment "%s-disabled-local"'),
+            )
             emit_metadata_body = script.split(
                 "emit_project_metadata_rules() {", 1
             )[1].split("\n}\n\nemit_project_network_rules()", 1)[0]
@@ -3199,6 +3213,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                     True,
                     hostname="host.example.test",
                     port=9002,
+                    exam_hostname="exam.example.test",
                     token="token",
                     tunnel_id="tunnel-id",
                     creds_json='{"TunnelSecret":"secret"}',
@@ -3251,6 +3266,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("credentials-file: /etc/cloudflared/tunnel-id.json", config)
             self.assertIn("protocol: auto", config)
             self.assertIn("grace-period: 10s", config)
+            self.assertIn('hostname: "exam.example.test"', config)
             self.assertIn("--no-autoupdate", unit)
             self.assertNotIn("--token", unit)
             self.assertNotIn("EnvironmentFile=/etc/cloudflared/token.env", unit)

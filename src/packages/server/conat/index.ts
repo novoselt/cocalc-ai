@@ -29,6 +29,7 @@ import { startRootfsReleaseGcMaintenance } from "@cocalc/server/rootfs/gc-mainte
 import { startRootfsScanMaintenance } from "@cocalc/server/rootfs/scan-maintenance";
 import { startBackgroundAutoGrowMaintenance } from "@cocalc/server/project-host/auto-grow-maintenance";
 import { startDedicatedHostSpendMaintenance } from "@cocalc/server/project-host/spend-maintenance";
+import { startExamHostMaintenance } from "@cocalc/server/project-host/exam";
 import { startAccountProjectIndexProjectionMaintenance } from "@cocalc/server/projections/account-project-index-maintenance";
 import { startAccountCollaboratorIndexProjectionMaintenance } from "@cocalc/server/projections/account-collaborator-index-maintenance";
 import { startAccountNotificationIndexProjectionMaintenance } from "@cocalc/server/projections/account-notification-index-maintenance";
@@ -122,6 +123,7 @@ export function startConatApiBackgroundWorkers(): void {
     startLroExpirationMaintenance();
     startUsageRetentionMaintenance();
     startHostRuntimeFleetRolloutWorker();
+    startExamHostMaintenance();
   }
   startAccountProjectIndexProjectionMaintenance();
   if (isPrimaryBayWorker()) {
