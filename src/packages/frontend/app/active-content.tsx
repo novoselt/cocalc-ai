@@ -32,6 +32,7 @@ import { AuthPage } from "@cocalc/frontend/auth";
 import SiteLicenseClaimPage from "@cocalc/frontend/claim/site-license-page";
 import { ManagedEgressBlockedScreen } from "./managed-egress-blocked-screen";
 import { joinUrlPath } from "@cocalc/util/url-path";
+import { CocalcErrorBoundary } from "./error-boundary";
 
 const CONNECTIVITY_DOCS_SLUG = "troubleshooting/connectivity";
 
@@ -111,6 +112,7 @@ export const ActiveContent: React.FC = React.memo(() => {
     key: string,
     is_active: boolean,
     content: React.ReactNode,
+    errorScope = `app.${key}`,
   ): React.JSX.Element {
     return (
       <div
@@ -124,7 +126,9 @@ export const ActiveContent: React.FC = React.memo(() => {
         }}
         aria-hidden={!is_active}
       >
-        {content}
+        <CocalcErrorBoundary scope={errorScope} resetKeys={[is_active]}>
+          {content}
+        </CocalcErrorBoundary>
       </div>
     );
   }
@@ -133,7 +137,7 @@ export const ActiveContent: React.FC = React.memo(() => {
   open_projects?.forEach((project_id: string) => {
     const is_active = project_id === active_top_tab;
     const x = <ProjectPage project_id={project_id} is_active={is_active} />;
-    project_layers.push(renderLayer(project_id, is_active, x));
+    project_layers.push(renderLayer(project_id, is_active, x, "app.project"));
   });
 
   if (get_api_key) {

@@ -9,7 +9,7 @@ import { startedUp } from "./webapp-error";
 
 async function start() {
   await cocalcStylesReady;
-  init();
+  await init();
   startedUp();
 }
 
