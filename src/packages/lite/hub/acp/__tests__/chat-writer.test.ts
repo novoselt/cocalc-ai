@@ -28,6 +28,8 @@ import * as chatServer from "@cocalc/chat/server";
 import { rotateChatStore } from "@cocalc/backend/chat-store/sqlite-offload";
 import { akv } from "@cocalc/conat/sync/akv";
 
+const callHubMock = jest.fn();
+
 // Mock ACP pieces that pull in ESM deps we don't need for this unit.
 jest.mock("@cocalc/ai/acp", () => ({
   CodexAcpAgent: class {},
@@ -104,6 +106,10 @@ jest.mock("@cocalc/conat/sync/akv", () => ({
     set: jest.fn(async () => {}),
   })),
 }));
+jest.mock("@cocalc/conat/hub/call-hub", () => ({
+  __esModule: true,
+  default: (...args: any[]) => callHubMock(...args),
+}));
 
 type RecordedSet = {
   event?: string;
@@ -121,6 +127,7 @@ type RecordedSet = {
   acp_live_preview_stream?: string;
   acp_config?: {
     sessionId?: string;
+    notifyOnTurnFinish?: boolean;
   };
   message_id?: string;
 };
@@ -239,6 +246,8 @@ beforeEach(() => {
   (akv as any)?.mockImplementation?.(() => ({
     set: jest.fn(async () => {}),
   }));
+  callHubMock.mockReset();
+  callHubMock.mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
@@ -248,6 +257,19 @@ afterEach(async () => {
 async function flush(writer: ChatStreamWriter) {
   (writer as any).commit.flush();
   await delay(0);
+}
+
+async function waitForCondition(
+  condition: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) {
+      throw new Error("timed out waiting for condition");
+    }
+    await delay(10);
+  }
 }
 
 function findLastChatSet(sets: RecordedSet[]): RecordedSet | undefined {
@@ -336,6 +358,125 @@ describe("ChatStreamWriter", () => {
     const final = findLastChatSet(sets)!;
     expect(final.generating).toBe(false);
     (writer as any).dispose?.(true);
+  });
+
+  it("publishes a submitted completion notice when config hydration lags", async () => {
+    const { syncdb } = makeFakeSyncDB();
+    let releaseNotice: (() => void) | undefined;
+    callHubMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseNotice = resolve;
+        }),
+    );
+    const writer: any = new ChatStreamWriter({
+      metadata: {
+        ...baseMetadata,
+        notify_on_turn_finish: true,
+      },
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+    });
+    await writer.waitUntilReady();
+
+    let resolved = false;
+    const pending = writer
+      .handle({
+        type: "summary",
+        finalResponse: "done",
+        seq: 0,
+      } as AcpStreamMessage)
+      .then(() => {
+        resolved = true;
+      });
+
+    await waitForCondition(() => callHubMock.mock.calls.length > 0);
+    expect(callHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: "p",
+        name: "notifications.createCodexTurnNotice",
+        timeout: 5_000,
+      }),
+    );
+    expect(resolved).toBe(false);
+
+    releaseNotice?.();
+    await pending;
+    expect(resolved).toBe(true);
+    writer.dispose?.(true);
+  });
+
+  it("lets a live notify toggle override the submitted preference", async () => {
+    const { syncdb } = makeFakeSyncDB();
+    syncdb.set({
+      event: "chat-thread-config",
+      sender_id: "__thread_config__:thread-0",
+      date: CHAT_THREAD_META_ROW_DATE,
+      thread_id: "thread-0",
+      acp_config: { notifyOnTurnFinish: false },
+    });
+    const writer: any = new ChatStreamWriter({
+      metadata: {
+        ...baseMetadata,
+        notify_on_turn_finish: true,
+      },
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+    });
+    await writer.waitUntilReady();
+
+    await writer.handle({
+      type: "summary",
+      finalResponse: "done",
+      seq: 0,
+    } as AcpStreamMessage);
+
+    expect(callHubMock).not.toHaveBeenCalled();
+    writer.dispose?.(true);
+  });
+
+  it("honors a live notify opt-in made after submission", async () => {
+    const { syncdb } = makeFakeSyncDB();
+    const writer: any = new ChatStreamWriter({
+      metadata: {
+        ...baseMetadata,
+        notify_on_turn_finish: false,
+      },
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+    });
+    await writer.waitUntilReady();
+    syncdb.set({
+      event: "chat-thread-config",
+      sender_id: "__thread_config__:thread-0",
+      date: CHAT_THREAD_META_ROW_DATE,
+      thread_id: "thread-0",
+      acp_config: { notifyOnTurnFinish: true },
+    });
+
+    await writer.handle({
+      type: "summary",
+      finalResponse: "done",
+      seq: 0,
+    } as AcpStreamMessage);
+
+    expect(callHubMock).toHaveBeenCalledTimes(1);
+    writer.dispose?.(true);
   });
 
   it("stamps ACP activity markers on the startup placeholder row", async () => {

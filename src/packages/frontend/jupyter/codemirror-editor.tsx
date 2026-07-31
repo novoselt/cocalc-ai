@@ -37,6 +37,8 @@ import { initFold, saveFold } from "@cocalc/frontend/codemirror/util";
 interface CachedInfo {
   sel?: any[]; // only cache the selections right now...
   last_introspect_pos?: { line: number; ch: number };
+  history?: any;
+  historyValue?: string;
 }
 
 const cache = new LRU<string, CachedInfo>({ max: 1000 });
@@ -141,13 +143,37 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
   const cm_is_focused = useRef<boolean>(false);
   const vim_mode = useRef<boolean>(false);
   const cm_ref = React.createRef<HTMLTextAreaElement>();
+  const completeRef = useRef(complete);
+  const [completionInput, setCompletionInput] = useState<
+    | {
+        code: string;
+        cursorIndex: number;
+        filterText: string;
+      }
+    | undefined
+  >(undefined);
   const [isEmpty, setIsEmpty] = useState<boolean>(value.length === 0);
+  const updateCompletionInput = useCallback(() => {
+    const editor = cm.current;
+    const completion = completeRef.current;
+    if (editor == null || completion == null) return;
+    const code = editor.getValue();
+    const cursorIndex = editor.indexFromPos(editor.getCursor());
+    const cursorStart = completion.get("cursor_start");
+    if (typeof cursorStart !== "number") return;
+    setCompletionInput({
+      code,
+      cursorIndex,
+      filterText: code.slice(cursorStart, cursorIndex),
+    });
+  }, []);
   const handleChange = useCallback(() => {
     setIsEmpty((prev) => {
       const next = (cm.current?.getValue() ?? "") === "";
       return prev === next ? prev : next;
     });
-  }, []);
+    updateCompletionInput();
+  }, [updateCompletionInput]);
   const key = useRef<string | null>(null);
   const prev_options = usePrevious(options);
   const frameActions = useNotebookFrameActions();
@@ -156,9 +182,9 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
 
   useEffect(() => {
     if (frameActions.current?.frame_id != null) {
-      key.current = `${(actions as any)?.path}${
+      key.current = `${(actions as any)?.path ?? ""}:${
         frameActions.current.frame_id
-      }${id}`;
+      }:${id}`;
     }
     init_codemirror(options, value);
 
@@ -168,6 +194,12 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
           saveFold(cm.current, key.current);
         }
         cm_save();
+        if (key.current != null) {
+          const cached = cache.get(key.current) ?? {};
+          cached.history = cm.current.getHistory();
+          cached.historyValue = cm.current.getValue();
+          cache.set(key.current, cached);
+        }
         cm_destroy();
       }
     };
@@ -212,13 +244,34 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       return;
     }
     if (cm.current != null) {
-      cm.current.setValueNoJump(value);
+      if (cm.current.getValue() !== value) {
+        cm.current.setValueNoJump(value);
+        cm.current.clearHistory();
+        cm_last_remote.current = value;
+        if (key.current != null) {
+          const cached = cache.get(key.current);
+          if (cached != null) {
+            delete cached.history;
+            delete cached.historyValue;
+            cache.set(key.current, cached);
+          }
+        }
+      }
     }
   }, [value]);
 
   useEffect(() => {
     setIsEmpty(value.length === 0);
   }, [value]);
+
+  useEffect(() => {
+    completeRef.current = complete;
+    if (complete == null) {
+      setCompletionInput(undefined);
+    } else {
+      updateCompletionInput();
+    }
+  }, [complete, updateCompletionInput]);
 
   useEffect(() => {
     // can't do anything if there is no codemirror editor
@@ -373,6 +426,7 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       id: id,
     }));
     actions.set_cursor_locs(locs, cm.current._setValueNoJump);
+    updateCompletionInput();
 
     // See https://github.com/jupyter/notebook/issues/2464 for discussion of this cell_list_top business.
     if (frameActions.current) {
@@ -427,35 +481,6 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       onSetCellInput?.(value);
     }
     return value;
-  }
-
-  function cm_undo(): void {
-    if (cm.current == null || actions == null) {
-      return;
-    }
-    if (
-      !actions.in_undo_mode() ||
-      cm.current.getValue() !== cm_last_remote.current
-    ) {
-      cm_save();
-    }
-    if (frameActions.current) {
-      // prefer this, because can update selection
-      frameActions.current.undo();
-    } else {
-      actions.undo();
-    }
-  }
-
-  function cm_redo(): void {
-    if (cm.current == null || actions == null) {
-      return;
-    }
-    if (frameActions.current) {
-      frameActions.current.redo();
-    } else {
-      actions.redo();
-    }
   }
 
   function shift_tab_key(): void {
@@ -596,10 +621,7 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       return;
     }
     const cur = cm.current.getCursor();
-    const pos = cm.current.cursorCoords(cur, "local");
-    const top = pos.bottom;
-    const { left } = pos;
-    const gutter = $(cm.current.getGutterElement()).width();
+    const pos = cm.current.cursorCoords(cur, "window");
     // ensure that store has same version of cell as we're completing
     cm_save();
     // do the actual completion:
@@ -609,9 +631,9 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
         cur,
         id,
         {
-          top,
-          left,
-          gutter,
+          top: pos.top,
+          bottom: pos.bottom,
+          left: pos.left,
         },
       );
       if (!show_dialog) {
@@ -727,6 +749,16 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
     cm.current.setValue(value);
     if (key.current != null) {
       const info = cache.get(key.current);
+      if (info?.history != null && info.historyValue === value) {
+        cm.current.setHistory(info.history);
+      } else {
+        cm.current.clearHistory();
+      }
+      if (info != null) {
+        delete info.history;
+        delete info.historyValue;
+        cache.set(key.current, info);
+      }
       if (info != null && info.sel != null) {
         cm.current
           .getDoc()
@@ -753,9 +785,6 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       cm.current.on("keydown", (cm, e) => onKeyDown(cm, e));
     }
 
-    // replace undo/redo by our sync aware versions
-    cm.current.undo = cm_undo;
-    cm.current.redo = cm_redo;
     const editor = {
       focus: focus_cm,
       save: cm_save,
@@ -810,7 +839,14 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
 
   function render_complete() {
     if (complete?.get("matches") && complete.get("matches").size > 0) {
-      return <Complete complete={complete} actions={actions} id={id} />;
+      return (
+        <Complete
+          complete={complete}
+          actions={actions}
+          id={id}
+          {...completionInput}
+        />
+      );
     }
   }
 

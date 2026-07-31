@@ -846,6 +846,9 @@ export class SyncDoc extends EventEmitter {
   };
 
   exit_undo_mode = (): void => {
+    if (!this.undo_mode) {
+      return;
+    }
     this.undo_mode = false;
     if (this.patchflowReady()) {
       this.patchflowSession?.resetUndo();

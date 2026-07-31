@@ -11,8 +11,13 @@ import { useIntl } from "react-intl";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { Icon } from "@cocalc/frontend/components";
 import { IS_MOBILE } from "@cocalc/frontend/feature";
-import { jupyter, labels } from "@cocalc/frontend/i18n";
-import { commands, CLEAR_CELL_OUTPUT_LABEL } from "./commands";
+import { jupyter } from "@cocalc/frontend/i18n";
+import {
+  commands,
+  CLEAR_CELL_OUTPUT_LABEL,
+  GLOBAL_REDO_LABEL,
+  GLOBAL_UNDO_LABEL,
+} from "./commands";
 import {
   CODE_BAR_BTN_STYLE,
   COPY_CELL_ICON,
@@ -158,13 +163,13 @@ export function CodeBarDropdownMenu({
     return [
       {
         key: "undo",
-        label: intl.formatMessage(labels.undo),
+        label: intl.formatMessage(GLOBAL_UNDO_LABEL),
         icon: <Icon name="undo" />,
         onClick: () => actions.undo(),
       },
       {
         key: "redo",
-        label: intl.formatMessage(labels.redo),
+        label: intl.formatMessage(GLOBAL_REDO_LABEL),
         icon: <Icon name="redo" />,
         onClick: () => actions.redo(),
       },

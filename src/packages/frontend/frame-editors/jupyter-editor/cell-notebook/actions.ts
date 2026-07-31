@@ -395,6 +395,14 @@ export class NotebookFrameActions {
     }
     this.enable_key_handler();
     this.setState({ mode });
+    if (mode == "escape") {
+      // Command mode owns unmodified shortcuts such as Z. Move DOM focus out
+      // of CodeMirror/Slate so the global accessibility boundary no longer
+      // correctly treats the cell editor as the keyboard owner.
+      const cellListElement =
+        this.cell_list_div?.get?.(0) ?? this.cell_list_div?.[0];
+      cellListElement?.focus?.({ preventScroll: true });
+    }
   }
 
   public focus(_wait?: boolean): void {
