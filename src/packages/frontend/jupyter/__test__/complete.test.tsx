@@ -3,19 +3,11 @@ import { fireEvent, render, screen } from "@testing-library/react";
 
 const saveInputEditor = jest.fn();
 const setMode = jest.fn();
-const jqueryFocus = jest.fn();
 const useNotebookFrameActions = jest.fn(() => ({
   current: {
     save_input_editor: saveInputEditor,
     set_mode: setMode,
   },
-}));
-
-(global as any).$ = jest.fn(() => ({
-  find: jest.fn(() => ({
-    focus: jqueryFocus,
-    data: jest.fn(),
-  })),
 }));
 
 jest.mock(
@@ -29,7 +21,6 @@ describe("Jupyter completion menu", () => {
   beforeEach(() => {
     saveInputEditor.mockReset();
     setMode.mockReset();
-    jqueryFocus.mockReset();
   });
 
   it("selects a completion on mouse down before blur can clear the menu", () => {
@@ -77,11 +68,62 @@ describe("Jupyter completion menu", () => {
       />,
     );
 
-    fireEvent.keyDown(screen.getByRole("list"), { keyCode: 13 });
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Enter" });
     jest.runAllTimers();
 
     expect(select_complete).toHaveBeenCalledWith("cell-1", "input");
     expect(focus_complete).toHaveBeenCalled();
     jest.useRealTimers();
+  });
+
+  it("uses arrow keys to move through completions without scrolling the page", () => {
+    const complete = fromJS({
+      matches: ["input", "int", "isinstance"],
+      offset: { top: 10, bottom: 20, left: 30 },
+    }) as Map<string, any>;
+
+    render(
+      <Complete
+        actions={{
+          select_complete: jest.fn(),
+          clear_complete: jest.fn(),
+        }}
+        id="cell-1"
+        complete={complete}
+      />,
+    );
+
+    const input = screen.getByRole("menuitem", { name: "input" });
+    const int = screen.getByRole("menuitem", { name: "int" });
+    expect(input).toHaveFocus();
+
+    const moved = fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    expect(moved).toBe(false);
+    expect(int).toHaveFocus();
+  });
+
+  it("accepts the focused completion with Tab", () => {
+    const select_complete = jest.fn();
+    const complete = fromJS({
+      matches: ["input", "int"],
+      offset: { top: 10, bottom: 20, left: 30 },
+    }) as Map<string, any>;
+
+    render(
+      <Complete
+        actions={{ select_complete, clear_complete: jest.fn() }}
+        id="cell-1"
+        complete={complete}
+      />,
+    );
+
+    const input = screen.getByRole("menuitem", { name: "input" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "int" }), {
+      key: "Tab",
+    });
+
+    expect(select_complete).toHaveBeenCalledWith("cell-1", "int");
   });
 });

@@ -587,10 +587,7 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       return;
     }
     const cur = cm.current.getCursor();
-    const pos = cm.current.cursorCoords(cur, "local");
-    const top = pos.bottom;
-    const { left } = pos;
-    const gutter = $(cm.current.getGutterElement()).width();
+    const pos = cm.current.cursorCoords(cur, "window");
     // ensure that store has same version of cell as we're completing
     cm_save();
     // do the actual completion:
@@ -600,9 +597,9 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
         cur,
         id,
         {
-          top,
-          left,
-          gutter,
+          top: pos.top,
+          bottom: pos.bottom,
+          left: pos.left,
         },
       );
       if (!show_dialog) {

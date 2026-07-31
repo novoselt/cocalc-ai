@@ -3,11 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-declare const $: any;
-
 import { Tag } from "antd";
-import { CSSProperties, useEffect, useMemo, useRef } from "react";
-import { Map } from "immutable";
+import type { Map } from "immutable";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { Tooltip } from "@cocalc/frontend/components";
 import useNotebookFrameActions from "@cocalc/frontend/frame-editors/jupyter-editor/cell-notebook/hook";
 
@@ -33,17 +33,51 @@ interface Props {
 // but seems to work well for now.  Could move.
 export function Complete({ actions, id, complete }: Props) {
   const frameActions = useNotebookFrameActions();
-
-  const nodeRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLUListElement | null>(null);
+  const itemRefs = useRef<Array<HTMLAnchorElement | null>>([]);
+  const anchorTop = complete.getIn(["offset", "top"], 0) as number;
+  const anchorBottom = complete.getIn(
+    ["offset", "bottom"],
+    anchorTop,
+  ) as number;
+  const anchorLeft = complete.getIn(["offset", "left"], 0) as number;
+  const [position, setPosition] = useState({
+    top: anchorBottom,
+    left: anchorLeft,
+  });
 
   useEffect(() => {
-    $(nodeRef.current).find("a:first").focus();
     return () => {
       // No matter what, when the complete dialog goes away, restore focus
       // and edit mode to the cell.
       frameActions.current?.set_mode("edit");
     };
   }, []);
+
+  useEffect(() => {
+    itemRefs.current[0]?.focus({ preventScroll: true });
+  }, [complete]);
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (menu == null) return;
+    const margin = 8;
+    const gap = 2;
+    const rect = menu.getBoundingClientRect();
+    const viewportHeight = document.documentElement.clientHeight;
+    const viewportWidth = document.documentElement.clientWidth;
+    const roomBelow = viewportHeight - anchorBottom - margin;
+    const roomAbove = anchorTop - margin;
+    const openAbove = rect.height > roomBelow && roomAbove > roomBelow;
+    const top = openAbove
+      ? Math.max(margin, anchorTop - rect.height - gap)
+      : Math.min(anchorBottom + gap, viewportHeight - rect.height - margin);
+    const left = Math.min(
+      Math.max(margin, anchorLeft),
+      Math.max(margin, viewportWidth - rect.width - margin),
+    );
+    setPosition({ top, left });
+  }, [anchorBottom, anchorLeft, anchorTop, complete]);
 
   const typeInfo = useMemo(() => {
     const types = complete?.getIn(["metadata", "_jupyter_types_experimental"]);
@@ -75,13 +109,19 @@ export function Complete({ actions, id, complete }: Props) {
     setTimeout(() => actions.focus_complete?.(), 0);
   }
 
-  function renderItem(item: string) {
+  const matches = (complete.get("matches")?.toArray?.() ?? []) as string[];
+  itemRefs.current.length = matches.length;
+
+  function renderItem(item: string, index: number) {
     return (
-      <li key={item}>
+      <li key={item} role="none">
         <a
           role="menuitem"
           style={{ display: "flex", fontSize: "13px" }}
           tabIndex={-1}
+          ref={(node) => {
+            itemRefs.current[index] = node;
+          }}
           onMouseDown={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -117,45 +157,92 @@ export function Complete({ actions, id, complete }: Props) {
     );
   }
 
-  function key(e: any): void {
-    if (e.keyCode === 27) {
-      actions.clear_complete();
-    }
-    if (e.keyCode !== 13) {
-      return;
-    }
+  function focusItem(index: number): void {
+    const count = matches.length;
+    if (count === 0) return;
+    const normalized = ((index % count) + count) % count;
+    const item = itemRefs.current[normalized];
+    item?.focus({ preventScroll: true });
+    item?.scrollIntoView?.({ block: "nearest" });
+  }
+
+  function focusedIndex(): number {
+    const index = itemRefs.current.findIndex(
+      (item) => item === document.activeElement,
+    );
+    return index < 0 ? 0 : index;
+  }
+
+  function consume(e: KeyboardEvent<HTMLUListElement>): void {
     e.preventDefault();
     e.stopPropagation();
-    const item =
-      $(nodeRef.current).find("a:focus").data("item") ??
-      complete.get("matches", []).first();
-    if (item != null) {
-      select(item);
+  }
+
+  function key(e: KeyboardEvent<HTMLUListElement>): void {
+    switch (e.key) {
+      case "Escape":
+        consume(e);
+        actions.clear_complete();
+        return;
+      case "ArrowDown":
+        consume(e);
+        focusItem(focusedIndex() + 1);
+        return;
+      case "ArrowUp":
+        consume(e);
+        focusItem(focusedIndex() - 1);
+        return;
+      case "Home":
+        consume(e);
+        focusItem(0);
+        return;
+      case "End":
+        consume(e);
+        focusItem(matches.length - 1);
+        return;
+      case "Enter":
+      case "Tab": {
+        consume(e);
+        const item = matches[focusedIndex()] ?? matches[0];
+        if (item != null) {
+          select(item);
+        }
+        return;
+      }
     }
   }
 
   function getStyle(): CSSProperties {
-    const top = complete.getIn(["offset", "top"], 0) as number;
-    const left = complete.getIn(["offset", "left"], 0) as number;
-    const gutter = complete.getIn(["offset", "gutter"], 0) as number;
     return {
       cursor: "pointer",
-      top: top + 15 + "px",
-      left: left + 100 + gutter + "px",
-      zIndex: 10,
+      top: `${position.top}px`,
+      left: `${position.left}px`,
+      zIndex: 2000,
       width: 0,
       height: 0,
-      position: "absolute",
+      position: "fixed",
     };
   }
 
-  return (
-    <div className="dropdown open" style={getStyle()} ref={nodeRef}>
-      <ul className="dropdown-menu cocalc-complete" onKeyDown={key}>
-        {complete.get("matches", []).map(renderItem)}
+  const menu = (
+    <div className="dropdown open" style={getStyle()}>
+      <ul
+        ref={menuRef}
+        aria-label="Code completions"
+        className="dropdown-menu cocalc-complete"
+        onKeyDown={key}
+        role="menu"
+        style={{
+          maxHeight: "min(50vh, 24rem)",
+          overflowY: "auto",
+        }}
+      >
+        {matches.map(renderItem)}
       </ul>
     </div>
   );
+
+  return createPortal(menu, document.body);
 }
 
 const typeToColor = {
