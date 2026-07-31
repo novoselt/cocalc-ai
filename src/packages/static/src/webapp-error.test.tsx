@@ -7,7 +7,11 @@ import { act } from "react";
 
 jest.mock("./crash", () => ({
   __esModule: true,
-  default: () => <div id="cocalc-react-crash" style={{ display: "none" }} />,
+  default: () => (
+    <div id="cocalc-react-crash" style={{ display: "none" }}>
+      <div id="cocalc-error-report-react" />
+    </div>
+  ),
 }));
 
 jest.mock("./crash-message", () => ({
@@ -15,10 +19,22 @@ jest.mock("./crash-message", () => ({
   default: () => <div>Crash details</div>,
 }));
 
-import initError from "./webapp-error";
+const COCALC_REACT_ERROR_EVENT = "cocalc:react-error";
+const COCALC_REACT_ROOT_READY_EVENT = "cocalc:react-root-ready";
+
+jest.mock(
+  "@cocalc/frontend/app/react-error-reporting",
+  () => ({
+    COCALC_REACT_ERROR_EVENT: "cocalc:react-error",
+    COCALC_REACT_ROOT_READY_EVENT: "cocalc:react-root-ready",
+  }),
+  { virtual: true },
+);
+
+import initError, { startedUp } from "./webapp-error";
 
 describe("webapp crash screen", () => {
-  it("does not suppress a later-installed error reporter", async () => {
+  it("leaves managed post-startup errors quiet unless React reports a root failure", async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     document.body.innerHTML = `
       <div id="cocalc-crash-container"></div>
@@ -28,6 +44,8 @@ describe("webapp crash screen", () => {
     await act(async () => {
       initError();
     });
+    startedUp();
+    window.dispatchEvent(new Event(COCALC_REACT_ROOT_READY_EVENT));
 
     const reporter = jest.fn(() => true);
     window.onerror = reporter;
@@ -48,6 +66,35 @@ describe("webapp crash screen", () => {
 
     expect(reporter).toHaveBeenCalledTimes(1);
     expect(window.onerror).toBe(reporter);
+    expect(document.getElementById("cocalc-react-crash")?.style.display).toBe(
+      "none",
+    );
+
+    window.dispatchEvent(
+      new CustomEvent(COCALC_REACT_ERROR_EVENT, {
+        detail: {
+          kind: "caught",
+          error,
+          componentStack: "\n at ProjectsTable",
+          boundaryScope: "projects.list",
+        },
+      }),
+    );
+    expect(document.getElementById("cocalc-react-crash")?.style.display).toBe(
+      "none",
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(COCALC_REACT_ERROR_EVENT, {
+          detail: {
+            kind: "uncaught",
+            error,
+            componentStack: "\n at Root",
+          },
+        }),
+      );
+    });
     expect(document.getElementById("cocalc-react-crash")?.style.display).toBe(
       "block",
     );

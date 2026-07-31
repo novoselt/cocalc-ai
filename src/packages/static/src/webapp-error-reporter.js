@@ -26,6 +26,9 @@ const {
   isIgnorableUnhandledRejection,
   isOpaqueCrossOriginScriptError,
 } = require("./webapp-error-filter");
+const {
+  COCALC_REACT_ERROR_EVENT,
+} = require("@cocalc/frontend/app/react-error-reporting");
 
 // set this to true, to enable the webapp error reporter for development
 const enable_for_testing = false;
@@ -242,6 +245,42 @@ if (ENABLED) {
     }
     e.message = `unhandledrejection: ${reason}`;
     reportException(e, "unhandledrejection");
+  });
+}
+
+if (ENABLED) {
+  window.addEventListener(COCALC_REACT_ERROR_EVENT, (event) => {
+    const detail = event?.detail;
+    if (detail?.kind == null) {
+      return;
+    }
+    const original = detail.error;
+    const exception =
+      original instanceof Error ? original : new Error(`${original}`);
+    if (detail.componentStack) {
+      const enriched = new Error(exception.message);
+      enriched.name = exception.name;
+      enriched.stack = `${exception.stack ?? exception}\nReact component stack:${detail.componentStack}`;
+      reportException(
+        enriched,
+        undefined,
+        detail.kind === "recoverable" ? "warning" : "error",
+        JSON.stringify({
+          react_error_kind: detail.kind,
+          boundary_scope: detail.boundaryScope,
+        }),
+      );
+      return;
+    }
+    reportException(
+      exception,
+      undefined,
+      detail.kind === "recoverable" ? "warning" : "error",
+      JSON.stringify({
+        react_error_kind: detail.kind,
+        boundary_scope: detail.boundaryScope,
+      }),
+    );
   });
 }
 

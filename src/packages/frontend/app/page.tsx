@@ -43,6 +43,7 @@ import { ActiveContent } from "./active-content";
 import { ConnectionIndicator } from "./connection-indicator";
 import { ConnectionInfo } from "./connection-info";
 import { useAppContext } from "./context";
+import { CocalcErrorBoundary } from "./error-boundary";
 import { FullscreenButton } from "./fullscreen-button";
 import { I18NBanner, useShowI18NBanner } from "./i18n-banner";
 import { AppLogo } from "./logo";
@@ -428,7 +429,12 @@ export const Page: React.FC = () => {
       {!lite && isNarrow && !isAuthView && (
         <ProjectsNav height={pageStyle.height} style={projectsNavStyle} />
       )}
-      <ActiveContent />
+      <CocalcErrorBoundary
+        scope="app.active-content"
+        resetKeys={[active_top_tab]}
+      >
+        <ActiveContent />
+      </CocalcErrorBoundary>
       <ImportPublicUrlModal />
       <PopconfirmModal />
       <SettingsModal />
