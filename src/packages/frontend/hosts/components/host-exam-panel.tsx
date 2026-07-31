@@ -233,6 +233,7 @@ export function HostExamPanel({
   const [stopHostAtDeadline, setStopHostAtDeadline] = useState(true);
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"prepare">();
   const [error, setError] = useState("");
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
   const api = webapp_client.conat_client.hub.hosts;
@@ -294,10 +295,12 @@ export function HostExamPanel({
 
   const mutate = async (
     action: () => Promise<HostExamState & { token?: string }>,
+    actionName?: "prepare",
   ) => {
     setError("");
     try {
       const completed = await runFreshAuthAction(async () => {
+        setPendingAction(actionName);
         setLoading(true);
         setError("");
         try {
@@ -306,10 +309,15 @@ export function HostExamPanel({
           if (next.token) setToken(next.token);
         } finally {
           setLoading(false);
+          setPendingAction(undefined);
         }
       });
       if (completed) {
-        message.success("Exam host updated");
+        message.success(
+          actionName === "prepare"
+            ? "Exam run prepared and tested"
+            : "Exam host updated",
+        );
       }
     } catch (err) {
       const text = `${(err as Error)?.message ?? err}`;
@@ -324,11 +332,12 @@ export function HostExamPanel({
     action: (
       idempotency_key: string,
     ) => Promise<HostExamState & { token?: string }>,
+    actionName?: "prepare",
   ) => {
     // A fresh-auth challenge may invoke the action again after elevation. One
     // click is still one logical mutation, so every retry must reuse its key.
     const idempotency_key = idempotencyKey(prefix);
-    return mutate(() => action(idempotency_key));
+    return mutate(() => action(idempotency_key), actionName);
   };
 
   const run = state?.run;
@@ -367,7 +376,14 @@ export function HostExamPanel({
       (run.stop_host_at_deadline !== false) !== stopHostAtDeadline);
 
   return (
-    <Spin spinning={loading}>
+    <Spin
+      spinning={loading}
+      tip={
+        pendingAction === "prepare"
+          ? "Preparing and testing: creating a smoke-test project, starting Jupyter, checking network isolation and cleanup, then erasing the test project. This usually takes about one minute."
+          : undefined
+      }
+    >
       <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
         <Alert
           type="info"
@@ -579,6 +595,12 @@ export function HostExamPanel({
               >
                 Also shut down the project host to save resources
               </Checkbox>
+              <Alert
+                type="info"
+                showIcon
+                title="Preparation runs a complete rehearsal"
+                description="Allow about one minute. CoCalc freezes the selected RootFS and limits, creates an isolated smoke-test project, starts Jupyter, verifies network isolation and cleanup, then erases the test project. Admission remains closed until you select Open admission."
+              />
               {prepareBlockers.length > 0 && (
                 <Alert
                   type="info"
@@ -589,18 +611,22 @@ export function HostExamPanel({
               )}
               <Button
                 type="primary"
+                loading={pendingAction === "prepare"}
                 disabled={loading || !canPrepare}
                 onClick={() => {
-                  void mutateIdempotently("create", (idempotency_key) =>
-                    api.createHostExamRun({
-                      id: host.id,
-                      browser_id: webapp_client.browser_id,
-                      rootfs_image: rootfsImage!,
-                      scheduled_stop_at: deadline.toISOString(),
-                      stop_host_at_deadline: stopHostAtDeadline,
-                      idempotency_key,
-                      timeout: EXAM_LIFECYCLE_TIMEOUT_MS,
-                    }),
+                  void mutateIdempotently(
+                    "create",
+                    (idempotency_key) =>
+                      api.createHostExamRun({
+                        id: host.id,
+                        browser_id: webapp_client.browser_id,
+                        rootfs_image: rootfsImage!,
+                        scheduled_stop_at: deadline.toISOString(),
+                        stop_host_at_deadline: stopHostAtDeadline,
+                        idempotency_key,
+                        timeout: EXAM_LIFECYCLE_TIMEOUT_MS,
+                      }),
+                    "prepare",
                   );
                 }}
               >

@@ -167,7 +167,7 @@ function requestSource(req: express.Request): string {
   return `${first ?? "unknown"}`.trim().slice(0, 128) || "unknown";
 }
 
-function joinPage({
+export function getExamJoinPage({
   error,
   admission_open,
 }: {
@@ -216,15 +216,16 @@ function joinPage({
 <body><main>
   <div class="eyebrow">Private computational project</div>
   <h1>Exam Scratchpad</h1>
-  <p>Enter the token provided by your instructor. Your temporary project is erased automatically after the exam.</p>
   ${
     admission_open
-      ? `<form method="post" action="/exam/join">
+      ? `<p>Enter the token provided by your instructor. Your temporary project is erased automatically after the exam.</p>
+  <form method="post" action="/exam/join">
     <label for="token">Exam token</label>
     <input id="token" name="token" type="password" autocomplete="off" required autofocus>
     <button type="submit">Open scratchpad</button>
   </form>`
-      : `<div class="closed">This exam is not accepting new projects.</div>`
+      : `<p>Your instructor has prepared this exam environment, but admission is not open yet.</p>
+  <div class="closed">Wait for your instructor to open admission, then refresh this page.</div>`
   }
   ${escaped ? `<div class="error" role="alert">${escaped}</div>` : ""}
 </main></body></html>`;
@@ -260,7 +261,7 @@ export async function initHttp({
       return;
     }
     res.type("html").send(
-      joinPage({
+      getExamJoinPage({
         admission_open: runtime.admission_open,
       }),
     );
@@ -276,7 +277,7 @@ export async function initHttp({
       return;
     }
     res.type("html").send(
-      joinPage({
+      getExamJoinPage({
         admission_open: runtime.admission_open,
       }),
     );
@@ -323,7 +324,7 @@ export async function initHttp({
         .status(400)
         .type("html")
         .send(
-          joinPage({
+          getExamJoinPage({
             admission_open: runtime.admission_open,
             error: `${(err as Error)?.message ?? err}`,
           }),

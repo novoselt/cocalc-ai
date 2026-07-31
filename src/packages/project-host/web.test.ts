@@ -7,7 +7,7 @@ jest.mock("./exam/controller", () => ({
   joinExamRun: jest.fn(),
 }));
 
-import { getProjectHostCustomizePayload } from "./web";
+import { getExamJoinPage, getProjectHostCustomizePayload } from "./web";
 
 describe("project-host customize payload", () => {
   it("does not expose account scoped data", () => {
@@ -40,5 +40,22 @@ describe("project-host customize payload", () => {
       account_id: "00000000-1000-4000-8000-000000000001",
       project_id: "00000000-1000-4000-8000-000000000002",
     });
+  });
+});
+
+describe("project-host exam admission page", () => {
+  it("only asks for the token while admission is open", () => {
+    const open = getExamJoinPage({ admission_open: true });
+    expect(open).toContain("Enter the token provided by your instructor");
+    expect(open).toContain('name="token"');
+    expect(open).not.toContain("admission is not open yet");
+  });
+
+  it("tells students to wait without asking for a token while closed", () => {
+    const closed = getExamJoinPage({ admission_open: false });
+    expect(closed).toContain("admission is not open yet");
+    expect(closed).toContain("Wait for your instructor to open admission");
+    expect(closed).not.toContain("Enter the token provided by your instructor");
+    expect(closed).not.toContain('name="token"');
   });
 });

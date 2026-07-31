@@ -243,9 +243,12 @@ the reusable project host online. Destructive early cleanup always requires
 6. Wait for the run to reach **ready**. Do not open admission unless every
    readiness check is green.
 
-Preparation freezes the image digest and resource policy, creates a real smoke
-test project, starts a Jupyter kernel, checks the disabled-network policy and
-local cleanup machinery, and then erases the smoke-test project.
+Preparation usually takes about one minute. It freezes the image digest and
+resource policy, creates a real smoke-test project, starts a Jupyter kernel,
+checks the disabled-network policy and local cleanup machinery, and then erases
+the smoke-test project. A successful preparation leaves the run **ready** with
+admission closed; students can enter a token only after you select **Open
+admission**.
 
 The panel displays a stable student URL and a newly generated shared token.
 Copy the token immediately and store it securely. Its plaintext is shown only

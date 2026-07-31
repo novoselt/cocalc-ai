@@ -1,6 +1,12 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 
 import { openAppDocs } from "@cocalc/frontend/docs/navigation";
 import { assessExamHostCapacity, HostExamPanel } from "./host-exam-panel";
@@ -247,6 +253,56 @@ describe("HostExamPanel", () => {
     const secondKey = mockCreateHostExamRun.mock.calls[1][0].idempotency_key;
     expect(firstKey).toMatch(/^create:/);
     expect(secondKey).toBe(firstKey);
+  });
+
+  it("explains the full rehearsal while preparation is running", async () => {
+    mockGetHostExamState.mockResolvedValueOnce({
+      eligible: true,
+      config: savedConfig,
+    });
+    let finishPreparation!: (value: unknown) => void;
+    mockCreateHostExamRun.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishPreparation = resolve;
+        }),
+    );
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[
+          {
+            image: "cocalc.local/rootfs/exam",
+            digest: "sha256:abc",
+          } as any,
+        ]}
+      />,
+    );
+
+    expect(
+      screen.getByText("Preparation runs a complete rehearsal"),
+    ).toBeInTheDocument();
+    const prepare = screen.getByRole("button", {
+      name: "Prepare and test run",
+    });
+    await waitFor(() => expect(prepare).toBeEnabled());
+    fireEvent.click(prepare);
+
+    expect(
+      await screen.findByText(/Preparing and testing: creating a smoke-test/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/This usually takes about one minute/),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      finishPreparation({ eligible: true, config: savedConfig });
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/Preparing and testing: creating a smoke-test/),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   it("does not present a stopped historical run as the current run", async () => {
