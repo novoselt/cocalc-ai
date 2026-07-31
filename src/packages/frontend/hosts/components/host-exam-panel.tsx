@@ -21,6 +21,7 @@ import {
   Typography,
   message,
 } from "antd";
+import { BookOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import { useEffect, useState } from "@cocalc/frontend/app-framework";
 import type {
@@ -34,7 +35,7 @@ import {
   FreshAuthModal,
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
-import { DocsLink } from "@cocalc/frontend/docs/link";
+import { openAppDocs } from "@cocalc/frontend/docs/navigation";
 
 const DEFAULT_CONFIG: HostExamConfigInput = {
   enabled: false,
@@ -170,10 +171,17 @@ export function HostExamPanel({
             <>
               Students get anonymous local workspaces on this on-demand host.
               Outbound project networking is disabled. Existing private-host
-              billing applies.{" "}
-              <DocsLink slug="hosts/exam-scratchpads">
+              billing applies.
+              <br />
+              <Button
+                icon={<BookOutlined />}
+                onClick={() => openAppDocs("hosts/exam-scratchpads")}
+                size="small"
+                style={{ height: "auto", padding: 0 }}
+                type="link"
+              >
                 Read the setup, testing, and cleanup guide.
-              </DocsLink>
+              </Button>
             </>
           }
         />
