@@ -35,11 +35,13 @@ import {
   setExamProjectNetworkPolicy,
   verifyExamProjectNetworkPolicy,
 } from "./network-policy";
+import { verifyExamPublicRoute } from "./public-route";
 import { verifyExamTokenHash } from "./token";
 
 const logger = getLogger("project-host:exam:controller");
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 const WATCHDOG_INTERVAL_MS = 5_000;
+const POWEROFF_RESPONSE_GRACE_MS = 5_000;
 const TOKEN_FAILURE_WINDOW_MS = 10 * 60_000;
 const TOKEN_FAILURE_LIMIT = 12;
 
@@ -178,6 +180,7 @@ function readinessForRow(row: LocalExamRunRow): HostExamReadinessCheck[] {
   return [
     { name: "host_running", ok: true },
     { name: "on_demand", ok: true },
+    { name: "public_route", ok: ready },
     {
       name: "rootfs",
       ok: ready,
@@ -579,6 +582,7 @@ export async function applyExamRunLocal({
   try {
     const row = runRow(run.run_id)!;
     await runWorkspaceSmokeTest(row);
+    await verifyExamPublicRoute(config.hostname);
     getDatabase()
       .prepare(
         "UPDATE exam_runs SET status='ready', last_error=NULL, updated_at_ms=? WHERE run_id=?",
@@ -798,7 +802,7 @@ export async function closeAndCleanupExamRunLocal({
             });
           },
         );
-      }, 250).unref?.();
+      }, POWEROFF_RESPONSE_GRACE_MS).unref?.();
     } else {
       await privilegedExamCommand("clear-current-exam-run", run_id);
     }

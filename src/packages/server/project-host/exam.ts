@@ -16,7 +16,10 @@ import type {
   HostExamRuntimeStatus,
   HostExamState,
 } from "@cocalc/conat/hub/api/hosts";
-import { ensureProxiedAddressDns } from "@cocalc/server/cloud/dns";
+import {
+  ensureHostnameCnameDns,
+  ensureProxiedAddressDns,
+} from "@cocalc/server/cloud/dns";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 import adminAlert from "@cocalc/server/messages/admin-alert";
 
@@ -296,6 +299,21 @@ function publicIp(host: ExamHostRow): string {
   return value;
 }
 
+function examDnsRoute(
+  host: ExamHostRow,
+): { type: "A"; target: string } | { type: "CNAME"; target: string } {
+  if (host.metadata?.public_route?.active_mode === "cloudflare-proxy") {
+    return { type: "A", target: publicIp(host) };
+  }
+  const tunnelId = `${host.metadata?.cloudflare_tunnel?.id ?? ""}`.trim();
+  if (!tunnelId) {
+    throw new Error(
+      "host must have an active direct route or Cloudflare tunnel before exam mode is enabled",
+    );
+  }
+  return { type: "CNAME", target: `${tunnelId}.cfargotunnel.com` };
+}
+
 function isHostOnDemand(host: ExamHostRow): boolean {
   const metadata = host.metadata ?? {};
   const pricing = `${
@@ -456,12 +474,20 @@ async function ensureExamDns({
   host: ExamHostRow;
   config: HostExamConfig;
 }): Promise<HostExamConfig> {
-  const target = publicIp(host);
-  const { record_id } = await ensureProxiedAddressDns({
-    name: config.hostname,
-    ipAddress: target,
-    record_id: config.dns_record_id ?? undefined,
-  });
+  const route = examDnsRoute(host);
+  const { record_id } =
+    route.type === "A"
+      ? await ensureProxiedAddressDns({
+          name: config.hostname,
+          ipAddress: route.target,
+          record_id: config.dns_record_id ?? undefined,
+        })
+      : await ensureHostnameCnameDns({
+          hostname: config.hostname,
+          target_hostname: route.target,
+          record_id: config.dns_record_id ?? undefined,
+          adopt_existing: true,
+        });
   const { rows } = await getPool().query(
     `
       UPDATE ${CONFIG_TABLE}
@@ -469,7 +495,7 @@ async function ensureExamDns({
       WHERE host_id=$1
       RETURNING *
     `,
-    [host.id, record_id, target],
+    [host.id, record_id, route.target],
   );
   return mapConfig(rows[0]);
 }
@@ -1037,6 +1063,7 @@ export function startExamHostMaintenance(): void {
 export const __test__ = {
   DEFAULT_EXAM_CONFIG,
   examHostnameForHost,
+  examDnsRoute,
   hashToken,
   isHostOnDemand,
   normalizeConfig,

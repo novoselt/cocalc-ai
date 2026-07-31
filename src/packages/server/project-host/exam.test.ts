@@ -56,6 +56,36 @@ describe("project-host exam configuration", () => {
     ).toThrow("reconciled public IPv4");
   });
 
+  it("follows the host's active public route transport", () => {
+    expect(
+      __test__.examDnsRoute({
+        id: "00000000-1000-4000-8000-000000000001",
+        metadata: {
+          public_route: { active_mode: "cloudflare-proxy" },
+          runtime: { public_ip: "34.0.129.201" },
+        },
+      }),
+    ).toEqual({ type: "A", target: "34.0.129.201" });
+    expect(
+      __test__.examDnsRoute({
+        id: "00000000-1000-4000-8000-000000000001",
+        metadata: {
+          cloudflare_tunnel: {
+            id: "00000000-2000-4000-8000-000000000002",
+          },
+        },
+      }),
+    ).toEqual({
+      type: "CNAME",
+      target: "00000000-2000-4000-8000-000000000002.cfargotunnel.com",
+    });
+    expect(() =>
+      __test__.examDnsRoute({
+        id: "00000000-1000-4000-8000-000000000001",
+      }),
+    ).toThrow("active direct route or Cloudflare tunnel");
+  });
+
   it("keeps terminal access disabled unless explicitly enabled", () => {
     const base = {
       enabled: true,

@@ -485,6 +485,20 @@ function buildAppPublicWildcardHostname({
   return `*.${raw}`;
 }
 
+function buildExamHostname({
+  hostHostname,
+}: {
+  hostHostname?: string;
+}): string | undefined {
+  const raw = `${hostHostname ?? ""}`.trim().toLowerCase();
+  if (!raw) return undefined;
+  const labels = raw.split(".");
+  const first = labels[0] ?? "";
+  if (!first.startsWith("host-")) return undefined;
+  labels[0] = `exam-${first.slice("host-".length)}`;
+  return labels.join(".");
+}
+
 export type BootstrapScripts = {
   expectedOs: string;
   expectedArch: string;
@@ -544,6 +558,7 @@ export type BootstrapScripts = {
     enabled: boolean;
     hostname?: string;
     appPublicWildcard?: string;
+    examHostname?: string;
     port?: number;
     sshHostname?: string;
     sshPort?: number;
@@ -1209,6 +1224,9 @@ export async function buildBootstrapScripts(
   const appPublicWildcard = buildAppPublicWildcardHostname({
     hostHostname: tunnel?.hostname,
   });
+  const examHostname = buildExamHostname({
+    hostHostname: tunnel?.hostname,
+  });
   const cloudflaredProtocol = (() => {
     const value = `${row.metadata?.cloudflared_protocol ?? "auto"}`
       .trim()
@@ -1249,6 +1267,7 @@ export async function buildBootstrapScripts(
         enabled: true,
         hostname: tunnel.hostname,
         appPublicWildcard,
+        examHostname,
         port,
         sshHostname: tunnel.ssh_hostname,
         sshPort,

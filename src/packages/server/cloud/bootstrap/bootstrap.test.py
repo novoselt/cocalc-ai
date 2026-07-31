@@ -3213,6 +3213,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                     True,
                     hostname="host.example.test",
                     port=9002,
+                    exam_hostname="exam.example.test",
                     token="token",
                     tunnel_id="tunnel-id",
                     creds_json='{"TunnelSecret":"secret"}',
@@ -3265,6 +3266,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("credentials-file: /etc/cloudflared/tunnel-id.json", config)
             self.assertIn("protocol: auto", config)
             self.assertIn("grace-period: 10s", config)
+            self.assertIn('hostname: "exam.example.test"', config)
             self.assertIn("--no-autoupdate", unit)
             self.assertNotIn("--token", unit)
             self.assertNotIn("EnvironmentFile=/etc/cloudflared/token.env", unit)
