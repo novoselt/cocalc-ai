@@ -39,6 +39,7 @@
   "license": "SEE LICENSE.md",
   "dependencies": {
     "@cocalc/ai": "workspace:*",
+    "@cocalc/assets": "workspace:*",
     "@cocalc/backend": "workspace:*",
     "@cocalc/conat": "workspace:*",
     "@cocalc/file-server": "workspace:*",
@@ -47,6 +48,7 @@
     "@cocalc/openat2": "^0.1.0",
     "@cocalc/project-proxy": "workspace:*",
     "@cocalc/project-runner": "workspace:*",
+    "@cocalc/static": "workspace:*",
     "@cocalc/util": "workspace:*",
     "@isaacs/ttlcache": "^1.4.1",
     "compression": "^1.8.1",

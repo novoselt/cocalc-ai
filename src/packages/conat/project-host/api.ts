@@ -9,7 +9,12 @@ import type {
   ProjectState,
 } from "@cocalc/util/db-schema/projects";
 import type { SnapshotSchedule } from "@cocalc/util/consts/snapshots";
-import type { HostPressureZone } from "@cocalc/conat/hub/api/hosts";
+import type {
+  HostExamConfig,
+  HostExamRun,
+  HostExamRuntimeStatus,
+  HostPressureZone,
+} from "@cocalc/conat/hub/api/hosts";
 import type { ManagedProjectEgressOverride } from "@cocalc/conat/files/file-server";
 import type {
   ProjectSecretsRuntimeCache,
@@ -29,6 +34,9 @@ export interface HostCreateProjectRequest extends CreateProjectOptions {
   users?: any;
   authorized_keys?: string;
   run_quota?: any;
+  local_only?: boolean;
+  exam_run_id?: string;
+  usage_account_id?: string;
 }
 
 export interface HostCreateProjectResponse {
@@ -494,6 +502,12 @@ export interface ProjectHostOriginHealth {
   error?: string;
 }
 
+export interface ApplyHostExamRunRequest {
+  config: HostExamConfig;
+  run: HostExamRun;
+  token_hash: string;
+}
+
 export interface HostControlApi {
   probePublicRouteOrigin: () => Promise<ProjectHostOriginHealth>;
   restartCloudflared: (opts: {
@@ -513,6 +527,31 @@ export interface HostControlApi {
     finished_at: string;
     duration_ms: number;
   }>;
+  applyExamRun: (
+    opts: ApplyHostExamRunRequest,
+  ) => Promise<HostExamRuntimeStatus>;
+  getExamRunStatus: (opts?: {
+    run_id?: string;
+  }) => Promise<HostExamRuntimeStatus>;
+  openExamRun: (opts: {
+    run_id: string;
+    config_generation: number;
+  }) => Promise<HostExamRuntimeStatus>;
+  updateExamRunDeadline: (opts: {
+    run_id: string;
+    config_generation: number;
+    scheduled_stop_at: string;
+  }) => Promise<HostExamRuntimeStatus>;
+  rotateExamRunToken: (opts: {
+    run_id: string;
+    config_generation: number;
+    token_hash: string;
+  }) => Promise<HostExamRuntimeStatus>;
+  closeAndCleanupExamRun: (opts: {
+    run_id: string;
+    config_generation: number;
+    poweroff?: boolean;
+  }) => Promise<HostExamRuntimeStatus>;
   createProject: (
     opts: HostCreateProjectRequest,
   ) => Promise<HostCreateProjectResponse>;

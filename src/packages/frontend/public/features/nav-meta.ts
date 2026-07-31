@@ -20,6 +20,10 @@ const FEATURE_META = {
   ai: { accent: FEATURE_ACCENTS.ai, icon: "robot" },
   api: { accent: COLORS.ANTD_LINK_BLUE_DARK, icon: "api" },
   compare: { accent: COLORS.BLUE_D, icon: "swap" },
+  "exam-scratchpads": {
+    accent: COLORS.RUN,
+    icon: "graduation-cap",
+  },
   "jupyter-notebook": {
     accent: COLORS.BLUE_D,
     icon: "jupyter",

@@ -20,6 +20,7 @@ import {
   type KnownPoolAddressMap,
 } from "./cryptomining-detector";
 import { isProjectHostCpuUsageTrackingEnabled } from "./cpu-usage-runtime";
+import { getProject } from "./sqlite/projects";
 
 const logger = getLogger("project-host:cpu-usage");
 
@@ -540,6 +541,8 @@ export function startManagedCpuUsageLoop({
       for (const delta of deltas) {
         try {
           const result = await hubApi.system.recordManagedProjectCpuUsage({
+            account_id:
+              getProject(delta.project_id)?.usage_account_id ?? undefined,
             project_id: delta.project_id,
             cpu_seconds: delta.cpu_seconds,
             sample_started_at,

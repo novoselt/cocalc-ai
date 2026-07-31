@@ -2193,6 +2193,13 @@ export type HostConnectionMethod =
   | "pull-host-rootfs-image"
   | "delete-host-rootfs-image"
   | "gc-deleted-host-rootfs-images"
+  | "get-host-exam-state"
+  | "set-host-exam-config"
+  | "create-host-exam-run"
+  | "rotate-host-exam-token"
+  | "open-host-exam-run"
+  | "update-host-exam-deadline"
+  | "stop-and-erase-host-exam-run"
   | "list-host-ssh-authorized-keys"
   | "add-host-ssh-authorized-key"
   | "remove-host-ssh-authorized-key"
@@ -2224,6 +2231,12 @@ export type HostConnectionMethod =
 export type HostControlMethod =
   | "probe-public-route-origin"
   | "restart-cloudflared"
+  | "apply-exam-run"
+  | "get-exam-run-status"
+  | "open-exam-run"
+  | "update-exam-run-deadline"
+  | "rotate-exam-run-token"
+  | "close-and-cleanup-exam-run"
   | "create-project"
   | "start-project"
   | "stop-project"
@@ -2952,6 +2965,27 @@ export interface InterBayHostConnectionApi {
   gcDeletedHostRootfsImages: (
     opts: Parameters<Hosts["gcDeletedHostRootfsImages"]>[0],
   ) => Promise<Awaited<ReturnType<Hosts["gcDeletedHostRootfsImages"]>>>;
+  getHostExamState: (
+    opts: Parameters<Hosts["getHostExamState"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["getHostExamState"]>>>;
+  setHostExamConfig: (
+    opts: Parameters<Hosts["setHostExamConfig"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["setHostExamConfig"]>>>;
+  createHostExamRun: (
+    opts: Parameters<Hosts["createHostExamRun"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["createHostExamRun"]>>>;
+  rotateHostExamToken: (
+    opts: Parameters<Hosts["rotateHostExamToken"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["rotateHostExamToken"]>>>;
+  openHostExamRun: (
+    opts: Parameters<Hosts["openHostExamRun"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["openHostExamRun"]>>>;
+  updateHostExamDeadline: (
+    opts: Parameters<Hosts["updateHostExamDeadline"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["updateHostExamDeadline"]>>>;
+  stopAndEraseHostExamRun: (
+    opts: Parameters<Hosts["stopAndEraseHostExamRun"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["stopAndEraseHostExamRun"]>>>;
   listHostSshAuthorizedKeys: (
     opts: Parameters<Hosts["listHostSshAuthorizedKeys"]>[0],
   ) => Promise<Awaited<ReturnType<Hosts["listHostSshAuthorizedKeys"]>>>;
@@ -3160,6 +3194,19 @@ const HOST_CONNECTION_METHOD_SPECS = [
     name: "gcDeletedHostRootfsImages",
     method: "gc-deleted-host-rootfs-images",
   },
+  { name: "getHostExamState", method: "get-host-exam-state" },
+  { name: "setHostExamConfig", method: "set-host-exam-config" },
+  { name: "createHostExamRun", method: "create-host-exam-run" },
+  { name: "rotateHostExamToken", method: "rotate-host-exam-token" },
+  { name: "openHostExamRun", method: "open-host-exam-run" },
+  {
+    name: "updateHostExamDeadline",
+    method: "update-host-exam-deadline",
+  },
+  {
+    name: "stopAndEraseHostExamRun",
+    method: "stop-and-erase-host-exam-run",
+  },
   {
     name: "listHostSshAuthorizedKeys",
     method: "list-host-ssh-authorized-keys",
@@ -3289,6 +3336,30 @@ export interface InterBayHostControlApi {
   runSyntheticRuntimeProbe: (opts: {
     host_id: string;
   }) => ReturnType<HostControlApi["runSyntheticRuntimeProbe"]>;
+  applyExamRun: (opts: {
+    host_id: string;
+    apply: HostControlArg<"applyExamRun">;
+  }) => ReturnType<HostControlApi["applyExamRun"]>;
+  getExamRunStatus: (opts: {
+    host_id: string;
+    get?: HostControlArg<"getExamRunStatus">;
+  }) => ReturnType<HostControlApi["getExamRunStatus"]>;
+  openExamRun: (opts: {
+    host_id: string;
+    open: HostControlArg<"openExamRun">;
+  }) => ReturnType<HostControlApi["openExamRun"]>;
+  updateExamRunDeadline: (opts: {
+    host_id: string;
+    update: HostControlArg<"updateExamRunDeadline">;
+  }) => ReturnType<HostControlApi["updateExamRunDeadline"]>;
+  rotateExamRunToken: (opts: {
+    host_id: string;
+    rotate: HostControlArg<"rotateExamRunToken">;
+  }) => ReturnType<HostControlApi["rotateExamRunToken"]>;
+  closeAndCleanupExamRun: (opts: {
+    host_id: string;
+    close: HostControlArg<"closeAndCleanupExamRun">;
+  }) => ReturnType<HostControlApi["closeAndCleanupExamRun"]>;
   createProject: (opts: {
     account_id: string;
     host_id: string;
@@ -4174,6 +4245,18 @@ type HostControlName = keyof InterBayHostControlApi;
 const HOST_CONTROL_METHOD_SPECS = [
   { name: "probePublicRouteOrigin", method: "probe-public-route-origin" },
   { name: "restartCloudflared", method: "restart-cloudflared" },
+  { name: "applyExamRun", method: "apply-exam-run" },
+  { name: "getExamRunStatus", method: "get-exam-run-status" },
+  { name: "openExamRun", method: "open-exam-run" },
+  {
+    name: "updateExamRunDeadline",
+    method: "update-exam-run-deadline",
+  },
+  { name: "rotateExamRunToken", method: "rotate-exam-run-token" },
+  {
+    name: "closeAndCleanupExamRun",
+    method: "close-and-cleanup-exam-run",
+  },
   { name: "createProject", method: "create-project" },
   { name: "startProject", method: "start-project" },
   { name: "stopProject", method: "stop-project" },

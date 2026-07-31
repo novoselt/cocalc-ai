@@ -192,6 +192,8 @@ import {
   startManagedRawNetworkEgressLoop,
 } from "./raw-network-egress";
 import { startManagedCpuUsageLoop } from "./cpu-usage";
+import { startExamWatchdog } from "./exam/controller";
+import { getExamUsageAccountId } from "./exam/usage";
 import { managedProjectEgressResidualTracker } from "./managed-egress-residual";
 import { startGcpPreemptionWatcher } from "./gcp-preemption";
 export { runPrivilegedRmHelper } from "./privileged-rm-helper";
@@ -896,7 +898,10 @@ export async function main(
     if (!(bytes > 0) || !isProjectHostManagedEgressTrackingEnabled()) return;
     try {
       await hubApi.system.recordManagedProjectEgress({
-        account_id,
+        account_id:
+          getProject(project_id)?.usage_account_id ??
+          (account_id ? getExamUsageAccountId(account_id) : undefined) ??
+          account_id,
         project_id,
         category: "file-download",
         bytes,
@@ -1002,6 +1007,7 @@ export async function main(
     if (!(bytes > 0) || !isProjectHostManagedEgressTrackingEnabled()) return;
     try {
       await hubApi.system.recordManagedProjectEgress({
+        account_id: getProject(project_id)?.usage_account_id ?? undefined,
         project_id,
         category: MANAGED_HTTP_EGRESS_CATEGORY,
         bytes,
@@ -1119,6 +1125,7 @@ export async function main(
     if (!isProjectHostManagedEgressTrackingEnabled()) return;
     try {
       await hubApi.system.recordManagedProjectEgress({
+        account_id: getProject(project_id)?.usage_account_id ?? undefined,
         project_id,
         category: MANAGED_WS_EGRESS_CATEGORY,
         bytes,
@@ -1592,6 +1599,7 @@ export async function main(
     timeout: PROJECT_RUNNER_RPC_TIMEOUT_MS,
   });
   wireProjectsApi(runnerApi);
+  startExamWatchdog();
   const stopRawNetworkEgressLoop = startManagedRawNetworkEgressLoop({
     runnerApi,
   });

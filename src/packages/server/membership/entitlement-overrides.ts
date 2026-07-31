@@ -26,7 +26,10 @@ export type AccountEntitlementOverrideInput = Omit<
 >;
 
 const NUMERIC_RULE_MODES = new Set(["minimum", "maximum", "set"]);
-const FEATURE_KEYS = new Set<keyof AccountFeatureOverrides>(["create_hosts"]);
+const FEATURE_KEYS = new Set<keyof AccountFeatureOverrides>([
+  "create_hosts",
+  "exam_mode",
+]);
 const PROJECT_DEFAULT_KEYS = [
   "disk_quota",
   "memory",
@@ -400,6 +403,12 @@ function normalizeFeatures(
     }
     features.create_hosts = value.create_hosts;
   }
+  if (value.exam_mode != null) {
+    if (typeof value.exam_mode !== "boolean") {
+      throw Error("features.exam_mode must be a boolean");
+    }
+    features.exam_mode = value.exam_mode;
+  }
   return features;
 }
 
@@ -750,6 +759,13 @@ export function describeAccountEntitlementOverride(
     effects.push(
       `Dedicated host creation: ${
         override.features.create_hosts ? "allow" : "block"
+      }`,
+    );
+  }
+  if (override.features?.exam_mode != null) {
+    effects.push(
+      `Exam scratchpad hosts: ${
+        override.features.exam_mode ? "allow" : "block"
       }`,
     );
   }

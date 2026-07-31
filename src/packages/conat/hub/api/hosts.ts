@@ -620,6 +620,118 @@ export interface HostRootfsImage {
   host_gc_eligible?: boolean;
 }
 
+export type HostExamNetworkMode = "disabled";
+
+export type HostExamRunStatus =
+  | "preparing"
+  | "ready"
+  | "open"
+  | "closing"
+  | "cleaning"
+  | "stopped"
+  | "error";
+
+export interface HostExamConfig {
+  host_id: string;
+  enabled: boolean;
+  hostname: string;
+  dns_record_id?: string | null;
+  dns_target?: string | null;
+  generation: number;
+  max_workspaces: number;
+  workspace_cpu: number;
+  workspace_memory_mb: number;
+  workspace_disk_mb: number;
+  workspace_ttl_minutes: number;
+  cleanup_grace_minutes: number;
+  terminal_enabled: boolean;
+  network_mode: HostExamNetworkMode;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  updated_by: string;
+}
+
+export interface HostExamRun {
+  run_id: string;
+  host_id: string;
+  config_generation: number;
+  status: HostExamRunStatus;
+  rootfs_image: string;
+  rootfs_digest: string;
+  run_quota: {
+    cpu_limit: number;
+    memory_limit: number;
+    disk_quota: number;
+    pids_limit: number;
+  };
+  max_workspaces: number;
+  terminal_enabled: boolean;
+  network_mode: HostExamNetworkMode;
+  scheduled_stop_at: string;
+  owner_account_id: string;
+  opened_at?: string | null;
+  admission_closed_at?: string | null;
+  cleanup_started_at?: string | null;
+  cleaned_at?: string | null;
+  stopped_at?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+}
+
+export interface HostExamReadinessCheck {
+  name:
+    | "host_running"
+    | "on_demand"
+    | "public_route"
+    | "rootfs"
+    | "local_snapshot"
+    | "network_policy"
+    | "workspace_smoke"
+    | "watchdog";
+  ok: boolean;
+  detail?: string;
+}
+
+export interface HostExamRuntimeStatus {
+  run_id?: string;
+  status?: HostExamRunStatus;
+  config_generation?: number;
+  admission_open: boolean;
+  active_workspaces: number;
+  max_workspaces?: number;
+  scheduled_stop_at?: string;
+  cleanup_deadline_at?: string;
+  hostname?: string;
+  terminal_enabled?: boolean;
+  network_mode?: HostExamNetworkMode;
+  last_error?: string;
+  updated_at?: string;
+  readiness?: HostExamReadinessCheck[];
+}
+
+export interface HostExamState {
+  eligible: boolean;
+  eligibility_reason?: string;
+  config?: HostExamConfig;
+  run?: HostExamRun;
+  runtime?: HostExamRuntimeStatus;
+}
+
+export interface HostExamConfigInput {
+  enabled: boolean;
+  max_workspaces: number;
+  workspace_cpu: number;
+  workspace_memory_mb: number;
+  workspace_disk_mb: number;
+  workspace_ttl_minutes: number;
+  cleanup_grace_minutes: number;
+  terminal_enabled?: boolean;
+  network_mode?: HostExamNetworkMode;
+}
+
 export interface HostRootfsGcItem {
   image: string;
   status: "removed" | "skipped" | "failed";
@@ -1578,6 +1690,13 @@ export const hosts = {
   pullHostRootfsImage: authFirstRequireAccount,
   deleteHostRootfsImage: authFirstRequireAccount,
   gcDeletedHostRootfsImages: authFirstRequireAccount,
+  getHostExamState: authFirstRequireAccount,
+  setHostExamConfig: authFirstRequireAccount,
+  createHostExamRun: authFirstRequireAccount,
+  rotateHostExamToken: authFirstRequireAccount,
+  openHostExamRun: authFirstRequireAccount,
+  updateHostExamDeadline: authFirstRequireAccount,
+  stopAndEraseHostExamRun: authFirstRequireAccount,
   listHostSshAuthorizedKeys: authFirstRequireAccount,
   addHostSshAuthorizedKey: authFirstRequireAccount,
   removeHostSshAuthorizedKey: authFirstRequireAccount,
@@ -1794,6 +1913,60 @@ export interface Hosts {
     session_hash?: string | null;
     id: string;
   }) => Promise<HostRootfsGcResult>;
+  getHostExamState: (opts: {
+    account_id?: string;
+    id: string;
+  }) => Promise<HostExamState>;
+  setHostExamConfig: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    config: HostExamConfigInput;
+  }) => Promise<HostExamState>;
+  createHostExamRun: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    rootfs_image: string;
+    scheduled_stop_at: string;
+    idempotency_key: string;
+  }) => Promise<HostExamState & { token: string }>;
+  rotateHostExamToken: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    idempotency_key: string;
+  }) => Promise<HostExamState & { token: string }>;
+  openHostExamRun: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    idempotency_key: string;
+  }) => Promise<HostExamState>;
+  updateHostExamDeadline: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    scheduled_stop_at: string;
+    idempotency_key: string;
+  }) => Promise<HostExamState>;
+  stopAndEraseHostExamRun: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    stop_host?: boolean;
+    idempotency_key: string;
+  }) => Promise<HostExamState>;
   listHostSshAuthorizedKeys: (opts: {
     account_id?: string;
     id: string;

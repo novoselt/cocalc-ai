@@ -91,4 +91,32 @@ describe("project-host shared browser session", () => {
       account_id: "00000000-1000-4000-8000-000000000001",
     });
   });
+
+  it("bounds an exam browser session token and cookie to the requested ttl", () => {
+    const now = Date.now();
+    const token = createProjectHostBrowserSessionToken({
+      account_id: "00000000-1000-4000-8000-000000000001",
+      now_ms: now,
+      ttl_seconds: 600,
+    });
+    expect(
+      resolveProjectHostBrowserSessionFromCookieHeader(
+        `cocalc_project_host_session=${encodeURIComponent(token)}`,
+      ),
+    ).toMatchObject({
+      account_id: "00000000-1000-4000-8000-000000000001",
+      iat_s: Math.floor(now / 1000),
+      exp_s: Math.floor(now / 1000) + 600,
+    });
+    expect(
+      buildProjectHostBrowserSessionCookie({
+        req: {
+          headers: {},
+          socket: {},
+        } as any,
+        sessionToken: token,
+        max_age_seconds: 600,
+      }),
+    ).toContain("Max-Age=600");
+  });
 });

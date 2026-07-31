@@ -24,6 +24,7 @@ import {
   type ManagedProjectEgressResidualTracker,
   type ManagedRawNetworkResidualSample,
 } from "./managed-egress-residual";
+import { getProject } from "./sqlite/projects";
 
 const logger = getLogger("project-host:raw-network-egress");
 
@@ -531,6 +532,8 @@ export function startManagedRawNetworkEgressLoop({
       for (const residual of residuals) {
         try {
           await hubApi.system.recordManagedProjectEgress({
+            account_id:
+              getProject(residual.project_id)?.usage_account_id ?? undefined,
             project_id: residual.project_id,
             category: CATEGORY,
             bytes: residual.bytes,

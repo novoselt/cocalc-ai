@@ -3802,6 +3802,84 @@ project_network_rule_marker() {
   printf 'cocalc-project-network-%s\\n' "$1"
 }
 
+project_network_policy_dir() {
+  printf '/var/lib/cocalc/project-network-policies\\n'
+}
+
+exam_runtime_dir() {
+  printf '/var/lib/cocalc/exam-runtime\\n'
+}
+
+exam_current_run_file() {
+  printf '%s/current-run\\n' "$(exam_runtime_dir)"
+}
+
+set_current_exam_run() {
+  local run_id="$1" dir
+  is_project_uuid "$run_id" || deny "exam-run-id-invalid" "$run_id"
+  dir="$(exam_runtime_dir)"
+  /usr/bin/install -d -m 0700 -o root -g root "$dir"
+  printf '%s\\n' "$run_id" > "$(exam_current_run_file)"
+  chmod 0600 "$(exam_current_run_file)"
+}
+
+clear_current_exam_run() {
+  local run_id="$1" current=""
+  is_project_uuid "$run_id" || deny "exam-run-id-invalid" "$run_id"
+  if [ -r "$(exam_current_run_file)" ]; then
+    current="$(cat "$(exam_current_run_file)" 2>/dev/null || true)"
+  fi
+  if [ -n "$current" ] && [ "$current" != "$run_id" ]; then
+    deny "exam-run-id-mismatch" "$run_id"
+  fi
+  rm -f "$(exam_current_run_file)"
+}
+
+poweroff_exam_host() {
+  local run_id="$1" current=""
+  is_project_uuid "$run_id" || deny "exam-run-id-invalid" "$run_id"
+  if [ -r "$(exam_current_run_file)" ]; then
+    current="$(cat "$(exam_current_run_file)" 2>/dev/null || true)"
+  fi
+  [ "$current" = "$run_id" ] || deny "exam-run-id-mismatch" "$run_id"
+  printf 'exam-deadline:%s\\n' "$run_id" > /mnt/cocalc/data/host-shutdown-intent
+  /usr/bin/systemctl poweroff --no-block
+}
+
+project_network_policy_file() {
+  printf '%s/%s\\n' "$(project_network_policy_dir)" "$1"
+}
+
+project_network_policy() {
+  local file
+  file="$(project_network_policy_file "$1")"
+  if [ -r "$file" ] && [ "$(cat "$file" 2>/dev/null || true)" = "disabled" ]; then
+    printf 'disabled\\n'
+  else
+    printf 'normal\\n'
+  fi
+}
+
+set_project_network_policy() {
+  local project_id="$1" policy="$2" dir file
+  is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
+  dir="$(project_network_policy_dir)"
+  file="$(project_network_policy_file "$project_id")"
+  /usr/bin/install -d -m 0700 -o root -g root "$dir"
+  case "$policy" in
+    disabled)
+      printf 'disabled\\n' > "$file"
+      chmod 0600 "$file"
+      ;;
+    normal)
+      rm -f "$file"
+      ;;
+    *)
+      deny "project-network-policy-invalid" "$policy"
+      ;;
+  esac
+}
+
 require_project_network_tools() {
   [ -x "$PROJECT_NETWORK_NFT" ] || deny "project-network-tool-missing" "$PROJECT_NETWORK_NFT"
   [ -x /usr/bin/prlimit ] || deny "project-network-tool-missing" "/usr/bin/prlimit"
@@ -3859,10 +3937,22 @@ emit_project_metadata_rules() {
 }
 
 emit_project_network_rules() {
-  local project_id="$1" path level marker
+  local project_id="$1" path level marker policy
   path="$(project_network_cgroup_path "$project_id")"
   level="$(project_network_cgroup_level "$project_id")"
   marker="$(project_network_rule_marker "$project_id")"
+  policy="$(project_network_policy "$project_id")"
+  if [ "$policy" = "disabled" ]; then
+    printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto { tcp, udp } th dport 53 counter reject comment "%s-disabled-dns"\\n' \
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" "$marker"
+    printf 'add rule inet %s %s socket cgroupv2 level %s "%s" fib daddr type local counter accept comment "%s-disabled-local"\\n' \
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" "$marker"
+    printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ct state established,related counter accept comment "%s-disabled-established"\\n' \
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" "$marker"
+    printf 'add rule inet %s %s socket cgroupv2 level %s "%s" counter reject comment "%s-disabled-reject"\\n' \
+      "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" "$marker"
+    return
+  fi
   printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto tcp tcp flags & (fin | syn | rst | ack) == syn limit rate over %s/second burst %s packets counter drop comment "%s-tcp"\\n' \
     "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
     "$PROJECT_TCP_NEW_RATE" "$PROJECT_TCP_NEW_BURST" "$marker"
@@ -3886,7 +3976,7 @@ project_cgroup_has_processes() {
 }
 
 verify_project_network_limits() {
-  local project_id="$1" marker rules metadata_ipv4_count metadata_ipv6_count tcp_count udp_count pid found=0 limits
+  local project_id="$1" marker rules metadata_ipv4_count metadata_ipv6_count tcp_count udp_count disabled_dns_count disabled_local_count disabled_established_count disabled_reject_count policy pid found=0 limits
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
   require_project_network_tools
   marker="$(project_network_rule_marker "$project_id")"
@@ -3898,8 +3988,22 @@ verify_project_network_limits() {
   metadata_ipv6_count="$(grep -Fc 'comment "cocalc-project-network-metadata-ipv6"' <<< "$rules" || true)"
   tcp_count="$(grep -Fc "comment \\\"${marker}-tcp\\\"" <<< "$rules" || true)"
   udp_count="$(grep -Fc "comment \\\"${marker}-udp\\\"" <<< "$rules" || true)"
-  if [ "$metadata_ipv4_count" -ne 1 ] || [ "$metadata_ipv6_count" -ne 1 ] || [ "$tcp_count" -ne 1 ] || [ "$udp_count" -ne 1 ]; then
-    echo "project network nftables rules are missing or duplicated: metadata_ipv4=${metadata_ipv4_count} metadata_ipv6=${metadata_ipv6_count} tcp=${tcp_count} udp=${udp_count}" >&2
+  disabled_dns_count="$(grep -Fc "comment \\\"${marker}-disabled-dns\\\"" <<< "$rules" || true)"
+  disabled_local_count="$(grep -Fc "comment \\\"${marker}-disabled-local\\\"" <<< "$rules" || true)"
+  disabled_established_count="$(grep -Fc "comment \\\"${marker}-disabled-established\\\"" <<< "$rules" || true)"
+  disabled_reject_count="$(grep -Fc "comment \\\"${marker}-disabled-reject\\\"" <<< "$rules" || true)"
+  policy="$(project_network_policy "$project_id")"
+  if [ "$metadata_ipv4_count" -ne 1 ] || [ "$metadata_ipv6_count" -ne 1 ]; then
+    echo "project metadata network rules are missing or duplicated: metadata_ipv4=${metadata_ipv4_count} metadata_ipv6=${metadata_ipv6_count}" >&2
+    return 1
+  fi
+  if [ "$policy" = "disabled" ]; then
+    if [ "$tcp_count" -ne 0 ] || [ "$udp_count" -ne 0 ] || [ "$disabled_dns_count" -ne 1 ] || [ "$disabled_local_count" -ne 1 ] || [ "$disabled_established_count" -ne 1 ] || [ "$disabled_reject_count" -ne 1 ]; then
+      echo "disabled project network rules are missing or duplicated: dns=${disabled_dns_count} local=${disabled_local_count} established=${disabled_established_count} reject=${disabled_reject_count} tcp=${tcp_count} udp=${udp_count}" >&2
+      return 1
+    fi
+  elif [ "$tcp_count" -ne 1 ] || [ "$udp_count" -ne 1 ] || [ "$disabled_dns_count" -ne 0 ] || [ "$disabled_local_count" -ne 0 ] || [ "$disabled_established_count" -ne 0 ] || [ "$disabled_reject_count" -ne 0 ]; then
+    echo "normal project network rules are missing or duplicated: tcp=${tcp_count} udp=${udp_count} dns=${disabled_dns_count} local=${disabled_local_count} established=${disabled_established_count} reject=${disabled_reject_count}" >&2
     return 1
   fi
   while IFS= read -r pid; do
@@ -4621,6 +4725,47 @@ PY
       exit 2
     fi
     reconcile_project_network_limits
+    ;;
+  set-project-network-policy)
+    if [ "$#" -ne 2 ] || ! is_project_uuid "$1"; then
+      echo "usage: cocalc-runtime-storage set-project-network-policy <project-id> <normal|disabled>" >&2
+      exit 2
+    fi
+    set_project_network_policy "$1" "$2"
+    reconcile_project_network_limits
+    ;;
+  verify-project-network-policy)
+    if [ "$#" -ne 2 ] || ! is_project_uuid "$1"; then
+      echo "usage: cocalc-runtime-storage verify-project-network-policy <project-id> <normal|disabled>" >&2
+      exit 2
+    fi
+    actual="$(project_network_policy "$1")"
+    if [ "$actual" != "$2" ]; then
+      echo "project network policy mismatch: expected=$2 actual=$actual" >&2
+      exit 1
+    fi
+    verify_project_network_limits "$1"
+    ;;
+  set-current-exam-run)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage set-current-exam-run <run-id>" >&2
+      exit 2
+    fi
+    set_current_exam_run "$1"
+    ;;
+  clear-current-exam-run)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage clear-current-exam-run <run-id>" >&2
+      exit 2
+    fi
+    clear_current_exam_run "$1"
+    ;;
+  poweroff-exam-host)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage poweroff-exam-host <run-id>" >&2
+      exit 2
+    fi
+    poweroff_exam_host "$1"
     ;;
   cleanup-project-cgroup)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then

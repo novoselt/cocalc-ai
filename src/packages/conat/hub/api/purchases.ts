@@ -89,6 +89,7 @@ export interface EnumOverride<T extends string> {
 
 export interface AccountFeatureOverrides {
   create_hosts?: boolean;
+  exam_mode?: boolean;
 }
 
 export interface ProjectDefaultOverrides {

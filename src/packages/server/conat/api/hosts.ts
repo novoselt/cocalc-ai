@@ -52,6 +52,8 @@ import type {
   HostAvailabilityReport,
   HostAvailabilityEvent,
   HostAvailabilityCategory,
+  HostExamConfigInput,
+  HostExamState,
 } from "@cocalc/conat/hub/api/hosts";
 import { getAccountProductAccessTrust } from "@cocalc/server/accounts/trusted-product-access";
 import { getClusterAccountsByIdsDirect } from "@cocalc/server/accounts/cluster-directory";
@@ -93,6 +95,7 @@ import {
   getHostAccessForAccount,
   hostAccessRoleCan,
   listHostAccessEntries,
+  requireHostPermission,
   removeHostAccessEntry,
   setHostAccessEntry,
 } from "@cocalc/server/project-host/access";
@@ -294,6 +297,16 @@ import {
   setHostDesiredStateInternal as setHostDesiredStateInternalHelper,
 } from "./hosts-teardown";
 import { upgradeHostConnectorInternalHelper } from "./hosts-self-host-connectors";
+import {
+  createExamRunLocal,
+  eraseActiveExamRunBeforeHostStopLocal,
+  getExamStateLocal,
+  openExamRunLocal,
+  rotateExamTokenLocal,
+  setExamConfigLocal,
+  stopAndEraseExamRunLocal,
+  updateExamDeadlineLocal,
+} from "@cocalc/server/project-host/exam";
 import {
   assertCloudHostBootstrapReconcileSupported,
   reconcileCloudHostBootstrapOverSsh,
@@ -4993,6 +5006,365 @@ export async function gcDeletedHostRootfsImages({
   };
 }
 
+async function loadHostForExam({
+  id,
+  account_id,
+  require_entitlement,
+}: {
+  id: string;
+  account_id?: string;
+  require_entitlement: boolean;
+}): Promise<{ row: any; eligible: boolean; eligibility_reason?: string }> {
+  const actor = requireAccount(account_id);
+  const access = await requireHostPermission({
+    host_id: id,
+    account_id: actor,
+    permission: "start-stop",
+    admin_view: true,
+  });
+  const { rows } = await pool().query(
+    `SELECT * FROM project_hosts WHERE id=$1 AND deleted IS NULL`,
+    [id],
+  );
+  const row = rows[0];
+  if (!row) throw new Error("host not found");
+  const membership = await loadMembership(actor);
+  const eligible =
+    access.is_admin || membership.entitlements?.features?.exam_mode === true;
+  const eligibility_reason = eligible
+    ? undefined
+    : "Exam mode is currently available only to explicitly enabled accounts.";
+  if (require_entitlement && !eligible) {
+    throw new Error(eligibility_reason);
+  }
+  return { row, eligible, eligibility_reason };
+}
+
+async function requireFreshExamMutation({
+  account_id,
+  browser_id,
+  session_hash,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+}): Promise<string | undefined> {
+  const auth = await maybeRequireFreshAuthForInteractiveHostAction({
+    account_id,
+    browser_id: browser_id ?? undefined,
+    session_hash: session_hash ?? undefined,
+    required: true,
+  });
+  return auth.session_hash ?? session_hash ?? undefined;
+}
+
+export async function getHostExamState({
+  account_id,
+  id,
+}: {
+  account_id?: string;
+  id: string;
+}): Promise<HostExamState> {
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .getHostExamState({
+        account_id,
+        id,
+      });
+  }
+  const { row, eligible, eligibility_reason } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: false,
+  });
+  return await getExamStateLocal({ host: row, eligible, eligibility_reason });
+}
+
+export async function setHostExamConfig({
+  account_id,
+  browser_id,
+  session_hash,
+  id,
+  config,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  id: string;
+  config: HostExamConfigInput;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .setHostExamConfig({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        config,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await setExamConfigLocal({
+    host: row,
+    actor_account_id: requireAccount(account_id),
+    input: config,
+  });
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
+export async function createHostExamRun({
+  account_id,
+  browser_id,
+  session_hash,
+  id,
+  rootfs_image,
+  scheduled_stop_at,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  id: string;
+  rootfs_image: string;
+  scheduled_stop_at: string;
+  idempotency_key: string;
+}): Promise<HostExamState & { token: string }> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .createHostExamRun({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        rootfs_image,
+        scheduled_stop_at,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  const { token } = await createExamRunLocal({
+    host: row,
+    actor_account_id: requireAccount(account_id),
+    rootfs_image,
+    scheduled_stop_at,
+    idempotency_key,
+  });
+  return {
+    ...(await getExamStateLocal({ host: row, eligible: true })),
+    token,
+  };
+}
+
+export async function rotateHostExamToken({
+  account_id,
+  browser_id,
+  session_hash,
+  id,
+  run_id,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  id: string;
+  run_id: string;
+  idempotency_key: string;
+}): Promise<HostExamState & { token: string }> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .rotateHostExamToken({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        run_id,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  const { token } = await rotateExamTokenLocal({
+    host: row,
+    run_id,
+    idempotency_key,
+  });
+  return {
+    ...(await getExamStateLocal({ host: row, eligible: true })),
+    token,
+  };
+}
+
+export async function openHostExamRun({
+  account_id,
+  browser_id,
+  session_hash,
+  id,
+  run_id,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  id: string;
+  run_id: string;
+  idempotency_key: string;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge().hostConnection(remoteBay).openHostExamRun({
+      account_id,
+      browser_id,
+      session_hash: freshSessionHash,
+      id,
+      run_id,
+      idempotency_key,
+    });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await openExamRunLocal({ host: row, run_id });
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
+export async function updateHostExamDeadline({
+  account_id,
+  browser_id,
+  session_hash,
+  id,
+  run_id,
+  scheduled_stop_at,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  id: string;
+  run_id: string;
+  scheduled_stop_at: string;
+  idempotency_key: string;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .updateHostExamDeadline({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        run_id,
+        scheduled_stop_at,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await updateExamDeadlineLocal({ host: row, run_id, scheduled_stop_at });
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
+export async function stopAndEraseHostExamRun({
+  account_id,
+  browser_id,
+  session_hash,
+  id,
+  run_id,
+  stop_host = true,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  id: string;
+  run_id: string;
+  stop_host?: boolean;
+  idempotency_key: string;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .stopAndEraseHostExamRun({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        run_id,
+        stop_host,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await stopAndEraseExamRunLocal({
+    host: row,
+    run_id,
+    poweroff: false,
+  });
+  if (stop_host) {
+    await stopHostInternal({ account_id, id });
+  }
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
 export async function listHostSshAuthorizedKeys({
   account_id,
   id,
@@ -5436,6 +5808,7 @@ export async function stopHost({
       });
   }
   const row = await loadHostForStartStop(id, account_id);
+  await eraseActiveExamRunBeforeHostStopLocal({ host: row });
   return await createHostLro({
     kind: HOST_STOP_LRO_KIND,
     row,
