@@ -126,7 +126,11 @@ export const ActiveContent: React.FC = React.memo(() => {
         }}
         aria-hidden={!is_active}
       >
-        <CocalcErrorBoundary scope={errorScope} resetKeys={[is_active]}>
+        <CocalcErrorBoundary
+          autoRetry={false}
+          scope={errorScope}
+          resetKeys={[is_active]}
+        >
           {content}
         </CocalcErrorBoundary>
       </div>
