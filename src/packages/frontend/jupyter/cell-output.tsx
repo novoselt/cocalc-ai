@@ -36,7 +36,6 @@ interface CellOutputProps {
   directory?: string;
   more_output?: ImmutableMap<string, any>;
   trust?: boolean;
-  complete?: boolean;
   hidePrompt?: boolean;
   style?: React.CSSProperties;
   divRef?;
@@ -59,7 +58,6 @@ export function CellOutput({
   directory,
   more_output,
   trust,
-  complete,
   hidePrompt,
   divRef,
   style,
@@ -76,7 +74,6 @@ export function CellOutput({
   const outputCount = output?.size ?? 0;
   const moreOutputCount = more_output?.get("mesg_list")?.size ?? 0;
   const minHeight = outputMinHeight({
-    complete,
     running,
     scrolled,
     stableOutputHeight,
@@ -191,17 +188,14 @@ export function CellOutput({
 }
 
 export function outputMinHeight({
-  complete,
   running,
   scrolled,
   stableOutputHeight,
 }: {
-  complete?: boolean;
   running: boolean;
   scrolled: boolean;
   stableOutputHeight: number;
 }): string | undefined {
-  if (complete) return "60vh";
   if (scrolled) return undefined;
   return running && stableOutputHeight > 0
     ? `${stableOutputHeight}px`

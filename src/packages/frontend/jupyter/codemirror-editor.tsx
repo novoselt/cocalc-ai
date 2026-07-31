@@ -143,13 +143,37 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
   const cm_is_focused = useRef<boolean>(false);
   const vim_mode = useRef<boolean>(false);
   const cm_ref = React.createRef<HTMLTextAreaElement>();
+  const completeRef = useRef(complete);
+  const [completionInput, setCompletionInput] = useState<
+    | {
+        code: string;
+        cursorIndex: number;
+        filterText: string;
+      }
+    | undefined
+  >(undefined);
   const [isEmpty, setIsEmpty] = useState<boolean>(value.length === 0);
+  const updateCompletionInput = useCallback(() => {
+    const editor = cm.current;
+    const completion = completeRef.current;
+    if (editor == null || completion == null) return;
+    const code = editor.getValue();
+    const cursorIndex = editor.indexFromPos(editor.getCursor());
+    const cursorStart = completion.get("cursor_start");
+    if (typeof cursorStart !== "number") return;
+    setCompletionInput({
+      code,
+      cursorIndex,
+      filterText: code.slice(cursorStart, cursorIndex),
+    });
+  }, []);
   const handleChange = useCallback(() => {
     setIsEmpty((prev) => {
       const next = (cm.current?.getValue() ?? "") === "";
       return prev === next ? prev : next;
     });
-  }, []);
+    updateCompletionInput();
+  }, [updateCompletionInput]);
   const key = useRef<string | null>(null);
   const prev_options = usePrevious(options);
   const frameActions = useNotebookFrameActions();
@@ -239,6 +263,15 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
   useEffect(() => {
     setIsEmpty(value.length === 0);
   }, [value]);
+
+  useEffect(() => {
+    completeRef.current = complete;
+    if (complete == null) {
+      setCompletionInput(undefined);
+    } else {
+      updateCompletionInput();
+    }
+  }, [complete, updateCompletionInput]);
 
   useEffect(() => {
     // can't do anything if there is no codemirror editor
@@ -393,6 +426,7 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       id: id,
     }));
     actions.set_cursor_locs(locs, cm.current._setValueNoJump);
+    updateCompletionInput();
 
     // See https://github.com/jupyter/notebook/issues/2464 for discussion of this cell_list_top business.
     if (frameActions.current) {
@@ -587,10 +621,7 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       return;
     }
     const cur = cm.current.getCursor();
-    const pos = cm.current.cursorCoords(cur, "local");
-    const top = pos.bottom;
-    const { left } = pos;
-    const gutter = $(cm.current.getGutterElement()).width();
+    const pos = cm.current.cursorCoords(cur, "window");
     // ensure that store has same version of cell as we're completing
     cm_save();
     // do the actual completion:
@@ -600,9 +631,9 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
         cur,
         id,
         {
-          top,
-          left,
-          gutter,
+          top: pos.top,
+          bottom: pos.bottom,
+          left: pos.left,
         },
       );
       if (!show_dialog) {
@@ -808,7 +839,14 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
 
   function render_complete() {
     if (complete?.get("matches") && complete.get("matches").size > 0) {
-      return <Complete complete={complete} actions={actions} id={id} />;
+      return (
+        <Complete
+          complete={complete}
+          actions={actions}
+          id={id}
+          {...completionInput}
+        />
+      );
     }
   }
 

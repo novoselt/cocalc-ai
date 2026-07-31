@@ -739,7 +739,6 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                       directory={directory}
                       more_output={more_output}
                       trust={trust}
-                      complete={is_current && complete != null}
                       hidePrompt
                       aiTools={aiTools}
                       isDragging={isDragging}
