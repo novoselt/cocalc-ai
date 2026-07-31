@@ -5,107 +5,18 @@
 
 import { Button, Col, Flex, Row, Typography } from "antd";
 
-import { type IconName } from "@cocalc/frontend/components/icon";
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
+import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
-  PUBLIC_ELEVATION,
-  PUBLIC_COLORS,
-  PUBLIC_RADIUS,
-  PUBLIC_TYPE,
-} from "@cocalc/frontend/public/theme";
-import { BulletList, featureAppPath as appPath } from "./page-components";
-import { ContextList, FeatureFinalBand, IconBadge } from "./feature-visuals";
+  BulletList,
+  featureAppPath as appPath,
+  featureAsset,
+  LinkButton,
+} from "./page-components";
+import { FeatureInfo, FeatureInfoHeading, ZoomableImage } from "./feature-info";
+import { ContextList, FeatureFinalBand } from "./feature-visuals";
 
-const { Paragraph, Text, Title } = Typography;
-
-function SageWorkspaceMock() {
-  const blocks = [
-    {
-      accent: "#389e0d",
-      body: "algebra, calculus, number theory, plotting",
-      icon: "sagemath",
-      title: "SageMath",
-    },
-    {
-      accent: "#2f6fda",
-      body: "notebooks, Python libraries, widgets",
-      icon: "jupyter",
-      title: "Jupyter",
-    },
-    {
-      accent: "#ad6800",
-      body: "SageTeX, papers, handouts, figures",
-      icon: "tex",
-      title: "LaTeX",
-    },
-    {
-      accent: "#7c3aed",
-      body: "terminals, databases, Codex, long jobs",
-      icon: "terminal",
-      title: "Research",
-    },
-  ] satisfies {
-    accent: string;
-    body: string;
-    icon: IconName;
-    title: string;
-  }[];
-
-  return (
-    <div
-      aria-label="Illustration of SageMath connected to notebooks, LaTeX, terminals, and research workflows"
-      role="img"
-      style={{
-        background:
-          "linear-gradient(145deg, #ffffff 0%, #f3fbf3 52%, #fff8e8 100%)",
-        border: `1px solid ${PUBLIC_COLORS.border}`,
-        borderRadius: PUBLIC_RADIUS.panel,
-        boxShadow: PUBLIC_ELEVATION.lg,
-        padding: 20,
-      }}
-    >
-      <Flex vertical gap={16}>
-        <Flex align="center" justify="space-between" wrap gap={10}>
-          <Flex align="center" gap={10}>
-            <IconBadge accent="#389e0d" icon="sagemath" />
-            <div>
-              <Text strong>SageMath in CoCalc</Text>
-              <div style={{ color: PUBLIC_COLORS.mutedText }}>
-                open mathematical software in a collaborative project
-              </div>
-            </div>
-          </Flex>
-        </Flex>
-
-        <Row gutter={[12, 12]}>
-          {blocks.map((block) => (
-            <Col key={block.title} xs={24} sm={12}>
-              <div
-                style={{
-                  background: PUBLIC_COLORS.surface,
-                  border: `1px solid ${PUBLIC_COLORS.border}`,
-                  borderRadius: PUBLIC_RADIUS.panel,
-                  height: "100%",
-                  padding: 14,
-                }}
-              >
-                <Flex align="center" gap={12}>
-                  <IconBadge accent={block.accent} icon={block.icon} />
-                  <div>
-                    <Text strong>{block.title}</Text>
-                    <div style={{ color: PUBLIC_COLORS.mutedText }}>
-                      {block.body}
-                    </div>
-                  </div>
-                </Flex>
-              </div>
-            </Col>
-          ))}
-        </Row>
-      </Flex>
-    </div>
-  );
-}
+const { Paragraph, Title } = Typography;
 
 export default function SageFeaturePage({
   helpEmail,
@@ -123,105 +34,236 @@ export default function SageFeaturePage({
     : "Start using SageMath";
 
   return (
-    <Flex vertical gap={22}>
+    <Flex vertical gap={36}>
       <PublicSection>
-        <Row gutter={[28, 28]} align="middle">
-          <Col xs={24} lg={11}>
-            <Flex vertical gap={14}>
-              <Title level={2} style={{ margin: 0 }}>
-                Use SageMath inside collaborative mathematics projects.
+        <Row align="top" gutter={[44, 32]} style={{ padding: "22px 0 14px" }}>
+          <Col xs={24} lg={14}>
+            <Flex vertical gap={20}>
+              <Title level={2} style={{ margin: 0, maxWidth: 760 }}>
+                Use SageMath online, without installing anything.
               </Title>
-              <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
-                Built by the team behind SageMath — notebooks, LaTeX, and
-                terminals together in one project.
-              </Paragraph>
-              <Paragraph style={{ margin: 0 }}>
-                Use SageMath for computational mathematics while collaborators
-                and reviewers follow the surrounding work in real time.
+              <Paragraph
+                style={{ fontSize: PUBLIC_TYPE.lead, margin: 0, maxWidth: 720 }}
+              >
+                Type Sage code in your browser and run it: in Jupyter notebooks,
+                on the command line, and inside LaTeX documents. No download, no
+                build, no setup.
               </Paragraph>
               <Flex wrap gap={12}>
                 <Button type="primary" href={primaryCtaHref}>
                   {primaryCtaLabel}
                 </Button>
-                <Button href={appPath("features/jupyter-notebook")}>
+                <LinkButton href={appPath("features/jupyter-notebook")}>
                   Jupyter notebooks
-                </Button>
+                </LinkButton>
               </Flex>
             </Flex>
           </Col>
-          <Col xs={24} lg={13}>
-            <SageWorkspaceMock />
-          </Col>
-        </Row>
-      </PublicSection>
-
-      <PublicSection>
-        <Row gutter={[24, 24]} align="middle">
-          <Col xs={24} lg={12}>
-            <Flex vertical gap={12}>
-              <Title level={3} style={{ margin: 0 }}>
-                Use Sage with the surrounding project.
-              </Title>
-              <Paragraph style={{ margin: 0 }}>
-                Some Sage workflows need source files, terminal commands,
-                generated figures, logs, and notes beside the notebook so the
-                setup can be picked up later.
-              </Paragraph>
-              <BulletList
-                items={[
-                  "Keep Sage notebooks, source files, logs, generated figures, and notes together.",
-                  "Review notebook computations with visible cursors and shared kernel sessions.",
-                  "Run package tools, scripts, generated outputs, and long jobs from the project terminal.",
-                  "Let a collaborator or Codex inspect an error with the surrounding context.",
-                ]}
-              />
-            </Flex>
-          </Col>
-          <Col xs={24} lg={12}>
+          <Col xs={24} lg={10}>
             <ContextList
               accent="#389e0d"
               items={[
-                { icon: "file", label: "Keep source files" },
-                { icon: "terminal", label: "Run project commands" },
-                { icon: "bug", label: "Inspect errors" },
-                { icon: "robot", label: "Use Codex with context" },
+                {
+                  icon: "sagemath",
+                  label: "SageMath preinstalled, ready to run",
+                },
+                { icon: "jupyter", label: "Sage kernel in Jupyter notebooks" },
+                { icon: "tex", label: "SageTeX in the LaTeX editor" },
+                { icon: "terminal", label: "sage REPL and .sage scripts" },
               ]}
-              title="Project context"
+              title="Sage online"
             />
           </Col>
         </Row>
       </PublicSection>
 
       <PublicSection>
+        <div style={{ margin: "0 auto", maxWidth: 940 }}>
+          <ZoomableImage
+            alt="A Jupyter notebook running the SageMath kernel in CoCalc"
+            priority
+            src={featureAsset("sagemath-jupyter.png")}
+          />
+        </div>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfoHeading
+          anchor="a-overview"
+          description={
+            <>
+              Installing Sage yourself is a big download and a build that can
+              take hours. In CoCalc it is already there, on every device with a
+              browser.
+            </>
+          }
+        >
+          Feature overview
+        </FeatureInfoHeading>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#389e0d"
+          alt="Using the SageMath kernel in a Jupyter notebook"
+          anchor="a-notebooks"
+          icon="jupyter"
+          image="sagemath-jupyter.png"
+          title="SageMath in Jupyter notebooks"
+        >
+          <Paragraph>
+            Sage images make the <strong>SageMath Jupyter kernel</strong> the
+            default: create a SageMath notebook with one click and start
+            computing. Symbolic math, number theory, plotting, and the rest of
+            Sage work exactly as they do in a local Sage session.
+          </Paragraph>
+          <Paragraph>
+            Because these are CoCalc notebooks, you get{" "}
+            <strong>real-time collaboration</strong>, chat anchored to cells,
+            and TimeTravel edit history on top. Legacy <code>.sagews</code>{" "}
+            worksheets convert to Jupyter notebooks automatically when opened.
+          </Paragraph>
+          <Paragraph>
+            <LinkButton href={appPath("features/jupyter-notebook")}>
+              More about Jupyter in CoCalc
+            </LinkButton>
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#7c3aed"
+          anchor="a-versions"
+          icon="server"
+          title="SageMath preinstalled"
+        >
+          <Paragraph>
+            Pick the Sage image and <strong>SageMath comes preinstalled</strong>
+            : the Sage Jupyter kernel, the <code>sage</code> REPL in the
+            terminal, <code>.sage</code> script support, and SageTeX for LaTeX
+            documents. The components Sage builds on, such as Maxima, GAP, and
+            PARI, are included and usable directly.
+          </Paragraph>
+          <Paragraph>
+            You pick the image per project and can switch later, so{" "}
+            <strong>upgrading Sage is a project setting</strong>, not an
+            afternoon of compiling.
+          </Paragraph>
+          <Paragraph>
+            <LinkButton href={appPath("features/software-environment")}>
+              Learn about software environments
+            </LinkButton>
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#ad6800"
+          alt="A LaTeX document with SageMath computations embedded via SageTeX"
+          anchor="a-sagetex"
+          icon="tex"
+          image="cocalc-sagemath-sagetex.png"
+          title="SageTeX: Sage inside LaTeX documents"
+        >
+          <Paragraph>
+            Embed Sage computations and plots directly in a paper or handout.
+            The <a href={appPath("features/latex-editor")}>LaTeX editor</a>{" "}
+            detects <code>sagetex.sty</code> and{" "}
+            <strong>runs the Sage pass automatically</strong> as part of the
+            build, in an image that provides both Sage and TeX Live.
+          </Paragraph>
+          <Paragraph>
+            No more copying output from a Sage session into your document by
+            hand: <strong>results update when the document rebuilds</strong>,
+            and collaborators see the same compiled PDF.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#096dd9"
+          anchor="a-commandline"
+          icon="terminal"
+          title="The sage REPL and .sage scripts"
+        >
+          <Paragraph>
+            Open a <a href={appPath("features/terminal")}>terminal</a> and{" "}
+            <code>sage</code> is on the PATH: use the{" "}
+            <strong>interactive Sage REPL</strong>, run <code>.sage</code>{" "}
+            scripts, or install extra packages into the session.
+          </Paragraph>
+          <Paragraph>
+            Long computations keep running when you close the browser, and{" "}
+            <strong>the session is shareable</strong>: a collaborator can open
+            the same terminal and see the same output.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#d4380d"
+          alt="Grading a SageMath notebook with nbgrader in a CoCalc course"
+          anchor="a-teaching"
+          icon="graduation-cap"
+          image="sage-nbgrader.png"
+          title="Teach with SageMath"
+        >
+          <Paragraph>
+            Getting software installed on every student's machine is a struggle
+            in any course, and Sage is a particularly large beast to install. On
+            CoCalc, <strong>students just sign in</strong>: every student
+            project has the same Sage version and packages.
+          </Paragraph>
+          <Paragraph>
+            The{" "}
+            <a href={appPath("features/teaching")}>course management tools</a>{" "}
+            distribute and collect assignments, and{" "}
+            <strong>nbgrader works with SageMath notebooks</strong>, with tests
+            running in each student's own project.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
         <FeatureFinalBand
           action={{
-            body: "Open a project and use Sage in notebooks, terminals, LaTeX documents, or long-running research jobs.",
+            body: "Create a project on a Sage image and start computing in a notebook, a terminal, or a LaTeX document.",
             href: primaryCtaHref,
             label: finalCtaLabel,
-            title: "Start using SageMath",
+            title: "Ready to run Sage in your browser?",
           }}
           relatedLinks={[
+            {
+              href: appPath("features/jupyter-notebook"),
+              label: "Jupyter notebooks",
+            },
             { href: appPath("features/latex-editor"), label: "LaTeX editor" },
             {
-              href: appPath("features/terminal"),
-              label: "Terminal workflows",
+              href: appPath("features/software-environment"),
+              label: "Software environments",
             },
-            {
-              href: appPath("products"),
-              label: "Compare operating models",
-            },
+            { href: appPath("features/teaching"), label: "Teaching" },
             ...(helpEmail
               ? [{ href: `mailto:${helpEmail}`, label: "Contact support" }]
               : []),
           ]}
-          title="When SageMath belongs in CoCalc."
+          title="When SageMath belongs in CoCalc"
         >
+          <Paragraph style={{ margin: 0 }}>
+            William Stein, the founder of SageMath, is also the founder of
+            SageMath, Inc., the company behind CoCalc, and works full-time on
+            CoCalc.
+          </Paragraph>
           <BulletList
             items={[
-              "When the math is one part of a larger research or engineering project, not a standalone worksheet.",
-              "When a paper or handout needs Sage output rendered inline, with SageTeX in the collaborative LaTeX editor.",
-              "When several people need to run, review, or continue the same computation from one shared project.",
-              "When a course needs free, open-source mathematics software in a shared environment students can use without installing anything.",
+              "When installing and maintaining Sage locally is not worth it: it is a large build, and CoCalc keeps current versions ready.",
+              "When a paper or handout should embed live Sage output via SageTeX in the collaborative LaTeX editor.",
+              "When several people need to run, review, or continue the same computation in one shared project.",
+              "When a course needs free open-source mathematics software that students can use without installing anything.",
             ]}
           />
         </FeatureFinalBand>

@@ -39,24 +39,21 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     summary:
       "Use collaborative Jupyter notebooks when output, files, terminals, history, and review need to stay together.",
     metadataSummary:
-      "Run Jupyter notebooks online in a shared CoCalc project: real-time collaboration, chat anchored to cells, TimeTravel history, managed kernels, course workflows, and AI agent context nearby.",
+      "Run Jupyter notebooks online in a shared CoCalc project: real-time collaboration, chat anchored to cells, TimeTravel history, kernels for Python, SageMath, R, and Julia, course workflows, and AI agent context nearby.",
     image: "/public/features/cocalc-jupyter2-20170508.png",
     index: true,
     sections: [
       {
-        title: "Why it matters",
+        title: "Run Jupyter notebooks online",
         paragraphs: [
-          "CoCalc notebooks stay compatible with the Jupyter ecosystem while adding the collaboration, teaching, and operational features that are awkward to bolt on later.",
-          "Kernel state, output, and widgets can be shared across collaborators, which makes notebooks practical for classes, pair work, and support sessions.",
+          "Run Jupyter notebooks online in your browser: type code into a cell, run it, and see the output immediately, with nothing to install on your own machine.",
+          "Kernels come from your project's software environment: Python with the scientific stack, SageMath, R, Julia, and more, and kernel state can be shared across collaborators.",
         ],
-      },
-      {
-        title: "Highlights",
         bullets: [
           "Real-time collaborative editing with visible cursors and shared kernel sessions",
-          "Built-in TimeTravel and recovery tools for recovering earlier notebook states",
+          "Chat threads anchored to individual cells, plus TimeTravel edit history",
           "Course workflows for distributing, collecting, and grading notebook assignments",
-          "Managed kernels with many languages and preinstalled scientific software",
+          "CPU and memory gauges in the toolbar, with a Stop button for runaway cells",
         ],
       },
     ],
@@ -73,6 +70,21 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
       "Write LaTeX online with real-time collaboration, side-by-side PDF preview with forward and inverse search, SageTeX, PythonTeX, and Knitr, discussions anchored to the source, and full edit history.",
     image: "/public/features/latex-editor-main-20251003.png",
     index: true,
+    sections: [
+      {
+        title: "Write LaTeX online",
+        paragraphs: [
+          "Edit LaTeX online in your browser with a side-by-side PDF preview, forward and inverse search, and error messages linked to the source line that caused them.",
+          "Collaborators edit the same document in real time, discussions attach to specific lines, and TimeTravel records the full edit history of every file.",
+        ],
+        bullets: [
+          "Complete TeX Live from your software environment, no local installation",
+          "Knitr, SageTeX, and PythonTeX documents build in the same editor",
+          "Multi-file projects with a table of contents across subfiles",
+          "Bibliographies, figures, and data live in the same project",
+        ],
+      },
+    ],
   },
   {
     slug: "terminal",
@@ -88,11 +100,16 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     index: true,
     sections: [
       {
-        title: "Practical shell workflows",
+        title: "A real Linux terminal online",
+        paragraphs: [
+          "Use a full Linux terminal online in your browser: a real bash shell in an Ubuntu-based project, not an emulator, with nothing to install and nothing that can break your own machine.",
+          "That makes it a safe place to practice Linux commands, and a practical one for real work: sessions survive disconnects, and the same shell can be shared with collaborators.",
+        ],
         bullets: [
           "Run commands and scripts in the same project as notebooks and documents",
-          "Share terminal sessions with collaborators",
-          "Keep long-running technical work in the browser instead of on a single laptop",
+          "Install more software with apt-get, pip, or npm; your installs persist",
+          "Edit a script and run it in a terminal pane right next to the editor",
+          "Keep long-running jobs going after you close the browser",
         ],
       },
     ],
@@ -105,9 +122,24 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     summary:
       "Use CoCalc projects as collaborative Linux environments with editors, terminals, files, and web services.",
     metadataSummary:
-      "Treat CoCalc projects as collaborative Linux environments with editors, terminals, files, and web-accessible services.",
+      "Use a complete online Linux environment in your browser: Ubuntu-based projects with passwordless sudo, persistent storage and snapshots, SSH access, web services, and collaborative editors and terminals.",
     image: "/public/features/cocalc-shell-script-run.png",
     index: true,
+    sections: [
+      {
+        title: "A complete Linux environment online",
+        paragraphs: [
+          "Every CoCalc project is a full Ubuntu-based Linux system running in your browser: a complete userland with bash, git, curl, and the package ecosystem of a normal Ubuntu machine; compilers like the gcc toolchain are one apt-get install away.",
+          "Passwordless sudo works in every project, and apt-get installs persist in a per-project overlay that survives restarts and moves with the project.",
+        ],
+        bullets: [
+          "Persistent home directory with snapshots as often as every 15 minutes plus off-host backups",
+          "Run web apps and services on any port behind an authenticated project URL",
+          "SSH, scp, sftp, and rsync access, including project-to-project SSH",
+          "Live memory and CPU monitoring, with larger and GPU hosts available",
+        ],
+      },
+    ],
   },
   {
     slug: "software-environment",
@@ -119,6 +151,21 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     metadataSummary:
       "Every CoCalc project runs on a software image you choose: lean base systems or full scientific stacks with Python, R, Julia, SageMath, and LaTeX — customizable from inside the project.",
     index: true,
+    sections: [
+      {
+        title: "Pick the software, keep your changes",
+        paragraphs: [
+          "Every CoCalc project runs on a runtime image you choose: full scientific stacks with Python, SageMath, R, Julia, and TeX Live, GPU images for machine learning, or a lean base system.",
+          "Your own installs with apt-get, pip, or npm persist on top of the read-only base image, and you can publish a configured environment as a reusable image for your team or course.",
+        ],
+        bullets: [
+          "Curated catalog with stable and preview channels",
+          "Switch a project's image anytime, with one-step rollback to the previous one",
+          "Build custom images from a declarative recipe or a Binder-style repository",
+          "The base image does not count against your project's disk quota",
+        ],
+      },
+    ],
   },
   {
     slug: "ai",
@@ -211,11 +258,29 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     slug: "r-statistical-software",
     title: "R Statistical Software",
     navLabel: "R",
+    metadataTitle: "R Statistical Software Online",
     tagline: "Use R when statistics is part of a larger project workflow.",
     summary:
-      "Work with R in notebooks, terminals, scripts, RMarkdown-style documents, Quarto-style workflows, Knitr, and shared course projects.",
-    image: "/public/features/cocalc-r-jupyter.png",
+      "Work with R in Jupyter notebooks, a browser-based IDE, terminals, scripts, RMarkdown and Quarto documents, knitr LaTeX papers, and shared course projects.",
+    metadataSummary:
+      "Use R statistical software online in a collaborative CoCalc project: Jupyter notebooks with the IRkernel, a one-click browser-based R IDE, RMarkdown and Quarto reports, knitr LaTeX documents, and persistent package installs.",
+    image: "/public/features/cocalc-r-hero-ggplot2-20260731.png",
     index: true,
+    sections: [
+      {
+        title: "R statistical software online",
+        paragraphs: [
+          "Run R in your browser: Jupyter notebooks with the IRkernel, a full R IDE launched with one click, RMarkdown and Quarto reports, knitr LaTeX documents, and plain R scripts on the command line.",
+          "Everything lives in one shared project: data, packages, notebooks, reports, and their full edit history, so collaborators re-run the same analysis instead of a copy.",
+        ],
+        bullets: [
+          "CoCalc renders .Rmd files with rmarkdown::render and .qmd files with quarto render",
+          ".Rnw and .Rtex knitr documents build in the LaTeX editor with forward and inverse search",
+          "Shiny is installed in the R images, with a bundled example app behind the project proxy",
+          "Package installs persist on top of the image's preinstalled R stack",
+        ],
+      },
+    ],
   },
   {
     slug: "julia",
@@ -233,24 +298,57 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     slug: "sage",
     title: "SageMath",
     navLabel: "SageMath",
+    metadataTitle: "Use SageMath Online",
     tagline:
       "Use SageMath in the collaborative environment with deep roots in Sage.",
     summary:
       "Use SageMath for computational math in notebooks, courses, SageTeX documents, and research.",
     metadataSummary:
-      "Use SageMath for teaching, notebooks, SageTeX documents, source development, and long-running mathematics computations in a real collaborative Linux project.",
+      "Use SageMath online without installing anything: SageMath Jupyter notebooks, the sage command line, SageTeX in LaTeX documents, teaching workflows, and long-running computations in a collaborative Linux project.",
     image: "/public/features/sagemath-jupyter.png",
     index: true,
+    sections: [
+      {
+        title: "Use SageMath online",
+        paragraphs: [
+          "Run SageMath in your browser without installing anything: pick the Sage image and SageMath comes preinstalled, with the Sage Jupyter kernel, the command-line REPL, .sage script support, and SageTeX for LaTeX documents.",
+          "The SageMath Jupyter kernel is the default in Sage images, the sage REPL is on the PATH in every terminal, and the LaTeX editor runs the SageTeX pass automatically when a document uses it.",
+        ],
+        bullets: [
+          "SageMath notebooks with real-time collaboration and TimeTravel history",
+          "SageTeX: embed live Sage computations in LaTeX papers and handouts",
+          "Legacy .sagews worksheets convert to Jupyter notebooks automatically",
+          "Teach with Sage: students sign in instead of installing, and nbgrader works with SageMath notebooks",
+        ],
+      },
+    ],
   },
   {
     slug: "octave",
     title: "GNU Octave",
     navLabel: "Octave",
+    metadataTitle: "Run GNU Octave Online",
     tagline: "Run Octave online in notebooks, scripts, and terminals.",
     summary:
       "Use GNU Octave for MATLAB-style numerical computing in collaborative projects with notebooks, .m files, terminals, plots, and teaching workflows.",
+    metadataSummary:
+      "Run GNU Octave online in a CoCalc Linux project: use it in Jupyter notebooks and terminals, edit .m files collaboratively, with TimeTravel history and snapshots.",
     image: "/public/features/cocalc-octave-jupyter-20200511.png",
     index: true,
+    sections: [
+      {
+        title: "Run GNU Octave online",
+        paragraphs: [
+          "GNU Octave is the free numerical computing language that is largely compatible with MATLAB. In CoCalc it runs inside a full Linux project, so collaboration, history, and backups come with it.",
+          "Use Octave in Jupyter notebooks after a documented kernel setup, edit .m files with Octave syntax highlighting, and run scripts in a terminal that survives disconnects.",
+        ],
+        bullets: [
+          "Step-by-step guide for setting up Octave and its Jupyter kernel",
+          ".m files open in the collaborative editor with a one-click octave shell",
+          "Real-time collaboration, TimeTravel history, and snapshots in every project",
+        ],
+      },
+    ],
   },
   {
     slug: "api",
