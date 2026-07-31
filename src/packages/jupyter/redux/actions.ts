@@ -1143,10 +1143,13 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     const doInit = this._state === "init";
     let cell_list_needs_recompute = false;
 
-    if (changes == "all" || this.store.get("cells") == null) {
+    if (doInit || changes == "all" || this.store.get("cells") == null) {
       // changes == 'all' is used by nbgrader to set the state...
-      // First time initialization, rather than some small
-      // update.  We could use the same code, e.g.,
+      // Initial hydration must replace all cells. In particular, the frontend
+      // may already contain a read-only optimistic preview loaded from disk;
+      // incrementally merging SyncDoc changes would leave preview-only cells
+      // behind and allow them to be committed as incomplete records.
+      // We could use the same code, e.g.,
       // calling syncdb_cell_change, but that SCALES HORRIBLY
       // as the number of cells gets large!
 
