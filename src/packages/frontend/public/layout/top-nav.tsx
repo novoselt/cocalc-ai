@@ -91,6 +91,33 @@ function useCompactNav(): boolean {
   return isCompact;
 }
 
+const HOVER_CAPABLE_MEDIA_QUERY = "(hover: hover)";
+
+function matchesHoverCapable(): boolean {
+  if (typeof window === "undefined") return true;
+  if (typeof window.matchMedia !== "function") return true;
+  return window.matchMedia(HOVER_CAPABLE_MEDIA_QUERY).matches;
+}
+
+// Touch-only devices (no hover) need the features submenu to open on tap;
+// a single tap must not hover-open and then click-close it again, so the
+// submenu trigger follows the device's hover capability instead of using
+// both triggers at once.
+function useHoverCapable(): boolean {
+  const [hoverCapable, setHoverCapable] = useState(matchesHoverCapable);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mediaQuery = window.matchMedia(HOVER_CAPABLE_MEDIA_QUERY);
+    const update = () => setHoverCapable(mediaQuery.matches);
+    update();
+    mediaQuery.addEventListener("change", update);
+    return () => mediaQuery.removeEventListener("change", update);
+  }, []);
+
+  return hoverCapable;
+}
+
 function HomeLogoLink({
   active,
   config,
@@ -160,6 +187,7 @@ export default function PublicTopNav({
   const isAuthenticated = !!config?.is_authenticated;
   const accountDisplayName = config?.account_display_name?.trim();
   const isCompact = useCompactNav();
+  const hoverCapable = useHoverCapable();
   const logoSquare = getLogoSquare(config);
   const showPolicies = arePublicPoliciesVisible(config);
   const siteName = getSiteName(config);
@@ -356,6 +384,7 @@ export default function PublicTopNav({
         items={menuItems}
         mode="horizontal"
         selectedKeys={selectedKeys}
+        triggerSubMenuAction={hoverCapable ? "hover" : "click"}
         style={{
           background: "transparent",
           borderBottom: 0,

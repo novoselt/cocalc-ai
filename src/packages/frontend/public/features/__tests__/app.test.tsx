@@ -423,13 +423,15 @@ describe("PublicFeaturesApp", () => {
     );
 
     expect(
-      screen.getByText("A Linux workspace you can actually administer."),
+      screen.getByText("A complete Linux environment in your browser."),
     ).not.toBeNull();
     expect(
-      screen.getByText(
-        "Install at the right layer, verify, and document what changed",
-      ),
+      screen.getByText("Root access with sudo, and installs that persist"),
     ).not.toBeNull();
+    expect(
+      screen.getByText("Snapshots every 15 minutes, backups off the host"),
+    ).not.toBeNull();
+    expect(screen.getByText("SSH, scp, and rsync")).not.toBeNull();
     expect(screen.getByText("Ready to use Linux in CoCalc?")).not.toBeNull();
   });
 
@@ -530,8 +532,8 @@ describe("PublicFeaturesApp", () => {
   it.each([
     {
       slug: "sage",
-      title: "Use SageMath inside collaborative mathematics projects.",
-      section: "Use Sage with the surrounding project.",
+      title: "Use SageMath online, without installing anything.",
+      section: "SageTeX: Sage inside LaTeX documents",
     },
     {
       slug: "julia",
@@ -540,14 +542,13 @@ describe("PublicFeaturesApp", () => {
     },
     {
       slug: "r-statistical-software",
-      title: "Use R for statistics and reproducible reporting.",
-      section: "Keep R close to the rest of the analysis.",
+      title: "R statistical software online, from analysis to report.",
+      section: "Knitr documents in the LaTeX editor",
     },
     {
       slug: "octave",
-      title:
-        "Run GNU Octave with notebooks, .m files, and shared numerical work.",
-      section: "Run reproducible Octave work without local setup drift.",
+      title: "Run GNU Octave online in a project you control.",
+      section: "Octave in Jupyter notebooks",
     },
     {
       slug: "slides",

@@ -1482,14 +1482,16 @@ export class JupyterActions extends Actions<JupyterStoreState> {
   };
 
   undo = (): void => {
-    if (this.syncdb != null) {
-      this.syncdb.undo();
+    const syncdb = this.syncdb;
+    if (syncdb?.isReady()) {
+      syncdb.undo();
     }
   };
 
   redo = (): void => {
-    if (this.syncdb != null) {
-      this.syncdb.redo();
+    const syncdb = this.syncdb;
+    if (syncdb?.isReady()) {
+      syncdb.redo();
     }
   };
 

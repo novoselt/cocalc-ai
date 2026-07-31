@@ -5,7 +5,9 @@
 
 import { Button, Col, Flex, Row, Typography } from "antd";
 
+import { Icon, type IconName } from "@cocalc/frontend/components/icon";
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
+import { COLORS } from "@cocalc/util/theme";
 import {
   PUBLIC_COLORS,
   PUBLIC_ELEVATION,
@@ -26,18 +28,101 @@ const GUIDE_BASE = "https://sagemathinc.github.io/cocalc-guides";
 
 // A small sample of the real runtime-image catalog, used for the mock visual.
 const CATALOG_SAMPLE = [
-  { accent: "#0f80c1", label: "SageMath", note: "symbolic + numeric math" },
-  { accent: "#389e0d", label: "Python + uv", note: "fast Python + Jupyter" },
-  { accent: "#1d6fb8", label: "R + RStudio", note: "IRkernel, Shiny, RStudio" },
-  { accent: "#7c3aed", label: "Julia + Pluto", note: "Pluto.jl notebooks" },
-  { accent: "#bf7b00", label: "LaTeX", note: "TeX Live 2026" },
-  { accent: "#d4380d", label: "PyTorch GPU", note: "CUDA machine learning" },
   {
-    accent: "#ad6800",
+    accent: COLORS.FEATURE_SAGE_BLUE,
+    label: "SageMath",
+    note: "symbolic + numeric math",
+  },
+  {
+    accent: COLORS.RUN,
+    label: "Python + uv",
+    note: "fast Python + Jupyter",
+  },
+  {
+    accent: COLORS.FEATURE_R_BLUE,
+    label: "R Statistics",
+    note: "IRkernel, IDE, Shiny",
+  },
+  {
+    accent: COLORS.FEATURE_PURPLE,
+    label: "Julia + Pluto",
+    note: "Pluto.jl notebooks",
+  },
+  {
+    accent: COLORS.FEATURE_LATEX_GOLD,
+    label: "LaTeX",
+    note: "TeX Live 2026",
+  },
+  {
+    accent: COLORS.FEATURE_RED,
+    label: "PyTorch GPU",
+    note: "CUDA machine learning",
+  },
+  {
+    accent: COLORS.FEATURE_ORANGE,
     label: "Web Development",
     note: "Node, Postgres, Redis",
   },
 ] as const;
+
+const REUSABLE_ENV_ACCENT = COLORS.FEATURE_ORANGE;
+const REUSABLE_ENV_ITEMS = [
+  { icon: "copy", label: "Start projects from a template" },
+  { icon: "database", label: "Include data and tools" },
+  { icon: "upload", label: "Publish upgraded versions" },
+  { icon: "file", label: "Record upgrade notes" },
+] satisfies { icon: IconName; label: string }[];
+
+// Visual for the custom-images section: what a published, reusable
+// environment image gives a team, lab, or course.
+function ReusableEnvironmentGrid() {
+  return (
+    <div>
+      <strong
+        style={{
+          color: PUBLIC_COLORS.heading,
+          display: "block",
+          margin: "0 0 12px",
+        }}
+      >
+        Reusable environments
+      </strong>
+      <div
+        style={{
+          display: "grid",
+          gap: 12,
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+        }}
+      >
+        {REUSABLE_ENV_ITEMS.map(({ icon, label }) => (
+          <div
+            key={label}
+            style={{
+              alignItems: "center",
+              background: `${REUSABLE_ENV_ACCENT}0f`,
+              border: `1px solid ${REUSABLE_ENV_ACCENT}26`,
+              borderRadius: PUBLIC_RADIUS.panel,
+              display: "flex",
+              gap: 10,
+              minHeight: 64,
+              padding: "10px 12px",
+            }}
+          >
+            <Icon
+              name={icon}
+              style={{
+                color: REUSABLE_ENV_ACCENT,
+                flex: "0 0 auto",
+                fontSize: 17,
+              }}
+            />
+            <strong style={{ color: PUBLIC_COLORS.heading }}>{label}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // Stand-in visual for the catalog section until a real screenshot of the
 // runtime-image catalog lands; keeps the section in the 2:1 media/text rhythm.
@@ -137,7 +222,7 @@ export default function SoftwareEnvironmentFeaturePage({
           </Col>
           <Col xs={24} lg={10}>
             <ContextList
-              accent="#096dd9"
+              accent={COLORS.FEATURE_BLUE}
               items={[
                 { icon: "cube", label: "One image per project, switchable" },
                 { icon: "download", label: "Your installs persist on top" },
@@ -166,7 +251,7 @@ export default function SoftwareEnvironmentFeaturePage({
       <PublicSection>
         {/* mock visual — replace with a screenshot of the image catalog */}
         <FeatureInfo
-          accent="#096dd9"
+          accent={COLORS.FEATURE_BLUE}
           alt="Cards from the runtime image catalog"
           anchor="a-catalog"
           icon="server"
@@ -175,7 +260,7 @@ export default function SoftwareEnvironmentFeaturePage({
         >
           <Paragraph>
             The catalog covers the stacks technical work actually uses:
-            SageMath, Python, R with RStudio, Julia with Pluto, Quarto, Lean,
+            SageMath, Python, R with a full IDE, Julia with Pluto, Quarto, Lean,
             GPU images for PyTorch and TensorFlow, web development, Overleaf, VS
             Code in the browser, and more.
           </Paragraph>
@@ -190,7 +275,7 @@ export default function SoftwareEnvironmentFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#7c3aed"
+          accent={COLORS.FEATURE_PURPLE}
           anchor="a-switching"
           icon="exchange"
           title="Pick per project, switch anytime"
@@ -210,7 +295,7 @@ export default function SoftwareEnvironmentFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#389e0d"
+          accent={COLORS.RUN}
           anchor="a-persistence"
           icon="download"
           title="Install on top: your changes persist"
@@ -231,9 +316,10 @@ export default function SoftwareEnvironmentFeaturePage({
 
       <PublicSection>
         <FeatureInfo
-          accent="#ad6800"
+          accent={COLORS.FEATURE_ORANGE}
           anchor="a-custom"
           icon="wrench"
+          imageComponent={<ReusableEnvironmentGrid />}
           title="Build and share your own images"
         >
           <Paragraph>
