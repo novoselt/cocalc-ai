@@ -4,8 +4,9 @@ import { queueSetSubvolumeQuota } from "./quota-queue";
 import getLogger from "@cocalc/backend/logger";
 import { btrfsQuotasDisabled } from "./config";
 import {
-  cachedBtrfsQgroupShowRaw,
+  cachedBtrfsQgroupShowRawForPath,
   invalidateBtrfsQgroupShowRaw,
+  type BtrfsMutationPriority,
 } from "./operation-cache";
 
 const logger = getLogger("file-server:btrfs:subvolume-quota");
@@ -120,8 +121,7 @@ export class SubvolumeQuota {
   private qgroup = async () => {
     const id = await this.subvolume.getSubvolumeId();
     let groups: QgroupShowRow[];
-    const path = this.subvolume.filesystem.opts.mount;
-    const result = await cachedBtrfsQgroupShowRaw(path);
+    const result = await cachedBtrfsQgroupShowRawForPath(this.subvolume.path);
     groups = parsePlainQgroupShow(result.stdout);
     const warning = quotaWarning(result.stderr);
     const match = selectQgroup(groups, id);
@@ -164,7 +164,16 @@ export class SubvolumeQuota {
     };
   };
 
-  set = async (size: string | number) => {
+  set = async (
+    size: string | number,
+    opts?: {
+      project_id?: string;
+      volume_kind?: string;
+      operation_id?: string;
+      operation_class?: string;
+      priority?: BtrfsMutationPriority;
+    },
+  ) => {
     if (btrfsQuotasDisabled()) {
       logger.debug("setQuota skipped because btrfs quotas are disabled", {
         path: this.subvolume.path,
@@ -181,6 +190,7 @@ export class SubvolumeQuota {
       path: this.subvolume.path,
       size,
       wait: true,
+      ...opts,
     });
     invalidateBtrfsQgroupShowRaw(this.subvolume.filesystem.opts.mount);
   };

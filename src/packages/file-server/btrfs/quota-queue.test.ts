@@ -133,4 +133,148 @@ describe("btrfs simple-quota queue", () => {
     const { btrfsQuotaMode } = await import("./config");
     expect(btrfsQuotaMode()).toBe("simple");
   });
+
+  it("coalesces queued writes for one logical volume", async () => {
+    process.env.COCALC_BTRFS_QUOTA_MODE = "simple";
+    const btrfsMock = jest.fn(async ({ args }: { args: string[] }) => {
+      if (args.join(" ") === "filesystem show /mnt/test") {
+        return {
+          exit_code: 0,
+          stdout: "Label: none  uuid: 11111111-2222-4333-8444-555555555555\n",
+          stderr: "",
+        };
+      }
+      if (args[0] === "qgroup" && args[1] === "limit") {
+        return { exit_code: 0, stdout: "", stderr: "" };
+      }
+      throw new Error(`unexpected btrfs args: ${args.join(" ")}`);
+    });
+    jest.doMock("./util", () => ({
+      btrfs: (opts: { args: string[] }) => btrfsMock(opts),
+    }));
+    jest.doMock("node:fs/promises", () => ({
+      readFile: async (path: string) => {
+        if (path.endsWith("/enabled")) return "1\n";
+        if (path.endsWith("/mode")) return "simple\n";
+        throw new Error(`unexpected readFile path: ${path}`);
+      },
+    }));
+    jest.doMock("@cocalc/backend/misc/async-utils-node", () => ({
+      exists: async () => true,
+    }));
+
+    const { queueSetSubvolumeQuota, getBtrfsQuotaQueueStatus } =
+      await import("./quota-queue");
+    const first = queueSetSubvolumeQuota({
+      mount: "/mnt/test",
+      path: "/mnt/test/project-1",
+      size: "10M",
+      project_id: "project-1",
+      volume_kind: "home",
+      operation_id: "operation-1",
+      priority: "scheduled",
+      wait: true,
+    });
+    const second = queueSetSubvolumeQuota({
+      mount: "/mnt/test",
+      path: "/mnt/test/project-1",
+      size: "20M",
+      project_id: "project-1",
+      volume_kind: "home",
+      operation_id: "operation-2",
+      priority: "lifecycle",
+      wait: true,
+    });
+
+    expect(getBtrfsQuotaQueueStatus("/mnt/test")).toEqual(
+      expect.objectContaining({
+        queued_count: 1,
+      }),
+    );
+    await Promise.all([first, second]);
+
+    const limitCalls = btrfsMock.mock.calls
+      .map(([opts]) => opts.args)
+      .filter((args) => args[0] === "qgroup" && args[1] === "limit");
+    expect(limitCalls).toEqual([
+      ["qgroup", "limit", "20M", "/mnt/test/project-1"],
+    ]);
+  });
+
+  it("runs lifecycle quota work ahead of scheduled work through the shared lock", async () => {
+    process.env.COCALC_BTRFS_QUOTA_MODE = "simple";
+    const commands: string[] = [];
+    const btrfsMock = jest.fn(async ({ args }: { args: string[] }) => {
+      if (args.join(" ") === "filesystem show /mnt/test") {
+        return {
+          exit_code: 0,
+          stdout: "Label: none  uuid: 11111111-2222-4333-8444-555555555555\n",
+          stderr: "",
+        };
+      }
+      if (args[0] === "qgroup" && args[1] === "limit") {
+        commands.push(args.join(" "));
+        return { exit_code: 0, stdout: "", stderr: "" };
+      }
+      throw new Error(`unexpected btrfs args: ${args.join(" ")}`);
+    });
+    jest.doMock("./util", () => ({
+      btrfs: (opts: { args: string[] }) => btrfsMock(opts),
+    }));
+    jest.doMock("node:fs/promises", () => ({
+      readFile: async (path: string) => {
+        if (path.endsWith("/enabled")) return "1\n";
+        if (path.endsWith("/mode")) return "simple\n";
+        throw new Error(`unexpected readFile path: ${path}`);
+      },
+    }));
+    jest.doMock("@cocalc/backend/misc/async-utils-node", () => ({
+      exists: async () => true,
+    }));
+
+    const { withBtrfsMutationLock } = await import("./operation-cache");
+    const { queueSetSubvolumeQuota } = await import("./quota-queue");
+    let releaseHolder!: () => void;
+    let holderStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    const holder = withBtrfsMutationLock({
+      mount: "/mnt/test",
+      operation: "existing-mutation",
+      run: async () => {
+        holderStarted();
+        await new Promise<void>((resolve) => {
+          releaseHolder = resolve;
+        });
+      },
+    });
+    await started;
+
+    const scheduled = queueSetSubvolumeQuota({
+      mount: "/mnt/test",
+      path: "/mnt/test/project-scheduled",
+      size: "10M",
+      project_id: "project-scheduled",
+      priority: "scheduled",
+      wait: true,
+    });
+    const lifecycle = queueSetSubvolumeQuota({
+      mount: "/mnt/test",
+      path: "/mnt/test/project-lifecycle",
+      size: "20M",
+      project_id: "project-lifecycle",
+      priority: "lifecycle",
+      wait: true,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(commands).toEqual([]);
+
+    releaseHolder();
+    await Promise.all([holder, scheduled, lifecycle]);
+    expect(commands).toEqual([
+      "qgroup limit 20M /mnt/test/project-lifecycle",
+      "qgroup limit 10M /mnt/test/project-scheduled",
+    ]);
+  });
 });

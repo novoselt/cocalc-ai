@@ -125,6 +125,7 @@ export type ProjectMeta = {
   owning_bay_id?: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
 };
 
 const pool = () => getPool();
@@ -501,6 +502,21 @@ export async function loadProject(project_id: string): Promise<ProjectMeta> {
     [project_id],
   );
   if (!rows[0]) throw Error(`project ${project_id} not found`);
+  let run_quota_revision = 0;
+  try {
+    const revision = await pool().query(
+      "SELECT COALESCE(run_quota_revision, 0)::bigint AS run_quota_revision FROM projects WHERE project_id=$1",
+      [project_id],
+    );
+    run_quota_revision = Number(revision.rows[0]?.run_quota_revision ?? 0);
+  } catch (err) {
+    // Compatibility with a control plane whose additive schema migration has
+    // not run yet. Revision zero is accepted only until versioned state lands.
+    log.debug("loadProject: quota revision unavailable", {
+      project_id,
+      err: `${err}`,
+    });
+  }
   const keys = await sshKeys(project_id);
   const authorized_keys = Object.values(keys)
     .map((k: any) => k.value)
@@ -509,7 +525,12 @@ export async function loadProject(project_id: string): Promise<ProjectMeta> {
     `${rows[0].image ?? ""}`.trim() ||
     (await getCurrentProjectRootfsBinding({ project_id }))?.image ||
     DEFAULT_PROJECT_IMAGE;
-  return { ...rows[0], image, authorized_keys };
+  return {
+    ...rows[0],
+    image,
+    authorized_keys,
+    run_quota_revision,
+  };
 }
 
 export async function loadHostFromRegistry(host_id: string) {
@@ -823,6 +844,7 @@ async function registerProjectOnHost({
     start: false,
     authorized_keys: meta.authorized_keys,
     run_quota,
+    run_quota_revision: Number(meta.run_quota_revision ?? 0),
   });
 }
 
@@ -1006,6 +1028,7 @@ export async function startProjectOnHost(
         project_id,
         authorized_keys: meta.authorized_keys,
         run_quota,
+        run_quota_revision: Number(meta.run_quota_revision ?? 0),
         image: meta.image,
         restore,
         restore_backup_id: explicitRestoreBackupId || undefined,
@@ -1081,9 +1104,11 @@ export async function startProjectOnHost(
 export async function updateProjectRunQuotaOnHost({
   project_id,
   run_quota,
+  run_quota_revision,
 }: {
   project_id: string;
   run_quota?: any;
+  run_quota_revision?: number;
 }): Promise<void> {
   const { host_id } = await getAssignedProjectHostInfo(project_id);
   const client = await getRoutedHostControlClient({
@@ -1093,6 +1118,7 @@ export async function updateProjectRunQuotaOnHost({
   await client.updateProjectRunQuota({
     project_id,
     run_quota: await applyHostRuntimePolicyToRunQuota(run_quota, host_id),
+    run_quota_revision,
   });
 }
 

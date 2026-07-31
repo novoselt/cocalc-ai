@@ -41,6 +41,7 @@ import { info as refCacheInfo } from "@cocalc/util/refcache";
 import { connect as connectToConat } from "@cocalc/conat/core/client";
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
+import { isPublicTarget } from "@cocalc/frontend/public/routes";
 import {
   clearStoredControlPlaneOrigin,
   getControlPlaneAppUrl,
@@ -2918,7 +2919,11 @@ export class ConatClient extends EventEmitter {
         }
         this.signInFailed(error);
         void this.browserSessionAutomation.stop();
-        if (!this.isAuthPage()) {
+        // Public pages (landing, features, pricing, ...) work signed out, so
+        // failing to sign in there must not raise a blocking alert.
+        const pathname =
+          typeof window === "undefined" ? null : window.location.pathname;
+        if (!this.isAuthPage() && !isPublicTarget(pathname)) {
           this.client.alert_message({
             type: "error",
             message: "You must sign in.",

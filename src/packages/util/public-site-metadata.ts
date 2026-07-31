@@ -131,7 +131,10 @@ const PUBLIC_IMAGE_DIMENSIONS: Record<string, PublicImageDimensions> = {
     height: 672,
     width: 1065,
   },
-  "/public/features/cocalc-r-jupyter.png": { height: 1013, width: 1866 },
+  "/public/features/cocalc-r-hero-ggplot2-20260731.png": {
+    height: 817,
+    width: 1226,
+  },
   "/public/features/cocalc-shell-script-run.png": {
     height: 742,
     width: 1312,

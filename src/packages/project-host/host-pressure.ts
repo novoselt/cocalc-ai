@@ -10,7 +10,7 @@ import type {
   HostPressureZone,
   HostResourcePressureProjectSummary,
 } from "@cocalc/conat/hub/api/hosts";
-import { listProjects, type ProjectRow } from "./sqlite/projects";
+import { listProjectsByStates, type ProjectRow } from "./sqlite/projects";
 import {
   getProjectStopState,
   listProjectStopPolicies,
@@ -923,7 +923,7 @@ export function startHostPressureController({
       });
       return;
     }
-    const projects = listProjects();
+    const projects = listProjectsByStates(["running"]);
     const policies = new Map(
       listProjectStopPolicies().map((row) => [row.project_id, row]),
     );

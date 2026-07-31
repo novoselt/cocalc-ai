@@ -5,132 +5,18 @@
 
 import { Button, Col, Flex, Row, Typography } from "antd";
 
-import type { IconName } from "@cocalc/frontend/components/icon";
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
+import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
-  PUBLIC_ELEVATION,
-  PUBLIC_COLORS,
-  PUBLIC_RADIUS,
-  PUBLIC_TYPE,
-} from "@cocalc/frontend/public/theme";
-import { BulletList, featureAppPath as appPath } from "./page-components";
-import { ContextList, FeatureFinalBand, IconBadge } from "./feature-visuals";
+  BulletList,
+  featureAppPath as appPath,
+  featureAsset,
+  LinkButton,
+} from "./page-components";
+import { FeatureInfo, FeatureInfoHeading, ZoomableImage } from "./feature-info";
+import { ContextList, FeatureFinalBand } from "./feature-visuals";
 
-const { Paragraph, Text, Title } = Typography;
-
-function RWorkflowMock() {
-  const pieces = [
-    ["jupyter", "Notebook", "IRKernel analysis"],
-    ["terminal", "Terminal", "Rscript model.R"],
-    ["markdown", "Rmd / Qmd", "reproducible report"],
-    ["tex", "Knitr", "LaTeX output"],
-  ] satisfies [IconName, string, string][];
-
-  return (
-    <div
-      aria-label="Illustration of R workflows in a CoCalc project"
-      role="img"
-      style={{
-        background:
-          "linear-gradient(145deg, #ffffff 0%, #f4f9ff 54%, #f6fff4 100%)",
-        border: `1px solid ${PUBLIC_COLORS.border}`,
-        borderRadius: PUBLIC_RADIUS.panel,
-        boxShadow: PUBLIC_ELEVATION.lg,
-        padding: 20,
-      }}
-    >
-      <Flex vertical gap={16}>
-        <Flex align="center" justify="space-between" wrap gap={10}>
-          <Flex align="center" gap={10}>
-            <IconBadge accent="#386cb0" icon="r" />
-            <div>
-              <Text strong>R project</Text>
-              <div style={{ color: PUBLIC_COLORS.mutedText }}>
-                notebooks, scripts, reports, data, and collaborators
-              </div>
-            </div>
-          </Flex>
-        </Flex>
-
-        <Row gutter={[12, 12]}>
-          {pieces.map(([icon, title, body]) => (
-            <Col key={title} xs={24} sm={12}>
-              <div
-                style={{
-                  background: PUBLIC_COLORS.surface,
-                  border: `1px solid ${PUBLIC_COLORS.border}`,
-                  borderRadius: PUBLIC_RADIUS.panel,
-                  height: "100%",
-                  padding: 14,
-                }}
-              >
-                <Flex align="center" gap={12}>
-                  <IconBadge accent="#386cb0" icon={icon} />
-                  <div>
-                    <Text strong>{title}</Text>
-                    <div style={{ color: PUBLIC_COLORS.mutedText }}>{body}</div>
-                  </div>
-                </Flex>
-              </div>
-            </Col>
-          ))}
-        </Row>
-      </Flex>
-    </div>
-  );
-}
-
-function RProjectFitBand() {
-  return (
-    <PublicSection>
-      <Row gutter={[24, 24]} align="middle">
-        <Col xs={24} lg={12}>
-          <Flex vertical gap={12}>
-            <Title level={3} style={{ margin: 0 }}>
-              Keep R close to the rest of the analysis.
-            </Title>
-            <Paragraph style={{ margin: 0 }}>
-              A dedicated R environment is the right tool when the work is
-              mainly R editing. CoCalc earns its place when R is one part of a
-              larger research or engineering project — notebooks, Python, LaTeX,
-              data, and shared files in one place, so collaborators and
-              reviewers work from the same state with visible cursors in
-              collaborative documents.
-            </Paragraph>
-            <Paragraph style={{ margin: 0 }}>
-              That fits reproducible research reports, statistical work that
-              mixes R with Python or shell tools, shared notebook review, and
-              team handoff — with teaching courses a natural extension, not the
-              only use.
-            </Paragraph>
-          </Flex>
-        </Col>
-        <Col xs={24} lg={12}>
-          <ContextList
-            accent="#386cb0"
-            items={[
-              { icon: "r", label: "Model, analyze, and report in R" },
-              { icon: "python", label: "Mix with Python or shell tools" },
-              {
-                icon: "tex",
-                label: "Publish with LaTeX, Rmd, Qmd, or Knitr",
-              },
-              {
-                icon: "history",
-                label: "Review TimeTravel history with the report",
-              },
-              {
-                icon: "jupyter",
-                label: "Review notebooks with shared kernel sessions",
-              },
-            ]}
-            title="Project context"
-          />
-        </Col>
-      </Row>
-    </PublicSection>
-  );
-}
+const { Paragraph, Title } = Typography;
 
 export default function RStatisticalSoftwareFeaturePage({
   helpEmail,
@@ -146,54 +32,213 @@ export default function RStatisticalSoftwareFeaturePage({
   const finalLabel = isAuthenticated ? "Open projects" : "Start using R";
 
   return (
-    <Flex vertical gap={22}>
+    <Flex vertical gap={36}>
       <PublicSection>
-        <Row gutter={[28, 28]} align="middle">
-          <Col xs={24} lg={11}>
-            <Flex vertical gap={14}>
-              <Title level={2} style={{ margin: 0 }}>
-                Use R for statistics and reproducible reporting.
+        <Row align="top" gutter={[44, 32]} style={{ padding: "22px 0 14px" }}>
+          <Col xs={24} lg={14}>
+            <Flex vertical gap={20}>
+              <Title level={2} style={{ margin: 0, maxWidth: 760 }}>
+                R statistical software online, from analysis to report.
               </Title>
-              <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
-                Fit statistical models and share analyses others can re-run
-                later.
+              <Paragraph
+                style={{ fontSize: PUBLIC_TYPE.lead, margin: 0, maxWidth: 720 }}
+              >
+                Run R in your browser: Jupyter notebooks, a full IDE, RMarkdown
+                and Quarto reports, knitr LaTeX documents, and plain R scripts,
+                all in one shared project.
               </Paragraph>
               <Flex wrap gap={12}>
                 <Button type="primary" href={primaryHref}>
                   {primaryLabel}
                 </Button>
-                <Button href={appPath("features/jupyter-notebook")}>
+                <LinkButton href={appPath("features/jupyter-notebook")}>
                   Jupyter notebooks
-                </Button>
-                <Button href={appPath("features/latex-editor")}>
+                </LinkButton>
+                <LinkButton href={appPath("features/latex-editor")}>
                   LaTeX editor
-                </Button>
+                </LinkButton>
               </Flex>
             </Flex>
           </Col>
-          <Col xs={24} lg={13}>
-            <RWorkflowMock />
+          <Col xs={24} lg={10}>
+            <ContextList
+              accent="#1d6fb8"
+              items={[
+                { icon: "r", label: "R with the IRkernel in notebooks" },
+                { icon: "server", label: "Browser-based R IDE with one click" },
+                { icon: "markdown", label: "RMarkdown and Quarto rendering" },
+                { icon: "tex", label: "Knitr .Rnw in the LaTeX editor" },
+              ]}
+              title="R online"
+            />
           </Col>
         </Row>
       </PublicSection>
 
-      <RProjectFitBand />
+      <PublicSection>
+        <div style={{ margin: "0 auto", maxWidth: 940 }}>
+          <ZoomableImage
+            alt="A faceted ggplot2 boxplot in an R Jupyter notebook in CoCalc"
+            priority
+            src={featureAsset("cocalc-r-hero-ggplot2-20260731.png")}
+          />
+        </div>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfoHeading
+          anchor="a-overview"
+          description={
+            <>
+              There are many ways to use R online in CoCalc. Pick the interface
+              that fits the task; the data, packages, and history stay in the
+              same project.
+            </>
+          }
+        >
+          Feature overview
+        </FeatureInfoHeading>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#1d6fb8"
+          alt="The same R Jupyter notebook synchronized across two views"
+          anchor="a-notebooks"
+          icon="jupyter"
+          image="cocalc-r-synced-editing-20260731.png"
+          title="R in collaborative Jupyter notebooks"
+        >
+          <Paragraph>
+            R images ship the <strong>IRkernel</strong>, so notebooks run R
+            natively: fit models, plot with ggplot2, and keep narrative text
+            next to the code.
+          </Paragraph>
+          <Paragraph>
+            CoCalc notebooks add <strong>real-time collaboration</strong>:
+            everyone sees the same cells, output, and kernel session, with chat
+            anchored to the notebook and TimeTravel recording every edit. That
+            makes review and pair analysis practical without screen sharing.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#389e0d"
+          alt="A Quarto document with R and Python code next to its rendered HTML"
+          anchor="a-rmarkdown"
+          icon="markdown"
+          image="cocalc-r-qmd-quarto-20260731.png"
+          title="RMarkdown and Quarto reports"
+        >
+          <Paragraph>
+            Edit <code>.Rmd</code> and <code>.qmd</code> files with the source
+            and the rendered result side by side. CoCalc runs{" "}
+            <strong>
+              <code>rmarkdown::render</code> and <code>quarto render</code>
+            </strong>{" "}
+            for you and shows the build log when something goes wrong.
+          </Paragraph>
+          <Paragraph>
+            The result is a <strong>reproducible report</strong>: code, text,
+            and figures in one file, rendered to HTML or PDF from the same
+            project that holds the data.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#ad6800"
+          alt="A knitr .Rnw document with R code next to its compiled PDF"
+          anchor="a-knitr"
+          icon="tex"
+          image="cocalc-r-rnw-knitr-20260731.png"
+          title="Knitr documents in the LaTeX editor"
+        >
+          <Paragraph>
+            Statistical papers that embed R belong in <code>.Rnw</code> or{" "}
+            <code>.Rtex</code> files. The{" "}
+            <a href={appPath("features/latex-editor")}>LaTeX editor</a>{" "}
+            <strong>runs knitr and then LaTeX in one build</strong>, with
+            forward and inverse search between source and PDF, in an image that
+            provides both R and TeX Live.
+          </Paragraph>
+          <Paragraph>
+            Starter templates for knitr documents are built in, and{" "}
+            <strong>collaborators see the same compiled PDF</strong> while the
+            source stays synchronized in real time.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#7c3aed"
+          anchor="a-ide"
+          icon="server"
+          title="A full R IDE and Shiny apps"
+        >
+          <Paragraph>
+            Prefer a classic IDE? The R images include a browser-based R IDE
+            server: <strong>launch it with one click</strong> from the project's
+            Apps tab and work on the project's files and packages in a familiar
+            layout.
+          </Paragraph>
+          <Paragraph>
+            Shiny is installed as well, and a bundled example app{" "}
+            <strong>runs through the project's app proxy</strong>, so you can
+            try an interactive app straight from the browser.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#096dd9"
+          alt="Rscript running an R file in a CoCalc terminal next to the editor"
+          anchor="a-commandline"
+          icon="terminal"
+          image="cocalc-r-script-mandelbrot-20260731.png"
+          title="R scripts on the command line"
+        >
+          <Paragraph>
+            Your existing scripts run unchanged:{" "}
+            <strong>
+              <code>Rscript analysis.R</code> in a real Linux terminal
+            </strong>
+            , with the project's filesystem, Git, and automatic backups and
+            snapshots around it.
+          </Paragraph>
+          <Paragraph>
+            Long-running model fits{" "}
+            <strong>keep going when you close the browser</strong>, and package
+            installs persist in the project, on top of the image's preinstalled
+            R stack.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
 
       <PublicSection>
         <FeatureFinalBand
           action={{
-            body: "Open a project and use R in notebooks, terminals, reports, or teaching workflows.",
+            body: "Open a project on an R image and use notebooks, the IDE, reports, or plain scripts as the work demands.",
             href: primaryHref,
             label: finalLabel,
-            title: "Start in a project",
+            title: "Start analyzing in R",
           }}
           relatedLinks={[
-            { href: appPath("features/python"), label: "Python" },
+            {
+              href: appPath("features/jupyter-notebook"),
+              label: "Jupyter notebooks",
+            },
             { href: appPath("features/latex-editor"), label: "LaTeX editor" },
             {
-              href: appPath("products"),
-              label: "Compare operating models",
+              href: appPath("features/software-environment"),
+              label: "Software environments",
             },
+            { href: appPath("features/python"), label: "Python" },
             ...(helpEmail
               ? [{ href: `mailto:${helpEmail}`, label: "Contact support" }]
               : []),
@@ -202,10 +247,10 @@ export default function RStatisticalSoftwareFeaturePage({
         >
           <BulletList
             items={[
-              "Develop the model in a notebook or script, with packages and data in the project.",
-              "Render a Quarto or RMarkdown report to HTML or PDF from the same project.",
+              "Develop the model in a notebook or the IDE, with packages and data in the project.",
+              "Render an RMarkdown or Quarto report, or build a knitr LaTeX paper, from the same project.",
               "Collaborators and reviewers open the project and see the exact code, output, and TimeTravel history.",
-              "Re-run it later — the environment, data, and report build are still there.",
+              "Re-run it later: the environment, data, and report build are still there.",
             ]}
           />
         </FeatureFinalBand>

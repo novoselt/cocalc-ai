@@ -498,6 +498,11 @@ Table({
       type: "map",
       desc: "If project is running, this is the quota that it is running with.",
     },
+    run_quota_revision: {
+      type: "integer",
+      pg_type: "BIGINT",
+      desc: "Monotonic owning-bay revision for the persistent desired run quota.",
+    },
     rootfs_image: {
       type: "string",
       desc: "The root filesystem image for this project. This can be an arbitrary Docker image.",
@@ -935,6 +940,8 @@ export interface CreateProjectOptions {
   host_id?: string;
   // Resource limits/settings to apply when the project runs (mirrors projects.run_quota in Postgres).
   run_quota?: any;
+  // Monotonic owning-bay revision for run_quota.
+  run_quota_revision?: number;
   // (optional) image ID
   image?: string;
   // Optional concatenated SSH public keys (one per line) provided by the master;

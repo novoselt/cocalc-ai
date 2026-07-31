@@ -14,7 +14,7 @@ import { getBtrfsMutationLockStatus } from "@cocalc/file-server/btrfs/operation-
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseIoPressure } from "./io-metrics";
-import { listProjects } from "./sqlite/projects";
+import { countProjectsByStates } from "./sqlite/projects";
 import {
   getStorageOperationSpec,
   type StorageOperationKind,
@@ -98,17 +98,15 @@ function readIoFullAvg10(path: string): number | undefined {
 }
 
 function defaultReadInputs(): StorageAdmissionInputs {
-  const projects = listProjects();
+  const projectCounts = countProjectsByStates(["starting", "stopping"]);
   const locks = getBtrfsMutationLockStatus();
   const hostIoFullAvg10 = readIoFullAvg10("/proc/pressure/io");
   return {
     sampled_at_ms: Date.now(),
     host_io_full_avg10: hostIoFullAvg10,
     project_pool_io_full_avg10: readIoFullAvg10(PROJECT_POOL_IO_PRESSURE),
-    starting_projects: projects.filter((row) => row.state === "starting")
-      .length,
-    stopping_projects: projects.filter((row) => row.state === "stopping")
-      .length,
+    starting_projects: projectCounts.starting ?? 0,
+    stopping_projects: projectCounts.stopping ?? 0,
     btrfs_mutation_locks: locks.length,
     btrfs_mutation_waiters: locks.reduce(
       (total, lock) => total + lock.queued,

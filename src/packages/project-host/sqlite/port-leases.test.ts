@@ -3,13 +3,14 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { closeDatabase } from "@cocalc/lite/hub/sqlite/database";
+import { closeDatabase, getDatabase } from "@cocalc/lite/hub/sqlite/database";
 import {
   acquireProjectPortLease,
   coolDownProjectPortOffset,
   getCoolingProjectPortOffsets,
   getProjectPortLease,
   HTTP_PORT_LEASE_START,
+  projectPortLeasePreferredOffset,
   releaseProjectPortLease,
   SSH_PORT_LEASE_START,
 } from "./port-leases";
@@ -39,25 +40,32 @@ describe("project port lease sqlite", () => {
     upsertProject({ project_id: projectA, state: "opened" });
     const first = acquireProjectPortLease(projectA);
     const second = acquireProjectPortLease(projectA);
+    const preferred = projectPortLeasePreferredOffset(projectA);
 
     expect(second).toMatchObject(first);
-    expect(first.ssh_port).toBe(SSH_PORT_LEASE_START);
-    expect(first.http_port).toBe(HTTP_PORT_LEASE_START);
+    expect(first.ssh_port).toBe(SSH_PORT_LEASE_START + preferred);
+    expect(first.http_port).toBe(HTTP_PORT_LEASE_START + preferred);
   });
 
   it("avoids ports currently used by running projects without leases", () => {
     upsertProject({
       project_id: projectA,
       state: "running",
-      ssh_port: SSH_PORT_LEASE_START,
-      http_port: HTTP_PORT_LEASE_START,
+      ssh_port:
+        SSH_PORT_LEASE_START + projectPortLeasePreferredOffset(projectB),
+      http_port:
+        HTTP_PORT_LEASE_START + projectPortLeasePreferredOffset(projectB),
     });
     upsertProject({ project_id: projectB, state: "opened" });
 
     const lease = acquireProjectPortLease(projectB);
 
-    expect(lease.ssh_port).toBe(SSH_PORT_LEASE_START + 1);
-    expect(lease.http_port).toBe(HTTP_PORT_LEASE_START + 1);
+    expect(lease.ssh_port).toBe(
+      SSH_PORT_LEASE_START + projectPortLeasePreferredOffset(projectB) + 1,
+    );
+    expect(lease.http_port).toBe(
+      HTTP_PORT_LEASE_START + projectPortLeasePreferredOffset(projectB) + 1,
+    );
   });
 
   it("rotates to a fresh lease when requested", () => {
@@ -76,34 +84,46 @@ describe("project port lease sqlite", () => {
     upsertProject({ project_id: projectA, state: "opened" });
 
     const lease = acquireProjectPortLease(projectA, {
-      avoidOffsets: [0, 1, 2],
+      avoidOffsets: [
+        projectPortLeasePreferredOffset(projectA),
+        projectPortLeasePreferredOffset(projectA) + 1,
+        projectPortLeasePreferredOffset(projectA) + 2,
+      ],
     });
 
-    expect(lease.ssh_port).toBe(SSH_PORT_LEASE_START + 3);
-    expect(lease.http_port).toBe(HTTP_PORT_LEASE_START + 3);
+    expect(lease.ssh_port).toBe(
+      SSH_PORT_LEASE_START + projectPortLeasePreferredOffset(projectA) + 3,
+    );
+    expect(lease.http_port).toBe(
+      HTTP_PORT_LEASE_START + projectPortLeasePreferredOffset(projectA) + 3,
+    );
   });
 
   it("skips cooled-down offsets", () => {
     upsertProject({ project_id: projectA, state: "opened" });
-    coolDownProjectPortOffset(0);
-    coolDownProjectPortOffset(1);
+    const preferred = projectPortLeasePreferredOffset(projectA);
+    coolDownProjectPortOffset(preferred);
+    coolDownProjectPortOffset(preferred + 1);
 
     const lease = acquireProjectPortLease(projectA);
 
-    expect(getCoolingProjectPortOffsets()).toEqual(new Set([0, 1]));
-    expect(lease.ssh_port).toBe(SSH_PORT_LEASE_START + 2);
-    expect(lease.http_port).toBe(HTTP_PORT_LEASE_START + 2);
+    expect(getCoolingProjectPortOffsets()).toEqual(
+      new Set([preferred, preferred + 1]),
+    );
+    expect(lease.ssh_port).toBe(SSH_PORT_LEASE_START + preferred + 2);
+    expect(lease.http_port).toBe(HTTP_PORT_LEASE_START + preferred + 2);
   });
 
   it("drops expired cooled-down offsets", () => {
     upsertProject({ project_id: projectA, state: "opened" });
-    coolDownProjectPortOffset(0, { ttlMs: -1 });
+    const preferred = projectPortLeasePreferredOffset(projectA);
+    coolDownProjectPortOffset(preferred, { ttlMs: -1 });
 
     const lease = acquireProjectPortLease(projectA);
 
     expect(getCoolingProjectPortOffsets()).toEqual(new Set());
-    expect(lease.ssh_port).toBe(SSH_PORT_LEASE_START);
-    expect(lease.http_port).toBe(HTTP_PORT_LEASE_START);
+    expect(lease.ssh_port).toBe(SSH_PORT_LEASE_START + preferred);
+    expect(lease.http_port).toBe(HTTP_PORT_LEASE_START + preferred);
   });
 
   it("releases the lease when the local project row is deleted", () => {
@@ -123,5 +143,39 @@ describe("project port lease sqlite", () => {
     releaseProjectPortLease(projectA);
 
     expect(getProjectPortLease(projectA)).toBeUndefined();
+  });
+
+  it("allocates by indexed probes with 10K existing leases", () => {
+    upsertProject({ project_id: projectA, state: "opened" });
+    expect(getProjectPortLease(projectA)).toBeUndefined();
+    const db = getDatabase();
+    const preferred = projectPortLeasePreferredOffset(projectA);
+    const insert = db.prepare(
+      `INSERT INTO project_port_leases(
+         project_id, ssh_port, http_port, updated_at
+       ) VALUES (?, ?, ?, ?)`,
+    );
+    db.exec("BEGIN");
+    try {
+      let inserted = 0;
+      for (let offset = 0; offset < 15_000 && inserted < 10_000; offset += 1) {
+        if (offset === preferred) continue;
+        insert.run(
+          `existing-${offset}`,
+          SSH_PORT_LEASE_START + offset,
+          HTTP_PORT_LEASE_START + offset,
+          Date.now(),
+        );
+        inserted += 1;
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+
+    const lease = acquireProjectPortLease(projectA);
+    expect(lease.ssh_port).toBe(SSH_PORT_LEASE_START + preferred);
+    expect(lease.http_port).toBe(HTTP_PORT_LEASE_START + preferred);
   });
 });

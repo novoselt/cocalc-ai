@@ -31,7 +31,12 @@ import { QueryParams } from "@cocalc/frontend/misc/query-params";
 import { createRoot } from "react-dom/client";
 import { setAntdNotificationInstance } from "./antd-notification";
 import { AppContext, useAppContextProvider } from "./context";
+import { CocalcErrorBoundary } from "./error-boundary";
 import { Localize, useLocalizationCtx } from "./localize";
+import {
+  enableManagedReactErrorHandling,
+  reactRootErrorHandlers,
+} from "./react-error-reporting";
 
 // App uses the context provided by Redux (for the locale, etc.) and Localize.
 function CocalcApp({ children }) {
@@ -234,7 +239,9 @@ function Root({ Page }) {
         <AntdApp>
           <AntdNotificationBridge />
           <CocalcApp>
-            <Page />
+            <CocalcErrorBoundary scope="app.page">
+              <Page />
+            </CocalcErrorBoundary>
           </CocalcApp>
         </AntdApp>
       </Localize>
@@ -245,7 +252,8 @@ function Root({ Page }) {
 export async function render(): Promise<void> {
   finishedLoading(); // comment this out to leave the loading/startup banner visible so you can use the Chrome dev tools with it.
   const container = document.getElementById("cocalc-webapp-container");
-  const root = createRoot(container!);
+  enableManagedReactErrorHandling();
+  const root = createRoot(container!, reactRootErrorHandlers);
   const { Page } = await import("./page");
   root.render(<Root Page={Page} />);
 }

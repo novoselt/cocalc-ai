@@ -114,16 +114,22 @@ Qgroupid Referenced Exclusive Max referenced Max exclusive Path
     });
   });
 
-  it("collapses concurrent global qgroup scans for the same mount", async () => {
-    btrfsMock.mockResolvedValueOnce({
-      stdout: `
+  it("uses path-filtered qgroup reads for each subvolume", async () => {
+    btrfsMock.mockImplementation(async ({ args }: { args: string[] }) => ({
+      stdout:
+        args.at(-1) === "/mnt/test/project-1"
+          ? `
 Qgroupid Referenced Exclusive Max referenced Max exclusive Path
 -------- ---------- --------- -------------- ------------- ----
 0/123    456        456       1000           none          project-1
+`
+          : `
+Qgroupid Referenced Exclusive Max referenced Max exclusive Path
+-------- ---------- --------- -------------- ------------- ----
 0/124    789        789       2000           none          project-2
 `,
       stderr: "",
-    });
+    }));
     const quota1 = new SubvolumeQuota({
       path: "/mnt/test/project-1",
       getSubvolumeId: async () => 123,
@@ -157,10 +163,38 @@ Qgroupid Referenced Exclusive Max referenced Max exclusive Path
         scope: "subvolume",
       },
     ]);
-    expect(btrfsMock).toHaveBeenCalledTimes(1);
-    expect(btrfsMock).toHaveBeenCalledWith({
+    expect(btrfsMock).toHaveBeenCalledTimes(2);
+    expect(btrfsMock).toHaveBeenNthCalledWith(1, {
       verbose: false,
-      args: ["qgroup", "show", "-prc", "--raw", "/mnt/test"],
+      args: ["qgroup", "show", "-prcf", "--raw", "/mnt/test/project-1"],
     });
+    expect(btrfsMock).toHaveBeenNthCalledWith(2, {
+      verbose: false,
+      args: ["qgroup", "show", "-prcf", "--raw", "/mnt/test/project-2"],
+    });
+  });
+
+  it("collapses concurrent reads for the same subvolume", async () => {
+    btrfsMock.mockResolvedValueOnce({
+      stdout: `
+Qgroupid Referenced Exclusive Max referenced Max exclusive Path
+-------- ---------- --------- -------------- ------------- ----
+0/123    456        456       1000           none          project-1
+`,
+      stderr: "",
+    });
+    const quota = new SubvolumeQuota({
+      path: "/mnt/test/project-1",
+      getSubvolumeId: async () => 123,
+      filesystem: {
+        opts: {
+          mount: "/mnt/test",
+        },
+      },
+    } as any);
+
+    await Promise.all([quota.get(), quota.get()]);
+
+    expect(btrfsMock).toHaveBeenCalledTimes(1);
   });
 });
