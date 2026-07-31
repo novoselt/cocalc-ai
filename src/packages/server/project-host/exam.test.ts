@@ -35,6 +35,27 @@ describe("project-host exam configuration", () => {
     ).toBe(true);
   });
 
+  it("requires a reconciled public IPv4 address for exam DNS", () => {
+    expect(
+      __test__.publicIp({
+        id: "00000000-1000-4000-8000-000000000001",
+        public_ip: "34.0.129.201",
+      }),
+    ).toBe("34.0.129.201");
+    expect(
+      __test__.publicIp({
+        id: "00000000-1000-4000-8000-000000000001",
+        metadata: { runtime: { public_ip: "34.0.129.202" } },
+      }),
+    ).toBe("34.0.129.202");
+    expect(() =>
+      __test__.publicIp({
+        id: "00000000-1000-4000-8000-000000000001",
+        public_ip: null,
+      }),
+    ).toThrow("reconciled public IPv4");
+  });
+
   it("keeps terminal access disabled unless explicitly enabled", () => {
     const base = {
       enabled: true,

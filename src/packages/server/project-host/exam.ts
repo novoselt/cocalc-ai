@@ -4,6 +4,7 @@
  */
 
 import { createHmac, randomBytes, randomUUID, scryptSync } from "node:crypto";
+import { isIP } from "node:net";
 import getLogger from "@cocalc/backend/logger";
 import { conatPassword } from "@cocalc/backend/data";
 import getPool, { type PoolClient } from "@cocalc/database/pool";
@@ -15,7 +16,7 @@ import type {
   HostExamRuntimeStatus,
   HostExamState,
 } from "@cocalc/conat/hub/api/hosts";
-import { ensureAppSubdomainDns } from "@cocalc/server/cloud/dns";
+import { ensureProxiedAddressDns } from "@cocalc/server/cloud/dns";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 import adminAlert from "@cocalc/server/messages/admin-alert";
 
@@ -49,6 +50,7 @@ export interface ExamHostRow {
   id: string;
   name?: string;
   status?: string;
+  public_ip?: string | null;
   public_url?: string | null;
   metadata?: Record<string, any>;
 }
@@ -278,6 +280,22 @@ function examHostnameForHost(host: ExamHostRow): string {
   return labels.join(".");
 }
 
+function publicIp(host: ExamHostRow): string {
+  const value = `${
+    host.public_ip ??
+    host.metadata?.runtime?.public_ip ??
+    host.metadata?.public_ip ??
+    host.metadata?.ip_address ??
+    ""
+  }`.trim();
+  if (isIP(value) !== 4) {
+    throw new Error(
+      "host must have a reconciled public IPv4 address before exam mode is enabled",
+    );
+  }
+  return value;
+}
+
 function isHostOnDemand(host: ExamHostRow): boolean {
   const metadata = host.metadata ?? {};
   const pricing = `${
@@ -438,12 +456,11 @@ async function ensureExamDns({
   host: ExamHostRow;
   config: HostExamConfig;
 }): Promise<HostExamConfig> {
-  const target = publicHostname(host);
-  const { record_id } = await ensureAppSubdomainDns({
-    hostname: config.hostname,
-    target_hostname: target,
+  const target = publicIp(host);
+  const { record_id } = await ensureProxiedAddressDns({
+    name: config.hostname,
+    ipAddress: target,
     record_id: config.dns_record_id ?? undefined,
-    adopt_existing: config.dns_record_id != null,
   });
   const { rows } = await getPool().query(
     `
@@ -1023,5 +1040,6 @@ export const __test__ = {
   hashToken,
   isHostOnDemand,
   normalizeConfig,
+  publicIp,
   validateDeadline,
 };
