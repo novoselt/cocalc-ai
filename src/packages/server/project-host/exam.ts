@@ -170,6 +170,36 @@ async function ensureSchema(): Promise<void> {
           created_by UUID NOT NULL
         )
       `);
+      // The shared schema synchronizer creates declared timestamp fields before
+      // this feature-specific schema initializer runs. Those generic columns are
+      // nullable and have no default, so CREATE TABLE IF NOT EXISTS alone does
+      // not establish the lifecycle invariants required here.
+      await getPool().query(`
+        UPDATE ${CONFIG_TABLE}
+        SET created_at=COALESCE(created_at, updated_at, NOW()),
+            updated_at=COALESCE(updated_at, created_at, NOW())
+        WHERE created_at IS NULL OR updated_at IS NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${CONFIG_TABLE}
+          ALTER COLUMN created_at SET DEFAULT NOW(),
+          ALTER COLUMN created_at SET NOT NULL,
+          ALTER COLUMN updated_at SET DEFAULT NOW(),
+          ALTER COLUMN updated_at SET NOT NULL
+      `);
+      await getPool().query(`
+        UPDATE ${RUN_TABLE}
+        SET created_at=COALESCE(created_at, updated_at, NOW()),
+            updated_at=COALESCE(updated_at, created_at, NOW())
+        WHERE created_at IS NULL OR updated_at IS NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${RUN_TABLE}
+          ALTER COLUMN created_at SET DEFAULT NOW(),
+          ALTER COLUMN created_at SET NOT NULL,
+          ALTER COLUMN updated_at SET DEFAULT NOW(),
+          ALTER COLUMN updated_at SET NOT NULL
+      `);
       await getPool().query(`
         CREATE UNIQUE INDEX IF NOT EXISTS project_host_exam_runs_active_host_idx
         ON ${RUN_TABLE}(host_id)
@@ -407,7 +437,7 @@ async function loadCurrentRun(
       SELECT *
       FROM ${RUN_TABLE}
       WHERE host_id=$1
-      ORDER BY created_at DESC
+      ORDER BY COALESCE(created_at, updated_at) DESC, updated_at DESC, run_id DESC
       LIMIT 1
     `,
     [host_id],
@@ -585,6 +615,7 @@ async function updateRunFromRuntime({
             ELSE cleanup_started_at
           END,
           cleaned_at=CASE WHEN $2='stopped' THEN COALESCE(cleaned_at, NOW()) ELSE cleaned_at END,
+          stopped_at=CASE WHEN $2='stopped' THEN COALESCE(stopped_at, NOW()) ELSE stopped_at END,
           last_error=$3,
           updated_at=NOW()
       WHERE run_id=$1
@@ -1062,6 +1093,7 @@ export function startExamHostMaintenance(): void {
 
 export const __test__ = {
   DEFAULT_EXAM_CONFIG,
+  ensureSchema,
   examHostnameForHost,
   examDnsRoute,
   hashToken,
