@@ -128,15 +128,21 @@ function result({
   state: HostExamState;
   token?: string;
 }) {
+  const currentToken = token ?? state.token;
+  const studentUrl = state.config?.hostname
+    ? `https://${state.config.hostname}`
+    : null;
   return {
     host_id: host.id,
     host_name: host.name ?? null,
-    student_url: state.config?.hostname
-      ? `https://${state.config.hostname}`
-      : null,
+    student_url: studentUrl,
+    admission_url:
+      studentUrl && currentToken
+        ? `${studentUrl}/#token=${encodeURIComponent(currentToken)}`
+        : null,
     documentation: "/app-docs/hosts/exam-scratchpads",
     capacity_guidance: hostCapacity(host, state),
-    ...(token ? { token } : undefined),
+    ...(currentToken ? { token: currentToken } : undefined),
     ...state,
   };
 }

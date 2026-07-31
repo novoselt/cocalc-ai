@@ -170,6 +170,7 @@ describe("host exam commands", () => {
 
     const initial = await harness.run(["status", "exam-test"]);
     assert.equal(initial.student_url, "https://exam-test.example.test");
+    assert.equal(initial.admission_url, null);
     assert.equal(initial.documentation, "/app-docs/hosts/exam-scratchpads");
     assert.equal(harness.calls.status.at(-1).timeout, 30_000);
 
@@ -228,6 +229,10 @@ describe("host exam commands", () => {
       "--idempotency-key",
       "exam-test-prepare",
     ]);
+    assert.equal(
+      prepared.admission_url,
+      "https://exam-test.example.test/#token=initial-token",
+    );
     assert.equal(prepared.token, "initial-token");
     assert.equal(prepared.run.status, "ready");
     const prepareCall = harness.calls.prepare.at(-1);

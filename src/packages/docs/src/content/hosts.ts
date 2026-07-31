@@ -224,9 +224,11 @@ cocalc host exam deadline <host> --delete-at 2026-08-01T15:30:00Z --stop-host
 cocalc host exam end <host> --stop-host --yes
 ~~~
 
-Preparation and token rotation print the plaintext admission token. The
-authenticated status command also shows the current token while a run is
-active. Mutation commands require fresh authentication; run
+Preparation and token rotation print the plaintext admission token and a
+copyable admission URL. The authenticated status command also shows the current
+token and admission URL while a run is active. The URL stores the token in its
+fragment, so browsers do not send it to Cloudflare or server access logs.
+Mutation commands require fresh authentication; run
 \`cocalc auth bootstrap\` first when the current CLI session is not elevated.
 Pass \`--keep-host-running\` instead of \`--stop-host\` when cleanup should leave
 the reusable project host online. Destructive early cleanup always requires
@@ -251,18 +253,21 @@ the smoke-test project. A successful preparation leaves the run **ready** with
 admission closed; students can enter a token only after you select **Open
 admission**.
 
-The panel displays a stable student URL and a newly generated shared token. The
-token remains visible to the authenticated instructor while the run is active;
-it grants only one temporary project per candidate browser for this run. Rotate
-it before opening admission if it was shared prematurely.
+The panel displays a stable student URL, a copyable admission link, and the raw
+shared token as a manual fallback. The admission link prefills the token and
+then removes it from the browser address. The token remains visible to the
+authenticated instructor while the run is active; it grants only one temporary
+project per candidate browser for this run. Rotate it before opening admission
+if it was shared prematurely.
 
 ## Step 3: run a candidate rehearsal
 
 1. Select **Open admission** only when new projects should be accepted.
-2. Open the student URL in an incognito window or, preferably, a separate
+2. Open the admission link in an incognito window or, preferably, a separate
    browser profile.
-3. Enter the shared token. The browser should open directly into a new anonymous
-   project without a normal CoCalc sign-in.
+3. Select **Open scratchpad**. The link prefills the token; the raw token can
+   still be entered manually. The browser should open directly into a new
+   anonymous project without a normal CoCalc sign-in.
 4. Create a Jupyter notebook and evaluate a simple expression such as
    \`2 + 2\`.
 5. Save and refresh the page. It should reconnect to the same project.

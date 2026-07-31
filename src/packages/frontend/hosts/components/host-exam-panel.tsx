@@ -437,6 +437,13 @@ export function HostExamPanel({
     !!run &&
     (dayjs(run.scheduled_stop_at).valueOf() !== deadline.valueOf() ||
       (run.stop_host_at_deadline !== false) !== stopHostAtDeadline);
+  const studentUrl = state?.config?.hostname
+    ? `https://${state.config.hostname}`
+    : undefined;
+  const admissionUrl =
+    studentUrl && token
+      ? `${studentUrl}/#token=${encodeURIComponent(token)}`
+      : undefined;
 
   return (
     <Spin
@@ -733,12 +740,9 @@ export function HostExamPanel({
           >
             <Descriptions size="small" column={1}>
               <Descriptions.Item label="Student URL">
-                {state?.config?.hostname ? (
-                  <Typography.Link
-                    href={`https://${state.config.hostname}`}
-                    target="_blank"
-                  >
-                    https://{state.config.hostname}
+                {studentUrl ? (
+                  <Typography.Link href={studentUrl} target="_blank">
+                    {studentUrl}
                   </Typography.Link>
                 ) : (
                   "not configured"
@@ -777,23 +781,52 @@ export function HostExamPanel({
             {token && (
               <>
                 <Divider />
-                <Alert
-                  type="info"
-                  title="Shared exam token"
-                  description="Share this token with students when admission opens. It grants only a temporary project for this exam and remains visible here while the run is active."
-                />
-                <Input
-                  value={token}
-                  readOnly
-                  addonAfter={
-                    <Button
-                      type="text"
-                      onClick={() => void navigator.clipboard.writeText(token)}
-                    >
-                      Copy
-                    </Button>
-                  }
-                />
+                <Space
+                  orientation="vertical"
+                  size="small"
+                  style={{ width: "100%" }}
+                >
+                  <Alert
+                    type="info"
+                    title="Student admission"
+                    description="Share the admission link when the exam opens. It prefills the token without sending it to the server in the URL. The token grants only one temporary project per student browser for this run."
+                  />
+                  {admissionUrl && (
+                    <Input
+                      aria-label="Student admission link"
+                      value={admissionUrl}
+                      readOnly
+                      addonAfter={
+                        <Button
+                          type="text"
+                          onClick={() =>
+                            void navigator.clipboard.writeText(admissionUrl)
+                          }
+                        >
+                          Copy link
+                        </Button>
+                      }
+                    />
+                  )}
+                  <Typography.Text type="secondary">
+                    Manual token
+                  </Typography.Text>
+                  <Input
+                    aria-label="Manual exam token"
+                    value={token}
+                    readOnly
+                    addonAfter={
+                      <Button
+                        type="text"
+                        onClick={() =>
+                          void navigator.clipboard.writeText(token)
+                        }
+                      >
+                        Copy token
+                      </Button>
+                    }
+                  />
+                </Space>
               </>
             )}
             <Divider />

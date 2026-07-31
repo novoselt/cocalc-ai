@@ -427,10 +427,15 @@ describe("HostExamPanel", () => {
       />,
     );
 
-    expect(await screen.findByText("Shared exam token")).toBeInTheDocument();
+    expect(await screen.findByText("Student admission")).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue(
+        "https://exam-host-1.example.test/#token=exam-token-visible-later",
+      ),
+    ).toBeVisible();
     expect(screen.getByDisplayValue("exam-token-visible-later")).toBeVisible();
     expect(
-      screen.getByText(/remains visible here while the run is active/),
+      screen.getByText(/without sending it to the server in the URL/),
     ).toBeInTheDocument();
   });
 

@@ -39,6 +39,19 @@ const DEFAULT_CONFIGURATION = {
   site_name: "CoCalc Project Host",
 };
 
+const EXAM_ADMISSION_SCRIPT = `(() => {
+  const token = new URLSearchParams(window.location.hash.slice(1)).get("token");
+  if (!token) return;
+  const input = document.querySelector('input[name="token"]');
+  if (!(input instanceof HTMLInputElement)) return;
+  input.value = token;
+  window.history.replaceState(
+    null,
+    document.title,
+    window.location.pathname + window.location.search,
+  );
+})();`;
+
 export function getProjectHostCustomizePayload(opts?: {
   account_id?: string;
   project_id?: string;
@@ -211,6 +224,7 @@ export function getExamJoinPage({
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="same-origin">
   <title>CoCalc Exam Scratchpad</title>
+  <script src="/exam/admission.js" defer></script>
   <style>
     :root { color-scheme: light; font-family: "Avenir Next", "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
@@ -307,6 +321,12 @@ export async function initHttp({
         admission_open: runtime.admission_open,
       }),
     );
+  });
+
+  app.get("/exam/admission.js", (req, res, next) => {
+    if (!examRuntimeForRequest(req)) return next();
+    setExamResponseHeaders(res);
+    res.type("application/javascript").send(EXAM_ADMISSION_SCRIPT);
   });
 
   app.post("/exam/join", async (req, res, next) => {
