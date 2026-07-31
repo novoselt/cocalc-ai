@@ -106,6 +106,10 @@ import {
 } from "@cocalc/frontend/project/realtime-access";
 import { isPublicDirectoryShareHost } from "@cocalc/frontend/projects/host-info";
 import { usesHubProjectRuntime } from "@cocalc/frontend/project/runtime-capabilities";
+import {
+  isExamMode,
+  waitForExamModeConfiguration,
+} from "@cocalc/frontend/customize/exam-mode";
 
 export interface ConatConnectionStatus {
   state: "connected" | "connecting" | "disconnected";
@@ -471,6 +475,9 @@ export class ConatClient extends EventEmitter {
 
   private bootstrapControlPlaneOrigin = reuseInFlight(async () => {
     if (this.remote || typeof window === "undefined") {
+      return;
+    }
+    if (await waitForExamModeConfiguration()) {
       return;
     }
     const stored = getStoredControlPlaneOrigin();
@@ -2880,11 +2887,12 @@ export class ConatClient extends EventEmitter {
           account_id: info.user.account_id,
           hub: info.id ?? "",
         });
-        void this.browserSessionAutomation
-          .start(info.user.account_id)
-          .catch((err) =>
-            console.warn(`failed to start browser session automation: ${err}`),
-          );
+        const browserSessionAction = isExamMode()
+          ? this.browserSessionAutomation.stop()
+          : this.browserSessionAutomation.start(info.user.account_id);
+        void browserSessionAction.catch((err) =>
+          console.warn(`failed to start browser session automation: ${err}`),
+        );
         const cookie = Cookies.get(ACCOUNT_ID_COOKIE);
         if (!lite && cookie && cookie != client.info.user.account_id) {
           // make sure account_id cookie is set to the actual account we're

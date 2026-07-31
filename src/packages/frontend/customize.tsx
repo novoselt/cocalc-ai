@@ -41,6 +41,7 @@ import type { ProjectRuntimeConfiguration } from "@cocalc/util/project-runtime";
 export { TermsOfService } from "@cocalc/frontend/customize/terms-of-service";
 import { delay } from "awaiting";
 import { init as initLite } from "./lite";
+import { setExamModeConfiguration } from "./customize/exam-mode";
 
 // update every 2 minutes.
 const UPDATE_INTERVAL = 2 * 60000;
@@ -305,6 +306,7 @@ function process_customize(obj) {
   // always set time, so other code can know for sure that customize was loaded.
   // it also might be helpful to know when
   obj["time"] = Date.now();
+  setExamModeConfiguration(obj.exam_mode === true);
   set_customize(obj);
 }
 
