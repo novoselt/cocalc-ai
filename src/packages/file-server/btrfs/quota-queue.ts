@@ -7,6 +7,13 @@ import path from "node:path";
 import { btrfs } from "./util";
 import { btrfsQuotasDisabled } from "./config";
 import { ensureBtrfsQuotaMode } from "./quota-mode";
+import {
+  type BtrfsMutationContext,
+  type BtrfsMutationPriority,
+  effectiveBtrfsMutationContext,
+  withBtrfsMutationContext,
+  withBtrfsMutationLock,
+} from "./operation-cache";
 
 const logger = getLogger("file-server:btrfs:quota-queue");
 
@@ -33,6 +40,21 @@ type QueueRow = {
   finished_at?: number | null;
   attempts: number;
   last_error?: string | null;
+  logical_key?: string | null;
+  project_id?: string | null;
+  volume_kind?: string | null;
+  operation_id?: string | null;
+  operation_class?: string | null;
+  base_priority: number;
+  context: BtrfsMutationContext;
+  first_enqueued_at: number;
+  last_coalesced_at: number;
+  claimed_at?: number | null;
+  lock_acquired_at?: number | null;
+  command_started_at?: number | null;
+  command_finished_at?: number | null;
+  completed_at?: number | null;
+  coalesced_count: number;
 };
 
 export type BtrfsQuotaQueueStatus = {
@@ -50,6 +72,13 @@ export type BtrfsQuotaQueueStatus = {
     kind: QuotaWorkKind;
     age_ms: number;
     attempts: number;
+    project_id?: string | null;
+    volume_kind?: string | null;
+    operation_id?: string | null;
+    operation_class?: string | null;
+    priority: BtrfsMutationPriority;
+    queue_wait_ms: number;
+    lock_wait_ms?: number;
   };
   last_failed?: {
     id: string;
@@ -63,14 +92,29 @@ export type BtrfsQuotaQueueStatus = {
 
 const TABLE = "btrfs_quota_queue";
 const MAX_ATTEMPTS = 8;
+const AGING_INTERVAL_MS = 5 * 60_000;
 let queueInitialized = false;
 let workerRunning = false;
 let wakeTimer: NodeJS.Timeout | undefined;
 let sqliteDb: DatabaseSync | undefined;
 const waiters = new Map<
   string,
-  { resolve: () => void; reject: (err: Error) => void }
+  Set<{ resolve: () => void; reject: (err: Error) => void }>
 >();
+
+const PRIORITY_VALUE: Record<BtrfsMutationPriority, number> = {
+  lifecycle: 0,
+  interactive: 1,
+  scheduled: 2,
+  scavenger: 3,
+};
+
+const PRIORITY_NAME: BtrfsMutationPriority[] = [
+  "lifecycle",
+  "interactive",
+  "scheduled",
+  "scavenger",
+];
 
 function sqliteFilename(): string {
   return (
@@ -107,14 +151,64 @@ function ensureQueueTable(): void {
       started_at INTEGER,
       finished_at INTEGER,
       attempts INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT
+      last_error TEXT,
+      logical_key TEXT,
+      project_id TEXT,
+      volume_kind TEXT,
+      operation_id TEXT,
+      operation_class TEXT,
+      base_priority INTEGER NOT NULL DEFAULT 1,
+      context_json TEXT,
+      first_enqueued_at INTEGER,
+      last_coalesced_at INTEGER,
+      claimed_at INTEGER,
+      lock_acquired_at INTEGER,
+      command_started_at INTEGER,
+      command_finished_at INTEGER,
+      completed_at INTEGER,
+      coalesced_count INTEGER NOT NULL DEFAULT 0
     )
+  `);
+  for (const [name, definition] of [
+    ["logical_key", "TEXT"],
+    ["project_id", "TEXT"],
+    ["volume_kind", "TEXT"],
+    ["operation_id", "TEXT"],
+    ["operation_class", "TEXT"],
+    ["base_priority", "INTEGER NOT NULL DEFAULT 1"],
+    ["context_json", "TEXT"],
+    ["first_enqueued_at", "INTEGER"],
+    ["last_coalesced_at", "INTEGER"],
+    ["claimed_at", "INTEGER"],
+    ["lock_acquired_at", "INTEGER"],
+    ["command_started_at", "INTEGER"],
+    ["command_finished_at", "INTEGER"],
+    ["completed_at", "INTEGER"],
+    ["coalesced_count", "INTEGER NOT NULL DEFAULT 0"],
+  ] as const) {
+    try {
+      db.exec(`ALTER TABLE ${TABLE} ADD COLUMN ${name} ${definition}`);
+    } catch {
+      // Existing databases already have this additive column.
+    }
+  }
+  db.exec(`
+    UPDATE ${TABLE}
+    SET first_enqueued_at = COALESCE(first_enqueued_at, created_at),
+        last_coalesced_at = COALESCE(last_coalesced_at, created_at)
+    WHERE first_enqueued_at IS NULL OR last_coalesced_at IS NULL
   `);
   db.exec(
     `CREATE INDEX IF NOT EXISTS ${TABLE}_status_available_idx ON ${TABLE}(status, available_at, created_at)`,
   );
   db.exec(
     `CREATE INDEX IF NOT EXISTS ${TABLE}_mount_status_idx ON ${TABLE}(mount, status, created_at)`,
+  );
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ${TABLE}_queued_logical_key_idx ON ${TABLE}(logical_key) WHERE status='queued' AND logical_key IS NOT NULL`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS ${TABLE}_priority_idx ON ${TABLE}(status, base_priority, available_at, first_enqueued_at)`,
   );
   queueInitialized = true;
 }
@@ -125,6 +219,12 @@ function db() {
 }
 
 function parseRow(row: any): QueueRow {
+  let context: BtrfsMutationContext = {};
+  try {
+    context = row.context_json ? JSON.parse(`${row.context_json}`) : {};
+  } catch {
+    context = {};
+  }
   return {
     id: `${row.id}`,
     mount: `${row.mount}`,
@@ -137,6 +237,25 @@ function parseRow(row: any): QueueRow {
     finished_at: row.finished_at == null ? null : Number(row.finished_at),
     attempts: Number(row.attempts ?? 0),
     last_error: row.last_error == null ? null : `${row.last_error}`,
+    logical_key: row.logical_key == null ? null : `${row.logical_key}`,
+    project_id: row.project_id == null ? null : `${row.project_id}`,
+    volume_kind: row.volume_kind == null ? null : `${row.volume_kind}`,
+    operation_id: row.operation_id == null ? null : `${row.operation_id}`,
+    operation_class:
+      row.operation_class == null ? null : `${row.operation_class}`,
+    base_priority: Number(row.base_priority ?? 1),
+    context,
+    first_enqueued_at: Number(row.first_enqueued_at ?? row.created_at ?? 0),
+    last_coalesced_at: Number(row.last_coalesced_at ?? row.created_at ?? 0),
+    claimed_at: row.claimed_at == null ? null : Number(row.claimed_at),
+    lock_acquired_at:
+      row.lock_acquired_at == null ? null : Number(row.lock_acquired_at),
+    command_started_at:
+      row.command_started_at == null ? null : Number(row.command_started_at),
+    command_finished_at:
+      row.command_finished_at == null ? null : Number(row.command_finished_at),
+    completed_at: row.completed_at == null ? null : Number(row.completed_at),
+    coalesced_count: Number(row.coalesced_count ?? 0),
   };
 }
 
@@ -153,14 +272,32 @@ function retryDelayMs(attempts: number): number {
 }
 
 function settleWaiter(id: string, err?: Error): void {
-  const waiter = waiters.get(id);
-  if (!waiter) return;
+  const entries = waiters.get(id);
+  if (!entries) return;
   waiters.delete(id);
-  if (err) {
-    waiter.reject(err);
-  } else {
-    waiter.resolve();
+  for (const waiter of entries) {
+    if (err) {
+      waiter.reject(err);
+    } else {
+      waiter.resolve();
+    }
   }
+}
+
+function addWaiter(
+  id: string,
+  waiter: { resolve: () => void; reject: (err: Error) => void },
+): void {
+  let entries = waiters.get(id);
+  if (!entries) {
+    entries = new Set();
+    waiters.set(id, entries);
+  }
+  entries.add(waiter);
+}
+
+function priorityName(value: number): BtrfsMutationPriority {
+  return PRIORITY_NAME[Math.max(0, Math.min(3, Math.floor(value)))]!;
 }
 
 async function setSubvolumeLimitNow({
@@ -184,33 +321,71 @@ async function setSubvolumeLimitNow({
 }
 
 async function executeRow(row: QueueRow): Promise<void> {
-  switch (row.payload.kind) {
-    case "set_subvolume_limit":
-      await setSubvolumeLimitNow({
-        mount: row.payload.mount,
-        path: row.payload.path,
-        size: row.payload.size,
-      });
-      return;
-  }
+  const context = effectiveBtrfsMutationContext({
+    ...row.context,
+    project_id: row.project_id ?? row.context.project_id,
+    operation_id: row.operation_id ?? row.context.operation_id,
+    operation_class: row.operation_class ?? row.context.operation_class,
+    priority: priorityName(row.base_priority),
+  });
+  await withBtrfsMutationContext(context, async () => {
+    const lockWaitStarted = Date.now();
+    await withBtrfsMutationLock({
+      mount: row.mount,
+      operation: `quota:${row.volume_kind ?? "subvolume"}`,
+      context,
+      run: async () => {
+        const lockAcquiredAt = Date.now();
+        db()
+          .prepare(
+            `UPDATE ${TABLE} SET lock_acquired_at=?, command_started_at=? WHERE id=?`,
+          )
+          .run(lockAcquiredAt, lockAcquiredAt, row.id);
+        logger.debug("executing btrfs quota work", {
+          id: row.id,
+          project_id: row.project_id,
+          volume_kind: row.volume_kind,
+          operation_id: row.operation_id,
+          priority: context.priority,
+          queue_wait_ms:
+            (row.claimed_at ?? lockWaitStarted) - row.first_enqueued_at,
+          lock_wait_ms: lockAcquiredAt - lockWaitStarted,
+          coalesced_count: row.coalesced_count,
+        });
+        switch (row.payload.kind) {
+          case "set_subvolume_limit":
+            await setSubvolumeLimitNow({
+              mount: row.payload.mount,
+              path: row.payload.path,
+              size: row.payload.size,
+            });
+            break;
+        }
+        db()
+          .prepare(`UPDATE ${TABLE} SET command_finished_at=? WHERE id=?`)
+          .run(Date.now(), row.id);
+      },
+    });
+  });
 }
 
 function readyRow(now = Date.now()): QueueRow | undefined {
   const row = db()
     .prepare(
       `
-        SELECT id, mount, kind, payload, status, created_at, available_at, started_at, finished_at, attempts, last_error
+        SELECT *
         FROM ${TABLE}
         WHERE status = 'in_progress'
            OR (status = 'queued' AND available_at <= ?)
         ORDER BY
           CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END,
+          MAX(0, base_priority - CAST((? - COALESCE(first_enqueued_at, created_at)) / ? AS INTEGER)) ASC,
           available_at ASC,
-          created_at ASC
+          COALESCE(first_enqueued_at, created_at) ASC
         LIMIT 1
       `,
     )
-    .get(now);
+    .get(now, now, AGING_INTERVAL_MS);
   if (!row) return undefined;
   return parseRow(row);
 }
@@ -237,15 +412,24 @@ function markInProgress(row: QueueRow): QueueRow {
     .prepare(
       `
         UPDATE ${TABLE}
-        SET status='in_progress', started_at=?, finished_at=NULL, attempts=?, last_error=NULL
+        SET status='in_progress',
+            started_at=?,
+            claimed_at=?,
+            lock_acquired_at=NULL,
+            command_started_at=NULL,
+            command_finished_at=NULL,
+            finished_at=NULL,
+            attempts=?,
+            last_error=NULL
         WHERE id=?
       `,
     )
-    .run(started_at, attempts, row.id);
+    .run(started_at, started_at, attempts, row.id);
   return {
     ...row,
     status: "in_progress",
     started_at,
+    claimed_at: started_at,
     attempts,
     last_error: null,
   };
@@ -287,6 +471,10 @@ async function runWorker(): Promise<void> {
       const claimed = markInProgress(row);
       try {
         await executeRow(claimed);
+        const completedAt = Date.now();
+        db()
+          .prepare(`UPDATE ${TABLE} SET completed_at=? WHERE id=?`)
+          .run(completedAt, claimed.id);
         db().prepare(`DELETE FROM ${TABLE} WHERE id=?`).run(claimed.id);
         settleWaiter(claimed.id);
       } catch (err) {
@@ -303,6 +491,10 @@ async function runWorker(): Promise<void> {
                 SET status='queued',
                     available_at=?,
                     finished_at=?,
+                    claimed_at=NULL,
+                    lock_acquired_at=NULL,
+                    command_started_at=NULL,
+                    command_finished_at=NULL,
                     last_error=?
                 WHERE id=?
               `,
@@ -352,28 +544,108 @@ async function runWorker(): Promise<void> {
 
 function enqueueRow(
   payload: QuotaWorkPayload,
-  { wait }: { wait: boolean },
+  {
+    wait,
+    logicalKey,
+    projectId,
+    volumeKind,
+    operationId,
+    operationClass,
+    context,
+  }: {
+    wait: boolean;
+    logicalKey: string;
+    projectId?: string;
+    volumeKind?: string;
+    operationId?: string;
+    operationClass?: string;
+    context: BtrfsMutationContext;
+  },
 ): Promise<void> | void {
   if (btrfsQuotasDisabled()) {
     return wait ? Promise.resolve() : undefined;
   }
   ensureQueueTable();
-  const id = randomUUID();
   const now = Date.now();
-  db()
+  const effectiveContext = effectiveBtrfsMutationContext(context);
+  const basePriority =
+    PRIORITY_VALUE[effectiveContext.priority ?? "interactive"];
+  const existing = db()
     .prepare(
-      `
-        INSERT INTO ${TABLE} (
-          id, mount, kind, payload, status, created_at, available_at, attempts
-        )
-        VALUES (?, ?, ?, ?, 'queued', ?, ?, 0)
-      `,
+      `SELECT id, base_priority FROM ${TABLE} WHERE status='queued' AND logical_key=?`,
     )
-    .run(id, payload.mount, payload.kind, JSON.stringify(payload), now, now);
+    .get(logicalKey) as { id: string; base_priority: number } | undefined;
+  const id = existing?.id ?? randomUUID();
+  if (existing) {
+    db()
+      .prepare(
+        `
+          UPDATE ${TABLE}
+          SET mount=?,
+              kind=?,
+              payload=?,
+              available_at=MIN(available_at, ?),
+              project_id=?,
+              volume_kind=?,
+              operation_id=?,
+              operation_class=?,
+              base_priority=MIN(base_priority, ?),
+              context_json=?,
+              last_coalesced_at=?,
+              coalesced_count=coalesced_count + 1,
+              last_error=NULL
+          WHERE id=?
+        `,
+      )
+      .run(
+        payload.mount,
+        payload.kind,
+        JSON.stringify(payload),
+        now,
+        projectId ?? effectiveContext.project_id ?? null,
+        volumeKind ?? null,
+        operationId ?? effectiveContext.operation_id ?? null,
+        operationClass ?? effectiveContext.operation_class ?? null,
+        basePriority,
+        JSON.stringify(effectiveContext),
+        now,
+        id,
+      );
+  } else {
+    db()
+      .prepare(
+        `
+        INSERT INTO ${TABLE} (
+          id, mount, kind, payload, status, created_at, available_at, attempts,
+          logical_key, project_id, volume_kind, operation_id, operation_class,
+          base_priority, context_json, first_enqueued_at, last_coalesced_at,
+          coalesced_count
+        )
+        VALUES (?, ?, ?, ?, 'queued', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      `,
+      )
+      .run(
+        id,
+        payload.mount,
+        payload.kind,
+        JSON.stringify(payload),
+        now,
+        now,
+        logicalKey,
+        projectId ?? effectiveContext.project_id ?? null,
+        volumeKind ?? null,
+        operationId ?? effectiveContext.operation_id ?? null,
+        operationClass ?? effectiveContext.operation_class ?? null,
+        basePriority,
+        JSON.stringify(effectiveContext),
+        now,
+        now,
+      );
+  }
   scheduleWake(0);
   if (!wait) return;
   return new Promise<void>((resolve, reject) => {
-    waiters.set(id, { resolve, reject });
+    addWaiter(id, { resolve, reject });
   });
 }
 
@@ -390,7 +662,20 @@ export function queueSetSubvolumeQuota(opts: {
   path: string;
   size: string | number;
   wait?: boolean;
+  project_id?: string;
+  volume_kind?: string;
+  operation_id?: string;
+  operation_class?: string;
+  priority?: BtrfsMutationPriority;
+  context?: BtrfsMutationContext;
 }): Promise<void> | void {
+  const context = effectiveBtrfsMutationContext({
+    ...(opts.context ?? {}),
+    project_id: opts.project_id ?? opts.context?.project_id,
+    operation_id: opts.operation_id ?? opts.context?.operation_id,
+    operation_class: opts.operation_class ?? opts.context?.operation_class,
+    priority: opts.priority ?? opts.context?.priority,
+  });
   return enqueueRow(
     {
       mount: opts.mount,
@@ -398,7 +683,15 @@ export function queueSetSubvolumeQuota(opts: {
       path: opts.path,
       size: `${opts.size}`,
     },
-    { wait: opts.wait ?? true },
+    {
+      wait: opts.wait ?? true,
+      logicalKey: `${opts.mount}\0${opts.path}`,
+      projectId: opts.project_id,
+      volumeKind: opts.volume_kind,
+      operationId: opts.operation_id,
+      operationClass: opts.operation_class,
+      context,
+    },
   );
 }
 
@@ -422,7 +715,7 @@ export function getBtrfsQuotaQueueStatus(
   const rows = db()
     .prepare(
       `
-        SELECT id, mount, kind, payload, status, created_at, available_at, started_at, finished_at, attempts, last_error
+        SELECT *
         FROM ${TABLE}
         ${where}
         ORDER BY created_at ASC
@@ -460,6 +753,17 @@ export function getBtrfsQuotaQueueStatus(
           kind: row.kind,
           age_ms: age,
           attempts: row.attempts,
+          project_id: row.project_id,
+          volume_kind: row.volume_kind,
+          operation_id: row.operation_id,
+          operation_class: row.operation_class,
+          priority: priorityName(row.base_priority),
+          queue_wait_ms:
+            (row.claimed_at ?? row.started_at ?? now) - row.first_enqueued_at,
+          lock_wait_ms:
+            row.lock_acquired_at != null && row.claimed_at != null
+              ? row.lock_acquired_at - row.claimed_at
+              : undefined,
         };
       }
       continue;

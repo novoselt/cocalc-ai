@@ -214,4 +214,42 @@ describe("localPath remote quota fallback", () => {
       project_id: "00000000-1000-4000-8000-000000000000",
     });
   });
+
+  it("does not rewrite quotas when the project host prepared them", async () => {
+    const ensureVolume = jest.fn(async () => undefined);
+    const resetScratchVolume = jest.fn(async () => undefined);
+    const setQuota = jest.fn(async () => undefined);
+    const getQuota = jest.fn(async () => ({ size: 4096 }));
+    const mount = jest.fn(async ({ scratch }: { scratch?: boolean }) => ({
+      path: scratch ? "/mnt/project-scratch" : "/mnt/project-home",
+    }));
+    createFileClient.mockReturnValue({
+      ensureVolume,
+      resetScratchVolume,
+      setQuota,
+      getQuota,
+      mount,
+    });
+
+    const mod = await import("./run/filesystem");
+    mod.init({ client: {} as any });
+
+    await expect(
+      mod.localPath({
+        project_id: "00000000-1000-4000-8000-000000000000",
+        disk: 4096,
+        scratch: 4096,
+        applyQuota: false,
+      }),
+    ).resolves.toEqual({
+      home: "/mnt/project-home",
+      quota_applied: true,
+      scratch: "/mnt/project-scratch",
+    });
+
+    expect(ensureVolume).toHaveBeenCalledTimes(2);
+    expect(getQuota).not.toHaveBeenCalled();
+    expect(setQuota).not.toHaveBeenCalled();
+    expect(resetScratchVolume).not.toHaveBeenCalled();
+  });
 });

@@ -1924,6 +1924,7 @@ async function startUnlocked({
           disk: config?.disk,
           scratch: config?.scratch,
           ensure: false,
+          applyQuota: config?.storage_quota_prepared !== true,
         }),
     );
     logger.debug("start: resolved home and scratch", {
@@ -1955,7 +1956,10 @@ async function startUnlocked({
           disk: config?.disk,
           scratch: config?.scratch,
           ensure: true,
-          resetScratch: !podmanReportsLiveProjectRunning,
+          resetScratch:
+            !podmanReportsLiveProjectRunning &&
+            config?.scratch_prepared !== true,
+          applyQuota: config?.storage_quota_prepared !== true,
         }),
     ));
 

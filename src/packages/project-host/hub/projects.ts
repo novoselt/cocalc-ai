@@ -67,8 +67,10 @@ import {
   getVolume,
   ensureVolume,
   getMountPoint,
+  resetScratchVolume,
   resolveProjectContainerPath,
 } from "../file-server";
+import { currentProjectVolumeLifecycleGeneration } from "../project-volume-lifecycle";
 import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
 import type { Configuration } from "@cocalc/conat/project/runner/types";
 import { lroStreamName } from "@cocalc/conat/lro/names";
@@ -144,6 +146,16 @@ import {
   isProjectDiskQuotaStartBlocked,
 } from "../project-start-quota";
 import { normalizeRunQuota, runnerConfigFromQuota } from "../run-quota";
+import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
+import {
+  acceptProjectVolumeQuotaDesired,
+  getProjectVolumeQuota,
+  invalidateProjectVolumeQuota,
+  markProjectVolumeQuotaApplied,
+  markProjectVolumeQuotaApplying,
+  markProjectVolumeQuotaFailed,
+  projectVolumeQuotaIsApplied,
+} from "../sqlite/volume-quotas";
 
 const logger = getLogger("project-host:hub:projects");
 const CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS = 45_000;
@@ -586,6 +598,7 @@ type StartMetadata = {
   image?: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   env?: ProjectEnv;
   autostart_enabled?: boolean | null;
   secrets?: Record<string, string>;
@@ -598,6 +611,7 @@ type LocalProjectOptions = CreateProjectOptions & {
   users?: any;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
 };
 
 async function loadProjectStartMetadataFromMaster(
@@ -637,12 +651,14 @@ async function resolveStartMetadata({
   project_id,
   authorized_keys,
   run_quota,
+  run_quota_revision,
   image,
   autostart,
 }: {
   project_id: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   image?: string;
   autostart?: boolean;
 }): Promise<StartMetadata> {
@@ -669,6 +685,8 @@ async function resolveStartMetadata({
   let resolved: StartMetadata = {
     authorized_keys: authorized_keys ?? existing?.authorized_keys ?? undefined,
     run_quota: run_quota ?? (existing as any)?.run_quota,
+    run_quota_revision:
+      run_quota_revision ?? (existing as any)?.run_quota_revision,
     image: image ?? existing?.image ?? undefined,
     env: (existing as any)?.env,
     autostart_enabled: (existing as any)?.autostart_enabled,
@@ -711,6 +729,8 @@ async function resolveStartMetadata({
           authorized_keys:
             resolved.authorized_keys ?? authoritative.authorized_keys,
           run_quota: resolved.run_quota ?? authoritative.run_quota,
+          run_quota_revision:
+            resolved.run_quota_revision ?? authoritative.run_quota_revision,
           env: resolved.env ?? authoritative.env,
           autostart_enabled:
             authoritative.autostart_enabled ?? resolved.autostart_enabled,
@@ -797,6 +817,7 @@ export function ensureProjectRow({
   const run_quota = normalizeRunQuota((opts as any)?.run_quota);
   if (run_quota) {
     row.run_quota = run_quota;
+    row.run_quota_revision = (opts as any)?.run_quota_revision;
     if (run_quota.disk_quota != null) {
       const disk = Math.floor(run_quota.disk_quota * MB);
       row.disk = disk;
@@ -906,6 +927,8 @@ async function getRunnerConfig(
     lro_op_id?: string;
     rotate_ports?: boolean;
     avoid_port_offsets?: Iterable<number>;
+    storage_quota_prepared?: boolean;
+    scratch_prepared?: boolean;
   },
 ) {
   const run_quota = normalizeRunQuota(resolved.run_quota);
@@ -915,10 +938,7 @@ async function getRunnerConfig(
   const scratch = limits.scratch ?? existing?.scratch;
   const ssh_proxy_public_key = await getSshProxyPublicKey();
   const secret = getOrCreateProjectLocalSecretToken(project_id);
-  const avoidOffsets = await getOccupiedProjectPortOffsets();
-  for (const offset of getRecentFailedProjectPortOffsets()) {
-    avoidOffsets.add(offset);
-  }
+  const avoidOffsets = getRecentFailedProjectPortOffsets();
   for (const offset of opts?.avoid_port_offsets ?? []) {
     if (Number.isInteger(offset)) {
       avoidOffsets.add(Number(offset));
@@ -942,6 +962,8 @@ async function getRunnerConfig(
     restore: opts?.restore,
     restore_backup_id: opts?.restore_backup_id,
     lro_op_id: opts?.lro_op_id,
+    storage_quota_prepared: opts?.storage_quota_prepared,
+    scratch_prepared: opts?.scratch_prepared,
     ...limits,
     disk,
     scratch,
@@ -1009,64 +1031,205 @@ function requestedDiskQuotaBytes(run_quota?: any): number | undefined {
   return Math.floor(value * MB);
 }
 
+function projectQuotaLedgerMode(): "off" | "observe" | "enforce" {
+  switch (
+    `${process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE ?? "observe"}`
+      .trim()
+      .toLowerCase()
+  ) {
+    case "off":
+      return "off";
+    case "enforce":
+      return "enforce";
+    default:
+      return "observe";
+  }
+}
+
 async function assertStartDiskQuotaAllowed({
   project_id,
   run_quota,
+  run_quota_revision,
+  reset_scratch = false,
+  scratch_lifecycle_generation,
 }: {
   project_id: string;
   run_quota?: any;
-}): Promise<void> {
+  run_quota_revision?: number;
+  reset_scratch?: boolean;
+  scratch_lifecycle_generation?: number;
+}): Promise<{
+  storage_quota_prepared: boolean;
+  scratch_prepared: boolean;
+}> {
   const requestedDiskBytes = requestedDiskQuotaBytes(run_quota);
-  if (requestedDiskBytes != null) {
+  if (requestedDiskBytes == null) {
+    await assertProjectDiskQuotaStartAllowed({
+      project_id,
+      logger,
+      getQuota: async (id) => {
+        const vol = await getVolume(id);
+        return await vol.quota.get();
+      },
+    });
+    return {
+      storage_quota_prepared: false,
+      scratch_prepared: false,
+    };
+  }
+
+  const ledgerMode = projectQuotaLedgerMode();
+  const reconcile = async ({
+    volume_kind,
+    desired_bytes,
+    reset,
+  }: {
+    volume_kind: "home" | "scratch";
+    desired_bytes: number;
+    reset?: boolean;
+  }): Promise<boolean> => {
+    let resetVolume: Awaited<ReturnType<typeof resetScratchVolume>> | undefined;
+    if (ledgerMode === "enforce" && volume_kind === "scratch" && reset) {
+      resetVolume =
+        scratch_lifecycle_generation == null
+          ? await resetScratchVolume(project_id)
+          : await resetScratchVolume(project_id, {
+              expected_lifecycle_generation: scratch_lifecycle_generation,
+            });
+    }
+    const acceptance =
+      ledgerMode === "off"
+        ? undefined
+        : acceptProjectVolumeQuotaDesired({
+            project_id,
+            volume_kind,
+            desired_bytes,
+            desired_revision: run_quota_revision,
+          });
+    const desired = acceptance?.row;
+    const targetDiskBytes = desired?.desired_bytes ?? desired_bytes;
+    if (
+      ledgerMode === "enforce" &&
+      desired != null &&
+      acceptance?.status !== "stale" &&
+      projectVolumeQuotaIsApplied(desired)
+    ) {
+      logger.debug("project disk quota ledger fast path", {
+        project_id,
+        volume_kind,
+        requested_size: targetDiskBytes,
+        desired_revision: desired.desired_revision,
+      });
+      return true;
+    }
     try {
-      const vol = await getVolume(project_id);
+      const vol =
+        resetVolume ?? (await getVolume(project_id, volume_kind === "scratch"));
       const quota = await vol.quota.get();
       if (
         isProjectDiskQuotaStartBlocked({
           used: quota.used,
-          size: requestedDiskBytes,
+          size: targetDiskBytes,
         })
       ) {
+        if (desired) {
+          markProjectVolumeQuotaFailed({
+            project_id,
+            volume_kind,
+            state: "blocked",
+            error: `quota usage ${quota.used} exceeds desired limit ${targetDiskBytes}`,
+          });
+        }
         throw new ProjectDiskQuotaExceededError({
           used: quota.used,
-          size: requestedDiskBytes,
+          size: targetDiskBytes,
         });
       }
       const currentSize = Number(quota.size);
       if (
         !Number.isFinite(currentSize) ||
         currentSize <= 0 ||
-        requestedDiskBytes > currentSize
+        targetDiskBytes !== currentSize
       ) {
-        await vol.quota.set(requestedDiskBytes);
-        logger.info("raised project disk quota before start", {
+        if (desired) {
+          markProjectVolumeQuotaApplying({
+            project_id,
+            volume_kind,
+          });
+        }
+        await vol.quota.set(targetDiskBytes, {
           project_id,
+          volume_kind,
+          operation_class: "project_volume_prepare",
+        });
+        logger.info("reconciled project disk quota before start", {
+          project_id,
+          volume_kind,
           previous_size: quota.size,
-          requested_size: requestedDiskBytes,
+          requested_size: targetDiskBytes,
           used: quota.used,
         });
       }
-      return;
+      if (desired) {
+        markProjectVolumeQuotaApplied({
+          project_id,
+          volume_kind,
+          desired_bytes: desired.desired_bytes,
+          desired_revision: desired.desired_revision,
+        });
+      }
+      return ledgerMode === "enforce" && desired != null;
     } catch (err) {
       if (err instanceof ProjectDiskQuotaExceededError) {
         throw err;
       }
+      if (desired) {
+        markProjectVolumeQuotaFailed({
+          project_id,
+          volume_kind,
+          error: err,
+        });
+      }
       logger.warn("unable to reconcile project disk quota before start", {
         project_id,
-        requested_size: requestedDiskBytes,
+        volume_kind,
+        requested_size: targetDiskBytes,
         err: `${err}`,
       });
-      return;
+      if (ledgerMode === "enforce") {
+        throw err;
+      }
+      return false;
     }
-  }
-  await assertProjectDiskQuotaStartAllowed({
-    project_id,
-    logger,
-    getQuota: async (id) => {
-      const vol = await getVolume(id);
-      return await vol.quota.get();
-    },
+  };
+
+  const homePrepared = await reconcile({
+    volume_kind: "home",
+    desired_bytes: requestedDiskBytes,
   });
+  const scratchLimit = runnerConfigFromQuota(
+    normalizeRunQuota(run_quota),
+  ).scratch;
+  if (scratchLimit === 0) {
+    return {
+      storage_quota_prepared: homePrepared,
+      scratch_prepared: true,
+    };
+  }
+  const requestedScratchBytes =
+    Number.isFinite(Number(scratchLimit)) && Number(scratchLimit) > 0
+      ? Math.floor(Number(scratchLimit))
+      : requestedDiskBytes;
+  const scratchPrepared = await reconcile({
+    volume_kind: "scratch",
+    desired_bytes: requestedScratchBytes,
+    reset: reset_scratch,
+  });
+  return {
+    storage_quota_prepared: homePrepared && scratchPrepared,
+    scratch_prepared:
+      ledgerMode === "enforce" && (!reset_scratch || scratchPrepared),
+  };
 }
 
 function publishStartProgress({
@@ -1277,6 +1440,75 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         promise: Promise<SyntheticRuntimeProbeResult>;
       }
     | undefined;
+  const stoppedVolumePreparationInFlight = new Map<string, Promise<boolean>>();
+
+  function scratchVolumeQuotaIsPrepared(project_id: string): boolean {
+    const row = getProjectVolumeQuota(project_id, "scratch");
+    return row != null && projectVolumeQuotaIsApplied(row);
+  }
+
+  function scheduleStoppedVolumePreparation(project_id: string): void {
+    if (
+      projectQuotaLedgerMode() !== "enforce" ||
+      syntheticRuntimeProbeProjects.has(project_id)
+    ) {
+      return;
+    }
+    const project = getProject(project_id);
+    if (
+      project == null ||
+      requestedDiskQuotaBytes(project.run_quota) == null ||
+      runnerConfigFromQuota(normalizeRunQuota(project.run_quota)).scratch === 0
+    ) {
+      return;
+    }
+    invalidateProjectVolumeQuota({
+      project_id,
+      volume_kind: "scratch",
+      reason: "project stopped; scratch reset pending",
+    });
+    if (stoppedVolumePreparationInFlight.has(project_id)) {
+      return;
+    }
+    const operation_id = `post-stop-volume-prepare:${project_id}:${uuid()}`;
+    const scratch_lifecycle_generation =
+      currentProjectVolumeLifecycleGeneration(project_id);
+    const preparation = withBtrfsMutationContext(
+      {
+        operation_id,
+        project_id,
+        priority: "interactive",
+        operation_class: "post_stop_volume_prepare",
+      },
+      async () => {
+        const prepared = await assertStartDiskQuotaAllowed({
+          project_id,
+          run_quota: project.run_quota,
+          run_quota_revision: project.run_quota_revision,
+          reset_scratch: true,
+          scratch_lifecycle_generation,
+        });
+        return (
+          prepared.storage_quota_prepared && prepared.scratch_prepared === true
+        );
+      },
+    )
+      .catch((err) => {
+        logger.warn("post-stop project volume preparation failed", {
+          project_id,
+          operation_id,
+          err: `${err}`,
+        });
+        return false;
+      })
+      .finally(() => {
+        if (stoppedVolumePreparationInFlight.get(project_id) === preparation) {
+          stoppedVolumePreparationInFlight.delete(project_id);
+        }
+      });
+    stoppedVolumePreparationInFlight.set(project_id, preparation);
+    void preparation;
+  }
 
   async function performSyntheticRuntimeProbe(): Promise<SyntheticRuntimeProbeResult> {
     const project_id = uuid();
@@ -1415,6 +1647,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         project_id,
         authorized_keys: (opts as any)?.authorized_keys,
         run_quota: (opts as any)?.run_quota,
+        run_quota_revision: (opts as any)?.run_quota_revision,
         image: opts?.image,
       });
       upsertProjectStopState({
@@ -1431,7 +1664,24 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
       });
       beginProjectHostActivity(activity_id, "start");
       try {
-        const initialConfig = await getRunnerConfig(project_id, resolved);
+        const volumePreparation = await withBtrfsMutationContext(
+          {
+            operation_id: activity_id,
+            project_id,
+            priority: "lifecycle",
+            operation_class: "project_volume_prepare",
+          },
+          async () =>
+            await assertStartDiskQuotaAllowed({
+              project_id,
+              run_quota: resolved.run_quota,
+              run_quota_revision: resolved.run_quota_revision,
+              reset_scratch: true,
+            }),
+        );
+        const initialConfig = await getRunnerConfig(project_id, resolved, {
+          ...volumePreparation,
+        });
         noteProjectHostActivityProgress(activity_id);
         const buildRetryConfig = async (retryOpts: {
           avoid_port_offsets: Iterable<number>;
@@ -1439,6 +1689,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           await getRunnerConfig(project_id, resolved, {
             rotate_ports: true,
             avoid_port_offsets: retryOpts.avoid_port_offsets,
+            ...volumePreparation,
           });
         const startRunner = async (config: Configuration) =>
           await startRunnerWithStorageReservation({
@@ -1484,6 +1735,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     project_id,
     authorized_keys,
     run_quota,
+    run_quota_revision,
     image,
     restore,
     restore_backup_id,
@@ -1494,6 +1746,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     project_id: string;
     authorized_keys?: string;
     run_quota?: any;
+    run_quota_revision?: number;
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
@@ -1513,6 +1766,10 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     const activity_id = `start:${op_id}`;
     const timings = createPhaseTimingRecorder();
     let runnerPhaseTimings: Record<string, number> | undefined;
+    let volumePreparation = {
+      storage_quota_prepared: false,
+      scratch_prepared: false,
+    };
     beginProjectHostActivity(activity_id, "start");
     let resolved: StartMetadata | undefined;
     try {
@@ -1524,6 +1781,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         project_id,
         authorized_keys,
         run_quota,
+        run_quota_revision,
         image,
         autostart,
       });
@@ -1561,10 +1819,34 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         message: "checking project disk quota",
       });
       await timings.measure("check_quota", async () => {
-        await assertStartDiskQuotaAllowed({
-          project_id,
-          run_quota: startMetadata.run_quota,
-        });
+        const runtimeState =
+          projectQuotaLedgerMode() === "enforce" && runnerApi.status
+            ? (await runnerApi.status({ project_id }))?.state
+            : undefined;
+        const stoppedPreparation =
+          stoppedVolumePreparationInFlight.get(project_id);
+        if (runtimeState !== "running" && stoppedPreparation != null) {
+          await stoppedPreparation;
+        }
+        const resetScratch =
+          runtimeState !== "running" &&
+          !scratchVolumeQuotaIsPrepared(project_id);
+        await withBtrfsMutationContext(
+          {
+            operation_id: op_id,
+            project_id,
+            priority: "lifecycle",
+            operation_class: "project_volume_prepare",
+          },
+          async () => {
+            volumePreparation = await assertStartDiskQuotaAllowed({
+              project_id,
+              run_quota: startMetadata.run_quota,
+              run_quota_revision: startMetadata.run_quota_revision,
+              reset_scratch: resetScratch,
+            });
+          },
+        );
       });
       upsertProjectStopState({
         project_id,
@@ -1578,6 +1860,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           users: startMetadata.users,
           authorized_keys: startMetadata.authorized_keys,
           run_quota: startMetadata.run_quota,
+          run_quota_revision: startMetadata.run_quota_revision,
           image: startMetadata.image,
         },
         state: "starting",
@@ -1617,6 +1900,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
             restore,
             restore_backup_id,
             lro_op_id: op_id,
+            ...volumePreparation,
           },
         );
       });
@@ -1672,6 +1956,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
                 lro_op_id: op_id,
                 rotate_ports: true,
                 avoid_port_offsets: retryOpts.avoid_port_offsets,
+                ...volumePreparation,
               },
             ),
           startRunner: async (runnerConfig: Configuration) =>
@@ -1841,6 +2126,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           `project stop did not converge; runner still reports state='${finalState}'`,
         );
       }
+      scheduleStoppedVolumePreparation(project_id);
       if (!syntheticRuntimeProbeProjects.has(project_id)) {
         try {
           const base = getMountPoint();

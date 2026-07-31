@@ -21,6 +21,29 @@ const logger = getLogger("file-server:btrfs:subvolume-snapshots");
 
 const DEFAULT_CLEANUP_QUOTA_RELIEF_BYTES = 1024 ** 3;
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
+const cleanupChains = new Map<string, Promise<void>>();
+
+async function withCleanupChain<T>(
+  path: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = cleanupChains.get(path) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chain = previous.then(() => current);
+  cleanupChains.set(path, chain);
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (cleanupChains.get(path) === chain) {
+      cleanupChains.delete(path);
+    }
+  }
+}
 
 async function removeSnapshotPathInProjectCgroup({
   projectRoot,
@@ -241,11 +264,8 @@ export class SubvolumeSnapshots {
     operation: string;
     run: () => Promise<T>;
   }): Promise<T> => {
-    return await withBtrfsMutationLock({
-      mount: this.subvolume.filesystem.opts.mount,
-      operation,
-      run: async () =>
-        await this.withCleanupQuotaReliefUnlocked({ operation, run }),
+    return await withCleanupChain(this.subvolume.path, async () => {
+      return await this.withCleanupQuotaReliefUnlocked({ operation, run });
     });
   };
 
@@ -256,12 +276,18 @@ export class SubvolumeSnapshots {
     operation: string;
     run: () => Promise<T>;
   }): Promise<T> => {
+    const runLocked = async () =>
+      await withBtrfsMutationLock({
+        mount: this.subvolume.filesystem.opts.mount,
+        operation,
+        run,
+      });
     if (btrfsQuotasDisabled()) {
-      return await run();
+      return await runLocked();
     }
     const quota = await this.subvolume.quota.get();
     if (!quota.size || quota.size <= 0) {
-      return await run();
+      return await runLocked();
     }
     const reliefSize =
       Math.max(quota.size, quota.used) + cleanupQuotaReliefBytes();
@@ -277,7 +303,7 @@ export class SubvolumeSnapshots {
     });
     await this.subvolume.quota.set(reliefSize);
     try {
-      result = await run();
+      result = await runLocked();
     } catch (err) {
       actionError = err;
     }

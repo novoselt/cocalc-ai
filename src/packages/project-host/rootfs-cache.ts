@@ -54,7 +54,7 @@ import {
 } from "@cocalc/util/rootfs-images";
 import type { ExecuteCodeStreamEvent } from "@cocalc/util/types/execute-code";
 
-import { listProjects } from "./sqlite/projects";
+import { getProjectsUsingRootfsImage, listProjects } from "./sqlite/projects";
 import { ensureRootfsRusticRepoProfile } from "./rootfs-rustic";
 import {
   estimateManagedRootfsPullReservationBytes,
@@ -196,6 +196,20 @@ function rootfsUsageByImage(): Map<string, RootfsUsage> {
       current.running_project_ids.push(row.project_id);
     }
     usage.set(image, current);
+  }
+  return usage;
+}
+
+function rootfsUsageForImage(image: string): RootfsUsage {
+  const usage: RootfsUsage = {
+    project_ids: [],
+    running_project_ids: [],
+  };
+  for (const row of getProjectsUsingRootfsImage(image)) {
+    usage.project_ids.push(row.project_id);
+    if (row.state === "running") {
+      usage.running_project_ids.push(row.project_id);
+    }
   }
   return usage;
 }
@@ -696,12 +710,12 @@ async function deleteCachedManagedRootfs({
 
 async function ensureManagedRootfsCacheIsUsable({
   image,
-  usage,
+  getUsage,
   finalPath,
   finalPreflightPath,
 }: {
   image: string;
-  usage?: RootfsUsage;
+  getUsage?: () => RootfsUsage;
   finalPath: string;
   finalPreflightPath: string;
 }): Promise<boolean> {
@@ -720,6 +734,7 @@ async function ensureManagedRootfsCacheIsUsable({
   }
   const preflight = await loadRootfsPreflightMetadata(finalPreflightPath);
   if (preflight == null || preflight.version !== ROOTFS_NORMALIZER_VERSION) {
+    const usage = getUsage?.();
     const counts = rootfsUsageCounts(usage);
     if (counts.running > 0) {
       throw new Error(
@@ -776,11 +791,12 @@ async function downloadManagedRootfsArtifact({
   const finalPath = imageCachePath(image);
   const finalInspectPath = inspectFilePath(image);
   const finalPreflightPath = preflightMetadataFilePath(image);
-  const usage = rootfsUsageByImage().get(image);
+  let usage: RootfsUsage | undefined;
+  const getUsage = () => (usage ??= rootfsUsageForImage(image));
   if (
     await ensureManagedRootfsCacheIsUsable({
       image,
-      usage,
+      getUsage,
       finalPath,
       finalPreflightPath,
     })
@@ -821,7 +837,7 @@ async function downloadManagedRootfsArtifact({
       if (
         await ensureManagedRootfsCacheIsUsable({
           image,
-          usage,
+          getUsage,
           finalPath,
           finalPreflightPath,
         })
@@ -1135,10 +1151,7 @@ export async function pullRootfsCacheEntry(
   } else {
     await extractBaseImage(trimmed);
   }
-  const usage = rootfsUsageByImage().get(trimmed) ?? {
-    project_ids: [],
-    running_project_ids: [],
-  };
+  const usage = rootfsUsageForImage(trimmed);
   const row = await buildEntry(trimmed, usage);
   if (!row) {
     throw new Error(`failed to cache rootfs image '${trimmed}'`);
@@ -1153,7 +1166,7 @@ export async function deleteRootfsCacheEntry(image: string): Promise<{
   if (!trimmed) {
     throw new Error("image must be specified");
   }
-  const usage = rootfsUsageByImage().get(trimmed);
+  const usage = rootfsUsageForImage(trimmed);
   if ((usage?.running_project_ids.length ?? 0) > 0) {
     throw new Error(
       `cannot delete cached image while ${usage!.running_project_ids.length} running project(s) are using it`,

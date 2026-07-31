@@ -7,7 +7,12 @@ import {
 } from "@cocalc/lite/hub/sqlite/database";
 import { account_id } from "@cocalc/backend/data";
 import { randomBytes } from "crypto";
+import { normalizeRootfsImageName } from "@cocalc/util/rootfs-images";
 import { releaseProjectPortLease } from "./port-leases";
+import {
+  acceptProjectVolumeQuotaDesired,
+  deleteProjectVolumeQuotas,
+} from "./volume-quotas";
 
 function parseRunQuota(run_quota?: any): any | undefined {
   if (run_quota == null) return undefined;
@@ -83,6 +88,7 @@ function serializeStringArray(value?: string[]): string | null {
 // - authorized_keys: concatenated SSH keys from master (account + project keys); the project’s own
 //   ~/.ssh/authorized_keys is read directly from the filesystem at auth time.
 // - run_quota: resource limits/settings passed from the master (mirrors projects.run_quota in Postgres)
+// - run_quota_revision: monotonic owning-bay revision for run_quota
 // - secret_names: names of project secrets seen in authoritative metadata.
 //   Values are not persisted locally; this lets project start fail closed when
 //   the master is unavailable but the project is known to require secrets.
@@ -105,12 +111,21 @@ export interface ProjectRow {
   secret_token?: string | null;
   authorized_keys?: string | null;
   run_quota?: any;
+  run_quota_revision?: number;
   secret_names?: string[];
 }
 
 export interface ProjectRuntimeArtifactReference {
   version: string;
   project_count: number;
+}
+
+export interface ProjectQuotaRepairRow {
+  project_id: string;
+  state?: string;
+  disk?: number;
+  scratch?: number;
+  run_quota_revision?: number;
 }
 
 function ensureProjectsTable() {
@@ -136,6 +151,7 @@ function ensureProjectsTable() {
       secret_token TEXT,
       authorized_keys TEXT,
       run_quota TEXT,
+      run_quota_revision INTEGER,
       secret_names TEXT
     )
   `);
@@ -170,10 +186,23 @@ function ensureProjectsTable() {
     db.exec("ALTER TABLE projects ADD COLUMN run_quota TEXT");
   } catch {}
   try {
+    db.exec("ALTER TABLE projects ADD COLUMN run_quota_revision INTEGER");
+  } catch {}
+  try {
     db.exec("ALTER TABLE projects ADD COLUMN secret_names TEXT");
   } catch {}
   db.exec(
     "CREATE INDEX IF NOT EXISTS projects_state_idx ON projects(state, updated_at)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_active_ssh_port_idx ON projects(ssh_port) WHERE state IN ('running', 'starting')",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_active_http_port_idx ON projects(http_port) WHERE state IN ('running', 'starting')",
+  );
+  db.exec("CREATE INDEX IF NOT EXISTS projects_image_idx ON projects(image)");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_quota_repair_idx ON projects(project_id) WHERE disk > 0 OR scratch > 0",
   );
 }
 
@@ -187,7 +216,7 @@ export function upsertProject(row: ProjectRow) {
   const existingProjectsRow =
     db
       .prepare(
-        "SELECT state, state_reported, runtime_exit_reason, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names FROM projects WHERE project_id=?",
+        "SELECT state, state_reported, runtime_exit_reason, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names FROM projects WHERE project_id=?",
       )
       .get(row.project_id) || {};
   const existing = getRow("projects", pk) || {};
@@ -210,7 +239,39 @@ export function upsertProject(row: ProjectRow) {
   const existingRunQuota = parseRunQuota(
     (existingProjectsRow as any).run_quota ?? (existing as any).run_quota,
   );
-  const run_quota = incomingRunQuota ?? existingRunQuota;
+  const existingRunQuotaRevision = Number(
+    (existingProjectsRow as any).run_quota_revision ??
+      (existing as any).run_quota_revision ??
+      0,
+  );
+  const hasIncomingRunQuotaRevision =
+    row.run_quota_revision != null &&
+    Number.isFinite(Number(row.run_quota_revision));
+  const incomingRunQuotaRevision = hasIncomingRunQuotaRevision
+    ? Math.max(0, Math.floor(Number(row.run_quota_revision)))
+    : undefined;
+  if (
+    incomingRunQuota != null &&
+    incomingRunQuotaRevision != null &&
+    incomingRunQuotaRevision === existingRunQuotaRevision &&
+    existingRunQuota != null &&
+    serializeRunQuota(incomingRunQuota) !== serializeRunQuota(existingRunQuota)
+  ) {
+    throw new Error(
+      `conflicting run_quota for project ${row.project_id} at revision ${incomingRunQuotaRevision}`,
+    );
+  }
+  const acceptIncomingRunQuota =
+    incomingRunQuota != null &&
+    (incomingRunQuotaRevision == null
+      ? existingRunQuotaRevision === 0
+      : incomingRunQuotaRevision >= existingRunQuotaRevision);
+  const run_quota = acceptIncomingRunQuota
+    ? incomingRunQuota
+    : existingRunQuota;
+  const run_quota_revision = acceptIncomingRunQuota
+    ? (incomingRunQuotaRevision ?? existingRunQuotaRevision)
+    : existingRunQuotaRevision;
   const diskFromQuota =
     run_quota?.disk_quota != null
       ? Math.floor(run_quota.disk_quota * 1_000_000)
@@ -288,8 +349,8 @@ export function upsertProject(row: ProjectRow) {
   }
 
   const stmt = db.prepare(`
-    INSERT INTO projects(project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO projects(project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project_id) DO UPDATE SET
       title=excluded.title,
       state=excluded.state,
@@ -307,6 +368,7 @@ export function upsertProject(row: ProjectRow) {
       secret_token=excluded.secret_token,
       authorized_keys=excluded.authorized_keys,
       run_quota=excluded.run_quota,
+      run_quota_revision=excluded.run_quota_revision,
       secret_names=excluded.secret_names
   `);
   stmt.run(
@@ -327,8 +389,34 @@ export function upsertProject(row: ProjectRow) {
     secret_token,
     authorized_keys,
     run_quota_json,
+    run_quota_revision,
     secret_names_json,
   );
+  const ledgerRevision = hasIncomingRunQuotaRevision
+    ? run_quota_revision
+    : existingRunQuotaRevision > 0
+      ? existingRunQuotaRevision
+      : undefined;
+  if (disk != null && Number.isFinite(Number(disk)) && Number(disk) > 0) {
+    acceptProjectVolumeQuotaDesired({
+      project_id: row.project_id,
+      volume_kind: "home",
+      desired_bytes: Number(disk),
+      desired_revision: ledgerRevision,
+    });
+  }
+  if (
+    scratch != null &&
+    Number.isFinite(Number(scratch)) &&
+    Number(scratch) > 0
+  ) {
+    acceptProjectVolumeQuotaDesired({
+      project_id: row.project_id,
+      volume_kind: "scratch",
+      desired_bytes: Number(scratch),
+      desired_revision: ledgerRevision,
+    });
+  }
 
   // Also mirror into the generic data table for changefeeds/UI.
   upsertRow("projects", pk, {
@@ -352,6 +440,7 @@ export function upsertProject(row: ProjectRow) {
     tools_version,
     authorized_keys,
     run_quota: run_quota ?? existing.run_quota,
+    run_quota_revision,
   });
 }
 
@@ -363,7 +452,7 @@ export function listProjects(): ProjectRow[] {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, run_quota, secret_names FROM projects",
+    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, run_quota, run_quota_revision, secret_names FROM projects",
   );
   return stmt.all().map((row: any) => ({
     ...row,
@@ -372,11 +461,55 @@ export function listProjects(): ProjectRow[] {
   })) as ProjectRow[];
 }
 
+export function listProjectQuotaRepairBatch({
+  after_project_id = "",
+  limit = 32,
+}: {
+  after_project_id?: string;
+  limit?: number;
+} = {}): ProjectQuotaRepairRow[] {
+  ensureProjectsTable();
+  const boundedLimit = Math.max(1, Math.min(256, Math.floor(limit)));
+  return getDatabase()
+    .prepare(
+      `SELECT project_id, state, disk, scratch, run_quota_revision
+        FROM projects
+        WHERE project_id > ?
+          AND (disk > 0 OR scratch > 0)
+        ORDER BY project_id
+        LIMIT ?`,
+    )
+    .all(after_project_id, boundedLimit) as ProjectQuotaRepairRow[];
+}
+
+export function getProjectsUsingRootfsImage(image: string): ProjectRow[] {
+  ensureProjectsTable();
+  const normalized = normalizeRootfsImageName(image);
+  if (!normalized) return [];
+  const candidates = new Set([`${image}`.trim(), normalized]);
+  if (normalized.startsWith("docker.io/")) {
+    candidates.add(normalized.slice("docker.io/".length));
+  }
+  const values = [...candidates].filter(Boolean);
+  const placeholders = values.map(() => "?").join(", ");
+  const rows = getDatabase()
+    .prepare(
+      `SELECT project_id, state, image
+         FROM projects
+        WHERE image IN (${placeholders})
+        ORDER BY project_id`,
+    )
+    .all(...values) as ProjectRow[];
+  return rows.filter(
+    (row) => normalizeRootfsImageName(row.image) === normalized,
+  );
+}
+
 export function getProject(project_id: string): ProjectRow | undefined {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names FROM projects WHERE project_id=?",
+    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names FROM projects WHERE project_id=?",
   );
   const row = stmt.get(project_id) as any;
   if (!row) {
@@ -465,6 +598,7 @@ export function deleteProjectLocal(project_id: string) {
   db.prepare("DELETE FROM projects WHERE project_id=?").run(project_id);
   deleteRow("projects", JSON.stringify({ project_id }));
   releaseProjectPortLease(project_id);
+  deleteProjectVolumeQuotas(project_id);
 }
 
 export function getProjectPorts(project_id: string): {

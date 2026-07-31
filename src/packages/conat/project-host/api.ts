@@ -520,6 +520,7 @@ export interface HostControlApi {
     project_id: string;
     authorized_keys?: string;
     run_quota?: any;
+    run_quota_revision?: number;
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
@@ -543,6 +544,7 @@ export interface HostControlApi {
   updateProjectRunQuota: (opts: {
     project_id: string;
     run_quota?: any;
+    run_quota_revision?: number;
   }) => Promise<{
     status: "already_current" | "repaired" | "not_running";
     requested_memory_max?: string;

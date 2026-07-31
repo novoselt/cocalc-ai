@@ -569,11 +569,13 @@ describe("startProjectOnHost placement", () => {
       ensure_volume: false,
       authorized_keys: "ssh-ed25519 AAAATEST user@test",
       run_quota: {},
+      run_quota_revision: 0,
     });
     expect(startProjectMock).toHaveBeenCalledWith({
       project_id: "proj-1",
       authorized_keys: "ssh-ed25519 AAAATEST user@test",
       run_quota: {},
+      run_quota_revision: 0,
       image: "sagemathinc/sagemath-x86_64:10.7",
       restore: "none",
       lro_op_id: "op-1",
@@ -658,6 +660,7 @@ describe("startProjectOnHost placement", () => {
       start: false,
       authorized_keys: "ssh-ed25519 AAAATEST user@test",
       run_quota: {},
+      run_quota_revision: 0,
     });
   });
 
@@ -764,6 +767,7 @@ describe("startProjectOnHost placement", () => {
         ensure_volume: false,
         authorized_keys: "ssh-ed25519 AAAATEST user@test",
         run_quota: {},
+        run_quota_revision: 0,
       },
     });
     expect(interBayHostControlStartProjectMock).toHaveBeenCalledWith({
@@ -774,6 +778,8 @@ describe("startProjectOnHost placement", () => {
         run_quota: {},
         image: "cocalc.local/rootfs/release",
         restore: "none",
+        restore_backup_id: undefined,
+        run_quota_revision: 0,
         lro_op_id: "op-1",
       },
     });
