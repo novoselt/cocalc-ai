@@ -137,6 +137,9 @@ function runQuotaForRestartComparison(
   if (run_quota == null || typeof run_quota !== "object") {
     return {};
   }
+  // idle_timeout is retained as legacy/future-policy metadata.  The current
+  // CoCalc-AI project-host does not enforce it, so changing it must not restart
+  // a running project.
   const { idle_timeout: _idle_timeout, ...rest } = run_quota as Record<
     string,
     unknown
@@ -552,9 +555,9 @@ export class BaseProject extends EventEmitter {
     await this.setRunQuota(null, account_id);
   };
 
-  // The run_quota is now explicitly used in singule-user and multi-user
-  // to control at least idle timeout of projects; also it is very useful
-  // for development since it is shown in the UI (in project settings).
+  // run_quota controls project resource limits and is shown in project
+  // settings.  It still includes idle_timeout for compatibility and possible
+  // future use, but current CoCalc-AI project hosts do not enforce idle stops.
   setRunQuota = async (
     run_quota: Quota | null,
     account_id?: string,
