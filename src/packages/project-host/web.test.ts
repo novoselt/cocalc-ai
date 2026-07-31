@@ -74,6 +74,7 @@ describe("project-host exam admission page", () => {
 
   it("only asks for the token while admission is open", () => {
     const open = getExamJoinPage({ admission_open: true });
+    expect(open).toContain('<meta name="referrer" content="same-origin">');
     expect(open).toContain("Enter the token provided by your instructor");
     expect(open).toContain('name="token"');
     expect(open).not.toContain("admission is not open yet");

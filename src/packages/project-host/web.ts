@@ -138,7 +138,10 @@ function setExamResponseHeaders(res: express.Response): void {
     "Permissions-Policy",
     "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
   );
-  res.setHeader("Referrer-Policy", "no-referrer");
+  // Chromium serializes the Origin header as "null" for same-origin form
+  // submissions under no-referrer. Keep enough same-origin referrer context
+  // for requireSameOriginPost to distinguish this page from a cross-site form.
+  res.setHeader("Referrer-Policy", "same-origin");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
 }
@@ -206,6 +209,7 @@ export function getExamJoinPage({
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="same-origin">
   <title>CoCalc Exam Scratchpad</title>
   <style>
     :root { color-scheme: light; font-family: "Avenir Next", "Segoe UI", sans-serif; }
