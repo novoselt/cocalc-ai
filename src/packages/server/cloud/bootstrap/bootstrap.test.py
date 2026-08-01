@@ -2811,6 +2811,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 f"COCALC_PROJECT_POOL_CPU_RESERVE_CORES={bootstrap.DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES}",
                 text,
             )
+            self.assertIn("COCALC_PROJECT_QUOTA_LEDGER_MODE=enforce", text)
             self.assertIn("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS=1", text)
             self.assertIn(
                 "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC=5", text

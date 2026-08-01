@@ -6937,6 +6937,10 @@ def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
         )
     )
     env_assignments.setdefault(
+        "COCALC_PROJECT_QUOTA_LEDGER_MODE",
+        existing_env.get("COCALC_PROJECT_QUOTA_LEDGER_MODE", "enforce"),
+    )
+    env_assignments.setdefault(
         "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS",
         existing_env.get("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS", "1"),
     )
