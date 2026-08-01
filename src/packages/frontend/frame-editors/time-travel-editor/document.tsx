@@ -10,6 +10,7 @@ Render a static version of a document for use in TimeTravel.
 import * as CodeMirror from "codemirror";
 import { useEffect, useMemo, useRef } from "react";
 import type { AccountState } from "@cocalc/frontend/account/types";
+import "../generic/codemirror-plugins";
 import { cm_options } from "../codemirror/cm-options";
 import { init_style_hacks } from "../codemirror/util";
 
@@ -83,7 +84,8 @@ export function TextDocument(props: TextDocumentProps) {
     if (cm == null) return;
     const next = readValue(value);
     if (cm.getValue() !== next) {
-      cm.setValue(next);
+      // Apply live updates without resetting the viewport or selection.
+      cm.setValueNoJump(next);
     }
     requestAnimationFrame(refresh);
   }, [value]);
