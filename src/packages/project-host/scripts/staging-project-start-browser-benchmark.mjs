@@ -189,6 +189,10 @@ try {
       await page.bringToFront();
       const startButton = page.getByTitle("Start Project");
       await startButton.waitFor({ state: "visible", timeout: 30_000 });
+      // Navigation preserves the synthetic pointer position. Move it away
+      // from the toolbar so a tooltip from the prior project cannot intercept
+      // the next real user-path click.
+      await page.mouse.move(0, 0);
       await sleep(options.settle_ms);
       const requestedAtMs = Date.now();
       const started = performance.now();
@@ -199,7 +203,7 @@ try {
         state: "visible",
         timeout: 5_000,
       });
-      await startButton.click({ force: true });
+      await startButton.click();
       await startingVisible;
       await starting.waitFor({ state: "hidden", timeout: 30_000 });
       const browserElapsedMs = Math.round(performance.now() - started);
