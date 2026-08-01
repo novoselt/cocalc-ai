@@ -1968,6 +1968,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'is_trusted_conmon_executable "$conmon_exe"',
                 script,
             )
+            self.assertIn('runtime_uid="${SUDO_UID:-0}"', script)
+            self.assertIn('[ "$owner_uid" = "$runtime_uid" ]', script)
             self.assertIn(
                 'deny "project-conmon-executable-invalid"',
                 script,

@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260801-v24"
+HELPER_SCHEMA_VERSION = "20260801-v25"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -3508,7 +3508,7 @@ require_runtime_owned_pid() {
 }
 
 is_trusted_conmon_executable() {
-  local executable="$1" runtime_relative version owner_uid mode
+  local executable="$1" runtime_relative version owner_uid runtime_uid mode
   case "$executable" in
     /usr/bin/conmon) ;;
     /opt/cocalc/container-runtime/*/bin/conmon)
@@ -3522,7 +3522,11 @@ is_trusted_conmon_executable() {
   [ -f "$executable" ] || return 1
   owner_uid="$(stat -Lc '%u' "$executable" 2>/dev/null || true)"
   mode="$(stat -Lc '%a' "$executable" 2>/dev/null || true)"
-  [ "$owner_uid" = "0" ] || return 1
+  runtime_uid="${SUDO_UID:-0}"
+  echo "$runtime_uid" | grep -Eq '^[0-9]+$' || return 1
+  [ "$owner_uid" = "0" ] ||
+    { [ "$runtime_uid" -gt 0 ] && [ "$owner_uid" = "$runtime_uid" ]; } ||
+    return 1
   echo "$mode" | grep -Eq '^[0-7]{3,4}$' || return 1
   [ "$((8#$mode & 022))" -eq 0 ] || return 1
 }
