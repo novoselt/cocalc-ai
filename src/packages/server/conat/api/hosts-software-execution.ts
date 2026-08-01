@@ -1003,6 +1003,7 @@ export async function rolloutHostManagedComponentsInternalHelper({
   account_id,
   id,
   components,
+  desired_version,
   reason,
   record_runtime_deployments = true,
   loadHostForStartStop,
@@ -1030,6 +1031,7 @@ export async function rolloutHostManagedComponentsInternalHelper({
   account_id?: string;
   id: string;
   components: HostManagedComponentRolloutRequest["components"];
+  desired_version?: string;
   reason?: string;
   record_runtime_deployments?: boolean;
   loadHostForStartStop: (id: string, account_id?: string) => Promise<any>;
@@ -1129,10 +1131,12 @@ export async function rolloutHostManagedComponentsInternalHelper({
   assertHostRunningForUpgrade(row);
   const requestedProjectHostRollout = components.includes("project-host");
   const client = await hostControlClient(id, 60_000);
-  const desiredProjectHostVersion = await resolveDesiredProjectHostVersion({
-    row,
-    loadEffectiveRuntimeDeployments,
-  });
+  const desiredProjectHostVersion =
+    normalizeObservedVersion(desired_version) ??
+    (await resolveDesiredProjectHostVersion({
+      row,
+      loadEffectiveRuntimeDeployments,
+    }));
   const installedProjectHostVersion = installedProjectHostArtifactVersion(row);
   const requiresProjectHostProcessReplacement =
     requestedProjectHostRollout &&
@@ -1257,9 +1261,7 @@ export async function rolloutHostManagedComponentsInternalHelper({
     await waitForHostHeartbeatAfter({ host_id: id, since });
     refreshedRow = await loadHostForStartStop(id, account_id);
   }
-  const desiredVersion = requestedProjectHostRollout
-    ? desiredProjectHostVersion
-    : undefined;
+  const desiredVersion = desiredProjectHostVersion;
   let observedProjectHostVersion: string | undefined;
   let observedProjectHostPids: number[] = [];
   let fallbackProjectHostVersion: string | undefined;

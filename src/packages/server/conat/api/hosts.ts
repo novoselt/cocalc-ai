@@ -8489,12 +8489,14 @@ export async function rolloutHostManagedComponents({
   account_id,
   id,
   components,
+  desired_version,
   base_url,
   reason,
 }: {
   account_id?: string;
   id: string;
   components: ManagedComponentKind[];
+  desired_version?: string;
   base_url?: string;
   reason?: string;
 }): Promise<HostLroResponse> {
@@ -8506,6 +8508,7 @@ export async function rolloutHostManagedComponents({
         account_id,
         id,
         components,
+        desired_version,
         base_url,
         reason,
       });
@@ -8516,10 +8519,18 @@ export async function rolloutHostManagedComponents({
     kind: HOST_ROLLOUT_MANAGED_COMPONENTS_LRO_KIND,
     row,
     account_id,
-    input: { id: row.id, account_id, components, base_url, reason },
+    input: {
+      id: row.id,
+      account_id,
+      components,
+      desired_version,
+      base_url,
+      reason,
+    },
     dedupe_key: hostManagedComponentRolloutDedupeKey({
       hostId: row.id,
       components,
+      desiredVersion: desired_version,
       baseUrl: base_url,
       reason,
     }),
@@ -8924,6 +8935,7 @@ export async function rolloutHostManagedComponentsInternal({
   account_id,
   id,
   components,
+  desired_version,
   base_url,
   reason,
   record_runtime_deployments,
@@ -8932,6 +8944,7 @@ export async function rolloutHostManagedComponentsInternal({
   account_id?: string;
   id: string;
   components: HostManagedComponentRolloutRequest["components"];
+  desired_version?: string;
   base_url?: string;
   reason?: string;
   record_runtime_deployments?: boolean;
@@ -8943,6 +8956,7 @@ export async function rolloutHostManagedComponentsInternal({
     account_id,
     id,
     components,
+    desired_version,
     reason,
     record_runtime_deployments,
     loadHostForStartStop: loadHostForRootfsManagement,

@@ -2228,6 +2228,14 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
       ],
     }));
     const updateProjectHostSoftwareRecord = jest.fn(async () => undefined);
+    const runtimeDeploymentsForComponentRollout = jest.fn(() => [
+      {
+        target_type: "component" as const,
+        target: "acp-worker" as const,
+        desired_version: "ph-v2",
+      },
+    ]);
+    const setProjectHostRuntimeDeployments = jest.fn(async () => undefined);
     const row = {
       id: "host-1",
       status: "running",
@@ -2243,6 +2251,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
         account_id: "account-1",
         id: "host-1",
         components: ["acp-worker"],
+        desired_version: "ph-v2",
         reason: "acp_canary",
         loadHostForStartStop: jest.fn(async () => row),
         assertHostRunningForUpgrade: () => undefined,
@@ -2282,18 +2291,19 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
         }),
         project_host_local_rollback_error_code: "project_host_local_rollback",
         setLastKnownGoodArtifactVersionInternal: async () => undefined,
-        runtimeDeploymentsForComponentRollout: () => [],
+        runtimeDeploymentsForComponentRollout,
         requestedByForRuntimeDeployments: () => "account-1",
-        setProjectHostRuntimeDeployments: async () => undefined,
+        setProjectHostRuntimeDeployments,
         loadEffectiveRuntimeDeployments: async () => [
           {
             target_type: "artifact",
             target: "project-host",
-            desired_version: "ph-v2",
+            desired_version: "ph-v1",
           },
         ],
         projectHostRolloutSettleTimeoutMs: 10,
         projectHostRolloutPollMs: 0,
+        record_runtime_deployments: true,
       }),
     ).resolves.toEqual({
       results: [
@@ -2315,6 +2325,22 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
       reason: "acp_canary",
       desired_version: "ph-v2",
     });
+    expect(runtimeDeploymentsForComponentRollout).toHaveBeenCalledWith({
+      components: ["acp-worker"],
+      desired_version: "ph-v2",
+      reason: "acp_canary",
+    });
+    expect(setProjectHostRuntimeDeployments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host_id: "host-1",
+        deployments: [
+          expect.objectContaining({
+            target: "acp-worker",
+            desired_version: "ph-v2",
+          }),
+        ],
+      }),
+    );
   });
 
   it("appends acp-worker diagnostics when acp worker rollout fails", async () => {
