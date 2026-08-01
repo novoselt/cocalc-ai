@@ -6,7 +6,7 @@ What this checks:
   - /usr/local/sbin/cocalc-runtime-storage
   - /etc/sudoers.d/cocalc-project-host-runtime
 - Sudo policy behavior:
-  - allows the intended wrapper path (sudo -n cocalc-runtime-storage sync)
+  - allows the intended wrapper path through non-mutating command-contract probes
   - denies broad root execution (sudo -n /bin/true)
   - denies generic mount escalation through the wrapper
 
@@ -158,29 +158,6 @@ async function checkRootOwnedNotWritable(path: string): Promise<CheckResult> {
       details: { path },
     };
   }
-}
-
-async function checkSudoWhitelistAllowsWrapper(): Promise<CheckResult> {
-  const probe = await run("sudo", ["-n", STORAGE_WRAPPER, "sync"]);
-  if (probe.exitCode === 0) {
-    return {
-      name: "sudo-wrapper-allow",
-      ok: true,
-      level: "warning",
-      message: "runtime sudo wrapper allow check passed",
-    };
-  }
-  return {
-    name: "sudo-wrapper-allow",
-    ok: false,
-    level: "warning",
-    message: "runtime sudo wrapper allow check failed",
-    details: {
-      exitCode: probe.exitCode,
-      stderr: probe.stderr.trim(),
-      stdout: probe.stdout.trim(),
-    },
-  };
 }
 
 function helperCommandSupported(
@@ -384,7 +361,6 @@ const PERIODIC_CHECK_FACTORIES: CheckFactory[] = [
   },
   { id: "host-service-cgroup", run: checkHostServiceCgroup },
   { id: "project-io-policy", run: checkProjectIoPolicy },
-  { id: "sudo-wrapper-allow", run: checkSudoWhitelistAllowsWrapper },
 ];
 
 function startupChecks(): Promise<CheckResult>[] {

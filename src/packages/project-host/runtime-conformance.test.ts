@@ -3,7 +3,7 @@ import { describe, expect, it } from "@jest/globals";
 import { __test__ } from "./runtime-conformance";
 
 describe("runtime conformance", () => {
-  it("keeps the live sudo wrapper probe out of startup checks", () => {
+  it("never uses a mutating filesystem sync as a sudo wrapper probe", () => {
     expect(__test__.startupCheckIds()).toEqual([
       "root-owned-path",
       "sudo-policy-visible",
@@ -16,7 +16,7 @@ describe("runtime conformance", () => {
     expect(__test__.periodicCheckIds()).toContain(
       "project-cgroup-helper-contract",
     );
-    expect(__test__.periodicCheckIds()).toContain("sudo-wrapper-allow");
+    expect(__test__.periodicCheckIds()).not.toContain("sudo-wrapper-allow");
     expect(__test__.requiredProjectCgroupCommands()).toContain(
       "verify-project-io-limits",
     );
