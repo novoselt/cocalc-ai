@@ -427,7 +427,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
       a.save_input_editor();
     }
 
-    if (!this.jupyter_actions.syncdb?.has_unsaved_changes()) {
+    if (!this.jupyter_actions.hasPendingIpynbChanges()) {
       return;
     }
 

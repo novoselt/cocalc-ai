@@ -1,0 +1,178 @@
+/** @jest-environment jsdom */
+
+jest.mock("@cocalc/frontend/webapp-client", () => ({
+  webapp_client: {},
+}));
+
+jest.mock("../widgets/manager", () => ({
+  WidgetManager: class WidgetManager {},
+}));
+
+import { JupyterActions } from "../browser-actions";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolve0) => {
+    resolve = resolve0;
+  });
+  return { promise, resolve };
+}
+
+function createActions() {
+  const actions: any = new JupyterActions("jupyter-save-race-test", {
+    getStore: jest.fn(() => undefined),
+    removeActions: jest.fn(),
+  } as any);
+  actions._state = "ready";
+  actions.path = "race.ipynb";
+  actions.isClosed = jest.fn(() => false);
+  actions.runDebug = jest.fn();
+  actions.setState = jest.fn();
+  actions.setToIpynb = jest.fn(async () => {});
+  actions.refreshKernelStatus = jest.fn(async () => {});
+  actions.store = { emit: jest.fn() };
+  return actions;
+}
+
+describe("Jupyter browser disk-save reconciliation", () => {
+  it("retries when kernel output advances while an older snapshot saves", async () => {
+    const actions = createActions();
+    const firstSave = deferred<{
+      bytes: number;
+      converted: boolean;
+      ipynb: object;
+    }>();
+    const oldIpynb = { cells: [{ outputs: ["old"] }] };
+    const newIpynb = { cells: [{ outputs: ["new"] }] };
+    let version = "v1";
+    let currentIpynb = oldIpynb;
+    const jupyterSaveIpynb = jest
+      .fn()
+      .mockImplementationOnce(async () => await firstSave.promise)
+      .mockResolvedValueOnce({
+        bytes: 100,
+        converted: false,
+        ipynb: newIpynb,
+      });
+    actions.syncdb = {
+      fs: { jupyterSaveIpynb },
+      get_state: () => "ready",
+      has_uncommitted_changes: () => false,
+      newestVersion: () => version,
+    };
+    actions.toIpynb = jest.fn(async () => currentIpynb);
+    actions.hasUnsavedChanges = true;
+
+    const saving = actions.saveIpynb();
+    await Promise.resolve();
+    expect(jupyterSaveIpynb).toHaveBeenCalledTimes(1);
+    expect(jupyterSaveIpynb).toHaveBeenLastCalledWith("race.ipynb", oldIpynb);
+
+    // This is the archive's critical ordering: the kernel commits new output
+    // before the browser receives the response for its older disk snapshot.
+    version = "v2";
+    currentIpynb = newIpynb;
+    firstSave.resolve({
+      bytes: 100,
+      converted: false,
+      ipynb: oldIpynb,
+    });
+    await saving;
+
+    expect(jupyterSaveIpynb).toHaveBeenCalledTimes(2);
+    expect(jupyterSaveIpynb).toHaveBeenLastCalledWith("race.ipynb", newIpynb);
+    expect(actions.setToIpynb).not.toHaveBeenCalled();
+    expect(actions.hasUnsavedChanges).toBe(false);
+  });
+
+  it("does not import a filesystem event over dirty RTC state", async () => {
+    const actions = createActions();
+    const saveIpynb = jest.fn(async () => {});
+    const jupyterImportIpynb = jest.fn(async (ipynb) => ({ ipynb }));
+    actions.syncdb = {
+      fs: { jupyterImportIpynb },
+      has_uncommitted_changes: () => false,
+      newestVersion: () => "v2",
+    };
+    actions.hasUnsavedChanges = true;
+    actions.saveIpynb = saveIpynb;
+
+    await actions.watchLoadFromDisk({
+      diskRead: {
+        bytes: 100,
+        text: "old",
+        ipynb: { cells: [{ outputs: ["old"] }] },
+      },
+    });
+
+    expect(saveIpynb).toHaveBeenCalledTimes(1);
+    expect(jupyterImportIpynb).not.toHaveBeenCalled();
+    expect(actions.setToIpynb).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a local in-flight save event into a save loop", async () => {
+    const actions = createActions();
+    const savingToDisk = deferred<{
+      bytes: number;
+      converted: boolean;
+      ipynb: object;
+    }>();
+    const ipynb = { cells: [{ outputs: ["current"] }] };
+    const jupyterSaveIpynb = jest.fn(async () => await savingToDisk.promise);
+    const jupyterImportIpynb = jest.fn(async (value) => ({ ipynb: value }));
+    actions.syncdb = {
+      fs: { jupyterImportIpynb, jupyterSaveIpynb },
+      get_state: () => "ready",
+      has_uncommitted_changes: () => false,
+      newestVersion: () => "v1",
+    };
+    actions.toIpynb = jest.fn(async () => ipynb);
+    actions.hasUnsavedChanges = true;
+
+    const saving = actions.saveIpynb();
+    await Promise.resolve();
+    await actions.watchLoadFromDisk({
+      diskRead: { bytes: 100, text: "current", ipynb },
+    });
+    savingToDisk.resolve({ bytes: 100, converted: false, ipynb });
+    await saving;
+
+    expect(jupyterSaveIpynb).toHaveBeenCalledTimes(1);
+    expect(jupyterImportIpynb).not.toHaveBeenCalled();
+    expect(actions.setToIpynb).not.toHaveBeenCalled();
+  });
+
+  it("abandons a disk import if RTC changes during conversion", async () => {
+    const actions = createActions();
+    const importing = deferred<{ ipynb: object }>();
+    const diskIpynb = { cells: [{ outputs: ["old"] }] };
+    const rtcIpynb = { cells: [{ outputs: ["new"] }] };
+    let version = "v1";
+    actions.syncdb = {
+      fs: {
+        jupyterImportIpynb: jest.fn(async () => await importing.promise),
+      },
+      has_uncommitted_changes: () => false,
+      newestVersion: () => version,
+    };
+    actions.hasUnsavedChanges = false;
+    actions.toIpynb = jest.fn(async () => rtcIpynb);
+    actions.saveIpynb = jest.fn(async () => {});
+
+    const loading = actions.watchLoadFromDisk({
+      diskRead: {
+        bytes: 100,
+        text: "old",
+        ipynb: diskIpynb,
+      },
+    });
+    await Promise.resolve();
+    version = "v2";
+    actions.hasUnsavedChanges = true;
+    importing.resolve({ ipynb: diskIpynb });
+    await loading;
+
+    expect(actions.setToIpynb).not.toHaveBeenCalled();
+    expect(actions.saveIpynb).toHaveBeenCalledTimes(1);
+  });
+});
