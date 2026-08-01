@@ -34,6 +34,7 @@ import JSONIPynb from "./json-ipynb";
 import KernelMenuItem from "./kernel-menu-item";
 import { RawIPynb } from "./raw-ipynb";
 import { search } from "./search";
+import { SessionLog } from "./session-log";
 import { Slideshow } from "./slideshow-revealjs/slideshow";
 import { TableOfContents } from "./table-of-contents";
 
@@ -164,6 +165,16 @@ const jupyter_raw: EditorDescription = {
   commands: set(["decrease_font_size", "increase_font_size"]),
 } as const;
 
+const jupyter_session_log: EditorDescription = {
+  type: "jupyter-session-log",
+  short: "Session Log",
+  name: "Command Line Session Log",
+  icon: "terminal",
+  component: SessionLog,
+  commands: set(["decrease_font_size", "increase_font_size"]),
+  buttons: set(["decrease_font_size", "increase_font_size"]),
+} as const;
+
 export const EDITOR_SPEC = {
   jupyter_cell_notebook,
   jupyter_minimal,
@@ -174,6 +185,7 @@ export const EDITOR_SPEC = {
   time_travel,
   jupyter_json,
   jupyter_raw,
+  jupyter_session_log,
   search,
 } as const;
 
