@@ -32,6 +32,8 @@ const REQUIRED_PROJECT_CGROUP_COMMANDS = [
   "attach-prepared-project-runtime",
   "prepare-project-startup-cgroup",
   "prepare-project-startup-runtime-cgroup",
+  "attach-host-service-cgroup",
+  "verify-host-service-cgroup",
   "verify-project-io-limits",
   "verify-project-network-limits",
 ] as const;
@@ -246,6 +248,33 @@ async function checkProjectIoPolicy(): Promise<CheckResult> {
   };
 }
 
+async function checkHostServiceCgroup(): Promise<CheckResult> {
+  const probe = await run("sudo", [
+    "-n",
+    STORAGE_WRAPPER,
+    "verify-host-service-cgroup",
+    String(process.pid),
+  ]);
+  return {
+    name: "host-service-cgroup",
+    ok: probe.exitCode === 0,
+    level: "error",
+    message:
+      probe.exitCode === 0
+        ? "project-host service cgroup conforms"
+        : "project-host service cgroup does not conform",
+    ...(probe.exitCode === 0
+      ? {}
+      : {
+          details: {
+            exitCode: probe.exitCode,
+            stderr: probe.stderr.trim(),
+            stdout: probe.stdout.trim(),
+          },
+        }),
+  };
+}
+
 async function checkSudoPolicyListsWrapper(): Promise<CheckResult> {
   const probe = await run("sudo", ["-n", "-l"]);
   if (probe.exitCode !== 0) {
@@ -334,6 +363,7 @@ const STARTUP_CHECK_FACTORIES: CheckFactory[] = [
     id: "project-cgroup-helper-contract",
     run: checkProjectCgroupHelperContract,
   },
+  { id: "host-service-cgroup", run: checkHostServiceCgroup },
   { id: "project-io-policy", run: checkProjectIoPolicy },
   { id: "sudo-direct-deny", run: checkSudoWhitelistDeniesDirectRoot },
   {
@@ -352,6 +382,7 @@ const PERIODIC_CHECK_FACTORIES: CheckFactory[] = [
     id: "project-cgroup-helper-contract",
     run: checkProjectCgroupHelperContract,
   },
+  { id: "host-service-cgroup", run: checkHostServiceCgroup },
   { id: "project-io-policy", run: checkProjectIoPolicy },
   { id: "sudo-wrapper-allow", run: checkSudoWhitelistAllowsWrapper },
 ];

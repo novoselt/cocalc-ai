@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260801-v22"
+HELPER_SCHEMA_VERSION = "20260801-v23"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -3350,6 +3350,9 @@ MAINTENANCE_CGROUP_IO_WEIGHT="10"
 MAINTENANCE_CGROUP_MEMORY_HIGH="$((4 * 1024 * 1024 * 1024))"
 MAINTENANCE_CGROUP_MEMORY_MAX="$((8 * 1024 * 1024 * 1024))"
 MAINTENANCE_CGROUP_PIDS_MAX="256"
+HOST_SERVICE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-host-services"
+HOST_SERVICE_CGROUP_CPU_WEIGHT="10000"
+HOST_SERVICE_CGROUP_IO_WEIGHT="10000"
 PROJECT_STARTUP_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-project-startup"
 PROJECT_STARTUP_CREATE_CGROUP_DEFAULT="${PROJECT_STARTUP_CGROUP_DEFAULT}/create"
 PROJECT_STARTUP_CGROUP_CPU_MAX="200000 100000"
@@ -3442,6 +3445,26 @@ require_runtime_owned_pid() {
   actual_uid="$(awk '/^Uid:/ {print $2}' "/proc/${pid}/status" 2>/dev/null || true)"
   if [ "$actual_uid" != "$expected_uid" ]; then
     deny "project-pid-owner-mismatch" "pid=${pid},expected=${expected_uid},actual=${actual_uid:-missing}"
+  fi
+}
+
+host_service_process_title() {
+  local title=""
+  IFS= read -r -d '' title < "/proc/$1/cmdline" 2>/dev/null || true
+  printf '%s\n' "$title"
+}
+
+require_host_service_pid() {
+  local pid="$1" runtime_uid actual_uid title
+  require_live_pid "$pid"
+  runtime_uid="$(id -u "$RUNTIME_USER")"
+  actual_uid="$(awk '/^Uid:/ {print $2}' "/proc/${pid}/status" 2>/dev/null || true)"
+  if [ "$actual_uid" != "$runtime_uid" ]; then
+    deny "host-service-pid-owner-mismatch" "pid=${pid},expected=${runtime_uid},actual=${actual_uid:-missing}"
+  fi
+  title="$(host_service_process_title "$pid")"
+  if ! grep -Eq '^project-host:(app|host-agent(:[0-9]+)?|conat-router|conat-persist|acp-worker|conat-router-cluster-node)$' <<< "$title"; then
+    deny "host-service-process-title-invalid" "pid=${pid},title=${title:-missing}"
   fi
 }
 
@@ -3596,6 +3619,66 @@ configure_maintenance_cgroup() {
   if [ "$mode" = "enforce" ]; then
     verify_io_max "$MAINTENANCE_CGROUP_DEFAULT" "maintenance"
   fi
+}
+
+configure_host_service_cgroup() {
+  enable_cgroup_controllers /sys/fs/cgroup
+  mkdir -p "$HOST_SERVICE_CGROUP_DEFAULT"
+  [ -w "${HOST_SERVICE_CGROUP_DEFAULT}/cpu.max" ] &&
+    printf 'max 100000\n' > "${HOST_SERVICE_CGROUP_DEFAULT}/cpu.max"
+  [ -w "${HOST_SERVICE_CGROUP_DEFAULT}/cpu.weight" ] &&
+    printf '%s\n' "$HOST_SERVICE_CGROUP_CPU_WEIGHT" > "${HOST_SERVICE_CGROUP_DEFAULT}/cpu.weight"
+  [ -w "${HOST_SERVICE_CGROUP_DEFAULT}/io.weight" ] &&
+    printf 'default %s\n' "$HOST_SERVICE_CGROUP_IO_WEIGHT" > "${HOST_SERVICE_CGROUP_DEFAULT}/io.weight"
+  [ -w "${HOST_SERVICE_CGROUP_DEFAULT}/memory.max" ] &&
+    printf 'max\n' > "${HOST_SERVICE_CGROUP_DEFAULT}/memory.max"
+  [ -w "${HOST_SERVICE_CGROUP_DEFAULT}/pids.max" ] &&
+    printf 'max\n' > "${HOST_SERVICE_CGROUP_DEFAULT}/pids.max"
+}
+
+host_service_cgroup_ready() {
+  [ -d "$HOST_SERVICE_CGROUP_DEFAULT" ] || return 1
+  [ "$(cat "${HOST_SERVICE_CGROUP_DEFAULT}/cpu.max" 2>/dev/null || true)" = "max 100000" ] || return 1
+  [ "$(cat "${HOST_SERVICE_CGROUP_DEFAULT}/cpu.weight" 2>/dev/null || true)" = "$HOST_SERVICE_CGROUP_CPU_WEIGHT" ] || return 1
+  [ "$(awk '$1 == "default" {print $2}' "${HOST_SERVICE_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)" = "$HOST_SERVICE_CGROUP_IO_WEIGHT" ] || return 1
+  [ "$(cat "${HOST_SERVICE_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)" = "max" ] || return 1
+  [ "$(cat "${HOST_SERVICE_CGROUP_DEFAULT}/pids.max" 2>/dev/null || true)" = "max" ] || return 1
+}
+
+attach_host_service_pid() {
+  local pid="$1" actual
+  require_host_service_pid "$pid"
+  configure_host_service_cgroup
+  printf '%s\n' "$pid" > "${HOST_SERVICE_CGROUP_DEFAULT}/cgroup.procs"
+  actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
+  [ "$actual" = "${HOST_SERVICE_CGROUP_DEFAULT#/sys/fs/cgroup}" ] ||
+    deny "host-service-cgroup-attachment-failed" "pid=${pid},actual=${actual:-missing}"
+}
+
+reconcile_host_service_cgroup() {
+  local pid_file pid title runtime_uid actual_uid
+  configure_host_service_cgroup
+  runtime_uid="$(id -u "$RUNTIME_USER")"
+  for pid_file in \
+    /mnt/cocalc/data/daemon.pid \
+    /mnt/cocalc/data/project-host-app.pid \
+    /mnt/cocalc/data/conat-router.pid \
+    /mnt/cocalc/data/conat-persist.pid \
+    /mnt/cocalc/data/conat-persist-app.pid \
+    /mnt/cocalc/data/host-agent.pid \
+    /mnt/cocalc/data/acp-worker.pid; do
+    [ -r "$pid_file" ] || continue
+    pid="$(cat "$pid_file")"
+    if ! echo "$pid" | grep -Eq '^[0-9]+$' || [ "$pid" -le 1 ] || ! kill -0 "$pid" 2>/dev/null; then
+      continue
+    fi
+    actual_uid="$(awk '/^Uid:/ {print $2}' "/proc/${pid}/status" 2>/dev/null || true)"
+    [ "$actual_uid" = "$runtime_uid" ] || continue
+    title="$(host_service_process_title "$pid")"
+    grep -Eq '^project-host:(app|host-agent(:[0-9]+)?|conat-router|conat-persist|acp-worker|conat-router-cluster-node)$' <<< "$title" || continue
+    require_host_service_pid "$pid"
+    printf '%s\n' "$pid" > "${HOST_SERVICE_CGROUP_DEFAULT}/cgroup.procs"
+  done
 }
 
 configure_project_startup_cgroup() {
@@ -4835,6 +4918,35 @@ escape_overlay_path() {
 }
 
 case "$cmd" in
+  attach-host-service-cgroup)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage attach-host-service-cgroup <pid>" >&2
+      exit 2
+    fi
+    acquire_project_cgroup_lock
+    attach_host_service_pid "$1"
+    release_project_lock
+    ;;
+  verify-host-service-cgroup)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage verify-host-service-cgroup <pid>" >&2
+      exit 2
+    fi
+    require_host_service_pid "$1"
+    host_service_cgroup_ready || deny "host-service-cgroup-not-ready" "$HOST_SERVICE_CGROUP_DEFAULT"
+    actual="$(awk -F: '$1 == "0" {print $3}' "/proc/$1/cgroup" 2>/dev/null || true)"
+    [ "$actual" = "${HOST_SERVICE_CGROUP_DEFAULT#/sys/fs/cgroup}" ] ||
+      deny "host-service-cgroup-mismatch" "pid=$1,actual=${actual:-missing}"
+    ;;
+  reconcile-host-service-cgroup)
+    if [ "$#" -ne 0 ]; then
+      echo "usage: cocalc-runtime-storage reconcile-host-service-cgroup" >&2
+      exit 2
+    fi
+    acquire_project_cgroup_lock
+    reconcile_host_service_cgroup
+    release_project_lock
+    ;;
   prepare-project-startup-cgroup)
     if [ "$#" -ne 2 ] || ! is_project_uuid "$1"; then
       echo "usage: cocalc-runtime-storage prepare-project-startup-cgroup <project-id> <launcher-pid>" >&2
@@ -6624,6 +6736,18 @@ def reconcile_project_io_policy(cfg: BootstrapConfig) -> None:
     )
 
 
+def reconcile_host_service_cgroup(cfg: BootstrapConfig) -> None:
+    run_cmd(
+        cfg,
+        [
+            "/usr/local/sbin/cocalc-runtime-storage",
+            "reconcile-host-service-cgroup",
+        ],
+        "reconcile project-host service priority",
+        timeout=30,
+    )
+
+
 def reconcile_storage_and_containment(cfg: BootstrapConfig) -> None:
     # Network reconciliation creates the project-pool hierarchy, which also
     # applies io.max. Establish every required writable mount before that
@@ -6634,6 +6758,7 @@ def reconcile_storage_and_containment(cfg: BootstrapConfig) -> None:
     reconcile_bees_runtime_policy(cfg)
     reconcile_project_network_limits(cfg)
     reconcile_project_io_policy(cfg)
+    reconcile_host_service_cgroup(cfg)
 
 
 def ensure_btrfs_data(cfg: BootstrapConfig) -> None:
@@ -9317,6 +9442,7 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
         verify_runtime_sudoers(cfg)
         reconcile_project_network_limits(cfg)
         reconcile_project_io_policy(cfg)
+        reconcile_host_service_cgroup(cfg)
         configure_cloudflared_with_options(cfg, install_package=False)
         record_operation_success(cfg, "reconcile")
         report_bootstrap_status(cfg, "done", "Privileged host helpers reconciled")

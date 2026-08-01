@@ -278,6 +278,7 @@ class BootstrapSharedScratchTest(unittest.TestCase):
                 "reconcile_bees_runtime_policy",
                 "reconcile_project_network_limits",
                 "reconcile_project_io_policy",
+                "reconcile_host_service_cgroup",
             ]
             try:
                 for name in names:
@@ -1978,6 +1979,17 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("configure_project_startup_cgroup", script)
             self.assertIn("prepare-project-startup-cgroup)", script)
             self.assertIn("prepare-project-startup-runtime-cgroup)", script)
+            self.assertIn("attach-host-service-cgroup)", script)
+            self.assertIn("verify-host-service-cgroup)", script)
+            self.assertIn("reconcile-host-service-cgroup)", script)
+            self.assertIn(
+                'HOST_SERVICE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-host-services"',
+                script,
+            )
+            self.assertIn(
+                '"$HOST_SERVICE_CGROUP_IO_WEIGHT" > "${HOST_SERVICE_CGROUP_DEFAULT}/io.weight"',
+                script,
+            )
             self.assertIn(
                 'PROJECT_STARTUP_CREATE_CGROUP_DEFAULT="${PROJECT_STARTUP_CGROUP_DEFAULT}/create"',
                 script,
@@ -3741,6 +3753,7 @@ class BootstrapModesTest(unittest.TestCase):
                 "verify_runtime_sudoers",
                 "reconcile_project_network_limits",
                 "reconcile_project_io_policy",
+                "reconcile_host_service_cgroup",
             ):
                 patch(name, lambda _cfg, name=name: events.append(name))
             patch(
@@ -3788,6 +3801,7 @@ class BootstrapModesTest(unittest.TestCase):
                     "verify_runtime_sudoers",
                     "reconcile_project_network_limits",
                     "reconcile_project_io_policy",
+                    "reconcile_host_service_cgroup",
                     "configure_cloudflared:False",
                     "success:reconcile",
                 ],
@@ -3955,6 +3969,7 @@ class BootstrapModesTest(unittest.TestCase):
             patch("install_privileged_wrappers", lambda _cfg: None)
             patch("reconcile_project_network_limits", lambda _cfg: None)
             patch("reconcile_project_io_policy", lambda _cfg: None)
+            patch("reconcile_host_service_cgroup", lambda _cfg: None)
             patch("ensure_cocalc_mount", lambda _cfg: None)
             patch("ensure_btrfs_data", lambda _cfg: None)
             patch("ensure_subuids", lambda _cfg: None)

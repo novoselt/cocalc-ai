@@ -108,6 +108,7 @@ import { startConatRevocationKickLoop } from "./conat-revocation-kick";
 import { getOrCreateProjectHostConatPassword } from "./local-conat-password";
 import { getProjectHostMasterConatToken } from "./master-conat-token";
 import { applyProjectHostProcessTitle } from "./process-role";
+import { attachCurrentProcessToHostServiceCgroup } from "./host-service-cgroup";
 import { startProjectWithAdmission } from "./project-start-admission";
 import {
   runRuntimeConformanceStartupChecks,
@@ -1795,6 +1796,7 @@ if (require.main === module) {
   applyProjectHostProcessTitle();
   process.env.COCALC_CONAT_CLUSTER_NODE_ENTRYPOINT = __filename;
   if (`${process.env.COCALC_CONAT_CLUSTER_NODE ?? ""}`.trim() === "1") {
+    attachCurrentProcessToHostServiceCgroup();
     runConatRouterClusterNodeMain().catch((err) => {
       console.error("project-host conat router cluster node failed:", err);
       process.exit(1);
@@ -1802,6 +1804,7 @@ if (require.main === module) {
   } else if (
     `${process.env.COCALC_PROJECT_HOST_ACP_WORKER ?? ""}`.trim() === "1"
   ) {
+    attachCurrentProcessToHostServiceCgroup();
     runAcpWorkerMain()
       .then(() => {
         process.exit(0);
@@ -1814,6 +1817,7 @@ if (require.main === module) {
     `${process.env.COCALC_PROJECT_HOST_CONAT_ROUTER_DAEMON ?? ""}`.trim() ===
     "1"
   ) {
+    attachCurrentProcessToHostServiceCgroup();
     runConatRouterDaemonMain().catch((err) => {
       console.error("project-host conat router daemon failed:", err);
       process.exit(1);
@@ -1822,11 +1826,13 @@ if (require.main === module) {
     `${process.env.COCALC_PROJECT_HOST_CONAT_PERSIST_DAEMON ?? ""}`.trim() ===
     "1"
   ) {
+    attachCurrentProcessToHostServiceCgroup();
     runConatPersistDaemonMain().catch((err) => {
       console.error("project-host conat persist daemon failed:", err);
       process.exit(1);
     });
   } else if (`${process.env.COCALC_PROJECT_HOST_AGENT ?? ""}`.trim() === "1") {
+    attachCurrentProcessToHostServiceCgroup();
     runHostAgentMain(process.argv.slice(2)).catch((err) => {
       console.error("project-host host-agent failed:", err);
       process.exit(1);
@@ -1844,6 +1850,7 @@ if (require.main === module) {
       console.error(`${err}`);
       process.exit(1);
     }
+    attachCurrentProcessToHostServiceCgroup();
     main().catch((err) => {
       console.error("project-host failed to start:", err);
       process.exitCode = 1;

@@ -8,6 +8,7 @@ describe("runtime conformance", () => {
       "root-owned-path",
       "sudo-policy-visible",
       "project-cgroup-helper-contract",
+      "host-service-cgroup",
       "project-io-policy",
       "sudo-direct-deny",
       "sudo-generic-mount-deny",
@@ -24,6 +25,9 @@ describe("runtime conformance", () => {
     );
     expect(__test__.requiredProjectCgroupCommands()).toContain(
       "prepare-project-startup-runtime-cgroup",
+    );
+    expect(__test__.requiredProjectCgroupCommands()).toContain(
+      "attach-host-service-cgroup",
     );
   });
 
