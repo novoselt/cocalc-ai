@@ -1433,7 +1433,7 @@ export interface HostSoftwareUpgradeResponse {
   results: Array<{
     artifact: HostSoftwareArtifact;
     version: string;
-    status: "updated" | "noop";
+    status: "updated" | "staged" | "noop";
   }>;
 }
 

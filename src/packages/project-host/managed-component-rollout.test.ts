@@ -146,6 +146,7 @@ describe("rolloutManagedComponents", () => {
       rolloutManagedComponents({
         components: ["acp-worker"],
         reason: "bundle_upgrade",
+        desired_version: "artifact-v2",
       }),
     ).resolves.toEqual({
       results: [
@@ -158,6 +159,7 @@ describe("rolloutManagedComponents", () => {
     });
     expect(rolloutProjectHostAcpWorkerMock).toHaveBeenCalledWith({
       restartReason: "bundle_upgrade",
+      desiredVersion: "artifact-v2",
     });
   });
 });

@@ -194,6 +194,7 @@ import type {
   HostRuntimeLogResponse,
   HostSshAuthorizedKeysResponse,
   HostStaticAppPathInspection,
+  StageProjectHostArtifactRequest,
   UpgradeSoftwareRequest,
   UpgradeSoftwareResponse,
 } from "@cocalc/conat/project-host/api";
@@ -2254,6 +2255,7 @@ export type HostControlMethod =
   | "apply-pending-copies"
   | "delete-project-data"
   | "upgrade-software"
+  | "stage-project-host-artifact"
   | "rollout-managed-components"
   | "grow-btrfs"
   | "grow-shared-scratch"
@@ -3427,6 +3429,10 @@ export interface InterBayHostControlApi {
     host_id: string;
     upgrade: UpgradeSoftwareRequest;
   }) => Promise<UpgradeSoftwareResponse>;
+  stageProjectHostArtifact: (opts: {
+    host_id: string;
+    stage: StageProjectHostArtifactRequest;
+  }) => Promise<UpgradeSoftwareResponse>;
   rolloutManagedComponents: (opts: {
     host_id: string;
     rollout: HostManagedComponentRolloutRequest;
@@ -4289,6 +4295,10 @@ const HOST_CONTROL_METHOD_SPECS = [
   { name: "applyPendingCopies", method: "apply-pending-copies" },
   { name: "deleteProjectData", method: "delete-project-data" },
   { name: "upgradeSoftware", method: "upgrade-software" },
+  {
+    name: "stageProjectHostArtifact",
+    method: "stage-project-host-artifact",
+  },
   { name: "rolloutManagedComponents", method: "rollout-managed-components" },
   { name: "growBtrfs", method: "grow-btrfs" },
   { name: "growSharedScratch", method: "grow-shared-scratch" },

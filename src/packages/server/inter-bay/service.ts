@@ -2684,6 +2684,10 @@ async function startHostControlService(): Promise<void> {
       await (
         await getHostClient(host_id, 10 * 60 * 1000)
       ).upgradeSoftware(upgrade),
+    stageProjectHostArtifact: async ({ host_id, stage }) =>
+      await (
+        await getHostClient(host_id, 10 * 60 * 1000)
+      ).stageProjectHostArtifact(stage),
     rolloutManagedComponents: async ({ host_id, rollout }) =>
       await (
         await getHostClient(host_id, 30_000)

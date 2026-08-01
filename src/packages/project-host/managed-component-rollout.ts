@@ -40,6 +40,7 @@ function noopResult(
 export async function rolloutManagedComponents({
   components,
   reason,
+  desired_version,
 }: HostManagedComponentRolloutRequest): Promise<HostManagedComponentRolloutResponse> {
   const requested = uniqueRequestedComponents(components ?? []);
   if (!requested.length) {
@@ -99,6 +100,7 @@ export async function rolloutManagedComponents({
       case "acp-worker": {
         const outcome = await rolloutProjectHostAcpWorker({
           restartReason: reason || "managed_component_rollout",
+          desiredVersion: desired_version,
         });
         results.push({
           component,
@@ -116,6 +118,7 @@ export async function rolloutManagedComponents({
   logger.info("managed component rollout requested", {
     components: requested,
     reason,
+    desired_version,
     results,
   });
   return { results };

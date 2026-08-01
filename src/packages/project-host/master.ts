@@ -1617,6 +1617,15 @@ export async function startMasterRegistration({
       deleteProjectLocal(project_id);
     },
     upgradeSoftware,
+    async stageProjectHostArtifact({ version, base_url, retention_policy }) {
+      return await upgradeSoftware({
+        targets: [{ artifact: "project-host", version }],
+        base_url,
+        restart_project_host: false,
+        activate_project_host: false,
+        retention_policy,
+      });
+    },
     async growBtrfs({ disk_gb }) {
       const args = ["-n", STORAGE_WRAPPER, "grow-btrfs"];
       if (disk_gb != null) args.push(String(disk_gb));

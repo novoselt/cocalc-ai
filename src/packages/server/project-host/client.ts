@@ -81,6 +81,8 @@ export async function getRoutedHostControlClient({
         await bridge.deleteProjectData({ host_id, del }),
       upgradeSoftware: async (upgrade) =>
         await bridge.upgradeSoftware({ host_id, upgrade }),
+      stageProjectHostArtifact: async (stage) =>
+        await bridge.stageProjectHostArtifact({ host_id, stage }),
       rolloutManagedComponents: async (rollout) =>
         await bridge.rolloutManagedComponents({ host_id, rollout }),
       growBtrfs: async (grow) => await bridge.growBtrfs({ host_id, grow }),
