@@ -1324,6 +1324,28 @@ export async function startMasterRegistration({
     }
   };
 
+  const startProjectRequest = async (
+    opts: Parameters<HostControlApi["startProject"]>[0],
+    skip_if_running: boolean,
+  ) => {
+    await awaitRuntimeReadyForControl(
+      skip_if_running ? "startProjectIdempotent" : "startProject",
+    );
+    if (!hubApi.projects?.start) {
+      throw Error("start not available");
+    }
+    const status = await hubApi.projects.start({
+      ...opts,
+      account_id,
+      skip_if_running,
+    } as any);
+    return {
+      project_id: opts.project_id,
+      state: (status as any)?.state,
+      phase_timings_ms: (status as any)?.phase_timings_ms,
+    };
+  };
+
   // Control plane for this host (master can ask us to create/start/stop projects).
   const controlImpl: HostControlApi = {
     async applyExamRun(opts) {
@@ -1472,36 +1494,11 @@ export async function startMasterRegistration({
       } as any);
       return { project_id };
     },
-    async startProject({
-      project_id,
-      authorized_keys,
-      run_quota,
-      run_quota_revision,
-      image,
-      restore,
-      restore_backup_id,
-      lro_op_id,
-    }) {
-      await awaitRuntimeReadyForControl("startProject");
-      if (!hubApi.projects?.start) {
-        throw Error("start not available");
-      }
-      const status = await hubApi.projects.start({
-        account_id,
-        project_id,
-        authorized_keys,
-        run_quota,
-        run_quota_revision,
-        image,
-        restore,
-        restore_backup_id,
-        lro_op_id,
-      });
-      return {
-        project_id,
-        state: (status as any)?.state,
-        phase_timings_ms: (status as any)?.phase_timings_ms,
-      };
+    async startProject(opts) {
+      return await startProjectRequest(opts, false);
+    },
+    async startProjectIdempotent(opts) {
+      return await startProjectRequest(opts, true);
     },
     async stopProject({ project_id }) {
       await awaitRuntimeReadyForControl("stopProject");

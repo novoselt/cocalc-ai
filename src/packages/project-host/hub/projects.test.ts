@@ -410,6 +410,53 @@ describe("project host start ACP rehydrate ordering", () => {
     );
   });
 
+  it("returns an existing runtime without restarting it for idempotent start", async () => {
+    const runnerApi = {
+      start: jest.fn(),
+      status: jest.fn(async () => ({ state: "running" })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await expect(
+      hubApi.projects.start({ project_id, skip_if_running: true }),
+    ).resolves.toMatchObject({
+      state: "running",
+      phase_timings_ms: {
+        check_existing_runtime: expect.any(Number),
+        total: expect.any(Number),
+      },
+    });
+    expect(runnerApi.status).toHaveBeenCalledWith({ project_id });
+    expect(runnerApi.start).not.toHaveBeenCalled();
+    expect(applyPendingCopies).not.toHaveBeenCalled();
+  });
+
+  it("does not skip an explicit restore when the runtime is active", async () => {
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      status: jest.fn(async () => ({ state: "running" })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({
+      project_id,
+      restore_backup_id: "backup-1",
+      skip_if_running: true,
+    });
+
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
+  });
+
   it("overlaps a cold OCI estimate with start preparation", async () => {
     const estimate = {
       estimated_bytes: 4_000_000_000,

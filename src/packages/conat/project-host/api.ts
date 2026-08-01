@@ -573,6 +573,19 @@ export interface HostControlApi {
     lro_op_id?: string;
     managed_egress_override?: ManagedProjectEgressOverride;
   }) => Promise<HostCreateProjectResponse>;
+  // A distinct method keeps mixed-version rollout safe: old hosts reject it,
+  // allowing the bay to fall back to status + legacy start.
+  startProjectIdempotent: (opts: {
+    project_id: string;
+    authorized_keys?: string;
+    run_quota?: any;
+    run_quota_revision?: number;
+    image?: string;
+    restore?: "none" | "auto" | "required";
+    restore_backup_id?: string;
+    lro_op_id?: string;
+    managed_egress_override?: ManagedProjectEgressOverride;
+  }) => Promise<HostCreateProjectResponse>;
   stopProject: (opts: {
     project_id: string;
   }) => Promise<HostCreateProjectResponse>;

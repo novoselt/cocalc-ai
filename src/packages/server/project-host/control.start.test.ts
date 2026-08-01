@@ -120,6 +120,8 @@ jest.mock("@cocalc/server/inter-bay/bridge", () => ({
         interBayHostControlCreateProjectMock(...args),
       startProject: (...args: any[]) =>
         interBayHostControlStartProjectMock(...args),
+      startProjectIdempotent: (...args: any[]) =>
+        interBayHostControlStartProjectMock(...args),
     })),
   })),
 }));
@@ -784,9 +786,12 @@ describe("startProjectOnHost placement", () => {
       project_id: "proj-1",
       state: "running",
     }));
+    const getProjectStatusMock = jest.fn();
     createHostControlClientMock = jest.fn(() => ({
       createProject: createProjectMock,
-      startProject: startProjectMock,
+      startProject: jest.fn(),
+      startProjectIdempotent: startProjectMock,
+      getProjectStatus: getProjectStatusMock,
     }));
 
     let loadProjectCalls = 0;
@@ -883,6 +888,7 @@ describe("startProjectOnHost placement", () => {
         managed_egress_override: "admin-host-drain",
       }),
     );
+    expect(getProjectStatusMock).not.toHaveBeenCalled();
   });
 
   it("retries start once after a successful guarded auto-grow", async () => {
@@ -1044,9 +1050,15 @@ describe("startProjectOnHost placement", () => {
       project_id: "proj-1",
       state: "running",
     }));
+    const startProjectIdempotentMock = jest.fn(async () => {
+      throw new Error(
+        "request -- no subscribers matching 'host.start-project-idempotent'",
+      );
+    });
     createHostControlClientMock = jest.fn(() => ({
       createProject: jest.fn(async () => ({ project_id: "proj-1" })),
       startProject: startProjectMock,
+      startProjectIdempotent: startProjectIdempotentMock,
       getProjectStatus: getProjectStatusMock,
     }));
 
@@ -1138,6 +1150,7 @@ describe("startProjectOnHost placement", () => {
     expect(getProjectStatusMock).toHaveBeenCalledWith({
       project_id: "proj-1",
     });
+    expect(startProjectIdempotentMock).toHaveBeenCalledTimes(1);
     expect(startProjectMock).not.toHaveBeenCalled();
   });
 

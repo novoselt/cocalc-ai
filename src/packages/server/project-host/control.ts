@@ -65,6 +65,21 @@ type StartProjectInFlight = {
 };
 const startProjectInFlight = new Map<string, StartProjectInFlight>();
 
+function isIdempotentStartUnavailable(err: unknown): boolean {
+  const text = `${(err as any)?.message ?? err ?? ""}`.toLowerCase();
+  const namesMethod =
+    text.includes("startprojectidempotent") ||
+    text.includes("start-project-idempotent");
+  return (
+    namesMethod &&
+    (text.includes("no subscribers matching") ||
+      text.includes("unknown method") ||
+      text.includes("method not found") ||
+      text.includes("not implemented") ||
+      text.includes("not available"))
+  );
+}
+
 type HostPlacement = {
   host_id: string;
 };
@@ -947,49 +962,6 @@ export async function startProjectOnHost(
     });
     markHostControl("placement_and_client", phaseStarted);
     phaseStarted = Date.now();
-    try {
-      if (typeof client.getProjectStatus === "function") {
-        const live = await client.getProjectStatus({ project_id });
-        if (
-          explicitRestoreBackupId &&
-          (live?.state === "running" || live?.state === "starting")
-        ) {
-          log.warn(
-            "startProjectOnHost ignoring active destination state because an explicit restore backup was requested",
-            {
-              project_id,
-              host_id: placement.host_id,
-              snapshot_state: snapshot.state,
-              live_state: live.state,
-              restore_backup_id: explicitRestoreBackupId,
-            },
-          );
-        } else if (live?.state === "running" || live?.state === "starting") {
-          log.warn(
-            "startProjectOnHost found project already active on assigned host; skipping restart",
-            {
-              project_id,
-              host_id: placement.host_id,
-              snapshot_state: snapshot.state,
-              live_state: live.state,
-            },
-          );
-          await saveProjectStateSnapshot(project_id, live.state, {
-            project_bundle_version: live.project_bundle_version,
-            tools_version: live.tools_version,
-          });
-          return;
-        }
-      }
-    } catch (err) {
-      log.debug("startProjectOnHost live status probe failed", {
-        project_id,
-        host_id: placement.host_id,
-        err: `${err}`,
-      });
-    }
-    markHostControl("live_status_probe", phaseStarted);
-    phaseStarted = Date.now();
     let cpuPolicyBlockMessage: string | undefined;
     try {
       if (
@@ -1036,8 +1008,7 @@ export async function startProjectOnHost(
     markHostControl("restore_metadata", phaseStarted);
     const restore = rows[0]?.backup_repo_id ? "auto" : "none";
     try {
-      phaseStarted = Date.now();
-      const response = await client.startProject({
+      const startRequest: Parameters<HostControlApi["startProject"]>[0] = {
         project_id,
         authorized_keys: meta.authorized_keys,
         run_quota,
@@ -1049,7 +1020,45 @@ export async function startProjectOnHost(
         ...(opts?.managed_egress_override
           ? { managed_egress_override: opts.managed_egress_override }
           : {}),
-      });
+      };
+      phaseStarted = Date.now();
+      let response;
+      if (typeof client.startProjectIdempotent === "function") {
+        try {
+          response = await client.startProjectIdempotent(startRequest);
+        } catch (err) {
+          if (!isIdempotentStartUnavailable(err)) {
+            throw err;
+          }
+          markHostControl("idempotent_capability_fallback", phaseStarted);
+        }
+      }
+      if (response == null) {
+        const liveStatusStarted = Date.now();
+        try {
+          const live = await client.getProjectStatus({ project_id });
+          if (
+            !explicitRestoreBackupId &&
+            (live?.state === "running" || live?.state === "starting")
+          ) {
+            markHostControl("live_status_probe", liveStatusStarted);
+            await saveProjectStateSnapshot(project_id, live.state, {
+              project_bundle_version: live.project_bundle_version,
+              tools_version: live.tools_version,
+            });
+            return;
+          }
+        } catch (err) {
+          log.debug("startProjectOnHost live status probe failed", {
+            project_id,
+            host_id: placement.host_id,
+            err: `${err}`,
+          });
+        }
+        markHostControl("live_status_probe", liveStatusStarted);
+        phaseStarted = Date.now();
+        response = await client.startProject(startRequest);
+      }
       markHostControl("start_rpc", phaseStarted);
       const saveRunningStateStarted = Date.now();
       await saveProjectStateSnapshot(project_id, response.state ?? "running", {

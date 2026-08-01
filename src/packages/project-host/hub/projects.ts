@@ -1759,6 +1759,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     lro_op_id,
     autostart,
     managed_egress_override,
+    skip_if_running,
   }: {
     project_id: string;
     authorized_keys?: string;
@@ -1770,12 +1771,14 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     lro_op_id?: string;
     autostart?: boolean;
     managed_egress_override?: ManagedProjectEgressOverride;
+    skip_if_running?: boolean;
   }): Promise<{
     op_id: string;
     scope_type: "project";
     scope_id: string;
     service: string;
     stream_name: string;
+    state?: string;
     phase_timings_ms?: Record<string, number>;
     runner_phase_timings_ms?: Record<string, number>;
   }> {
@@ -1790,6 +1793,42 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     beginProjectHostActivity(activity_id, "start");
     let resolved: StartMetadata | undefined;
     try {
+      if (skip_if_running && !restore_backup_id && runnerApi.status) {
+        try {
+          const current = await timings.measure(
+            "check_existing_runtime",
+            async () => await runnerApi.status({ project_id }),
+          );
+          if (current?.state === "running" || current?.state === "starting") {
+            timings.phase_timings_ms.total = Object.values(
+              timings.phase_timings_ms,
+            ).reduce((sum, value) => sum + value, 0);
+            publishStartProgress({
+              activity_id,
+              project_id,
+              op_id,
+              phase: "done",
+              progress: 100,
+              message: "project already running",
+              detail: { phase_timings_ms: timings.phase_timings_ms },
+            });
+            return {
+              op_id,
+              scope_type: "project",
+              scope_id: project_id,
+              service: PERSIST_SERVICE,
+              stream_name: lroStreamName(op_id),
+              state: current.state,
+              phase_timings_ms: timings.phase_timings_ms,
+            };
+          }
+        } catch (err) {
+          logger.debug(
+            "idempotent start could not inspect current runtime; continuing with start",
+            { project_id, err: `${err}` },
+          );
+        }
+      }
       await assertManagedRawNetworkStartAllowedBestEffort({
         project_id,
         managed_egress_override,
