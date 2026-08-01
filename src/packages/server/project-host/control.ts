@@ -1089,13 +1089,18 @@ export async function startProjectOnHost(
             ? { managed_egress_override: opts.managed_egress_override }
             : {}),
         });
+        const saveRunningStateStarted = Date.now();
         await saveProjectStateSnapshot(project_id, retry.state ?? "running", {
           runtime_started: true,
           project_bundle_version: retry.project_bundle_version,
           tools_version: retry.tools_version,
         });
-        if (opts?.lro_op_id && retry.phase_timings_ms) {
-          mergeStartProjectTimings(opts.lro_op_id, retry.phase_timings_ms);
+        if (opts?.lro_op_id) {
+          mergeStartProjectTimings(opts.lro_op_id, {
+            ...retry.phase_timings_ms,
+            "control.save_authoritative_running_state":
+              Date.now() - saveRunningStateStarted,
+          });
         }
         return;
       }
