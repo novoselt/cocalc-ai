@@ -192,9 +192,15 @@ try {
       await sleep(options.settle_ms);
       const requestedAtMs = Date.now();
       const started = performance.now();
-      await startButton.click({ force: true });
       const starting = page.getByText("Starting", { exact: true });
-      await starting.waitFor({ state: "visible", timeout: 5_000 });
+      // Arm the observer before dispatch: sufficiently fast starts can render
+      // and remove the optimistic state before an after-click waiter attaches.
+      const startingVisible = starting.waitFor({
+        state: "visible",
+        timeout: 5_000,
+      });
+      await startButton.click({ force: true });
+      await startingVisible;
       await starting.waitFor({ state: "hidden", timeout: 30_000 });
       const browserElapsedMs = Math.round(performance.now() - started);
       const failed = await startButton.isVisible();
