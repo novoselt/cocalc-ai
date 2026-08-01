@@ -1254,11 +1254,12 @@ describe("project host start ACP rehydrate ordering", () => {
         set: jest.fn(async () => undefined),
       },
     });
+    const scratchQuotaGet = jest.fn(async () => ({ used: 0, size: 0 }));
     const scratchQuotaSet = jest.fn(async () => undefined);
     resetScratchVolume.mockResolvedValueOnce({
       path: `/mnt/cocalc/project-${project_id}-scratch`,
       quota: {
-        get: jest.fn(async () => ({ used: 0, size: 0 })),
+        get: scratchQuotaGet,
         set: scratchQuotaSet,
       },
     });
@@ -1284,7 +1285,9 @@ describe("project host start ACP rehydrate ordering", () => {
         volume_kind: "scratch",
         operation_class: "project_volume_prepare",
         priority: "lifecycle",
+        force_write: true,
       });
+      expect(scratchQuotaGet).not.toHaveBeenCalled();
       expect(runnerApi.start).toHaveBeenCalledWith({
         project_id,
         config: expect.objectContaining({

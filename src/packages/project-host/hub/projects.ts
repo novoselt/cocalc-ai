@@ -1159,7 +1159,10 @@ async function assertStartDiskQuotaAllowed({
         project_id,
         volume_kind === "scratch",
       );
-      const quota = await vol.quota.get();
+      // A freshly recreated scratch subvolume is empty and has no limit. A
+      // physical qgroup read here adds no safety, but can block for seconds
+      // while Btrfs quota accounting catches up after I/O pressure.
+      const quota = resetVolume ? { used: 0, size: 0 } : await vol.quota.get();
       if (
         isProjectDiskQuotaStartBlocked({
           used: quota.used,
@@ -1198,6 +1201,7 @@ async function assertStartDiskQuotaAllowed({
         volume_kind,
         operation_class: "project_volume_prepare",
         priority: "lifecycle",
+        ...(resetVolume != null ? { force_write: true } : undefined),
       });
       return ledgerMode === "enforce";
     } catch (err) {

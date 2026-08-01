@@ -2315,6 +2315,7 @@ async function applyManagedProjectVolumeQuotaRaw({
   project_id,
   volume_kind,
   size,
+  force_write = false,
   operation_id,
   operation_class,
   priority = "interactive",
@@ -2322,6 +2323,7 @@ async function applyManagedProjectVolumeQuotaRaw({
   project_id: string;
   volume_kind: "home" | "scratch";
   size: number;
+  force_write?: boolean;
   operation_id?: string;
   operation_class: string;
   priority?: "lifecycle" | "interactive" | "scheduled" | "scavenger";
@@ -2337,7 +2339,7 @@ async function applyManagedProjectVolumeQuotaRaw({
     scratch,
     path: vol.path,
   });
-  if ((await vol.quota.get()).size !== target) {
+  if (force_write || (await vol.quota.get()).size !== target) {
     await vol.quota.set(target, {
       project_id,
       volume_kind,
@@ -2356,12 +2358,14 @@ export async function reconcileManagedProjectVolumeQuota({
   operation_id,
   operation_class,
   priority,
+  force_write,
 }: {
   project_id: string;
   volume_kind: "home" | "scratch";
   operation_id?: string;
   operation_class: string;
   priority?: "lifecycle" | "interactive" | "scheduled" | "scavenger";
+  force_write?: boolean;
 }): Promise<number> {
   return await projectVolumeQuotaManager.applyEffectiveQuota({
     project_id,
@@ -2369,6 +2373,7 @@ export async function reconcileManagedProjectVolumeQuota({
     operation_id,
     operation_class,
     priority,
+    force_write,
   });
 }
 
