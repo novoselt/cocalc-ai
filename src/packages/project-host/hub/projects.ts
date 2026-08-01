@@ -713,7 +713,7 @@ async function resolveStartMetadata({
     !existing?.title;
   if (needsMaster || start_metadata != null) {
     try {
-      const authoritative =
+      const authoritative: StartMetadata | undefined =
         start_metadata ??
         (await loadProjectStartMetadataFromMaster(project_id));
       if (authoritative) {
