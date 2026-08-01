@@ -114,6 +114,7 @@ function shouldPublishTunnelBrowserDns(metadata: HostMetadata): boolean {
 const DEFAULT_SOFTWARE_BASE_URL = "https://software.cocalc.ai/software";
 type BootstrapManagedArtifact =
   | "project-host"
+  | "container-runtime"
   | "project-bundle"
   | "tools"
   | "bootstrap-environment";
@@ -463,7 +464,7 @@ async function fetchSha256(url: string): Promise<string | undefined> {
 
 function extractArtifactVersion(
   url: string,
-  artifact: "project-host" | "project" | "tools",
+  artifact: "project-host" | "container-runtime" | "project" | "tools",
 ): string | undefined {
   if (!url) return undefined;
   try {
@@ -541,6 +542,12 @@ export type BootstrapScripts = {
   projectHostCurrent: string;
   projectHostBin: string;
   projectHostVersion: string;
+  containerRuntimeUrl: string;
+  containerRuntimeSha256: string;
+  containerRuntimeRoot: string;
+  containerRuntimeDir: string;
+  containerRuntimeRemote: string;
+  containerRuntimeVersion: string;
   projectBundleUrl: string;
   projectBundleSha256: string;
   projectBundlesRoot: string;
@@ -716,6 +723,7 @@ async function loadBootstrapArtifactDesiredVersions(
     const target = deployment.target as HostRuntimeArtifact;
     if (
       target !== "project-host" &&
+      target !== "container-runtime" &&
       target !== "project-bundle" &&
       target !== "tools" &&
       target !== "bootstrap-environment"
@@ -761,6 +769,7 @@ function observedBootstrapArtifactVersions(
     if (!currentVersion) continue;
     if (
       artifact.artifact === "project-host" ||
+      artifact.artifact === "container-runtime" ||
       artifact.artifact === "project-bundle" ||
       artifact.artifact === "tools"
     ) {
@@ -832,6 +841,9 @@ function versionedSoftwareArtifactUrl({
   if (artifact === "project-bundle") {
     return `${baseUrl}/project/${version}/bundle-${os}.tar.xz`;
   }
+  if (artifact === "container-runtime") {
+    return `${baseUrl}/container-runtime/${version}/container-runtime-${os}-${arch}.tar.xz`;
+  }
   return `${baseUrl}/tools/${version}/tools-${os}-${arch}.tar.xz`;
 }
 
@@ -883,12 +895,14 @@ async function resolveBootstrapArtifactBundle({
     );
   }
   const manifestUrl =
-    artifact === "tools"
-      ? `${softwareBaseUrl}/tools/latest-${targetOs}-${targetArch}.json`
+    artifact === "tools" || artifact === "container-runtime"
+      ? `${softwareBaseUrl}/${artifact}/latest-${targetOs}-${targetArch}.json`
       : `${softwareBaseUrl}/${artifact === "project-bundle" ? "project" : "project-host"}/latest-${targetOs}.json`;
   const resolved = await resolveSoftwareArtifact(manifestUrl, {
     os: targetOs,
-    ...(artifact === "tools" ? { arch: targetArch } : {}),
+    ...(artifact === "tools" || artifact === "container-runtime"
+      ? { arch: targetArch }
+      : {}),
   });
   const resolvedVersion =
     extractArtifactVersion(
@@ -1039,6 +1053,22 @@ export async function buildBootstrapScripts(
     /[^a-f0-9]/gi,
     "",
   );
+  const resolvedContainerRuntime = await resolveBootstrapArtifactBundle({
+    softwareBaseUrl,
+    artifact: "container-runtime",
+    desiredVersion: chooseBootstrapArtifactVersion({
+      host_id: row.id,
+      artifact: "container-runtime",
+      desiredVersion: desiredArtifactVersions["container-runtime"],
+      observedVersion: observedArtifactVersions["container-runtime"],
+    }),
+    targetOs: targetPlatform.os,
+    targetArch: targetPlatform.arch,
+  });
+  const containerRuntimeUrl = resolvedContainerRuntime.url;
+  const containerRuntimeSha256 = (
+    resolvedContainerRuntime.sha256 ?? ""
+  ).replace(/[^a-f0-9]/gi, "");
   const resolvedProjectBundle = await resolveBootstrapArtifactBundle({
     softwareBaseUrl,
     artifact: "project-bundle",
@@ -1093,6 +1123,10 @@ export async function buildBootstrapScripts(
   const projectBundleRemote = `${bootstrapRoot}/tmp/project-bundle.tar.xz`;
   const projectHostVersion = resolvedHostBundle.version || "latest";
   const projectHostBundleRemote = `${bootstrapRoot}/tmp/project-host-bundle.tar.xz`;
+  const containerRuntimeVersion = resolvedContainerRuntime.version || "latest";
+  const containerRuntimeRoot = "/opt/cocalc/container-runtime";
+  const containerRuntimeDir = `${containerRuntimeRoot}/${containerRuntimeVersion}`;
+  const containerRuntimeRemote = `${bootstrapRoot}/tmp/container-runtime.tar.xz`;
   const toolsVersion = resolvedTools.version || "latest";
   const toolsRoot = "/opt/cocalc/tools";
   const toolsDir = `${toolsRoot}/${toolsVersion}`;
@@ -1105,6 +1139,9 @@ export async function buildBootstrapScripts(
   }
   if (!projectBundleUrl) {
     throw new Error("project bundle URL could not be resolved");
+  }
+  if (!containerRuntimeUrl) {
+    throw new Error("container runtime URL could not be resolved");
   }
   if (!toolsUrl) {
     throw new Error("project tools URL could not be resolved");
@@ -1419,6 +1456,12 @@ export async function buildBootstrapScripts(
     projectHostCurrent,
     projectHostBin,
     projectHostVersion,
+    containerRuntimeUrl,
+    containerRuntimeSha256,
+    containerRuntimeRoot,
+    containerRuntimeDir,
+    containerRuntimeRemote,
+    containerRuntimeVersion,
     projectBundleUrl,
     projectBundleSha256,
     projectBundlesRoot,
@@ -1602,6 +1645,7 @@ cat <<EOF_COCALC_BOOTSTRAP_HOST_FACTS > "$BOOTSTRAP_DIR/bootstrap-host-facts.jso
   "data_disk_candidates": "${scripts.dataDiskCandidates}",
   "shared_scratch_disk_devices": "${scripts.sharedScratchDiskDevices}",
   "project_host_bundle_root": "${scripts.projectHostBundlesRoot}",
+  "container_runtime_root": "${scripts.containerRuntimeRoot}",
   "project_bundle_root": "${scripts.projectBundlesRoot}",
   "tools_root": "${scripts.toolsRoot}"
 }
@@ -1641,6 +1685,15 @@ cat <<EOF_COCALC_BOOTSTRAP_DESIRED_STATE > "$BOOTSTRAP_DIR/bootstrap-desired-sta
     "dir": "${scripts.projectHostBundleDir}",
     "current": "${scripts.projectHostCurrent}",
     "version": "${scripts.projectHostVersion}"
+  },
+  "container_runtime_bundle": {
+    "url": "${scripts.containerRuntimeUrl}",
+    "sha256": "${scripts.containerRuntimeSha256}",
+    "remote": "${scripts.containerRuntimeRemote}",
+    "root": "${scripts.containerRuntimeRoot}",
+    "dir": "${scripts.containerRuntimeDir}",
+    "current": "${scripts.containerRuntimeRoot}/current",
+    "version": "${scripts.containerRuntimeVersion}"
   },
   "project_bundle": {
     "url": "${scripts.projectBundleUrl}",

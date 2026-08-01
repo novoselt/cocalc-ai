@@ -797,6 +797,7 @@ class BootstrapConfig:
     bootstrap_token: str | None
     ca_cert_path: str | None
     bootstrap_done_paths: list[str]
+    container_runtime_bundle: BundleSpec | None = None
 
 
 def _require(condition: bool, message: str) -> None:
@@ -896,6 +897,7 @@ def load_config(bootstrap_dir: str) -> BootstrapConfig:
     _require(bool(facts), f"missing bootstrap host facts: {facts_path}")
     _require(bool(desired), f"missing bootstrap desired state: {desired_path}")
     bundle_host = desired.get("project_host_bundle") or {}
+    bundle_container_runtime = desired.get("container_runtime_bundle") or None
     bundle_project = desired.get("project_bundle") or {}
     bundle_tools = desired.get("tools_bundle") or {}
     cloudflared = desired.get("cloudflared") or {}
@@ -1081,6 +1083,35 @@ def load_config(bootstrap_dir: str) -> BootstrapConfig:
                 "bootstrap-desired-state.bootstrap_done_paths",
             )
         ],
+        container_runtime_bundle=(
+            BundleSpec(
+                url=_ensure_str(
+                    bundle_container_runtime.get("url"),
+                    "container_runtime_bundle.url",
+                ),
+                sha256=bundle_container_runtime.get("sha256") or None,
+                remote=_ensure_str(
+                    bundle_container_runtime.get("remote"),
+                    "container_runtime_bundle.remote",
+                ),
+                root=_ensure_str(
+                    bundle_container_runtime.get("root"),
+                    "container_runtime_bundle.root",
+                ),
+                dir=_ensure_str(
+                    bundle_container_runtime.get("dir"),
+                    "container_runtime_bundle.dir",
+                ),
+                current=_ensure_str(
+                    bundle_container_runtime.get("current"),
+                    "container_runtime_bundle.current",
+                ),
+                version=bundle_container_runtime.get("version"),
+                manifest_url=bundle_container_runtime.get("manifest_url") or None,
+            )
+            if bundle_container_runtime
+            else None
+        ),
     )
 
 
@@ -1509,6 +1540,11 @@ def build_host_facts(cfg: BootstrapConfig) -> dict[str, Any]:
         "runtime_user_host_uid": desired_uid,
         "runtime_user_host_gid": desired_gid,
         "project_host_bundle_root": cfg.project_host_bundle.root,
+        "container_runtime_root": (
+            cfg.container_runtime_bundle.root
+            if cfg.container_runtime_bundle is not None
+            else None
+        ),
         "project_bundle_root": cfg.project_bundle.root,
         "tools_root": cfg.tools_bundle.root,
     }
@@ -1524,7 +1560,7 @@ def build_bootstrap_connection(cfg: BootstrapConfig) -> dict[str, Any]:
 
 
 def build_desired_state(cfg: BootstrapConfig) -> dict[str, Any]:
-    return {
+    state = {
         "schema_version": STATE_SCHEMA_VERSION,
         "recorded_at": now_iso(),
         "bootstrap": {
@@ -1591,6 +1627,18 @@ def build_desired_state(cfg: BootstrapConfig) -> dict[str, Any]:
             "grace_period_seconds": cfg.cloudflared.grace_period_seconds,
         },
     }
+    if cfg.container_runtime_bundle is not None:
+        state["container_runtime_bundle"] = {
+            "url": cfg.container_runtime_bundle.url,
+            "sha256": cfg.container_runtime_bundle.sha256,
+            "remote": cfg.container_runtime_bundle.remote,
+            "version": cfg.container_runtime_bundle.version,
+            "root": cfg.container_runtime_bundle.root,
+            "dir": cfg.container_runtime_bundle.dir,
+            "current": cfg.container_runtime_bundle.current,
+            "manifest_url": cfg.container_runtime_bundle.manifest_url,
+        }
+    return state
 
 
 def refresh_installed_state(cfg: BootstrapConfig, base: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1609,6 +1657,11 @@ def refresh_installed_state(cfg: BootstrapConfig, base: dict[str, Any] | None = 
         "project_host_bundle_version": symlink_version(cfg.project_host_bundle.current),
         "project_bundle_version": symlink_version(cfg.project_bundle.current),
         "tools_bundle_version": symlink_version(cfg.tools_bundle.current),
+        "container_runtime_version": (
+            symlink_version(cfg.container_runtime_bundle.current)
+            if cfg.container_runtime_bundle is not None
+            else None
+        ),
     }
     return state
 
@@ -2571,6 +2624,11 @@ def prune_bundle_versions(
         cfg.project_host_bundle.root,
         cfg.project_bundle.root,
         cfg.tools_bundle.root,
+        *(
+            [cfg.container_runtime_bundle.root]
+            if cfg.container_runtime_bundle is not None
+            else []
+        ),
     ]
     runtime_paths = [path for path in runtime_paths if Path(path).exists()]
     if not runtime_paths:
@@ -9407,6 +9465,11 @@ def run_reconcile(cfg: BootstrapConfig) -> int:
         reconcile_storage_and_containment(cfg)
         ensure_subuids(cfg)
         ensure_runtime_user_manager(cfg)
+        if cfg.container_runtime_bundle is not None:
+            report_bootstrap_status(
+                cfg, "running", "Installing container runtime"
+            )
+            extract_bundle(cfg, cfg.container_runtime_bundle)
         configure_podman(cfg)
         verify_runtime_user_contract(cfg)
         write_env(cfg, image_size_gb)
@@ -9518,7 +9581,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--config", help=argparse.SUPPRESS)
     parser.add_argument(
         "--only",
-        help="Comma-separated subset (project_bundle, project_host_bundle, tools_bundle, cloudflared)",
+        help="Comma-separated subset (container_runtime_bundle, project_bundle, project_host_bundle, tools_bundle, cloudflared)",
     )
     args = parser.parse_args(argv)
     bootstrap_dir = args.bootstrap_dir
@@ -9541,6 +9604,11 @@ def main(argv: list[str]) -> int:
                     extract_bundle(cfg, cfg.project_host_bundle)
                     write_wrapper(cfg)
                     write_helpers(cfg)
+                if (
+                    "container_runtime_bundle" in only
+                    and cfg.container_runtime_bundle is not None
+                ):
+                    extract_bundle(cfg, cfg.container_runtime_bundle)
                 if "project_bundle" in only:
                     extract_bundle(cfg, cfg.project_bundle)
                 if "tools_bundle" in only:
