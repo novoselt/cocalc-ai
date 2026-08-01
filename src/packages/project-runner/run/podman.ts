@@ -2655,10 +2655,11 @@ async function stopUnlocked({ project_id }: { project_id: string }) {
           name,
         });
       }
-      // A fully stopped project must release every overlay lease. Otherwise a
-      // stale merged mount can survive a failed start or snapshot restore and
-      // mask the correct lowerdir on the next start.
-      await unmountAllRootFs(project_id);
+      // Release every overlay lease, but do not synchronously force a kernel
+      // unmount while holding the project lifecycle lock. A quick restart can
+      // cancel the delayed disposal and reuse the image-validated mount;
+      // otherwise the lease manager detaches it after its grace period.
+      await unmountAllRootFs(project_id, { immediate: false });
       await cleanupProjectSecretsHostPath(project_id);
       await cleanupProjectCgroup(project_id);
     } catch (err) {

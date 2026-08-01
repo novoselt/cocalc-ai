@@ -401,7 +401,9 @@ describe("project-runner podman orphan fallback", () => {
         ],
       }),
     );
-    expect(mockUnmountAll).toHaveBeenCalledWith(project1);
+    expect(mockUnmountAll).toHaveBeenCalledWith(project1, {
+      immediate: false,
+    });
   });
 
   it("force-kills a live project when podman rm reports success but conmon is still alive", async () => {
@@ -479,7 +481,9 @@ describe("project-runner podman orphan fallback", () => {
         ],
       }),
     );
-    expect(mockUnmountAll).toHaveBeenCalledWith(project1);
+    expect(mockUnmountAll).toHaveBeenCalledWith(project1, {
+      immediate: false,
+    });
   });
 
   it("force-kills a live project when podman rm times out and the retry still leaves conmon alive", async () => {
@@ -543,7 +547,9 @@ describe("project-runner podman orphan fallback", () => {
     expect(processKillSpy).toHaveBeenCalledWith(-500, "SIGKILL");
     expect(processKillSpy).toHaveBeenCalledWith(501, "SIGKILL");
     expect(processKillSpy).toHaveBeenCalledWith(-501, "SIGKILL");
-    expect(mockUnmountAll).toHaveBeenCalledWith(project1);
+    expect(mockUnmountAll).toHaveBeenCalledWith(project1, {
+      immediate: false,
+    });
   });
 
   it("force-kills every duplicate main conmon tree for one project", async () => {
@@ -606,7 +612,9 @@ describe("project-runner podman orphan fallback", () => {
         ],
       }),
     );
-    expect(mockUnmountAll).toHaveBeenCalledWith(project1);
+    expect(mockUnmountAll).toHaveBeenCalledWith(project1, {
+      immediate: false,
+    });
   });
 
   it("uses caller-provided host ports when starting a project", async () => {
