@@ -2,7 +2,10 @@ import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
 import type { Host, HostPressureZone } from "@cocalc/conat/hub/api/hosts";
 import type { ManagedProjectEgressOverride } from "@cocalc/conat/files/file-server";
-import type { HostControlApi } from "@cocalc/conat/project-host/api";
+import type {
+  HostControlApi,
+  HostProjectStartMetadata,
+} from "@cocalc/conat/project-host/api";
 import sshKeys from "../projects/get-ssh-keys";
 import { notifyProjectHostUpdate } from "../conat/route-project";
 import { getConfiguredBayId } from "../bay-config";
@@ -46,6 +49,9 @@ import type {
 } from "@cocalc/conat/hub/api/hosts";
 import { applyHostRuntimePolicyToRunQuota } from "./run-quota";
 import { reconcileProjectAppPrivateHostnamesForProject } from "@cocalc/server/app-private-hostnames";
+import { getProjectSecretsRuntimeCache } from "@cocalc/server/projects/project-secrets";
+import type { ProjectEnv } from "@cocalc/conat/hub/api/projects";
+import type { ProjectSecretsRuntimeCache } from "@cocalc/util/project-secrets";
 
 const log = getLogger("server:project-host:control");
 // Project starts can include large restores, so allow a long RPC timeout.
@@ -141,6 +147,9 @@ export type ProjectMeta = {
   authorized_keys?: string;
   run_quota?: any;
   run_quota_revision?: number;
+  env?: ProjectEnv;
+  autostart_enabled?: boolean | null;
+  project_secrets_cache?: ProjectSecretsRuntimeCache;
 };
 
 const pool = () => getPool();
@@ -511,7 +520,10 @@ export function shouldSkipStartForSnapshot({
   return { skip: false };
 }
 
-export async function loadProject(project_id: string): Promise<ProjectMeta> {
+export async function loadProject(
+  project_id: string,
+  { include_start_metadata = false }: { include_start_metadata?: boolean } = {},
+): Promise<ProjectMeta> {
   const { rows } = await pool().query(
     "SELECT title, users, rootfs_image as image, host_id, region, owning_bay_id, run_quota FROM projects WHERE project_id=$1",
     [project_id],
@@ -520,10 +532,12 @@ export async function loadProject(project_id: string): Promise<ProjectMeta> {
   let run_quota_revision = 0;
   try {
     const revision = await pool().query(
-      "SELECT COALESCE(run_quota_revision, 0)::bigint AS run_quota_revision FROM projects WHERE project_id=$1",
+      "SELECT COALESCE(run_quota_revision, 0)::bigint AS run_quota_revision, env, autostart_enabled FROM projects WHERE project_id=$1",
       [project_id],
     );
     run_quota_revision = Number(revision.rows[0]?.run_quota_revision ?? 0);
+    rows[0].env = revision.rows[0]?.env;
+    rows[0].autostart_enabled = revision.rows[0]?.autostart_enabled;
   } catch (err) {
     // Compatibility with a control plane whose additive schema migration has
     // not run yet. Revision zero is accepted only until versioned state lands.
@@ -545,6 +559,9 @@ export async function loadProject(project_id: string): Promise<ProjectMeta> {
     image,
     authorized_keys,
     run_quota_revision,
+    project_secrets_cache: include_start_metadata
+      ? await getProjectSecretsRuntimeCache({ project_id })
+      : undefined,
   };
 }
 
@@ -987,7 +1004,9 @@ export async function startProjectOnHost(
     }
     markHostControl("cpu_policy", phaseStarted);
     phaseStarted = Date.now();
-    const meta = await loadProject(project_id);
+    const meta = await loadProject(project_id, {
+      include_start_metadata: true,
+    });
     markHostControl("load_project", phaseStarted);
     phaseStarted = Date.now();
     const run_quota = await applyHostRuntimePolicyToRunQuota(
@@ -1007,20 +1026,31 @@ export async function startProjectOnHost(
     }
     markHostControl("restore_metadata", phaseStarted);
     const restore = rows[0]?.backup_repo_id ? "auto" : "none";
-    try {
-      const startRequest: Parameters<HostControlApi["startProject"]>[0] = {
-        project_id,
+    const startRequest: Parameters<HostControlApi["startProject"]>[0] = {
+      project_id,
+      authorized_keys: meta.authorized_keys,
+      run_quota,
+      run_quota_revision: Number(meta.run_quota_revision ?? 0),
+      image: meta.image,
+      restore,
+      restore_backup_id: explicitRestoreBackupId || undefined,
+      lro_op_id: opts?.lro_op_id,
+      start_metadata: {
+        title: meta.title,
+        users: meta.users,
+        image: meta.image,
         authorized_keys: meta.authorized_keys,
         run_quota,
         run_quota_revision: Number(meta.run_quota_revision ?? 0),
-        image: meta.image,
-        restore,
-        restore_backup_id: explicitRestoreBackupId || undefined,
-        lro_op_id: opts?.lro_op_id,
-        ...(opts?.managed_egress_override
-          ? { managed_egress_override: opts.managed_egress_override }
-          : {}),
-      };
+        env: meta.env,
+        autostart_enabled: meta.autostart_enabled,
+        project_secrets_cache: meta.project_secrets_cache,
+      } satisfies HostProjectStartMetadata,
+      ...(opts?.managed_egress_override
+        ? { managed_egress_override: opts.managed_egress_override }
+        : {}),
+    };
+    try {
       phaseStarted = Date.now();
       let response;
       if (typeof client.startProjectIdempotent === "function") {
@@ -1086,18 +1116,7 @@ export async function startProjectOnHost(
           host_id: placement.host_id,
           next_disk_gb: autoGrow.next_disk_gb,
         });
-        const retry = await client.startProject({
-          project_id,
-          authorized_keys: meta.authorized_keys,
-          run_quota,
-          image: meta.image,
-          restore,
-          restore_backup_id: explicitRestoreBackupId || undefined,
-          lro_op_id: opts?.lro_op_id,
-          ...(opts?.managed_egress_override
-            ? { managed_egress_override: opts.managed_egress_override }
-            : {}),
-        });
+        const retry = await client.startProject(startRequest);
         const saveRunningStateStarted = Date.now();
         await saveProjectStateSnapshot(project_id, retry.state ?? "running", {
           runtime_started: true,

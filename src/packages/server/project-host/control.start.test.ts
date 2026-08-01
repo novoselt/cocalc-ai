@@ -28,6 +28,7 @@ let interBayHostListMock: jest.Mock;
 let interBayHostControlCreateProjectMock: jest.Mock;
 let interBayHostControlStartProjectMock: jest.Mock;
 let getLroMock: jest.Mock;
+let getProjectSecretsRuntimeCacheMock: jest.Mock;
 
 jest.mock("@cocalc/backend/logger", () => ({
   __esModule: true,
@@ -132,6 +133,12 @@ jest.mock("@cocalc/server/projects/rootfs-state", () => ({
     getCurrentProjectRootfsBindingMock(...args),
 }));
 
+jest.mock("@cocalc/server/projects/project-secrets", () => ({
+  __esModule: true,
+  getProjectSecretsRuntimeCache: (...args: any[]) =>
+    getProjectSecretsRuntimeCacheMock(...args),
+}));
+
 jest.mock("./run-quota", () => ({
   __esModule: true,
   applyHostRuntimePolicyToRunQuota: jest.fn(
@@ -210,6 +217,10 @@ describe("startProjectOnHost placement", () => {
       state: "running",
     }));
     getLroMock = jest.fn(async () => undefined);
+    getProjectSecretsRuntimeCacheMock = jest.fn(async () => ({
+      generation: 0,
+      secrets: {},
+    }));
     releaseMock = jest.fn();
     resolveHostBayMock = jest.fn(async (host_id: string) => ({
       bay_id: host_id === "host-2" ? "bay-7" : "bay-0",
@@ -573,14 +584,22 @@ describe("startProjectOnHost placement", () => {
       run_quota: {},
       run_quota_revision: 0,
     });
-    expect(startProjectMock).toHaveBeenCalledWith({
-      project_id: "proj-1",
-      authorized_keys: "ssh-ed25519 AAAATEST user@test",
-      run_quota: {},
-      run_quota_revision: 0,
+    expect(startProjectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: "proj-1",
+        authorized_keys: "ssh-ed25519 AAAATEST user@test",
+        run_quota: {},
+        run_quota_revision: 0,
+        image: "sagemathinc/sagemath-x86_64:10.7",
+        restore: "none",
+        lro_op_id: "op-1",
+      }),
+    );
+    expect(startProjectMock.mock.calls[0][0].start_metadata).toMatchObject({
+      title: "OCI test",
+      users: { owner: { group: "owner" } },
       image: "sagemathinc/sagemath-x86_64:10.7",
-      restore: "none",
-      lro_op_id: "op-1",
+      run_quota_revision: 0,
     });
     expect(notifyProjectHostUpdateMock).toHaveBeenCalledWith({
       project_id: "proj-1",
@@ -764,7 +783,7 @@ describe("startProjectOnHost placement", () => {
     });
     expect(interBayHostControlStartProjectMock).toHaveBeenCalledWith({
       host_id: "host-2",
-      start: {
+      start: expect.objectContaining({
         project_id: "proj-1",
         authorized_keys: "ssh-ed25519 AAAATEST user@test",
         run_quota: {},
@@ -773,7 +792,7 @@ describe("startProjectOnHost placement", () => {
         restore_backup_id: undefined,
         run_quota_revision: 0,
         lro_op_id: "op-1",
-      },
+      }),
     });
   });
 

@@ -1547,6 +1547,56 @@ describe("project host start ACP rehydrate ordering", () => {
     );
   });
 
+  it("uses metadata carried by the start RPC without calling the master", async () => {
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+    getProject.mockReturnValue({
+      image: undefined,
+      title: undefined,
+      authorized_keys: undefined,
+      run_quota: undefined,
+    });
+    getMasterConatClient.mockReturnValue({ nats: true });
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({
+      project_id,
+      start_metadata: {
+        title: "dev",
+        users: { "test-account-id": { group: "owner" } },
+        image: customImage,
+        authorized_keys: "ssh-ed25519 AAAATEST user@test",
+        run_quota: { memory_limit: 1234 },
+        env: { FOO: "bar" },
+      },
+    });
+
+    expect(callHub).not.toHaveBeenCalled();
+    expect(runnerApi.start).toHaveBeenCalledWith({
+      project_id,
+      config: expect.objectContaining({
+        image: customImage,
+        authorized_keys: "ssh-ed25519 AAAATEST user@test",
+        env: { FOO: "bar" },
+      }),
+    });
+    expect(upsertProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id,
+        title: "dev",
+        image: customImage,
+      }),
+    );
+  });
+
   it("rejects local autostarts when master metadata disables automatic starts", async () => {
     const runnerApi = {
       start: jest.fn(async () => ({

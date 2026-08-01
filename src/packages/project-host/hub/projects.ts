@@ -46,6 +46,7 @@ import type {
 import type { CodexUsageStatusInfo } from "@cocalc/conat/hub/api/system";
 import type { MembershipEffectiveLimits } from "@cocalc/conat/hub/api/purchases";
 import type { ProjectSecretsRuntimeCache } from "@cocalc/util/project-secrets";
+import type { HostProjectStartMetadata } from "@cocalc/conat/project-host/api";
 import type { client as projectRunnerClient } from "@cocalc/conat/project/runner/run";
 import { getCodexAppServerAccountStatus } from "@cocalc/ai/acp";
 import {
@@ -660,6 +661,7 @@ async function resolveStartMetadata({
   run_quota_revision,
   image,
   autostart,
+  start_metadata,
 }: {
   project_id: string;
   authorized_keys?: string;
@@ -667,6 +669,7 @@ async function resolveStartMetadata({
   run_quota_revision?: number;
   image?: string;
   autostart?: boolean;
+  start_metadata?: HostProjectStartMetadata;
 }): Promise<StartMetadata> {
   const existing = getProject(project_id);
   const cachedSecretNames = (existing as any)?.secret_names;
@@ -708,10 +711,11 @@ async function resolveStartMetadata({
     resolved.secrets == null ||
     (autostart && resolved.autostart_enabled == null) ||
     !existing?.title;
-  if (needsMaster) {
+  if (needsMaster || start_metadata != null) {
     try {
       const authoritative =
-        await loadProjectStartMetadataFromMaster(project_id);
+        start_metadata ??
+        (await loadProjectStartMetadataFromMaster(project_id));
       if (authoritative) {
         let secrets = authoritative.secrets;
         let secret_names =
@@ -1760,6 +1764,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     autostart,
     managed_egress_override,
     skip_if_running,
+    start_metadata,
   }: {
     project_id: string;
     authorized_keys?: string;
@@ -1772,6 +1777,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     autostart?: boolean;
     managed_egress_override?: ManagedProjectEgressOverride;
     skip_if_running?: boolean;
+    start_metadata?: HostProjectStartMetadata;
   }): Promise<{
     op_id: string;
     scope_type: "project";
@@ -1840,6 +1846,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         run_quota_revision,
         image,
         autostart,
+        start_metadata,
       });
       const startMetadata = resolved;
       if (autostart && startMetadata.autostart_enabled === false) {
