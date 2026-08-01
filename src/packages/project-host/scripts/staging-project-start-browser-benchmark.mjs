@@ -228,6 +228,9 @@ try {
         throw new Error(`could not correlate browser start for ${projectId}`);
       }
       const phaseTimings = operation.result?.phase_timings_ms ?? {};
+      const requestDispatchMs =
+        Date.parse(operation.created_at) - requestedAtMs;
+      const backendElapsedMs = Number(phaseTimings["control.total"] ?? 0);
       const sample = {
         scenario: options.scenario,
         round,
@@ -238,9 +241,11 @@ try {
         browser_failed: failed,
         operation_created_at: operation.created_at,
         operation_finished_at: operation.finished_at,
-        request_dispatch_ms: Date.parse(operation.created_at) - requestedAtMs,
-        observation_lag_ms:
-          browserElapsedMs - Number(phaseTimings["control.total"] ?? 0),
+        request_dispatch_ms: requestDispatchMs,
+        // Retain the original aggregate for comparison with earlier runs.
+        observation_lag_ms: browserElapsedMs - backendElapsedMs,
+        post_backend_observation_ms:
+          browserElapsedMs - requestDispatchMs - backendElapsedMs,
         phase_timings_ms: phaseTimings,
       };
       samples.push(sample);
@@ -270,6 +275,12 @@ process.stdout.write(
       ),
       observation_lag_ms: distribution(
         samples.map((sample) => sample.observation_lag_ms),
+      ),
+      request_dispatch_ms: distribution(
+        samples.map((sample) => sample.request_dispatch_ms),
+      ),
+      post_backend_observation_ms: distribution(
+        samples.map((sample) => sample.post_backend_observation_ms),
       ),
     },
     null,
