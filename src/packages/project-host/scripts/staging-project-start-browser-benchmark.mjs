@@ -66,7 +66,7 @@ function parseArgs(argv) {
   return options;
 }
 
-async function runCli(api, args) {
+async function runCliOnce(api, args) {
   return await new Promise((resolvePromise, reject) => {
     const child = spawn(
       process.execPath,
@@ -113,6 +113,30 @@ async function runCli(api, args) {
       resolvePromise(response);
     });
   });
+}
+
+function isTransientCliFailure(err) {
+  return /(?:socket has been disconnected|\bdisconnected\b|ECONNRESET|ECONNREFUSED|no responders|no subscribers|\b503\b|timed? out|timeout)/i.test(
+    `${err}`,
+  );
+}
+
+async function runCli(api, args) {
+  let lastError;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      return await runCliOnce(api, args);
+    } catch (err) {
+      lastError = err;
+      if (!isTransientCliFailure(err) || attempt === 5) throw err;
+      const delayMs = 250 * 2 ** (attempt - 1);
+      process.stderr.write(
+        `transient CLI failure; retrying in ${delayMs}ms (${attempt}/5): ${err}\n`,
+      );
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
 }
 
 function percentile(values, fraction) {
