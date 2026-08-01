@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260801-v21"
+HELPER_SCHEMA_VERSION = "20260801-v22"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -3307,6 +3307,7 @@ MAINTENANCE_CGROUP_MEMORY_HIGH="$((4 * 1024 * 1024 * 1024))"
 MAINTENANCE_CGROUP_MEMORY_MAX="$((8 * 1024 * 1024 * 1024))"
 MAINTENANCE_CGROUP_PIDS_MAX="256"
 PROJECT_STARTUP_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-project-startup"
+PROJECT_STARTUP_CREATE_CGROUP_DEFAULT="${PROJECT_STARTUP_CGROUP_DEFAULT}/create"
 PROJECT_STARTUP_CGROUP_CPU_MAX="200000 100000"
 PROJECT_STARTUP_CGROUP_CPU_WEIGHT="10000"
 PROJECT_STARTUP_CGROUP_IO_WEIGHT="10000"
@@ -3410,6 +3411,14 @@ project_legacy_cgroup() {
 
 project_cgroup() {
   printf '%s/project-%s\n' "$PROJECT_POOL_CGROUP_DEFAULT" "$1"
+}
+
+project_startup_runtime_cgroup() {
+  printf '%s/project-%s\n' "$PROJECT_STARTUP_CGROUP_DEFAULT" "$1"
+}
+
+project_startup_runtime_cgroup_relative_path() {
+  printf '%s/project-%s\n' "${PROJECT_STARTUP_CGROUP_DEFAULT#/sys/fs/cgroup}" "$1"
 }
 
 project_cgroup_relative_path() {
@@ -3546,9 +3555,26 @@ configure_maintenance_cgroup() {
 }
 
 configure_project_startup_cgroup() {
-  local fields mode
+  local fields mode pid attempt remaining
   enable_cgroup_controllers /sys/fs/cgroup
   mkdir -p "$PROJECT_STARTUP_CGROUP_DEFAULT"
+  mkdir -p "$PROJECT_STARTUP_CREATE_CGROUP_DEFAULT"
+  # Helper v21 attached podman-create launchers directly to the parent. Move
+  # any mixed-version processes into the compatibility leaf before enabling
+  # controllers; cgroup v2 forbids internal processes in a delegated parent.
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      printf '%s\n' "$pid" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cgroup.procs" || true
+    done < "${PROJECT_STARTUP_CGROUP_DEFAULT}/cgroup.procs"
+    remaining="$(cat "${PROJECT_STARTUP_CGROUP_DEFAULT}/cgroup.procs")"
+    [ -z "$remaining" ] && break
+    sleep 0.01
+  done
+  if [ -n "${remaining:-}" ]; then
+    deny "project-startup-internal-processes-remain" "$remaining"
+  fi
+  enable_cgroup_controllers "$PROJECT_STARTUP_CGROUP_DEFAULT"
   [ -w "${PROJECT_STARTUP_CGROUP_DEFAULT}/cpu.max" ] &&
     printf '%s\n' "$PROJECT_STARTUP_CGROUP_CPU_MAX" > "${PROJECT_STARTUP_CGROUP_DEFAULT}/cpu.max"
   [ -w "${PROJECT_STARTUP_CGROUP_DEFAULT}/cpu.weight" ] &&
@@ -3570,11 +3596,36 @@ configure_project_startup_cgroup() {
   if [ "$mode" = "enforce" ]; then
     verify_io_max "$PROJECT_STARTUP_CGROUP_DEFAULT" "startup"
   fi
+  [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cpu.max" ] &&
+    printf 'max 100000\n' > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cpu.max"
+  [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cpu.weight" ] &&
+    printf '%s\n' "$PROJECT_STARTUP_CGROUP_CPU_WEIGHT" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cpu.weight"
+  [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/io.weight" ] &&
+    printf 'default %s\n' "$PROJECT_STARTUP_CGROUP_IO_WEIGHT" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/io.weight"
+  [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high" ] &&
+    printf '%s\n' "$PROJECT_STARTUP_CGROUP_MEMORY_HIGH" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high"
+  [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.max" ] &&
+    printf '%s\n' "$PROJECT_STARTUP_CGROUP_MEMORY_MAX" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.max"
+  [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.swap.max" ] &&
+    printf '0\n' > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.swap.max"
+  [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/pids.max" ] &&
+    printf '%s\n' "$PROJECT_STARTUP_CGROUP_PIDS_MAX" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/pids.max"
+  apply_io_max "$PROJECT_STARTUP_CREATE_CGROUP_DEFAULT" "startup" "$mode"
+  if [ "$mode" = "enforce" ]; then
+    verify_io_max "$PROJECT_STARTUP_CREATE_CGROUP_DEFAULT" "startup"
+  fi
 }
 
 project_startup_cgroup_ready() {
+  local controller
   [ -d "$PROJECT_STARTUP_CGROUP_DEFAULT" ] || return 1
+  [ -d "$PROJECT_STARTUP_CREATE_CGROUP_DEFAULT" ] || return 1
   [ -w "${PROJECT_STARTUP_CGROUP_DEFAULT}/cgroup.procs" ] || return 1
+  [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cgroup.procs" ] || return 1
+  [ -z "$(cat "${PROJECT_STARTUP_CGROUP_DEFAULT}/cgroup.procs" 2>/dev/null || true)" ] || return 1
+  for controller in cpu memory pids io; do
+    grep -qw "$controller" "${PROJECT_STARTUP_CGROUP_DEFAULT}/cgroup.subtree_control" || return 1
+  done
   [ "$(cat "${PROJECT_STARTUP_CGROUP_DEFAULT}/cpu.max" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_CPU_MAX" ] || return 1
   [ "$(cat "${PROJECT_STARTUP_CGROUP_DEFAULT}/cpu.weight" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_CPU_WEIGHT" ] || return 1
   [ "$(awk '$1 == "default" {print $2}' "${PROJECT_STARTUP_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_IO_WEIGHT" ] || return 1
@@ -3582,6 +3633,13 @@ project_startup_cgroup_ready() {
   [ "$(cat "${PROJECT_STARTUP_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_MEMORY_MAX" ] || return 1
   [ "$(cat "${PROJECT_STARTUP_CGROUP_DEFAULT}/memory.swap.max" 2>/dev/null || true)" = "0" ] || return 1
   [ "$(cat "${PROJECT_STARTUP_CGROUP_DEFAULT}/pids.max" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_PIDS_MAX" ] || return 1
+  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cpu.max" 2>/dev/null || true)" = "max 100000" ] || return 1
+  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cpu.weight" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_CPU_WEIGHT" ] || return 1
+  [ "$(awk '$1 == "default" {print $2}' "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_IO_WEIGHT" ] || return 1
+  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_MEMORY_HIGH" ] || return 1
+  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_MEMORY_MAX" ] || return 1
+  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.swap.max" 2>/dev/null || true)" = "0" ] || return 1
+  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/pids.max" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_PIDS_MAX" ] || return 1
   return 0
 }
 
@@ -3774,6 +3832,24 @@ configure_project_cgroup() {
   printf '0\n' > "$cgroup/memory.oom.group"
 }
 
+configure_project_startup_runtime_leaf() {
+  local cgroup="$1" memory_max="$2" memory_high="$3" memory_low="$4"
+  local memory_swap_max="$5" pids_max="$6" cpu_quota="$7"
+  local cpu_period="$8" startup_cpu_weight="$9"
+  local startup_io_weight="${10}" io_class="${11:-standard}"
+  configure_project_cgroup \
+    "$cgroup" "$memory_max" "$memory_high" "$memory_low" \
+    "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
+    "$startup_cpu_weight" "$startup_io_weight" "$io_class"
+  # Enforced policy normally replaces the caller's requested weight. During
+  # startup the leaf is also bounded by the two-CPU/tight-I/O parent, so give
+  # it first service within that reserve without weakening any hard cap.
+  printf '%s\n' "$startup_cpu_weight" > "$cgroup/cpu.weight"
+  if [ -w "$cgroup/io.weight" ]; then
+    printf 'default %s\n' "$startup_io_weight" > "$cgroup/io.weight"
+  fi
+}
+
 project_pid_is_in_pool() {
   local project_id="$1" pid="$2" actual expected
   actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
@@ -3782,6 +3858,15 @@ project_pid_is_in_pool() {
     "$expected"|"$expected"/*) return 0 ;;
   esac
   return 1
+}
+
+verify_project_pid_in_startup_runtime() {
+  local project_id="$1" pid="$2" actual expected
+  actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
+  expected="$(project_startup_runtime_cgroup_relative_path "$project_id")"
+  [ "$actual" = "$expected" ] ||
+    deny "project-startup-runtime-cgroup-verification-failed" \
+      "pid=${pid},expected=${expected},actual=${actual:-missing}"
 }
 
 verify_project_pid_in_pool() {
@@ -3910,6 +3995,30 @@ attach_pid_tree_to_project_pool_storage() {
       pending="${pending:+${pending} }${child}"
     done
   done
+}
+
+move_project_startup_runtime_to_pool() {
+  local project_id="$1" pool="$2" source pid attempt remaining
+  source="$(project_startup_runtime_cgroup "$project_id")"
+  [ -d "$source" ] || return 1
+  # Move every process from the root-owned leaf, rather than relying only on a
+  # process-tree snapshot. Once init is moved, new children inherit the final
+  # leaf; retries close the small fork race for conmon and networking helpers.
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      printf '%s\n' "$pid" > "$pool/cgroup.procs" || true
+    done < "$source/cgroup.procs"
+    remaining="$(cat "$source/cgroup.procs" 2>/dev/null || true)"
+    [ -z "$remaining" ] && break
+    sleep 0.01
+  done
+  [ -z "${remaining:-}" ] ||
+    deny "project-startup-runtime-processes-remain" \
+      "project=${project_id},pids=${remaining}"
+  rmdir "$source" 2>/dev/null ||
+    deny "project-startup-runtime-cleanup-failed" "$project_id"
+  return 0
 }
 
 find_project_conmon_pids() {
@@ -4118,6 +4227,11 @@ emit_project_startup_network_rules() {
   printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto udp ct state new limit rate over %s/second burst %s packets counter drop comment "%s-udp"\n' \
     "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
     "$PROJECT_UDP_NEW_RATE" "$PROJECT_UDP_NEW_BURST" "$marker"
+  # A temporary runtime leaf has no project-specific policy identity. Deny
+  # all traffic until verified migration into the final per-project cgroup;
+  # retries made by the project daemon resume under its normal/exam policy.
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" counter drop comment "%s-deny"\n' \
+    "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" "$marker"
 }
 
 emit_project_metadata_rules() {
@@ -4172,7 +4286,7 @@ project_cgroup_has_processes() {
 }
 
 verify_project_network_limits() {
-  local project_id="$1" marker rules metadata_ipv4_count metadata_ipv6_count tcp_count udp_count disabled_dns_count disabled_local_count disabled_established_count disabled_reject_count policy pid found=0 limits
+  local project_id="$1" marker rules metadata_ipv4_count metadata_ipv6_count startup_deny_count tcp_count udp_count disabled_dns_count disabled_local_count disabled_established_count disabled_reject_count policy pid found=0 limits
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
   require_project_network_tools
   marker="$(project_network_rule_marker "$project_id")"
@@ -4182,6 +4296,7 @@ verify_project_network_limits() {
   fi
   metadata_ipv4_count="$(grep -Fc 'comment "cocalc-project-network-metadata-ipv4"' <<< "$rules" || true)"
   metadata_ipv6_count="$(grep -Fc 'comment "cocalc-project-network-metadata-ipv6"' <<< "$rules" || true)"
+  startup_deny_count="$(grep -Fc 'comment "cocalc-project-network-startup-deny"' <<< "$rules" || true)"
   tcp_count="$(grep -Fc "comment \\\"${marker}-tcp\\\"" <<< "$rules" || true)"
   udp_count="$(grep -Fc "comment \\\"${marker}-udp\\\"" <<< "$rules" || true)"
   disabled_dns_count="$(grep -Fc "comment \\\"${marker}-disabled-dns\\\"" <<< "$rules" || true)"
@@ -4189,8 +4304,8 @@ verify_project_network_limits() {
   disabled_established_count="$(grep -Fc "comment \\\"${marker}-disabled-established\\\"" <<< "$rules" || true)"
   disabled_reject_count="$(grep -Fc "comment \\\"${marker}-disabled-reject\\\"" <<< "$rules" || true)"
   policy="$(project_network_policy "$project_id")"
-  if [ "$metadata_ipv4_count" -ne 1 ] || [ "$metadata_ipv6_count" -ne 1 ]; then
-    echo "project metadata network rules are missing or duplicated: metadata_ipv4=${metadata_ipv4_count} metadata_ipv6=${metadata_ipv6_count}" >&2
+  if [ "$metadata_ipv4_count" -ne 1 ] || [ "$metadata_ipv6_count" -ne 1 ] || [ "$startup_deny_count" -ne 1 ]; then
+    echo "project shared network rules are missing or duplicated: metadata_ipv4=${metadata_ipv4_count} metadata_ipv6=${metadata_ipv6_count} startup_deny=${startup_deny_count}" >&2
     return 1
   fi
   if [ "$policy" = "disabled" ]; then
@@ -4690,10 +4805,10 @@ case "$cmd" in
       acquire_project_cgroup_lock
       configure_project_startup_cgroup
     fi
-    printf '%s\n' "$launcher_pid" > "${PROJECT_STARTUP_CGROUP_DEFAULT}/cgroup.procs"
+    printf '%s\n' "$launcher_pid" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cgroup.procs"
     printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
     actual_startup_cgroup="$(awk -F: '$1 == "0" {print $3}' "/proc/${launcher_pid}/cgroup" 2>/dev/null || true)"
-    [ "$actual_startup_cgroup" = "${PROJECT_STARTUP_CGROUP_DEFAULT#/sys/fs/cgroup}" ] ||
+    [ "$actual_startup_cgroup" = "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT#/sys/fs/cgroup}" ] ||
       deny "project-startup-cgroup-verification-failed" "pid=${launcher_pid},actual=${actual_startup_cgroup:-missing}"
     release_project_lock
     ;;
@@ -4746,6 +4861,58 @@ case "$cmd" in
     printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
     verify_project_pid_in_pool "$project_id" "$launcher_pid"
     release_project_lock
+    ensure_project_network_rule "$project_id"
+    ;;
+  prepare-project-startup-runtime-cgroup)
+    if [ "$#" -ne 13 ]; then
+      echo "usage: cocalc-runtime-storage prepare-project-startup-runtime-cgroup <project-id> <launcher-pid> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <final-cpu-weight> <final-io-weight> <io-class> <startup-io-weight>" >&2
+      exit 2
+    fi
+    project_id="$1"
+    launcher_pid="$2"
+    memory_max="$3"
+    memory_high="$4"
+    memory_low="$5"
+    memory_swap_max="$6"
+    pids_max="$7"
+    cpu_quota="$8"
+    cpu_period="$9"
+    final_cpu_weight="${10}"
+    final_io_weight="${11}"
+    io_class="${12}"
+    startup_io_weight="${13}"
+    if ! is_project_uuid "$project_id"; then
+      deny "project-id-invalid" "$project_id"
+    fi
+    require_runtime_owned_pid "$launcher_pid"
+    if ! valid_positive_cgroup_limit "$startup_io_weight" || [ "$startup_io_weight" -gt 10000 ]; then
+      deny "project-cgroup-io-weight-invalid" "$startup_io_weight"
+    fi
+    acquire_project_cgroup_shared_lock
+    if ! project_pool_hierarchy_ready || ! project_startup_cgroup_ready; then
+      release_project_lock
+      acquire_project_cgroup_lock
+      configure_project_pool_hierarchy
+    fi
+    require_finite_project_pool_memory_max
+    pool="$(project_cgroup "$project_id")"
+    startup_pool="$(project_startup_runtime_cgroup "$project_id")"
+    if [ -d "$startup_pool" ] && project_cgroup_has_processes "$startup_pool"; then
+      deny "project-startup-runtime-already-active" "$project_id"
+    fi
+    configure_project_cgroup \
+      "$pool" "$memory_max" "$memory_high" "$memory_low" \
+      "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
+      "$final_cpu_weight" "$final_io_weight" "$io_class"
+    configure_project_startup_runtime_leaf \
+      "$startup_pool" "$memory_max" "$memory_high" "$memory_low" \
+      "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
+      "$PROJECT_STARTUP_CGROUP_CPU_WEIGHT" "$startup_io_weight" "$io_class"
+    printf '%s\n' "$launcher_pid" > "$startup_pool/cgroup.procs"
+    printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
+    verify_project_pid_in_startup_runtime "$project_id" "$launcher_pid"
+    release_project_lock
+    # This also repairs the startup deny rule before the launcher can exec.
     ensure_project_network_rule "$project_id"
     ;;
   enter-project-cgroup)
@@ -4858,7 +5025,10 @@ case "$cmd" in
         *" -n project-${project_id} "*) ;;
         *) deny "project-conmon-name-mismatch" "pid=${conmon_pid},project=${project_id}" ;;
       esac
-      if ! project_pid_is_in_pool "$project_id" "$init_pid" ||
+      startup_pool="$(project_startup_runtime_cgroup "$project_id")"
+      if [ -d "$startup_pool" ]; then
+        move_project_startup_runtime_to_pool "$project_id" "$pool"
+      elif ! project_pid_is_in_pool "$project_id" "$init_pid" ||
         ! project_pid_is_in_pool "$project_id" "$conmon_pid"; then
         attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
       fi
@@ -4877,6 +5047,8 @@ case "$cmd" in
     if [ -n "$init_pid" ]; then
       verify_project_pid_in_pool "$project_id" "$init_pid" ||
         deny "project-cgroup-verification-failed" "pid=${init_pid},project=${project_id}"
+      verify_project_pid_in_pool "$project_id" "$conmon_pid" ||
+        deny "project-cgroup-verification-failed" "pid=${conmon_pid},project=${project_id}"
     fi
     if [ -n "$final_cpu_weight" ]; then
       if ! valid_positive_cgroup_limit "$final_cpu_weight" || [ "$final_cpu_weight" -gt 10000 ]; then
@@ -5106,6 +5278,19 @@ PY
     fi
     acquire_project_cgroup_lock
     pool="$(project_cgroup "$1")"
+    startup_pool="$(project_startup_runtime_cgroup "$1")"
+    if [ -d "$startup_pool" ]; then
+      if [ -w "$startup_pool/cgroup.kill" ]; then
+        printf '1\n' > "$startup_pool/cgroup.kill" 2>/dev/null || true
+      fi
+      for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        rmdir "$startup_pool" 2>/dev/null && break
+        sleep 0.1
+      done
+      if [ -d "$startup_pool" ]; then
+        deny "project-startup-runtime-cleanup-failed" "$1"
+      fi
+    fi
     if [ -d "$pool" ]; then
       if [ -w "$pool/cgroup.kill" ]; then
         printf '1\n' > "$pool/cgroup.kill" 2>/dev/null || true

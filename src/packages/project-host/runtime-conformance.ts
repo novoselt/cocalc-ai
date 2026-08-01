@@ -31,6 +31,7 @@ const REQUIRED_PROJECT_CGROUP_COMMANDS = [
   "enter-project-cgroup",
   "attach-prepared-project-runtime",
   "prepare-project-startup-cgroup",
+  "prepare-project-startup-runtime-cgroup",
   "verify-project-io-limits",
   "verify-project-network-limits",
 ] as const;

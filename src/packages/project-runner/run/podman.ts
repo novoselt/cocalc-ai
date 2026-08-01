@@ -127,7 +127,7 @@ sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-startup-cgroup "$
 shift
 exec /usr/bin/ionice -c 2 -n 0 podman "$@"`;
 const PROJECT_CGROUP_LAUNCHER_SCRIPT = `set -euo pipefail
-sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}" "\${11}" "\${12}"
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-startup-runtime-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}" "\${11}" "\${12}"
 shift 12
 exec /usr/bin/ionice -c 2 -n 0 podman "$@"`;
 const DEFAULT_PROJECT_SCRIPT = join(
@@ -2451,9 +2451,10 @@ async function startUnlocked({
 
     logger.debug("start: launching container - ", name);
     try {
-      // Creation executes no image command, so it can safely use the bounded
-      // host-level startup reserve. The first project instruction runs only
-      // after podman start enters the fully contained per-project cgroup.
+      // Creation and initial runtime startup use separate leaves under the
+      // bounded host-level reserve. The project runtime leaf keeps all hard
+      // project limits and has no network until verified migration into the
+      // final per-project cgroup after Podman reports the container running.
       await timings.measure(
         "podman_create",
         async () =>

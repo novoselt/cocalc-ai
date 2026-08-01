@@ -1931,6 +1931,13 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("configure_maintenance_cgroup", script)
             self.assertIn("configure_project_startup_cgroup", script)
             self.assertIn("prepare-project-startup-cgroup)", script)
+            self.assertIn("prepare-project-startup-runtime-cgroup)", script)
+            self.assertIn(
+                'PROJECT_STARTUP_CREATE_CGROUP_DEFAULT="${PROJECT_STARTUP_CGROUP_DEFAULT}/create"',
+                script,
+            )
+            self.assertIn("project-startup-runtime-cgroup-verification-failed", script)
+            self.assertIn("move_project_startup_runtime_to_pool", script)
             self.assertIn("attach_maintenance_worker", script)
             self.assertIn("btrfs|btrfs-maintenance)", script)
             self.assertIn(
@@ -1954,6 +1961,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn("cocalc-project-network-startup", script)
+            self.assertIn('counter drop comment "%s-deny"', script)
             self.assertIn(
                 '"maintenance_process_count": len(maintenance_processes.split())',
                 script,
@@ -2143,6 +2151,17 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )[1].split("\n    ;;", 1)[0]
             self.assertIn('ensure_project_network_rule "$project_id"', prepare_body)
             self.assertNotIn("acquire_project_network_lock", prepare_body)
+            startup_prepare_body = script.split(
+                "  prepare-project-startup-runtime-cgroup)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertIn(
+                "configure_project_startup_runtime_leaf",
+                startup_prepare_body,
+            )
+            self.assertIn(
+                'ensure_project_network_rule "$project_id"',
+                startup_prepare_body,
+            )
             cleanup_body = script.split(
                 "  cleanup-project-cgroup)", 1
             )[1].split("\n    ;;", 1)[0]

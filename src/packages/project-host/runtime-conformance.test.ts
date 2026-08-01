@@ -22,6 +22,9 @@ describe("runtime conformance", () => {
     expect(__test__.requiredProjectCgroupCommands()).toContain(
       "attach-prepared-project-runtime",
     );
+    expect(__test__.requiredProjectCgroupCommands()).toContain(
+      "prepare-project-startup-runtime-cgroup",
+    );
   });
 
   it("distinguishes supported helper usage from an old helper", () => {

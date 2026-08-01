@@ -684,6 +684,7 @@ describe("project-runner podman orphan fallback", () => {
         launcher: expect.objectContaining({
           command: "bash",
           argsPrefix: expect.arrayContaining([
+            expect.stringContaining("prepare-project-startup-runtime-cgroup"),
             "cocalc-project-podman",
             project1,
             "10000",
