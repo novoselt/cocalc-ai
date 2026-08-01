@@ -2841,6 +2841,23 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 env_path.read_text(encoding="utf-8"),
             )
 
+    def test_write_env_preserves_explicit_quota_ledger_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = replace(
+                make_cfg(tmpdir),
+                ssh_user="",
+                env_lines=["COCALC_PROJECT_QUOTA_LEDGER_MODE=observe"],
+            )
+            env_path = Path(cfg.env_file)
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+
+            bootstrap.write_env(cfg, 10)
+
+            self.assertIn(
+                "COCALC_PROJECT_QUOTA_LEDGER_MODE=observe",
+                env_path.read_text(encoding="utf-8"),
+            )
+
     def test_write_env_migrates_legacy_project_pool_reserve_from_env_lines_to_auto(
         self,
     ) -> None:
