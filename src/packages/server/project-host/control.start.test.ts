@@ -586,7 +586,7 @@ describe("startProjectOnHost placement", () => {
     });
   });
 
-  it("re-registers a project that already has an assigned host", async () => {
+  it("does not re-register a project that already has an assigned host", async () => {
     const createProjectMock = jest.fn(async () => ({
       project_id: "proj-1",
       state: "opened",
@@ -651,17 +651,7 @@ describe("startProjectOnHost placement", () => {
       host_id: "host-1",
     });
 
-    expect(createProjectMock).toHaveBeenCalledWith({
-      project_id: "proj-1",
-      title: "Already placed",
-      users: { owner: { group: "owner" } },
-      image: "cocalc.local/rootfs/course",
-      ensure_volume: false,
-      start: false,
-      authorized_keys: "ssh-ed25519 AAAATEST user@test",
-      run_quota: {},
-      run_quota_revision: 0,
-    });
+    expect(createProjectMock).not.toHaveBeenCalled();
   });
 
   it("passes account_id when automatic placement registers a project on a remote shared-pool host", async () => {

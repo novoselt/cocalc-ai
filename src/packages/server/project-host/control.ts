@@ -754,24 +754,15 @@ export async function ensurePlacement(
       // Project is already placed. In multi-bay mode the assigned host may be
       // registered on another bay, so only reject if it cannot be resolved at all.
       if (await hostExistsAnywhere(meta.host_id)) {
-        await registerProjectOnHost({
-          project_id,
-          host_id: meta.host_id,
-          meta,
-          account_id,
-        });
         return { host_id: meta.host_id };
       }
       throw Error(
         `project is assigned to host ${meta.host_id} but it is unavailable`,
       );
     }
-    await registerProjectOnHost({
-      project_id,
-      host_id: meta.host_id,
-      meta,
-      account_id,
-    });
+    // startProject is the authoritative warm-path operation. The host resolves
+    // missing metadata from the owning bay and upserts its local project row,
+    // so an unconditional createProject RPC here only adds a network round trip.
     return { host_id: meta.host_id };
   }
 
