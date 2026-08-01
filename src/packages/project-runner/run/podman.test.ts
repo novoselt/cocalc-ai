@@ -668,6 +668,7 @@ describe("project-runner podman orphan fallback", () => {
           argsPrefix: expect.arrayContaining([
             "cocalc-project-podman",
             project1,
+            "10000",
           ]),
         }),
       }),
@@ -683,6 +684,18 @@ describe("project-runner podman orphan fallback", () => {
           "-",
           "4242",
           "4241",
+        ],
+      }),
+    );
+    expect(mockExecuteCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "sudo",
+        args: [
+          "-n",
+          "/usr/local/sbin/cocalc-runtime-storage",
+          "finish-project-startup-cgroup",
+          project1,
+          "100",
         ],
       }),
     );
@@ -719,6 +732,38 @@ describe("project-runner podman orphan fallback", () => {
         name: `project-${project1}`,
       }),
     ).rejects.toThrow("escaped project cgroup containment");
+  });
+
+  it("fails closed when the startup CPU weight cannot be restored", async () => {
+    mockProjectStartPodman(project1);
+    mockExecuteCode.mockImplementation(async ({ args }) =>
+      args?.includes("finish-project-startup-cgroup")
+        ? {
+            exit_code: 1,
+            stdout: "",
+            stderr: "unable to restore cpu weight",
+          }
+        : { exit_code: 0, stdout: "", stderr: "" },
+    );
+
+    await expect(
+      start({
+        project_id: project1,
+        localPath: async () => ({
+          home: `/tmp/project-${project1}`,
+          quota_applied: true,
+        }),
+        config: {
+          image: "docker.io/library/ubuntu:latest",
+          ssh_port: 30123,
+          http_port: 45123,
+        },
+      }),
+    ).rejects.toThrow("failed to restore runtime CPU weight");
+    expect(mockPodman).toHaveBeenCalledWith(
+      ["rm", "-f", "-t", "0", `project-${project1}`],
+      { timeout: 10 },
+    );
   });
 
   it("does not set project quota twice when localPath already applied it", async () => {

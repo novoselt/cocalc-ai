@@ -4763,6 +4763,26 @@ case "$cmd" in
         deny "project-cgroup-verification-failed" "pid=${init_pid},project=${project_id}"
     fi
     ;;
+  finish-project-startup-cgroup)
+    if [ "$#" -ne 2 ]; then
+      echo "usage: cocalc-runtime-storage finish-project-startup-cgroup <project-id> <cpu-weight>" >&2
+      exit 2
+    fi
+    project_id="$1"
+    cpu_weight="$2"
+    if ! is_project_uuid "$project_id"; then
+      deny "project-id-invalid" "$project_id"
+    fi
+    if ! valid_positive_cgroup_limit "$cpu_weight" || [ "$cpu_weight" -gt 10000 ]; then
+      deny "project-cgroup-cpu-weight-invalid" "$cpu_weight"
+    fi
+    pool="$(project_cgroup "$project_id")"
+    [ -d "$pool" ] || deny "project-cgroup-missing" "$pool"
+    printf '%s\n' "$cpu_weight" > "$pool/cpu.weight"
+    actual_cpu_weight="$(cat "$pool/cpu.weight" 2>/dev/null || true)"
+    [ "$actual_cpu_weight" = "$cpu_weight" ] ||
+      deny "project-cgroup-cpu-weight-mismatch" "expected=${cpu_weight},actual=${actual_cpu_weight:-missing}"
+    ;;
   verify-project-io-limits)
     if [ "$#" -ne 2 ] || ! is_project_uuid "$1"; then
       echo "usage: cocalc-runtime-storage verify-project-io-limits <project-id> <io-class>" >&2

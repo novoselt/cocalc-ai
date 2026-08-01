@@ -112,8 +112,10 @@ const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
 const VERIFY_PROJECT_POOL_TIMEOUT_S = 10;
 const VERIFY_PROJECT_IO_TIMEOUT_S = 10;
 const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
+const FINISH_PROJECT_STARTUP_CGROUP_TIMEOUT_S = 10;
 const RECONCILE_PROJECT_NETWORK_TIMEOUT_S = 30;
 const DEFAULT_PROJECT_POOL_CGROUP = "/sys/fs/cgroup/cocalc-project-pool";
+const PROJECT_STARTUP_CPU_WEIGHT = "10000";
 const PROJECT_LEAF_POOL_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024;
 const MIN_PROJECT_LEAF_MEMORY_MAX_BYTES = 512 * 1024 * 1024;
 const PROJECT_POOL_LAUNCHER_SCRIPT = `set -euo pipefail
@@ -1168,6 +1170,32 @@ async function attachPreparedProjectRuntime({
   if (result.exit_code != null && result.exit_code !== 0) {
     throw Error(
       `failed to attach and verify project runtime processes for ${project_id}: ${result.stderr || result.stdout || `helper exited ${result.exit_code}`}`,
+    );
+  }
+}
+
+async function finishProjectStartupCgroup({
+  project_id,
+  cpu_weight,
+}: {
+  project_id: string;
+  cpu_weight: string;
+}): Promise<void> {
+  const result = await executeCode({
+    command: "sudo",
+    args: [
+      "-n",
+      "/usr/local/sbin/cocalc-runtime-storage",
+      "finish-project-startup-cgroup",
+      project_id,
+      cpu_weight,
+    ],
+    timeout: FINISH_PROJECT_STARTUP_CGROUP_TIMEOUT_S,
+    err_on_exit: false,
+  });
+  if (result.exit_code != null && result.exit_code !== 0) {
+    throw Error(
+      `failed to restore runtime CPU weight for ${project_id}: ${result.stderr || result.stdout || `helper exited ${result.exit_code}`}`,
     );
   }
 }
@@ -2430,10 +2458,10 @@ async function startUnlocked({
       "podman_run",
       async () =>
         await podman(args, {
-          launcher: projectCgroupPodmanLauncher(
-            project_id,
-            projectCgroupLimits,
-          ),
+          launcher: projectCgroupPodmanLauncher(project_id, {
+            ...projectCgroupLimits,
+            cpu_weight: PROJECT_STARTUP_CPU_WEIGHT,
+          }),
         }),
     );
     const runtime = await timings.measure(
@@ -2464,6 +2492,14 @@ async function startUnlocked({
           await attachPreparedProjectRuntime({
             project_id,
             runtime,
+          }),
+      );
+      await timings.measure(
+        "finish_startup_cgroup",
+        async () =>
+          await finishProjectStartupCgroup({
+            project_id,
+            cpu_weight: projectCgroupLimits.cpu_weight,
           }),
       );
     } catch (err) {
