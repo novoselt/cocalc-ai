@@ -175,6 +175,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "opens anonymous exam workspace admission",
   },
+  "hosts.increaseHostExamCapacity": {
+    decision: "fresh-auth-required",
+    reason: "increases anonymous exam project admission and resource use",
+  },
   "hosts.rotateHostExamToken": {
     decision: "fresh-auth-required",
     reason: "rotates the bearer secret for anonymous exam admission",

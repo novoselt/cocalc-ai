@@ -349,6 +349,7 @@ import {
   rotateHostExamToken,
   openHostExamRun,
   updateHostExamDeadline,
+  increaseHostExamCapacity,
   stopAndEraseHostExamRun,
   getBackupConfigLocal,
   getHostAvailability,
@@ -2353,6 +2354,11 @@ async function startHostConnectionService(): Promise<void> {
         ...opts,
         internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
       }),
+    increaseHostExamCapacity: async (opts) =>
+      await increaseHostExamCapacity({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
     stopAndEraseHostExamRun: async (opts) =>
       await stopAndEraseHostExamRun({
         ...opts,
@@ -2627,6 +2633,10 @@ async function startHostControlService(): Promise<void> {
       await (
         await getHostClient(host_id, 30_000)
       ).updateExamRunDeadline(update),
+    increaseExamRunCapacity: async ({ host_id, increase }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).increaseExamRunCapacity(increase),
     rotateExamRunToken: async ({ host_id, rotate }) =>
       await (await getHostClient(host_id, 30_000)).rotateExamRunToken(rotate),
     closeAndCleanupExamRun: async ({ host_id, close }) =>

@@ -302,6 +302,7 @@ import {
   createExamRunLocal,
   eraseActiveExamRunBeforeHostStopLocal,
   getExamStateLocal,
+  increaseExamCapacityLocal,
   openExamRunLocal,
   rotateExamTokenLocal,
   setExamConfigLocal,
@@ -5343,6 +5344,54 @@ export async function updateHostExamDeadline({
     scheduled_stop_at,
     stop_host_at_deadline,
   });
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
+export async function increaseHostExamCapacity({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+  id,
+  run_id,
+  max_projects,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+  id: string;
+  run_id: string;
+  max_projects: number;
+  idempotency_key: string;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+    internalAuth,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .increaseHostExamCapacity({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        run_id,
+        max_projects,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await increaseExamCapacityLocal({ host: row, run_id, max_projects });
   return await getExamStateLocal({ host: row, eligible: true });
 }
 

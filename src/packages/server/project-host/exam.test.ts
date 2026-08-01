@@ -153,6 +153,7 @@ describe("project-host exam configuration", () => {
     const run = {
       run_id: "00000000-2000-4000-8000-000000000002",
       status: "preparing",
+      max_projects: 10,
     } as any;
     expect(
       __test__.shouldReconcileRunWithRuntime(run, {
@@ -170,6 +171,18 @@ describe("project-host exam configuration", () => {
         active_projects: 0,
       }),
     ).toBe(false);
+    expect(
+      __test__.shouldReconcileRunWithRuntime(
+        { ...run, status: "open" },
+        {
+          run_id: run.run_id,
+          status: "open",
+          admission_open: true,
+          active_projects: 10,
+          max_projects: 11,
+        },
+      ),
+    ).toBe(true);
     expect(
       __test__.shouldReconcileRunWithRuntime(run, {
         run_id: "00000000-3000-4000-8000-000000000003",

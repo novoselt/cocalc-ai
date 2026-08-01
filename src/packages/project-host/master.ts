@@ -112,6 +112,7 @@ import {
   applyExamRunLocal,
   closeAndCleanupExamRunLocal,
   getExamRunStatusLocal,
+  increaseExamRunCapacityLocal,
   openExamRunLocal,
   rotateExamRunTokenLocal,
   updateExamRunDeadlineLocal,
@@ -1340,6 +1341,10 @@ export async function startMasterRegistration({
     async updateExamRunDeadline(opts) {
       await awaitReadyForControl("updateExamRunDeadline", waitUntilReady);
       return updateExamRunDeadlineLocal(opts);
+    },
+    async increaseExamRunCapacity(opts) {
+      await awaitReadyForControl("increaseExamRunCapacity", waitUntilReady);
+      return increaseExamRunCapacityLocal(opts);
     },
     async rotateExamRunToken(opts) {
       await awaitReadyForControl("rotateExamRunToken", waitUntilReady);

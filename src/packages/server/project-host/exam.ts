@@ -690,8 +690,9 @@ function shouldReconcileRunWithRuntime(
   return !!(
     run &&
     runtime?.run_id === run.run_id &&
-    runtime.status &&
-    runtime.status !== run.status
+    ((runtime.status && runtime.status !== run.status) ||
+      (runtime.max_projects != null &&
+        runtime.max_projects !== run.max_projects))
   );
 }
 
@@ -805,6 +806,10 @@ async function updateRunFromRuntime({
     `
       UPDATE ${RUN_TABLE}
       SET status=$2,
+          max_projects=CASE
+            WHEN $4::INTEGER IS NULL THEN max_projects
+            ELSE GREATEST(max_projects, $4::INTEGER)
+          END,
           opened_at=CASE WHEN $2='open' THEN COALESCE(opened_at, NOW()) ELSE opened_at END,
           admission_closed_at=CASE
             WHEN $2 IN ('closing', 'cleaning', 'stopped') THEN COALESCE(admission_closed_at, NOW())
@@ -821,7 +826,7 @@ async function updateRunFromRuntime({
       WHERE run_id=$1
       RETURNING *
     `,
-    [run_id, status, runtime.last_error ?? null],
+    [run_id, status, runtime.last_error ?? null, runtime.max_projects ?? null],
   );
   if (!rows[0]) throw new Error("exam run not found");
   return mapRun(rows[0]);
@@ -1142,6 +1147,60 @@ export async function updateExamDeadlineLocal({
     `,
     [run_id, deadline, stop_host_at_deadline ?? run.stop_host_at_deadline],
   );
+  return mapRun(rows[0]);
+}
+
+export async function increaseExamCapacityLocal({
+  host,
+  run_id,
+  max_projects,
+}: {
+  host: ExamHostRow;
+  run_id: string;
+  max_projects: number;
+}): Promise<HostExamRun> {
+  const run = await requireRunForMutation({ host_id: host.id, run_id });
+  if (run.status !== "ready" && run.status !== "open") {
+    throw new Error(
+      `exam capacity can only increase while the run is ready or open (status=${run.status})`,
+    );
+  }
+  const capacity = requireFiniteRange(max_projects, {
+    label: "max_projects",
+    min: 1,
+    max: 1_000,
+    integer: true,
+  });
+  if (capacity < run.max_projects) {
+    throw new Error(
+      `exam capacity cannot decrease during a run (current=${run.max_projects})`,
+    );
+  }
+  if (capacity === run.max_projects) return run;
+  const control = await getRoutedHostControlClient({
+    host_id: host.id,
+    timeout: 30_000,
+    fresh: true,
+  });
+  const runtime = await control.increaseExamRunCapacity({
+    run_id,
+    config_generation: run.config_generation,
+    max_projects: capacity,
+  });
+  const appliedCapacity = runtime.max_projects;
+  if (appliedCapacity == null || appliedCapacity < capacity) {
+    throw new Error("project host did not apply the requested exam capacity");
+  }
+  const { rows } = await getPool().query(
+    `
+      UPDATE ${RUN_TABLE}
+      SET max_projects=GREATEST(max_projects, $2), updated_at=NOW()
+      WHERE run_id=$1
+      RETURNING *
+    `,
+    [run_id, appliedCapacity],
+  );
+  if (!rows[0]) throw new Error("exam run not found");
   return mapRun(rows[0]);
 }
 

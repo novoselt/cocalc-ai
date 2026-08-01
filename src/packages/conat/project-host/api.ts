@@ -543,6 +543,11 @@ export interface HostControlApi {
     scheduled_stop_at: string;
     stop_host_at_deadline?: boolean;
   }) => Promise<HostExamRuntimeStatus>;
+  increaseExamRunCapacity: (opts: {
+    run_id: string;
+    config_generation: number;
+    max_projects: number;
+  }) => Promise<HostExamRuntimeStatus>;
   rotateExamRunToken: (opts: {
     run_id: string;
     config_generation: number;

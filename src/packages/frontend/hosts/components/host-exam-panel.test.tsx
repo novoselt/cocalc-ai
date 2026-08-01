@@ -18,6 +18,7 @@ import {
 const mockGetHostExamState = jest.fn(async () => ({ eligible: true }));
 const mockSetHostExamConfig = jest.fn();
 const mockCreateHostExamRun = jest.fn();
+const mockIncreaseHostExamCapacity = jest.fn();
 const mockRunFreshAuthAction = jest.fn(
   async (action: () => Promise<unknown>) => {
     await action();
@@ -43,6 +44,8 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
           getHostExamState: (...args: any[]) => mockGetHostExamState(...args),
           setHostExamConfig: (...args: any[]) => mockSetHostExamConfig(...args),
           createHostExamRun: (...args: any[]) => mockCreateHostExamRun(...args),
+          increaseHostExamCapacity: (...args: any[]) =>
+            mockIncreaseHostExamCapacity(...args),
         },
       },
     },
@@ -82,6 +85,7 @@ describe("HostExamPanel", () => {
     mockGetHostExamState.mockClear();
     mockSetHostExamConfig.mockReset();
     mockCreateHostExamRun.mockReset();
+    mockIncreaseHostExamCapacity.mockReset();
     mockRunFreshAuthAction.mockReset();
     mockRunFreshAuthAction.mockImplementation(
       async (action: () => Promise<unknown>) => {
@@ -438,6 +442,63 @@ describe("HostExamPanel", () => {
     expect(
       screen.getByText(/without sending it to the server in the URL/),
     ).toBeInTheDocument();
+  });
+
+  it("increases capacity for the active run without changing its saved default", async () => {
+    const activeState = {
+      eligible: true,
+      host_status: "running",
+      config: { ...savedConfig, max_projects: 10 },
+      run: {
+        run_id: "open-run",
+        status: "open",
+        rootfs_image: "cocalc.local/rootfs/exam",
+        scheduled_stop_at: "2026-08-01T03:00:00.000Z",
+        stop_host_at_deadline: false,
+        max_projects: 10,
+        terminal_enabled: false,
+      },
+      runtime: {
+        status: "open",
+        admission_open: true,
+        active_projects: 10,
+        max_projects: 10,
+      },
+    };
+    mockGetHostExamState.mockResolvedValueOnce(activeState);
+    mockIncreaseHostExamCapacity.mockResolvedValue({
+      ...activeState,
+      run: { ...activeState.run, max_projects: 11 },
+      runtime: { ...activeState.runtime, max_projects: 11 },
+    });
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[]}
+      />,
+    );
+
+    const capacity = await screen.findByRole("spinbutton", {
+      name: "Maximum students for this run",
+    });
+    fireEvent.change(capacity, { target: { value: "11" } });
+    const increase = screen.getByRole("button", {
+      name: "Increase capacity",
+    });
+    expect(increase).toBeEnabled();
+    fireEvent.click(increase);
+
+    await waitFor(() =>
+      expect(mockIncreaseHostExamCapacity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "host-1",
+          run_id: "open-run",
+          max_projects: 11,
+          browser_id: "browser-1",
+        }),
+      ),
+    );
+    expect(screen.getByText(/saved default remains 10/i)).toBeInTheDocument();
   });
 
   it("leaves fresh-auth challenges for the fresh-auth flow", async () => {

@@ -103,7 +103,10 @@ function ensureBooleanChoice({
 }
 
 function hostCapacity(host: any, state: HostExamState) {
-  const maxProjects = state.config?.max_projects ?? state.run?.max_projects;
+  const maxProjects =
+    state.run && state.run.status !== "stopped"
+      ? state.run.max_projects
+      : (state.config?.max_projects ?? state.run?.max_projects);
   if (maxProjects == null) return undefined;
   const actualCpu = Number(
     host.host_cpu_count ?? host.runtime?.cpu_count ?? host.machine?.cpu,
@@ -511,6 +514,51 @@ export function registerHostExamCommands({
                 ? false
                 : run.stop_host_at_deadline,
             idempotency_key: operationKey("exam-deadline", opts.idempotencyKey),
+            ...mutationAuth(opts),
+            timeout: operationTimeout(opts, MUTATION_TIMEOUT_MS),
+          });
+          return result({ host, state });
+        });
+      },
+    );
+
+  exam
+    .command("capacity <host>")
+    .description("increase the maximum students for the active exam run")
+    .requiredOption(
+      "--max-projects <count>",
+      "new maximum simultaneous student projects",
+    )
+    .option("--run <run_id>", "exam run id; defaults to the active run")
+    .option("--idempotency-key <key>", "reuse a previous logical request key")
+    .option("--browser-id <id>", "browser session id for fresh-auth checks")
+    .option("--wait-timeout <duration>", "RPC timeout", "2m")
+    .action(
+      async (
+        hostIdentifier: string,
+        opts: ExamCommandOptions & { run?: string; maxProjects: string },
+        command: Command,
+      ) => {
+        await withContext(command, "host exam capacity", async (ctx) => {
+          const host = await resolveHost(ctx, hostIdentifier);
+          const current = await getState(ctx, host.id);
+          const run = activeRun(current);
+          const max_projects = parseNumber(
+            opts.maxProjects,
+            run.max_projects,
+            "--max-projects",
+            { integer: true },
+          );
+          if (max_projects < run.max_projects) {
+            throw new Error(
+              `exam capacity cannot decrease during a run (current=${run.max_projects})`,
+            );
+          }
+          const state = await ctx.hub.hosts.increaseHostExamCapacity({
+            id: host.id,
+            run_id: `${opts.run ?? ""}`.trim() || run.run_id,
+            max_projects,
+            idempotency_key: operationKey("exam-capacity", opts.idempotencyKey),
             ...mutationAuth(opts),
             timeout: operationTimeout(opts, MUTATION_TIMEOUT_MS),
           });

@@ -42,6 +42,8 @@ export async function getRoutedHostControlClient({
       openExamRun: async (open) => await bridge.openExamRun({ host_id, open }),
       updateExamRunDeadline: async (update) =>
         await bridge.updateExamRunDeadline({ host_id, update }),
+      increaseExamRunCapacity: async (increase) =>
+        await bridge.increaseExamRunCapacity({ host_id, increase }),
       rotateExamRunToken: async (rotate) =>
         await bridge.rotateExamRunToken({ host_id, rotate }),
       closeAndCleanupExamRun: async (close) =>

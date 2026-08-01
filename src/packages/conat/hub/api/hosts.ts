@@ -1703,6 +1703,7 @@ export const hosts = {
   rotateHostExamToken: authFirstRequireAccount,
   openHostExamRun: authFirstRequireAccount,
   updateHostExamDeadline: authFirstRequireAccount,
+  increaseHostExamCapacity: authFirstRequireAccount,
   stopAndEraseHostExamRun: authFirstRequireAccount,
   listHostSshAuthorizedKeys: authFirstRequireAccount,
   addHostSshAuthorizedKey: authFirstRequireAccount,
@@ -1970,6 +1971,16 @@ export interface Hosts {
     run_id: string;
     scheduled_stop_at: string;
     stop_host_at_deadline?: boolean;
+    idempotency_key: string;
+    timeout?: number;
+  }) => Promise<HostExamState>;
+  increaseHostExamCapacity: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    max_projects: number;
     idempotency_key: string;
     timeout?: number;
   }) => Promise<HostExamState>;

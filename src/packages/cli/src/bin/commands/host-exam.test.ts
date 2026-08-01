@@ -129,6 +129,15 @@ function makeHarness() {
         };
         return state;
       },
+      increaseHostExamCapacity: async (opts: any) => {
+        record("capacity", opts);
+        state = {
+          ...state,
+          run: { ...state.run!, max_projects: opts.max_projects },
+          runtime: { ...state.runtime!, max_projects: opts.max_projects },
+        };
+        return state;
+      },
       stopAndEraseHostExamRun: async (opts: any) => {
         record("end", opts);
         state = {
@@ -268,6 +277,20 @@ describe("host exam commands", () => {
     assert.equal(deadlineCall.scheduled_stop_at, newDeleteAt);
     assert.equal(deadlineCall.stop_host_at_deadline, false);
     assert.equal(deadlineCall.timeout, 120_000);
+
+    const expanded = await harness.run([
+      "capacity",
+      "exam-test",
+      "--max-projects",
+      "25",
+    ]);
+    assert.equal(expanded.run.max_projects, 25);
+    assert.equal(harness.calls.capacity.at(-1).max_projects, 25);
+    assert.equal(expanded.capacity_guidance.maximum_projects, 25);
+    await assert.rejects(
+      harness.run(["capacity", "exam-test", "--max-projects", "24"]),
+      /cannot decrease/,
+    );
 
     const ended = await harness.run([
       "end",

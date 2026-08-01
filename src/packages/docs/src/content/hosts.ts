@@ -221,6 +221,7 @@ cocalc host exam status <host> --wait
 
 # Change cleanup policy, or end early and permanently erase all exam projects.
 cocalc host exam deadline <host> --delete-at 2026-08-01T15:30:00Z --stop-host
+cocalc host exam capacity <host> --max-projects 110
 cocalc host exam end <host> --stop-host --yes
 ~~~
 
@@ -301,6 +302,14 @@ The instructor may move the cleanup time or change the subsequent host-shutdown
 choice while the run is ready or open. Updating either requires fresh
 authentication. Treat the displayed project-deletion time as authoritative;
 cleanup grace is not working time.
+
+The instructor may also increase **Maximum students for this run** immediately
+while the run is ready or open. One student uses one temporary project. This is
+useful when attendance exceeds the original estimate: increasing 10 to 11 makes
+the additional place available without rebuilding the RootFS or interrupting
+existing students. Capacity cannot be reduced during a run, and the saved
+default for future runs does not change. The panel recalculates its host-sizing
+advice before the increase is submitted.
 
 ## Step 5: end the run safely
 

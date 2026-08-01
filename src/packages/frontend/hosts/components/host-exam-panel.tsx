@@ -281,6 +281,7 @@ export function HostExamPanel({
     defaultExamDeadline(DEFAULT_CONFIG.project_ttl_minutes),
   );
   const [stopHostAtDeadline, setStopHostAtDeadline] = useState(true);
+  const [runCapacity, setRunCapacity] = useState<number>();
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState<"prepare">();
@@ -319,6 +320,7 @@ export function HostExamPanel({
         setRootfsImage(next.run.rootfs_image);
         setDeadline(dayjs(next.run.scheduled_stop_at));
         setStopHostAtDeadline(next.run.stop_host_at_deadline !== false);
+        setRunCapacity(next.run.max_projects);
       } else {
         if (next.run?.rootfs_image) {
           setRootfsImage(next.run.rootfs_image);
@@ -330,6 +332,7 @@ export function HostExamPanel({
           ),
         );
         setStopHostAtDeadline(true);
+        setRunCapacity(undefined);
       }
     } catch (err) {
       setError(`${(err as Error)?.message ?? err}`);
@@ -441,6 +444,7 @@ export function HostExamPanel({
     !!run &&
     (dayjs(run.scheduled_stop_at).valueOf() !== deadline.valueOf() ||
       (run.stop_host_at_deadline !== false) !== stopHostAtDeadline);
+  const requestedRunCapacity = runCapacity ?? run?.max_projects ?? 1;
   const studentUrl = state?.config?.hostname
     ? `https://${state.config.hostname}`
     : undefined;
@@ -795,6 +799,63 @@ export function HostExamPanel({
                   </Tag>
                 ))}
               </Space>
+            )}
+            {(run.status === "ready" || run.status === "open") && (
+              <>
+                <Divider />
+                <Space
+                  orientation="vertical"
+                  size="small"
+                  style={{ width: "100%" }}
+                >
+                  <Space wrap align="center">
+                    <Typography.Text strong>
+                      Maximum students for this run
+                    </Typography.Text>
+                    <InputNumber
+                      aria-label="Maximum students for this run"
+                      min={run.max_projects}
+                      max={1_000}
+                      precision={0}
+                      value={requestedRunCapacity}
+                      onChange={(value) =>
+                        setRunCapacity(Number(value ?? run.max_projects))
+                      }
+                    />
+                    <Button
+                      disabled={
+                        loading || requestedRunCapacity <= run.max_projects
+                      }
+                      onClick={() => {
+                        void mutateIdempotently("capacity", (idempotency_key) =>
+                          api.increaseHostExamCapacity({
+                            id: host.id,
+                            browser_id: webapp_client.browser_id,
+                            run_id: run.run_id,
+                            max_projects: requestedRunCapacity,
+                            idempotency_key,
+                            timeout: EXAM_MUTATION_TIMEOUT_MS,
+                          }),
+                        );
+                      }}
+                    >
+                      Increase capacity
+                    </Button>
+                  </Space>
+                  <Typography.Text type="secondary">
+                    One student uses one temporary project. Capacity can be
+                    increased immediately during an exam, but cannot be reduced.
+                    The saved default remains{" "}
+                    {state?.config?.max_projects ?? run.max_projects}.
+                  </Typography.Text>
+                  {requestedRunCapacity > run.max_projects && (
+                    <ExamHostCapacityAlert
+                      host={host}
+                      maxProjects={requestedRunCapacity}
+                    />
+                  )}
+                </Space>
+              </>
             )}
             {token && (
               <>

@@ -41,6 +41,7 @@ import {
   buildExamBrowserBootstrap,
   type ExamBrowserBootstrap,
 } from "./browser-bootstrap";
+import { validateExamCapacityIncrease } from "./capacity";
 
 const logger = getLogger("project-host:exam:controller");
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
@@ -698,6 +699,36 @@ export function updateExamRunDeadlineLocal({
       Date.now(),
       run_id,
     );
+  return runtimeStatus(runRow(run_id));
+}
+
+export function increaseExamRunCapacityLocal({
+  run_id,
+  config_generation,
+  max_projects,
+}: {
+  run_id: string;
+  config_generation: number;
+  max_projects: number;
+}): HostExamRuntimeStatus {
+  const row = assertRunIdentity({ run_id, config_generation });
+  const { run } = decodeRun(row);
+  validateExamCapacityIncrease({
+    current: run.max_projects,
+    requested: max_projects,
+    status: row.status,
+  });
+  if (max_projects === run.max_projects) {
+    return runtimeStatus(row);
+  }
+  run.max_projects = max_projects;
+  getDatabase()
+    .prepare(
+      `UPDATE exam_runs
+       SET run_json=?, updated_at_ms=?
+       WHERE run_id=?`,
+    )
+    .run(JSON.stringify(run), Date.now(), run_id);
   return runtimeStatus(runRow(run_id));
 }
 
