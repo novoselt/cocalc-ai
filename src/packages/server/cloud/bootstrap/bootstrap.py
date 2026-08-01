@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260801-v19"
+HELPER_SCHEMA_VERSION = "20260801-v20"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -4604,8 +4604,8 @@ escape_overlay_path() {
 
 case "$cmd" in
   prepare-project-cgroup)
-    if [ "$#" -ne 11 ] && [ "$#" -ne 12 ]; then
-      echo "usage: cocalc-runtime-storage prepare-project-cgroup <project-id> <launcher-pid> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight> <io-class>" >&2
+    if [ "$#" -ne 11 ] && [ "$#" -ne 12 ] && [ "$#" -ne 13 ]; then
+      echo "usage: cocalc-runtime-storage prepare-project-cgroup <project-id> <launcher-pid> <memory-max> <memory-high> <memory-low> <memory-swap-max> <pids-max> <cpu-quota|max> <cpu-period> <cpu-weight> <io-weight> <io-class> [<startup-io-weight>]" >&2
       exit 2
     fi
     project_id="$1"
@@ -4622,6 +4622,7 @@ case "$cmd" in
     # Bootstrap helpers may converge before the project-host artifact. Keep
     # the old caller safe during that window by selecting the lowest class.
     io_class="${12:-standard}"
+    startup_io_weight="${13:-$io_weight}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
@@ -4641,6 +4642,12 @@ case "$cmd" in
       "$pool" "$memory_max" "$memory_high" "$memory_low" \
       "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
       "$cpu_weight" "$io_weight" "$io_class"
+    if ! valid_positive_cgroup_limit "$startup_io_weight" || [ "$startup_io_weight" -gt 10000 ]; then
+      deny "project-cgroup-io-weight-invalid" "$startup_io_weight"
+    fi
+    if [ -w "$pool/io.weight" ]; then
+      printf 'default %s\n' "$startup_io_weight" > "$pool/io.weight"
+    fi
     printf '%s\n' "$launcher_pid" > "$pool/cgroup.procs"
     printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
     verify_project_pid_in_pool "$project_id" "$launcher_pid"
@@ -4718,8 +4725,8 @@ case "$cmd" in
     fi
     ;;
   attach-prepared-project-runtime)
-    if [ "$#" -ne 2 ] && [ "$#" -ne 4 ] && [ "$#" -ne 5 ]; then
-      echo "usage: cocalc-runtime-storage attach-prepared-project-runtime <project-id> <podman-netns-path|-> [<init-pid> <conmon-pid> [<final-cpu-weight>]]" >&2
+    if [ "$#" -ne 2 ] && [ "$#" -ne 4 ] && [ "$#" -ne 5 ] && [ "$#" -ne 6 ]; then
+      echo "usage: cocalc-runtime-storage attach-prepared-project-runtime <project-id> <podman-netns-path|-> [<init-pid> <conmon-pid> [<final-cpu-weight> [<final-io-weight>]]]" >&2
       exit 2
     fi
     project_id="$1"
@@ -4727,6 +4734,7 @@ case "$cmd" in
     init_pid="${3:-}"
     conmon_pid="${4:-}"
     final_cpu_weight="${5:-}"
+    final_io_weight="${6:-}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
@@ -4784,6 +4792,17 @@ case "$cmd" in
       actual_cpu_weight="$(cat "$pool/cpu.weight" 2>/dev/null || true)"
       [ "$actual_cpu_weight" = "$final_cpu_weight" ] ||
         deny "project-cgroup-cpu-weight-mismatch" "expected=${final_cpu_weight},actual=${actual_cpu_weight:-missing}"
+    fi
+    if [ -n "$final_io_weight" ]; then
+      if ! valid_positive_cgroup_limit "$final_io_weight" || [ "$final_io_weight" -gt 10000 ]; then
+        deny "project-cgroup-io-weight-invalid" "$final_io_weight"
+      fi
+      if [ -w "$pool/io.weight" ]; then
+        printf 'default %s\n' "$final_io_weight" > "$pool/io.weight"
+        actual_io_weight="$(awk '$1 == "default" {print $2; exit}' "$pool/io.weight" 2>/dev/null || true)"
+        [ "$actual_io_weight" = "$final_io_weight" ] ||
+          deny "project-cgroup-io-weight-mismatch" "expected=${final_io_weight},actual=${actual_io_weight:-missing}"
+      fi
     fi
     ;;
   finish-project-startup-cgroup)

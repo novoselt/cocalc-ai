@@ -1891,7 +1891,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )[1].split("\n    ;;", 1)[0]
             self.assertIn('> "$pool/cpu.weight"', finish_startup_body)
             self.assertIn("project-cgroup-cpu-weight-mismatch", finish_startup_body)
-            self.assertIn("[<init-pid> <conmon-pid> [<final-cpu-weight>]]", script)
+            self.assertIn(
+                "[<init-pid> <conmon-pid> [<final-cpu-weight> [<final-io-weight>]]]",
+                script,
+            )
+            self.assertIn('> "$pool/io.weight"', finish_startup_body)
+            self.assertIn("project-cgroup-io-weight-mismatch", finish_startup_body)
             self.assertIn("project_pid_is_in_pool", finish_startup_body)
             self.assertIn('require_runtime_owned_pid "$conmon_pid"', script)
             self.assertIn(

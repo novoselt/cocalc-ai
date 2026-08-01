@@ -115,6 +115,7 @@ const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
 const RECONCILE_PROJECT_NETWORK_TIMEOUT_S = 30;
 const DEFAULT_PROJECT_POOL_CGROUP = "/sys/fs/cgroup/cocalc-project-pool";
 const PROJECT_STARTUP_CPU_WEIGHT = "10000";
+const PROJECT_STARTUP_IO_WEIGHT = "10000";
 const PROJECT_LEAF_POOL_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024;
 const MIN_PROJECT_LEAF_MEMORY_MAX_BYTES = 512 * 1024 * 1024;
 const PROJECT_POOL_LAUNCHER_SCRIPT = `set -euo pipefail
@@ -122,9 +123,9 @@ sudo -n /usr/local/sbin/cocalc-runtime-storage enter-project-cgroup "$1" "$$"
 shift
 exec podman "$@"`;
 const PROJECT_CGROUP_LAUNCHER_SCRIPT = `set -euo pipefail
-sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}" "\${11}"
-shift 11
-exec podman "$@"`;
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}" "\${11}" "\${12}"
+shift 12
+exec /usr/bin/ionice -c 2 -n 0 podman "$@"`;
 const DEFAULT_PROJECT_SCRIPT = join(
   COCALC_SRC,
   "packages/project/bin/cocalc-project.js",
@@ -798,6 +799,7 @@ function projectCgroupPodmanLauncher(
       limits.cpu_weight,
       limits.io_weight,
       limits.io_class,
+      PROJECT_STARTUP_IO_WEIGHT,
     ],
   };
 }
@@ -1149,10 +1151,12 @@ async function attachPreparedProjectRuntime({
   project_id,
   runtime,
   cpu_weight,
+  io_weight,
 }: {
   project_id: string;
   runtime: StartedContainerRuntime;
   cpu_weight: string;
+  io_weight: string;
 }): Promise<void> {
   const result = await executeCode({
     command: "sudo",
@@ -1165,6 +1169,7 @@ async function attachPreparedProjectRuntime({
       `${runtime.init_pid}`,
       `${runtime.conmon_pid}`,
       cpu_weight,
+      io_weight,
     ],
     timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
     err_on_exit: false,
@@ -2469,6 +2474,7 @@ async function startUnlocked({
             project_id,
             runtime,
             cpu_weight: projectCgroupLimits.cpu_weight,
+            io_weight: projectCgroupLimits.io_weight,
           }),
       );
     } catch (err) {
