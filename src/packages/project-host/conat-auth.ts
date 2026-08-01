@@ -39,6 +39,7 @@ import { getProject } from "./sqlite/projects";
 import { getAccountRevokedBeforeMs } from "./sqlite/account-revocations";
 import { resolveProjectHostBrowserSessionFromCookieHeader } from "./browser-session";
 import { getProjectHostManagedEgressBlockedMessage } from "./managed-egress-runtime";
+import { getLocalExamAccountProjectId } from "./exam/identity";
 
 const authDecisionCache = new TTL<string, boolean>({
   max: 20_000,
@@ -342,6 +343,8 @@ export function createProjectHostConatAuth({ host_id }: { host_id: string }): {
     }
 
     const userId = getCoCalcUserId(user);
+    const examProjectId =
+      userType === "account" ? getLocalExamAccountProjectId(userId) : undefined;
     if (
       userType === "account" &&
       isAccountSessionRevoked({
@@ -361,6 +364,7 @@ export function createProjectHostConatAuth({ host_id }: { host_id: string }): {
       const parsed = parseAcpSubject(subject);
       if (
         userType !== "account" ||
+        examProjectId != null ||
         type !== "pub" ||
         parsed == null ||
         (parsed.version === "account-project" && parsed.account_id !== userId)
@@ -395,6 +399,7 @@ export function createProjectHostConatAuth({ host_id }: { host_id: string }): {
       const viewerFileSubject = extractViewerFileSubject(subject);
       if (viewerFileSubject) {
         allowed =
+          examProjectId == null &&
           type === "pub" &&
           viewerFileSubject.account_id === userId &&
           (isProjectViewerLocal({
@@ -413,7 +418,10 @@ export function createProjectHostConatAuth({ host_id }: { host_id: string }): {
       }
       const shareFileSubject = extractShareFileSubject(subject);
       if (shareFileSubject) {
-        allowed = type === "pub" && shareFileSubject.account_id === userId;
+        allowed =
+          examProjectId == null &&
+          type === "pub" &&
+          shareFileSubject.account_id === userId;
         if (cacheable) {
           authDecisionCache.set(cacheKey, allowed);
         }
@@ -421,10 +429,12 @@ export function createProjectHostConatAuth({ host_id }: { host_id: string }): {
       }
       const project_id = extractProjectSubject(subject);
       if (project_id) {
-        allowed = isProjectCollaboratorLocal({
-          account_id: userId,
-          project_id,
-        });
+        allowed =
+          (examProjectId == null || examProjectId === project_id) &&
+          isProjectCollaboratorLocal({
+            account_id: userId,
+            project_id,
+          });
       }
     }
 

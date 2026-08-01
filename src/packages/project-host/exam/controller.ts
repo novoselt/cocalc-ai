@@ -42,6 +42,7 @@ import {
   type ExamBrowserBootstrap,
 } from "./browser-bootstrap";
 import { validateExamCapacityIncrease } from "./capacity";
+import TTL from "@isaacs/ttlcache";
 
 const logger = getLogger("project-host:exam:controller");
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
@@ -49,6 +50,7 @@ const WATCHDOG_INTERVAL_MS = 5_000;
 const POWEROFF_RESPONSE_GRACE_MS = 5_000;
 const TOKEN_FAILURE_WINDOW_MS = 10 * 60_000;
 const TOKEN_FAILURE_LIMIT = 12;
+const TOKEN_FAILURE_SOURCE_LIMIT = 10_000;
 
 interface LocalExamRunRow {
   run_id: string;
@@ -74,7 +76,10 @@ interface LocalExamSessionRow {
   last_error: string | null;
 }
 
-const tokenFailures = new Map<string, number[]>();
+const tokenFailures = new TTL<string, number[]>({
+  max: TOKEN_FAILURE_SOURCE_LIMIT,
+  ttl: TOKEN_FAILURE_WINDOW_MS,
+});
 let watchdogStarted = false;
 let cleanupInFlight: Promise<HostExamRuntimeStatus> | undefined;
 
@@ -426,6 +431,9 @@ async function provisionProject({
     last_name: "User",
     display_name: "Exam User",
     usage_account_id: run.owner_account_id,
+    exam_mode: true,
+    exam_run_id: run.run_id,
+    exam_project_id: project_id,
   });
   await setExamProjectNetworkPolicy({
     project_id,
