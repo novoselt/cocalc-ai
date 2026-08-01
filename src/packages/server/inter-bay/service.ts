@@ -2658,6 +2658,10 @@ async function startHostControlService(): Promise<void> {
     },
     startProject: async ({ host_id, start }) =>
       await (await getHostClient(host_id, 60 * 60 * 1000)).startProject(start),
+    startProjectIdempotent: async ({ host_id, start }) =>
+      await (
+        await getHostClient(host_id, 60 * 60 * 1000)
+      ).startProjectIdempotent(start),
     stopProject: async ({ host_id, stop }) =>
       await (await getHostClient(host_id, 30_000)).stopProject(stop),
     getProjectStatus: async ({ host_id, get }) =>

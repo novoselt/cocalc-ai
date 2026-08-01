@@ -114,16 +114,22 @@ const VERIFY_PROJECT_IO_TIMEOUT_S = 10;
 const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
 const RECONCILE_PROJECT_NETWORK_TIMEOUT_S = 30;
 const DEFAULT_PROJECT_POOL_CGROUP = "/sys/fs/cgroup/cocalc-project-pool";
+const PROJECT_STARTUP_CPU_WEIGHT = "10000";
+const PROJECT_STARTUP_IO_WEIGHT = "10000";
 const PROJECT_LEAF_POOL_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024;
 const MIN_PROJECT_LEAF_MEMORY_MAX_BYTES = 512 * 1024 * 1024;
 const PROJECT_POOL_LAUNCHER_SCRIPT = `set -euo pipefail
 sudo -n /usr/local/sbin/cocalc-runtime-storage enter-project-cgroup "$1" "$$"
 shift
 exec podman "$@"`;
+const PROJECT_STARTUP_LAUNCHER_SCRIPT = `set -euo pipefail
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-startup-cgroup "$1" "$$"
+shift
+exec /usr/bin/ionice -c 2 -n 0 podman "$@"`;
 const PROJECT_CGROUP_LAUNCHER_SCRIPT = `set -euo pipefail
-sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}" "\${11}"
-shift 11
-exec podman "$@"`;
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-startup-runtime-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}" "\${11}" "\${12}"
+shift 12
+exec /usr/bin/ionice -c 2 -n 0 podman "$@"`;
 const DEFAULT_PROJECT_SCRIPT = join(
   COCALC_SRC,
   "packages/project/bin/cocalc-project.js",
@@ -797,6 +803,19 @@ function projectCgroupPodmanLauncher(
       limits.cpu_weight,
       limits.io_weight,
       limits.io_class,
+      PROJECT_STARTUP_IO_WEIGHT,
+    ],
+  };
+}
+
+function projectStartupPodmanLauncher(project_id: string) {
+  return {
+    command: "bash",
+    argsPrefix: [
+      "-c",
+      PROJECT_STARTUP_LAUNCHER_SCRIPT,
+      "cocalc-project-podman-create",
+      project_id,
     ],
   };
 }
@@ -904,18 +923,64 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForStartedContainer(name: string): Promise<boolean> {
+type StartedContainerRuntime = {
+  init_pid: number;
+  conmon_pid: number;
+  sandbox_path?: string;
+};
+
+async function inspectStartedContainerRuntime(
+  name: string,
+): Promise<StartedContainerRuntime | undefined> {
+  let stdout: string;
+  try {
+    ({ stdout } = await podman([
+      "inspect",
+      "--format",
+      "{{.State.Running}}|{{.State.Pid}}|{{.State.ConmonPid}}|{{.NetworkSettings.SandboxKey}}",
+      name,
+    ]));
+  } catch {
+    return undefined;
+  }
+  const [running, initPidText, conmonPidText, sandboxPath = ""] = `${
+    stdout ?? ""
+  }`
+    .trim()
+    .split("|", 4);
+  if (running !== "true") return undefined;
+  const initPid = Number(initPidText);
+  const conmonPid = Number(conmonPidText);
+  if (
+    !Number.isInteger(initPid) ||
+    initPid <= 1 ||
+    !Number.isInteger(conmonPid) ||
+    conmonPid <= 1
+  ) {
+    throw Error(
+      `invalid runtime pids for ${name}: init=${initPidText || "missing"}, conmon=${conmonPidText || "missing"}`,
+    );
+  }
+  return {
+    init_pid: initPid,
+    conmon_pid: conmonPid,
+    ...(sandboxPath ? { sandbox_path: sandboxPath } : {}),
+  };
+}
+
+async function waitForStartedContainer(
+  name: string,
+): Promise<StartedContainerRuntime | undefined> {
   const start = Date.now();
   while (Date.now() - start < START_RUNNING_CHECK_TIMEOUT_MS) {
-    if (await podmanReportsRunningContainer(name)) {
-      return true;
-    }
+    const runtime = await inspectStartedContainerRuntime(name);
+    if (runtime) return runtime;
     if (!(await hasLiveConmonContainer(name))) {
-      return false;
+      return undefined;
     }
     await wait(START_RUNNING_CHECK_INTERVAL_MS);
   }
-  return await podmanReportsRunningContainer(name);
+  return await inspectStartedContainerRuntime(name);
 }
 
 function truncateStartFailureDetail(text: string): string {
@@ -1094,6 +1159,40 @@ async function attachProjectToCgroup({
   if (result.exit_code != null && result.exit_code !== 0) {
     throw Error(
       `failed to attach ${name} to its project cgroup: ${result.stderr || result.stdout || `helper exited ${result.exit_code}`}`,
+    );
+  }
+}
+
+async function attachPreparedProjectRuntime({
+  project_id,
+  runtime,
+  cpu_weight,
+  io_weight,
+}: {
+  project_id: string;
+  runtime: StartedContainerRuntime;
+  cpu_weight: string;
+  io_weight: string;
+}): Promise<void> {
+  const result = await executeCode({
+    command: "sudo",
+    args: [
+      "-n",
+      "/usr/local/sbin/cocalc-runtime-storage",
+      "attach-prepared-project-runtime",
+      project_id,
+      runtime.sandbox_path ?? "-",
+      `${runtime.init_pid}`,
+      `${runtime.conmon_pid}`,
+      cpu_weight,
+      io_weight,
+    ],
+    timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
+    err_on_exit: false,
+  });
+  if (result.exit_code != null && result.exit_code !== 0) {
+    throw Error(
+      `failed to finalize project runtime cgroup for ${project_id}: ${result.stderr || result.stdout || `helper exited ${result.exit_code}`}`,
     );
   }
 }
@@ -1863,10 +1962,16 @@ export async function start(opts: StartOptions): Promise<StartResult> {
   if (!isValidUUID(opts.project_id)) {
     throw Error("start: project_id must be valid");
   }
-  return await withProjectLifecycleLock(
-    opts.project_id,
-    async () => await startUnlocked(opts),
-  );
+  const lockRequestedAt = Date.now();
+  return await withProjectLifecycleLock(opts.project_id, async () => {
+    const lifecycleLockWait = Date.now() - lockRequestedAt;
+    const result = await startUnlocked(opts);
+    result.phase_timings_ms = {
+      ...result.phase_timings_ms,
+      lifecycle_lock_wait: lifecycleLockWait,
+    };
+    return result;
+  });
 }
 
 async function startUnlocked({
@@ -1894,27 +1999,34 @@ async function startUnlocked({
     starting.add(project_id);
     report({ type: "start-project", progress: 0 });
     const name = projectContainerName(project_id);
-    const hasLiveProjectContainer = await hasLiveConmonContainer(name);
-    let podmanReportsLiveProjectRunning = false;
-    if (hasLiveProjectContainer) {
-      podmanReportsLiveProjectRunning =
-        await podmanReportsRunningContainer(name);
-    }
-    if (hasLiveProjectContainer && !podmanReportsLiveProjectRunning) {
-      logger.warn(
-        "start: found live project processes without podman metadata; cleaning up before relaunch",
-        {
-          project_id,
-          name,
-        },
-      );
-      await cleanupOrphanedLiveContainer({
-        project_id,
-        name,
-        reason: "start found live project container without podman metadata",
-      });
-      podmanReportsLiveProjectRunning = false;
-    }
+    const { podmanReportsLiveProjectRunning } = await timings.measure(
+      "container_preflight",
+      async () => {
+        const hasLiveProjectContainer = await hasLiveConmonContainer(name);
+        let podmanReportsLiveProjectRunning = false;
+        if (hasLiveProjectContainer) {
+          podmanReportsLiveProjectRunning =
+            await podmanReportsRunningContainer(name);
+        }
+        if (hasLiveProjectContainer && !podmanReportsLiveProjectRunning) {
+          logger.warn(
+            "start: found live project processes without podman metadata; cleaning up before relaunch",
+            {
+              project_id,
+              name,
+            },
+          );
+          await cleanupOrphanedLiveContainer({
+            project_id,
+            name,
+            reason:
+              "start found live project container without podman metadata",
+          });
+          podmanReportsLiveProjectRunning = false;
+        }
+        return { hasLiveProjectContainer, podmanReportsLiveProjectRunning };
+      },
+    );
 
     let { home, scratch, quota_applied } = await timings.measure(
       "resolve_initial_paths",
@@ -2141,16 +2253,27 @@ async function startUnlocked({
       Number.isInteger(config?.http_port) && (config?.http_port ?? 0) > 0
         ? Number(config?.http_port)
         : undefined;
-    const ssh_port = configuredSshPort ?? (await getPort());
-    let http_port = configuredHttpPort ?? (await getPort());
-    // avoid rare collision with ssh_port when ports are probed locally
-    if (configuredHttpPort == null && http_port === ssh_port) {
-      http_port = await getPort();
-    }
+    const { ssh_port, http_port } = await timings.measure(
+      "allocate_ports",
+      async () => {
+        const ssh_port = configuredSshPort ?? (await getPort());
+        let http_port = configuredHttpPort ?? (await getPort());
+        // avoid rare collision with ssh_port when ports are probed locally
+        if (configuredHttpPort == null && http_port === ssh_port) {
+          http_port = await getPort();
+        }
+        return { ssh_port, http_port };
+      },
+    );
 
     const args: string[] = [];
-    args.push("run");
-    args.push(...(await podmanRuntimeArgs()));
+    args.push("create");
+    args.push(
+      ...(await timings.measure(
+        "resolve_podman_runtime",
+        async () => await podmanRuntimeArgs(),
+      )),
+    );
     // Podman 4.9 cannot reliably enforce rootless per-container limits on the
     // production cgroup layout. Keep it from moving descendants out of the
     // root-owned aggregate pool; the pre-exec launcher provides containment.
@@ -2161,7 +2284,6 @@ async function startUnlocked({
       `--userns=keep-id:uid=${DEFAULT_PROJECT_RUNTIME_UID},gid=${DEFAULT_PROJECT_RUNTIME_GID}`,
     );
     args.push("--user", "0:0");
-    args.push("--detach");
     args.push("--label", `project_id=${project_id}`, "--label", `role=project`);
     args.push("--replace");
     const originalConatServer = env.CONAT_SERVER;
@@ -2307,7 +2429,10 @@ async function startUnlocked({
       args.push("-e", `${key}=${env[key]}`);
     }
 
-    const limitArgs = await podmanLimits(config);
+    const limitArgs = await timings.measure(
+      "resolve_cgroup_limits",
+      async () => await podmanLimits(config),
+    );
     const projectCgroupLimits = projectCgroupLimitsFromPodmanArgs(
       limitArgs,
       config?.io_class,
@@ -2325,21 +2450,39 @@ async function startUnlocked({
     args.push(projectScript, "--sshd", "--init", PROJECT_STARTUP_SCRIPT_PATH);
 
     logger.debug("start: launching container - ", name);
-    await timings.measure(
-      "podman_run",
-      async () =>
-        await podman(args, {
-          launcher: projectCgroupPodmanLauncher(
-            project_id,
-            projectCgroupLimits,
-          ),
-        }),
-    );
-    const started = await timings.measure(
+    try {
+      // Creation and initial runtime startup use separate leaves under the
+      // bounded host-level reserve. The project runtime leaf keeps all hard
+      // project limits and has no network until verified migration into the
+      // final per-project cgroup after Podman reports the container running.
+      await timings.measure(
+        "podman_create",
+        async () =>
+          await podman(args, {
+            launcher: projectStartupPodmanLauncher(project_id),
+          }),
+      );
+      await timings.measure(
+        "podman_start",
+        async () =>
+          await podman(["start", name], {
+            launcher: projectCgroupPodmanLauncher(project_id, {
+              ...projectCgroupLimits,
+              cpu_weight: PROJECT_STARTUP_CPU_WEIGHT,
+            }),
+          }),
+      );
+    } catch (err) {
+      await podman(["rm", "-f", "-t", "0", name], { timeout: 10 }).catch(
+        () => {},
+      );
+      throw err;
+    }
+    const runtime = await timings.measure(
       "verify_container_running",
       async () => await waitForStartedContainer(name),
     );
-    if (!started) {
+    if (!runtime) {
       const detail = await collectStartFailureDetail(name);
       await podman(["rm", "-f", "-t", "0", name], { timeout: 10 }).catch(
         (err) => {
@@ -2357,14 +2500,15 @@ async function startUnlocked({
       );
     }
     try {
-      await attachProjectToCgroup({
-        project_id,
-        name,
-        limits: projectCgroupLimits,
-      });
       await timings.measure(
-        "verify_project_cgroup",
-        async () => await verifyProjectContainerInPool({ project_id, name }),
+        "finalize_project_cgroup",
+        async () =>
+          await attachPreparedProjectRuntime({
+            project_id,
+            runtime,
+            cpu_weight: projectCgroupLimits.cpu_weight,
+            io_weight: projectCgroupLimits.io_weight,
+          }),
       );
     } catch (err) {
       await podman(["rm", "-f", "-t", "0", name], { timeout: 10 }).catch(
@@ -2384,6 +2528,13 @@ async function startUnlocked({
       desc: "started",
     });
     timings.phase_timings_ms.total = Date.now() - totalStarted;
+    timings.phase_timings_ms.unattributed = Math.max(
+      0,
+      timings.phase_timings_ms.total -
+        Object.entries(timings.phase_timings_ms)
+          .filter(([phase]) => phase !== "total")
+          .reduce((sum, [_phase, duration]) => sum + duration, 0),
+    );
 
     return {
       state: "running",
@@ -2504,10 +2655,11 @@ async function stopUnlocked({ project_id }: { project_id: string }) {
           name,
         });
       }
-      // A fully stopped project must release every overlay lease. Otherwise a
-      // stale merged mount can survive a failed start or snapshot restore and
-      // mask the correct lowerdir on the next start.
-      await unmountAllRootFs(project_id);
+      // Release every overlay lease, but do not synchronously force a kernel
+      // unmount while holding the project lifecycle lock. A quick restart can
+      // cancel the delayed disposal and reuse the image-validated mount;
+      // otherwise the lease manager detaches it after its grace period.
+      await unmountAllRootFs(project_id, { immediate: false });
       await cleanupProjectSecretsHostPath(project_id);
       await cleanupProjectCgroup(project_id);
     } catch (err) {

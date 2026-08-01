@@ -667,6 +667,7 @@ function makeDeps(
                 status: "running",
                 machine: {
                   cloud: "nebius",
+                  machine_type: request.machine_type,
                   shared_disk_gb: request.delete_shared_scratch
                     ? undefined
                     : request.shared_disk_gb,
@@ -951,6 +952,42 @@ test("host scratch set grows existing shared scratch without sending disk type",
   assert.equal(capture.data.host_id, "host-1");
   assert.equal(capture.data.requested_shared_disk_gb, 200);
   assert.equal(capture.data.normalized_shared_disk_gb, 279);
+});
+
+test("host machine-type updates a resolved host through the validated API", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const deps = makeDeps(capture, {
+    resolveHost: async () => ({
+      id: "host-id",
+      name: "oceania-1",
+      status: "off",
+    }),
+  });
+  const program = new Command();
+  registerHostCommand(program, deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "machine-type",
+    "oceania-1",
+    "t2d-standard-16",
+  ]);
+
+  assert.deepEqual(capture.hostMachineUpdates?.[0], {
+    id: "host-id",
+    machine_type: "t2d-standard-16",
+  });
+  assert.equal(capture.data.host_id, "host-id");
+  assert.equal(capture.data.machine_type, "t2d-standard-16");
 });
 
 test("host scratch delete requires confirmation and sends delete flag", async () => {

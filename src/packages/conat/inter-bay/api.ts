@@ -2245,6 +2245,7 @@ export type HostControlMethod =
   | "close-and-cleanup-exam-run"
   | "create-project"
   | "start-project"
+  | "start-project-idempotent"
   | "stop-project"
   | "get-project-status"
   | "update-authorized-keys"
@@ -3387,6 +3388,10 @@ export interface InterBayHostControlApi {
     host_id: string;
     start: HostControlArg<"startProject">;
   }) => Promise<HostCreateProjectResponse>;
+  startProjectIdempotent: (opts: {
+    host_id: string;
+    start: HostControlArg<"startProjectIdempotent">;
+  }) => Promise<HostCreateProjectResponse>;
   stopProject: (opts: {
     host_id: string;
     stop: HostControlArg<"stopProject">;
@@ -4285,6 +4290,7 @@ const HOST_CONTROL_METHOD_SPECS = [
   },
   { name: "createProject", method: "create-project" },
   { name: "startProject", method: "start-project" },
+  { name: "startProjectIdempotent", method: "start-project-idempotent" },
   { name: "stopProject", method: "stop-project" },
   { name: "getProjectStatus", method: "get-project-status" },
   { name: "updateAuthorizedKeys", method: "update-authorized-keys" },

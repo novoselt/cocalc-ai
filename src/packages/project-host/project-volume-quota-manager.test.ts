@@ -84,6 +84,32 @@ describe("project volume quota manager", () => {
     expect(applyRaw.mock.calls.map(([opts]) => opts.size)).toEqual([150, 100]);
   });
 
+  it("forwards a forced physical write for a newly recreated volume", async () => {
+    const { ledger, manager, applyRaw } = await setup();
+    ledger.acceptProjectVolumeQuotaDesired({
+      project_id: "project-1",
+      volume_kind: "scratch",
+      desired_bytes: 100,
+    });
+
+    await manager.applyEffectiveQuota({
+      project_id: "project-1",
+      volume_kind: "scratch",
+      operation_class: "project_volume_prepare",
+      priority: "lifecycle",
+      force_write: true,
+    });
+
+    expect(applyRaw).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: "project-1",
+        volume_kind: "scratch",
+        size: 100,
+        force_write: true,
+      }),
+    );
+  });
+
   it("keeps the largest overlapping claim until it is released", async () => {
     const { manager, applyRaw, currentSize } = await setup();
     const first = await manager.beginTemporaryOverride({

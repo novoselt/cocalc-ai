@@ -410,6 +410,100 @@ describe("project host start ACP rehydrate ordering", () => {
     );
   });
 
+  it("returns an existing runtime without restarting it for idempotent start", async () => {
+    const runnerApi = {
+      start: jest.fn(),
+      status: jest.fn(async () => ({ state: "running" })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await expect(
+      hubApi.projects.start({ project_id, skip_if_running: true }),
+    ).resolves.toMatchObject({
+      state: "running",
+      phase_timings_ms: {
+        check_existing_runtime: expect.any(Number),
+        total: expect.any(Number),
+      },
+    });
+    expect(runnerApi.status).toHaveBeenCalledWith({ project_id });
+    expect(runnerApi.start).not.toHaveBeenCalled();
+    expect(applyPendingCopies).not.toHaveBeenCalled();
+  });
+
+  it("does not probe Podman twice when local state records a stopped runtime", async () => {
+    getProject.mockReturnValue({
+      image: DEFAULT_PROJECT_IMAGE,
+      run_quota: undefined,
+      state: "opened",
+    });
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      status: jest.fn(async () => ({ state: "opened" })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({ project_id, skip_if_running: true });
+
+    expect(runnerApi.status).not.toHaveBeenCalled();
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the remote pending-copy claim after an authoritative empty check", async () => {
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({
+      project_id,
+      apply_pending_copies: false,
+    });
+
+    expect(applyPendingCopies).not.toHaveBeenCalled();
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not skip an explicit restore when the runtime is active", async () => {
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      status: jest.fn(async () => ({ state: "running" })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({
+      project_id,
+      restore_backup_id: "backup-1",
+      skip_if_running: true,
+    });
+
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
+  });
+
   it("overlaps a cold OCI estimate with start preparation", async () => {
     const estimate = {
       estimated_bytes: 4_000_000_000,
@@ -1098,6 +1192,10 @@ describe("project host start ACP rehydrate ordering", () => {
     const previousMode = process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
     process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = "enforce";
     projectVolumeQuotaIsApplied.mockReturnValue(true);
+    getProjectVolumeQuota.mockImplementation((_project_id, volume_kind) => ({
+      project_id,
+      volume_kind,
+    }));
     getProject.mockReturnValue({
       image: DEFAULT_PROJECT_IMAGE,
       run_quota: { disk_quota: 65_000 },
@@ -1127,6 +1225,7 @@ describe("project host start ACP rehydrate ordering", () => {
       });
       expect(getVolume).not.toHaveBeenCalled();
       expect(resetScratchVolume).not.toHaveBeenCalled();
+      expect(runnerApi.status).not.toHaveBeenCalled();
       expect(runnerApi.start).toHaveBeenCalled();
     } finally {
       if (previousMode == null) {
@@ -1155,11 +1254,12 @@ describe("project host start ACP rehydrate ordering", () => {
         set: jest.fn(async () => undefined),
       },
     });
+    const scratchQuotaGet = jest.fn(async () => ({ used: 0, size: 0 }));
     const scratchQuotaSet = jest.fn(async () => undefined);
     resetScratchVolume.mockResolvedValueOnce({
       path: `/mnt/cocalc/project-${project_id}-scratch`,
       quota: {
-        get: jest.fn(async () => ({ used: 0, size: 0 })),
+        get: scratchQuotaGet,
         set: scratchQuotaSet,
       },
     });
@@ -1185,7 +1285,9 @@ describe("project host start ACP rehydrate ordering", () => {
         volume_kind: "scratch",
         operation_class: "project_volume_prepare",
         priority: "lifecycle",
+        force_write: true,
       });
+      expect(scratchQuotaGet).not.toHaveBeenCalled();
       expect(runnerApi.start).toHaveBeenCalledWith({
         project_id,
         config: expect.objectContaining({
@@ -1491,6 +1593,56 @@ describe("project host start ACP rehydrate ordering", () => {
         title: "dev",
         image: customImage,
         secret_names: ["API_KEY"],
+      }),
+    );
+  });
+
+  it("uses metadata carried by the start RPC without calling the master", async () => {
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+    getProject.mockReturnValue({
+      image: undefined,
+      title: undefined,
+      authorized_keys: undefined,
+      run_quota: undefined,
+    });
+    getMasterConatClient.mockReturnValue({ nats: true });
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({
+      project_id,
+      start_metadata: {
+        title: "dev",
+        users: { "test-account-id": { group: "owner" } },
+        image: customImage,
+        authorized_keys: "ssh-ed25519 AAAATEST user@test",
+        run_quota: { memory_limit: 1234 },
+        env: { FOO: "bar" },
+      },
+    });
+
+    expect(callHub).not.toHaveBeenCalled();
+    expect(runnerApi.start).toHaveBeenCalledWith({
+      project_id,
+      config: expect.objectContaining({
+        image: customImage,
+        authorized_keys: "ssh-ed25519 AAAATEST user@test",
+        env: { FOO: "bar" },
+      }),
+    });
+    expect(upsertProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id,
+        title: "dev",
+        image: customImage,
       }),
     );
   });

@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import { appendSupervisionEvent } from "./supervision-events";
+import { attachCurrentProcessToHostServiceCgroup } from "./host-service-cgroup";
 
 const COMMAND_ENV = "COCALC_PROJECT_HOST_SUPERVISED_COMMAND";
 const ARGS_ENV = "COCALC_PROJECT_HOST_SUPERVISED_ARGS";
@@ -231,6 +232,8 @@ export function supervisorExitCode(result: SupervisedAppResult): number {
 }
 
 if (require.main === module) {
+  process.title = supervisedProcessTitle(supervisedComponent());
+  attachCurrentProcessToHostServiceCgroup();
   superviseApp()
     .then((result) => {
       process.exit(supervisorExitCode(result));

@@ -21,6 +21,7 @@ import type {
   ProjectSecretsRuntimeRefreshResult,
   ProjectSecretSshKeySetupResult,
 } from "@cocalc/util/project-secrets";
+import type { ProjectEnv } from "@cocalc/conat/hub/api/projects";
 import type {
   RootfsTrivyHostScanRequest,
   RootfsTrivyHostScanResponse,
@@ -45,6 +46,18 @@ export interface HostCreateProjectResponse {
   project_bundle_version?: string;
   tools_version?: string;
   phase_timings_ms?: Record<string, number>;
+}
+
+export interface HostProjectStartMetadata {
+  title?: string;
+  users?: any;
+  image?: string;
+  authorized_keys?: string;
+  run_quota?: any;
+  run_quota_revision?: number;
+  env?: ProjectEnv;
+  autostart_enabled?: boolean | null;
+  project_secrets_cache?: ProjectSecretsRuntimeCache;
 }
 
 export interface HostProjectStateResponse {
@@ -570,8 +583,25 @@ export interface HostControlApi {
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
+    apply_pending_copies?: boolean;
     lro_op_id?: string;
     managed_egress_override?: ManagedProjectEgressOverride;
+    start_metadata?: HostProjectStartMetadata;
+  }) => Promise<HostCreateProjectResponse>;
+  // A distinct method keeps mixed-version rollout safe: old hosts reject it,
+  // allowing the bay to fall back to status + legacy start.
+  startProjectIdempotent: (opts: {
+    project_id: string;
+    authorized_keys?: string;
+    run_quota?: any;
+    run_quota_revision?: number;
+    image?: string;
+    restore?: "none" | "auto" | "required";
+    restore_backup_id?: string;
+    apply_pending_copies?: boolean;
+    lro_op_id?: string;
+    managed_egress_override?: ManagedProjectEgressOverride;
+    start_metadata?: HostProjectStartMetadata;
   }) => Promise<HostCreateProjectResponse>;
   stopProject: (opts: {
     project_id: string;

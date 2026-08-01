@@ -693,6 +693,7 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
+      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -738,6 +739,7 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
+      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -781,6 +783,7 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
+      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -827,7 +830,7 @@ describe("ProjectsActions archive flow", () => {
     );
   });
 
-  it("optimistically marks a started project as starting and schedules targeted reconciliation", async () => {
+  it("converges from a successful start LRO and retains projection fallbacks", async () => {
     jest.useFakeTimers();
     try {
       configureProject({
@@ -850,9 +853,12 @@ describe("ProjectsActions archive flow", () => {
       );
 
       const started = await actions.start_project(project_id);
+      await Promise.resolve();
 
       expect(started).toBe(true);
-      expect(mockedWebappClient.async_query).not.toHaveBeenCalled();
+      expect(mockedWebappClient.conat_client.lroWait).toHaveBeenCalledWith(
+        expect.objectContaining({ op_id: "start-op-1" }),
+      );
       expect(
         redux._set_state.mock.calls.some(
           ([state]) =>
@@ -863,7 +869,23 @@ describe("ProjectsActions archive flow", () => {
             ]) === "starting",
         ),
       ).toBe(true);
-      expect(reconcile).not.toHaveBeenCalled();
+      expect(
+        redux._set_state.mock.calls.some(
+          ([state]) =>
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "state",
+            ]) === "running" &&
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "source",
+            ]) === "project-start-lro",
+        ),
+      ).toBe(true);
+      expect(reconcile).toHaveBeenCalledTimes(1);
+      expect(reconcile).toHaveBeenCalledWith(project_id, "project-start");
 
       configureProject({
         state: "starting",
@@ -873,9 +895,70 @@ describe("ProjectsActions archive flow", () => {
 
       await jest.advanceTimersByTimeAsync(1_000);
       expect(reconcile).toHaveBeenCalledWith(project_id, "project-start");
+      expect(reconcile).toHaveBeenCalledTimes(2);
 
       await jest.advanceTimersByTimeAsync(5_000);
-      expect(reconcile).toHaveBeenCalledTimes(2);
+      expect(reconcile).toHaveBeenCalledTimes(3);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("converges directly from a bounded foreground start acknowledgement", async () => {
+    jest.useFakeTimers();
+    try {
+      configureProject({
+        state: "opened",
+        lastEdited: new Date("2026-04-25T15:55:00.000Z"),
+        hostId: "host-1",
+      });
+      mockedWebappClient.conat_client.hub.projects.start.mockResolvedValueOnce({
+        op_id: "start-op-foreground",
+        scope_type: "project",
+        scope_id: project_id,
+        service: "persist-service",
+        stream_name: "stream:start-op-foreground",
+        terminal_status: "succeeded",
+      });
+      const { actions, redux } = makeActions();
+      jest
+        .spyOn(actions, "ensure_host_info" as any)
+        .mockResolvedValue(undefined as any);
+      jest
+        .spyOn(actions as any, "project_log")
+        .mockImplementation(async () => {});
+      jest
+        .spyOn(actions as any, "loadProjectedProjectForCurrentAccount")
+        .mockResolvedValue(undefined);
+
+      const started = await actions.start_project(project_id);
+      await Promise.resolve();
+
+      expect(started).toBe(true);
+      expect(
+        mockedWebappClient.conat_client.hub.projects.start,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          wait: false,
+          foreground_wait_ms: 5_000,
+        }),
+      );
+      expect(mockedWebappClient.conat_client.lroWait).not.toHaveBeenCalled();
+      expect(
+        redux._set_state.mock.calls.some(
+          ([state]) =>
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "state",
+            ]) === "running" &&
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "source",
+            ]) === "project-start-lro",
+        ),
+      ).toBe(true);
     } finally {
       jest.useRealTimers();
     }
@@ -929,6 +1012,33 @@ describe("ProjectsActions archive flow", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it("does not wait for a normal host-info refresh before starting", async () => {
+    configureProject({
+      state: "opened",
+      lastEdited: new Date("2026-04-25T15:55:00.000Z"),
+      hostId: "host-1",
+    });
+    const { actions } = makeActions();
+    const unresolvedHostRefresh = new Promise<never>(() => undefined);
+    const ensureHostInfo = jest
+      .spyOn(actions, "ensure_host_info" as any)
+      .mockReturnValue(unresolvedHostRefresh);
+    jest
+      .spyOn(actions as any, "project_log")
+      .mockImplementation(async () => {});
+
+    await expect(actions.start_project(project_id)).resolves.toBe(true);
+
+    expect(ensureHostInfo).toHaveBeenCalledWith("host-1");
+    expect(
+      mockedWebappClient.conat_client.hub.projects.start,
+    ).toHaveBeenCalledWith({
+      foreground_wait_ms: 5000,
+      project_id,
+      wait: false,
+    });
   });
 
   it("logs project_started only after the project is observed running", async () => {

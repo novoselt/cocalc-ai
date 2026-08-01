@@ -259,9 +259,16 @@ export async function mount({
     // (handled by RefcountLeaseManager internally)
 
     if (await isMounted({ project_id })) {
-      // Already mounted; keep the lease and return.
-      addRelease(project_id, release);
-      return merged;
+      const mountedImage = await readFile(imageName, "utf8").catch(() => "");
+      if (mountedImage.trim() === image) {
+        // Already mounted against the requested lowerdir. A quick restart can
+        // cancel delayed disposal and safely reuse this mount.
+        addRelease(project_id, release);
+        return merged;
+      }
+      // Never let the restart grace period mask a RootFS change. Detach the
+      // old mount before replacing the persisted image identity below.
+      await disposeMount(project_id);
     }
 
     try {
@@ -319,13 +326,17 @@ export async function unmount(
   await release(opts);
 }
 
-export async function unmountAll(project_id: string): Promise<void> {
+export async function unmountAll(
+  project_id: string,
+  opts: { immediate?: boolean } = {},
+): Promise<void> {
+  const immediate = opts.immediate !== false;
   const releases = leaseReleases.get(project_id) ?? [];
   leaseReleases.delete(project_id);
   for (const release of releases.reverse()) {
-    await release({ immediate: true });
+    await release({ immediate });
   }
-  if (await isMounted({ project_id })) {
+  if (immediate && (await isMounted({ project_id }))) {
     await disposeMount(project_id);
   }
 }
