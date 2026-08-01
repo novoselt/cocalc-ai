@@ -827,7 +827,7 @@ describe("ProjectsActions archive flow", () => {
     );
   });
 
-  it("optimistically marks a started project as starting and schedules targeted reconciliation", async () => {
+  it("reconciles a start on LRO completion and retains scheduled fallbacks", async () => {
     jest.useFakeTimers();
     try {
       configureProject({
@@ -850,9 +850,12 @@ describe("ProjectsActions archive flow", () => {
       );
 
       const started = await actions.start_project(project_id);
+      await Promise.resolve();
 
       expect(started).toBe(true);
-      expect(mockedWebappClient.async_query).not.toHaveBeenCalled();
+      expect(mockedWebappClient.conat_client.lroWait).toHaveBeenCalledWith(
+        expect.objectContaining({ op_id: "start-op-1" }),
+      );
       expect(
         redux._set_state.mock.calls.some(
           ([state]) =>
@@ -863,7 +866,8 @@ describe("ProjectsActions archive flow", () => {
             ]) === "starting",
         ),
       ).toBe(true);
-      expect(reconcile).not.toHaveBeenCalled();
+      expect(reconcile).toHaveBeenCalledTimes(1);
+      expect(reconcile).toHaveBeenCalledWith(project_id, "project-start");
 
       configureProject({
         state: "starting",
@@ -873,9 +877,10 @@ describe("ProjectsActions archive flow", () => {
 
       await jest.advanceTimersByTimeAsync(1_000);
       expect(reconcile).toHaveBeenCalledWith(project_id, "project-start");
+      expect(reconcile).toHaveBeenCalledTimes(2);
 
       await jest.advanceTimersByTimeAsync(5_000);
-      expect(reconcile).toHaveBeenCalledTimes(2);
+      expect(reconcile).toHaveBeenCalledTimes(3);
     } finally {
       jest.useRealTimers();
     }

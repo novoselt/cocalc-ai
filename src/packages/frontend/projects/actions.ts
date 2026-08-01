@@ -4031,6 +4031,22 @@ export class ProjectsActions extends Actions<ProjectsState> {
         });
         actions.trackStartOp(resp);
         opts.onStartOp?.(resp);
+        const startConvergence = this.waitForProjectStartOp({
+          op: resp,
+          timeout_ms: opts.waitTimeoutMs,
+        }).then(async (summary) => {
+          if (summary.status === "succeeded") {
+            // The bay saves authoritative running state before publishing the
+            // terminal LRO summary. Repair once at that causal boundary rather
+            // than waiting for the cumulative periodic fallback (1s + 5s).
+            await this.repairProjectProjection({
+              kind: "project-ids",
+              project_ids: [project_id],
+              reason: "project-start",
+            });
+          }
+          return summary;
+        });
         this.recordProjectStartUxLatencyWhenRunning({
           project_id,
           timer: uxTimer,
@@ -4050,13 +4066,20 @@ export class ProjectsActions extends Actions<ProjectsState> {
           void this.ensure_host_info(host_id, true);
         }
         if (opts.waitForStart) {
-          const summary = await this.waitForProjectStartOp({
-            op: resp,
-            timeout_ms: opts.waitTimeoutMs,
-          });
+          const summary = await startConvergence;
           if (summary.status !== "succeeded") {
             throw Error(summary.error ?? `project start ${summary.status}`);
           }
+        } else {
+          void startConvergence.catch((err) => {
+            // Scheduled lifecycle reconciliation remains the fallback when a
+            // browser misses or loses the terminal LRO stream.
+            console.warn("project start LRO convergence failed", {
+              project_id,
+              op_id: resp?.op_id,
+              err: `${err}`,
+            });
+          });
         }
       } catch (err) {
         recordUxLatencyEvent({
