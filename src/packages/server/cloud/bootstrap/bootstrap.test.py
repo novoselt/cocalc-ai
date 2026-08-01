@@ -1959,6 +1959,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("project-cgroup-io-weight-mismatch", finish_startup_body)
             self.assertIn("project_pid_is_in_pool", finish_startup_body)
             self.assertIn('require_runtime_owned_pid "$conmon_pid"', script)
+            self.assertIn("is_trusted_conmon_executable()", script)
+            self.assertIn(
+                "/opt/cocalc/container-runtime/*/bin/conmon)",
+                script,
+            )
+            self.assertIn(
+                'is_trusted_conmon_executable "$conmon_exe"',
+                script,
+            )
             self.assertIn(
                 'deny "project-conmon-executable-invalid"',
                 script,

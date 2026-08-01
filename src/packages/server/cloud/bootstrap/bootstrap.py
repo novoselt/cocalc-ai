@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260801-v23"
+HELPER_SCHEMA_VERSION = "20260801-v24"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -3507,6 +3507,26 @@ require_runtime_owned_pid() {
   fi
 }
 
+is_trusted_conmon_executable() {
+  local executable="$1" runtime_relative version owner_uid mode
+  case "$executable" in
+    /usr/bin/conmon) ;;
+    /opt/cocalc/container-runtime/*/bin/conmon)
+      runtime_relative="${executable#/opt/cocalc/container-runtime/}"
+      version="${runtime_relative%%/*}"
+      [ "$runtime_relative" = "${version}/bin/conmon" ] || return 1
+      echo "$version" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]*$' || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  [ -f "$executable" ] || return 1
+  owner_uid="$(stat -Lc '%u' "$executable" 2>/dev/null || true)"
+  mode="$(stat -Lc '%a' "$executable" 2>/dev/null || true)"
+  [ "$owner_uid" = "0" ] || return 1
+  echo "$mode" | grep -Eq '^[0-7]{3,4}$' || return 1
+  [ "$((8#$mode & 022))" -eq 0 ] || return 1
+}
+
 host_service_process_title() {
   local title=""
   IFS= read -r -d '' title < "/proc/$1/cmdline" 2>/dev/null || true
@@ -5233,7 +5253,7 @@ case "$cmd" in
       require_live_pid "$init_pid"
       require_runtime_owned_pid "$conmon_pid"
       conmon_exe="$(readlink -f "/proc/${conmon_pid}/exe" 2>/dev/null || true)"
-      [ "$conmon_exe" = "/usr/bin/conmon" ] ||
+      is_trusted_conmon_executable "$conmon_exe" ||
         deny "project-conmon-executable-invalid" "pid=${conmon_pid},exe=${conmon_exe:-missing}"
       conmon_cmdline="$(tr '\\0' ' ' < "/proc/${conmon_pid}/cmdline" 2>/dev/null || true)"
       case " $conmon_cmdline " in
