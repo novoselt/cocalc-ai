@@ -4723,6 +4723,15 @@ async function runProjectStartLikeAction({
       op_id: op.op_id,
       status: op.status,
     });
+    if (foreground_wait_ms != null && foreground_wait_ms > 0) {
+      const terminalStatus = await waitForJoinedProjectStart({
+        op_id: op.op_id,
+        timeout_ms: foreground_wait_ms,
+      });
+      if (terminalStatus === "succeeded") {
+        return { ...response, terminal_status: "succeeded" };
+      }
+    }
     return response;
   }
   publishStartLroSummaryBestEffort({
@@ -4938,6 +4947,40 @@ async function runProjectStartLikeAction({
     );
   }
   return response;
+}
+
+async function waitForJoinedProjectStart({
+  op_id,
+  timeout_ms,
+}: {
+  op_id: string;
+  timeout_ms: number;
+}): Promise<"succeeded" | undefined> {
+  const deadline = Date.now() + timeout_ms;
+  let delay_ms = 10;
+  while (true) {
+    const summary = await getLro(op_id);
+    if (summary?.status === "succeeded") {
+      return "succeeded";
+    }
+    if (
+      summary?.status === "failed" ||
+      summary?.status === "canceled" ||
+      summary?.status === "expired"
+    ) {
+      throw new Error(
+        summary.error ?? `project start ${summary.status} (${op_id})`,
+      );
+    }
+    const remaining_ms = deadline - Date.now();
+    if (remaining_ms <= 0) {
+      return undefined;
+    }
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, Math.min(delay_ms, remaining_ms)),
+    );
+    delay_ms = Math.min(100, Math.ceil(delay_ms * 1.5));
+  }
 }
 
 export async function stop({

@@ -391,6 +391,77 @@ describe("projects.start", () => {
     );
   });
 
+  it("returns a terminal acknowledgement when joining a fast active start", async () => {
+    let created = true;
+    let finishStart: (() => void) | undefined;
+    interBayStartMock = jest.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishStart = resolve;
+        }),
+    );
+    createLroDetailedMock = jest.fn(async (...args: any[]) => ({
+      lro: await createLroMock(...args),
+      created: created ? ((created = false), true) : false,
+    }));
+    getLroMock = jest.fn(async () => ({
+      op_id: "op-1",
+      kind: "project-start",
+      scope_type: "project",
+      scope_id: "proj-1",
+      status: "succeeded",
+    }));
+    const { start } = await import("./projects");
+
+    const first = await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      wait: false,
+    });
+    const joined = await start({
+      account_id: "acct-2",
+      project_id: "proj-1",
+      wait: false,
+      foreground_wait_ms: 5_000,
+    });
+
+    expect(joined).toEqual({
+      ...first,
+      terminal_status: "succeeded",
+    });
+    expect(getLroMock).toHaveBeenCalledWith("op-1");
+    expect(interBayStartMock).toHaveBeenCalledTimes(1);
+
+    finishStart?.();
+    await flushBackgroundStartTask();
+  });
+
+  it("propagates terminal failure when joining an active start", async () => {
+    createLroDetailedMock = jest.fn(async (...args: any[]) => ({
+      lro: await createLroMock(...args),
+      created: false,
+    }));
+    getLroMock = jest.fn(async () => ({
+      op_id: "op-1",
+      kind: "project-start",
+      scope_type: "project",
+      scope_id: "proj-1",
+      status: "failed",
+      error: "runtime failed",
+    }));
+    const { start } = await import("./projects");
+
+    await expect(
+      start({
+        account_id: "acct-2",
+        project_id: "proj-1",
+        wait: false,
+        foreground_wait_ms: 5_000,
+      }),
+    ).rejects.toThrow("runtime failed");
+    expect(interBayStartMock).not.toHaveBeenCalled();
+  });
+
   it("does not let autostart supersede an active backup restore", async () => {
     let created = true;
     createLroDetailedMock = jest.fn(async (...args: any[]) => ({
