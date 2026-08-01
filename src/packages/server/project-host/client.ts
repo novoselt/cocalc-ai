@@ -42,6 +42,8 @@ export async function getRoutedHostControlClient({
       openExamRun: async (open) => await bridge.openExamRun({ host_id, open }),
       updateExamRunDeadline: async (update) =>
         await bridge.updateExamRunDeadline({ host_id, update }),
+      increaseExamRunCapacity: async (increase) =>
+        await bridge.increaseExamRunCapacity({ host_id, increase }),
       rotateExamRunToken: async (rotate) =>
         await bridge.rotateExamRunToken({ host_id, rotate }),
       closeAndCleanupExamRun: async (close) =>
@@ -79,6 +81,8 @@ export async function getRoutedHostControlClient({
         await bridge.deleteProjectData({ host_id, del }),
       upgradeSoftware: async (upgrade) =>
         await bridge.upgradeSoftware({ host_id, upgrade }),
+      stageProjectHostArtifact: async (stage) =>
+        await bridge.stageProjectHostArtifact({ host_id, stage }),
       rolloutManagedComponents: async (rollout) =>
         await bridge.rolloutManagedComponents({ host_id, rollout }),
       growBtrfs: async (grow) => await bridge.growBtrfs({ host_id, grow }),

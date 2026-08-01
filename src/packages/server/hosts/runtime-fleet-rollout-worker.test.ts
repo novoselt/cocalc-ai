@@ -91,7 +91,7 @@ describe("host runtime fleet rollout planning", () => {
     ).toBe(false);
   });
 
-  test("requires every selected auxiliary component to be aligned", () => {
+  test("requires every selected auxiliary component to be aligned without changing the host runtime", () => {
     const status = {
       host_id: "host-a",
       configured: [],
@@ -141,6 +141,11 @@ describe("host runtime fleet rollout planning", () => {
       }),
     ).toBe(false);
     status.observed_components[1].version_state = "aligned";
+    status.observed_artifacts[0].current_version = "artifact-v1";
+    status.observed_host_agent.project_host.rollout.target_version =
+      "artifact-v1";
+    status.observed_host_agent.project_host.rollout.running_version =
+      "artifact-v1";
     expect(
       __test__.runtimeObservationIsStable({
         status,
@@ -162,13 +167,34 @@ describe("host runtime fleet rollout planning", () => {
     );
   });
 
-  test("promotes only selected components with service-specific policies", () => {
+  test("promotes only selected auxiliary components with service-specific policies", () => {
     expect(
       __test__.runtimeDeploymentsForPromotion({
         version: "artifact-v2",
         components: ["conat-router", "acp-worker"],
         reason: "test",
         metadata: { campaign: "op-1" },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        target_type: "component",
+        target: "conat-router",
+        rollout_policy: "restart_now",
+      }),
+      expect.objectContaining({
+        target_type: "component",
+        target: "acp-worker",
+        rollout_policy: "drain_then_replace",
+      }),
+    ]);
+  });
+
+  test("promotes the artifact only when project-host is selected", () => {
+    expect(
+      __test__.runtimeDeploymentsForPromotion({
+        version: "artifact-v2",
+        components: ["project-host", "acp-worker"],
+        metadata: { campaign: "op-2" },
       }),
     ).toEqual([
       expect.objectContaining({
@@ -179,17 +205,10 @@ describe("host runtime fleet rollout planning", () => {
       expect.objectContaining({
         target_type: "component",
         target: "project-host",
-        rollout_policy: "restart_now",
-      }),
-      expect.objectContaining({
-        target_type: "component",
-        target: "conat-router",
-        rollout_policy: "restart_now",
       }),
       expect.objectContaining({
         target_type: "component",
         target: "acp-worker",
-        rollout_policy: "drain_then_replace",
       }),
     ]);
   });

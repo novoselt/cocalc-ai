@@ -422,6 +422,7 @@ export type HostManagedComponentRolloutAction =
 export interface HostManagedComponentRolloutRequest {
   components: ManagedComponentKind[];
   reason?: string;
+  desired_version?: string;
 }
 
 export interface HostManagedComponentRolloutResult {
@@ -541,6 +542,12 @@ export interface HostControlApi {
     run_id: string;
     config_generation: number;
     scheduled_stop_at: string;
+    stop_host_at_deadline?: boolean;
+  }) => Promise<HostExamRuntimeStatus>;
+  increaseExamRunCapacity: (opts: {
+    run_id: string;
+    config_generation: number;
+    max_projects: number;
   }) => Promise<HostExamRuntimeStatus>;
   rotateExamRunToken: (opts: {
     run_id: string;
@@ -606,6 +613,11 @@ export interface HostControlApi {
   deleteProjectData: (opts: { project_id: string }) => Promise<void>;
   upgradeSoftware: (
     opts: UpgradeSoftwareRequest,
+  ) => Promise<UpgradeSoftwareResponse>;
+  // A distinct RPC makes old hosts reject stage-only requests instead of
+  // interpreting them as normal project-host activation.
+  stageProjectHostArtifact: (
+    opts: StageProjectHostArtifactRequest,
   ) => Promise<UpgradeSoftwareResponse>;
   growBtrfs: (opts: { disk_gb?: number }) => Promise<{ ok: boolean }>;
   growSharedScratch: (opts: { disk_gb?: number }) => Promise<{ ok: boolean }>;
@@ -828,17 +840,26 @@ export interface UpgradeSoftwareRequest {
   targets: SoftwareUpgradeTarget[];
   base_url?: string;
   restart_project_host?: boolean;
+  // Install component code without changing the project-host process selected
+  // by the shared current link.
+  activate_project_host?: boolean;
   retention_policy?: HostRuntimeRetentionPolicy;
 }
 
 export interface UpgradeSoftwareResult {
   artifact: SoftwareArtifact;
   version: string;
-  status: "updated" | "noop";
+  status: "updated" | "staged" | "noop";
 }
 
 export interface UpgradeSoftwareResponse {
   results: UpgradeSoftwareResult[];
+}
+
+export interface StageProjectHostArtifactRequest {
+  version: string;
+  base_url?: string;
+  retention_policy?: HostRuntimeRetentionPolicy;
 }
 
 export interface HostStatusApi {

@@ -89,11 +89,11 @@ describe("project-host exam configuration", () => {
   it("keeps terminal access disabled unless explicitly enabled", () => {
     const base = {
       enabled: true,
-      max_workspaces: 100,
-      workspace_cpu: 1,
-      workspace_memory_mb: 2_000,
-      workspace_disk_mb: 5_000,
-      workspace_ttl_minutes: 360,
+      max_projects: 100,
+      project_cpu: 1,
+      project_memory_mb: 2_000,
+      project_disk_mb: 5_000,
+      project_ttl_minutes: 360,
       cleanup_grace_minutes: 10,
       network_mode: "disabled" as const,
     };
@@ -102,6 +102,21 @@ describe("project-host exam configuration", () => {
       __test__.normalizeConfig({ ...base, terminal_enabled: true })
         .terminal_enabled,
     ).toBe(true);
+  });
+
+  it("normalizes the public scratchpad title", () => {
+    expect(
+      __test__.normalizeConfig({
+        ...__test__.DEFAULT_EXAM_CONFIG,
+        title: "  Linear Algebra Scratchpad  ",
+      }).title,
+    ).toBe("Linear Algebra Scratchpad");
+    expect(() =>
+      __test__.normalizeConfig({
+        ...__test__.DEFAULT_EXAM_CONFIG,
+        title: "x".repeat(101),
+      }),
+    ).toThrow("1 to 100 characters");
   });
 
   it("rejects unsupported exam network modes", () => {
@@ -118,5 +133,63 @@ describe("project-host exam configuration", () => {
     const encoded = __test__.hashToken("do-not-store-this-token");
     expect(encoded).toMatch(/^scrypt-v1\$[^$]+\$[^$]+$/);
     expect(encoded).not.toContain("do-not-store-this-token");
+  });
+
+  it("recovers the current instructor token without storing plaintext", () => {
+    const row = {
+      run_id: "00000000-2000-4000-8000-000000000002",
+      status: "ready",
+      token_idempotency_key: "rotate:stable-key",
+    };
+    const first = __test__.tokenForRunRecord(row);
+    expect(first).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(__test__.tokenForRunRecord(row)).toBe(first);
+    expect(
+      __test__.tokenForRunRecord({ ...row, status: "stopped" }),
+    ).toBeUndefined();
+  });
+
+  it("reconciles central lifecycle state from the authoritative host", () => {
+    const run = {
+      run_id: "00000000-2000-4000-8000-000000000002",
+      status: "preparing",
+      max_projects: 10,
+    } as any;
+    expect(
+      __test__.shouldReconcileRunWithRuntime(run, {
+        run_id: run.run_id,
+        status: "ready",
+        admission_open: false,
+        active_projects: 0,
+      }),
+    ).toBe(true);
+    expect(
+      __test__.shouldReconcileRunWithRuntime(run, {
+        run_id: run.run_id,
+        status: "preparing",
+        admission_open: false,
+        active_projects: 0,
+      }),
+    ).toBe(false);
+    expect(
+      __test__.shouldReconcileRunWithRuntime(
+        { ...run, status: "open" },
+        {
+          run_id: run.run_id,
+          status: "open",
+          admission_open: true,
+          active_projects: 10,
+          max_projects: 11,
+        },
+      ),
+    ).toBe(true);
+    expect(
+      __test__.shouldReconcileRunWithRuntime(run, {
+        run_id: "00000000-3000-4000-8000-000000000003",
+        status: "ready",
+        admission_open: false,
+        active_projects: 0,
+      }),
+    ).toBe(false);
   });
 });

@@ -194,6 +194,7 @@ import type {
   HostRuntimeLogResponse,
   HostSshAuthorizedKeysResponse,
   HostStaticAppPathInspection,
+  StageProjectHostArtifactRequest,
   UpgradeSoftwareRequest,
   UpgradeSoftwareResponse,
 } from "@cocalc/conat/project-host/api";
@@ -2202,6 +2203,7 @@ export type HostConnectionMethod =
   | "rotate-host-exam-token"
   | "open-host-exam-run"
   | "update-host-exam-deadline"
+  | "increase-host-exam-capacity"
   | "stop-and-erase-host-exam-run"
   | "list-host-ssh-authorized-keys"
   | "add-host-ssh-authorized-key"
@@ -2238,6 +2240,7 @@ export type HostControlMethod =
   | "get-exam-run-status"
   | "open-exam-run"
   | "update-exam-run-deadline"
+  | "increase-exam-run-capacity"
   | "rotate-exam-run-token"
   | "close-and-cleanup-exam-run"
   | "create-project"
@@ -2252,6 +2255,7 @@ export type HostControlMethod =
   | "apply-pending-copies"
   | "delete-project-data"
   | "upgrade-software"
+  | "stage-project-host-artifact"
   | "rollout-managed-components"
   | "grow-btrfs"
   | "grow-shared-scratch"
@@ -2986,6 +2990,9 @@ export interface InterBayHostConnectionApi {
   updateHostExamDeadline: (
     opts: Parameters<Hosts["updateHostExamDeadline"]>[0],
   ) => Promise<Awaited<ReturnType<Hosts["updateHostExamDeadline"]>>>;
+  increaseHostExamCapacity: (
+    opts: Parameters<Hosts["increaseHostExamCapacity"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["increaseHostExamCapacity"]>>>;
   stopAndEraseHostExamRun: (
     opts: Parameters<Hosts["stopAndEraseHostExamRun"]>[0],
   ) => Promise<Awaited<ReturnType<Hosts["stopAndEraseHostExamRun"]>>>;
@@ -3207,6 +3214,10 @@ const HOST_CONNECTION_METHOD_SPECS = [
     method: "update-host-exam-deadline",
   },
   {
+    name: "increaseHostExamCapacity",
+    method: "increase-host-exam-capacity",
+  },
+  {
     name: "stopAndEraseHostExamRun",
     method: "stop-and-erase-host-exam-run",
   },
@@ -3355,6 +3366,10 @@ export interface InterBayHostControlApi {
     host_id: string;
     update: HostControlArg<"updateExamRunDeadline">;
   }) => ReturnType<HostControlApi["updateExamRunDeadline"]>;
+  increaseExamRunCapacity: (opts: {
+    host_id: string;
+    increase: HostControlArg<"increaseExamRunCapacity">;
+  }) => ReturnType<HostControlApi["increaseExamRunCapacity"]>;
   rotateExamRunToken: (opts: {
     host_id: string;
     rotate: HostControlArg<"rotateExamRunToken">;
@@ -3413,6 +3428,10 @@ export interface InterBayHostControlApi {
   upgradeSoftware: (opts: {
     host_id: string;
     upgrade: UpgradeSoftwareRequest;
+  }) => Promise<UpgradeSoftwareResponse>;
+  stageProjectHostArtifact: (opts: {
+    host_id: string;
+    stage: StageProjectHostArtifactRequest;
   }) => Promise<UpgradeSoftwareResponse>;
   rolloutManagedComponents: (opts: {
     host_id: string;
@@ -4255,6 +4274,10 @@ const HOST_CONTROL_METHOD_SPECS = [
     name: "updateExamRunDeadline",
     method: "update-exam-run-deadline",
   },
+  {
+    name: "increaseExamRunCapacity",
+    method: "increase-exam-run-capacity",
+  },
   { name: "rotateExamRunToken", method: "rotate-exam-run-token" },
   {
     name: "closeAndCleanupExamRun",
@@ -4272,6 +4295,10 @@ const HOST_CONTROL_METHOD_SPECS = [
   { name: "applyPendingCopies", method: "apply-pending-copies" },
   { name: "deleteProjectData", method: "delete-project-data" },
   { name: "upgradeSoftware", method: "upgrade-software" },
+  {
+    name: "stageProjectHostArtifact",
+    method: "stage-project-host-artifact",
+  },
   { name: "rolloutManagedComponents", method: "rollout-managed-components" },
   { name: "growBtrfs", method: "grow-btrfs" },
   { name: "growSharedScratch", method: "grow-shared-scratch" },

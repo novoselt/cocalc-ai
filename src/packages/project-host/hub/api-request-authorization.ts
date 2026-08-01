@@ -8,6 +8,10 @@ import { ConatError } from "@cocalc/conat/util";
 import type { HubApiRequestContext } from "@cocalc/lite/hub/api";
 import { getRow } from "@cocalc/lite/hub/sqlite/database";
 import { isValidUUID } from "@cocalc/util/misc";
+import {
+  getLocalExamAccountProjectId,
+  isLocalExamProject,
+} from "../exam/identity";
 
 export const ACCOUNT_PROJECT_HOST_HUB_METHODS = new Set([
   "projects.codexDeviceAuthStart",
@@ -38,6 +42,17 @@ export const PROJECT_PROJECT_HOST_HUB_METHODS = new Set([
   "system.listProjectAppPrivateHostnames",
   "system.reserveProjectAppPrivateHostname",
   "system.releaseProjectAppPrivateHostname",
+  "system.getManagedProjectEgressPolicy",
+  "system.recordManagedProjectEgress",
+  "system.recordServiceAdmissionDenial",
+  "system.recordServiceAdmissionNearLimit",
+  "system.getServiceAdmissionConfig",
+]);
+
+export const EXAM_PROJECT_HOST_HUB_METHODS = new Set([
+  "db.getBlob",
+  "db.saveBlob",
+  "projects.getSshKeys",
   "system.getManagedProjectEgressPolicy",
   "system.recordManagedProjectEgress",
   "system.recordServiceAdmissionDenial",
@@ -97,8 +112,16 @@ export function authorizeProjectHostHubApiRequest({
       );
     }
     const targetProjectId = projectIdFromArgs(args);
+    if (targetProjectId == null) {
+      forbidden("not authorized for project", subject);
+    }
+    if (getLocalExamAccountProjectId(account_id) != null) {
+      forbidden(
+        "project-host hub API methods are disabled for exam accounts",
+        subject,
+      );
+    }
     if (
-      targetProjectId == null ||
       !isProjectCollaboratorLocal({
         account_id,
         project_id: targetProjectId,
@@ -113,7 +136,10 @@ export function authorizeProjectHostHubApiRequest({
     if (name === "system.ping") {
       return;
     }
-    if (!PROJECT_PROJECT_HOST_HUB_METHODS.has(name)) {
+    const allowedMethods = isLocalExamProject(project_id)
+      ? EXAM_PROJECT_HOST_HUB_METHODS
+      : PROJECT_PROJECT_HOST_HUB_METHODS;
+    if (!allowedMethods.has(name)) {
       forbidden(
         "project-host hub API method is not available to project identities",
         subject,

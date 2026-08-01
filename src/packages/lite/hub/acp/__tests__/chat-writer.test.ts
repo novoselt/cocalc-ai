@@ -20,6 +20,8 @@ import {
   disposeAllChatWritersForTests,
   recoverCurrentWorkerStuckAcpTurns,
   recoverOrphanedAcpTurns,
+  recoverTerminalStaleAcpTurns,
+  repairCompletedAcpTurn,
   repairInterruptedAcpTurn,
 } from "../index";
 import * as queue from "../../sqlite/acp-queue";
@@ -900,6 +902,63 @@ describe("ChatStreamWriter", () => {
       ]),
     );
     (writer as any).dispose?.(true);
+    await writer.waitUntilDisposed();
+  });
+
+  it("retains completion when terminal activity persistence times out before the chat commit", async () => {
+    const { syncdb, setCurrent } = makeFakeSyncDB();
+    setCurrent({
+      event: "chat",
+      date: baseMetadata.message_date,
+      sender_id: baseMetadata.sender_id,
+      message_id: baseMetadata.message_id,
+      thread_id: baseMetadata.thread_id,
+      generating: true,
+      history: [{ content: ":robot: Thinking..." }],
+    });
+    let releaseLog: (() => void) | undefined;
+    const logGate = new Promise<void>((resolve) => {
+      releaseLog = resolve;
+    });
+    const summary: AcpStreamMessage = {
+      type: "summary",
+      finalResponse: "done despite the persistence disconnect",
+      seq: 0,
+    };
+    const writer: any = new ChatStreamWriter({
+      metadata: baseMetadata,
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+    });
+
+    await writer.waitUntilReady();
+    (queue.listAcpPayloads as any).mockReturnValue([summary]);
+    writer.waitForLiveLogFlush = async () => await logGate;
+    writer.terminalStorageTimeoutMs = 5;
+    await writer.handle(summary);
+
+    expect(writer.getTerminalState()).toBe("completed");
+    expect(
+      syncdb.get_one({ event: "chat", message_id: baseMetadata.message_id })
+        ?.generating,
+    ).toBe(true);
+    expect((turns.finalizeAcpTurnLease as any).mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.objectContaining({
+            state: "completed",
+          }),
+        ],
+      ]),
+    );
+
+    releaseLog?.();
+    writer.dispose?.(true);
     await writer.waitUntilDisposed();
   });
 
@@ -3079,6 +3138,245 @@ describe("recoverOrphanedAcpTurns", () => {
       model: "gpt-5.3-codex",
       sessionId: "session-keep",
     });
+  });
+});
+
+describe("repairCompletedAcpTurn", () => {
+  it("replays a queued summary as a durable completed chat turn", async () => {
+    const { syncdb, setCurrent } = makeFakeSyncDB();
+    const messageDate = "2026-07-31T19:33:55.502Z";
+    const payloads: AcpStreamMessage[] = [
+      {
+        type: "event",
+        event: {
+          type: "message",
+          text: "intermediate response",
+        },
+        seq: 0,
+      },
+      {
+        type: "summary",
+        finalResponse: "The completed answer must survive reconnect.",
+        threadId: "019fa190-3b85-79b2-bbf0-ed06dec7b570",
+        usage: {
+          inputTokens: 10,
+          outputTokens: 20,
+        } as any,
+        seq: 1,
+      },
+    ];
+    setCurrent({
+      event: "chat",
+      date: messageDate,
+      sender_id: "codex-agent",
+      message_id: "msg-completed-replay",
+      thread_id: "thread-completed-replay",
+      generating: true,
+      history: [
+        {
+          author_id: "codex-agent",
+          content: ":robot: Thinking...",
+          date: messageDate,
+        },
+      ],
+    });
+    (chatServer.acquireChatSyncDB as any).mockResolvedValue(syncdb);
+    (queue.listAcpPayloads as any).mockReturnValue(payloads);
+    const logSet = jest.fn(async () => {});
+    (akv as any).mockReturnValue({ set: logSet });
+
+    const repaired = await repairCompletedAcpTurn({
+      client: makeFakeClient() as any,
+      turn: {
+        project_id: "p",
+        path: "chat",
+        message_date: messageDate,
+        sender_id: "codex-agent",
+        message_id: "msg-completed-replay",
+        thread_id: "thread-completed-replay",
+        account_id: "account-1",
+        started_at_ms: 1234,
+      },
+    });
+
+    const finalChat = syncdb.get_one({
+      event: "chat",
+      message_id: "msg-completed-replay",
+    });
+    const threadState = syncdb.get_one({
+      event: "chat-thread-state",
+      thread_id: "thread-completed-replay",
+    });
+    expect(repaired).toBe(true);
+    expect(finalChat?.generating).toBe(false);
+    expect(finalChat?.history?.[0]?.content).toBe(
+      "The completed answer must survive reconnect.",
+    );
+    expect(finalChat?.acp_thread_id).toBe(
+      "019fa190-3b85-79b2-bbf0-ed06dec7b570",
+    );
+    expect(finalChat?.acp_account_id).toBe("account-1");
+    expect(finalChat?.acp_interrupted).toBe(false);
+    expect(threadState?.state).toBe("complete");
+    expect(logSet).toHaveBeenCalledWith(
+      "thread-completed-replay:msg-completed-replay",
+      payloads,
+    );
+    expect(queue.clearAcpPayloads).toHaveBeenCalled();
+  });
+
+  it("retains the summary queue when completed chat replay cannot save", async () => {
+    const { syncdb, setCurrent } = makeFakeSyncDB();
+    setCurrent({
+      event: "chat",
+      date: "2026-07-31T19:33:55.502Z",
+      sender_id: "codex-agent",
+      message_id: "msg-completed-retry",
+      thread_id: "thread-completed-retry",
+      generating: true,
+      history: [],
+    });
+    syncdb.save = async () => {
+      throw new Error("disconnected");
+    };
+    (chatServer.acquireChatSyncDB as any).mockResolvedValue(syncdb);
+    (queue.listAcpPayloads as any).mockReturnValue([
+      {
+        type: "summary",
+        finalResponse: "retained final answer",
+        seq: 0,
+      },
+    ]);
+
+    const repaired = await repairCompletedAcpTurn({
+      client: makeFakeClient() as any,
+      turn: {
+        project_id: "p",
+        path: "chat",
+        message_date: "2026-07-31T19:33:55.502Z",
+        sender_id: "codex-agent",
+        message_id: "msg-completed-retry",
+        thread_id: "thread-completed-retry",
+      },
+    });
+
+    expect(repaired).toBe(false);
+    expect(queue.clearAcpPayloads).not.toHaveBeenCalled();
+  });
+
+  it("replays queued completion instead of interrupting it during restart recovery", async () => {
+    const { syncdb, setCurrent } = makeFakeSyncDB();
+    const messageDate = "2026-07-31T19:33:55.502Z";
+    setCurrent({
+      event: "chat",
+      date: messageDate,
+      sender_id: "codex-agent",
+      message_id: "msg-restart-completed",
+      thread_id: "thread-restart-completed",
+      generating: true,
+      history: [{ content: ":robot: Thinking..." }],
+    });
+    (chatServer.acquireChatSyncDB as any).mockResolvedValue(syncdb);
+    (queue.listAcpPayloads as any).mockReturnValue([
+      {
+        type: "summary",
+        finalResponse: "completed before the worker restarted",
+        seq: 0,
+      },
+    ]);
+    (turns.listRecentTerminalAcpTurnLeases as any).mockReturnValue([
+      {
+        project_id: "p",
+        path: "chat",
+        message_date: messageDate,
+        sender_id: "codex-agent",
+        message_id: "msg-restart-completed",
+        thread_id: "thread-restart-completed",
+        state: "completed",
+        owner_instance_id: "old-worker",
+        started_at: Date.now() - 60_000,
+        heartbeat_at: Date.now() - 20_000,
+        ended_at: Date.now() - 15_000,
+      },
+    ]);
+
+    const recovered = await recoverTerminalStaleAcpTurns(
+      makeFakeClient() as any,
+    );
+
+    const finalChat = syncdb.get_one({
+      event: "chat",
+      message_id: "msg-restart-completed",
+    });
+    const threadState = syncdb.get_one({
+      event: "chat-thread-state",
+      thread_id: "thread-restart-completed",
+    });
+    expect(recovered).toBe(1);
+    expect(finalChat?.generating).toBe(false);
+    expect(finalChat?.history?.[0]?.content).toBe(
+      "completed before the worker restarted",
+    );
+    expect(finalChat?.acp_interrupted).toBe(false);
+    expect(threadState?.state).toBe("complete");
+  });
+
+  it("does not overwrite a newer active turn's thread state", async () => {
+    const { syncdb, setCurrent } = makeFakeSyncDB();
+    const messageDate = "2026-07-31T19:33:55.502Z";
+    setCurrent({
+      event: "chat",
+      date: messageDate,
+      sender_id: "codex-agent",
+      message_id: "msg-older-completed",
+      thread_id: "thread-shared",
+      generating: true,
+      history: [],
+    });
+    syncdb.set({
+      event: "chat-thread-state",
+      thread_id: "thread-shared",
+      state: "running",
+      active_message_id: "msg-newer-running",
+    });
+    (chatServer.acquireChatSyncDB as any).mockResolvedValue(syncdb);
+    (queue.listAcpPayloads as any).mockReturnValue([
+      {
+        type: "summary",
+        finalResponse: "older turn completed",
+        seq: 0,
+      },
+    ]);
+
+    expect(
+      await repairCompletedAcpTurn({
+        client: makeFakeClient() as any,
+        turn: {
+          project_id: "p",
+          path: "chat",
+          message_date: messageDate,
+          sender_id: "codex-agent",
+          message_id: "msg-older-completed",
+          thread_id: "thread-shared",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      syncdb.get_one({
+        event: "chat-thread-state",
+        thread_id: "thread-shared",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        state: "running",
+        active_message_id: "msg-newer-running",
+      }),
+    );
+    expect(
+      syncdb.get_one({ event: "chat", message_id: "msg-older-completed" })
+        ?.generating,
+    ).toBe(false);
   });
 });
 

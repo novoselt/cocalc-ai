@@ -46,6 +46,7 @@ let hostConnectionListHostRootfsImagesMock: jest.Mock;
 let hostConnectionPullHostRootfsImageMock: jest.Mock;
 let hostConnectionDeleteHostRootfsImageMock: jest.Mock;
 let hostConnectionGcDeletedHostRootfsImagesMock: jest.Mock;
+let hostConnectionSetHostExamConfigMock: jest.Mock;
 let hostConnectionListHostSshAuthorizedKeysMock: jest.Mock;
 let hostConnectionAddHostSshAuthorizedKeyMock: jest.Mock;
 let hostConnectionRemoveHostSshAuthorizedKeyMock: jest.Mock;
@@ -435,6 +436,8 @@ jest.mock("@cocalc/server/inter-bay/bridge", () => ({
         hostConnectionDeleteHostRootfsImageMock(...args),
       gcDeletedHostRootfsImages: (...args: any[]) =>
         hostConnectionGcDeletedHostRootfsImagesMock(...args),
+      setHostExamConfig: (...args: any[]) =>
+        hostConnectionSetHostExamConfigMock(...args),
       listHostSshAuthorizedKeys: (...args: any[]) =>
         hostConnectionListHostSshAuthorizedKeysMock(...args),
       addHostSshAuthorizedKey: (...args: any[]) =>
@@ -788,6 +791,9 @@ beforeEach(() => {
     items: [],
     removed_count: 0,
     removed_bytes_total: 0,
+  }));
+  hostConnectionSetHostExamConfigMock = jest.fn(async () => ({
+    eligible: true,
   }));
   hostConnectionListHostSshAuthorizedKeysMock = jest.fn(async () => ({
     host_id: HOST_ID,
@@ -4119,6 +4125,50 @@ describe("hosts.authoritative remote host actions", () => {
         provider: "gcp",
       }),
     );
+  });
+
+  it("validates exam fresh auth once before an authoritative bay forward", async () => {
+    const { HOST_DANGEROUS_INTERNAL_AUTH, setHostExamConfig } =
+      await import("./hosts");
+    const config = {
+      enabled: true,
+      max_projects: 20,
+      project_cpu: 1,
+      project_memory_mb: 2_000,
+      project_disk_mb: 5_000,
+      project_ttl_minutes: 360,
+      cleanup_grace_minutes: 10,
+      terminal_enabled: false,
+      network_mode: "disabled" as const,
+    };
+
+    await setHostExamConfig({
+      account_id: ACCOUNT_ID,
+      browser_id: "browser-1",
+      session_hash: "session-hash",
+      id: HOST_ID,
+      config,
+    });
+
+    expect(requireFreshAuthForSessionHashMock).toHaveBeenCalledTimes(1);
+    expect(hostConnectionSetHostExamConfigMock).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+      browser_id: "browser-1",
+      session_hash: "session-hash",
+      id: HOST_ID,
+      config,
+    });
+
+    requireFreshAuthForSessionHashMock.mockClear();
+    await setHostExamConfig({
+      account_id: ACCOUNT_ID,
+      browser_id: "browser-1",
+      session_hash: "session-hash",
+      internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      id: HOST_ID,
+      config,
+    });
+    expect(requireFreshAuthForSessionHashMock).not.toHaveBeenCalled();
   });
 
   afterEach(() => {

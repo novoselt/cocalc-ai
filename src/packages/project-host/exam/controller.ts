@@ -37,6 +37,12 @@ import {
 } from "./network-policy";
 import { verifyExamPublicRoute } from "./public-route";
 import { verifyExamTokenHash } from "./token";
+import {
+  buildExamBrowserBootstrap,
+  type ExamBrowserBootstrap,
+} from "./browser-bootstrap";
+import { validateExamCapacityIncrease } from "./capacity";
+import TTL from "@isaacs/ttlcache";
 
 const logger = getLogger("project-host:exam:controller");
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
@@ -44,6 +50,7 @@ const WATCHDOG_INTERVAL_MS = 5_000;
 const POWEROFF_RESPONSE_GRACE_MS = 5_000;
 const TOKEN_FAILURE_WINDOW_MS = 10 * 60_000;
 const TOKEN_FAILURE_LIMIT = 12;
+const TOKEN_FAILURE_SOURCE_LIMIT = 10_000;
 
 interface LocalExamRunRow {
   run_id: string;
@@ -69,7 +76,10 @@ interface LocalExamSessionRow {
   last_error: string | null;
 }
 
-const tokenFailures = new Map<string, number[]>();
+const tokenFailures = new TTL<string, number[]>({
+  max: TOKEN_FAILURE_SOURCE_LIMIT,
+  ttl: TOKEN_FAILURE_WINDOW_MS,
+});
 let watchdogStarted = false;
 let cleanupInFlight: Promise<HostExamRuntimeStatus> | undefined;
 
@@ -110,6 +120,34 @@ function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
 
+function normalizeExamConfig(
+  raw: HostExamConfig | Record<string, any>,
+): HostExamConfig {
+  const legacy = raw as Record<string, any>;
+  return {
+    ...raw,
+    title: `${raw.title ?? "Exam Scratchpad"}`.trim() || "Exam Scratchpad",
+    max_projects: Number(raw.max_projects ?? legacy.max_workspaces),
+    project_cpu: Number(raw.project_cpu ?? legacy.workspace_cpu),
+    project_memory_mb: Number(
+      raw.project_memory_mb ?? legacy.workspace_memory_mb,
+    ),
+    project_disk_mb: Number(raw.project_disk_mb ?? legacy.workspace_disk_mb),
+    project_ttl_minutes: Number(
+      raw.project_ttl_minutes ?? legacy.workspace_ttl_minutes,
+    ),
+  } as HostExamConfig;
+}
+
+function normalizeExamRun(raw: HostExamRun | Record<string, any>): HostExamRun {
+  const legacy = raw as Record<string, any>;
+  return {
+    ...raw,
+    max_projects: Number(raw.max_projects ?? legacy.max_workspaces),
+    stop_host_at_deadline: raw.stop_host_at_deadline !== false,
+  } as HostExamRun;
+}
+
 function currentRunRow(): LocalExamRunRow | undefined {
   ensureSchema();
   return getDatabase()
@@ -148,8 +186,8 @@ function decodeRun(row: LocalExamRunRow): {
   run: HostExamRun;
 } {
   return {
-    config: parseJson<HostExamConfig>(row.config_json),
-    run: parseJson<HostExamRun>(row.run_json),
+    config: normalizeExamConfig(parseJson<HostExamConfig>(row.config_json)),
+    run: normalizeExamRun(parseJson<HostExamRun>(row.run_json)),
   };
 }
 
@@ -162,7 +200,7 @@ function listSessions(run_id: string): LocalExamSessionRow[] {
     .all(run_id) as LocalExamSessionRow[];
 }
 
-function activeWorkspaceCount(run_id: string): number {
+function activeProjectCount(run_id: string): number {
   ensureSchema();
   const row = getDatabase()
     .prepare(
@@ -188,7 +226,7 @@ function readinessForRow(row: LocalExamRunRow): HostExamReadinessCheck[] {
     },
     { name: "local_snapshot", ok: ready },
     { name: "network_policy", ok: ready },
-    { name: "workspace_smoke", ok: ready },
+    { name: "project_smoke", ok: ready },
     { name: "watchdog", ok: watchdogStarted },
   ];
 }
@@ -197,7 +235,7 @@ function runtimeStatus(row?: LocalExamRunRow): HostExamRuntimeStatus {
   if (!row) {
     return {
       admission_open: false,
-      active_workspaces: 0,
+      active_projects: 0,
       updated_at: new Date().toISOString(),
     };
   }
@@ -207,11 +245,13 @@ function runtimeStatus(row?: LocalExamRunRow): HostExamRuntimeStatus {
     status: row.status,
     config_generation: row.config_generation,
     admission_open: row.admission_open === 1,
-    active_workspaces: activeWorkspaceCount(row.run_id),
-    max_workspaces: run.max_workspaces,
+    active_projects: activeProjectCount(row.run_id),
+    max_projects: run.max_projects,
     scheduled_stop_at: new Date(row.scheduled_stop_at_ms).toISOString(),
+    stop_host_at_deadline: run.stop_host_at_deadline,
     cleanup_deadline_at: new Date(row.cleanup_deadline_at_ms).toISOString(),
     hostname: config.hostname,
+    title: config.title,
     terminal_enabled: run.terminal_enabled,
     network_mode: run.network_mode,
     last_error: row.last_error ?? undefined,
@@ -258,7 +298,7 @@ function noteTokenFailure(source: string): void {
   tokenFailures.set(source, recent);
 }
 
-function reserveWorkspace({
+function reserveProject({
   row,
   account_id,
   project_id,
@@ -278,10 +318,10 @@ function reserveWorkspace({
       current.admission_open !== 1 ||
       current.scheduled_stop_at_ms <= Date.now()
     ) {
-      throw new Error("exam admission is closed");
+      throw new Error("scratchpad access is closed");
     }
-    if (activeWorkspaceCount(row.run_id) >= run.max_workspaces) {
-      throw new Error("exam workspace capacity has been reached");
+    if (activeProjectCount(row.run_id) >= run.max_projects) {
+      throw new Error("exam project capacity has been reached");
     }
     db.prepare(
       `INSERT INTO exam_sessions(
@@ -328,7 +368,7 @@ function setStudentProjectFunctionality({
   });
 }
 
-async function eraseWorkspace(session: LocalExamSessionRow): Promise<void> {
+async function eraseProject(session: LocalExamSessionRow): Promise<void> {
   const db = getDatabase();
   db.prepare(
     "UPDATE exam_sessions SET status='cleaning', last_error=NULL WHERE account_id=?",
@@ -375,7 +415,7 @@ async function eraseWorkspace(session: LocalExamSessionRow): Promise<void> {
   }
 }
 
-async function provisionWorkspace({
+async function provisionProject({
   row,
   account_id,
   project_id,
@@ -384,13 +424,16 @@ async function provisionWorkspace({
   account_id: string;
   project_id: string;
 }): Promise<void> {
-  const { run } = decodeRun(row);
+  const { config, run } = decodeRun(row);
   upsertRow("accounts", JSON.stringify({ account_id }), {
     account_id,
     first_name: "Exam",
     last_name: "User",
     display_name: "Exam User",
     usage_account_id: run.owner_account_id,
+    exam_mode: true,
+    exam_run_id: run.run_id,
+    exam_project_id: project_id,
   });
   await setExamProjectNetworkPolicy({
     project_id,
@@ -399,7 +442,7 @@ async function provisionWorkspace({
   try {
     await hubApi.projects.createProject({
       project_id,
-      title: "Exam Scratchpad",
+      title: config.title,
       image: run.rootfs_image,
       start: true,
       ensure_volume: true,
@@ -439,8 +482,8 @@ async function provisionWorkspace({
       .prepare("SELECT * FROM exam_sessions WHERE account_id=?")
       .get(account_id) as LocalExamSessionRow | undefined;
     if (session) {
-      await eraseWorkspace(session).catch((cleanupErr) => {
-        logger.error("failed to erase rejected exam workspace", {
+      await eraseProject(session).catch((cleanupErr) => {
+        logger.error("failed to erase rejected exam project", {
           project_id,
           err: `${cleanupErr}`,
         });
@@ -450,7 +493,7 @@ async function provisionWorkspace({
   }
 }
 
-async function runWorkspaceSmokeTest(row: LocalExamRunRow): Promise<void> {
+async function runProjectSmokeTest(row: LocalExamRunRow): Promise<void> {
   const account_id = randomUUID();
   const project_id = randomUUID();
   const db = getDatabase();
@@ -466,7 +509,7 @@ async function runWorkspaceSmokeTest(row: LocalExamRunRow): Promise<void> {
     Date.now(),
     row.cleanup_deadline_at_ms,
   );
-  await provisionWorkspace({ row, account_id, project_id });
+  await provisionProject({ row, account_id, project_id });
   try {
     const marker = `cocalc-exam-smoke-${randomUUID()}`;
     const result = await sandboxExec({
@@ -508,14 +551,14 @@ printf '%s\\n' '${marker}'
     });
     if (result.code !== 0 || !result.stdout.includes(marker)) {
       throw new Error(
-        `exam workspace readiness failed (code=${result.code}, signal=${result.signal ?? "none"}): ${result.stderr || result.stdout}`,
+        `exam project readiness failed (code=${result.code}, signal=${result.signal ?? "none"}): ${result.stderr || result.stdout}`,
       );
     }
   } finally {
     const session = db
       .prepare("SELECT * FROM exam_sessions WHERE account_id=?")
       .get(account_id) as LocalExamSessionRow;
-    await eraseWorkspace(session);
+    await eraseProject(session);
   }
 }
 
@@ -524,6 +567,8 @@ export async function applyExamRunLocal({
   run,
   token_hash,
 }: ApplyHostExamRunRequest): Promise<HostExamRuntimeStatus> {
+  config = normalizeExamConfig(config);
+  run = normalizeExamRun(run);
   ensureSchema();
   if (config.host_id !== run.host_id) {
     throw new Error("exam config and run host do not match");
@@ -581,7 +626,7 @@ export async function applyExamRunLocal({
   startExamWatchdog();
   try {
     const row = runRow(run.run_id)!;
-    await runWorkspaceSmokeTest(row);
+    await runProjectSmokeTest(row);
     await verifyExamPublicRoute(config.hostname);
     getDatabase()
       .prepare(
@@ -632,10 +677,12 @@ export function updateExamRunDeadlineLocal({
   run_id,
   config_generation,
   scheduled_stop_at,
+  stop_host_at_deadline,
 }: {
   run_id: string;
   config_generation: number;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
 }): HostExamRuntimeStatus {
   const row = assertRunIdentity({ run_id, config_generation });
   const { config, run } = decodeRun(row);
@@ -644,6 +691,8 @@ export function updateExamRunDeadlineLocal({
     throw new Error("exam deadline must be in the future");
   }
   run.scheduled_stop_at = new Date(deadline).toISOString();
+  run.stop_host_at_deadline =
+    stop_host_at_deadline ?? run.stop_host_at_deadline;
   getDatabase()
     .prepare(
       `UPDATE exam_runs
@@ -658,6 +707,36 @@ export function updateExamRunDeadlineLocal({
       Date.now(),
       run_id,
     );
+  return runtimeStatus(runRow(run_id));
+}
+
+export function increaseExamRunCapacityLocal({
+  run_id,
+  config_generation,
+  max_projects,
+}: {
+  run_id: string;
+  config_generation: number;
+  max_projects: number;
+}): HostExamRuntimeStatus {
+  const row = assertRunIdentity({ run_id, config_generation });
+  const { run } = decodeRun(row);
+  validateExamCapacityIncrease({
+    current: run.max_projects,
+    requested: max_projects,
+    status: row.status,
+  });
+  if (max_projects === run.max_projects) {
+    return runtimeStatus(row);
+  }
+  run.max_projects = max_projects;
+  getDatabase()
+    .prepare(
+      `UPDATE exam_runs
+       SET run_json=?, updated_at_ms=?
+       WHERE run_id=?`,
+    )
+    .run(JSON.stringify(run), Date.now(), run_id);
   return runtimeStatus(runRow(run_id));
 }
 
@@ -689,6 +768,7 @@ export interface ExamBrowserSession {
   project_id: string;
   run_id: string;
   expires_at_ms: number;
+  scheduled_stop_at_ms: number;
 }
 
 export function getExamBrowserSession(
@@ -715,7 +795,23 @@ export function getExamBrowserSession(
     project_id: session.project_id,
     run_id: session.run_id,
     expires_at_ms: session.expires_at_ms,
+    scheduled_stop_at_ms: row.scheduled_stop_at_ms,
   };
+}
+
+export function getExamBrowserBootstrap(
+  account_id: string,
+): ExamBrowserBootstrap | undefined {
+  const session = getExamBrowserSession(account_id);
+  if (!session) return;
+  return buildExamBrowserBootstrap({
+    session,
+    account: getRow("accounts", JSON.stringify({ account_id })),
+    project: getRow(
+      "projects",
+      JSON.stringify({ project_id: session.project_id }),
+    ),
+  });
 }
 
 export async function joinExamRun({
@@ -732,23 +828,24 @@ export async function joinExamRun({
     row.admission_open !== 1 ||
     row.scheduled_stop_at_ms <= Date.now()
   ) {
-    throw new Error("exam admission is closed");
+    throw new Error("scratchpad access is closed");
   }
   assertTokenRateLimit(source);
   if (!verifyExamTokenHash(token.trim(), row.token_hash)) {
     noteTokenFailure(source);
-    throw new Error("invalid exam token");
+    throw new Error("invalid access token");
   }
   tokenFailures.delete(source);
   const account_id = randomUUID();
   const project_id = randomUUID();
-  reserveWorkspace({ row, account_id, project_id });
-  await provisionWorkspace({ row, account_id, project_id });
+  reserveProject({ row, account_id, project_id });
+  await provisionProject({ row, account_id, project_id });
   return {
     account_id,
     project_id,
     run_id: row.run_id,
     expires_at_ms: row.cleanup_deadline_at_ms,
+    scheduled_stop_at_ms: row.scheduled_stop_at_ms,
   };
 }
 
@@ -772,7 +869,7 @@ export async function closeAndCleanupExamRunLocal({
     for (const session of listSessions(run_id)) {
       if (session.status === "deleted") continue;
       try {
-        await eraseWorkspace(session);
+        await eraseProject(session);
       } catch (err) {
         errors.push(`${session.project_id}: ${err}`);
       }
@@ -781,7 +878,7 @@ export async function closeAndCleanupExamRunLocal({
       (session) => session.status !== "deleted",
     );
     if (remaining.length || errors.length) {
-      const message = `exam cleanup incomplete: ${errors.join("; ") || `${remaining.length} workspaces remain`}`;
+      const message = `exam cleanup incomplete: ${errors.join("; ") || `${remaining.length} projects remain`}`;
       db.prepare(
         "UPDATE exam_runs SET status='error', last_error=?, updated_at_ms=? WHERE run_id=?",
       ).run(message, Date.now(), run_id);
@@ -821,7 +918,7 @@ async function reconcileDeadline(): Promise<void> {
     await closeAndCleanupExamRunLocal({
       run_id: row.run_id,
       config_generation: row.config_generation,
-      poweroff: true,
+      poweroff: decodeRun(row).run.stop_host_at_deadline,
     });
   } catch (err) {
     logger.error("local exam deadline cleanup failed", {
@@ -829,7 +926,10 @@ async function reconcileDeadline(): Promise<void> {
       cleanup_deadline_at: new Date(row.cleanup_deadline_at_ms).toISOString(),
       err: `${err}`,
     });
-    if (Date.now() >= row.cleanup_deadline_at_ms) {
+    if (
+      decodeRun(row).run.stop_host_at_deadline &&
+      Date.now() >= row.cleanup_deadline_at_ms
+    ) {
       await privilegedExamCommand("poweroff-exam-host", row.run_id);
     }
   }

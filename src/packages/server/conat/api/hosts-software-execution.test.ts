@@ -2179,6 +2179,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
       targets: [{ artifact: "project-host", version: "ph-v2" }],
       base_url: "https://hub.example.test/software",
       restart_project_host: false,
+      activate_project_host: true,
       retention_policy: expect.any(Object),
     });
     expect(updateProjectHostSoftwareRecord).toHaveBeenCalledWith(
@@ -2204,6 +2205,140 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
         components: ["project-host"],
         desired_version: "ph-v2",
         reason: "host_software_upgrade",
+      }),
+    );
+  });
+
+  it("stages an ACP artifact without activating or recording project-host", async () => {
+    const stageProjectHostArtifact = jest.fn(async () => ({
+      results: [
+        {
+          artifact: "project-host" as const,
+          version: "ph-v2",
+          status: "staged" as const,
+        },
+      ],
+    }));
+    const rolloutManagedComponents = jest.fn(async () => ({
+      results: [
+        {
+          component: "acp-worker" as const,
+          action: "drain_requested" as const,
+        },
+      ],
+    }));
+    const updateProjectHostSoftwareRecord = jest.fn(async () => undefined);
+    const runtimeDeploymentsForComponentRollout = jest.fn(() => [
+      {
+        target_type: "component" as const,
+        target: "acp-worker" as const,
+        desired_version: "ph-v2",
+      },
+    ]);
+    const setProjectHostRuntimeDeployments = jest.fn(async () => undefined);
+    const row = {
+      id: "host-1",
+      status: "running",
+      version: "ph-v1",
+      metadata: {
+        owner: "account-1",
+        software: { project_host: "ph-v1", project_host_build_id: "build-v1" },
+      },
+    };
+
+    await expect(
+      rolloutHostManagedComponentsInternalHelper({
+        account_id: "account-1",
+        id: "host-1",
+        components: ["acp-worker"],
+        desired_version: "ph-v2",
+        reason: "acp_canary",
+        loadHostForStartStop: jest.fn(async () => row),
+        assertHostRunningForUpgrade: () => undefined,
+        hostControlClient: async () => ({
+          getRuntimeLog: async () => ({
+            source: "acp-worker",
+            lines: 25,
+            text: "",
+          }),
+          stageProjectHostArtifact,
+          rolloutManagedComponents,
+          getManagedComponentStatus: async () => [
+            {
+              component: "acp-worker",
+              artifact: "project-host",
+              upgrade_policy: "drain_then_replace",
+              enabled: true,
+              managed: true,
+              desired_version: "build-v2",
+              runtime_state: "running",
+              version_state: "aligned",
+              running_versions: ["build-v2"],
+              running_pids: [5678],
+            },
+          ],
+        }),
+        waitForHostHeartbeatAfter: async () => undefined,
+        installedProjectHostArtifactVersion: () => "ph-v1",
+        resolveHostSoftwareBaseUrl: async () =>
+          "https://hub.example.test/software",
+        resolveReachableUpgradeBaseUrl: async ({ baseUrl }) => baseUrl,
+        updateProjectHostSoftwareRecord,
+        recordProjectHostLocalRollbackInternal: async () => ({
+          host_id: "host-1",
+          rollback_version: "ph-v1",
+          source: "host-agent",
+        }),
+        project_host_local_rollback_error_code: "project_host_local_rollback",
+        setLastKnownGoodArtifactVersionInternal: async () => undefined,
+        runtimeDeploymentsForComponentRollout,
+        requestedByForRuntimeDeployments: () => "account-1",
+        setProjectHostRuntimeDeployments,
+        loadEffectiveRuntimeDeployments: async () => [
+          {
+            target_type: "artifact",
+            target: "project-host",
+            desired_version: "ph-v1",
+          },
+        ],
+        projectHostRolloutSettleTimeoutMs: 10,
+        projectHostRolloutPollMs: 0,
+        record_runtime_deployments: true,
+      }),
+    ).resolves.toEqual({
+      results: [
+        {
+          component: "acp-worker",
+          action: "drain_requested",
+        },
+      ],
+    });
+
+    expect(stageProjectHostArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        version: "ph-v2",
+      }),
+    );
+    expect(updateProjectHostSoftwareRecord).not.toHaveBeenCalled();
+    expect(rolloutManagedComponents).toHaveBeenCalledWith({
+      components: ["acp-worker"],
+      reason: "acp_canary",
+      desired_version: "ph-v2",
+    });
+    expect(runtimeDeploymentsForComponentRollout).toHaveBeenCalledWith({
+      components: ["acp-worker"],
+      desired_version: "ph-v2",
+      reason: "acp_canary",
+    });
+    expect(setProjectHostRuntimeDeployments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host_id: "host-1",
+        deployments: [
+          expect.objectContaining({
+            target: "acp-worker",
+            desired_version: "ph-v2",
+          }),
+        ],
       }),
     );
   });

@@ -31,6 +31,7 @@ import {
 import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { NewsItemWebapp, SYSTEM_CHANNEL } from "@cocalc/util/types/news";
+import { isExamMode } from "@cocalc/frontend/customize/exam-mode";
 
 export const NEWS = "news";
 const NewsItemMap = createTypedMap<NewsItemWebapp>();
@@ -158,6 +159,10 @@ async function getCurrentAccountId(): Promise<string | undefined> {
 }
 
 async function ensureSystemNewsSeenState(): Promise<void> {
+  if (isExamMode()) {
+    closeSystemNewsSeenState();
+    return;
+  }
   if (!webapp_client.is_signed_in()) {
     closeSystemNewsSeenState();
     return;
@@ -267,6 +272,16 @@ export class NewsActions extends Actions<NewsState> {
   }
 
   public refresh = async (): Promise<void> => {
+    if (isExamMode()) {
+      closeSystemNewsSeenState();
+      this.setState({
+        loading: false,
+        unread: 0,
+        news: Map(),
+        system_seen_ids: ImmutableSet<string>(),
+      });
+      return;
+    }
     if (!webapp_client.is_signed_in()) {
       closeSystemNewsSeenState();
       this.setState({
@@ -446,6 +461,10 @@ function closeRealtimeFeed(): void {
 }
 
 async function ensureRealtimeFeed(): Promise<void> {
+  if (isExamMode()) {
+    closeRealtimeFeed();
+    return;
+  }
   if (!webapp_client.is_signed_in()) {
     closeRealtimeFeed();
     return;

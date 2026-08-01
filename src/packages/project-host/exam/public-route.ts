@@ -6,7 +6,7 @@
 const DEFAULT_DEADLINE_MS = 2 * 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_MS = 2_000;
-const EXPECTED_MARKER = "CoCalc Exam Scratchpad";
+const EXPECTED_MARKER = '<meta name="cocalc-scratchpad" content="exam">';
 
 interface ProbeOptions {
   deadlineMs?: number;

@@ -39,22 +39,22 @@ The first version is complete only if it provides all of the following:
 3. The host has one stable exam hostname suitable for a lockdown-browser
    allowlist.
 4. The project host serves the complete student application from that origin.
-5. A shared, revocable exam token creates one anonymous local workspace per
+5. A shared, revocable exam token creates one anonymous local project per
    browser session.
 6. Student accounts and projects are local to the project host; they are not
    normal global CoCalc accounts or centrally retained projects.
-7. Every workspace uses the exact root filesystem image and digest frozen when
+7. Every project uses the exact root filesystem image and digest frozen when
    the exam run is opened.
-8. Every workspace has a fixed CPU, memory, and disk quota.
-9. The instructor sets a maximum number of workspaces.
+8. Every project has a fixed CPU, memory, and disk quota.
+9. The instructor sets a maximum number of projects.
 10. Outbound project network access is disabled and verified fail-closed.
 11. Jupyter notebooks, files, kernels, autosave, and TimeTravel work locally
-    while the workspace exists. Terminals are configurable per run and disabled
+    while the project exists. Terminals are configurable per run and disabled
     by default.
 12. Rustic backups and project snapshots are disabled.
 13. A required, editable, and cancellable automatic stop time is persisted.
 14. Deadline handling survives hub, project-host process, and VM restarts.
-15. Stopping an exam closes admission, deletes exam workspaces, and then stops
+15. Stopping an exam closes admission, deletes exam projects, and then stops
     the VM without deleting the reusable host.
 16. The instructor can immediately stop and erase an exam run.
 17. Existing private-host billing remains unchanged.
@@ -85,7 +85,7 @@ The MVP should satisfy this concrete flow:
 10. The instructor may later restart the same trusted host for another exam.
 
 The instructor does not upload questions, assign students, collect submissions,
-grade work, or map workspaces to student identities in this version.
+grade work, or map projects to student identities in this version.
 
 ## 4. Product Terminology
 
@@ -93,12 +93,12 @@ Use these terms consistently in code, UI, documentation, and operations:
 
 - **Exam host:** A reusable private project host with exam mode enabled.
 - **Exam configuration:** Stable host-level choices such as hostname, capacity,
-  workspace quotas, and permitted root filesystem images.
+  project quotas, and permitted root filesystem images.
 - **Exam run:** One time-bounded period with a frozen configuration, access
   token, admission state, and stop deadline.
 - **Exam session:** One anonymous browser session admitted to an exam run.
-- **Exam workspace:** The local project created for an exam session.
-- **Stop and erase:** Close admission, delete run workspaces and local session
+- **Exam project:** The local project created for an exam session.
+- **Stop and erase:** Close admission, delete run projects and local session
   data, then stop the VM.
 
 Avoid calling an exam session a student account in user-facing text. It is not a
@@ -135,7 +135,7 @@ The project host is authoritative for:
 - Anonymous local account IDs.
 - Local exam project IDs and collaborator mappings.
 - Browser-session cookies.
-- Workspace files, terminals, kernels, and TimeTravel.
+- Project files, terminals, kernels, and TimeTravel.
 - Local admission count and capacity enforcement.
 - Local deadline enforcement and cleanup progress.
 
@@ -177,11 +177,11 @@ host_id                     uuid primary key
 enabled                     boolean not null
 hostname                    text unique not null
 hostname_generation         bigint not null
-max_workspaces              integer not null
-workspace_cpu               real not null
-workspace_memory_mb         integer not null
-workspace_disk_mb           integer not null
-workspace_ttl_minutes       integer not null
+max_projects              integer not null
+project_cpu               real not null
+project_memory_mb         integer not null
+project_disk_mb           integer not null
+project_ttl_minutes       integer not null
 terminal_enabled            boolean not null
 network_mode                text not null
 created_at                  timestamptz not null
@@ -207,7 +207,7 @@ rootfs_image_id             text not null
 rootfs_runtime_image        text not null
 rootfs_digest               text not null
 run_quota                   jsonb not null
-max_workspaces              integer not null
+max_projects              integer not null
 network_mode                text not null
 scheduled_stop_at           timestamptz not null
 opened_at                   timestamptz
@@ -262,7 +262,7 @@ Required transition rules:
 - `ready` permits instructor testing but not anonymous admission.
 - `open` is the only state that accepts the shared token.
 - `closing` rejects new admissions immediately.
-- `cleaning` revokes sessions and removes every run-owned workspace.
+- `cleaning` revokes sessions and removes every run-owned project.
 - `stopped` requires cleanup completion or an explicit dirty-stop marker.
 - Configuration affecting isolation, rootfs, or quotas is immutable after
   entering `open`.
@@ -330,7 +330,7 @@ work.
 When the request uses the exam hostname, `/customize` should put the frontend in
 a narrow exam mode that:
 
-- Shows only the current workspace.
+- Shows only the current project.
 - Hides account management, billing, upgrades, collaborators, sharing, and
   public publishing.
 - Hides AI features and external-service integrations.
@@ -354,7 +354,7 @@ The student flow is:
    exists.
 2. The student enters the shared exam token.
 3. `POST /exam/join` validates the token, run state, deadline, rate limit, and
-   workspace capacity.
+   project capacity.
 4. The project host creates a random local account UUID.
 5. The project host creates one local project UUID with the frozen rootfs,
    quotas, backup settings, and disabled network policy.
@@ -362,16 +362,16 @@ The student flow is:
 7. The project starts only after network isolation is installed and verified.
 8. The project host issues its existing HMAC browser-session cookie with an
    expiry bounded by the run deadline plus a small cleanup grace period.
-9. The browser is redirected to the workspace.
+9. The browser is redirected to the project.
 
 The existing project-host browser-session and local project authorization code
 should be extended rather than replaced.
 
 ### 9.2 Session behavior
 
-- Multiple tabs in the same browser reuse the same exam session and workspace.
-- Reloading the join page must not create another workspace.
-- A different fresh browser session creates a different workspace.
+- Multiple tabs in the same browser reuse the same exam session and project.
+- Reloading the join page must not create another project.
+- A different fresh browser session creates a different project.
 - A new exam run invalidates all cookies from prior run generations.
 - Closing admission prevents new sessions but does not immediately interrupt
   existing sessions before cleanup begins.
@@ -387,7 +387,7 @@ should be extended rather than replaced.
 - Support token rotation before opening the run.
 - Rate-limit failures by source IP and host.
 - Add bounded exponential delay for repeated failures.
-- Enforce `max_workspaces` atomically.
+- Enforce `max_projects` atomically.
 - Do not accept account IDs, project IDs, rootfs choices, or quotas from the
   anonymous client.
 - Do not log the plaintext token.
@@ -408,7 +408,7 @@ At run creation:
 - Pre-pull and verify that exact digest on the host.
 - Run readiness using the same image and quotas as students.
 
-Every exam workspace must receive:
+Every exam project must receive:
 
 - The frozen rootfs digest.
 - The same CPU allocation.
@@ -421,7 +421,7 @@ Do not silently upgrade the rootfs during an open run. A new image requires a
 new run and a new readiness test.
 
 The host may be deliberately overprovisioned for predictable exam performance.
-The UI should show the declared maximum workspaces and aggregate requested
+The UI should show the declared maximum projects and aggregate requested
 resources so the instructor can detect obvious overcommitment.
 
 ## 11. Outbound Network Isolation
@@ -452,7 +452,7 @@ A plain Podman `--network=none` is not sufficient unless testing proves it
 preserves every required host-local CoCalc path. The project still needs local
 Conat, Jupyter, file, terminal, and published project-port communication.
 
-For an exam workspace, the host firewall should:
+For an exam project, the host firewall should:
 
 - Allow established and related reply traffic needed by permitted local
   connections.
@@ -464,7 +464,7 @@ For an exam workspace, the host firewall should:
 - Reject direct-IP access that bypasses DNS.
 - Continue blocking cloud metadata endpoints.
 - Install policy before starting user processes.
-- Remove policy when the workspace is deleted.
+- Remove policy when the project is deleted.
 
 The project process and its user-controlled descendants must remain in the
 policy's cgroup. Student `sudo` inside the rootless container must not be able to
@@ -497,7 +497,7 @@ admission can open.
 
 ## 12. Backups, Snapshots, TimeTravel, And Cleanup
 
-Exam workspaces must be marked as host-local exam projects and excluded from
+Exam projects must be marked as host-local exam projects and excluded from
 normal backup and snapshot maintenance.
 
 For the MVP:
@@ -506,7 +506,7 @@ For the MVP:
 - Project snapshots are disabled.
 - No project data is copied to another host or bay during cleanup.
 - No standard project drain or migration path is used.
-- TimeTravel remains normal local project data while the workspace exists.
+- TimeTravel remains normal local project data while the project exists.
 - Hard deletion of the project removes its TimeTravel with the rest of its
   files.
 
@@ -528,7 +528,7 @@ destroyed.
 
 An abrupt infrastructure-level power loss cannot execute in-guest cleanup. On
 the next boot, an expired or dirty exam run must complete cleanup before the
-project host accepts admission or serves an old workspace. This limitation
+project host accepts admission or serves an old project. This limitation
 should be documented accurately rather than hidden.
 
 ## 13. Restart-Safe Scheduled Shutdown
@@ -593,7 +593,7 @@ On every VM boot, before normal exam service starts:
 - Read persistent local exam state.
 - If the run is expired, close admission and clean it.
 - If the run is dirty, resume cleanup.
-- Refuse to serve old exam workspaces.
+- Refuse to serve old exam projects.
 - Power off again if the central control plane incorrectly restarted an
   expired run.
 
@@ -637,9 +637,9 @@ The panel should support:
 - Enable or disable exam mode while no run is active.
 - Display the stable exam hostname.
 - Select an immutable rootfs entry.
-- Set maximum workspaces.
-- Set per-workspace CPU, memory, and disk.
-- Set workspace expiry and cleanup grace within safe bounds.
+- Set maximum projects.
+- Set per-project CPU, memory, and disk.
+- Set project expiry and cleanup grace within safe bounds.
 - Enable or disable the terminal if UCL confirms this choice is needed.
 - Display network mode as fixed to `Disabled`.
 - Save configuration through the authoritative bay.
@@ -666,7 +666,7 @@ Show:
 - Host and public-route health.
 - Frozen rootfs digest.
 - Admission open or closed.
-- Active workspace count and configured maximum.
+- Active project count and configured maximum.
 - Countdown to automatic stop.
 - Normal hourly host price and estimated remaining cost.
 - Network-isolation verification status.
@@ -682,7 +682,7 @@ explicitly require the exam stop-and-erase workflow. It must not accidentally
 invoke the standard backup, drain, or migration behavior.
 
 Immediate stop-and-erase requires fresh authorization and a clear confirmation
-that all anonymous workspace data will be permanently deleted.
+that all anonymous project data will be permanently deleted.
 
 ## 16. Readiness And Operational Checks
 
@@ -693,16 +693,16 @@ Admission may open only after all required checks pass:
 - The stable exam hostname resolves to the current host route.
 - HTTP and WebSocket public probes pass through the exam hostname.
 - The exact frozen rootfs digest is cached and verified.
-- CPU, memory, disk, and workspace limits fit within configured host capacity.
+- CPU, memory, disk, and project limits fit within configured host capacity.
 - The local watchdog has the correct future deadline.
 - Central and local run generations match.
 - Network policy installation succeeds.
-- A synthetic smoke workspace can be created and started.
-- The smoke workspace can write a file.
+- A synthetic smoke project can be created and started.
+- The smoke project can write a file.
 - A Jupyter kernel can start and execute code.
 - Required host-local WebSocket and reconnect paths work.
 - External network checks fail as expected.
-- The smoke workspace can be deleted with no residual volume or session.
+- The smoke project can be deleted with no residual volume or session.
 
 The readiness result should be durable and invalidated by:
 
@@ -765,16 +765,16 @@ delivery risk to the MVP.
 - Anonymous seat numbers.
 - Student roster import.
 - SSO, SAML, or OIDC.
-- Identity mapping between workspace and student.
+- Identity mapping between project and student.
 - Identity verification or photo checks.
 
 ### 18.3 Assessment workflow
 
 - Uploading or authoring exam questions.
-- Copying starter content into workspaces.
+- Copying starter content into projects.
 - Timed release of questions.
 - Submission collection.
-- Automatic workspace export.
+- Automatic project export.
 - Grading or autograding.
 - Rubrics and feedback.
 - Grade passback.
@@ -805,13 +805,13 @@ egress proxy over static hostname-to-IP nftables rules.
 
 ### 18.6 Retention, review, and TimeTravel
 
-- Instructor access to student workspaces.
+- Instructor access to student projects.
 - TimeTravel review of what a student typed.
 - Replay or audit timelines.
 - Configurable post-exam retention.
 - Legal holds.
 - Exports to institution storage.
-- Selective preservation of specific workspaces.
+- Selective preservation of specific projects.
 - Academic-integrity analysis.
 
 TimeTravel requires no separate cleanup in the MVP because it is project data
@@ -889,9 +889,9 @@ Likely project-host RPC additions:
 - Apply a signed run snapshot.
 - Prepare and verify a run.
 - Report readiness.
-- Report aggregate workspace count.
+- Report aggregate project count.
 - Close admission.
-- Clean run workspaces.
+- Clean run projects.
 - Report watchdog and cleanup state.
 
 Likely project-host local modules:
@@ -932,7 +932,7 @@ Cover:
 - Run snapshot freezing.
 - Rootfs digest resolution.
 - Token generation, hashing, rotation, and rejection.
-- Atomic maximum-workspace enforcement.
+- Atomic maximum-project enforcement.
 - Local session reuse and expiry.
 - Run-generation invalidation.
 - Local project membership isolation.
@@ -1007,7 +1007,7 @@ without any student admission.
 - Add exam customization.
 - Add local admission, sessions, and projects.
 
-Exit criterion: anonymous users can receive isolated local workspaces through
+Exit criterion: anonymous users can receive isolated local projects through
 one origin on a development host.
 
 ### Phase 3: Fail-closed network isolation
@@ -1093,12 +1093,12 @@ Suggested primary positioning:
 
 Supporting claims should remain limited to implemented behavior:
 
-- A clean browser-based Linux workspace for every candidate.
+- A clean browser-based Linux project for every candidate.
 - Jupyter notebooks, terminals, and the institution's chosen software.
 - One stable origin for lockdown-browser configuration.
 - A pinned, rehearsable software environment.
 - Disabled outbound project networking.
-- Anonymous temporary workspaces with automatic cleanup.
+- Anonymous temporary projects with automatic cleanup.
 - On-demand capacity that stops on schedule.
 - No separate exam cluster to operate.
 
@@ -1107,7 +1107,7 @@ proctoring software, or an institution's grading workflow. Position it as the
 computational scratchpad those systems do not provide.
 
 TimeTravel may be mentioned only accurately: it exists within each temporary
-workspace while that workspace exists and is deleted with the workspace.
+project while that project exists and is deleted with the project.
 Instructor review or retention of TimeTravel is deferred.
 
 ## 23. Observability And Runbook
@@ -1118,8 +1118,8 @@ Record metrics without student content or identity:
 - Public route health.
 - Active exam runs.
 - Admission attempts, successes, and rate-limit rejections.
-- Current and maximum workspace count.
-- Workspace create/start latency.
+- Current and maximum project count.
+- Project create/start latency.
 - Kernel smoke-test latency.
 - Network-policy verification failures.
 - Central/local deadline disagreement.
@@ -1133,7 +1133,7 @@ Alert administrators on:
 - Public route failure.
 - Local watchdog heartbeat missing.
 - Deadline disagreement.
-- Workspace capacity exhaustion.
+- Project capacity exhaustion.
 - Repeated admission errors.
 - Network fail-open or unverifiable state.
 - Cleanup failure.
@@ -1161,9 +1161,9 @@ The MVP is done when:
 - The exact rootfs and quotas are frozen and visible.
 - Network isolation passes real IPv4, IPv6, DNS, and direct-IP tests.
 - Normal CoCalc files, Jupyter, terminal, autosave, and reconnect work.
-- No backups or snapshots are created for exam workspaces.
+- No backups or snapshots are created for exam projects.
 - Automatic deadline handling survives deliberate central and local restarts.
-- Stop-and-erase deletes all workspace data and stops the VM.
+- Stop-and-erase deletes all project data and stops the VM.
 - The reusable host and cached rootfs remain.
 - Existing billing behavior is unchanged and accurately disclosed.
 - Documentation and the landing page describe only implemented capabilities.
@@ -1174,18 +1174,18 @@ The MVP is done when:
 
 The following decisions should be confirmed before implementation starts:
 
-1. Confirm the exact UCL lockdown browser and its hostname/WebSocket rules.  I don't know, but test.cocalc.com worked fine with websockets
+1. Confirm the exact UCL lockdown browser and its hostname/WebSocket rules. I don't know, but test.cocalc.com worked fine with websockets
 2. Confirm whether the terminal must be enabled in the first UCL run.
    RESOLVED: terminal access is an instructor-configurable run setting and is
    disabled by default.
-3. Choose safe minimum and maximum workspace TTL values.  They selected them before each exam; i.e., this should be configurable.  I think it was between 3 hours and 2 days (?).  See the cocalc source code.
-4. Choose the cleanup grace period before forced VM poweroff.     I'm not sure I understand.  Configurabe?
-5. Confirm the first supported managed GCP private-host configurations.    (?)  The instructor can just define any host they want using our existing UI for creating a project host.
-6. Confirm the stable exam hostname suffix.  I think it should be just prefix-exam-{host_id}.xxx on a host that has dns prefix-host-{host_id}.xxx, i.e., just replace "host" by "exam".  it's simple.  Alternatively just use something random like we do now with the dev server proxy. that's fine too.
+3. Choose safe minimum and maximum project TTL values. They selected them before each exam; i.e., this should be configurable. I think it was between 3 hours and 2 days (?). See the cocalc source code.
+4. Choose the cleanup grace period before forced VM poweroff. I'm not sure I understand. Configurabe?
+5. Confirm the first supported managed GCP private-host configurations. (?) The instructor can just define any host they want using our existing UI for creating a project host.
+6. Confirm the stable exam hostname suffix. I think it should be just prefix-exam-{host_id}.xxx on a host that has dns prefix-host-{host_id}.xxx, i.e., just replace "host" by "exam". it's simple. Alternatively just use something random like we do now with the dev server proxy. that's fine too.
 7. Confirm whether the initial production feature flag is account allowlisted
-   or admin enabled per host.    My preference is explicit allowlist.  One way would be to have this be part of membership entitlement.
-8. Confirm the minimum operational capacity rehearsal for UCL's first exam.   Unknown but it doesn't matter since they make the project host to match their need and our project hosts can handle several hundred active projects at once.
-9. USER: One issue not mentioned is EGRESS.  All egress I think from all these workspace projects should be accounted for to the owner of the project host.
+   or admin enabled per host. My preference is explicit allowlist. One way would be to have this be part of membership entitlement.
+8. Confirm the minimum operational capacity rehearsal for UCL's first exam. Unknown but it doesn't matter since they make the project host to match their need and our project hosts can handle several hundred active projects at once.
+9. USER: One issue not mentioned is EGRESS. All egress I think from all these exam projects should be accounted for to the owner of the project host.
 
 None of these decisions should expand the MVP into identity, assessment
 delivery, submission, grading, special billing, or proctoring.

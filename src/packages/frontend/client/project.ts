@@ -48,6 +48,7 @@ import { DirectoryListingEntry } from "@cocalc/util/types";
 import { WebappClient } from "./client";
 import { isDirViaFs } from "./is-dir";
 import { throttle } from "lodash";
+import { isExamMode } from "@cocalc/frontend/customize/exam-mode";
 import { type ProjectApi } from "@cocalc/conat/project/api";
 import { type CopyOptions } from "@cocalc/conat/files/fs";
 import type {
@@ -634,10 +635,14 @@ export class ProjectClient {
         });
         return;
       }
-      const results = await Promise.allSettled([
-        this.client.conat_client.hub.db.touch({}),
-        this.client.conat_client.touchProjectHost({ project_id }),
-      ]);
+      const results = await Promise.allSettled(
+        isExamMode()
+          ? [this.client.conat_client.touchProjectHost({ project_id })]
+          : [
+              this.client.conat_client.hub.db.touch({}),
+              this.client.conat_client.touchProjectHost({ project_id }),
+            ],
+      );
       for (const result of results) {
         if (result.status !== "rejected") {
           continue;

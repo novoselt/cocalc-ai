@@ -94,18 +94,20 @@ function runtimeDeploymentsForPromotion({
   reason?: string;
   metadata: Record<string, any>;
 }) {
-  const promotedComponents = Array.from(
-    new Set<ManagedComponentKind>(["project-host", ...components]),
-  );
+  const promotesProjectHost = components.includes("project-host");
   return [
-    {
-      target_type: "artifact" as const,
-      target: "project-host" as const,
-      desired_version: version,
-      rollout_reason: reason,
-      metadata,
-    },
-    ...promotedComponents.map((component) => ({
+    ...(promotesProjectHost
+      ? [
+          {
+            target_type: "artifact" as const,
+            target: "project-host" as const,
+            desired_version: version,
+            rollout_reason: reason,
+            metadata,
+          },
+        ]
+      : []),
+    ...components.map((component) => ({
       target_type: "component" as const,
       target: component,
       desired_version: version,
@@ -135,10 +137,7 @@ function runtimeObservationIsStable({
   const observedComponents = new Map(
     (status.observed_components ?? []).map((entry) => [entry.component, entry]),
   );
-  const requiredComponents = new Set<ManagedComponentKind>([
-    "project-host",
-    ...components,
-  ]);
+  const requiredComponents = new Set<ManagedComponentKind>(components);
   const componentsStable = Array.from(requiredComponents).every((component) => {
     const observed = observedComponents.get(component);
     return (
@@ -146,6 +145,9 @@ function runtimeObservationIsStable({
       observed.version_state === "aligned"
     );
   });
+  if (!components.includes("project-host")) {
+    return componentsStable;
+  }
   const rollout = status.observed_host_agent?.project_host?.rollout;
   return (
     artifact?.current_version === version &&
@@ -229,26 +231,28 @@ async function runHostRollout({
   let childOpId: string | undefined;
   let managedComponentOpId: string | undefined;
   try {
-    const child = await upgradeHostSoftware({
-      account_id,
-      id: host_id,
-      targets: [{ artifact: "project-host", version }],
-      base_url,
-      align_runtime_stack: false,
-      record_runtime_deployments: true,
-    });
-    childOpId = child.op_id;
-    const summary = await waitForDurableLroCompletion({
-      op_id: child.op_id,
-      scope_type: child.scope_type,
-      scope_id: child.scope_id,
-      client: conat(),
-      timeout_ms: CHILD_TIMEOUT_MS,
-    });
-    if (summary.status !== "succeeded") {
-      throw new Error(
-        summary.error ?? `project-host child rollout ${summary.status}`,
-      );
+    if (components.includes("project-host")) {
+      const child = await upgradeHostSoftware({
+        account_id,
+        id: host_id,
+        targets: [{ artifact: "project-host", version }],
+        base_url,
+        align_runtime_stack: false,
+        record_runtime_deployments: true,
+      });
+      childOpId = child.op_id;
+      const summary = await waitForDurableLroCompletion({
+        op_id: child.op_id,
+        scope_type: child.scope_type,
+        scope_id: child.scope_id,
+        client: conat(),
+        timeout_ms: CHILD_TIMEOUT_MS,
+      });
+      if (summary.status !== "succeeded") {
+        throw new Error(
+          summary.error ?? `project-host child rollout ${summary.status}`,
+        );
+      }
     }
     const auxiliaryComponents = components.filter(
       (component) => component !== "project-host",
@@ -258,6 +262,7 @@ async function runHostRollout({
         account_id,
         id: host_id,
         components: auxiliaryComponents,
+        desired_version: version,
         base_url,
         reason,
       });

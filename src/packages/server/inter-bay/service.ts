@@ -349,6 +349,7 @@ import {
   rotateHostExamToken,
   openHostExamRun,
   updateHostExamDeadline,
+  increaseHostExamCapacity,
   stopAndEraseHostExamRun,
   getBackupConfigLocal,
   getHostAvailability,
@@ -2248,6 +2249,7 @@ async function startHostConnectionService(): Promise<void> {
       account_id,
       id,
       components,
+      desired_version,
       base_url,
       reason,
     }) =>
@@ -2255,6 +2257,7 @@ async function startHostConnectionService(): Promise<void> {
         account_id,
         id,
         components,
+        desired_version,
         base_url,
         reason,
       }),
@@ -2328,13 +2331,41 @@ async function startHostConnectionService(): Promise<void> {
         id,
       }),
     getHostExamState: async (opts) => await getHostExamState(opts),
-    setHostExamConfig: async (opts) => await setHostExamConfig(opts),
-    createHostExamRun: async (opts) => await createHostExamRun(opts),
-    rotateHostExamToken: async (opts) => await rotateHostExamToken(opts),
-    openHostExamRun: async (opts) => await openHostExamRun(opts),
-    updateHostExamDeadline: async (opts) => await updateHostExamDeadline(opts),
+    setHostExamConfig: async (opts) =>
+      await setHostExamConfig({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    createHostExamRun: async (opts) =>
+      await createHostExamRun({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    rotateHostExamToken: async (opts) =>
+      await rotateHostExamToken({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    openHostExamRun: async (opts) =>
+      await openHostExamRun({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    updateHostExamDeadline: async (opts) =>
+      await updateHostExamDeadline({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    increaseHostExamCapacity: async (opts) =>
+      await increaseHostExamCapacity({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
     stopAndEraseHostExamRun: async (opts) =>
-      await stopAndEraseHostExamRun(opts),
+      await stopAndEraseHostExamRun({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
     listHostSshAuthorizedKeys: async ({ account_id, id }) =>
       await listHostSshAuthorizedKeys({
         account_id,
@@ -2604,6 +2635,10 @@ async function startHostControlService(): Promise<void> {
       await (
         await getHostClient(host_id, 30_000)
       ).updateExamRunDeadline(update),
+    increaseExamRunCapacity: async ({ host_id, increase }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).increaseExamRunCapacity(increase),
     rotateExamRunToken: async ({ host_id, rotate }) =>
       await (await getHostClient(host_id, 30_000)).rotateExamRunToken(rotate),
     closeAndCleanupExamRun: async ({ host_id, close }) =>
@@ -2651,6 +2686,10 @@ async function startHostControlService(): Promise<void> {
       await (
         await getHostClient(host_id, 10 * 60 * 1000)
       ).upgradeSoftware(upgrade),
+    stageProjectHostArtifact: async ({ host_id, stage }) =>
+      await (
+        await getHostClient(host_id, 10 * 60 * 1000)
+      ).stageProjectHostArtifact(stage),
     rolloutManagedComponents: async ({ host_id, rollout }) =>
       await (
         await getHostClient(host_id, 30_000)

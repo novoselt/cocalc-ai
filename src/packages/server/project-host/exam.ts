@@ -37,11 +37,12 @@ const ACTIVE_RUN_STATUSES: HostExamRunStatus[] = [
 ];
 const PROJECT_HOST_RPC_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_EXAM_CONFIG: Omit<HostExamConfigInput, "enabled"> = {
-  max_workspaces: 100,
-  workspace_cpu: 1,
-  workspace_memory_mb: 2_000,
-  workspace_disk_mb: 5_000,
-  workspace_ttl_minutes: 6 * 60,
+  title: "Exam Scratchpad",
+  max_projects: 100,
+  project_cpu: 1,
+  project_memory_mb: 2_000,
+  project_disk_mb: 5_000,
+  project_ttl_minutes: 6 * 60,
   cleanup_grace_minutes: 10,
   terminal_enabled: false,
   network_mode: "disabled",
@@ -69,15 +70,16 @@ function mapConfig(row: any): HostExamConfig {
   return {
     host_id: row.host_id,
     enabled: row.enabled === true,
+    title: `${row.title ?? "Exam Scratchpad"}`,
     hostname: row.hostname,
     dns_record_id: row.dns_record_id ?? null,
     dns_target: row.dns_target ?? null,
     generation: Number(row.generation),
-    max_workspaces: Number(row.max_workspaces),
-    workspace_cpu: Number(row.workspace_cpu),
-    workspace_memory_mb: Number(row.workspace_memory_mb),
-    workspace_disk_mb: Number(row.workspace_disk_mb),
-    workspace_ttl_minutes: Number(row.workspace_ttl_minutes),
+    max_projects: Number(row.max_projects),
+    project_cpu: Number(row.project_cpu),
+    project_memory_mb: Number(row.project_memory_mb),
+    project_disk_mb: Number(row.project_disk_mb),
+    project_ttl_minutes: Number(row.project_ttl_minutes),
     cleanup_grace_minutes: Number(row.cleanup_grace_minutes),
     terminal_enabled: row.terminal_enabled === true,
     network_mode: "disabled",
@@ -100,10 +102,11 @@ function mapRun(row: any): HostExamRun {
       typeof row.run_quota === "string"
         ? JSON.parse(row.run_quota)
         : row.run_quota,
-    max_workspaces: Number(row.max_workspaces),
+    max_projects: Number(row.max_projects),
     terminal_enabled: row.terminal_enabled === true,
     network_mode: "disabled",
     scheduled_stop_at: dateString(row.scheduled_stop_at)!,
+    stop_host_at_deadline: row.stop_host_at_deadline !== false,
     owner_account_id: row.owner_account_id,
     opened_at: dateString(row.opened_at) ?? null,
     admission_closed_at: dateString(row.admission_closed_at) ?? null,
@@ -117,6 +120,40 @@ function mapRun(row: any): HostExamRun {
   };
 }
 
+async function migrateLegacyExamColumnNames(): Promise<void> {
+  const renames = [
+    [CONFIG_TABLE, "max_workspaces", "max_projects"],
+    [CONFIG_TABLE, "workspace_cpu", "project_cpu"],
+    [CONFIG_TABLE, "workspace_memory_mb", "project_memory_mb"],
+    [CONFIG_TABLE, "workspace_disk_mb", "project_disk_mb"],
+    [CONFIG_TABLE, "workspace_ttl_minutes", "project_ttl_minutes"],
+    [RUN_TABLE, "max_workspaces", "max_projects"],
+  ] as const;
+  for (const [table, legacy, current] of renames) {
+    const { rows } = await getPool().query<{ column_name: string }>(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema=current_schema() AND table_name=$1
+          AND column_name IN ($2, $3)
+      `,
+      [table, legacy, current],
+    );
+    const columns = new Set(rows.map(({ column_name }) => column_name));
+    if (!columns.has(legacy)) continue;
+    if (!columns.has(current)) {
+      await getPool().query(
+        `ALTER TABLE ${table} RENAME COLUMN ${legacy} TO ${current}`,
+      );
+      continue;
+    }
+    await getPool().query(
+      `UPDATE ${table} SET ${current}=COALESCE(${current}, ${legacy})`,
+    );
+    await getPool().query(`ALTER TABLE ${table} DROP COLUMN ${legacy}`);
+  }
+}
+
 async function ensureSchema(): Promise<void> {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -124,15 +161,16 @@ async function ensureSchema(): Promise<void> {
         CREATE TABLE IF NOT EXISTS ${CONFIG_TABLE} (
           host_id UUID PRIMARY KEY,
           enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          title TEXT NOT NULL DEFAULT 'Exam Scratchpad',
           hostname TEXT NOT NULL UNIQUE,
           dns_record_id TEXT,
           dns_target TEXT,
           generation BIGINT NOT NULL DEFAULT 1,
-          max_workspaces INTEGER NOT NULL,
-          workspace_cpu DOUBLE PRECISION NOT NULL,
-          workspace_memory_mb INTEGER NOT NULL,
-          workspace_disk_mb INTEGER NOT NULL,
-          workspace_ttl_minutes INTEGER NOT NULL,
+          max_projects INTEGER NOT NULL,
+          project_cpu DOUBLE PRECISION NOT NULL,
+          project_memory_mb INTEGER NOT NULL,
+          project_disk_mb INTEGER NOT NULL,
+          project_ttl_minutes INTEGER NOT NULL,
           cleanup_grace_minutes INTEGER NOT NULL,
           terminal_enabled BOOLEAN NOT NULL DEFAULT FALSE,
           network_mode TEXT NOT NULL DEFAULT 'disabled',
@@ -154,10 +192,11 @@ async function ensureSchema(): Promise<void> {
           rootfs_image TEXT NOT NULL,
           rootfs_digest TEXT NOT NULL,
           run_quota JSONB NOT NULL,
-          max_workspaces INTEGER NOT NULL,
+          max_projects INTEGER NOT NULL,
           terminal_enabled BOOLEAN NOT NULL DEFAULT FALSE,
           network_mode TEXT NOT NULL DEFAULT 'disabled',
           scheduled_stop_at TIMESTAMPTZ NOT NULL,
+          stop_host_at_deadline BOOLEAN NOT NULL DEFAULT TRUE,
           owner_account_id UUID NOT NULL,
           opened_at TIMESTAMPTZ,
           admission_closed_at TIMESTAMPTZ,
@@ -169,6 +208,47 @@ async function ensureSchema(): Promise<void> {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           created_by UUID NOT NULL
         )
+      `);
+      await migrateLegacyExamColumnNames();
+      await getPool().query(`
+        ALTER TABLE ${CONFIG_TABLE}
+          ADD COLUMN IF NOT EXISTS title TEXT DEFAULT 'Exam Scratchpad'
+      `);
+      await getPool().query(`
+        UPDATE ${CONFIG_TABLE}
+        SET title='Exam Scratchpad'
+        WHERE title IS NULL OR BTRIM(title)=''
+      `);
+      await getPool().query(`
+        ALTER TABLE ${CONFIG_TABLE}
+          ALTER COLUMN title SET DEFAULT 'Exam Scratchpad',
+          ALTER COLUMN title SET NOT NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${CONFIG_TABLE}
+          ALTER COLUMN max_projects SET NOT NULL,
+          ALTER COLUMN project_cpu SET NOT NULL,
+          ALTER COLUMN project_memory_mb SET NOT NULL,
+          ALTER COLUMN project_disk_mb SET NOT NULL,
+          ALTER COLUMN project_ttl_minutes SET NOT NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${RUN_TABLE}
+          ALTER COLUMN max_projects SET NOT NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${RUN_TABLE}
+          ADD COLUMN IF NOT EXISTS stop_host_at_deadline BOOLEAN DEFAULT TRUE
+      `);
+      await getPool().query(`
+        UPDATE ${RUN_TABLE}
+        SET stop_host_at_deadline=TRUE
+        WHERE stop_host_at_deadline IS NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${RUN_TABLE}
+          ALTER COLUMN stop_host_at_deadline SET DEFAULT TRUE,
+          ALTER COLUMN stop_host_at_deadline SET NOT NULL
       `);
       // The shared schema synchronizer creates declared timestamp fields before
       // this feature-specific schema initializer runs. Those generic columns are
@@ -246,40 +326,54 @@ function requireFiniteRange(
 }
 
 function normalizeConfig(input: HostExamConfigInput): HostExamConfigInput {
+  const legacy = input as HostExamConfigInput & Record<string, unknown>;
   if (input.network_mode != null && input.network_mode !== "disabled") {
     throw new Error("the exam MVP supports only disabled project networking");
   }
   return {
     enabled: input.enabled === true,
-    max_workspaces: requireFiniteRange(input.max_workspaces, {
-      label: "max_workspaces",
-      min: 1,
-      max: 1_000,
-      integer: true,
-    }),
-    workspace_cpu: requireFiniteRange(input.workspace_cpu, {
-      label: "workspace_cpu",
+    title: normalizeScratchpadTitle(input.title),
+    max_projects: requireFiniteRange(
+      input.max_projects ?? legacy.max_workspaces,
+      {
+        label: "max_projects",
+        min: 1,
+        max: 1_000,
+        integer: true,
+      },
+    ),
+    project_cpu: requireFiniteRange(input.project_cpu ?? legacy.workspace_cpu, {
+      label: "project_cpu",
       min: 0.1,
       max: 128,
     }),
-    workspace_memory_mb: requireFiniteRange(input.workspace_memory_mb, {
-      label: "workspace_memory_mb",
-      min: 256,
-      max: 1_048_576,
-      integer: true,
-    }),
-    workspace_disk_mb: requireFiniteRange(input.workspace_disk_mb, {
-      label: "workspace_disk_mb",
-      min: 1_000,
-      max: 4_000_000,
-      integer: true,
-    }),
-    workspace_ttl_minutes: requireFiniteRange(input.workspace_ttl_minutes, {
-      label: "workspace_ttl_minutes",
-      min: 180,
-      max: 2 * 24 * 60,
-      integer: true,
-    }),
+    project_memory_mb: requireFiniteRange(
+      input.project_memory_mb ?? legacy.workspace_memory_mb,
+      {
+        label: "project_memory_mb",
+        min: 256,
+        max: 1_048_576,
+        integer: true,
+      },
+    ),
+    project_disk_mb: requireFiniteRange(
+      input.project_disk_mb ?? legacy.workspace_disk_mb,
+      {
+        label: "project_disk_mb",
+        min: 1_000,
+        max: 4_000_000,
+        integer: true,
+      },
+    ),
+    project_ttl_minutes: requireFiniteRange(
+      input.project_ttl_minutes ?? legacy.workspace_ttl_minutes,
+      {
+        label: "project_ttl_minutes",
+        min: 180,
+        max: 2 * 24 * 60,
+        integer: true,
+      },
+    ),
     cleanup_grace_minutes: requireFiniteRange(input.cleanup_grace_minutes, {
       label: "cleanup_grace_minutes",
       min: 1,
@@ -289,6 +383,14 @@ function normalizeConfig(input: HostExamConfigInput): HostExamConfigInput {
     terminal_enabled: input.terminal_enabled === true,
     network_mode: "disabled",
   };
+}
+
+function normalizeScratchpadTitle(value: unknown): string {
+  const title = `${value ?? "Exam Scratchpad"}`.trim();
+  if (!title || title.length > 100) {
+    throw new Error("title must contain 1 to 100 characters");
+  }
+  return title;
 }
 
 function publicHostname(host: ExamHostRow): string {
@@ -395,7 +497,7 @@ function hashToken(token: string): string {
 
 function validateDeadline(
   scheduled_stop_at: string,
-  workspace_ttl_minutes: number,
+  project_ttl_minutes: number,
 ): string {
   const deadline = new Date(scheduled_stop_at);
   const now = Date.now();
@@ -407,9 +509,9 @@ function validateDeadline(
       "scheduled_stop_at must be at least one minute in the future",
     );
   }
-  if (deadline.valueOf() > now + workspace_ttl_minutes * 60_000) {
+  if (deadline.valueOf() > now + project_ttl_minutes * 60_000) {
     throw new Error(
-      `scheduled_stop_at exceeds the configured ${workspace_ttl_minutes}-minute run limit`,
+      `scheduled_stop_at exceeds the configured ${project_ttl_minutes}-minute run limit`,
     );
   }
   return deadline.toISOString();
@@ -437,12 +539,61 @@ async function loadCurrentRun(
       SELECT *
       FROM ${RUN_TABLE}
       WHERE host_id=$1
-      ORDER BY COALESCE(created_at, updated_at) DESC, updated_at DESC, run_id DESC
+      ORDER BY
+        (status = 'stopped') ASC,
+        COALESCE(created_at, updated_at) DESC,
+        updated_at DESC,
+        run_id DESC
       LIMIT 1
     `,
     [host_id],
   );
   return rows[0] ? mapRun(rows[0]) : undefined;
+}
+
+async function loadRunById({
+  host_id,
+  run_id,
+}: {
+  host_id: string;
+  run_id: string;
+}): Promise<HostExamRun | undefined> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT * FROM ${RUN_TABLE} WHERE host_id=$1 AND run_id=$2`,
+    [host_id, run_id],
+  );
+  return rows[0] ? mapRun(rows[0]) : undefined;
+}
+
+async function loadRunToken({
+  host_id,
+  run_id,
+}: {
+  host_id: string;
+  run_id: string;
+}): Promise<string | undefined> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT run_id, status, token_idempotency_key FROM ${RUN_TABLE} WHERE host_id=$1 AND run_id=$2`,
+    [host_id, run_id],
+  );
+  const row = rows[0];
+  return tokenForRunRecord(row);
+}
+
+function tokenForRunRecord(row?: {
+  run_id?: string;
+  status?: string;
+  token_idempotency_key?: string;
+}): string | undefined {
+  if (!row?.run_id || row.status === "stopped" || !row.token_idempotency_key) {
+    return;
+  }
+  return deterministicToken({
+    run_id: row.run_id,
+    idempotency_key: row.token_idempotency_key,
+  });
 }
 
 async function loadRuntimeStatus(
@@ -456,7 +607,21 @@ async function loadRuntimeStatus(
       timeout: 15_000,
       fresh: true,
     });
-    return await client.getExamRunStatus({ run_id: run?.run_id });
+    // The project host is authoritative for which run is actually active.
+    // Do not constrain this query using potentially stale central state.
+    const runtime = (await client.getExamRunStatus(
+      {},
+    )) as HostExamRuntimeStatus & Record<string, unknown>;
+    return {
+      ...runtime,
+      active_projects: Number(
+        runtime.active_projects ?? runtime.active_workspaces ?? 0,
+      ),
+      max_projects:
+        runtime.max_projects == null && runtime.max_workspaces == null
+          ? undefined
+          : Number(runtime.max_projects ?? runtime.max_workspaces),
+    };
   } catch (err) {
     logger.warn("unable to load project-host exam runtime status", {
       host_id: host.id,
@@ -467,8 +632,8 @@ async function loadRuntimeStatus(
       run_id: run?.run_id,
       status: run?.status,
       admission_open: false,
-      active_workspaces: 0,
-      max_workspaces: run?.max_workspaces,
+      active_projects: 0,
+      max_projects: run?.max_projects,
       scheduled_stop_at: run?.scheduled_stop_at,
       last_error: `project-host status unavailable: ${err}`,
     };
@@ -484,17 +649,51 @@ export async function getExamStateLocal({
   eligible: boolean;
   eligibility_reason?: string;
 }): Promise<HostExamState> {
-  const [config, run] = await Promise.all([
+  const [config, centralRun] = await Promise.all([
     loadConfig(host.id),
     loadCurrentRun(host.id),
   ]);
+  const runtime = await loadRuntimeStatus(host, centralRun);
+  let run = centralRun;
+  if (runtime?.run_id && runtime.run_id !== run?.run_id) {
+    run =
+      (await loadRunById({ host_id: host.id, run_id: runtime.run_id })) ?? run;
+  }
+  if (shouldReconcileRunWithRuntime(run, runtime)) {
+    if (run && runtime) {
+      // The project host owns execution state. Heal the central row when a
+      // hub restart or lost RPC response interrupted the original mutation.
+      run = await updateRunFromRuntime({
+        run_id: run.run_id,
+        runtime,
+      });
+    }
+  }
+  const token = run
+    ? await loadRunToken({ host_id: host.id, run_id: run.run_id })
+    : undefined;
   return {
     eligible,
     eligibility_reason,
+    host_status: host.status,
     config,
     run,
-    runtime: await loadRuntimeStatus(host, run),
+    runtime,
+    token,
   };
+}
+
+function shouldReconcileRunWithRuntime(
+  run?: HostExamRun,
+  runtime?: HostExamRuntimeStatus,
+): boolean {
+  return !!(
+    run &&
+    runtime?.run_id === run.run_id &&
+    ((runtime.status && runtime.status !== run.status) ||
+      (runtime.max_projects != null &&
+        runtime.max_projects !== run.max_projects))
+  );
 }
 
 async function ensureExamDns({
@@ -551,21 +750,22 @@ export async function setExamConfigLocal({
   const { rows } = await getPool().query(
     `
       INSERT INTO ${CONFIG_TABLE} (
-        host_id, enabled, hostname, generation, max_workspaces,
-        workspace_cpu, workspace_memory_mb, workspace_disk_mb,
-        workspace_ttl_minutes, cleanup_grace_minutes, terminal_enabled,
+        host_id, enabled, title, hostname, generation, max_projects,
+        project_cpu, project_memory_mb, project_disk_mb,
+        project_ttl_minutes, cleanup_grace_minutes, terminal_enabled,
         network_mode, created_by, updated_by
       )
       VALUES (
-        $1, $2, $3, 1, $4, $5, $6, $7, $8, $9, $10, 'disabled', $11, $11
+        $1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11, 'disabled', $12, $12
       )
       ON CONFLICT (host_id) DO UPDATE SET
         enabled=EXCLUDED.enabled,
-        max_workspaces=EXCLUDED.max_workspaces,
-        workspace_cpu=EXCLUDED.workspace_cpu,
-        workspace_memory_mb=EXCLUDED.workspace_memory_mb,
-        workspace_disk_mb=EXCLUDED.workspace_disk_mb,
-        workspace_ttl_minutes=EXCLUDED.workspace_ttl_minutes,
+        title=EXCLUDED.title,
+        max_projects=EXCLUDED.max_projects,
+        project_cpu=EXCLUDED.project_cpu,
+        project_memory_mb=EXCLUDED.project_memory_mb,
+        project_disk_mb=EXCLUDED.project_disk_mb,
+        project_ttl_minutes=EXCLUDED.project_ttl_minutes,
         cleanup_grace_minutes=EXCLUDED.cleanup_grace_minutes,
         terminal_enabled=EXCLUDED.terminal_enabled,
         network_mode='disabled',
@@ -577,12 +777,13 @@ export async function setExamConfigLocal({
     [
       host.id,
       config.enabled,
+      config.title,
       hostname,
-      config.max_workspaces,
-      config.workspace_cpu,
-      config.workspace_memory_mb,
-      config.workspace_disk_mb,
-      config.workspace_ttl_minutes,
+      config.max_projects,
+      config.project_cpu,
+      config.project_memory_mb,
+      config.project_disk_mb,
+      config.project_ttl_minutes,
       config.cleanup_grace_minutes,
       config.terminal_enabled,
       actor_account_id,
@@ -605,6 +806,10 @@ async function updateRunFromRuntime({
     `
       UPDATE ${RUN_TABLE}
       SET status=$2,
+          max_projects=CASE
+            WHEN $4::INTEGER IS NULL THEN max_projects
+            ELSE GREATEST(max_projects, $4::INTEGER)
+          END,
           opened_at=CASE WHEN $2='open' THEN COALESCE(opened_at, NOW()) ELSE opened_at END,
           admission_closed_at=CASE
             WHEN $2 IN ('closing', 'cleaning', 'stopped') THEN COALESCE(admission_closed_at, NOW())
@@ -621,7 +826,7 @@ async function updateRunFromRuntime({
       WHERE run_id=$1
       RETURNING *
     `,
-    [run_id, status, runtime.last_error ?? null],
+    [run_id, status, runtime.last_error ?? null, runtime.max_projects ?? null],
   );
   if (!rows[0]) throw new Error("exam run not found");
   return mapRun(rows[0]);
@@ -632,12 +837,14 @@ export async function createExamRunLocal({
   actor_account_id,
   rootfs_image,
   scheduled_stop_at,
+  stop_host_at_deadline = true,
   idempotency_key,
 }: {
   host: ExamHostRow;
   actor_account_id: string;
   rootfs_image: string;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
   idempotency_key: string;
 }): Promise<{ run: HostExamRun; token: string }> {
   await ensureSchema();
@@ -656,7 +863,7 @@ export async function createExamRunLocal({
   const key = validateIdempotencyKey(idempotency_key);
   const deadline = validateDeadline(
     scheduled_stop_at,
-    config.workspace_ttl_minutes,
+    config.project_ttl_minutes,
   );
   const control = await getRoutedHostControlClient({
     host_id: host.id,
@@ -671,66 +878,103 @@ export async function createExamRunLocal({
     );
   }
 
-  const existingByKey = await getPool().query(
-    `
-      SELECT *
-      FROM ${RUN_TABLE}
-      WHERE host_id=$1 AND created_by=$2 AND create_idempotency_key=$3
-      LIMIT 1
-    `,
-    [host.id, actor_account_id, key],
-  );
-  if (existingByKey.rows[0]) {
-    const run = mapRun(existingByKey.rows[0]);
-    return {
-      run,
-      token: deterministicToken({
-        run_id: run.run_id,
-        idempotency_key: key,
-      }),
-    };
-  }
-
   const run_id = randomUUID();
   const token = deterministicToken({ run_id, idempotency_key: key });
   const token_hash = hashToken(token);
   const run_quota = {
-    cpu_limit: config.workspace_cpu,
-    memory_limit: config.workspace_memory_mb,
-    disk_quota: config.workspace_disk_mb,
+    cpu_limit: config.project_cpu,
+    memory_limit: config.project_memory_mb,
+    disk_quota: config.project_disk_mb,
     pids_limit: 4_096,
   };
-  const { rows } = await getPool().query(
-    `
-      INSERT INTO ${RUN_TABLE} (
-        run_id, host_id, config_generation, status, token_hash,
-        create_idempotency_key, token_idempotency_key, rootfs_image,
-        rootfs_digest, run_quota, max_workspaces, terminal_enabled,
-        network_mode, scheduled_stop_at, owner_account_id, created_by
-      )
-      VALUES (
-        $1, $2, $3, 'preparing', $4, $5, $5, $6, $7, $8::JSONB,
-        $9, $10, 'disabled', $11, $12, $13
-      )
-      RETURNING *
-    `,
-    [
-      run_id,
+  const db = await getPool().connect();
+  let transactionOpen = false;
+  let run: HostExamRun;
+  try {
+    await db.query("BEGIN");
+    transactionOpen = true;
+    await db.query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))", [
+      "project-host-exam-run-create",
       host.id,
-      config.generation,
-      token_hash,
-      key,
-      selected.image,
-      selected.digest,
-      JSON.stringify(run_quota),
-      config.max_workspaces,
-      config.terminal_enabled,
-      deadline,
-      ownerAccountId(host),
-      actor_account_id,
-    ],
-  );
-  let run = mapRun(rows[0]);
+    ]);
+    const existingByKey = await db.query(
+      `
+        SELECT *
+        FROM ${RUN_TABLE}
+        WHERE host_id=$1 AND created_by=$2 AND create_idempotency_key=$3
+        LIMIT 1
+      `,
+      [host.id, actor_account_id, key],
+    );
+    if (existingByKey.rows[0]) {
+      run = mapRun(existingByKey.rows[0]);
+      await db.query("COMMIT");
+      transactionOpen = false;
+      return {
+        run,
+        token: deterministicToken({
+          run_id: run.run_id,
+          idempotency_key: key,
+        }),
+      };
+    }
+    const active = await db.query(
+      `
+        SELECT run_id
+        FROM ${RUN_TABLE}
+        WHERE host_id=$1 AND status <> 'stopped'
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [host.id],
+    );
+    if (active.rows[0]) {
+      throw new Error("another exam run is still active on this host");
+    }
+    const { rows } = await db.query(
+      `
+        INSERT INTO ${RUN_TABLE} (
+          run_id, host_id, config_generation, status, token_hash,
+          create_idempotency_key, token_idempotency_key, rootfs_image,
+          rootfs_digest, run_quota, max_projects, terminal_enabled,
+          network_mode, scheduled_stop_at, stop_host_at_deadline,
+          owner_account_id, created_by
+        )
+        VALUES (
+          $1, $2, $3, 'preparing', $4, $5, $5, $6, $7, $8::JSONB,
+          $9, $10, 'disabled', $11, $12, $13, $14
+        )
+        RETURNING *
+      `,
+      [
+        run_id,
+        host.id,
+        config.generation,
+        token_hash,
+        key,
+        selected.image,
+        selected.digest,
+        JSON.stringify(run_quota),
+        config.max_projects,
+        config.terminal_enabled,
+        deadline,
+        stop_host_at_deadline !== false,
+        ownerAccountId(host),
+        actor_account_id,
+      ],
+    );
+    run = mapRun(rows[0]);
+    await db.query("COMMIT");
+    transactionOpen = false;
+  } catch (err) {
+    if (transactionOpen) {
+      await db.query("ROLLBACK");
+    }
+    throw err;
+  } finally {
+    db.release();
+  }
+
   try {
     const runtime = await control.applyExamRun({
       config,
@@ -739,13 +983,33 @@ export async function createExamRunLocal({
     });
     run = await updateRunFromRuntime({ run_id, runtime });
   } catch (err) {
+    let runtime: HostExamRuntimeStatus | undefined;
+    let inspectedRuntime = false;
+    try {
+      runtime = await control.getExamRunStatus({});
+      inspectedRuntime = true;
+    } catch (statusErr) {
+      logger.warn("unable to inspect exam runtime after apply failure", {
+        host_id: host.id,
+        run_id,
+        err: `${statusErr}`,
+      });
+    }
+    const rejectedBeforeActivation =
+      inspectedRuntime && runtime?.run_id !== run_id;
     await getPool().query(
       `
         UPDATE ${RUN_TABLE}
-        SET status='error', last_error=$2, updated_at=NOW()
+        SET status=$2,
+            admission_closed_at=CASE WHEN $2='stopped' THEN COALESCE(admission_closed_at, NOW()) ELSE admission_closed_at END,
+            cleanup_started_at=CASE WHEN $2='stopped' THEN COALESCE(cleanup_started_at, NOW()) ELSE cleanup_started_at END,
+            cleaned_at=CASE WHEN $2='stopped' THEN COALESCE(cleaned_at, NOW()) ELSE cleaned_at END,
+            stopped_at=CASE WHEN $2='stopped' THEN COALESCE(stopped_at, NOW()) ELSE stopped_at END,
+            last_error=$3,
+            updated_at=NOW()
         WHERE run_id=$1
       `,
-      [run_id, `${err}`],
+      [run_id, rejectedBeforeActivation ? "stopped" : "error", `${err}`],
     );
     throw err;
   }
@@ -840,10 +1104,12 @@ export async function updateExamDeadlineLocal({
   host,
   run_id,
   scheduled_stop_at,
+  stop_host_at_deadline,
 }: {
   host: ExamHostRow;
   run_id: string;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
 }): Promise<HostExamRun> {
   const [run, config] = await Promise.all([
     requireRunForMutation({ host_id: host.id, run_id }),
@@ -859,7 +1125,7 @@ export async function updateExamDeadlineLocal({
   }
   const deadline = validateDeadline(
     scheduled_stop_at,
-    config.workspace_ttl_minutes,
+    config.project_ttl_minutes,
   );
   const control = await getRoutedHostControlClient({
     host_id: host.id,
@@ -870,16 +1136,71 @@ export async function updateExamDeadlineLocal({
     run_id,
     config_generation: run.config_generation,
     scheduled_stop_at: deadline,
+    stop_host_at_deadline: stop_host_at_deadline ?? run.stop_host_at_deadline,
   });
   const { rows } = await getPool().query(
     `
       UPDATE ${RUN_TABLE}
-      SET scheduled_stop_at=$2, updated_at=NOW()
+      SET scheduled_stop_at=$2, stop_host_at_deadline=$3, updated_at=NOW()
       WHERE run_id=$1
       RETURNING *
     `,
-    [run_id, deadline],
+    [run_id, deadline, stop_host_at_deadline ?? run.stop_host_at_deadline],
   );
+  return mapRun(rows[0]);
+}
+
+export async function increaseExamCapacityLocal({
+  host,
+  run_id,
+  max_projects,
+}: {
+  host: ExamHostRow;
+  run_id: string;
+  max_projects: number;
+}): Promise<HostExamRun> {
+  const run = await requireRunForMutation({ host_id: host.id, run_id });
+  if (run.status !== "ready" && run.status !== "open") {
+    throw new Error(
+      `exam capacity can only increase while the run is ready or open (status=${run.status})`,
+    );
+  }
+  const capacity = requireFiniteRange(max_projects, {
+    label: "max_projects",
+    min: 1,
+    max: 1_000,
+    integer: true,
+  });
+  if (capacity < run.max_projects) {
+    throw new Error(
+      `exam capacity cannot decrease during a run (current=${run.max_projects})`,
+    );
+  }
+  if (capacity === run.max_projects) return run;
+  const control = await getRoutedHostControlClient({
+    host_id: host.id,
+    timeout: 30_000,
+    fresh: true,
+  });
+  const runtime = await control.increaseExamRunCapacity({
+    run_id,
+    config_generation: run.config_generation,
+    max_projects: capacity,
+  });
+  const appliedCapacity = runtime.max_projects;
+  if (appliedCapacity == null || appliedCapacity < capacity) {
+    throw new Error("project host did not apply the requested exam capacity");
+  }
+  const { rows } = await getPool().query(
+    `
+      UPDATE ${RUN_TABLE}
+      SET max_projects=GREATEST(max_projects, $2), updated_at=NOW()
+      WHERE run_id=$1
+      RETURNING *
+    `,
+    [run_id, appliedCapacity],
+  );
+  if (!rows[0]) throw new Error("exam run not found");
   return mapRun(rows[0]);
 }
 
@@ -926,7 +1247,7 @@ export async function eraseActiveExamRunBeforeHostStopLocal({
   if (!run || run.status === "stopped") return false;
   if (host.status !== "running") {
     throw new Error(
-      "the exam host must be running so its temporary workspaces can be erased before stopping",
+      "the exam host must be running so its temporary projects can be erased before stopping",
     );
   }
   await stopAndEraseExamRunLocal({
@@ -995,6 +1316,7 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
         public_url: row.public_url,
         metadata: row.metadata,
       };
+      const stopHostAtDeadline = row.stop_host_at_deadline !== false;
       await db.query("BEGIN");
       try {
         await db.query(
@@ -1007,19 +1329,21 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
           `,
           [row.run_id],
         );
-        await db.query(
-          `
-            UPDATE project_hosts
-            SET metadata=jsonb_set(
-              COALESCE(metadata, '{}'::JSONB),
-              '{desired_state}',
-              '"stopped"'::JSONB,
-              true
-            )
-            WHERE id=$1
-          `,
-          [row.host_id],
-        );
+        if (stopHostAtDeadline) {
+          await db.query(
+            `
+              UPDATE project_hosts
+              SET metadata=jsonb_set(
+                COALESCE(metadata, '{}'::JSONB),
+                '{desired_state}',
+                '"stopped"'::JSONB,
+                true
+              )
+              WHERE id=$1
+            `,
+            [row.host_id],
+          );
+        }
         await db.query("COMMIT");
       } catch (err) {
         await db.query("ROLLBACK");
@@ -1028,14 +1352,16 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
       await stopAndEraseExamRunLocal({
         host,
         run_id: row.run_id,
-        poweroff: true,
+        poweroff: stopHostAtDeadline,
       });
-      const { stopHostInternal } =
-        await import("@cocalc/server/conat/api/hosts");
-      await stopHostInternal({
-        id: row.host_id,
-        account_id: row.owner_account_id,
-      });
+      if (stopHostAtDeadline) {
+        const { stopHostInternal } =
+          await import("@cocalc/server/conat/api/hosts");
+        await stopHostInternal({
+          id: row.host_id,
+          account_id: row.owner_account_id,
+        });
+      }
     } catch (err) {
       logger.error("scheduled exam cleanup failed", {
         host_id: row.host_id,
@@ -1052,7 +1378,7 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
       );
       void adminAlert({
         subject: `Exam cleanup failed on ${row.name ?? row.host_id}`,
-        body: `Run ${row.run_id} reached its deadline but cleanup or host stop failed:\n\n${err}`,
+        body: `Run ${row.run_id} reached its deadline but cleanup${row.stop_host_at_deadline !== false ? " or host stop" : ""} failed:\n\n${err}`,
         dedupMinutes: 15,
       });
     } finally {
@@ -1100,5 +1426,7 @@ export const __test__ = {
   isHostOnDemand,
   normalizeConfig,
   publicIp,
+  shouldReconcileRunWithRuntime,
+  tokenForRunRecord,
   validateDeadline,
 };

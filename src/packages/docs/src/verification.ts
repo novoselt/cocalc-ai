@@ -297,6 +297,7 @@ function reviewAgeDays(lastReviewed: string, now: Date): number | undefined {
 
 const HOST_ACTION_TABS: Partial<Record<DocsActionId, string>> = {
   "hosts.access.open": "Access",
+  "hosts.exam.open": "Exams",
   "hosts.change-rules.open": "Overview",
   "hosts.lifecycle.open": "Overview",
   "hosts.move.open": "Projects",

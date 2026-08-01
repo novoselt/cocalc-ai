@@ -20,6 +20,10 @@ Table({
       type: "boolean",
       desc: "Whether exam mode may be prepared on this host.",
     },
+    title: {
+      type: "string",
+      desc: "Public title shown on the temporary scratchpad admission page.",
+    },
     hostname: {
       type: "string",
       desc: "Stable single-origin hostname used by exam browsers.",
@@ -36,23 +40,23 @@ Table({
       type: "number",
       desc: "Monotonic configuration generation frozen into each exam run.",
     },
-    max_workspaces: {
+    max_projects: {
       type: "number",
-      desc: "Maximum anonymous workspaces admitted during one run.",
+      desc: "Maximum anonymous projects admitted during one run.",
     },
-    workspace_cpu: {
+    project_cpu: {
       type: "number",
-      desc: "CPU limit assigned to each exam workspace.",
+      desc: "CPU limit assigned to each exam project.",
     },
-    workspace_memory_mb: {
+    project_memory_mb: {
       type: "number",
-      desc: "Memory limit assigned to each exam workspace.",
+      desc: "Memory limit assigned to each exam project.",
     },
-    workspace_disk_mb: {
+    project_disk_mb: {
       type: "number",
-      desc: "Disk quota assigned to each exam workspace.",
+      desc: "Disk quota assigned to each exam project.",
     },
-    workspace_ttl_minutes: {
+    project_ttl_minutes: {
       type: "number",
       desc: "Maximum duration of an exam run before cleanup.",
     },

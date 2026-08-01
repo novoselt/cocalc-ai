@@ -64,6 +64,7 @@ import { TeamLicenseWarningBanner } from "./team-license-warning-banner";
 import AutomaticUpdateNotice from "./automatic-update-notice";
 import { useVisibleViewportBottom } from "./visible-viewport";
 import { OnboardingEmailPrompt } from "./onboarding-email-prompt";
+import { ScratchpadSessionControls } from "./scratchpad-session-controls";
 
 // ipad and ios have a weird trick where they make the screen
 // actually smaller than 100vh and have it be scrollable, even
@@ -166,6 +167,10 @@ export const Page: React.FC = () => {
   const is_logged_in = useTypedRedux("account", "is_logged_in");
   const examMode = useTypedRedux("customize", "exam_mode") === true;
   const examProjectId = useTypedRedux("customize", "project_id");
+  const scratchpadDeleteAt = useTypedRedux(
+    "customize",
+    "scratchpad_delete_at" as any,
+  ) as string | undefined;
   const clientSignedIn = useClientSignedIn();
   const effectivelySignedIn = is_logged_in || clientSignedIn;
   const groups = useTypedRedux("account", "groups");
@@ -439,6 +444,9 @@ export const Page: React.FC = () => {
       {fullscreen && !isAuthView && render_fullscreen()}
       {!lite && !examMode && isNarrow && !isAuthView && (
         <ProjectsNav height={pageStyle.height} style={projectsNavStyle} />
+      )}
+      {examMode && !isAuthView && (
+        <ScratchpadSessionControls deleteAt={scratchpadDeleteAt} />
       )}
       <CocalcErrorBoundary
         autoRetry={false}

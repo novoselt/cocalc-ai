@@ -302,6 +302,7 @@ import {
   createExamRunLocal,
   eraseActiveExamRunBeforeHostStopLocal,
   getExamStateLocal,
+  increaseExamCapacityLocal,
   openExamRunLocal,
   rotateExamTokenLocal,
   setExamConfigLocal,
@@ -5045,11 +5046,16 @@ async function requireFreshExamMutation({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
 }: {
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
 }): Promise<string | undefined> {
+  if (internalAuth === HOST_DANGEROUS_INTERNAL_AUTH) {
+    return session_hash ?? undefined;
+  }
   const auth = await maybeRequireFreshAuthForInteractiveHostAction({
     account_id,
     browser_id: browser_id ?? undefined,
@@ -5087,12 +5093,14 @@ export async function setHostExamConfig({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   config,
 }: {
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   config: HostExamConfigInput;
 }): Promise<HostExamState> {
@@ -5100,6 +5108,7 @@ export async function setHostExamConfig({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5130,23 +5139,28 @@ export async function createHostExamRun({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   rootfs_image,
   scheduled_stop_at,
+  stop_host_at_deadline,
   idempotency_key,
 }: {
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   rootfs_image: string;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
   idempotency_key: string;
 }): Promise<HostExamState & { token: string }> {
   const freshSessionHash = await requireFreshExamMutation({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5159,6 +5173,7 @@ export async function createHostExamRun({
         id,
         rootfs_image,
         scheduled_stop_at,
+        stop_host_at_deadline,
         idempotency_key,
       });
   }
@@ -5172,6 +5187,7 @@ export async function createHostExamRun({
     actor_account_id: requireAccount(account_id),
     rootfs_image,
     scheduled_stop_at,
+    stop_host_at_deadline,
     idempotency_key,
   });
   return {
@@ -5184,6 +5200,7 @@ export async function rotateHostExamToken({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   run_id,
   idempotency_key,
@@ -5191,6 +5208,7 @@ export async function rotateHostExamToken({
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   run_id: string;
   idempotency_key: string;
@@ -5199,6 +5217,7 @@ export async function rotateHostExamToken({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5233,6 +5252,7 @@ export async function openHostExamRun({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   run_id,
   idempotency_key,
@@ -5240,6 +5260,7 @@ export async function openHostExamRun({
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   run_id: string;
   idempotency_key: string;
@@ -5248,6 +5269,7 @@ export async function openHostExamRun({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5273,23 +5295,28 @@ export async function updateHostExamDeadline({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   run_id,
   scheduled_stop_at,
+  stop_host_at_deadline,
   idempotency_key,
 }: {
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   run_id: string;
   scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
   idempotency_key: string;
 }): Promise<HostExamState> {
   const freshSessionHash = await requireFreshExamMutation({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5302,6 +5329,7 @@ export async function updateHostExamDeadline({
         id,
         run_id,
         scheduled_stop_at,
+        stop_host_at_deadline,
         idempotency_key,
       });
   }
@@ -5310,7 +5338,60 @@ export async function updateHostExamDeadline({
     account_id,
     require_entitlement: true,
   });
-  await updateExamDeadlineLocal({ host: row, run_id, scheduled_stop_at });
+  await updateExamDeadlineLocal({
+    host: row,
+    run_id,
+    scheduled_stop_at,
+    stop_host_at_deadline,
+  });
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
+export async function increaseHostExamCapacity({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+  id,
+  run_id,
+  max_projects,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+  id: string;
+  run_id: string;
+  max_projects: number;
+  idempotency_key: string;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+    internalAuth,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .increaseHostExamCapacity({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        run_id,
+        max_projects,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await increaseExamCapacityLocal({ host: row, run_id, max_projects });
   return await getExamStateLocal({ host: row, eligible: true });
 }
 
@@ -5318,6 +5399,7 @@ export async function stopAndEraseHostExamRun({
   account_id,
   browser_id,
   session_hash,
+  internalAuth,
   id,
   run_id,
   stop_host = true,
@@ -5326,6 +5408,7 @@ export async function stopAndEraseHostExamRun({
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   run_id: string;
   stop_host?: boolean;
@@ -5335,6 +5418,7 @@ export async function stopAndEraseHostExamRun({
     account_id,
     browser_id,
     session_hash,
+    internalAuth,
   });
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
@@ -5363,7 +5447,15 @@ export async function stopAndEraseHostExamRun({
   if (stop_host) {
     await stopHostInternal({ account_id, id });
   }
-  return await getExamStateLocal({ host: row, eligible: true });
+  // The row loaded before cleanup still says "running". Reload it after a
+  // requested shutdown so state rendering does not try to contact the now
+  // disconnected project-host or briefly re-enable preparation controls.
+  const { row: currentRow } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  return await getExamStateLocal({ host: currentRow, eligible: true });
 }
 
 export async function listHostSshAuthorizedKeys({
@@ -8397,12 +8489,14 @@ export async function rolloutHostManagedComponents({
   account_id,
   id,
   components,
+  desired_version,
   base_url,
   reason,
 }: {
   account_id?: string;
   id: string;
   components: ManagedComponentKind[];
+  desired_version?: string;
   base_url?: string;
   reason?: string;
 }): Promise<HostLroResponse> {
@@ -8414,6 +8508,7 @@ export async function rolloutHostManagedComponents({
         account_id,
         id,
         components,
+        desired_version,
         base_url,
         reason,
       });
@@ -8424,10 +8519,18 @@ export async function rolloutHostManagedComponents({
     kind: HOST_ROLLOUT_MANAGED_COMPONENTS_LRO_KIND,
     row,
     account_id,
-    input: { id: row.id, account_id, components, base_url, reason },
+    input: {
+      id: row.id,
+      account_id,
+      components,
+      desired_version,
+      base_url,
+      reason,
+    },
     dedupe_key: hostManagedComponentRolloutDedupeKey({
       hostId: row.id,
       components,
+      desiredVersion: desired_version,
       baseUrl: base_url,
       reason,
     }),
@@ -8832,6 +8935,7 @@ export async function rolloutHostManagedComponentsInternal({
   account_id,
   id,
   components,
+  desired_version,
   base_url,
   reason,
   record_runtime_deployments,
@@ -8840,6 +8944,7 @@ export async function rolloutHostManagedComponentsInternal({
   account_id?: string;
   id: string;
   components: HostManagedComponentRolloutRequest["components"];
+  desired_version?: string;
   base_url?: string;
   reason?: string;
   record_runtime_deployments?: boolean;
@@ -8851,6 +8956,7 @@ export async function rolloutHostManagedComponentsInternal({
     account_id,
     id,
     components,
+    desired_version,
     reason,
     record_runtime_deployments,
     loadHostForStartStop: loadHostForRootfsManagement,

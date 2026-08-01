@@ -51,6 +51,7 @@ export type DocsActionId =
   | "admin.users.open"
   | "hosts.open"
   | "hosts.access.open"
+  | "hosts.exam.open"
   | "hosts.change-rules.open"
   | "hosts.lifecycle.open"
   | "hosts.move.open"

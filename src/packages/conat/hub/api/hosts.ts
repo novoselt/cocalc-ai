@@ -634,15 +634,16 @@ export type HostExamRunStatus =
 export interface HostExamConfig {
   host_id: string;
   enabled: boolean;
+  title: string;
   hostname: string;
   dns_record_id?: string | null;
   dns_target?: string | null;
   generation: number;
-  max_workspaces: number;
-  workspace_cpu: number;
-  workspace_memory_mb: number;
-  workspace_disk_mb: number;
-  workspace_ttl_minutes: number;
+  max_projects: number;
+  project_cpu: number;
+  project_memory_mb: number;
+  project_disk_mb: number;
+  project_ttl_minutes: number;
   cleanup_grace_minutes: number;
   terminal_enabled: boolean;
   network_mode: HostExamNetworkMode;
@@ -665,10 +666,11 @@ export interface HostExamRun {
     disk_quota: number;
     pids_limit: number;
   };
-  max_workspaces: number;
+  max_projects: number;
   terminal_enabled: boolean;
   network_mode: HostExamNetworkMode;
   scheduled_stop_at: string;
+  stop_host_at_deadline: boolean;
   owner_account_id: string;
   opened_at?: string | null;
   admission_closed_at?: string | null;
@@ -689,7 +691,7 @@ export interface HostExamReadinessCheck {
     | "rootfs"
     | "local_snapshot"
     | "network_policy"
-    | "workspace_smoke"
+    | "project_smoke"
     | "watchdog";
   ok: boolean;
   detail?: string;
@@ -700,11 +702,13 @@ export interface HostExamRuntimeStatus {
   status?: HostExamRunStatus;
   config_generation?: number;
   admission_open: boolean;
-  active_workspaces: number;
-  max_workspaces?: number;
+  active_projects: number;
+  max_projects?: number;
   scheduled_stop_at?: string;
+  stop_host_at_deadline?: boolean;
   cleanup_deadline_at?: string;
   hostname?: string;
+  title?: string;
   terminal_enabled?: boolean;
   network_mode?: HostExamNetworkMode;
   last_error?: string;
@@ -715,18 +719,21 @@ export interface HostExamRuntimeStatus {
 export interface HostExamState {
   eligible: boolean;
   eligibility_reason?: string;
+  host_status?: string;
   config?: HostExamConfig;
   run?: HostExamRun;
   runtime?: HostExamRuntimeStatus;
+  token?: string;
 }
 
 export interface HostExamConfigInput {
   enabled: boolean;
-  max_workspaces: number;
-  workspace_cpu: number;
-  workspace_memory_mb: number;
-  workspace_disk_mb: number;
-  workspace_ttl_minutes: number;
+  title?: string;
+  max_projects: number;
+  project_cpu: number;
+  project_memory_mb: number;
+  project_disk_mb: number;
+  project_ttl_minutes: number;
   cleanup_grace_minutes: number;
   terminal_enabled?: boolean;
   network_mode?: HostExamNetworkMode;
@@ -1426,7 +1433,7 @@ export interface HostSoftwareUpgradeResponse {
   results: Array<{
     artifact: HostSoftwareArtifact;
     version: string;
-    status: "updated" | "noop";
+    status: "updated" | "staged" | "noop";
   }>;
 }
 
@@ -1638,6 +1645,7 @@ export interface HostRuntimeDeploymentUpsert {
 export interface HostManagedComponentRolloutRequest {
   id: string;
   components: ManagedComponentKind[];
+  desired_version?: string;
   reason?: string;
 }
 
@@ -1696,6 +1704,7 @@ export const hosts = {
   rotateHostExamToken: authFirstRequireAccount,
   openHostExamRun: authFirstRequireAccount,
   updateHostExamDeadline: authFirstRequireAccount,
+  increaseHostExamCapacity: authFirstRequireAccount,
   stopAndEraseHostExamRun: authFirstRequireAccount,
   listHostSshAuthorizedKeys: authFirstRequireAccount,
   addHostSshAuthorizedKey: authFirstRequireAccount,
@@ -1916,6 +1925,7 @@ export interface Hosts {
   getHostExamState: (opts: {
     account_id?: string;
     id: string;
+    timeout?: number;
   }) => Promise<HostExamState>;
   setHostExamConfig: (opts: {
     account_id?: string;
@@ -1923,6 +1933,7 @@ export interface Hosts {
     session_hash?: string | null;
     id: string;
     config: HostExamConfigInput;
+    timeout?: number;
   }) => Promise<HostExamState>;
   createHostExamRun: (opts: {
     account_id?: string;
@@ -1931,7 +1942,9 @@ export interface Hosts {
     id: string;
     rootfs_image: string;
     scheduled_stop_at: string;
+    stop_host_at_deadline?: boolean;
     idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState & { token: string }>;
   rotateHostExamToken: (opts: {
     account_id?: string;
@@ -1940,6 +1953,7 @@ export interface Hosts {
     id: string;
     run_id: string;
     idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState & { token: string }>;
   openHostExamRun: (opts: {
     account_id?: string;
@@ -1948,6 +1962,7 @@ export interface Hosts {
     id: string;
     run_id: string;
     idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState>;
   updateHostExamDeadline: (opts: {
     account_id?: string;
@@ -1956,7 +1971,19 @@ export interface Hosts {
     id: string;
     run_id: string;
     scheduled_stop_at: string;
+    stop_host_at_deadline?: boolean;
     idempotency_key: string;
+    timeout?: number;
+  }) => Promise<HostExamState>;
+  increaseHostExamCapacity: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    max_projects: number;
+    idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState>;
   stopAndEraseHostExamRun: (opts: {
     account_id?: string;
@@ -1966,6 +1993,7 @@ export interface Hosts {
     run_id: string;
     stop_host?: boolean;
     idempotency_key: string;
+    timeout?: number;
   }) => Promise<HostExamState>;
   listHostSshAuthorizedKeys: (opts: {
     account_id?: string;
@@ -2386,6 +2414,7 @@ export interface Hosts {
     account_id?: string;
     id: string;
     components: ManagedComponentKind[];
+    desired_version?: string;
     base_url?: string;
     reason?: string;
   }) => Promise<HostLroResponse>;

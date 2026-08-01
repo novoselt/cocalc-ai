@@ -9,6 +9,7 @@ import { MentionsStore, MentionsState } from "./store";
 import { MentionsActions } from "./actions";
 import { REDUX_NAME } from "./util";
 import { getNotificationFilterFromFragment } from "@cocalc/frontend/notifications/fragment";
+import { waitForExamModeConfiguration } from "@cocalc/frontend/customize/exam-mode";
 
 export function init(redux: AppRedux) {
   if (redux.getStore(REDUX_NAME) != undefined) {
@@ -29,5 +30,11 @@ export function init(redux: AppRedux) {
     REDUX_NAME,
     MentionsActions,
   );
-  actions._init();
+  void waitForExamModeConfiguration().then((examMode) => {
+    if (examMode) {
+      actions.setState({ loading: false });
+      return;
+    }
+    actions._init();
+  });
 }

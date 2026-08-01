@@ -2190,8 +2190,11 @@ async function handleOp(op: LroSummary): Promise<void> {
         account_id,
         id: host_id,
         components: input?.components ?? [],
+        desired_version: input?.desired_version,
         base_url: input?.base_url,
         reason: input?.reason,
+        record_runtime_deployments:
+          input?.record_runtime_deployments !== false,
         onProgress: async (update) => {
           await progressStep("waiting", update.rollout_phase_label, {
             host_id,

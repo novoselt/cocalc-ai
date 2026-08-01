@@ -10,6 +10,22 @@ Table({
   rules: {
     primary_key: "run_id",
     pg_indexes: ["host_id", "status", "scheduled_stop_at", "updated_at"],
+    pg_custom_indexes: [
+      {
+        name: "project_host_exam_runs_active_host_idx",
+        query: "(host_id) WHERE status <> 'stopped'",
+        unique: true,
+      },
+      {
+        name: "project_host_exam_runs_create_key_idx",
+        query: "(host_id, created_by, create_idempotency_key)",
+        unique: true,
+      },
+      {
+        name: "project_host_exam_runs_due_idx",
+        query: "(scheduled_stop_at) WHERE status <> 'stopped'",
+      },
+    ],
   },
   fields: {
     run_id: {
@@ -50,11 +66,11 @@ Table({
     },
     run_quota: {
       type: "map",
-      desc: "Per-workspace resource limits frozen into this run.",
+      desc: "Per-project resource limits frozen into this run.",
     },
-    max_workspaces: {
+    max_projects: {
       type: "number",
-      desc: "Maximum workspaces frozen into this run.",
+      desc: "Maximum projects frozen into this run.",
     },
     terminal_enabled: {
       type: "boolean",
@@ -62,15 +78,19 @@ Table({
     },
     network_mode: {
       type: "string",
-      desc: "Per-workspace network policy frozen into this run.",
+      desc: "Per-project network policy frozen into this run.",
     },
     scheduled_stop_at: {
       type: "timestamp",
-      desc: "Mandatory deadline for admission closure, cleanup, and VM stop.",
+      desc: "Mandatory deadline for admission closure and project cleanup.",
+    },
+    stop_host_at_deadline: {
+      type: "boolean",
+      desc: "Whether the reusable project host also shuts down after deadline cleanup.",
     },
     owner_account_id: {
       type: "uuid",
-      desc: "Project-host owner charged for exam workspace egress.",
+      desc: "Project-host owner charged for exam project egress.",
     },
     opened_at: {
       type: "timestamp",
@@ -82,7 +102,7 @@ Table({
     },
     cleanup_started_at: {
       type: "timestamp",
-      desc: "When exam workspace cleanup started.",
+      desc: "When exam project cleanup started.",
     },
     cleaned_at: {
       type: "timestamp",

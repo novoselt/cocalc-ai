@@ -27,15 +27,20 @@ export const HOSTS_ENTRIES: DocsEntry[] = [
         description:
           "Open project hosts and select a private host's Exams tab.",
         executable: true,
-        id: "hosts.open",
+        id: "hosts.exam.open",
         label: "Open project hosts",
+        parameters: projectHostActionParameters(),
       },
     ],
     audiences: ["agents", "instructors"],
     body: PROJECT_HOST_EXAMS_BODY.trim(),
     category: "Project hosts",
     id: "hosts.exam-scratchpads",
-    lastReviewed: "2026-07-30",
+    image: docsIcon(
+      "/public/docs/exam-scratchpad-301d1929.webp",
+      "A locked computational exam project with a notebook, timer, and disabled Internet access",
+    ),
+    lastReviewed: "2026-07-31",
     slug: "hosts/exam-scratchpads",
     status: "ready",
     summary:

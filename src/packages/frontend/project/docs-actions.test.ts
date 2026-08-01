@@ -173,6 +173,27 @@ describe("project docs actions", () => {
     });
   });
 
+  it("opens a project host drawer on the exams tab", async () => {
+    const result = await revealDocsAction({
+      actionId: "hosts.exam.open",
+      parameters: { hostId: "host-1" },
+      projectId: "project-1",
+    });
+
+    expect(mockOpenHostDrawer).toHaveBeenCalledWith({
+      hostId: "host-1",
+      tab: "exams",
+    });
+    expect(result).toMatchObject({
+      action_id: "hosts.exam.open",
+      drawer_tab: "exams",
+      host_id: "host-1",
+      opened: true,
+      project_id: "project-1",
+      tab: "hosts",
+    });
+  });
+
   it("opens selected project host drawer tabs", async () => {
     const reliability = await revealDocsAction({
       actionId: "hosts.reliability.open",
