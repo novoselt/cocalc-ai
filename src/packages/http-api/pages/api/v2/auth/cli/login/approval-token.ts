@@ -42,6 +42,11 @@ export default async function cliLoginApprovalToken(req, res) {
     const fresh_auth_until = session.fresh_auth_until
       ? new Date(session.fresh_auth_until)
       : null;
+    if (fresh_auth_until == null) {
+      throw Object.assign(new Error("fresh auth is required for cli login"), {
+        code: "fresh_auth_required",
+      });
+    }
     if (elevatedLogin) {
       const requiredMs = resolveFreshAuthDurationMs({
         duration: requestedDuration,
