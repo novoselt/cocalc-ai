@@ -16,7 +16,9 @@ export async function stop(opts: { project_id: string }) {
   return await apiCall("v2/projects/stop", opts);
 }
 
-// Starts project running and resets idle timeout.
+// Starts/wakes the project and records activity.  Activity metadata is retained
+// for compatibility and possible future policy; current CoCalc-AI project hosts
+// do not enforce an idle timeout.
 export async function touch(opts: { project_id: string }) {
   return await apiCall("v2/projects/touch", opts);
 }

@@ -792,7 +792,8 @@ export class ProjectActions extends Actions<ProjectStoreState> {
 
   // Records in the backend database that we are actively
   // using this project and wakes up the project.
-  // This resets the idle timeout, among other things.
+  // Current CoCalc-AI project hosts do not enforce an idle timeout; retaining
+  // activity timestamps preserves compatibility and possible future policy.
   // This is throttled, so multiple calls are spaced out.
   touch = async (): Promise<void> => {
     if (this.isViewerProjectUser()) {

@@ -36,7 +36,7 @@ describe("CocalcErrorBoundary", () => {
     }
 
     render(
-      <CocalcErrorBoundary scope="test.transient">
+      <CocalcErrorBoundary autoRetry scope="test.transient">
         <TransientFailure />
       </CocalcErrorBoundary>,
       {
@@ -49,6 +49,31 @@ describe("CocalcErrorBoundary", () => {
     expect(
       screen.queryByText("This part of CoCalc could not be displayed."),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not automatically remount a failed subtree by default", async () => {
+    let failures = 0;
+    function Failure() {
+      failures += 1;
+      throw new Error("persistent");
+    }
+
+    render(
+      <CocalcErrorBoundary scope="test.manual">
+        <Failure />
+      </CocalcErrorBoundary>,
+      {
+        onCaughtError: () => {},
+        onRecoverableError: () => {},
+      },
+    );
+
+    expect(
+      await screen.findByText("This part of CoCalc could not be displayed."),
+    ).toBeInTheDocument();
+    const failuresAfterFallback = failures;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(failures).toBe(failuresAfterFallback);
   });
 
   it("shows a local fallback and supports a manual retry", async () => {

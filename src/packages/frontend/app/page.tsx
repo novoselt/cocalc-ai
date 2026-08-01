@@ -449,6 +449,7 @@ export const Page: React.FC = () => {
         <ScratchpadSessionControls deleteAt={scratchpadDeleteAt} />
       )}
       <CocalcErrorBoundary
+        autoRetry={false}
         scope="app.active-content"
         resetKeys={[active_top_tab]}
       >

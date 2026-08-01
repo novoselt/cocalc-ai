@@ -202,9 +202,9 @@ async function checkForRememberMeAccess({
       account_id,
     });
     if (access) {
-      // Record that user is going to actively access
-      // this project.  This is important since it resets
-      // the idle timeout.
+      // Record that the user is actively accessing this project.  Current
+      // CoCalc-AI project hosts do not enforce an idle timeout, but this
+      // activity remains useful and preserves future policy semantics.
       database.touch({
         account_id,
         project_id,
