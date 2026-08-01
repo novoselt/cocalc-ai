@@ -4028,13 +4028,18 @@ export class ProjectsActions extends Actions<ProjectsState> {
           project_id,
           ...(opts.autostart ? { autostart: true } : {}),
           wait: false,
+          foreground_wait_ms: 5_000,
         });
         actions.trackStartOp(resp);
         opts.onStartOp?.(resp);
-        const startConvergence = this.waitForProjectStartOp({
-          op: resp,
-          timeout_ms: opts.waitTimeoutMs,
-        }).then((summary) => {
+        type ProjectStartCompletion = {
+          status: LroSummary["status"];
+          error?: LroSummary["error"];
+          finished_at?: LroSummary["finished_at"];
+          updated_at?: LroSummary["updated_at"];
+          created_at?: LroSummary["created_at"];
+        };
+        const applySucceededStart = (summary: ProjectStartCompletion) => {
           if (summary.status === "succeeded") {
             // The bay saves authoritative running state before publishing the
             // terminal LRO summary. Use that causal acknowledgement directly
@@ -4054,7 +4059,18 @@ export class ProjectsActions extends Actions<ProjectsState> {
             });
           }
           return summary;
-        });
+        };
+        const startConvergence =
+          resp.terminal_status === "succeeded"
+            ? Promise.resolve(
+                applySucceededStart({
+                  status: "succeeded",
+                }),
+              )
+            : this.waitForProjectStartOp({
+                op: resp,
+                timeout_ms: opts.waitTimeoutMs,
+              }).then(applySucceededStart);
         this.recordProjectStartUxLatencyWhenRunning({
           project_id,
           timer: uxTimer,
@@ -4309,7 +4325,11 @@ export class ProjectsActions extends Actions<ProjectsState> {
 
   private projectStartSucceededStateUpdate = (
     project_id: string,
-    summary: LroSummary,
+    summary: {
+      finished_at?: LroSummary["finished_at"];
+      updated_at?: LroSummary["updated_at"];
+      created_at?: LroSummary["created_at"];
+    },
   ) => {
     const project_map = store.get("project_map");
     const project = project_map?.get(project_id);

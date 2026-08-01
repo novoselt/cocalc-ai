@@ -4467,6 +4467,7 @@ export async function start({
   project_move_id,
   project_move_auth,
   wait = true,
+  foreground_wait_ms,
 }: {
   account_id: string;
   project_id: string;
@@ -4481,12 +4482,14 @@ export async function start({
   project_move_id?: string;
   project_move_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
   wait?: boolean;
+  foreground_wait_ms?: number;
 }): Promise<{
   op_id: string;
   scope_type: "project";
   scope_id: string;
   service: string;
   stream_name: string;
+  terminal_status?: "succeeded";
 }> {
   return await runProjectStartLikeAction({
     kind: "start",
@@ -4499,6 +4502,7 @@ export async function start({
     project_move_id,
     project_move_auth,
     wait,
+    foreground_wait_ms,
   });
 }
 
@@ -4508,18 +4512,21 @@ export async function startFromHost({
   project_id,
   autostart,
   wait = true,
+  foreground_wait_ms,
 }: {
   host_id?: string;
   account_id: string;
   project_id: string;
   autostart?: boolean;
   wait?: boolean;
+  foreground_wait_ms?: number;
 }): Promise<{
   op_id: string;
   scope_type: "project";
   scope_id: string;
   service: string;
   stream_name: string;
+  terminal_status?: "succeeded";
 }> {
   assertProjectRuntimeCapability("host_placement");
   await assertProjectAssignedToHostForStart({ host_id, project_id });
@@ -4529,6 +4536,7 @@ export async function startFromHost({
     project_id,
     autostart,
     wait,
+    foreground_wait_ms,
   });
 }
 
@@ -4596,6 +4604,7 @@ async function runProjectStartLikeAction({
   project_move_id,
   project_move_auth,
   wait = true,
+  foreground_wait_ms,
 }: {
   kind: "start" | "restart";
   account_id: string;
@@ -4607,13 +4616,25 @@ async function runProjectStartLikeAction({
   project_move_id?: string;
   project_move_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
   wait?: boolean;
+  foreground_wait_ms?: number;
 }): Promise<{
   op_id: string;
   scope_type: "project";
   scope_id: string;
   service: string;
   stream_name: string;
+  terminal_status?: "succeeded";
 }> {
+  if (
+    foreground_wait_ms != null &&
+    (!Number.isInteger(foreground_wait_ms) ||
+      foreground_wait_ms < 1 ||
+      foreground_wait_ms > 5_000)
+  ) {
+    throw new Error(
+      "foreground_wait_ms must be an integer from 1 through 5000",
+    );
+  }
   await assertCollabAllowRemoteProjectAccess({ account_id, project_id });
   await assertProjectNotHardDeleting({ project_id });
   if (
@@ -4881,6 +4902,36 @@ async function runProjectStartLikeAction({
 
   if (wait) {
     await runStart();
+  } else if (foreground_wait_ms != null && foreground_wait_ms > 0) {
+    type ForegroundStartResult =
+      | { status: "succeeded" }
+      | { status: "failed"; error: unknown };
+    const completion: Promise<ForegroundStartResult> = runStart().then(
+      () => ({ status: "succeeded" }),
+      (error) => ({ status: "failed", error }),
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timed = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), foreground_wait_ms);
+    });
+    const result = await Promise.race([completion, timed]);
+    if (timer != null) {
+      clearTimeout(timer);
+    }
+    if (result?.status === "failed") {
+      throw result.error;
+    }
+    if (result?.status === "succeeded") {
+      return { ...response, terminal_status: "succeeded" };
+    }
+    void completion.then((lateResult) => {
+      if (lateResult.status === "failed") {
+        log.warn("async start failed", {
+          project_id,
+          err: `${lateResult.error}`,
+        });
+      }
+    });
   } else {
     runStart().catch((err) =>
       log.warn("async start failed", { project_id, err: `${err}` }),

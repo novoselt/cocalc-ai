@@ -693,6 +693,7 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
+      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -738,6 +739,7 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
+      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -781,6 +783,7 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
+      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -901,6 +904,66 @@ describe("ProjectsActions archive flow", () => {
     }
   });
 
+  it("converges directly from a bounded foreground start acknowledgement", async () => {
+    jest.useFakeTimers();
+    try {
+      configureProject({
+        state: "opened",
+        lastEdited: new Date("2026-04-25T15:55:00.000Z"),
+        hostId: "host-1",
+      });
+      mockedWebappClient.conat_client.hub.projects.start.mockResolvedValueOnce({
+        op_id: "start-op-foreground",
+        scope_type: "project",
+        scope_id: project_id,
+        service: "persist-service",
+        stream_name: "stream:start-op-foreground",
+        terminal_status: "succeeded",
+      });
+      const { actions, redux } = makeActions();
+      jest
+        .spyOn(actions, "ensure_host_info" as any)
+        .mockResolvedValue(undefined as any);
+      jest
+        .spyOn(actions as any, "project_log")
+        .mockImplementation(async () => {});
+      jest
+        .spyOn(actions as any, "loadProjectedProjectForCurrentAccount")
+        .mockResolvedValue(undefined);
+
+      const started = await actions.start_project(project_id);
+      await Promise.resolve();
+
+      expect(started).toBe(true);
+      expect(
+        mockedWebappClient.conat_client.hub.projects.start,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          wait: false,
+          foreground_wait_ms: 5_000,
+        }),
+      );
+      expect(mockedWebappClient.conat_client.lroWait).not.toHaveBeenCalled();
+      expect(
+        redux._set_state.mock.calls.some(
+          ([state]) =>
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "state",
+            ]) === "running" &&
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "source",
+            ]) === "project-start-lro",
+        ),
+      ).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("marks restart requests locally so fast restarts still reset runtime consumers", async () => {
     jest.useFakeTimers();
     try {
@@ -972,6 +1035,7 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
+      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });

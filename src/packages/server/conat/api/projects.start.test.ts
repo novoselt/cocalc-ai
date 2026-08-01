@@ -259,6 +259,78 @@ describe("projects.start", () => {
     expect(publishLroSummaryMock).toHaveBeenCalled();
   });
 
+  it("returns a terminal acknowledgement for a fast bounded foreground start", async () => {
+    const { start } = await import("./projects");
+
+    const response = await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      wait: false,
+      foreground_wait_ms: 5_000,
+    });
+
+    expect(response).toEqual({
+      op_id: "op-1",
+      scope_type: "project",
+      scope_id: "proj-1",
+      service: "persist-service",
+      stream_name: "stream:op-1",
+      terminal_status: "succeeded",
+    });
+    expect(updateLroMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "succeeded" }),
+    );
+  });
+
+  it("returns the LRO while a bounded foreground start continues", async () => {
+    let finishStart: (() => void) | undefined;
+    interBayStartMock = jest.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishStart = resolve;
+        }),
+    );
+    const { start } = await import("./projects");
+
+    const response = await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      wait: false,
+      foreground_wait_ms: 5,
+    });
+
+    expect(response).toEqual({
+      op_id: "op-1",
+      scope_type: "project",
+      scope_id: "proj-1",
+      service: "persist-service",
+      stream_name: "stream:op-1",
+    });
+    expect(
+      updateLroMock.mock.calls.some(([opts]) => opts.status === "succeeded"),
+    ).toBe(false);
+
+    finishStart?.();
+    await flushBackgroundStartTask();
+    expect(updateLroMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "succeeded" }),
+    );
+  });
+
+  it("rejects an invalid foreground wait before creating an LRO", async () => {
+    const { start } = await import("./projects");
+
+    await expect(
+      start({
+        account_id: "acct-1",
+        project_id: "proj-1",
+        wait: false,
+        foreground_wait_ms: 5_001,
+      }),
+    ).rejects.toThrow("foreground_wait_ms must be an integer");
+    expect(createLroMock).not.toHaveBeenCalled();
+  });
+
   it("does not initialize optional progress mirroring before project start", async () => {
     mirrorStartLroProgressMock = jest.fn(() => new Promise(() => undefined));
     const { start } = await import("./projects");
