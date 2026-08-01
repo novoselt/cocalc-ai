@@ -174,6 +174,16 @@ const context = await browser.newContext();
 await context.addCookies(cookies);
 const page = await context.newPage();
 const samples = [];
+let browserConsole = [];
+page.on("console", (message) => {
+  if (message.type() !== "warning" && message.type() !== "error") return;
+  browserConsole.push({
+    at: new Date().toISOString(),
+    type: message.type(),
+    text: message.text().slice(0, 2_000),
+  });
+  if (browserConsole.length > 100) browserConsole.shift();
+});
 
 try {
   for (let round = 1; round <= options.rounds; round += 1) {
@@ -194,6 +204,39 @@ try {
       // the next real user-path click.
       await page.mouse.move(0, 0);
       await sleep(options.settle_ms);
+      browserConsole = [];
+      await page.evaluate(() => {
+        const state = globalThis.__cocalcProjectStartBenchmark;
+        state?.observer?.disconnect();
+        const transitions = [];
+        const snapshot = () => {
+          const start = document.querySelector('[title="Start Project"]');
+          const starting = document.querySelector(
+            '[title="Project is starting"]',
+          );
+          const next = {
+            at_ms: Date.now(),
+            start_visible: !!start?.clientHeight,
+            starting_visible: !!starting?.clientHeight,
+          };
+          const previous = transitions.at(-1);
+          if (
+            previous?.start_visible === next.start_visible &&
+            previous?.starting_visible === next.starting_visible
+          ) {
+            return;
+          }
+          transitions.push(next);
+        };
+        const observer = new MutationObserver(snapshot);
+        observer.observe(document.body, {
+          attributes: true,
+          childList: true,
+          subtree: true,
+        });
+        globalThis.__cocalcProjectStartBenchmark = { observer, transitions };
+        snapshot();
+      });
       const requestedAtMs = Date.now();
       const started = performance.now();
       const startingButton = page.getByTitle("Project is starting");
@@ -232,6 +275,11 @@ try {
       }
       const browserElapsedMs = Math.round(performance.now() - started);
       const failed = await startButton.isVisible();
+      const browserStateTransitions = await page.evaluate(() => {
+        const state = globalThis.__cocalcProjectStartBenchmark;
+        state?.observer?.disconnect();
+        return state?.transitions ?? [];
+      });
       const operations = await runCli(options.api, [
         "op",
         "list",
@@ -263,6 +311,8 @@ try {
         requested_at: new Date(requestedAtMs).toISOString(),
         browser_elapsed_ms: browserElapsedMs,
         browser_failed: failed,
+        browser_state_transitions: browserStateTransitions,
+        browser_console: [...browserConsole],
         operation_created_at: operation.created_at,
         operation_finished_at: operation.finished_at,
         request_dispatch_ms: requestDispatchMs,
