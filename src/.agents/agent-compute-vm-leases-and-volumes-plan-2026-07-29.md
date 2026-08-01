@@ -14,6 +14,8 @@ Build a deliberately small GCP-only compute product for AI agents:
 - a **VM lease** is short-lived root compute with Docker-capable Ubuntu;
 - a **volume** is explicitly created persistent storage;
 - a volume can be attached read-write to exactly one VM lease;
+- an authorized agent can grow an approved volume inside a human-set storage
+  and recurring-cost envelope;
 - the VM boot disk is disposable and deleted with the lease;
 - a human uses fresh authentication to issue a bounded compute grant;
 - an agent can act only inside that grant;
@@ -40,7 +42,10 @@ cocalc compute authorize \
   --max-vm-ttl 4h \
   --max-compute-cost 25 \
   --max-egress 50GiB \
-  --allow-volume sage-pypy
+  --max-total-volume 750GiB \
+  --max-monthly-volume-cost 100 \
+  --allow-volume sage-pypy \
+  --allow-volume-resize sage-pypy:750GiB
 
 # Agent actions inside the approved project.
 cocalc vm create \
@@ -131,6 +136,12 @@ The MVP should directly support:
 - obtaining hundreds of GiB of temporary workspace;
 - preserving source trees, compiler output, package caches, and Docker layers
   across disposable VM leases;
+- growing an approved persistent volume without interrupting an attached Linux
+  build when it approaches capacity;
+- starting, inspecting, logging, and canceling durable build/test jobs that
+  survive an SSH or ACP disconnect;
+- preventing unbounded Apport or systemd core-dump retention from silently
+  exhausting the disposable root filesystem during native-package tests;
 - running many independent temporary build or migration workers;
 - connecting from a CoCalc project with standard SSH, `scp`, and `rsync`;
 - connecting from a user's laptop with the same standard tools;
@@ -847,20 +858,24 @@ CREATE TABLE compute_grants (
   max_total_vcpus INTEGER NOT NULL,
   max_ram_gb INTEGER NOT NULL,
   max_boot_disk_gb INTEGER NOT NULL,
+  max_total_volume_gb INTEGER NOT NULL,
+  max_monthly_volume_cost_usd NUMERIC NOT NULL,
   max_vm_ttl_seconds INTEGER NOT NULL,
   max_fixed_cost_usd NUMERIC NOT NULL,
   max_egress_gib NUMERIC NOT NULL,
   allowed_architectures TEXT[] NOT NULL,
   allowed_machine_types TEXT[] NOT NULL,
   allowed_pricing_models TEXT[] NOT NULL,
-  allowed_volume_ids UUID[] NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}'
 );
 ```
 
-The exact schema can use normalized grant-volume rows if query or update
-requirements make arrays awkward. The first implementation should prefer the
-smallest representation that supports transactional envelope checks.
+Use normalized grant-volume rows in the first implementation. Each row must
+identify the allowed volume and record `allow_attach`, `allow_resize`, and a
+human-approved `max_size_gb`. The grant-level total-GiB and monthly-cost limits
+bound all such rows together. A resize persists after the short-lived grant
+expires, so authorization must display and record the maximum continuing
+monthly storage charge, not merely the cost through grant expiration.
 
 A grant is:
 
@@ -871,7 +886,8 @@ A grant is:
 - unable to create volumes;
 - unable to delete volumes;
 - unable to expand its own limits;
-- usable only for VM operations within its stored envelope.
+- usable only for VM operations and explicitly approved grow-only volume
+  resizes within its stored envelope.
 
 The grant is server-side authority. Do not return a general fresh-auth cookie
 or reusable account credential to the project.
@@ -940,12 +956,15 @@ CREATE TABLE compute_volumes (
   zone TEXT NOT NULL,
   disk_type TEXT NOT NULL,
   size_gb INTEGER NOT NULL,
+  desired_size_gb INTEGER NOT NULL,
   filesystem TEXT NOT NULL DEFAULT 'ext4',
   state TEXT NOT NULL,
   attached_vm_id UUID,
   attachment_generation BIGINT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL,
   ready_at TIMESTAMPTZ,
+  resize_requested_at TIMESTAMPTZ,
+  resized_at TIMESTAMPTZ,
   detach_requested_at TIMESTAMPTZ,
   detached_at TIMESTAMPTZ,
   delete_requested_at TIMESTAMPTZ,
@@ -962,7 +981,8 @@ The first release supports:
 
 - GCP `pd-balanced`;
 - zonal disks;
-- creation at a fixed size;
+- creation at a human-approved initial size;
+- grow-only enlargement while detached or attached;
 - one ext4 filesystem;
 - one read-write attachment;
 - mount at the fixed path `/work`;
@@ -971,8 +991,11 @@ The first release supports:
 Do not implement shrink, snapshot, clone, or cross-zone move.
 Do not make the mount path configurable in MVP.
 
-Online enlargement is useful but may be deferred until after the first
-end-to-end release. If added, it must be grow-only and freshly authenticated.
+Online enlargement is a first-release requirement. A human may authorize one
+resize directly with fresh authentication or preauthorize bounded agent
+resizes in a compute grant. Provider-disk growth is authoritative for billing;
+filesystem growth is performed over the ordinary direct SSH boundary and is
+never trusted for authorization or cost enforcement.
 
 ### Internal work table
 
@@ -1103,7 +1126,9 @@ A project identity may perform only:
 - obtain the public SSH endpoint;
 - extend TTL up to the grant maximum and grant expiration;
 - delete its VM;
-- inspect allowed volume names and attachment state.
+- inspect allowed volume names and attachment state;
+- grow an allowed volume when its grant row permits resize and the requested
+  size remains inside both the per-volume and aggregate storage/cost envelope;
 
 When the caller is also an authenticated Codex account session, it may create,
 fork, resume, interrupt, and inspect its own ACP turns using the existing Codex
@@ -1166,6 +1191,20 @@ enqueue provider work.
 
 Provider failure releases the reservation transactionally and records an audit
 event.
+
+Volume resize admission separately locks the grant and volume rows and
+atomically verifies:
+
+- the volume is explicitly allowed with `allow_resize = true`;
+- the requested size is larger than the current provider size and no larger
+  than the per-volume maximum;
+- aggregate approved volume GiB and continuing monthly cost remain inside the
+  grant;
+- owner billing admission succeeds at the new persistent rate;
+- no conflicting attach, detach, delete, or resize operation is active.
+
+The operation reserves the larger size before provider work is enqueued. The
+agent cannot change the grant limits or shrink the volume.
 
 ### Dangerous RPC registry
 
@@ -1281,6 +1320,9 @@ requested
   -> available
   -> deleting
   -> deleted
+
+available -> resizing -> available
+attached  -> resizing -> attached
 ```
 
 Exceptional states:
@@ -1352,6 +1394,29 @@ Volume deletion:
   deletion.
 
 VM TTL never implies volume deletion.
+
+### Grow-only resize
+
+Resize is an idempotent long-running operation keyed by volume, requested
+size, and request ID. It must:
+
+1. complete fresh-auth or grant-envelope admission;
+2. reserve `desired_size_gb` and the higher continuing storage charge;
+3. call the provider's grow-only disk resize operation;
+4. reconcile the actual provider size by immutable disk ID;
+5. set `size_gb` to the confirmed provider size and update billing;
+6. if detached, mark filesystem growth pending for the next attachment;
+7. if attached and requested by the caller, use direct SSH to verify that
+   `/work` is the expected ext4 volume and run bounded online `resize2fs`;
+8. verify the block-device and filesystem sizes and return both in structured
+   output.
+
+Every attachment must also compare the ext4 filesystem with the provider disk
+and safely finish any pending grow before publishing the mount ready. It must
+never run `mkfs` or attempt shrink as a recovery action. If provider growth
+succeeds but the database commit fails, reconciliation adopts the larger
+provider size and corresponding charge. If filesystem growth fails, retain the
+larger disk, report `filesystem_resize_pending`, and allow an idempotent retry.
 
 ### Billing failure
 
@@ -1439,6 +1504,22 @@ The platform startup script should only:
 Docker installation can initially be performed by the agent. A later
 secret-free cached image with Docker preinstalled is an optimization, not an
 MVP requirement.
+
+The first release must nevertheless provide an idempotent SSH bootstrap
+command for build workers. When a persistent volume is attached, it configures
+Docker's data root below `/work`, creates documented persistent cache roots for
+pip, cibuildwheel, ccache, and temporary build artifacts, and verifies that
+Docker can restart using the same state. Deleting or replacing the disposable
+VM must not delete those layers or caches. A trusted Docker-cached boot image
+may optimize startup later but is not required for persistence.
+
+The same bootstrap must apply a bounded crash-artifact policy. Ubuntu Apport,
+systemd-coredump, and equivalent native crash paths may be disabled or retained
+under an explicit byte/count/age quota, but they must never accumulate without
+bound under `/var` or another disposable-root path. Durable jobs record the
+policy and report root and `/work` free space before launch. If crash artifacts
+are retained for debugging, place or copy them into a bounded per-job directory
+under `/work` and include their hashes in the job manifest.
 
 ## Egress Metering And Cost Control
 
@@ -1681,6 +1762,7 @@ compute.createProjectVm
 compute.extendProjectVm
 compute.deleteProjectVm
 compute.getProjectVmSshEndpoint
+compute.resizeProjectVolume
 ```
 
 Suggested internal methods:
@@ -1740,10 +1822,13 @@ cocalc compute authorize \
   --max-vcpus 64 \
   --max-compute-cost 25 \
   --max-egress 50GiB \
+  --max-total-volume 750GiB \
+  --max-monthly-volume-cost 100 \
   --max-vm-ttl 4h \
   --arch amd64,arm64 \
   --pricing spot,on-demand \
-  --allow-volume sage-pypy
+  --allow-volume sage-pypy \
+  --allow-volume-resize sage-pypy:750GiB
 
 cocalc compute grants
 cocalc compute revoke <grant>
@@ -1763,6 +1848,7 @@ cocalc volume create sage-pypy \
 
 cocalc volume list
 cocalc volume get sage-pypy
+cocalc volume resize sage-pypy --size 750GiB --wait
 cocalc volume delete sage-pypy
 ```
 
@@ -1773,6 +1859,13 @@ Creation prints:
 - approximate 30-day price;
 - the fact that billing continues while detached;
 - the fact that VM TTL never deletes the volume.
+
+Resize accepts `--json`, returns an LRO, is grow-only, and reports the old,
+requested, and confirmed provider sizes plus the continuing monthly-cost
+change. For an attached volume, `--grow-filesystem` uses the same direct SSH
+path as `vm exec`; otherwise the CLI reports that ext4 growth will complete on
+the next attachment. Project agents may invoke it only inside a grant's
+explicit resize envelope.
 
 ### VM operations
 
@@ -1789,6 +1882,7 @@ cocalc vm get <vm>
 cocalc vm wait <vm>
 cocalc vm extend <vm> --ttl 2h
 cocalc vm delete <vm>
+cocalc vm bootstrap <vm> --docker --persistent-build-cache
 ```
 
 `create` should:
@@ -1825,6 +1919,28 @@ cocalc vm rsync build-arm:/work/dist/ ./dist/
 ```
 
 No SSH payload, terminal stream, or file content passes through Conat or a hub.
+
+### Durable remote jobs
+
+Long package builds and test suites must not depend on one SSH connection
+remaining open. The first release provides:
+
+```bash
+cocalc vm job start <vm> --name sage-cp314 -- bash -lc '<command>'
+cocalc vm job status <vm> <job>
+cocalc vm job logs <vm> <job> --follow
+cocalc vm job cancel <vm> <job>
+```
+
+These are direct SSH helpers implemented with conventional guest facilities
+such as systemd transient services. They do not introduce a privileged CoCalc
+guest agent or make guest status authoritative for billing. With a volume
+attached, the launcher, bounded logs, PID/unit metadata, timestamps, and final
+exit code live below `/work/runs/<run_id>/jobs/<job_id>` so an ACP restart,
+SSH disconnect, or replacement coordinator can reconcile the job. VM loss is
+reported as interruption, never silently converted to success or an automatic
+duplicate. The run manifest records the last durable Git commit and artifact
+hashes needed for an authorized replacement VM to continue.
 
 ### Codex compute runs
 
@@ -1986,7 +2102,7 @@ Show:
 - attached VM;
 - hourly price;
 - approximate monthly price;
-- create and delete actions.
+- create, grow-only resize, and delete actions.
 
 Deletion requires fresh auth and typed name confirmation.
 
@@ -2121,6 +2237,36 @@ Orphan policy differs by resource:
 - do not trust the guest to shut down;
 - keep finalizing delayed egress.
 
+### Volume resize uncertainty
+
+- inspect the provider disk by immutable ID before retrying;
+- adopt and bill a larger provider size even when the original response or
+  database commit was lost;
+- never roll back by shrinking;
+- keep `filesystem_resize_pending` separate from provider resize success;
+- permit bounded SSH filesystem-growth retries without repeating provider
+  growth.
+
+### SSH or coordinator disconnect during a job
+
+- the durable guest service continues independently of the SSH stream;
+- reconnecting clients read the on-volume job manifest and bounded log;
+- cancellation is idempotent;
+- absent durable exit evidence is `running`, `interrupted`, or `unknown`, never
+  success;
+- retry uses a new job ID and preserves the first attempt's evidence.
+
+### Guest root-disk pressure
+
+- bootstrap verifies the bounded core-dump policy before package work starts;
+- durable job admission records free bytes on both `/` and `/work` and may
+  reject a caller-specified insufficient-capacity threshold;
+- logs, exit records, build caches, and recoverable artifacts live on `/work`;
+- filling the disposable root is a failed or interrupted attempt, never a
+  reason to discard the persistent volume or infer job success;
+- replacement bootstrap identifies and reports any retained crash artifacts
+  before resuming work.
+
 ## Observability
 
 Operator status should include:
@@ -2185,6 +2331,7 @@ Deliver:
 - TTL;
 - SSH key injection;
 - CLI create/wait/ssh/exec/cp/delete;
+- durable SSH-backed job start/status/logs/cancel;
 - site-funded admin admission;
 - one x86 and one ARM64 machine;
 - lifecycle audit events.
@@ -2201,10 +2348,13 @@ Exit criteria:
 Deliver:
 
 - `compute_volumes`;
-- freshly authenticated create/delete;
+- freshly authenticated create/resize/delete;
 - zonal `pd-balanced`;
+- bounded grant-authorized grow-only resize and online ext4 growth;
 - attach generation and fencing;
 - mount at `/work`;
+- idempotent Docker/bootstrap configuration with Docker layers and build caches
+  below `/work`;
 - detach and preserve on VM expiry;
 - continuous volume billing record;
 - CLI volume commands.
@@ -2216,7 +2366,11 @@ Exit criteria:
 - attach the same volume to a new VM;
 - verify all data;
 - prove concurrent attachment is rejected;
-- prove VM TTL never deletes the volume.
+- prove VM TTL never deletes the volume;
+- grow a nearly full attached volume without stopping its durable build job;
+- verify provider and ext4 sizes after growth;
+- replace the VM and prove Docker layers, compiler caches, job logs, and source
+  state remain usable;
 
 ### Phase 3: compute grants and agent authority
 
@@ -2228,6 +2382,8 @@ Deliver:
 - transactional admission;
 - dangerous RPC registry coverage;
 - project-scoped CLI create inside grant;
+- project-scoped resize inside an explicit per-volume and aggregate
+  storage-cost envelope;
 - no general account credential in the project.
 
 Exit criteria:
@@ -2236,7 +2392,8 @@ Exit criteria:
 - a human can authorize a bounded grant;
 - the project can create only inside the envelope;
 - grant expiration and revocation block new work;
-- the project cannot create or delete volumes.
+- the project cannot create or delete volumes and can resize only explicitly
+  approved volumes inside every size and cost bound.
 
 Phases 2 and 3 may be swapped during implementation, but both are required
 before non-admin agent use.
@@ -2409,6 +2566,9 @@ Cover:
 - Standard Tier and IPv4-only request construction;
 - forbidden metadata keys;
 - volume attachment generation;
+- grow-only resize admission, aggregate limits, idempotency, billing changes,
+  and shrink rejection;
+- provider-resize/database-commit recovery and filesystem-pending retries;
 - delete-while-attached rejection;
 - VM deletion preserving volume;
 - egress delta deduplication;
@@ -2459,6 +2619,18 @@ Run against the dedicated untrusted staging project:
 33. exercise automatic profile selection as rate-limit status changes;
 34. revoke one profile and verify the other remains usable;
 35. verify compute cost and model usage have distinct attribution.
+36. fill an attached ext4 volume close to capacity and grow it online;
+37. disconnect the initiating SSH and ACP sessions during a durable build,
+    reconnect, and verify logs and final exit status;
+38. lose the provider resize response and verify reconciliation adopts the
+    actual larger disk without a second growth or incorrect charge;
+39. replace the VM, reattach the volume, and verify Docker layers, compiler
+    caches, and durable job evidence survived;
+40. attempt agent resize beyond per-volume, aggregate-GiB, and monthly-cost
+    limits and confirm transactional rejection.
+41. generate repeated native core dumps and prove the configured quota keeps
+    the disposable root filesystem below its safety threshold while retaining
+    any requested bounded evidence under `/work`.
 
 ### Adversarial tests
 
@@ -2530,7 +2702,7 @@ Rollback means:
 - add narrow GCP compute provider;
 - add isolated work queue;
 - implement create/status/stop/delete;
-- implement disk create/attach/detach/delete;
+- implement disk create/attach/detach/grow/delete;
 - add invariant verification;
 - add reconciler and expiry worker.
 
@@ -2554,6 +2726,7 @@ Rollback means:
 ### CLI
 
 - add `compute`, `vm`, and `volume` command modules;
+- add volume resize, build-worker bootstrap, and durable job commands;
 - add stable JSON output;
 - add local SSH key management;
 - add direct SSH/exec/cp/rsync;
@@ -2589,7 +2762,13 @@ The MVP is complete only when:
   grant;
 - the project agent can create an x86 or ARM64 Ubuntu VM and obtain root;
 - Docker works normally;
+- Docker layers and documented package/compiler caches persist on `/work`
+  across VM replacement;
+- native crashes cannot accumulate unbounded data on the disposable root, and
+  any retained crash evidence is quota-bounded and manifest-recorded;
 - the agent can use direct SSH, `scp`, and `rsync`;
+- the agent can run and reconcile durable jobs across SSH and coordinator
+  disconnects;
 - an authenticated Codex account can start a fresh child, fork through a
   specified completed turn, or resume a child against a selected ready VM;
 - parallel child runs have independent threads and writable workspaces;
@@ -2603,6 +2782,10 @@ The MVP is complete only when:
 - VM expiry deletes its disposable boot disk;
 - an explicit persistent volume survives VM expiry;
 - that volume attaches to exactly one VM;
+- an authorized agent can grow that volume online inside a human-set size and
+  recurring-cost envelope, while shrink and excess growth are rejected;
+- provider resize, ext4 growth, billing, and partial-failure reconciliation
+  pass the staging tests;
 - volume deletion always requires fresh human authentication;
 - no VM has a service account or platform secret;
 - no VM has private network access to CoCalc infrastructure;
@@ -2621,7 +2804,6 @@ The MVP is complete only when:
 Possible later work, each requiring a separate decision:
 
 - snapshots and volume cloning;
-- grow-only volume resize;
 - trusted Docker-cached boot images;
 - automatic Spot replacement;
 - additional providers;
@@ -2640,8 +2822,9 @@ Possible later work, each requiring a separate decision:
 - a higher-level fleet scheduler, task graph, automatic merge service, or
   correctness judge above independent child runs.
 
-None of these are prerequisites for solving the immediate "an agent just needs
-a root VM with persistent work storage" problem.
+None of these are prerequisites for the first-release Linux package-building
+contract, which includes grow-only volume resize, persistent build caches, and
+durable remote jobs.
 
 ## Reference Material
 
