@@ -2568,6 +2568,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                f'PROJECT_POOL_CPU_RESERVE_DYNAMIC_DIVISOR="{bootstrap.DYNAMIC_PROJECT_POOL_CPU_RESERVE_DIVISOR}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'reserve_cores="$((cpu_count / PROJECT_POOL_CPU_RESERVE_DYNAMIC_DIVISOR))"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 f'MIN_PROJECT_POOL_CPU_CORES="{bootstrap.MIN_PROJECT_POOL_CPU_CORES}"',
                 rootctl.read_text(encoding="utf-8"),
             )
