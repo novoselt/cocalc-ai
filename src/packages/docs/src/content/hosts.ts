@@ -98,9 +98,288 @@ cocalc host bootstrap-status <host>
 
 ## Why this matters in CoCalc
 
-Project hosts make CoCalc more than a shared web editor. They let the workspace
+Project hosts make CoCalc more than a shared web editor. They let the project
 own real compute, run persistent services, use cloud machines economically, and
 give agents a stable Linux environment to work in.
+`;
+
+export const PROJECT_HOST_EXAMS_BODY = String.raw`
+## A computational scratchpad for exams
+
+Exam Mode adds a temporary browser-based computational scratchpad service to a
+private, on-demand project host. Each browser session receives a clean anonymous CoCalc
+project with the exact RootFS and CPU, memory, and disk limits selected by the
+instructor.
+
+This is useful when an in-person exam permits computation but requires a clean,
+predictable environment. Students can use Jupyter notebooks, files, installed
+mathematical software, and optionally terminals without signing into a normal
+CoCalc account or reaching the public Internet. They copy their answers to
+paper or to the institution's separate assessment system.
+
+Exam mode deliberately does **not** deliver questions, identify candidates,
+collect submissions, grade work, or provide proctoring. It complements a
+lockdown browser or assessment platform; it does not replace one.
+
+## What one exam run guarantees
+
+When the instructor prepares a run, CoCalc freezes its configuration:
+
+- one stable student hostname suitable for a lockdown-browser allowlist
+- one exact RootFS image and digest for every project
+- fixed per-project CPU, memory, and disk quotas
+- a maximum number of simultaneous projects
+- outbound project networking disabled and checked during readiness
+- terminal access either allowed or disabled for the entire run
+- backups and snapshots disabled for temporary projects
+- a required automatic project-deletion time
+- optional project-host shutdown after cleanup, enabled by default
+
+The central CoCalc service remains the instructor control plane. Student files,
+Jupyter kernels, browser traffic, and other project traffic go directly to the
+exam host through the single student origin.
+
+## Before the first rehearsal
+
+1. Create a private managed GCP project host using **on-demand** pricing, not
+   spot pricing. An exam must not depend on spot capacity surviving.
+2. Size the host for the expected number of simultaneous candidates. Because
+   the host runs for a short window, deliberately overprovisioning it is often
+   the simplest way to obtain predictable performance.
+3. Start the host well before the exam and cache the exact RootFS that candidates
+   will use. The RootFS must appear in the host's cached-image inventory with a
+   digest before it can be selected for a run.
+4. Ensure the project-host owner has enough account credit for the complete
+   exam window. Existing billing and spending enforcement still apply.
+5. Confirm that the instructor's account has the exam-mode entitlement.
+
+Create and rehearse the host well in advance. For each exam, start that same
+trusted host 30 to 60 minutes before candidates arrive.
+
+### Host sizing guidance
+
+Use the configured **Maximum projects** as the maximum number of simultaneous
+students: each admitted browser session receives one project. As a conservative
+starting point, choose a host with:
+
+- at least 8 vCPU
+- RAM in GB greater than \`3 + number of students / 2\`
+
+For example, 20 students calls for at least 8 vCPU and 14 GB RAM, while 200
+students calls for at least 8 vCPU and 104 GB RAM. The Exams panel performs this
+calculation from **Maximum projects** and compares it with the actual host; the
+result is advisory and never blocks setup or admission.
+
+This formula deliberately leaves substantial headroom. Exam projects are often
+much lighter than their configured per-project memory ceiling, so do not
+estimate host capacity by multiplying that ceiling by the student count. A
+smaller host may work well for a known workload, but rehearse the exact RootFS,
+notebooks, and expected concurrency before relying on it. Short exam windows
+usually make deliberate overprovisioning the safest choice.
+
+## Step 1: configure the host
+
+1. Open **Project Hosts**, select the private host, and open its **Exams** tab.
+2. Turn on **Enable exam mode**.
+3. Set **Maximum projects** to the largest number of browser sessions that may
+   be admitted. This is also the student count used by the host-sizing guidance.
+   Leave headroom for instructor testing and accidental extra sessions.
+4. Set CPU, memory, and disk limits for each project.
+5. Set **Maximum run** to the longest permitted project lifetime.
+6. Set **Cleanup grace**. This is the spending-safety interval before forced
+   VM poweroff if cleanup cannot complete; it is not additional candidate time.
+7. Decide whether to allow terminals. They are disabled by default. This choice
+   is frozen when a run is prepared.
+8. Save the configuration and complete the fresh-authentication prompt.
+
+Outbound networking is fixed to **disabled** in the current version.
+
+### CLI and agent automation
+
+Every instructor control in the Exams panel is also available through
+\`cocalc host exam\`. This is useful for repeatable rehearsals, institutional
+runbooks, and asking a CoCalc agent to prepare or inspect an exam. Use
+\`cocalc host rootfs <host>\` to list the images already cached on a host.
+
+~~~bash
+# Inspect the current configuration, run, readiness checks, and student URL.
+cocalc host exam status <host>
+
+# Enable exam mode and configure per-project limits.
+cocalc host exam configure <host> --enable --max-projects 100 \
+  --project-cpu 1 --project-memory-mb 2000 --project-disk-mb 5000 \
+  --maximum-run-minutes 360 --cleanup-grace-minutes 10 --deny-terminal
+
+# Prepare the run and wait for its smoke test to finish.
+cocalc host exam prepare <host> --rootfs <image> \
+  --delete-at 2026-08-01T15:00:00Z --stop-host
+
+# Rotate a lost token before opening admission, then admit students.
+cocalc host exam rotate-token <host>
+cocalc host exam open <host>
+cocalc host exam status <host> --wait
+
+# Change cleanup policy, or end early and permanently erase all exam projects.
+cocalc host exam deadline <host> --delete-at 2026-08-01T15:30:00Z --stop-host
+cocalc host exam capacity <host> --max-projects 110
+cocalc host exam end <host> --stop-host --yes
+~~~
+
+Preparation and token rotation print the plaintext admission token and a
+copyable admission URL. The authenticated status command also shows the current
+token and admission URL while a run is active. The URL stores the token in its
+fragment, so browsers do not send it to Cloudflare or server access logs.
+Mutation commands require fresh authentication; run
+\`cocalc auth bootstrap\` first when the current CLI session is not elevated.
+Pass \`--keep-host-running\` instead of \`--stop-host\` when cleanup should leave
+the reusable project host online. Destructive early cleanup always requires
+\`--yes\`.
+
+## Step 2: prepare and test a run
+
+1. Start the host and wait until it reports **running** and online.
+2. In the **Exams** tab, select a cached RootFS.
+3. Choose **Delete all exam projects at**. Allow enough time for the rehearsal
+   as well as the candidate session.
+4. Leave **Also shut down the project host to save resources** selected unless
+   the host should remain running for unrelated work after exam cleanup.
+5. Select **Prepare and test run** and complete fresh authentication.
+6. Wait for the run to reach **ready**. Do not open admission unless every
+   readiness check is green.
+
+Preparation usually takes about one minute. It freezes the image digest and
+resource policy, creates a real smoke-test project, starts a Jupyter kernel,
+checks the disabled-network policy and local cleanup machinery, and then erases
+the smoke-test project. A successful preparation leaves the run **ready** with
+admission closed; students can enter a token only after you select **Open
+admission**.
+
+The panel displays a stable student URL, a copyable admission link, and the raw
+shared token as a manual fallback. The admission link prefills the token and
+then removes it from the browser address. The token remains visible to the
+authenticated instructor while the run is active; it grants only one temporary
+project per candidate browser for this run. Rotate it before opening admission
+if it was shared prematurely.
+
+## Step 3: run a candidate rehearsal
+
+1. Select **Open admission** only when new projects should be accepted.
+2. Open the admission link in an incognito window or, preferably, a separate
+   browser profile.
+3. Select **Open scratchpad**. The link prefills the token; the raw token can
+   still be entered manually. The browser should open directly into a new
+   anonymous project without a normal CoCalc sign-in.
+4. Create a Jupyter notebook and evaluate a simple expression such as
+   \`2 + 2\`.
+5. Save and refresh the page. It should reconnect to the same project.
+6. Confirm that terminal controls match the run setting.
+7. Confirm that outbound networking fails from a notebook, for example:
+
+~~~python
+import urllib.request
+urllib.request.urlopen("https://example.com", timeout=5)
+~~~
+
+8. Return to the instructor panel, select **Refresh status**, and confirm that
+   the active project count increased.
+9. To test project isolation, repeat the token flow in a genuinely separate
+   browser profile. Separate tabs or incognito windows in the same browser
+   session may share the same cookie and therefore the same project.
+
+For the institutional rehearsal, use the exact operating system, lockdown
+browser configuration, RootFS, and expected concurrent load planned for the
+real exam.
+
+## Step 4: monitor and adjust cleanup
+
+While admission is open, the panel shows public-route health, the frozen RootFS,
+active project count, capacity, terminal policy, network policy, the time when
+all exam projects will be deleted, and whether the project host will then shut
+down. Refresh the panel during a rehearsal to confirm that candidate sessions
+appear.
+
+The instructor may move the cleanup time or change the subsequent host-shutdown
+choice while the run is ready or open. Updating either requires fresh
+authentication. Treat the displayed project-deletion time as authoritative;
+cleanup grace is not working time.
+
+The instructor may also increase **Maximum students for this run** immediately
+while the run is ready or open. One student uses one temporary project. This is
+useful when attendance exceeds the original estimate: increasing 10 to 11 makes
+the additional place available without rebuilding the RootFS or interrupting
+existing students. Capacity cannot be reduced during a run, and the saved
+default for future runs does not change. The panel recalculates its host-sizing
+advice before the increase is submitted.
+
+## Step 5: end the run safely
+
+The normal end is automatic. At the configured time, admission closes and all
+temporary projects are erased. If **Also shut down the project host to save
+resources** is selected, the VM then powers off; otherwise the reusable host
+keeps running. A durable central reconciler and a persisted host-local watchdog
+both enforce cleanup across service and VM restarts.
+
+For an early end, select **End exam and erase now** and confirm the destructive
+action. The same checkbox determines whether the host also shuts down. Do not
+manually stop the VM first: exam cleanup must erase candidate projects before
+any host shutdown.
+
+After cleanup:
+
+- candidate projects and their TimeTravel history are gone
+- anonymous local session records are gone
+- the VM is off and compute billing stops when automatic host shutdown was
+  selected; otherwise the host remains available for its normal projects
+- the reusable project-host record, disk, hostname, and cached RootFS remain
+
+The instructor can later start the same trusted host and prepare a new run.
+
+## Data retention and recovery
+
+Exam projects are local-only projects. They are not normal global CoCalc
+projects, and Rustic backups and project snapshots are disabled. TimeTravel
+works while a project exists because it is stored with the project files;
+it is erased with those files when the run ends.
+
+Candidates must copy anything they need to retain into the institution's
+assessment system or onto their answer sheet before the deadline. Exam mode is
+designed for zero retention, not recovery after cleanup.
+
+## Lockdown-browser configuration
+
+Allowlist the single HTTPS exam hostname shown in the instructor panel,
+including secure WebSockets to that same hostname. The student application,
+authentication, files, kernels, and project traffic all use this origin.
+
+Lockdown-browser products differ in URL, certificate, popup, clipboard, and
+WebSocket rules. CoCalc cannot infer those local policies. Rehearse the exact
+institutional configuration before the first live exam, and verify that page
+refresh, notebook execution, autosave, and reconnect all work.
+
+## Operational checklist
+
+At least one day before the exam:
+
+- confirm the on-demand host size and account credit
+- start the host and confirm bootstrap and public-route health
+- cache and rehearse the exact RootFS
+- test the institution's lockdown browser from the exam room network
+- run representative notebook concurrency
+- complete a full timed stop-and-erase rehearsal
+
+Thirty to sixty minutes before the exam:
+
+- start the trusted host and wait for it to become healthy
+- prepare a new run and require all readiness checks to pass
+- securely record the one-time shared token
+- test one candidate project using the actual lockdown browser
+- confirm the project-deletion time, host-shutdown choice, and active-project
+  capacity
+- open admission only when the room is ready
+
+Normal private-host CPU and network-egress billing is charged to the host owner.
+There is no special exam billing or automatic overage protection in this
+version.
 `;
 
 export const PROJECT_HOST_ACCESS_BODY = String.raw`

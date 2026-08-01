@@ -41,6 +41,10 @@ export function normalizeRunQuota(run_quota?: any): any | undefined {
 export function runnerConfigFromQuota(
   rawRunQuota?: any,
 ): Partial<Configuration> {
+  // run_quota still contains the legacy idle_timeout field, but the current
+  // CoCalc-AI project-host does not enforce idle stopping.  Do not map it into
+  // the runner unless an idle-stop policy and its activity semantics are
+  // deliberately implemented again.
   const run_quota = normalizeRunQuota(rawRunQuota);
   const limits: Partial<Configuration> = {
     pids: positiveIntegerEnv("COCALC_PROJECT_PIDS_LIMIT", 4096),

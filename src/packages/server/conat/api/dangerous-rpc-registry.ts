@@ -107,6 +107,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "host provisioning can create billable infrastructure",
   },
+  "hosts.createHostExamRun": {
+    decision: "fresh-auth-required",
+    reason: "creates a billable time-bounded exam workload",
+  },
   "hosts.deleteHost": {
     decision: "fresh-auth-required",
     reason: "destructive host lifecycle action",
@@ -167,6 +171,18 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "host RootFS image import can consume storage",
   },
+  "hosts.openHostExamRun": {
+    decision: "fresh-auth-required",
+    reason: "opens anonymous exam workspace admission",
+  },
+  "hosts.increaseHostExamCapacity": {
+    decision: "fresh-auth-required",
+    reason: "increases anonymous exam project admission and resource use",
+  },
+  "hosts.rotateHostExamToken": {
+    decision: "fresh-auth-required",
+    reason: "rotates the bearer secret for anonymous exam admission",
+  },
   "hosts.reconcileHostRehome": {
     decision: "fresh-auth-not-required",
     reason: ORDINARY_AUTHZ,
@@ -190,6 +206,18 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "hosts.setHostPublicRouteMode": {
     decision: "fresh-auth-required",
     reason: "changes public project-host ingress and DNS routing",
+  },
+  "hosts.setHostExamConfig": {
+    decision: "fresh-auth-required",
+    reason: "changes public exam admission and resource limits",
+  },
+  "hosts.stopAndEraseHostExamRun": {
+    decision: "fresh-auth-required",
+    reason: "irreversibly deletes all temporary exam workspace data",
+  },
+  "hosts.updateHostExamDeadline": {
+    decision: "fresh-auth-required",
+    reason: "changes the automatic cleanup and host-stop deadline",
   },
   "hosts.recordAcpAdmissionDenial": {
     decision: "fresh-auth-not-required",

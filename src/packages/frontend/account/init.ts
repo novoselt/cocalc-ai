@@ -23,6 +23,7 @@ import { ACCOUNT_ID_COOKIE } from "@cocalc/frontend/client/client";
 import { parseManagedEgressBlockedError } from "@cocalc/frontend/purchases/managed-egress-blocked";
 import { getControlPlaneAuthBootstrap } from "@cocalc/frontend/auth/api";
 import { waitForAccountTableConnectedForSignIn } from "./wait-for-account-table-connected";
+import { waitForExamModeConfiguration } from "@cocalc/frontend/customize/exam-mode";
 
 export function init(redux) {
   // Register account store
@@ -64,6 +65,10 @@ export function init(redux) {
     if (!account_id) {
       return;
     }
+    if (await waitForExamModeConfiguration()) {
+      authBootstrapLoadedFor = account_id;
+      return;
+    }
     if (
       !opts?.force &&
       (authBootstrapLoadingFor === account_id ||
@@ -101,8 +106,9 @@ export function init(redux) {
         window.location.href = `https://authenticated?api_key=${mesg.api_key}`;
       }, 2000);
     }
-    const table = redux.getTable("account")._table;
-    if (table.get_state?.() !== "connected") {
+    const examMode = await waitForExamModeConfiguration();
+    const table = redux.getTable("account")?._table;
+    if (!examMode && table?.get_state?.() !== "connected") {
       // not fully signed in until the account table is connected, so that we know
       // email address, etc. If we don't set this, the UI briefly shows the
       // pre-sign-in state.

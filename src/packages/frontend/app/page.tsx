@@ -20,6 +20,7 @@ import { alert_message } from "@cocalc/frontend/alerts";
 import {
   CSS,
   React,
+  redux,
   useActions,
   useEffect,
   useState,
@@ -63,6 +64,7 @@ import { TeamLicenseWarningBanner } from "./team-license-warning-banner";
 import AutomaticUpdateNotice from "./automatic-update-notice";
 import { useVisibleViewportBottom } from "./visible-viewport";
 import { OnboardingEmailPrompt } from "./onboarding-email-prompt";
+import { ScratchpadSessionControls } from "./scratchpad-session-controls";
 
 // ipad and ios have a weird trick where they make the screen
 // actually smaller than 100vh and have it be scrollable, even
@@ -163,11 +165,25 @@ export const Page: React.FC = () => {
   const accountIsReady = useTypedRedux("account", "is_ready");
   const account_id = useTypedRedux("account", "account_id");
   const is_logged_in = useTypedRedux("account", "is_logged_in");
+  const examMode = useTypedRedux("customize", "exam_mode") === true;
+  const examProjectId = useTypedRedux("customize", "project_id");
+  const scratchpadDeleteAt = useTypedRedux(
+    "customize",
+    "scratchpad_delete_at" as any,
+  ) as string | undefined;
   const clientSignedIn = useClientSignedIn();
   const effectivelySignedIn = is_logged_in || clientSignedIn;
   const groups = useTypedRedux("account", "groups");
   const show_i18n = useShowI18NBanner();
   const zendesk = !!useTypedRedux("customize", "zendesk");
+
+  useEffect(() => {
+    if (!examMode || !examProjectId || active_top_tab === examProjectId) return;
+    void redux.getActions("projects").open_project({
+      project_id: examProjectId,
+      switch_to: true,
+    });
+  }, [active_top_tab, examMode, examProjectId]);
 
   function account_tab_icon(): IconName | React.JSX.Element {
     if (account_id) {
@@ -411,7 +427,7 @@ export const Page: React.FC = () => {
       <TeamLicenseWarningBanner />
       <VerifyEmail />
       {!fullscreen && <LegacyMigrationCtaBanner />}
-      {!lite && !fullscreen && !isAuthView && (
+      {!lite && !examMode && !fullscreen && !isAuthView && (
         <nav className="smc-top-bar" style={topBarStyle}>
           <AppLogo size={pageStyle.height} />
           {is_logged_in && render_project_nav_button()}
@@ -426,8 +442,11 @@ export const Page: React.FC = () => {
         </nav>
       )}
       {fullscreen && !isAuthView && render_fullscreen()}
-      {!lite && isNarrow && !isAuthView && (
+      {!lite && !examMode && isNarrow && !isAuthView && (
         <ProjectsNav height={pageStyle.height} style={projectsNavStyle} />
+      )}
+      {examMode && !isAuthView && (
+        <ScratchpadSessionControls deleteAt={scratchpadDeleteAt} />
       )}
       <CocalcErrorBoundary
         autoRetry={false}
@@ -436,10 +455,10 @@ export const Page: React.FC = () => {
       >
         <ActiveContent />
       </CocalcErrorBoundary>
-      <ImportPublicUrlModal />
-      <PopconfirmModal />
-      <SettingsModal />
-      <OnboardingEmailPrompt />
+      {!examMode && <ImportPublicUrlModal />}
+      {!examMode && <PopconfirmModal />}
+      {!examMode && <SettingsModal />}
+      {!examMode && <OnboardingEmailPrompt />}
     </div>
   );
   return (

@@ -657,6 +657,13 @@ function describeOverride(override?: AccountEntitlementOverride): string[] {
       }`,
     );
   }
+  if (override.features?.exam_mode != null) {
+    effects.push(
+      `Exam scratchpad hosts: ${
+        override.features.exam_mode ? "allow" : "block"
+      }`,
+    );
+  }
   if (override.dedicated_hosts?.funding_mode) {
     effects.push(
       `Account host billing mode: ${override.dedicated_hosts.funding_mode.value}`,
@@ -695,6 +702,12 @@ function resetFormFields(
         : override.features.create_hosts
           ? "true"
           : "false",
+    exam_mode:
+      override?.features?.exam_mode == null
+        ? "inherit"
+        : override.features.exam_mode
+          ? "true"
+          : "false",
   };
   for (const field of NUMERIC_FIELDS) {
     applyRuleToFields(values, field, getNumericRule(override, field));
@@ -714,6 +727,10 @@ export function buildOverride(values: Record<string, any>) {
   if (values.create_hosts === "true" || values.create_hosts === "false") {
     override.features ??= {};
     override.features.create_hosts = values.create_hosts === "true";
+  }
+  if (values.exam_mode === "true" || values.exam_mode === "false") {
+    override.features ??= {};
+    override.features.exam_mode = values.exam_mode === "true";
   }
   return override;
 }
@@ -1179,6 +1196,19 @@ export function AccountEntitlementOverridePanel({
                         details?.selected.entitlements.features?.create_hosts
                       }
                       name="create_hosts"
+                      options={[
+                        { value: "inherit", label: "No override" },
+                        { value: "true", label: "Allow" },
+                        { value: "false", label: "Block" },
+                      ]}
+                    />
+                    <SelectOverrideEditor
+                      label="Exam scratchpad hosts"
+                      description="Allows or blocks configuring ephemeral exam scratchpads on private on-demand hosts owned or managed by this account."
+                      current={
+                        details?.selected.entitlements.features?.exam_mode
+                      }
+                      name="exam_mode"
                       options={[
                         { value: "inherit", label: "No override" },
                         { value: "true", label: "Allow" },

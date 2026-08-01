@@ -2008,16 +2008,18 @@ export class ChatStreamWriter {
     err: unknown,
     phase: string,
   ): Promise<void> {
+    const recoverableSummaryQueued = this.hasQueuedSummaryPayload();
     if (
       shouldCompleteAcpTurnAfterTerminalStorageFailure({
         err,
         phase,
         finishedBy: this.finishedBy,
         terminalRowAlreadyPersisted: this.terminalRowAlreadyPersisted(),
+        recoverableSummaryQueued,
       })
     ) {
       logger.warn(
-        "ACP terminal storage timed out after summary row was verified; completing turn with degraded storage",
+        "ACP terminal storage timed out after summary was retained; completing turn and scheduling durable replay",
         {
           chatKey: this.chatKey,
           project_id: this.metadata.project_id,
@@ -2026,12 +2028,23 @@ export class ChatStreamWriter {
           thread_id: this.metadata.thread_id,
           phase,
           code: acpStorageFailureCode(err),
+          recoverable_summary_queued: recoverableSummaryQueued,
         },
       );
-      // Preserve the successfully written summary instead of replacing it with
-      // a generic storage error. Record the storage failure after finalization
-      // so cleanup will not block on the same stuck save chain.
+      // The local ACP payload queue is the write-ahead record for terminal
+      // output. Once Codex emitted a summary, never rerun or relabel that turn
+      // because project persistence was temporarily disconnected.
       await this.finalizeFinishedTurn();
+      scheduleCompletedAcpRepairRetry({
+        client: this.client,
+        turn: {
+          ...this.metadata,
+          account_id: this.approverAccountId,
+          session_id: this.threadId ?? this.sessionKey,
+        },
+      });
+      // Record the storage failure after finalization so cleanup will not block
+      // on the same stuck save chain.
       this.noteProjectStorageFailure(err, phase);
       return;
     }
@@ -2040,6 +2053,23 @@ export class ChatStreamWriter {
     this.finishedBy = "error";
     this.lastErrorText = projectStorageFailureMessage(err);
     await this.finalizeFinishedTurn();
+  }
+
+  private hasQueuedSummaryPayload(): boolean {
+    try {
+      return listAcpPayloads(this.metadata).some(
+        (payload) => payload.type === "summary",
+      );
+    } catch (err) {
+      logger.warn("failed to inspect queued ACP summary payload", {
+        chatKey: this.chatKey,
+        project_id: this.metadata.project_id,
+        path: this.metadata.path,
+        message_id: this.metadata.message_id,
+        err,
+      });
+      return false;
+    }
   }
 
   private throwProjectStorageFailureIfPresent(phase: string): void {
@@ -4476,7 +4506,7 @@ async function persistQueuedAcpPayloadsAsActivityLog({
       name: refs.store,
       client,
     }).set(refs.key, payloads);
-    logger.warn("persisted queued acp payloads as interrupted activity log", {
+    logger.warn("persisted queued acp payloads as recovery activity log", {
       project_id,
       path,
       message_date,
@@ -4497,6 +4527,331 @@ async function persistQueuedAcpPayloadsAsActivityLog({
     });
     return { payloads, durable: false };
   }
+}
+
+type CompletedAcpTurnTarget = InterruptedAcpTurnTarget & {
+  parent_message_id?: string | null;
+  started_at_ms?: number | null;
+  session_id?: string | null;
+  recovery_parent_op_id?: string | null;
+  recovery_reason?: string | null;
+  recovery_count?: number | null;
+};
+
+type RepairCompletedAcpTurnOptions = {
+  client: ConatClient;
+  turn: CompletedAcpTurnTarget;
+};
+
+type CompletedAcpRepairResult = {
+  repaired: boolean;
+  durable: boolean;
+};
+
+function completedPayloadContent(
+  payloads: AcpStreamMessage[],
+): string | undefined {
+  const summary = getLatestSummaryText(payloads);
+  const message = getLatestMessageText(payloads);
+  const content = summary?.trim() ? summary : message;
+  return content == null
+    ? undefined
+    : appendGeneratedImageMarkdown(content, payloads);
+}
+
+function latestCompletedPayloadMetadata(payloads: AcpStreamMessage[]): {
+  sessionId?: string;
+  usage?: AcpStreamUsage;
+} {
+  let sessionId: string | undefined;
+  let usage: AcpStreamUsage | undefined;
+  for (const payload of payloads) {
+    if (
+      "threadId" in payload &&
+      typeof payload.threadId === "string" &&
+      payload.threadId.trim()
+    ) {
+      sessionId = normalizeCodexSessionId(payload.threadId) ?? sessionId;
+    }
+    if (payload.type === "summary" && payload.usage != null) {
+      usage = payload.usage;
+    }
+  }
+  return { sessionId, usage };
+}
+
+function hasQueuedCompletedAcpPayloads(turn: CompletedAcpTurnTarget): boolean {
+  try {
+    return listAcpPayloads(turn as AcpChatContext).some(
+      (payload) => payload.type === "summary",
+    );
+  } catch (err) {
+    logger.debug("failed listing queued completed ACP payloads", {
+      project_id: turn.project_id,
+      path: turn.path,
+      message_id: turn.message_id,
+      err,
+    });
+    return false;
+  }
+}
+
+async function repairCompletedAcpTurnOnce({
+  client,
+  turn,
+}: RepairCompletedAcpTurnOptions): Promise<CompletedAcpRepairResult> {
+  const project_id = `${turn.project_id ?? ""}`.trim();
+  const path = `${turn.path ?? ""}`.trim();
+  const message_date = `${turn.message_date ?? ""}`.trim();
+  const sender_id = `${turn.sender_id ?? "openai-codex-agent"}`.trim();
+  const message_id = `${turn.message_id ?? ""}`.trim();
+  const thread_id = `${turn.thread_id ?? ""}`.trim();
+  if (!project_id || !path || !message_date || !message_id || !thread_id) {
+    return { repaired: false, durable: false };
+  }
+
+  const queuedPersistence = await persistQueuedAcpPayloadsAsActivityLog({
+    client,
+    turn: {
+      ...turn,
+      project_id,
+      path,
+      message_date,
+      sender_id,
+      message_id,
+      thread_id,
+    },
+  });
+  const payloads = queuedPersistence.payloads;
+  if (!payloads.some((payload) => payload.type === "summary")) {
+    // Another retry may already have committed and cleared this queue.
+    return { repaired: false, durable: payloads.length === 0 };
+  }
+  const content = completedPayloadContent(payloads);
+  if (content == null) {
+    return { repaired: false, durable: false };
+  }
+  const payloadMetadata = latestCompletedPayloadMetadata(payloads);
+
+  let chatDurable = false;
+  try {
+    await withChatSyncDB({
+      client,
+      project_id,
+      path,
+      fn: async (syncdb) => {
+        const current = findRecoverableChatRow(syncdb as any, {
+          message_date,
+          sender_id,
+          message_id,
+        });
+        const rowDate =
+          normalizeIsoDateString(syncdbField<string>(current, "date")) ??
+          normalizeIsoDateString(message_date) ??
+          message_date;
+        const rowSender =
+          syncdbField<string>(current, "sender_id") ?? sender_id;
+        const currentHistory = historyToArray(syncdbField(current, "history"));
+        const refs = deriveAcpLogRefs({
+          project_id,
+          path,
+          thread_id,
+          message_id,
+        });
+        const update: Record<string, unknown> = {
+          event: "chat",
+          date: rowDate,
+          sender_id: rowSender,
+          generating: false,
+          history: [
+            {
+              ...(currentHistory[0] ?? {}),
+              author_id: rowSender,
+              content,
+              date: rowDate,
+            },
+            ...currentHistory.slice(1),
+          ],
+          message_id,
+          thread_id,
+          parent_message_id:
+            syncdbField<string>(current, "parent_message_id") ??
+            turn.parent_message_id ??
+            undefined,
+          acp_log_store: refs.store,
+          acp_log_key: refs.key,
+          acp_log_subject: refs.subject,
+          acp_live_log_stream: null,
+          acp_live_preview_stream: null,
+          acp_thread_id:
+            payloadMetadata.sessionId ?? turn.session_id ?? undefined,
+          acp_started_at_ms:
+            Number(turn.started_at_ms) > 0
+              ? Number(turn.started_at_ms)
+              : undefined,
+          acp_usage: payloadMetadata.usage,
+          acp_account_id: turn.account_id ?? undefined,
+          acp_recovery_parent_op_id: turn.recovery_parent_op_id ?? undefined,
+          acp_recovery_reason: turn.recovery_reason ?? undefined,
+          acp_recovery_count:
+            Number(turn.recovery_count) > 0
+              ? Number(turn.recovery_count)
+              : undefined,
+          acp_interrupted: false,
+          acp_interrupted_reason: null,
+          acp_interrupted_text: null,
+        };
+        syncdb.set(update);
+        const currentThreadState = preferredThreadStateRow(syncdb, thread_id);
+        const activeMessageId = syncdbField<string>(
+          currentThreadState,
+          "active_message_id",
+        );
+        const threadState = syncdbField<string>(currentThreadState, "state");
+        const newerTurnIsActive =
+          !!activeMessageId &&
+          activeMessageId !== message_id &&
+          (threadState === "running" || threadState === "queued");
+        if (!newerTurnIsActive) {
+          replaceThreadScopedRow(
+            syncdb,
+            THREAD_STATE_EVENT,
+            thread_id,
+            buildThreadStateRecord({
+              thread_id,
+              state: "complete",
+              active_message_id: message_id,
+              updated_at: new Date().toISOString(),
+              schema_version: THREAD_STATE_SCHEMA_VERSION,
+            }),
+          );
+        }
+        syncdb.commit();
+        await syncdb.save();
+        chatDurable = true;
+      },
+    });
+  } catch (err) {
+    logger.warn("failed to replay completed ACP chat row", {
+      project_id,
+      path,
+      message_date,
+      message_id,
+      thread_id,
+      storage_error: isProjectAcpStorageError(err),
+      err,
+    });
+  }
+
+  const durable = queuedPersistence.durable && chatDurable;
+  if (durable) {
+    try {
+      clearAcpPayloads({
+        project_id,
+        path,
+        message_date,
+        sender_id,
+        message_id,
+        thread_id,
+      } as any);
+    } catch (err) {
+      logger.debug("failed clearing ACP queue after completed turn replay", {
+        project_id,
+        path,
+        message_date,
+        message_id,
+        err,
+      });
+    }
+    const job = getAcpJobByOpId(message_id);
+    if (job?.state === "running") {
+      setAcpJobState({
+        op_id: message_id,
+        state: "completed",
+        worker_id: job.worker_id ?? undefined,
+      });
+      noteDetachedWorkerQueueProgress();
+    }
+  }
+  return { repaired: chatDurable, durable };
+}
+
+const COMPLETED_REPAIR_RETRY_DELAYS_MS = [
+  1_000, 5_000, 15_000, 60_000, 300_000,
+];
+const COMPLETED_REPAIR_RETRY_MAX_AGE_MS = 24 * 60 * 60_000;
+const scheduledCompletedRepairs = new Map<
+  string,
+  { timer: NodeJS.Timeout; startedAt: number; attempt: number }
+>();
+
+function completedRepairKey(turn: CompletedAcpTurnTarget): string {
+  return [turn.project_id, turn.path, turn.message_date, turn.message_id].join(
+    "\0",
+  );
+}
+
+function scheduleCompletedAcpRepairRetry(
+  options: RepairCompletedAcpTurnOptions,
+  attempt = 0,
+  startedAt = Date.now(),
+): void {
+  if (process.env.NODE_ENV === "test") return;
+  const key = completedRepairKey(options.turn);
+  if (scheduledCompletedRepairs.has(key)) return;
+  if (Date.now() - startedAt >= COMPLETED_REPAIR_RETRY_MAX_AGE_MS) {
+    logger.warn(
+      "stopped retrying completed ACP replay after retention window",
+      {
+        project_id: options.turn.project_id,
+        path: options.turn.path,
+        message_id: options.turn.message_id,
+        attempts: attempt,
+      },
+    );
+    return;
+  }
+  const delayMs =
+    COMPLETED_REPAIR_RETRY_DELAYS_MS[
+      Math.min(attempt, COMPLETED_REPAIR_RETRY_DELAYS_MS.length - 1)
+    ];
+  const timer = setTimeout(() => {
+    scheduledCompletedRepairs.delete(key);
+    void repairCompletedAcpTurnOnce(options)
+      .then((result) => {
+        if (result.durable) return;
+        scheduleCompletedAcpRepairRetry(options, attempt + 1, startedAt);
+      })
+      .catch((err) => {
+        logger.warn("completed ACP replay retry failed", {
+          project_id: options.turn.project_id,
+          path: options.turn.path,
+          message_id: options.turn.message_id,
+          attempt: attempt + 1,
+          err,
+        });
+        scheduleCompletedAcpRepairRetry(options, attempt + 1, startedAt);
+      });
+  }, delayMs);
+  timer.unref?.();
+  scheduledCompletedRepairs.set(key, { timer, startedAt, attempt });
+}
+
+export async function repairCompletedAcpTurn(
+  options: RepairCompletedAcpTurnOptions,
+): Promise<boolean> {
+  const result = await repairCompletedAcpTurnOnce(options);
+  const key = completedRepairKey(options.turn);
+  if (result.durable) {
+    const pending = scheduledCompletedRepairs.get(key);
+    if (pending) {
+      clearTimeout(pending.timer);
+      scheduledCompletedRepairs.delete(key);
+    }
+  } else {
+    scheduleCompletedAcpRepairRetry(options);
+  }
+  return result.repaired;
 }
 
 type RepairInterruptedAcpTurnOptions = {
@@ -5235,6 +5590,8 @@ export async function recoverOrphanedRunningAcpJobsWithoutLease(
     ),
   );
   let recovered = 0;
+  let terminalized = 0;
+  let requeued = 0;
   for (const job of listRunningAcpJobs()) {
     const messageDate = `${job.assistant_message_date ?? ""}`.trim();
     if (!messageDate) continue;
@@ -5255,6 +5612,7 @@ export async function recoverOrphanedRunningAcpJobsWithoutLease(
       });
       noteDetachedWorkerQueueProgress();
       recovered += 1;
+      terminalized += 1;
       continue;
     }
     if (
@@ -5285,12 +5643,12 @@ export async function recoverOrphanedRunningAcpJobsWithoutLease(
       worker_id: job.worker_id ?? undefined,
     });
     noteDetachedWorkerQueueProgress();
-    const requeued = getAcpJob({
+    const requeuedJob = getAcpJob({
       project_id: job.project_id,
       path: job.path,
       user_message_id: job.user_message_id,
     });
-    if (requeued?.state === "queued" && opts.client) {
+    if (requeuedJob?.state === "queued" && opts.client) {
       try {
         await persistQueuedUserMessageProjection({
           client: opts.client,
@@ -5312,11 +5670,14 @@ export async function recoverOrphanedRunningAcpJobsWithoutLease(
       }
     }
     recovered += 1;
+    requeued += 1;
   }
   if (recovered > 0) {
-    logger.warn("requeued orphaned ACP jobs without leases", {
+    logger.warn("reconciled orphaned ACP jobs without running leases", {
       instance: ACP_INSTANCE_ID,
       recovered,
+      terminalized,
+      requeued,
       grace_ms: graceMs,
     });
   }
@@ -5434,6 +5795,42 @@ export async function recoverTerminalStaleAcpTurns(
   let recovered = 0;
   for (const turn of terminalTurns) {
     try {
+      if (turn.state === "completed") {
+        const job = turn.message_id
+          ? getAcpJobByOpId(turn.message_id)
+          : undefined;
+        const request = job ? decodeAcpJobRequest(job) : undefined;
+        const completedTurn: CompletedAcpTurnTarget = {
+          ...turn,
+          ...(request?.chat ?? {}),
+          project_id: turn.project_id,
+          path: turn.path,
+          message_date: turn.message_date,
+          sender_id: turn.sender_id,
+          message_id: turn.message_id,
+          thread_id: turn.thread_id,
+          account_id: request?.account_id ?? job?.account_id,
+          session_id:
+            turn.session_id ??
+            (request?.request_kind === "command"
+              ? undefined
+              : request?.session_id),
+        };
+        if (hasQueuedCompletedAcpPayloads(completedTurn)) {
+          if (
+            await repairCompletedAcpTurn({
+              client,
+              turn: completedTurn,
+            })
+          ) {
+            recovered += 1;
+          }
+          // A queued summary is authoritative completion intent. If storage is
+          // still unavailable, the replay scheduler owns it; never downgrade
+          // the successful turn to an interruption.
+          continue;
+        }
+      }
       if (
         !(await turnNeedsInterruptedRepair({
           client,
@@ -5579,16 +5976,18 @@ export function shouldCompleteAcpTurnAfterTerminalStorageFailure({
   phase,
   finishedBy,
   terminalRowAlreadyPersisted,
+  recoverableSummaryQueued = false,
 }: {
   err: unknown;
   phase: string;
   finishedBy?: "summary" | "error" | "interrupt";
   terminalRowAlreadyPersisted: boolean;
+  recoverableSummaryQueued?: boolean;
 }): boolean {
   return (
     phase === "terminal-summary" &&
     finishedBy === "summary" &&
-    terminalRowAlreadyPersisted &&
+    (terminalRowAlreadyPersisted || recoverableSummaryQueued) &&
     acpStorageFailureCode(err) === "ACP_TERMINAL_STORAGE_TIMEOUT"
   );
 }

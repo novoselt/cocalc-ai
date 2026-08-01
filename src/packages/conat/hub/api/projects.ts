@@ -2075,12 +2075,17 @@ export interface Projects {
     // When false, enqueue start and return immediately; callers can watch
     // LRO/changefeed for progress.
     wait?: boolean;
+    // With wait=false, keep the request open for at most this many
+    // milliseconds so ordinary warm starts can return a terminal ack while
+    // long preparation continues through the LRO.
+    foreground_wait_ms?: number;
   }) => Promise<{
     op_id: string;
     scope_type: "project";
     scope_id: string;
     service: string;
     stream_name: string;
+    terminal_status?: "succeeded";
   }>;
   startFromHost: (opts: {
     host_id?: string;
@@ -2088,12 +2093,14 @@ export interface Projects {
     project_id: string;
     autostart?: boolean;
     wait?: boolean;
+    foreground_wait_ms?: number;
   }) => Promise<{
     op_id: string;
     scope_type: "project";
     scope_id: string;
     service: string;
     stream_name: string;
+    terminal_status?: "succeeded";
   }>;
   stop: (opts: {
     account_id?: string;

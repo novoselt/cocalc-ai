@@ -35,6 +35,7 @@ export interface ProjectVolumeQuotaAdapter {
     project_id: string;
     volume_kind: ProjectVolumeKind;
     size: number;
+    force_write?: boolean;
     operation_id?: string;
     operation_class: string;
     priority?: "lifecycle" | "interactive" | "scheduled" | "scavenger";
@@ -108,12 +109,14 @@ export class ProjectVolumeQuotaManager {
     operation_id,
     operation_class,
     priority,
+    force_write,
   }: {
     project_id: string;
     volume_kind: ProjectVolumeKind;
     operation_id?: string;
     operation_class: string;
     priority?: "lifecycle" | "interactive" | "scheduled" | "scavenger";
+    force_write?: boolean;
   }): Promise<number> {
     const persistent = await this.ensurePersistentDesired(
       project_id,
@@ -130,6 +133,7 @@ export class ProjectVolumeQuotaManager {
         project_id,
         volume_kind,
         size: effective_bytes,
+        force_write,
         operation_id,
         operation_class,
         priority,
@@ -172,12 +176,14 @@ export class ProjectVolumeQuotaManager {
     operation_id,
     operation_class,
     priority,
+    force_write,
   }: {
     project_id: string;
     volume_kind: ProjectVolumeKind;
     operation_id?: string;
     operation_class: string;
     priority?: "lifecycle" | "interactive" | "scheduled" | "scavenger";
+    force_write?: boolean;
   }): Promise<number> {
     return await withQuotaTransitionLock(
       project_id,
@@ -189,6 +195,7 @@ export class ProjectVolumeQuotaManager {
           operation_id,
           operation_class,
           priority,
+          force_write,
         }),
     );
   }

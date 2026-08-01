@@ -34,6 +34,10 @@ import { countRunningAcpTurnLeasesForWorker } from "@cocalc/lite/hub/sqlite/acp-
 import { getSoftwareVersions } from "../../software";
 import { getProjectHostConatClient } from "../../runtime-client";
 import { getProjectHostProcessTitle } from "../../process-role";
+import {
+  readProjectHostAcpWorkerTarget,
+  writeProjectHostAcpWorkerTarget,
+} from "./worker-target";
 
 const logger = getLogger("project-host:hub:acp:worker-manager");
 const ACP_WORKER_PID_FILE = path.join(data, "acp-worker.pid");
@@ -232,7 +236,8 @@ function noteProjectHostAcpWorkerSpawn(now = Date.now()): {
 
 export function resolveProjectHostAcpWorkerLaunch({
   command = process.env.COCALC_PROJECT_HOST_DAEMON_EXEC ?? process.execPath,
-  entryPoint = workerEntryPoint,
+  entryPoint = readProjectHostAcpWorkerTarget()?.entry_point ??
+    workerEntryPoint,
 }: {
   command?: string;
   entryPoint?: string;
@@ -270,6 +275,13 @@ function safeRealpath(value?: string): string | undefined {
 }
 
 function resolveProjectHostWorkerBundlePath(launch: WorkerLaunch): string {
+  const target = readProjectHostAcpWorkerTarget();
+  if (
+    target &&
+    launch.resolvedEntryPoint === path.resolve(target.entry_point)
+  ) {
+    return target.bundle_path;
+  }
   const explicit =
     `${process.env.COCALC_PROJECT_HOST_BUNDLE_PATH ?? ""}`.trim() ||
     `${process.env.COCALC_PROJECT_HOST_CURRENT ?? ""}`.trim();
@@ -282,6 +294,8 @@ function resolveProjectHostWorkerBundlePath(launch: WorkerLaunch): string {
 }
 
 function resolveProjectHostWorkerBundleVersion(bundlePath: string): string {
+  const target = readProjectHostAcpWorkerTarget();
+  if (target?.bundle_path === bundlePath) return target.build_id;
   const explicit = `${process.env.COCALC_PROJECT_HOST_VERSION ?? ""}`.trim();
   if (explicit) return explicit;
   const software = getSoftwareVersions();
@@ -1070,9 +1084,14 @@ export async function ensureProjectHostAcpWorkerRunning({
 
 export async function rolloutProjectHostAcpWorker({
   restartReason = "managed_component_rollout",
+  desiredVersion,
 }: {
   restartReason?: string;
+  desiredVersion?: string;
 } = {}): Promise<ProjectHostAcpWorkerRolloutOutcome> {
+  if (desiredVersion) {
+    writeProjectHostAcpWorkerTarget(desiredVersion);
+  }
   const launch = workerLaunchSignature();
   const { managedWorkers: workers } = partitionManageableProjectHostAcpWorkers({
     workers: listProjectHostAcpWorkers(),

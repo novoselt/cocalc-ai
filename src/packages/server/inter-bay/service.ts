@@ -343,6 +343,14 @@ import {
   drainHost,
   forceDeprovisionHost,
   gcDeletedHostRootfsImages,
+  getHostExamState,
+  setHostExamConfig,
+  createHostExamRun,
+  rotateHostExamToken,
+  openHostExamRun,
+  updateHostExamDeadline,
+  increaseHostExamCapacity,
+  stopAndEraseHostExamRun,
   getBackupConfigLocal,
   getHostAvailability,
   getHostLog,
@@ -2241,6 +2249,7 @@ async function startHostConnectionService(): Promise<void> {
       account_id,
       id,
       components,
+      desired_version,
       base_url,
       reason,
     }) =>
@@ -2248,6 +2257,7 @@ async function startHostConnectionService(): Promise<void> {
         account_id,
         id,
         components,
+        desired_version,
         base_url,
         reason,
       }),
@@ -2319,6 +2329,42 @@ async function startHostConnectionService(): Promise<void> {
         session_hash,
         internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
         id,
+      }),
+    getHostExamState: async (opts) => await getHostExamState(opts),
+    setHostExamConfig: async (opts) =>
+      await setHostExamConfig({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    createHostExamRun: async (opts) =>
+      await createHostExamRun({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    rotateHostExamToken: async (opts) =>
+      await rotateHostExamToken({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    openHostExamRun: async (opts) =>
+      await openHostExamRun({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    updateHostExamDeadline: async (opts) =>
+      await updateHostExamDeadline({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    increaseHostExamCapacity: async (opts) =>
+      await increaseHostExamCapacity({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
+      }),
+    stopAndEraseHostExamRun: async (opts) =>
+      await stopAndEraseHostExamRun({
+        ...opts,
+        internalAuth: HOST_DANGEROUS_INTERNAL_AUTH,
       }),
     listHostSshAuthorizedKeys: async ({ account_id, id }) =>
       await listHostSshAuthorizedKeys({
@@ -2579,6 +2625,26 @@ async function startHostControlService(): Promise<void> {
       await (
         await getHostClient(host_id, 15 * 60 * 1000)
       ).runSyntheticRuntimeProbe(),
+    applyExamRun: async ({ host_id, apply }) =>
+      await (await getHostClient(host_id, 10 * 60 * 1000)).applyExamRun(apply),
+    getExamRunStatus: async ({ host_id, get }) =>
+      await (await getHostClient(host_id, 30_000)).getExamRunStatus(get),
+    openExamRun: async ({ host_id, open }) =>
+      await (await getHostClient(host_id, 60_000)).openExamRun(open),
+    updateExamRunDeadline: async ({ host_id, update }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).updateExamRunDeadline(update),
+    increaseExamRunCapacity: async ({ host_id, increase }) =>
+      await (
+        await getHostClient(host_id, 30_000)
+      ).increaseExamRunCapacity(increase),
+    rotateExamRunToken: async ({ host_id, rotate }) =>
+      await (await getHostClient(host_id, 30_000)).rotateExamRunToken(rotate),
+    closeAndCleanupExamRun: async ({ host_id, close }) =>
+      await (
+        await getHostClient(host_id, 10 * 60 * 1000)
+      ).closeAndCleanupExamRun(close),
     createProject: async ({ account_id, host_id, create }) => {
       const connection = await resolveHostConnectionLocal({
         account_id,
@@ -2592,6 +2658,10 @@ async function startHostControlService(): Promise<void> {
     },
     startProject: async ({ host_id, start }) =>
       await (await getHostClient(host_id, 60 * 60 * 1000)).startProject(start),
+    startProjectIdempotent: async ({ host_id, start }) =>
+      await (
+        await getHostClient(host_id, 60 * 60 * 1000)
+      ).startProjectIdempotent(start),
     stopProject: async ({ host_id, stop }) =>
       await (await getHostClient(host_id, 30_000)).stopProject(stop),
     getProjectStatus: async ({ host_id, get }) =>
@@ -2620,6 +2690,10 @@ async function startHostControlService(): Promise<void> {
       await (
         await getHostClient(host_id, 10 * 60 * 1000)
       ).upgradeSoftware(upgrade),
+    stageProjectHostArtifact: async ({ host_id, stage }) =>
+      await (
+        await getHostClient(host_id, 10 * 60 * 1000)
+      ).stageProjectHostArtifact(stage),
     rolloutManagedComponents: async ({ host_id, rollout }) =>
       await (
         await getHostClient(host_id, 30_000)

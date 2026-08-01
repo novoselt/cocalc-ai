@@ -531,6 +531,8 @@ export function projectHostSslRuleExpression(opts: {
     `(starts_with(http.host, "direct-check-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
     " or ",
     `(starts_with(http.host, "dev-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
+    " or ",
+    `(starts_with(http.host, "exam-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
     ")",
   ].join("");
 }

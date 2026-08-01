@@ -14,6 +14,7 @@ import {
   subscribeAccountLroSummaryFeed,
 } from "./account-summary-feed";
 import { lite } from "@cocalc/frontend/lite";
+import { isExamMode } from "@cocalc/frontend/customize/exam-mode";
 
 type BaseOptions = {
   kind: string;
@@ -57,7 +58,7 @@ export class SingleLroOpsManager {
   constructor(private opts: SingleOptions) {}
 
   init = () => {
-    if (lite) {
+    if (lite || isExamMode()) {
       this.clearState();
       return;
     }
@@ -95,7 +96,7 @@ export class SingleLroOpsManager {
     scope_type?: LroSummary["scope_type"];
     scope_id?: string;
   }) => {
-    if (lite) {
+    if (lite || isExamMode()) {
       return;
     }
     if (!op?.op_id) {
@@ -117,7 +118,7 @@ export class SingleLroOpsManager {
   };
 
   dismiss = (op_id?: string) => {
-    if (lite) {
+    if (lite || isExamMode()) {
       return;
     }
     const target = op_id ?? this.state?.op_id ?? this.currentOpId;
@@ -138,7 +139,7 @@ export class SingleLroOpsManager {
   };
 
   private bootstrap = reuseInFlight(async () => {
-    if (lite) {
+    if (lite || isExamMode()) {
       return;
     }
     if (!this.initialized || this.opts.isClosed()) {
@@ -234,7 +235,7 @@ export class SingleLroOpsManager {
     scope_type: LroSummary["scope_type"];
     scope_id: string;
   }) => {
-    if (lite) {
+    if (lite || isExamMode()) {
       return;
     }
     if (this.currentOpId !== op_id) {
@@ -395,7 +396,7 @@ export class MultiLroOpsManager {
   constructor(private opts: MultiOptions) {}
 
   init = () => {
-    if (lite) {
+    if (lite || isExamMode()) {
       this.opts.setState(undefined);
       return;
     }
@@ -437,7 +438,7 @@ export class MultiLroOpsManager {
     scope_type?: LroSummary["scope_type"];
     scope_id?: string;
   }) => {
-    if (lite) {
+    if (lite || isExamMode()) {
       return;
     }
     if (!op?.op_id) {
@@ -458,7 +459,7 @@ export class MultiLroOpsManager {
   };
 
   dismiss = (op_id?: string) => {
-    if (lite) {
+    if (lite || isExamMode()) {
       return;
     }
     if (!op_id) {
@@ -481,7 +482,7 @@ export class MultiLroOpsManager {
   };
 
   private bootstrap = reuseInFlight(async () => {
-    if (lite) {
+    if (lite || isExamMode()) {
       return;
     }
     if (!this.initialized || this.opts.isClosed()) {
@@ -576,7 +577,7 @@ export class MultiLroOpsManager {
     scope_type: LroSummary["scope_type"];
     scope_id: string;
   }) => {
-    if (lite) {
+    if (lite || isExamMode()) {
       return;
     }
     if (this.streams.has(op_id) || this.streamInit.has(op_id)) {

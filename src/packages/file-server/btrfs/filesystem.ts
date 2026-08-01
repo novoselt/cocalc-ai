@@ -113,8 +113,14 @@ export class Filesystem {
   init = async () => {
     await mkdirp([this.opts.mount]);
     await this.initDevice();
-    await this.mountFilesystem();
-    await this.sync();
+    const mountedNow = await this.mountFilesystem();
+    // A newly mounted development loopback image benefits from an explicit
+    // flush before quota setup. Never put a host-wide filesystem sync on the
+    // startup path for an already-mounted production filesystem: active
+    // project writeback can make that flush take an unbounded amount of time.
+    if (mountedNow) {
+      await this.sync();
+    }
     // Reconcile the mounted filesystem to CoCalc's only supported quota modes:
     // simple quotas or fully disabled quotas. Classic btrfs qgroups are
     // intentionally unsupported here because they caused severe latency,
@@ -142,7 +148,9 @@ export class Filesystem {
         err,
       );
     }
-    await this.sync();
+    if (mountedNow) {
+      await this.sync();
+    }
     await this.startBees("startup");
     this.startBeesTelemetry();
   };
@@ -393,16 +401,17 @@ export class Filesystem {
     return obj;
   };
 
-  private mountFilesystem = async () => {
+  private mountFilesystem = async (): Promise<boolean> => {
     try {
       await this.info();
       // already mounted
-      return;
+      return false;
     } catch {}
     const { stderr, exit_code } = await this._mountFilesystem();
     if (exit_code) {
       throw Error(stderr);
     }
+    return true;
   };
 
   private _mountFilesystem = async () => {

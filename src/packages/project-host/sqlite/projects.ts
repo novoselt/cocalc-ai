@@ -97,6 +97,7 @@ export interface ProjectRow {
   title?: string;
   state?: string;
   state_reported?: boolean;
+  state_updated_at?: number;
   runtime_exit_reason?: string | null;
   image?: string;
   disk?: number;
@@ -113,6 +114,9 @@ export interface ProjectRow {
   run_quota?: any;
   run_quota_revision?: number;
   secret_names?: string[];
+  local_only?: boolean;
+  exam_run_id?: string | null;
+  usage_account_id?: string | null;
 }
 
 export interface ProjectRuntimeArtifactReference {
@@ -138,6 +142,7 @@ function ensureProjectsTable() {
       title TEXT,
       state TEXT,
       state_reported INTEGER,
+      state_updated_at INTEGER,
       runtime_exit_reason TEXT,
       image TEXT,
       disk INTEGER,
@@ -152,7 +157,10 @@ function ensureProjectsTable() {
       authorized_keys TEXT,
       run_quota TEXT,
       run_quota_revision INTEGER,
-      secret_names TEXT
+      secret_names TEXT,
+      local_only INTEGER,
+      exam_run_id TEXT,
+      usage_account_id TEXT
     )
   `);
   // Older tables won't have state_reported; add it if missing.
@@ -161,6 +169,9 @@ function ensureProjectsTable() {
   } catch (err) {
     // ignore - column already exists
   }
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN state_updated_at INTEGER");
+  } catch {}
   try {
     db.exec("ALTER TABLE projects ADD COLUMN runtime_exit_reason TEXT");
   } catch {}
@@ -191,6 +202,15 @@ function ensureProjectsTable() {
   try {
     db.exec("ALTER TABLE projects ADD COLUMN secret_names TEXT");
   } catch {}
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN local_only INTEGER");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN exam_run_id TEXT");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN usage_account_id TEXT");
+  } catch {}
   db.exec(
     "CREATE INDEX IF NOT EXISTS projects_state_idx ON projects(state, updated_at)",
   );
@@ -204,6 +224,9 @@ function ensureProjectsTable() {
   db.exec(
     "CREATE INDEX IF NOT EXISTS projects_quota_repair_idx ON projects(project_id) WHERE disk > 0 OR scratch > 0",
   );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_exam_run_idx ON projects(exam_run_id) WHERE exam_run_id IS NOT NULL",
+  );
 }
 
 export function upsertProject(row: ProjectRow) {
@@ -216,7 +239,7 @@ export function upsertProject(row: ProjectRow) {
   const existingProjectsRow =
     db
       .prepare(
-        "SELECT state, state_reported, runtime_exit_reason, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names FROM projects WHERE project_id=?",
+        "SELECT state, state_reported, state_updated_at, runtime_exit_reason, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id FROM projects WHERE project_id=?",
       )
       .get(row.project_id) || {};
   const existing = getRow("projects", pk) || {};
@@ -326,6 +349,18 @@ export function upsertProject(row: ProjectRow) {
     ? (parseStringArray(row.secret_names) ?? [])
     : parseStringArray((existingProjectsRow as any).secret_names);
   const secret_names_json = serializeStringArray(secret_names);
+  const local_only =
+    row.local_only ?? Boolean((existingProjectsRow as any).local_only);
+  const exam_run_id =
+    row.exam_run_id ??
+    (existingProjectsRow as any).exam_run_id ??
+    (existing as any).exam_run_id ??
+    null;
+  const usage_account_id =
+    row.usage_account_id ??
+    (existingProjectsRow as any).usage_account_id ??
+    (existing as any).usage_account_id ??
+    null;
 
   // Track whether the latest state has been reported to the master.
   // If a state is explicitly provided and differs from the current one,
@@ -338,6 +373,12 @@ export function upsertProject(row: ProjectRow) {
     (row.state !== undefined && row.state !== existingProjectsRow.state) ||
     (hasRuntimeExitReason &&
       runtime_exit_reason !== existingProjectsRow.runtime_exit_reason);
+  const state_updated_at = stateChanged
+    ? (row.state_updated_at ?? row.updated_at ?? now)
+    : (existingProjectsRow.state_updated_at ??
+      row.state_updated_at ??
+      row.updated_at ??
+      now);
   if (state_reported === undefined) {
     if (stateChanged) {
       state_reported = 0;
@@ -349,12 +390,13 @@ export function upsertProject(row: ProjectRow) {
   }
 
   const stmt = db.prepare(`
-    INSERT INTO projects(project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO projects(project_id, title, state, state_reported, state_updated_at, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project_id) DO UPDATE SET
       title=excluded.title,
       state=excluded.state,
       state_reported=excluded.state_reported,
+      state_updated_at=excluded.state_updated_at,
       runtime_exit_reason=excluded.runtime_exit_reason,
       image=excluded.image,
       disk=excluded.disk,
@@ -369,13 +411,17 @@ export function upsertProject(row: ProjectRow) {
       authorized_keys=excluded.authorized_keys,
       run_quota=excluded.run_quota,
       run_quota_revision=excluded.run_quota_revision,
-      secret_names=excluded.secret_names
+      secret_names=excluded.secret_names,
+      local_only=excluded.local_only,
+      exam_run_id=excluded.exam_run_id,
+      usage_account_id=excluded.usage_account_id
   `);
   stmt.run(
     row.project_id,
     title,
     state,
     state_reported,
+    state_updated_at,
     runtime_exit_reason,
     image,
     disk,
@@ -391,6 +437,9 @@ export function upsertProject(row: ProjectRow) {
     run_quota_json,
     run_quota_revision,
     secret_names_json,
+    local_only ? 1 : 0,
+    exam_run_id,
+    usage_account_id,
   );
   const ledgerRevision = hasIncomingRunQuotaRevision
     ? run_quota_revision
@@ -426,6 +475,7 @@ export function upsertProject(row: ProjectRow) {
     state: state
       ? {
           state,
+          time: new Date(state_updated_at),
           ...(runtime_exit_reason ? { runtime_exit_reason } : {}),
         }
       : existing.state,
@@ -441,6 +491,27 @@ export function upsertProject(row: ProjectRow) {
     authorized_keys,
     run_quota: run_quota ?? existing.run_quota,
     run_quota_revision,
+    local_only,
+    exam_run_id,
+    usage_account_id,
+    course:
+      exam_run_id == null
+        ? existing.course
+        : {
+            ...(existing.course ?? {}),
+            student_project_functionality: {
+              ...(existing.course?.student_project_functionality ?? {}),
+              disableTerminals: row.users
+                ? (row as any).terminal_enabled !== true
+                : (existing.course?.student_project_functionality
+                    ?.disableTerminals ?? true),
+              disableActions: false,
+              disableUploads: true,
+              disableAI: true,
+              disableCollaborators: true,
+              disableProjectControl: true,
+            },
+          },
   });
 }
 
@@ -452,7 +523,7 @@ export function listProjects(): ProjectRow[] {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, run_quota, run_quota_revision, secret_names FROM projects",
+    "SELECT project_id, title, state, state_reported, state_updated_at, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id FROM projects",
   );
   return stmt.all().map((row: any) => ({
     ...row,
@@ -470,10 +541,11 @@ export function listProjectsByStates(states: string[]): ProjectRow[] {
   const placeholders = normalized.map(() => "?").join(",");
   return getDatabase()
     .prepare(
-      `SELECT project_id, title, state, state_reported, runtime_exit_reason,
+      `SELECT project_id, title, state, state_reported, state_updated_at, runtime_exit_reason,
               image, disk, scratch, last_seen, updated_at, http_port, ssh_port,
               project_bundle_version, tools_version, secret_token, run_quota,
-              run_quota_revision, secret_names
+              run_quota_revision, secret_names, local_only, exam_run_id,
+              usage_account_id
          FROM projects
         WHERE state IN (${placeholders})`,
     )
@@ -574,7 +646,7 @@ export function getProject(project_id: string): ProjectRow | undefined {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names FROM projects WHERE project_id=?",
+    "SELECT project_id, title, state, state_reported, state_updated_at, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id FROM projects WHERE project_id=?",
   );
   const row = stmt.get(project_id) as any;
   if (!row) {
@@ -621,11 +693,15 @@ export function listUnreportedProjects(): ProjectRow[] {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, state, runtime_exit_reason FROM projects WHERE state_reported = 0",
+    "SELECT project_id, state, state_updated_at, updated_at, runtime_exit_reason FROM projects WHERE state_reported = 0",
   );
   return stmt.all().map((row: any) => ({
     project_id: row.project_id,
     state: row.state,
+    state_updated_at: row.state_updated_at,
+    ...(row.state_updated_at == null && row.updated_at != null
+      ? { updated_at: row.updated_at }
+      : {}),
     ...(row.runtime_exit_reason
       ? { runtime_exit_reason: row.runtime_exit_reason }
       : {}),

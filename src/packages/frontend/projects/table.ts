@@ -5,6 +5,10 @@ import { parse_query } from "@cocalc/sync/table/util";
 import { once } from "@cocalc/util/async-utils";
 import { redux, Table } from "../app-framework";
 import { getLogger } from "@cocalc/frontend/logger";
+import {
+  isExamMode,
+  waitForExamModeConfiguration,
+} from "@cocalc/frontend/customize/exam-mode";
 
 declare var DEBUG: boolean;
 
@@ -103,11 +107,13 @@ async function createProjectsTableUntilConnected(): Promise<void> {
 }
 
 export const refresh_projects_table = reuseInFlight(async () => {
+  if (isExamMode()) return;
   redux.removeTable("projects");
   await createProjectsTableUntilConnected();
 });
 
 async function load_projects(): Promise<void> {
+  if (await waitForExamModeConfiguration()) return;
   await createProjectsTableUntilConnected();
 }
 

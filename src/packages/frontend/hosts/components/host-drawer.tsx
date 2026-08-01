@@ -90,6 +90,7 @@ import { HostCurrentMetrics } from "./host-current-metrics";
 import { HostPlacementSummary, HostPressureTag } from "../pressure-ui";
 import { HostAccessPolicySummary } from "./host-access-policy";
 import { HostAvailabilityPanel } from "./host-availability-panel";
+import { HostExamPanel } from "./host-exam-panel";
 import { confirmHostDeprovision } from "./host-confirm";
 import { HostBillingEnforcementStatus } from "./host-billing-enforcement";
 import {
@@ -5289,6 +5290,16 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
       key: "access",
       label: "Access",
       children: accessContent,
+    },
+    {
+      key: "exams",
+      label: "Exams",
+      children: (
+        <HostExamPanel
+          host={host}
+          rootfsImages={rootfsInventory?.entries ?? []}
+        />
+      ),
     },
     {
       key: "projects",

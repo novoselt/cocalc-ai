@@ -488,6 +488,18 @@ function hostnameFromUrl(value: unknown): string {
   }
 }
 
+export function examHostnameFromProjectHostPublicUrl(
+  value: unknown,
+): string | undefined {
+  const publicHostname = hostnameFromUrl(value);
+  if (!publicHostname) return;
+  const labels = publicHostname.split(".");
+  const first = labels[0] ?? "";
+  if (!first.startsWith("host-")) return;
+  labels[0] = `exam-${first.slice("host-".length)}`;
+  return labels.join(".");
+}
+
 export function shouldRouteProjectHostIngressToApp(
   req: Pick<IncomingMessage, "headers">,
 ): boolean {
@@ -506,6 +518,7 @@ export function shouldRouteProjectHostIngressToApp(
   const infrastructureHostnames = new Set([
     publicHostname,
     hostnameFromUrl(process.env.PROJECT_HOST_INTERNAL_URL),
+    examHostnameFromProjectHostPublicUrl(process.env.PROJECT_HOST_PUBLIC_URL),
   ]);
   return !infrastructureHostnames.has(requestHostname);
 }

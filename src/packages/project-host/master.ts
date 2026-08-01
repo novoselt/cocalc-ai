@@ -108,6 +108,15 @@ import { getManagedComponentStatus } from "./managed-components";
 import { rolloutManagedComponents } from "./managed-component-rollout";
 import { readHostAgentState } from "./host-agent-state";
 import { recordProjectHostRpcTraffic } from "./rpc-traffic-audit";
+import {
+  applyExamRunLocal,
+  closeAndCleanupExamRunLocal,
+  getExamRunStatusLocal,
+  increaseExamRunCapacityLocal,
+  openExamRunLocal,
+  rotateExamRunTokenLocal,
+  updateExamRunDeadlineLocal,
+} from "./exam/controller";
 import { upsertProjectStopPolicy } from "./sqlite/stop-policy";
 import { querySqlite } from "./sqlite/admin-query";
 import { startHostPressureController } from "./host-pressure";
@@ -1315,8 +1324,58 @@ export async function startMasterRegistration({
     }
   };
 
+  const startProjectRequest = async (
+    opts: Parameters<HostControlApi["startProject"]>[0],
+    skip_if_running: boolean,
+  ) => {
+    await awaitRuntimeReadyForControl(
+      skip_if_running ? "startProjectIdempotent" : "startProject",
+    );
+    if (!hubApi.projects?.start) {
+      throw Error("start not available");
+    }
+    const status = await hubApi.projects.start({
+      ...opts,
+      account_id,
+      skip_if_running,
+    } as any);
+    return {
+      project_id: opts.project_id,
+      state: (status as any)?.state,
+      phase_timings_ms: (status as any)?.phase_timings_ms,
+    };
+  };
+
   // Control plane for this host (master can ask us to create/start/stop projects).
   const controlImpl: HostControlApi = {
+    async applyExamRun(opts) {
+      await awaitReadyForControl("applyExamRun", waitUntilReady);
+      return await applyExamRunLocal(opts);
+    },
+    async getExamRunStatus(opts) {
+      await awaitReadyForControl("getExamRunStatus", waitUntilReady);
+      return getExamRunStatusLocal(opts);
+    },
+    async openExamRun(opts) {
+      await awaitReadyForControl("openExamRun", waitUntilReady);
+      return openExamRunLocal(opts);
+    },
+    async updateExamRunDeadline(opts) {
+      await awaitReadyForControl("updateExamRunDeadline", waitUntilReady);
+      return updateExamRunDeadlineLocal(opts);
+    },
+    async increaseExamRunCapacity(opts) {
+      await awaitReadyForControl("increaseExamRunCapacity", waitUntilReady);
+      return increaseExamRunCapacityLocal(opts);
+    },
+    async rotateExamRunToken(opts) {
+      await awaitReadyForControl("rotateExamRunToken", waitUntilReady);
+      return rotateExamRunTokenLocal(opts);
+    },
+    async closeAndCleanupExamRun(opts) {
+      await awaitReadyForControl("closeAndCleanupExamRun", waitUntilReady);
+      return await closeAndCleanupExamRunLocal(opts);
+    },
     async probePublicRouteOrigin() {
       await awaitReadyForControl("probePublicRouteOrigin", waitUntilReady);
       const startedAt = Date.now();
@@ -1435,36 +1494,11 @@ export async function startMasterRegistration({
       } as any);
       return { project_id };
     },
-    async startProject({
-      project_id,
-      authorized_keys,
-      run_quota,
-      run_quota_revision,
-      image,
-      restore,
-      restore_backup_id,
-      lro_op_id,
-    }) {
-      await awaitRuntimeReadyForControl("startProject");
-      if (!hubApi.projects?.start) {
-        throw Error("start not available");
-      }
-      const status = await hubApi.projects.start({
-        account_id,
-        project_id,
-        authorized_keys,
-        run_quota,
-        run_quota_revision,
-        image,
-        restore,
-        restore_backup_id,
-        lro_op_id,
-      });
-      return {
-        project_id,
-        state: (status as any)?.state,
-        phase_timings_ms: (status as any)?.phase_timings_ms,
-      };
+    async startProject(opts) {
+      return await startProjectRequest(opts, false);
+    },
+    async startProjectIdempotent(opts) {
+      return await startProjectRequest(opts, true);
     },
     async stopProject({ project_id }) {
       await awaitRuntimeReadyForControl("stopProject");
@@ -1580,6 +1614,15 @@ export async function startMasterRegistration({
       deleteProjectLocal(project_id);
     },
     upgradeSoftware,
+    async stageProjectHostArtifact({ version, base_url, retention_policy }) {
+      return await upgradeSoftware({
+        targets: [{ artifact: "project-host", version }],
+        base_url,
+        restart_project_host: false,
+        activate_project_host: false,
+        retention_policy,
+      });
+    },
     async growBtrfs({ disk_gb }) {
       const args = ["-n", STORAGE_WRAPPER, "grow-btrfs"];
       if (disk_gb != null) args.push(String(disk_gb));

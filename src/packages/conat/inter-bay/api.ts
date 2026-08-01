@@ -194,6 +194,7 @@ import type {
   HostRuntimeLogResponse,
   HostSshAuthorizedKeysResponse,
   HostStaticAppPathInspection,
+  StageProjectHostArtifactRequest,
   UpgradeSoftwareRequest,
   UpgradeSoftwareResponse,
 } from "@cocalc/conat/project-host/api";
@@ -2196,6 +2197,14 @@ export type HostConnectionMethod =
   | "pull-host-rootfs-image"
   | "delete-host-rootfs-image"
   | "gc-deleted-host-rootfs-images"
+  | "get-host-exam-state"
+  | "set-host-exam-config"
+  | "create-host-exam-run"
+  | "rotate-host-exam-token"
+  | "open-host-exam-run"
+  | "update-host-exam-deadline"
+  | "increase-host-exam-capacity"
+  | "stop-and-erase-host-exam-run"
   | "list-host-ssh-authorized-keys"
   | "add-host-ssh-authorized-key"
   | "remove-host-ssh-authorized-key"
@@ -2227,8 +2236,16 @@ export type HostConnectionMethod =
 export type HostControlMethod =
   | "probe-public-route-origin"
   | "restart-cloudflared"
+  | "apply-exam-run"
+  | "get-exam-run-status"
+  | "open-exam-run"
+  | "update-exam-run-deadline"
+  | "increase-exam-run-capacity"
+  | "rotate-exam-run-token"
+  | "close-and-cleanup-exam-run"
   | "create-project"
   | "start-project"
+  | "start-project-idempotent"
   | "stop-project"
   | "get-project-status"
   | "update-authorized-keys"
@@ -2239,6 +2256,7 @@ export type HostControlMethod =
   | "apply-pending-copies"
   | "delete-project-data"
   | "upgrade-software"
+  | "stage-project-host-artifact"
   | "rollout-managed-components"
   | "grow-btrfs"
   | "grow-shared-scratch"
@@ -2955,6 +2973,30 @@ export interface InterBayHostConnectionApi {
   gcDeletedHostRootfsImages: (
     opts: Parameters<Hosts["gcDeletedHostRootfsImages"]>[0],
   ) => Promise<Awaited<ReturnType<Hosts["gcDeletedHostRootfsImages"]>>>;
+  getHostExamState: (
+    opts: Parameters<Hosts["getHostExamState"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["getHostExamState"]>>>;
+  setHostExamConfig: (
+    opts: Parameters<Hosts["setHostExamConfig"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["setHostExamConfig"]>>>;
+  createHostExamRun: (
+    opts: Parameters<Hosts["createHostExamRun"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["createHostExamRun"]>>>;
+  rotateHostExamToken: (
+    opts: Parameters<Hosts["rotateHostExamToken"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["rotateHostExamToken"]>>>;
+  openHostExamRun: (
+    opts: Parameters<Hosts["openHostExamRun"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["openHostExamRun"]>>>;
+  updateHostExamDeadline: (
+    opts: Parameters<Hosts["updateHostExamDeadline"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["updateHostExamDeadline"]>>>;
+  increaseHostExamCapacity: (
+    opts: Parameters<Hosts["increaseHostExamCapacity"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["increaseHostExamCapacity"]>>>;
+  stopAndEraseHostExamRun: (
+    opts: Parameters<Hosts["stopAndEraseHostExamRun"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["stopAndEraseHostExamRun"]>>>;
   listHostSshAuthorizedKeys: (
     opts: Parameters<Hosts["listHostSshAuthorizedKeys"]>[0],
   ) => Promise<Awaited<ReturnType<Hosts["listHostSshAuthorizedKeys"]>>>;
@@ -3163,6 +3205,23 @@ const HOST_CONNECTION_METHOD_SPECS = [
     name: "gcDeletedHostRootfsImages",
     method: "gc-deleted-host-rootfs-images",
   },
+  { name: "getHostExamState", method: "get-host-exam-state" },
+  { name: "setHostExamConfig", method: "set-host-exam-config" },
+  { name: "createHostExamRun", method: "create-host-exam-run" },
+  { name: "rotateHostExamToken", method: "rotate-host-exam-token" },
+  { name: "openHostExamRun", method: "open-host-exam-run" },
+  {
+    name: "updateHostExamDeadline",
+    method: "update-host-exam-deadline",
+  },
+  {
+    name: "increaseHostExamCapacity",
+    method: "increase-host-exam-capacity",
+  },
+  {
+    name: "stopAndEraseHostExamRun",
+    method: "stop-and-erase-host-exam-run",
+  },
   {
     name: "listHostSshAuthorizedKeys",
     method: "list-host-ssh-authorized-keys",
@@ -3292,6 +3351,34 @@ export interface InterBayHostControlApi {
   runSyntheticRuntimeProbe: (opts: {
     host_id: string;
   }) => ReturnType<HostControlApi["runSyntheticRuntimeProbe"]>;
+  applyExamRun: (opts: {
+    host_id: string;
+    apply: HostControlArg<"applyExamRun">;
+  }) => ReturnType<HostControlApi["applyExamRun"]>;
+  getExamRunStatus: (opts: {
+    host_id: string;
+    get?: HostControlArg<"getExamRunStatus">;
+  }) => ReturnType<HostControlApi["getExamRunStatus"]>;
+  openExamRun: (opts: {
+    host_id: string;
+    open: HostControlArg<"openExamRun">;
+  }) => ReturnType<HostControlApi["openExamRun"]>;
+  updateExamRunDeadline: (opts: {
+    host_id: string;
+    update: HostControlArg<"updateExamRunDeadline">;
+  }) => ReturnType<HostControlApi["updateExamRunDeadline"]>;
+  increaseExamRunCapacity: (opts: {
+    host_id: string;
+    increase: HostControlArg<"increaseExamRunCapacity">;
+  }) => ReturnType<HostControlApi["increaseExamRunCapacity"]>;
+  rotateExamRunToken: (opts: {
+    host_id: string;
+    rotate: HostControlArg<"rotateExamRunToken">;
+  }) => ReturnType<HostControlApi["rotateExamRunToken"]>;
+  closeAndCleanupExamRun: (opts: {
+    host_id: string;
+    close: HostControlArg<"closeAndCleanupExamRun">;
+  }) => ReturnType<HostControlApi["closeAndCleanupExamRun"]>;
   createProject: (opts: {
     account_id: string;
     host_id: string;
@@ -3300,6 +3387,10 @@ export interface InterBayHostControlApi {
   startProject: (opts: {
     host_id: string;
     start: HostControlArg<"startProject">;
+  }) => Promise<HostCreateProjectResponse>;
+  startProjectIdempotent: (opts: {
+    host_id: string;
+    start: HostControlArg<"startProjectIdempotent">;
   }) => Promise<HostCreateProjectResponse>;
   stopProject: (opts: {
     host_id: string;
@@ -3342,6 +3433,10 @@ export interface InterBayHostControlApi {
   upgradeSoftware: (opts: {
     host_id: string;
     upgrade: UpgradeSoftwareRequest;
+  }) => Promise<UpgradeSoftwareResponse>;
+  stageProjectHostArtifact: (opts: {
+    host_id: string;
+    stage: StageProjectHostArtifactRequest;
   }) => Promise<UpgradeSoftwareResponse>;
   rolloutManagedComponents: (opts: {
     host_id: string;
@@ -4177,8 +4272,25 @@ type HostControlName = keyof InterBayHostControlApi;
 const HOST_CONTROL_METHOD_SPECS = [
   { name: "probePublicRouteOrigin", method: "probe-public-route-origin" },
   { name: "restartCloudflared", method: "restart-cloudflared" },
+  { name: "applyExamRun", method: "apply-exam-run" },
+  { name: "getExamRunStatus", method: "get-exam-run-status" },
+  { name: "openExamRun", method: "open-exam-run" },
+  {
+    name: "updateExamRunDeadline",
+    method: "update-exam-run-deadline",
+  },
+  {
+    name: "increaseExamRunCapacity",
+    method: "increase-exam-run-capacity",
+  },
+  { name: "rotateExamRunToken", method: "rotate-exam-run-token" },
+  {
+    name: "closeAndCleanupExamRun",
+    method: "close-and-cleanup-exam-run",
+  },
   { name: "createProject", method: "create-project" },
   { name: "startProject", method: "start-project" },
+  { name: "startProjectIdempotent", method: "start-project-idempotent" },
   { name: "stopProject", method: "stop-project" },
   { name: "getProjectStatus", method: "get-project-status" },
   { name: "updateAuthorizedKeys", method: "update-authorized-keys" },
@@ -4189,6 +4301,10 @@ const HOST_CONTROL_METHOD_SPECS = [
   { name: "applyPendingCopies", method: "apply-pending-copies" },
   { name: "deleteProjectData", method: "delete-project-data" },
   { name: "upgradeSoftware", method: "upgrade-software" },
+  {
+    name: "stageProjectHostArtifact",
+    method: "stage-project-host-artifact",
+  },
   { name: "rolloutManagedComponents", method: "rollout-managed-components" },
   { name: "growBtrfs", method: "grow-btrfs" },
   { name: "growSharedScratch", method: "grow-shared-scratch" },

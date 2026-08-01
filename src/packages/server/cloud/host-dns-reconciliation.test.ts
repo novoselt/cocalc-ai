@@ -30,6 +30,70 @@ const OLD_IP = "203.0.113.10";
 const NEW_IP = "203.0.113.20";
 const DNS_NAME = `host-${HOST_ID}-test.example.com`;
 
+async function addDirectHost(id: string, name: string): Promise<void> {
+  const dnsName = `host-${id}-test.example.com`;
+  await upsertProjectHost({
+    id,
+    name,
+    region: "us-central1",
+    status: "running",
+    public_url: `https://${dnsName}`,
+    ssh_server: `${OLD_IP}:2222`,
+    metadata: {
+      desired_state: "running",
+      machine: { cloud: "gcp" },
+      public_route: { active_mode: "cloudflare-proxy" },
+      runtime: {
+        provider: "gcp",
+        instance_id: `instance-${id}`,
+        zone: "us-central1-a",
+        public_ip: OLD_IP,
+      },
+    },
+  });
+  // Host heartbeats intentionally cannot write these control-plane subtrees.
+  await getPool().query(
+    `
+      UPDATE project_hosts
+      SET metadata=metadata
+        || jsonb_build_object(
+          'public_route',
+          jsonb_build_object('active_mode', 'cloudflare-proxy'),
+          'dns',
+          jsonb_build_object('name', $2::text, 'record_id', 'record-1')
+        )
+      WHERE id=$1
+    `,
+    [id, dnsName],
+  );
+}
+
+async function setRecentDnsFailure(
+  hostIds: string[],
+  consecutiveFailures: number,
+  error: string,
+): Promise<void> {
+  await getPool().query(
+    `
+      UPDATE project_hosts
+      SET metadata=jsonb_set(
+        metadata,
+        '{dns_reconciliation}',
+        jsonb_build_object(
+          'status', 'failed',
+          'failed_at', NOW(),
+          'attempted_at', NOW(),
+          'error', $2::text,
+          'consecutive_failures', $3::integer
+        ),
+        true
+      )
+      WHERE id=ANY($1::uuid[])
+    `,
+    [hostIds, error, consecutiveFailures],
+  );
+}
+
 beforeAll(async () => {
   await before({ noConat: true });
 }, 15_000);
@@ -72,40 +136,7 @@ beforeEach(async () => {
     ],
   });
   adminAlertMock.mockResolvedValue(undefined);
-  await upsertProjectHost({
-    id: HOST_ID,
-    name: "DNS reconciliation test host",
-    region: "us-central1",
-    status: "running",
-    public_url: `https://${DNS_NAME}`,
-    ssh_server: `${OLD_IP}:2222`,
-    metadata: {
-      desired_state: "running",
-      machine: { cloud: "gcp" },
-      public_route: { active_mode: "cloudflare-proxy" },
-      runtime: {
-        provider: "gcp",
-        instance_id: `instance-${HOST_ID}`,
-        zone: "us-central1-a",
-        public_ip: OLD_IP,
-      },
-    },
-  });
-  // Host heartbeats intentionally cannot write these control-plane subtrees.
-  await getPool().query(
-    `
-      UPDATE project_hosts
-      SET metadata=metadata
-        || jsonb_build_object(
-          'public_route',
-          jsonb_build_object('active_mode', 'cloudflare-proxy'),
-          'dns',
-          jsonb_build_object('name', $2::text, 'record_id', 'record-1')
-        )
-      WHERE id=$1
-    `,
-    [HOST_ID, DNS_NAME],
-  );
+  await addDirectHost(HOST_ID, "DNS reconciliation test host");
 });
 
 describe("project-host DNS desired-state reconciliation", () => {
@@ -194,6 +225,76 @@ describe("project-host DNS desired-state reconciliation", () => {
     });
     expect(new Date(work.rows[0].not_before).getTime()).toBeGreaterThan(
       Date.now(),
+    );
+  });
+
+  it("deduplicates changing diagnostics for an isolated host alert", async () => {
+    const timeout = Object.assign(
+      new Error("The operation was aborted due to timeout"),
+      { name: "TimeoutError" },
+    );
+    await setRecentDnsFailure(
+      [HOST_ID],
+      4,
+      `${timeout.name}: ${timeout.message}`,
+    );
+    ensureHostDnsMock.mockRejectedValue(timeout);
+    const { handleHostDnsReconciliationWork } =
+      await import("./host-dns-reconciliation");
+
+    await expect(
+      handleHostDnsReconciliationWork({
+        vm_id: HOST_ID,
+        payload: { attempt: 4 },
+      }),
+    ).rejects.toThrow(/aborted due to timeout/);
+
+    expect(adminAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject:
+          "Project-host DNS reconciliation failed: DNS reconciliation test host",
+        dedupMinutes: 15,
+        dedupBySubject: true,
+      }),
+    );
+  });
+
+  it("collapses a correlated Cloudflare outage into a fleet alert", async () => {
+    const secondHost = "cd515768-25f7-4e24-8e6a-edc2b321d536";
+    const thirdHost = "4a6cd1c1-f60b-4f3b-8ce5-96ee86245b48";
+    const timeout = Object.assign(
+      new Error("The operation was aborted due to timeout"),
+      { name: "TimeoutError" },
+    );
+    const error = `${timeout.name}: ${timeout.message}`;
+    await addDirectHost(secondHost, "DNS reconciliation test host 2");
+    await addDirectHost(thirdHost, "DNS reconciliation test host 3");
+    await setRecentDnsFailure([HOST_ID, secondHost, thirdHost], 4, error);
+    ensureHostDnsMock.mockRejectedValue(timeout);
+    const { handleHostDnsReconciliationWork } =
+      await import("./host-dns-reconciliation");
+
+    await expect(
+      handleHostDnsReconciliationWork({
+        vm_id: HOST_ID,
+        payload: { attempt: 4 },
+      }),
+    ).rejects.toThrow(/aborted due to timeout/);
+
+    expect(adminAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject: "[bay-0] Project-host DNS reconciliation fleet degraded",
+        body: expect.stringContaining('"shared_cloudflare_failure":true'),
+        dedupMinutes: 4 * 60,
+        dedupBySubject: true,
+      }),
+    );
+    expect(adminAlertMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject: expect.stringContaining(
+          "Project-host DNS reconciliation failed:",
+        ),
+      }),
     );
   });
 

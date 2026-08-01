@@ -108,6 +108,7 @@ import { startConatRevocationKickLoop } from "./conat-revocation-kick";
 import { getOrCreateProjectHostConatPassword } from "./local-conat-password";
 import { getProjectHostMasterConatToken } from "./master-conat-token";
 import { applyProjectHostProcessTitle } from "./process-role";
+import { attachCurrentProcessToHostServiceCgroup } from "./host-service-cgroup";
 import { startProjectWithAdmission } from "./project-start-admission";
 import {
   runRuntimeConformanceStartupChecks,
@@ -192,6 +193,8 @@ import {
   startManagedRawNetworkEgressLoop,
 } from "./raw-network-egress";
 import { startManagedCpuUsageLoop } from "./cpu-usage";
+import { startExamWatchdog } from "./exam/controller";
+import { getExamUsageAccountId } from "./exam/usage";
 import { managedProjectEgressResidualTracker } from "./managed-egress-residual";
 import { startGcpPreemptionWatcher } from "./gcp-preemption";
 export { runPrivilegedRmHelper } from "./privileged-rm-helper";
@@ -896,7 +899,10 @@ export async function main(
     if (!(bytes > 0) || !isProjectHostManagedEgressTrackingEnabled()) return;
     try {
       await hubApi.system.recordManagedProjectEgress({
-        account_id,
+        account_id:
+          getProject(project_id)?.usage_account_id ??
+          (account_id ? getExamUsageAccountId(account_id) : undefined) ??
+          account_id,
         project_id,
         category: "file-download",
         bytes,
@@ -1002,6 +1008,7 @@ export async function main(
     if (!(bytes > 0) || !isProjectHostManagedEgressTrackingEnabled()) return;
     try {
       await hubApi.system.recordManagedProjectEgress({
+        account_id: getProject(project_id)?.usage_account_id ?? undefined,
         project_id,
         category: MANAGED_HTTP_EGRESS_CATEGORY,
         bytes,
@@ -1119,6 +1126,7 @@ export async function main(
     if (!isProjectHostManagedEgressTrackingEnabled()) return;
     try {
       await hubApi.system.recordManagedProjectEgress({
+        account_id: getProject(project_id)?.usage_account_id ?? undefined,
         project_id,
         category: MANAGED_WS_EGRESS_CATEGORY,
         bytes,
@@ -1592,6 +1600,7 @@ export async function main(
     timeout: PROJECT_RUNNER_RPC_TIMEOUT_MS,
   });
   wireProjectsApi(runnerApi);
+  startExamWatchdog();
   const stopRawNetworkEgressLoop = startManagedRawNetworkEgressLoop({
     runnerApi,
   });
@@ -1787,6 +1796,7 @@ if (require.main === module) {
   applyProjectHostProcessTitle();
   process.env.COCALC_CONAT_CLUSTER_NODE_ENTRYPOINT = __filename;
   if (`${process.env.COCALC_CONAT_CLUSTER_NODE ?? ""}`.trim() === "1") {
+    attachCurrentProcessToHostServiceCgroup();
     runConatRouterClusterNodeMain().catch((err) => {
       console.error("project-host conat router cluster node failed:", err);
       process.exit(1);
@@ -1794,6 +1804,7 @@ if (require.main === module) {
   } else if (
     `${process.env.COCALC_PROJECT_HOST_ACP_WORKER ?? ""}`.trim() === "1"
   ) {
+    attachCurrentProcessToHostServiceCgroup();
     runAcpWorkerMain()
       .then(() => {
         process.exit(0);
@@ -1806,6 +1817,7 @@ if (require.main === module) {
     `${process.env.COCALC_PROJECT_HOST_CONAT_ROUTER_DAEMON ?? ""}`.trim() ===
     "1"
   ) {
+    attachCurrentProcessToHostServiceCgroup();
     runConatRouterDaemonMain().catch((err) => {
       console.error("project-host conat router daemon failed:", err);
       process.exit(1);
@@ -1814,11 +1826,13 @@ if (require.main === module) {
     `${process.env.COCALC_PROJECT_HOST_CONAT_PERSIST_DAEMON ?? ""}`.trim() ===
     "1"
   ) {
+    attachCurrentProcessToHostServiceCgroup();
     runConatPersistDaemonMain().catch((err) => {
       console.error("project-host conat persist daemon failed:", err);
       process.exit(1);
     });
   } else if (`${process.env.COCALC_PROJECT_HOST_AGENT ?? ""}`.trim() === "1") {
+    attachCurrentProcessToHostServiceCgroup();
     runHostAgentMain(process.argv.slice(2)).catch((err) => {
       console.error("project-host host-agent failed:", err);
       process.exit(1);
@@ -1836,6 +1850,7 @@ if (require.main === module) {
       console.error(`${err}`);
       process.exit(1);
     }
+    attachCurrentProcessToHostServiceCgroup();
     main().catch((err) => {
       console.error("project-host failed to start:", err);
       process.exitCode = 1;

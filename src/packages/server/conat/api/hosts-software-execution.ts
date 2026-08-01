@@ -399,7 +399,7 @@ function managedComponentAlignmentFailures({
       );
       continue;
     }
-    if (expectedVersion) {
+    if (expectedVersion && component !== "acp-worker") {
       const desired = normalizeObservedVersion(status.desired_version);
       const running = [
         ...new Set(
@@ -1003,6 +1003,7 @@ export async function rolloutHostManagedComponentsInternalHelper({
   account_id,
   id,
   components,
+  desired_version,
   reason,
   record_runtime_deployments = true,
   loadHostForStartStop,
@@ -1030,6 +1031,7 @@ export async function rolloutHostManagedComponentsInternalHelper({
   account_id?: string;
   id: string;
   components: HostManagedComponentRolloutRequest["components"];
+  desired_version?: string;
   reason?: string;
   record_runtime_deployments?: boolean;
   loadHostForStartStop: (id: string, account_id?: string) => Promise<any>;
@@ -1045,11 +1047,18 @@ export async function rolloutHostManagedComponentsInternalHelper({
     rolloutManagedComponents: (opts: {
       components: HostManagedComponentRolloutRequest["components"];
       reason?: string;
+      desired_version?: string;
     }) => Promise<HostManagedComponentRolloutResponse>;
     upgradeSoftware?: (opts: {
       targets: Array<{ artifact: "project-host"; version: string }>;
       base_url?: string;
       restart_project_host: boolean;
+      activate_project_host?: boolean;
+      retention_policy?: HostRuntimeRetentionPolicy;
+    }) => Promise<HostSoftwareUpgradeResponse>;
+    stageProjectHostArtifact?: (opts: {
+      version: string;
+      base_url?: string;
       retention_policy?: HostRuntimeRetentionPolicy;
     }) => Promise<HostSoftwareUpgradeResponse>;
     getManagedComponentStatus?: () => Promise<HostManagedComponentStatus[]>;
@@ -1122,10 +1131,12 @@ export async function rolloutHostManagedComponentsInternalHelper({
   assertHostRunningForUpgrade(row);
   const requestedProjectHostRollout = components.includes("project-host");
   const client = await hostControlClient(id, 60_000);
-  const desiredProjectHostVersion = await resolveDesiredProjectHostVersion({
-    row,
-    loadEffectiveRuntimeDeployments,
-  });
+  const desiredProjectHostVersion =
+    normalizeObservedVersion(desired_version) ??
+    (await resolveDesiredProjectHostVersion({
+      row,
+      loadEffectiveRuntimeDeployments,
+    }));
   const installedProjectHostVersion = installedProjectHostArtifactVersion(row);
   const requiresProjectHostProcessReplacement =
     requestedProjectHostRollout &&
@@ -1135,9 +1146,13 @@ export async function rolloutHostManagedComponentsInternalHelper({
     desiredProjectHostVersion &&
     installedProjectHostVersion !== desiredProjectHostVersion
   ) {
-    if (typeof client.upgradeSoftware !== "function") {
+    if (
+      requestedProjectHostRollout
+        ? typeof client.upgradeSoftware !== "function"
+        : typeof client.stageProjectHostArtifact !== "function"
+    ) {
       throw new Error(
-        `cannot roll out project-host components to ${desiredProjectHostVersion}; host control client does not support software upgrade`,
+        `cannot roll out project-host components to ${desiredProjectHostVersion}; host control client does not support ${requestedProjectHostRollout ? "software upgrade" : "safe component artifact staging"}`,
       );
     }
     if (
@@ -1161,18 +1176,28 @@ export async function rolloutHostManagedComponentsInternalHelper({
       row,
       baseUrl: resolvedBaseUrl,
     });
-    const upgrade = await client.upgradeSoftware({
-      targets: [
-        {
-          artifact: "project-host",
+    const retentionPolicy = await defaultHostRuntimeRetentionPolicy();
+    const upgrade = requestedProjectHostRollout
+      ? await client.upgradeSoftware!({
+          targets: [
+            {
+              artifact: "project-host",
+              version: desiredProjectHostVersion,
+            },
+          ],
+          base_url: effectiveBaseUrl,
+          restart_project_host: false,
+          activate_project_host: true,
+          retention_policy: retentionPolicy,
+        })
+      : await client.stageProjectHostArtifact!({
           version: desiredProjectHostVersion,
-        },
-      ],
-      base_url: effectiveBaseUrl,
-      restart_project_host: false,
-      retention_policy: await defaultHostRuntimeRetentionPolicy(),
-    });
-    const upgradeResults = upgrade.results ?? [];
+          base_url: effectiveBaseUrl,
+          retention_policy: retentionPolicy,
+        });
+    const upgradeResults = (upgrade.results ?? []).filter(
+      (result) => result.status === "updated",
+    );
     if (upgradeResults.length > 0) {
       await updateProjectHostSoftwareRecord({
         row,
@@ -1208,6 +1233,7 @@ export async function rolloutHostManagedComponentsInternalHelper({
       promise: client.rolloutManagedComponents({
         components,
         reason,
+        desired_version: desiredProjectHostVersion,
       }),
       timeoutMs: managedComponentRolloutRpcTimeoutMs,
     });
@@ -1235,9 +1261,7 @@ export async function rolloutHostManagedComponentsInternalHelper({
     await waitForHostHeartbeatAfter({ host_id: id, since });
     refreshedRow = await loadHostForStartStop(id, account_id);
   }
-  const desiredVersion = requestedProjectHostRollout
-    ? desiredProjectHostVersion
-    : undefined;
+  const desiredVersion = desiredProjectHostVersion;
   let observedProjectHostVersion: string | undefined;
   let observedProjectHostPids: number[] = [];
   let fallbackProjectHostVersion: string | undefined;

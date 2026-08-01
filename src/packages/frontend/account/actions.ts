@@ -33,6 +33,7 @@ import {
   type AccountProjectionRepairReason,
 } from "./table";
 import { writeAndWaitForProjection } from "@cocalc/frontend/projection-ack";
+import { isExamMode } from "@cocalc/frontend/customize/exam-mode";
 
 export type AccountProjectionRepairRequest = {
   fields?: string[];
@@ -354,7 +355,7 @@ export class AccountActions extends Actions<AccountState> {
   };
 
   addTag = async (tag: string) => {
-    if (lite) {
+    if (lite || isExamMode()) {
       return;
     }
     const store = this.redux.getStore("account");

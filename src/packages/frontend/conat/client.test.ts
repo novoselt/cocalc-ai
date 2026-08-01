@@ -3,6 +3,11 @@
 import immutable from "immutable";
 import { EventEmitter } from "events";
 
+jest.mock("@cocalc/frontend/customize/exam-mode", () => ({
+  isExamMode: () => false,
+  waitForExamModeConfiguration: async () => false,
+}));
+
 let historyPushStateSpy: jest.SpyInstance;
 let historyReplaceStateSpy: jest.SpyInstance;
 const originalFetch = global.fetch;

@@ -141,7 +141,9 @@ export interface Upgrades {
 export interface DefaultQuotaSetting {
   cpu: number; // limit cpu, usually 1
   cpu_oc: number; // overcommit ratio for CPU, e.g 10: means 1/10 is requested
-  idle_timeout: number; // seconds
+  // Legacy/future-policy value in seconds; current CoCalc-AI project hosts do
+  // not enforce idle stopping.
+  idle_timeout: number;
   internet: boolean; // usually true
   mem: number; // memory limit in MB
   mem_oc: number; // overcommit ratio to derive memory request (e.g. 5 = 5x overcommit)
@@ -165,7 +167,9 @@ interface Users {
 // but also tune some aspects of the overall behavior.
 interface SiteSettingsDefaultQuotas {
   internet: boolean; // true, allow project pods to access the internet
-  idle_timeout: number; // overrides DEFAULT_QUOTAS.mintime
+  // Overrides DEFAULT_QUOTAS.mintime for runtimes that enforce idle stopping;
+  // the current CoCalc-AI project-host does not.
+  idle_timeout: number;
   cpu: number; // shared cpu quota, in 1 core units, overrides DEFAULT_QUOTAS.cores
   cpu_oc: number; // overcommitment ratio for cpu, 1:cpu_oc
   mem: number; // shared memory quota, in mb, overrides DEFAULT_QUOTAS.memory
@@ -208,7 +212,9 @@ const BASE_QUOTAS: RQuota = {
   disk_quota: DEFAULT_QUOTAS.disk_quota,
   memory_limit: DEFAULT_QUOTAS.memory, // upper bound on RAM in MB
   cpu_limit: DEFAULT_QUOTAS.cores, // upper bound on vCPUs
-  idle_timeout: DEFAULT_QUOTAS.mintime, // minimum uptime
+  // Retained for compatibility and possible future idle-stop policy.  The
+  // current CoCalc-AI project-host deliberately ignores this field.
+  idle_timeout: DEFAULT_QUOTAS.mintime,
   always_running: false, // if true, a service restarts the project if it isn't running
   pay_as_you_go: null,
   gpu: false,

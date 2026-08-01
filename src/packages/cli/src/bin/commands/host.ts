@@ -13,6 +13,7 @@ import { humanSize } from "@cocalc/util/misc";
 import { isValidUUID } from "@cocalc/util/misc";
 
 import { printArrayTable } from "../core/cli-output";
+import { registerHostExamCommands } from "./host-exam";
 
 type HostRuntimeLogRow = {
   host_id: string;
@@ -1578,6 +1579,7 @@ export function registerHostCommand(
     });
   }
   const host = program.command("host").description("host operations");
+  registerHostExamCommands({ hostCommand: host, deps });
 
   host
     .command("list")
@@ -1789,6 +1791,34 @@ export function registerHostCommand(
         });
       });
     });
+
+  host
+    .command("machine-type <host> <machine-type>")
+    .description("change the provider machine type of a stopped host")
+    .action(
+      async (hostIdentifier: string, machineType: string, command: Command) => {
+        await withContext(command, "host machine-type", async (ctx) => {
+          const h = await resolveHost(ctx, hostIdentifier, {
+            admin_view: true,
+          });
+          const requestedMachineType = `${machineType}`.trim();
+          if (!requestedMachineType) {
+            throw new Error("machine type must not be empty");
+          }
+          const updated = await ctx.hub.hosts.updateHostMachine({
+            id: h.id,
+            machine_type: requestedMachineType,
+          });
+          return {
+            host_id: updated.id,
+            name: updated.name ?? h.name ?? null,
+            status: updated.status ?? null,
+            machine_type: updated.machine?.machine_type ?? updated.size ?? null,
+            pricing_model: updated.pricing_model ?? null,
+          };
+        });
+      },
+    );
 
   host
     .command("cloud-refresh <host>")

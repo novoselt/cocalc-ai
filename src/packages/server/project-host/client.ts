@@ -35,6 +35,19 @@ export async function getRoutedHostControlClient({
         await bridge.restartCloudflared({ host_id, restart }),
       runSyntheticRuntimeProbe: async () =>
         await bridge.runSyntheticRuntimeProbe({ host_id }),
+      applyExamRun: async (apply) =>
+        await bridge.applyExamRun({ host_id, apply }),
+      getExamRunStatus: async (get) =>
+        await bridge.getExamRunStatus({ host_id, get }),
+      openExamRun: async (open) => await bridge.openExamRun({ host_id, open }),
+      updateExamRunDeadline: async (update) =>
+        await bridge.updateExamRunDeadline({ host_id, update }),
+      increaseExamRunCapacity: async (increase) =>
+        await bridge.increaseExamRunCapacity({ host_id, increase }),
+      rotateExamRunToken: async (rotate) =>
+        await bridge.rotateExamRunToken({ host_id, rotate }),
+      closeAndCleanupExamRun: async (close) =>
+        await bridge.closeAndCleanupExamRun({ host_id, close }),
       createProject: async (create) => {
         if (!account_id) {
           throw new Error(
@@ -49,6 +62,8 @@ export async function getRoutedHostControlClient({
       },
       startProject: async (start) =>
         await bridge.startProject({ host_id, start }),
+      startProjectIdempotent: async (start) =>
+        await bridge.startProjectIdempotent({ host_id, start }),
       stopProject: async (stop) => await bridge.stopProject({ host_id, stop }),
       getProjectStatus: async (get) =>
         await bridge.getProjectStatus({ host_id, get }),
@@ -68,6 +83,8 @@ export async function getRoutedHostControlClient({
         await bridge.deleteProjectData({ host_id, del }),
       upgradeSoftware: async (upgrade) =>
         await bridge.upgradeSoftware({ host_id, upgrade }),
+      stageProjectHostArtifact: async (stage) =>
+        await bridge.stageProjectHostArtifact({ host_id, stage }),
       rolloutManagedComponents: async (rollout) =>
         await bridge.rolloutManagedComponents({ host_id, rollout }),
       growBtrfs: async (grow) => await bridge.growBtrfs({ host_id, grow }),

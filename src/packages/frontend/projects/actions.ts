@@ -3956,8 +3956,24 @@ export class ProjectsActions extends Actions<ProjectsState> {
         "host_id",
       ]) as string | undefined;
       if (assignedHostId) {
-        const hostInfo = await this.ensure_host_info(assignedHostId);
-        const hostState = evaluateHostOperational(hostInfo as any);
+        const cachedHostInfo = store.get("host_info")?.get(assignedHostId);
+        let hostInfo = cachedHostInfo;
+        let hostState = evaluateHostOperational(hostInfo as any);
+        if (hostState.state === "unavailable") {
+          const updatedAt = cachedHostInfo?.get?.("updated_at");
+          const fresh =
+            typeof updatedAt === "number" &&
+            Date.now() - updatedAt < ProjectsActions.HOST_INFO_TTL_MS;
+          if (!fresh) {
+            hostInfo = await this.ensure_host_info(assignedHostId, true);
+            hostState = evaluateHostOperational(hostInfo as any);
+          }
+        } else {
+          // Host availability is also enforced by the start RPC. Refresh an
+          // operational or missing cache in parallel instead of adding a
+          // control-plane round trip to every normal start.
+          void this.ensure_host_info(assignedHostId);
+        }
         if (hostState.state === "unavailable") {
           const hostName = hostLabel(hostInfo as any, assignedHostId);
           const reason = hostState.reason ?? "Assigned host is unavailable.";
@@ -4012,9 +4028,49 @@ export class ProjectsActions extends Actions<ProjectsState> {
           project_id,
           ...(opts.autostart ? { autostart: true } : {}),
           wait: false,
+          foreground_wait_ms: 5_000,
         });
         actions.trackStartOp(resp);
         opts.onStartOp?.(resp);
+        type ProjectStartCompletion = {
+          status: LroSummary["status"];
+          error?: LroSummary["error"];
+          finished_at?: LroSummary["finished_at"];
+          updated_at?: LroSummary["updated_at"];
+          created_at?: LroSummary["created_at"];
+        };
+        const applySucceededStart = (summary: ProjectStartCompletion) => {
+          if (summary.status === "succeeded") {
+            // The bay saves authoritative running state before publishing the
+            // terminal LRO summary. Use that causal acknowledgement directly
+            // for lifecycle convergence; the projection read repairs the rest
+            // of the row in the background.
+            this.projectStartSucceededStateUpdate(project_id, summary);
+            void this.repairProjectProjection({
+              kind: "project-ids",
+              project_ids: [project_id],
+              reason: "project-start",
+            }).catch((err) => {
+              logger.debug("project start projection repair failed", {
+                project_id,
+                op_id: resp?.op_id,
+                error: `${err}`,
+              });
+            });
+          }
+          return summary;
+        };
+        const startConvergence =
+          resp.terminal_status === "succeeded"
+            ? Promise.resolve(
+                applySucceededStart({
+                  status: "succeeded",
+                }),
+              )
+            : this.waitForProjectStartOp({
+                op: resp,
+                timeout_ms: opts.waitTimeoutMs,
+              }).then(applySucceededStart);
         this.recordProjectStartUxLatencyWhenRunning({
           project_id,
           timer: uxTimer,
@@ -4034,13 +4090,20 @@ export class ProjectsActions extends Actions<ProjectsState> {
           void this.ensure_host_info(host_id, true);
         }
         if (opts.waitForStart) {
-          const summary = await this.waitForProjectStartOp({
-            op: resp,
-            timeout_ms: opts.waitTimeoutMs,
-          });
+          const summary = await startConvergence;
           if (summary.status !== "succeeded") {
             throw Error(summary.error ?? `project start ${summary.status}`);
           }
+        } else {
+          void startConvergence.catch((err) => {
+            // Scheduled lifecycle reconciliation remains the fallback when a
+            // browser misses or loses the terminal LRO stream.
+            console.warn("project start LRO convergence failed", {
+              project_id,
+              op_id: resp?.op_id,
+              err: `${err}`,
+            });
+          });
         }
       } catch (err) {
         recordUxLatencyEvent({
@@ -4258,6 +4321,39 @@ export class ProjectsActions extends Actions<ProjectsState> {
         });
       }
     }
+  };
+
+  private projectStartSucceededStateUpdate = (
+    project_id: string,
+    summary: {
+      finished_at?: LroSummary["finished_at"];
+      updated_at?: LroSummary["updated_at"];
+      created_at?: LroSummary["created_at"];
+    },
+  ) => {
+    const project_map = store.get("project_map");
+    const project = project_map?.get(project_id);
+    if (project_map == null || project == null) {
+      return;
+    }
+    const time =
+      summary.finished_at ??
+      summary.updated_at ??
+      summary.created_at ??
+      new Date();
+    this.setState({
+      project_map: project_map.set(
+        project_id,
+        project.set(
+          "state",
+          fromJS({
+            state: "running",
+            time,
+            source: "project-start-lro",
+          }),
+        ),
+      ),
+    });
   };
 
   public mark_project_hard_delete_accepted = (

@@ -24,6 +24,8 @@ const DEFAULT_RETRY_BASE_MS = 10_000;
 const DEFAULT_RETRY_MAX_MS = 5 * 60_000;
 const DEFAULT_ALERT_FAILURES = 5;
 const DEFAULT_PROVIDER_OBSERVATION_TIMEOUT_MS = 30_000;
+const DNS_FLEET_FAILURE_WINDOW_MS = 5 * 60_000;
+const DNS_FLEET_ALERT_DEDUP_MINUTES = 4 * 60;
 
 type HostRow = {
   id: string;
@@ -33,6 +35,27 @@ type HostRow = {
   bay_id?: string | null;
   ssh_server?: string | null;
   metadata?: Record<string, any>;
+};
+
+type DnsFleetFailureRow = {
+  checked_hosts: number;
+  host_id?: string | null;
+  host_name?: string | null;
+  error?: string | null;
+};
+
+type DnsFleetFailureContext = {
+  checked_hosts: number;
+  recent_failed_hosts: number;
+  failed_host_ids: string[];
+  failure_classes: Record<string, number>;
+  shared_failure_threshold: number;
+  shared_cloudflare_failure: boolean;
+  samples: Array<{
+    host_id: string;
+    host_name?: string;
+    error: string;
+  }>;
 };
 
 function positiveNumber(value: string | undefined, fallback: number): number {
@@ -76,6 +99,68 @@ function alertFailures(): number {
 
 function errorText(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : `${err}`;
+}
+
+function dnsControlPlaneFailureClass(error: string): string {
+  const value = error.toLowerCase();
+  const mentionsCloudflare = value.includes("cloudflare");
+  const abortedByTimeout =
+    value.includes("timeout") &&
+    value.includes("operation was aborted due to timeout");
+  if (!mentionsCloudflare && !abortedByTimeout) return "other";
+  if (/\b(?:http )?52[0-9]\b/.test(value)) return "cloudflare_52x";
+  if (value.includes("timed out") || value.includes("timeout")) {
+    return "timeout";
+  }
+  if (
+    value.includes("fetch failed") ||
+    /\b(eai_again|econnreset|etimedout|econnrefused|enotfound)\b/.test(value) ||
+    value.includes("socket hang up")
+  ) {
+    return "network_fetch";
+  }
+  return "cloudflare_api";
+}
+
+function buildDnsFleetFailureContext({
+  current_error,
+  rows,
+}: {
+  current_error: string;
+  rows: DnsFleetFailureRow[];
+}): DnsFleetFailureContext {
+  const checkedHosts = Number(rows[0]?.checked_hosts ?? 0);
+  const failures = rows.filter(
+    (row): row is DnsFleetFailureRow & { host_id: string; error: string } =>
+      !!row.host_id && !!row.error,
+  );
+  const failureClasses: Record<string, number> = {};
+  for (const failure of failures) {
+    const failureClass = dnsControlPlaneFailureClass(failure.error);
+    failureClasses[failureClass] = (failureClasses[failureClass] ?? 0) + 1;
+  }
+  const sharedCloudflareFailures =
+    (failureClasses.cloudflare_52x ?? 0) +
+    (failureClasses.cloudflare_api ?? 0) +
+    (failureClasses.network_fetch ?? 0) +
+    (failureClasses.timeout ?? 0);
+  const threshold = Math.max(2, Math.ceil(checkedHosts / 2));
+  return {
+    checked_hosts: checkedHosts,
+    recent_failed_hosts: failures.length,
+    failed_host_ids: failures.map(({ host_id }) => host_id).slice(0, 32),
+    failure_classes: failureClasses,
+    shared_failure_threshold: threshold,
+    shared_cloudflare_failure:
+      checkedHosts >= 3 &&
+      dnsControlPlaneFailureClass(current_error) !== "other" &&
+      sharedCloudflareFailures >= threshold,
+    samples: failures.slice(0, 5).map(({ host_id, host_name, error }) => ({
+      host_id,
+      ...(host_name ? { host_name } : {}),
+      error,
+    })),
+  };
 }
 
 async function withTimeout<T>(
@@ -264,6 +349,96 @@ async function recordFailure(opts: {
   return Number(rows[0]?.consecutive_failures ?? 0);
 }
 
+async function loadDnsFleetFailureContext(
+  current_error: string,
+): Promise<DnsFleetFailureContext> {
+  const { rows } = await pool().query<DnsFleetFailureRow>(
+    `
+      WITH active AS (
+        SELECT id, name, metadata
+        FROM project_hosts
+        WHERE deleted IS NULL
+          AND status='running'
+          AND COALESCE(NULLIF(BTRIM(bay_id), ''), $1)=$1
+          AND COALESCE(metadata ->> 'desired_state', 'running')='running'
+          AND metadata -> 'machine' ->> 'cloud'='gcp'
+          AND metadata -> 'public_route' ->> 'active_mode'='cloudflare-proxy'
+      ), recent AS (
+        SELECT id AS host_id,
+               name AS host_name,
+               metadata -> 'dns_reconciliation' ->> 'error' AS error
+        FROM active
+        WHERE metadata -> 'dns_reconciliation' ->> 'status'='failed'
+          AND NULLIF(
+                metadata -> 'dns_reconciliation' ->> 'failed_at',
+                ''
+              )::timestamptz >= NOW() - ($2::double precision * interval '1 millisecond')
+      )
+      SELECT totals.checked_hosts,
+             recent.host_id,
+             recent.host_name,
+             recent.error
+      FROM (SELECT COUNT(*)::integer AS checked_hosts FROM active) AS totals
+      LEFT JOIN recent ON TRUE
+      ORDER BY recent.host_id
+    `,
+    [getConfiguredBayId(), DNS_FLEET_FAILURE_WINDOW_MS],
+  );
+  return buildDnsFleetFailureContext({ current_error, rows });
+}
+
+async function alertDnsReconciliationFailure({
+  host,
+  host_id,
+  desired_ip,
+  error,
+  failures,
+}: {
+  host?: HostRow;
+  host_id: string;
+  desired_ip?: string;
+  error: string;
+  failures: number;
+}): Promise<void> {
+  let fleet: DnsFleetFailureContext | undefined;
+  try {
+    fleet = await loadDnsFleetFailureContext(error);
+  } catch (err) {
+    logger.error("unable to classify DNS reconciliation fleet failure", {
+      host_id,
+      err: errorText(err),
+    });
+  }
+  if (fleet?.shared_cloudflare_failure) {
+    const bayId = getConfiguredBayId();
+    await adminAlert({
+      subject: `[${bayId}] Project-host DNS reconciliation fleet degraded`,
+      body: [
+        "Project-host DNS reconciliation is failing across the fleet because the shared Cloudflare control plane appears degraded.",
+        `bay_id=${bayId}`,
+        `fleet=${JSON.stringify(fleet)}`,
+        "Individual host alerts are suppressed. Durable retries remain queued and existing Cloudflare edge routes are not changed by failed reconciliation attempts.",
+      ].join("\n"),
+      dedupMinutes: DNS_FLEET_ALERT_DEDUP_MINUTES,
+      dedupBySubject: true,
+    });
+    return;
+  }
+  await adminAlert({
+    subject: `Project-host DNS reconciliation failed: ${host?.name ?? host_id}`,
+    body: [
+      "CoCalc could not converge a direct project-host Cloudflare route.",
+      `host_id=${host_id}`,
+      `desired_ip=${desired_ip || "unknown"}`,
+      `consecutive_failures=${failures}`,
+      `error=${error}`,
+      "A durable retry remains queued.",
+    ].join("\n"),
+    dedupMinutes: 15,
+    dedupBySubject: true,
+  });
+}
+
 async function verifyDns(opts: {
   host_id: string;
   public_ip: string;
@@ -395,17 +570,12 @@ export async function handleHostDnsReconciliationWork(row: {
       not_before: new Date(Date.now() + retryDelayMs(attempt)),
     });
     if (failures >= alertFailures()) {
-      await adminAlert({
-        subject: `Project-host DNS reconciliation failed: ${host?.name ?? row.vm_id}`,
-        body: [
-          "CoCalc could not converge a direct project-host Cloudflare route.",
-          `host_id=${row.vm_id}`,
-          `desired_ip=${desiredIp || "unknown"}`,
-          `consecutive_failures=${failures}`,
-          `error=${error}`,
-          "A durable retry remains queued.",
-        ].join("\n"),
-        dedupMinutes: 15,
+      await alertDnsReconciliationFailure({
+        host,
+        host_id: row.vm_id,
+        desired_ip: desiredIp || undefined,
+        error,
+        failures,
       }).catch((alertErr) => {
         logger.error("unable to alert failed DNS reconciliation", {
           host_id: row.vm_id,
@@ -494,6 +664,8 @@ export async function enqueueHostDnsReconciliation(
 }
 
 export const _test = {
+  buildDnsFleetFailureContext,
+  dnsControlPlaneFailureClass,
   retryDelayMs,
   verifyIntervalMs,
   withTimeout,

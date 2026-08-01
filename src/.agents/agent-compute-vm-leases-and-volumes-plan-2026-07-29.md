@@ -2,6 +2,8 @@
 
 Date: 2026-07-29
 
+Last revised: 2026-08-01
+
 Status: proposed implementation plan; this document does not change runtime or
 production behavior.
 
@@ -12,9 +14,13 @@ Build a deliberately small GCP-only compute product for AI agents:
 - a **VM lease** is short-lived root compute with Docker-capable Ubuntu;
 - a **volume** is explicitly created persistent storage;
 - a volume can be attached read-write to exactly one VM lease;
+- an authorized agent can grow an approved volume inside a human-set storage
+  and recurring-cost envelope;
 - the VM boot disk is disposable and deleted with the lease;
 - a human uses fresh authentication to issue a bounded compute grant;
 - an agent can act only inside that grant;
+- CoCalc's existing Codex/ACP service can coordinate work on a lease without
+  placing Codex credentials in the guest;
 - SSH, command execution, and file transfer use ordinary direct SSH tools;
 - outbound bytes are metered from GCP host-level metrics and sold at a simple
   fixed rate;
@@ -36,7 +42,10 @@ cocalc compute authorize \
   --max-vm-ttl 4h \
   --max-compute-cost 25 \
   --max-egress 50GiB \
-  --allow-volume sage-pypy
+  --max-total-volume 750GiB \
+  --max-monthly-volume-cost 100 \
+  --allow-volume sage-pypy \
+  --allow-volume-resize sage-pypy:750GiB
 
 # Agent actions inside the approved project.
 cocalc vm create \
@@ -52,6 +61,33 @@ cocalc vm cp <vm>:/work/dist ./dist
 cocalc vm delete <vm>
 ```
 
+After the lease and grant path is working, the same primitive should support a
+Codex child run with either fresh context or a real fork of a stored Codex
+thread:
+
+```bash
+# Start a new independent Codex thread. Codex stays on the trusted project
+# host and uses the VM through the scoped compute CLI/SSH tool boundary.
+cocalc project codex exec \
+  --compute-vm <vm> \
+  --fresh \
+  --stdin \
+  --json
+
+# Branch the provider thread through one specific completed turn.
+cocalc project codex exec \
+  --compute-vm <vm> \
+  --fork-session <session-id> \
+  --fork-through-turn <turn-id> \
+  --stdin \
+  --json
+```
+
+These commands are a proposed contract, not current behavior. The Codex run
+and its OpenAI authentication remain account-attributed. A compute grant pays
+for and bounds compute; it does not grant, pool, or transfer somebody's Codex
+subscription.
+
 The lease expires even if the agent disconnects. The persistent volume remains
 until a freshly authenticated human explicitly deletes it.
 
@@ -65,6 +101,16 @@ The implementation should optimize for these goals in this order:
 4. simple implementation and operation;
 5. preservation of useful intermediate work;
 6. a narrow path to later extensions without implementing them now.
+
+For agent integration, two authorizations remain deliberately independent:
+
+- the compute grant bounds VM count, machine size, TTL, storage, egress, and
+  cloud spend;
+- the existing Codex authentication and payment-source policy bounds model
+  access, account attribution, rate limits, and model usage.
+
+The effective authority is the intersection of those two envelopes. Neither
+one may silently widen the other.
 
 The design should prefer visible, conventional primitives:
 
@@ -90,10 +136,21 @@ The MVP should directly support:
 - obtaining hundreds of GiB of temporary workspace;
 - preserving source trees, compiler output, package caches, and Docker layers
   across disposable VM leases;
+- growing an approved persistent volume without interrupting an attached Linux
+  build when it approaches capacity;
+- starting, inspecting, logging, and canceling durable build/test jobs that
+  survive an SSH or ACP disconnect;
+- preventing unbounded Apport or systemd core-dump retention from silently
+  exhausting the disposable root filesystem during native-package tests;
 - running many independent temporary build or migration workers;
 - connecting from a CoCalc project with standard SSH, `scp`, and `rsync`;
 - connecting from a user's laptop with the same standard tools;
 - letting an AI agent provision compute only after explicit human approval;
+- letting a Codex session use a VM as a bounded remote build/test target;
+- forking a Codex thread through a specified completed turn so several
+  independent workers can pursue disjoint tasks with controlled context;
+- starting a context-free Codex run when history would be irrelevant or
+  undesirable;
 - stopping spend automatically when TTL, funding, or egress limits are reached.
 
 ## Explicit Non-Goals
@@ -120,6 +177,13 @@ The first product will not implement:
 - Kubernetes orchestration;
 - automatic application health checks;
 - guest-agent-based activity or billing telemetry;
+- pooling, lending, or reselling one user's ChatGPT/Codex subscription to
+  another account or to a project identity;
+- automatically copying `~/.codex/auth.json`, an OpenAI API key, or a Codex
+  access token into a general root VM;
+- putting model-provider credentials in instance metadata, startup scripts,
+  persistent volumes, or compute records;
+- treating a compute grant as authorization for model usage;
 - automatic idle detection;
 - direct access to GCP APIs or credentials;
 - compatibility with the removed Compute Servers implementation.
@@ -331,6 +395,440 @@ The first version is owner-only. If a grant is bound to a collaborative
 project, the UI must state that anybody who can run commands as the project
 user can use the project's private SSH key and therefore obtain root on the VM.
 
+## Codex Execution Architecture
+
+### Keep inference identity out of the hostile guest
+
+The default and MVP architecture is:
+
+```text
+human or parent agent
+        |
+        v
+existing CoCalc ACP/Codex app-server on the trusted project host
+        |
+        | scoped compute API for lifecycle; direct SSH for data-plane tools
+        v
+root-controlled leased VM
+```
+
+The Codex process, stored thread, account identity, subscription or API-key
+selection, usage governor, and provider connection stay in the existing
+project-host Codex boundary. The lease receives only its SSH public key and
+non-secret task data. Initially Codex can use the already proposed
+`cocalc vm exec`, `cp`, and `rsync` commands explicitly. A later remote-workspace
+adapter may expose scoped `exec`, `read`, `write`, `apply_patch`, `stat`,
+`upload`, and `download` operations over the same direct SSH connection.
+
+This is intentionally different from copying a full Codex installation and
+credentials into every VM. The guest security model grants root and assumes
+all guest processes and checked-out repositories may be hostile. Any secret
+placed in that environment must be considered readable and exfiltratable.
+
+The first integration should use the ordinary local/project worktree as the
+source of truth and the VM for expensive builds, tests, searches, and generated
+artifacts. Synchronization remains explicit. If a future remote-workspace mode
+makes the VM the source of truth, it must be a separately visible mode rather
+than implicit bidirectional synchronization.
+
+### Context modes
+
+Every Codex compute run must select exactly one context mode:
+
+- `fresh`: call `thread/start`; include the new task, applicable system and
+  developer policy, repository `AGENTS.md`, and a small compute-target
+  manifest, but no prior conversation;
+- `fork`: call the Codex App Server `thread/fork` on an account- and
+  project-authorized source thread; optionally pass `lastTurnId` so the new
+  thread contains history only through one specified completed turn;
+- `resume`: call `thread/resume` on the same stored child thread and continue
+  its existing workspace assignment.
+
+`fresh` is the default when no context option is supplied. `fork` must return a
+new provider thread ID before work is enqueued. `resume` is never implemented
+by copying text into a new prompt. A source session ID and `lastTurnId` are
+opaque identifiers; the server validates ownership and project access instead
+of accepting transcript text supplied by the caller.
+
+CoCalc already has the important foundation:
+
+- ACP requests carry `account_id`, `project_id`, session configuration, and
+  payment-source metadata;
+- `project codex exec --session-id` resumes stored sessions;
+- the App Server bridge calls provider `thread/resume`;
+- the chat UI and ACP server call provider `thread/fork` for chat forks;
+- subscription, account API key, project API key, and site API key are distinct
+  resolved auth sources.
+
+The compute implementation should extend `AcpForkSessionRequest` and
+`forkCodexAppServerSession` with optional `lastTurnId`, then attach the resulting
+child session to a compute-run record. Do not build a second transcript or fake
+fork mechanism in the compute service.
+
+### Authentication and provider-policy boundary
+
+Current OpenAI guidance distinguishes ChatGPT sign-in for subscription access
+from API-key sign-in for usage-based access. It recommends API keys as the
+default for programmatic automation, describes ChatGPT-managed auth on trusted
+CI runners as an advanced mode, and says to treat `auth.json` like a password.
+The App Server documentation also asks new enterprise integrations to identify
+their client and contact OpenAI about the known-client list for compliance
+logs.
+
+Therefore:
+
+- every run has a real initiating `account_id`; a bare project identity cannot
+  inherit a collaborator's personal ChatGPT subscription;
+- child sessions may reuse the initiating account's resolved auth source, but
+  may not change it merely because the compute-grant owner is different;
+- model usage, rate limits, service tier, and payment source continue through
+  the existing Codex governor and session accounting;
+- when an account owns multiple connected Codex subscriptions, the run records
+  and uses one explicit credential profile rather than an ambiguous account
+  default;
+- compute records store only redacted auth-source and payment-source IDs, never
+  tokens or API-key material;
+- CoCalc must not automate browser login in the VM, multiplex one personal
+  subscription across accounts, or turn subscription auth into a site key;
+- the integration advertises a stable CoCalc App Server `clientInfo`, and the
+  production launch checklist includes contacting OpenAI about known-client
+  registration and any enterprise compliance requirements;
+- provider-specific auth placement is controlled by a server-side policy with
+  an immediate kill switch, so a provider policy change can disable one mode
+  without disabling VM leases.
+
+The compute product does not attempt to reinterpret provider terms. Before
+production, the supported auth/placement matrix must be reviewed against the
+then-current official provider documentation and, where needed, confirmed with
+the provider.
+
+### Multiple subscription profiles per CoCalc account
+
+One CoCalc human may control more than one separately paid OpenAI
+account/subscription. The credential model should support that directly instead
+of forcing one `auth.json` per CoCalc account, encouraging manual secret
+copying, or requiring fake CoCalc users.
+
+The current external credential selector is effectively unique on:
+
+```text
+(provider, kind, scope, owner_account_id, project_id, organization_id)
+```
+
+and `upsertExternalCredential` updates the newest matching live row. Thus a
+second account-scoped `codex-subscription-auth-json` currently replaces the
+first. Before subscription fan-out, extend the generic credential model with a
+stable `profile_id` (or add an equivalent normalized profile table) and include
+it in selector uniqueness, routing, encryption context, revocation, listing,
+and audit.
+
+Each Codex subscription profile contains:
+
+- an opaque CoCalc credential/profile ID;
+- owner `account_id`;
+- provider and credential kind;
+- provider account/workspace ID derived from verified auth, used for duplicate
+  detection and never accepted merely from user input;
+- a user-chosen label such as `pro-1` or `research-2`;
+- masked provider login identity for display;
+- observed plan type and current rate-limit status;
+- created, refreshed, last-used, expired, and revoked timestamps;
+- whether the owner has enabled it for automatic agent scheduling;
+- encrypted credential payload in the existing bay-owned credential store.
+
+Do not put an email plus-address in a uniqueness or security decision. The
+verified provider account/workspace ID is authoritative; the email is display
+metadata.
+
+Suggested CLI:
+
+```bash
+cocalc project codex auth subscription login --profile pro-1
+cocalc project codex auth subscription login --profile pro-2
+cocalc project codex auth subscription list
+cocalc project codex auth subscription status --profile pro-1
+cocalc project codex auth subscription revoke --profile pro-1
+
+# Explicit selection.
+cocalc project codex exec --codex-profile pro-2 ...
+
+# Select among this initiating account's profiles that have opted into
+# scheduling, using current rate-limit status and per-profile concurrency.
+cocalc project codex exec --codex-profile auto ...
+```
+
+The OAuth/device flow is completed by the same CoCalc human owner for every
+profile. CoCalc does not create OpenAI accounts or buy subscriptions on the
+user's behalf. Automatic selection is constrained to profiles owned by the
+initiating CoCalc account and explicitly enabled for scheduling. Every run
+records the chosen profile before provider thread creation so attribution and
+cancellation remain deterministic.
+
+Concrete existing touchpoints that must become profile-aware include:
+
+- `ExternalCredentialSelector` and the `external_credentials` lookup/upsert
+  queries, with a real partial unique index for live profile identity;
+- `SUBSCRIPTION_CREDENTIAL_SELECTOR` and every registry get/has/touch/sync
+  operation;
+- `resolveSubscriptionCodexHome(accountId, profileId)`, with separate cache
+  directories and GC usage for each profile;
+- `resolveCodexAuthRuntime`, whose `contextId` must include profile ID so two
+  subscriptions never reuse one app-server container/auth context;
+- device-auth start/status/cancel and auth upload, all of which require an
+  explicit profile target;
+- `CodexSessionConfig`, ACP session metadata, `AiSessionRecord` payment-source
+  fields, and provider thread creation;
+- the usage-status poller and ACP/Codex admission governor, which must report
+  and limit the selected profile rather than an account-global fiction.
+
+Backfill the current single account credential as profile `default`. Adding the
+profile to authenticated-encryption associated data requires a controlled
+decrypt/re-encrypt migration; do not strand existing auth blobs. Concurrent
+profile creation must fail or deduplicate on verified provider account ID
+instead of racing two live rows into existence.
+
+This first-class path is safer than users copying many `auth.json` files:
+
+- encrypted secrets remain in the authoritative credential bay;
+- refreshing one profile cannot silently overwrite another;
+- the UI can show which identity is active, rate-limited, expired, or revoked;
+- the scheduler can make a deterministic choice without scanning directories;
+- audit and usage records identify the exact paid profile;
+- revocation does not depend on finding every manually copied file.
+
+Provider terms remain the external policy boundary. The design permits several
+paid profiles owned by one human when the provider permits that; it does not
+share one profile between unrelated users, counterfeit extra profiles, or hide
+the selected provider identity.
+
+### Optional resident Codex runner
+
+Running `codex exec` or `codex app-server` inside the lease may be useful later,
+especially when the VM itself is the authoritative workspace. It is not the
+default MVP posture.
+
+Any managed resident-runner design requires a separate threat and terms review:
+
+- API-key automation should prefer a narrow per-run proxy or capability so the
+  root guest never receives the underlying long-lived key;
+- a proxy capability must be bound to one account, run, model policy, expiry,
+  and usage budget, and remain useless for compute-control APIs;
+- ChatGPT-managed auth or enterprise access tokens may be used only where
+  official provider policy permits it and the VM is explicitly treated as a
+  trusted private runner, not as the general hostile-guest profile;
+- credential material may never be written to a persistent user volume or
+  instance metadata;
+- revocation and lease expiry must terminate both the agent process and its
+  provider capability independently of guest cooperation.
+
+This later mode changes a core invariant: a scoped secret becomes visible to
+root, even if only briefly. It must be separately authorized and labeled in the
+UI and audit log. A user's manual decision to SSH into their own VM and install
+Codex is possible without product support, but CoCalc must not silently copy
+their existing credentials there.
+
+#### A read-only Codex disk is provenance, not isolation
+
+A read-only persistent disk containing a pinned Codex binary is useful for
+fast startup, reproducible versions, and supply-chain provenance. It does not
+make app-server technically trusted against root in the same VM.
+
+Even if the binary is static, signed, addressed by an exact path, and mounted
+read-only, guest root controls the kernel and can generally:
+
+- inspect process memory, file descriptors, pipes, and `/proc` state;
+- trace or inject into the process;
+- replace or interpose the dynamic loader and libraries when they are not part
+  of an independently protected image;
+- alter DNS, routing, certificate trust, and syscall behavior;
+- capture any bearer credential after the trusted binary receives it.
+
+Secure Boot, measured boot, `fs-verity`, and a read-only disk improve code
+provenance but do not protect a process from the administrator of its running
+kernel. Confidential VMs primarily protect a guest from the cloud host; they do
+not ordinarily protect one guest process from root inside that guest. A
+TEE/enclave design with remote attestation could change this conclusion, but it
+would be a distinct research project with a much narrower tool and filesystem
+boundary.
+
+There are therefore two honest product postures:
+
+1. **Secretless guest.** Run the exact trusted Codex app-server binary in
+   CoCalc's existing credential-managed Codex boundary, or in a separate
+   trusted sidecar that does not share the guest kernel. Give it scoped SSH
+   tools into the root VM. No model credential enters the lease. This is the
+   MVP and strongest technical boundary.
+2. **Owner-credential guest.** Deliver the initiating human's own Codex
+   credential ephemerally to an exact pinned binary in that human's private
+   root VM. Root can technically capture it; the boundary is the provider's
+   terms of service plus the owner's explicit consent, not cryptographic
+   isolation from the owner. This is analogous to a user running Codex on a
+   machine they administer.
+
+The second posture can still reduce accidental exposure:
+
+- require fresh confirmation from the credential owner for that run or bounded
+  run window;
+- prohibit it for a collaborative project or any VM whose root SSH key is
+  available to another account;
+- send credentials directly to the trusted app-server login protocol rather
+  than instance metadata, disk, shell history, command arguments, or logs;
+- use tmpfs, disable swap, avoid `auth.json`, and destroy the boot disk at run
+  end;
+- mount the pinned Codex/tools image read-only and verify its digest before
+  delivery;
+- record the exact account, client version, VM, run, expiry, and consent event;
+- rely on provider rate limits and immediate credential revocation for abuse
+  response.
+
+These controls reduce mistakes; they do not stop malicious root. The mode must
+never receive a site credential, another person's subscription, or a key that
+CoCalc intends to keep secret from the VM owner. Several distinct subscription
+profiles owned by that same human may be scheduled independently when provider
+terms permit it, but each remains a separately authenticated and audited
+provider identity with its own limits.
+
+A read-only tools disk is worth considering in both postures. Its claim is
+“pinned immutable distribution,” never “root cannot steal app-server
+credentials.”
+
+### Parallel fan-out
+
+The architecture should make a bounded Sage-style development sprint a normal
+case:
+
+1. a coordinator identifies disjoint tasks and one completed source turn;
+2. it asks ACP for one provider-native fork per task, optionally through that
+   exact turn;
+3. grant admission leases one VM per child, subject to VM and aggregate
+   vCPU/RAM/cost limits;
+4. every child gets a unique run ID, VM ID, worktree or volume directory, and
+   task manifest;
+5. children cannot contact one another over the private network and do not
+   share writable worktrees;
+6. each child returns a structured result containing commit or patch identity,
+   validation results, artifact hashes, timing, and remaining caveats;
+7. the trusted coordinator or a human reviews and merges results.
+
+The maximum number of simultaneous Codex turns is a separate server-side
+limit from `max_active_vms`. Starting twenty VMs does not authorize twenty model
+sessions, and starting twenty model sessions does not authorize twenty VMs.
+Cancellation can stop a child turn without deleting its VM, or terminate the
+run and request VM deletion, but the requested behavior must be explicit.
+
+VM stdout, files, and generated summaries are untrusted tool output. They may
+inform the model but never override system/developer policy, expand a grant,
+select a new payment source, or authorize another child run.
+
+## Economics And Capacity Strategy
+
+### Compute and inference have different shapes
+
+Spot compute is exceptionally well matched to agent work:
+
+- compilation, tests, linear algebra, and search are batch workloads;
+- the ACP thread and coordinator survive outside the disposable VM;
+- Git commits and persistent volumes provide natural checkpoints;
+- an agent can detect a lost SSH target, provision a replacement inside the
+  same grant, reattach the volume, and continue;
+- large machines shorten feedback loops enough to improve the agent's work,
+  not merely the wall-clock benchmark.
+
+GCP currently advertises Spot discounts of up to 91%, but prices are variable,
+can change, and capacity can be reclaimed at any time. Admission must use the
+live catalog price and snapshot it for the lease. Product copy should say
+“current Spot price,” not promise a permanent 90% discount.
+
+Using the motivating estimate of `$200/month` for a 32-vCPU, 128-GiB Spot VM:
+
+```text
+illustrative hourly cost       = $200 / 730 ~= $0.274/hour
+one four-hour worker           ~= $1.10
+ten four-hour workers          ~= $10.96
+one hundred four-hour workers  ~= $109.59
+```
+
+These are illustrations, not catalog prices. The CLI should calculate the same
+table from the immutable price snapshot before a human authorizes the grant.
+At this price, model access, engineering attention, persistent storage, or
+egress can cost more than CPU. Egress is especially avoidable for software
+research: keep package/compiler caches on a volume or versioned tools disk and
+return small commits, patches, logs, and benchmark summaries.
+
+### Subscription capacity is not a token contract
+
+Current OpenAI documentation describes the `$200/month` Pro 20x tier in terms
+of approximate local-message ranges in a shared five-hour window, with task
+complexity, context, model, reasoning, caching, tool use, and possible weekly
+limits all affecting consumption. It does not promise a fixed number of tokens
+per subscription. CoCalc should therefore measure useful completed work, not
+convert a subscription into a fictional token balance.
+
+For every run, retain the already available redacted usage fields:
+
+- input, cached-input, output, and reasoning-output tokens;
+- model, reasoning level, and service tier;
+- wall time and active tool time;
+- VM type, VM hours, egress, and persistent-storage cost;
+- outcome: completed, useful patch/commit, tests passed, interrupted, retried,
+  or discarded.
+
+The useful operating metric is approximately:
+
+```text
+cost per accepted result
+  = allocated model cost or subscription share
+  + VM/volume/egress cost
+  + review and merge cost
+```
+
+Subscription rate-limit status is a scheduling signal, not a grant. A fan-out
+controller should queue or reduce concurrency when the initiating account's
+Codex window is constrained, and may choose a lower-cost/high-volume model for
+bounded mechanical tasks. It may select among the initiating human's connected,
+automation-enabled subscription profiles. It must not use unrelated accounts,
+an unconnected collaborator credential, or multiple copies of one profile
+represented as if they were independent subscriptions.
+
+The first real experiment should use existing subscriptions rather than buy a
+large speculative pool:
+
+1. run two weeks of representative Sage.js tasks;
+2. cap at a small fleet such as four large Spot VMs per active coordinator;
+3. record accepted-result throughput, provider window pressure, and compute
+   utilization;
+4. use API-key/credits as explicit overflow where appropriate;
+5. only then decide whether more subscription profiles owned by that human,
+   additional human seats, Business/Enterprise capacity, or API usage is the
+   economical scaling path.
+
+Five to ten `$200/month` subscriptions would be `$1,000-$2,000/month`, roughly
+the same order as several continuously running large Spot VMs under the
+illustrative estimate. That may be excellent value if each subscription belongs
+to a provider account actually controlled and connected by the CoCalc owner and
+produces independent accepted work. CoCalc should make such owner-managed
+profiles easy to connect and audit; it should not itself manufacture accounts
+or conceal which profile is running. For a shared multi-human organizational
+fleet, use provider-supported delegation, team/enterprise seats, or a
+usage-priced arrangement.
+
+### Recovery policy
+
+The platform does not need automatic Spot replacement in the first compute
+MVP. The agent can request a replacement through the same idempotent CLI and
+grant. The run record should include a bounded retry policy:
+
+- maximum replacements;
+- maximum total VM-hours and fixed cost across replacements;
+- whether to reattach the same volume;
+- last durable Git commit and artifact manifest;
+- whether interruption should resume the same Codex thread or fork a recovery
+  child.
+
+Later, repeated successful agent-driven recovery can justify moving this policy
+into the orchestrator. The control plane still enforces the aggregate envelope;
+an agent's ability to recover is never authority to spend without limit.
+
 ## Product Resource Model
 
 The MVP has exactly three user-visible durable resource types:
@@ -360,20 +858,24 @@ CREATE TABLE compute_grants (
   max_total_vcpus INTEGER NOT NULL,
   max_ram_gb INTEGER NOT NULL,
   max_boot_disk_gb INTEGER NOT NULL,
+  max_total_volume_gb INTEGER NOT NULL,
+  max_monthly_volume_cost_usd NUMERIC NOT NULL,
   max_vm_ttl_seconds INTEGER NOT NULL,
   max_fixed_cost_usd NUMERIC NOT NULL,
   max_egress_gib NUMERIC NOT NULL,
   allowed_architectures TEXT[] NOT NULL,
   allowed_machine_types TEXT[] NOT NULL,
   allowed_pricing_models TEXT[] NOT NULL,
-  allowed_volume_ids UUID[] NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}'
 );
 ```
 
-The exact schema can use normalized grant-volume rows if query or update
-requirements make arrays awkward. The first implementation should prefer the
-smallest representation that supports transactional envelope checks.
+Use normalized grant-volume rows in the first implementation. Each row must
+identify the allowed volume and record `allow_attach`, `allow_resize`, and a
+human-approved `max_size_gb`. The grant-level total-GiB and monthly-cost limits
+bound all such rows together. A resize persists after the short-lived grant
+expires, so authorization must display and record the maximum continuing
+monthly storage charge, not merely the cost through grant expiration.
 
 A grant is:
 
@@ -384,7 +886,8 @@ A grant is:
 - unable to create volumes;
 - unable to delete volumes;
 - unable to expand its own limits;
-- usable only for VM operations within its stored envelope.
+- usable only for VM operations and explicitly approved grow-only volume
+  resizes within its stored envelope.
 
 The grant is server-side authority. Do not return a general fresh-auth cookie
 or reusable account credential to the project.
@@ -453,12 +956,15 @@ CREATE TABLE compute_volumes (
   zone TEXT NOT NULL,
   disk_type TEXT NOT NULL,
   size_gb INTEGER NOT NULL,
+  desired_size_gb INTEGER NOT NULL,
   filesystem TEXT NOT NULL DEFAULT 'ext4',
   state TEXT NOT NULL,
   attached_vm_id UUID,
   attachment_generation BIGINT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL,
   ready_at TIMESTAMPTZ,
+  resize_requested_at TIMESTAMPTZ,
+  resized_at TIMESTAMPTZ,
   detach_requested_at TIMESTAMPTZ,
   detached_at TIMESTAMPTZ,
   delete_requested_at TIMESTAMPTZ,
@@ -475,7 +981,8 @@ The first release supports:
 
 - GCP `pd-balanced`;
 - zonal disks;
-- creation at a fixed size;
+- creation at a human-approved initial size;
+- grow-only enlargement while detached or attached;
 - one ext4 filesystem;
 - one read-write attachment;
 - mount at the fixed path `/work`;
@@ -484,8 +991,11 @@ The first release supports:
 Do not implement shrink, snapshot, clone, or cross-zone move.
 Do not make the mount path configurable in MVP.
 
-Online enlargement is useful but may be deferred until after the first
-end-to-end release. If added, it must be grow-only and freshly authenticated.
+Online enlargement is a first-release requirement. A human may authorize one
+resize directly with fresh authentication or preauthorize bounded agent
+resizes in a compute grant. Provider-disk growth is authoritative for billing;
+filesystem growth is performed over the ordinary direct SSH boundary and is
+never trusted for authorization or cost enforcement.
 
 ### Internal work table
 
@@ -531,6 +1041,58 @@ Every mutation should append an audit event containing:
 
 Never include private keys, auth cookies, or provider credentials.
 
+### Internal Codex compute-run link
+
+Do not add a fourth cloud resource merely because an ACP turn targets a VM.
+Keep the Codex thread and turn in the existing ACP/session stores, and add a
+small durable link record such as `compute_agent_runs` for orchestration and
+audit:
+
+```sql
+CREATE TABLE compute_agent_runs (
+  id UUID PRIMARY KEY,
+  owner_account_id UUID NOT NULL,
+  actor_account_id UUID NOT NULL,
+  project_id UUID NOT NULL,
+  vm_id UUID NOT NULL,
+  grant_id UUID NOT NULL,
+  agent_provider TEXT NOT NULL,
+  execution_placement TEXT NOT NULL,
+  context_mode TEXT NOT NULL,
+  source_session_id TEXT,
+  source_turn_id TEXT,
+  session_id TEXT NOT NULL,
+  codex_auth_source TEXT NOT NULL,
+  codex_credential_profile_id UUID,
+  payment_source_kind TEXT,
+  payment_source_id TEXT,
+  workspace_path TEXT NOT NULL,
+  state TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  canceled_at TIMESTAMPTZ,
+  error TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'
+);
+```
+
+`execution_placement` initially has the value `project-host-remote-tools`.
+Possible future values require an explicit policy review; in particular,
+`vm-resident` must never be inferred from the presence of a Codex binary.
+
+The record references ACP history rather than duplicating prompts or
+transcripts. `metadata` may contain redacted model configuration, artifact
+manifests, usage totals, and hashes, but not hidden context, bearer tokens,
+subscription files, API keys, SSH private keys, or raw environment dumps.
+
+The owner pays for compute. The actor's resolved Codex payment source pays for
+model usage unless an existing project or site API-key policy explicitly says
+otherwise. Both identities are recorded so a collaborative project never
+turns owner-pays compute into accidental owner-pays personal subscription use.
+When the actor owns multiple subscription profiles, the selected profile ID is
+also immutable for the run; resume does not silently switch identities.
+
 ## Fresh Authentication And Agent Authority
 
 ### Direct human actions
@@ -545,6 +1107,8 @@ These actions require cookie-backed fresh authentication:
 - create a VM without a compute grant;
 - increase a VM TTL outside its grant;
 - increase a VM resource or egress envelope;
+- enable a managed VM-resident agent mode or deliver any provider credential
+  capability to a guest;
 - override billing enforcement;
 - perform admin repair or force-detach operations.
 
@@ -562,7 +1126,15 @@ A project identity may perform only:
 - obtain the public SSH endpoint;
 - extend TTL up to the grant maximum and grant expiration;
 - delete its VM;
-- inspect allowed volume names and attachment state.
+- inspect allowed volume names and attachment state;
+- grow an allowed volume when its grant row permits resize and the requested
+  size remains inside both the per-volume and aggregate storage/cost envelope;
+
+When the caller is also an authenticated Codex account session, it may create,
+fork, resume, interrupt, and inspect its own ACP turns using the existing Codex
+admission and concurrency policy. That authority comes from the initiating
+account's Codex session, not from the compute grant. A project bearer by itself
+cannot select or consume a human collaborator's subscription.
 
 The agent may not:
 
@@ -574,6 +1146,8 @@ The agent may not:
 - open a public port;
 - access account or payment credentials;
 - obtain fresh-auth session material.
+- read or select another account's Codex auth or payment source;
+- export Codex credentials or a general CoCalc bearer token to the VM.
 
 ### Grant admission transaction
 
@@ -591,11 +1165,46 @@ VM creation must lock the grant row and atomically verify:
 - requested volume is explicitly allowed and currently unattached;
 - owner billing admission succeeds.
 
+Creating a linked Codex compute run additionally verifies, without weakening
+the VM transaction above:
+
+- the VM is `ready`, belongs to the same project/grant, and has not expired;
+- the initiating account may access both the project and the source ACP
+  session;
+- a requested fork source and `lastTurnId` exist and are in a completed state;
+- the requested child-session concurrency is inside the Codex admission limit;
+- the resolved Codex auth and payment source belong to or are legitimately
+  available to the initiating account under existing project/site policy;
+- an explicitly selected subscription profile belongs to the initiating
+  account; `auto` considers only that account's automation-enabled profiles;
+- fork/resume uses a profile for the same provider account/workspace as the
+  stored source thread, and resume preserves the run's immutable profile;
+- context mode and execution placement are allowed by current provider policy.
+
+The VM reservation and Codex admission need not share one database
+transaction, but partial failure must be compensated. A failed child-session
+start leaves the VM usable and records the failed run; it does not leak a
+concurrency reservation or delete useful persistent work.
+
 Only after this transaction records a VM and reserves grant capacity should it
 enqueue provider work.
 
 Provider failure releases the reservation transactionally and records an audit
 event.
+
+Volume resize admission separately locks the grant and volume rows and
+atomically verifies:
+
+- the volume is explicitly allowed with `allow_resize = true`;
+- the requested size is larger than the current provider size and no larger
+  than the per-volume maximum;
+- aggregate approved volume GiB and continuing monthly cost remain inside the
+  grant;
+- owner billing admission succeeds at the new persistent rate;
+- no conflicting attach, detach, delete, or resize operation is active.
+
+The operation reserves the larger size before provider work is enqueued. The
+agent cannot change the grant limits or shrink the volume.
 
 ### Dangerous RPC registry
 
@@ -711,6 +1320,9 @@ requested
   -> available
   -> deleting
   -> deleted
+
+available -> resizing -> available
+attached  -> resizing -> attached
 ```
 
 Exceptional states:
@@ -782,6 +1394,29 @@ Volume deletion:
   deletion.
 
 VM TTL never implies volume deletion.
+
+### Grow-only resize
+
+Resize is an idempotent long-running operation keyed by volume, requested
+size, and request ID. It must:
+
+1. complete fresh-auth or grant-envelope admission;
+2. reserve `desired_size_gb` and the higher continuing storage charge;
+3. call the provider's grow-only disk resize operation;
+4. reconcile the actual provider size by immutable disk ID;
+5. set `size_gb` to the confirmed provider size and update billing;
+6. if detached, mark filesystem growth pending for the next attachment;
+7. if attached and requested by the caller, use direct SSH to verify that
+   `/work` is the expected ext4 volume and run bounded online `resize2fs`;
+8. verify the block-device and filesystem sizes and return both in structured
+   output.
+
+Every attachment must also compare the ext4 filesystem with the provider disk
+and safely finish any pending grow before publishing the mount ready. It must
+never run `mkfs` or attempt shrink as a recovery action. If provider growth
+succeeds but the database commit fails, reconciliation adopts the larger
+provider size and corresponding charge. If filesystem growth fails, retain the
+larger disk, report `filesystem_resize_pending`, and allow an idempotent retry.
 
 ### Billing failure
 
@@ -869,6 +1504,22 @@ The platform startup script should only:
 Docker installation can initially be performed by the agent. A later
 secret-free cached image with Docker preinstalled is an optimization, not an
 MVP requirement.
+
+The first release must nevertheless provide an idempotent SSH bootstrap
+command for build workers. When a persistent volume is attached, it configures
+Docker's data root below `/work`, creates documented persistent cache roots for
+pip, cibuildwheel, ccache, and temporary build artifacts, and verifies that
+Docker can restart using the same state. Deleting or replacing the disposable
+VM must not delete those layers or caches. A trusted Docker-cached boot image
+may optimize startup later but is not required for persistence.
+
+The same bootstrap must apply a bounded crash-artifact policy. Ubuntu Apport,
+systemd-coredump, and equivalent native crash paths may be disabled or retained
+under an explicit byte/count/age quota, but they must never accumulate without
+bound under `/var` or another disposable-root path. Durable jobs record the
+policy and report root and `/work` free space before launch. If crash artifacts
+are retained for debugging, place or copy them into a bounded per-job directory
+under `/work` and include their hashes in the job manifest.
 
 ## Egress Metering And Cost Control
 
@@ -1111,6 +1762,7 @@ compute.createProjectVm
 compute.extendProjectVm
 compute.deleteProjectVm
 compute.getProjectVmSshEndpoint
+compute.resizeProjectVolume
 ```
 
 Suggested internal methods:
@@ -1124,6 +1776,31 @@ compute.recordEgressObservation
 compute.expireDueVms
 compute.enforceBilling
 ```
+
+Codex orchestration remains in ACP rather than becoming a provider-specific
+`compute.runCodex` RPC. Extend the existing ACP contract narrowly:
+
+```text
+AcpRequest.config.computeTarget = {
+  vm_id,
+  run_id,
+  workspace_path,
+  mode: "project-host-remote-tools"
+}
+
+AcpForkSessionRequest.lastTurnId? = <provider turn id>
+```
+
+The ACP admission path resolves `vm_id` through the project-scoped compute API,
+creates the internal run link, and injects only redacted target metadata plus
+the scoped CLI environment needed to call direct SSH tools. It does not inject
+the VM's SSH private key into an API payload; the key remains in the project
+filesystem or local CLI key store as already specified.
+
+The provider-native fork must complete before the child run is queued. Store
+the returned thread ID, source thread ID, and optional source turn ID. If fork
+succeeds but later admission fails, retain or archive the empty child thread
+and record the compensation result instead of silently losing its identity.
 
 All create and delete methods accept idempotency keys. All long-running cloud
 mutations return an LRO ID.
@@ -1145,10 +1822,13 @@ cocalc compute authorize \
   --max-vcpus 64 \
   --max-compute-cost 25 \
   --max-egress 50GiB \
+  --max-total-volume 750GiB \
+  --max-monthly-volume-cost 100 \
   --max-vm-ttl 4h \
   --arch amd64,arm64 \
   --pricing spot,on-demand \
-  --allow-volume sage-pypy
+  --allow-volume sage-pypy \
+  --allow-volume-resize sage-pypy:750GiB
 
 cocalc compute grants
 cocalc compute revoke <grant>
@@ -1168,6 +1848,7 @@ cocalc volume create sage-pypy \
 
 cocalc volume list
 cocalc volume get sage-pypy
+cocalc volume resize sage-pypy --size 750GiB --wait
 cocalc volume delete sage-pypy
 ```
 
@@ -1178,6 +1859,13 @@ Creation prints:
 - approximate 30-day price;
 - the fact that billing continues while detached;
 - the fact that VM TTL never deletes the volume.
+
+Resize accepts `--json`, returns an LRO, is grow-only, and reports the old,
+requested, and confirmed provider sizes plus the continuing monthly-cost
+change. For an attached volume, `--grow-filesystem` uses the same direct SSH
+path as `vm exec`; otherwise the CLI reports that ext4 growth will complete on
+the next attachment. Project agents may invoke it only inside a grant's
+explicit resize envelope.
 
 ### VM operations
 
@@ -1194,6 +1882,7 @@ cocalc vm get <vm>
 cocalc vm wait <vm>
 cocalc vm extend <vm> --ttl 2h
 cocalc vm delete <vm>
+cocalc vm bootstrap <vm> --docker --persistent-build-cache
 ```
 
 `create` should:
@@ -1230,6 +1919,89 @@ cocalc vm rsync build-arm:/work/dist/ ./dist/
 ```
 
 No SSH payload, terminal stream, or file content passes through Conat or a hub.
+
+### Durable remote jobs
+
+Long package builds and test suites must not depend on one SSH connection
+remaining open. The first release provides:
+
+```bash
+cocalc vm job start <vm> --name sage-cp314 -- bash -lc '<command>'
+cocalc vm job status <vm> <job>
+cocalc vm job logs <vm> <job> --follow
+cocalc vm job cancel <vm> <job>
+```
+
+These are direct SSH helpers implemented with conventional guest facilities
+such as systemd transient services. They do not introduce a privileged CoCalc
+guest agent or make guest status authoritative for billing. With a volume
+attached, the launcher, bounded logs, PID/unit metadata, timestamps, and final
+exit code live below `/work/runs/<run_id>/jobs/<job_id>` so an ACP restart,
+SSH disconnect, or replacement coordinator can reconcile the job. VM loss is
+reported as interruption, never silently converted to success or an automatic
+duplicate. The run manifest records the last durable Git commit and artifact
+hashes needed for an authorized replacement VM to continue.
+
+### Codex compute runs
+
+Extend the existing `project codex exec` surface instead of introducing a
+second Codex CLI:
+
+```bash
+# Fresh provider thread with no chat history.
+cocalc project codex exec \
+  --compute-vm <vm> \
+  --fresh \
+  --stdin \
+  --json
+
+# Provider-native fork through a specific completed turn.
+cocalc project codex exec \
+  --compute-vm <vm> \
+  --fork-session <session-id> \
+  --fork-through-turn <turn-id> \
+  --stdin \
+  --json
+
+# Continue an existing child on its assigned VM.
+cocalc project codex exec \
+  --compute-vm <vm> \
+  --session-id <child-session-id> \
+  --stdin \
+  --json
+```
+
+`--fresh`, `--fork-session`, and `--session-id` are mutually exclusive.
+`--fork-through-turn` requires `--fork-session`. Omitting all three means
+`--fresh`; there is no implicit reuse of whichever chat happens to be open.
+
+For agents and awkward multiline prompts, accept one JSON request from stdin:
+
+```bash
+cocalc project codex exec --request-json --json <<'EOF'
+{
+  "prompt": "Build and benchmark the modular-symbols kernel.",
+  "context": {
+    "mode": "fork",
+    "session_id": "thr_source",
+    "last_turn_id": "turn_completed"
+  },
+  "compute": {
+    "vm_id": "build-arm",
+    "workspace_path": "/work/runs/modsym-arm"
+  }
+}
+EOF
+```
+
+Human output shows VM, workspace, context mode, source and child session IDs,
+execution placement, model, auth-source label, and both compute and model
+payment sources. `--json` returns stable fields including `run_id`, `vm_id`,
+`session_id`, `turn_id`, state, usage, and error. `--jsonl` continues to stream
+the existing ACP events, augmented with a run/VM binding event.
+
+Do not print prompts, subscription tokens, API keys, SSH private-key paths, or
+full environments merely because `--verbose` is set.
 
 ### Batch creation
 
@@ -1330,7 +2102,7 @@ Show:
 - attached VM;
 - hourly price;
 - approximate monthly price;
-- create and delete actions.
+- create, grow-only resize, and delete actions.
 
 Deletion requires fresh auth and typed name confirmation.
 
@@ -1465,6 +2237,36 @@ Orphan policy differs by resource:
 - do not trust the guest to shut down;
 - keep finalizing delayed egress.
 
+### Volume resize uncertainty
+
+- inspect the provider disk by immutable ID before retrying;
+- adopt and bill a larger provider size even when the original response or
+  database commit was lost;
+- never roll back by shrinking;
+- keep `filesystem_resize_pending` separate from provider resize success;
+- permit bounded SSH filesystem-growth retries without repeating provider
+  growth.
+
+### SSH or coordinator disconnect during a job
+
+- the durable guest service continues independently of the SSH stream;
+- reconnecting clients read the on-volume job manifest and bounded log;
+- cancellation is idempotent;
+- absent durable exit evidence is `running`, `interrupted`, or `unknown`, never
+  success;
+- retry uses a new job ID and preserves the first attempt's evidence.
+
+### Guest root-disk pressure
+
+- bootstrap verifies the bounded core-dump policy before package work starts;
+- durable job admission records free bytes on both `/` and `/work` and may
+  reject a caller-specified insufficient-capacity threshold;
+- logs, exit records, build caches, and recoverable artifacts live on `/work`;
+- filling the disposable root is a failed or interrupted attempt, never a
+  reason to discard the persistent volume or infer job success;
+- replacement bootstrap identifies and reports any retained crash artifacts
+  before resuming work.
+
 ## Observability
 
 Operator status should include:
@@ -1529,6 +2331,7 @@ Deliver:
 - TTL;
 - SSH key injection;
 - CLI create/wait/ssh/exec/cp/delete;
+- durable SSH-backed job start/status/logs/cancel;
 - site-funded admin admission;
 - one x86 and one ARM64 machine;
 - lifecycle audit events.
@@ -1545,10 +2348,13 @@ Exit criteria:
 Deliver:
 
 - `compute_volumes`;
-- freshly authenticated create/delete;
+- freshly authenticated create/resize/delete;
 - zonal `pd-balanced`;
+- bounded grant-authorized grow-only resize and online ext4 growth;
 - attach generation and fencing;
 - mount at `/work`;
+- idempotent Docker/bootstrap configuration with Docker layers and build caches
+  below `/work`;
 - detach and preserve on VM expiry;
 - continuous volume billing record;
 - CLI volume commands.
@@ -1560,7 +2366,11 @@ Exit criteria:
 - attach the same volume to a new VM;
 - verify all data;
 - prove concurrent attachment is rejected;
-- prove VM TTL never deletes the volume.
+- prove VM TTL never deletes the volume;
+- grow a nearly full attached volume without stopping its durable build job;
+- verify provider and ext4 sizes after growth;
+- replace the VM and prove Docker layers, compiler caches, job logs, and source
+  state remain usable;
 
 ### Phase 3: compute grants and agent authority
 
@@ -1572,6 +2382,8 @@ Deliver:
 - transactional admission;
 - dangerous RPC registry coverage;
 - project-scoped CLI create inside grant;
+- project-scoped resize inside an explicit per-volume and aggregate
+  storage-cost envelope;
 - no general account credential in the project.
 
 Exit criteria:
@@ -1580,10 +2392,97 @@ Exit criteria:
 - a human can authorize a bounded grant;
 - the project can create only inside the envelope;
 - grant expiration and revocation block new work;
-- the project cannot create or delete volumes.
+- the project cannot create or delete volumes and can resize only explicitly
+  approved volumes inside every size and cost bound.
 
 Phases 2 and 3 may be swapped during implementation, but both are required
 before non-admin agent use.
+
+### Phase 3A: Codex remote-compute integration
+
+Deliver:
+
+- the existing project-host ACP/Codex app-server as the trusted coordinator;
+- `computeTarget` metadata on ACP requests and an internal compute-run link;
+- `lastTurnId` support through the existing ACP and App Server fork path;
+- explicit `fresh`, `fork`, and `resume` CLI context modes;
+- `--compute-vm`, `--request-json`, stable `--json`, and augmented `--jsonl`;
+- a generated run manifest and unique `/work/runs/<run_id>` directory;
+- a built-in compute skill or equivalent instructions for direct
+  `vm exec/cp/rsync` use;
+- separate compute-grant and Codex-session admission;
+- bounded child-session fan-out and cancellation;
+- auth/payment-source/run audit metadata with all credentials redacted;
+- named multiple-subscription profiles, explicit/automatic profile selection,
+  and per-profile live rate-limit status;
+- a provider-policy kill switch for execution placement and auth modes.
+
+Exit criteria:
+
+- a fresh run contains no source conversation history;
+- a fork through turn `T` contains provider history through `T` and no later
+  turns, and receives a distinct child thread ID;
+- resume continues that child instead of creating a text-simulated copy;
+- four child sessions can use four independent leases and work directories
+  under one bounded grant;
+- a project collaborator cannot consume another collaborator's personal
+  ChatGPT subscription merely because the latter owns the compute grant;
+- one account can connect two distinct subscription profiles without either
+  overwriting the other, select each explicitly, and revoke them independently;
+- automatic selection never leaves the initiating account's enabled profile
+  set and never changes profile during resume;
+- the VM contains no `auth.json`, OpenAI API key, Codex access token, general
+  CoCalc bearer, or SSH private key;
+- revoking the compute grant blocks new VM/run bindings but does not corrupt
+  stored ACP threads or persistent volumes;
+- malicious guest output cannot expand either the compute or Codex envelope;
+- model usage and compute cost are separately attributable and visible.
+
+This phase does not require a VM-resident Codex process or transparent remote
+filesystem. Those remain separate later decisions.
+
+### Phase 3B: owner-credential resident-runner canary
+
+This is an optional, separately authorized experiment after the secretless
+remote-compute path works. It exists because users who administer their own
+private VM can already copy several `auth.json` files there manually; a managed
+path can make the same trust decision explicit, auditable, revocable, and much
+less error-prone.
+
+Deliver:
+
+- an exact-version Codex tools image mounted read-only and verified by digest;
+- an owner-only VM eligibility check that rejects collaborative root access;
+- explicit consent explaining that VM root can capture the selected credential;
+- one selected subscription profile per resident app-server process;
+- ephemeral credential injection into tmpfs or the app-server login protocol,
+  never instance metadata, persistent disk, command arguments, or logs;
+- profile-specific process directories, concurrency limits, usage status, and
+  revocation;
+- native `fresh`, `fork`, and `resume` behavior identical to Phase 3A;
+- lease-expiry and revocation hooks that terminate the process and destroy the
+  disposable boot disk even when the guest is uncooperative;
+- a provider-policy kill switch independent of secretless remote execution.
+
+Exit criteria:
+
+- one owner can select either of two independently authenticated subscription
+  profiles without copying or renaming `auth.json` files;
+- two resident processes never share a profile directory, token cache, provider
+  thread, or rate-limit state;
+- the user-facing consent and audit record identify the profile, VM, Codex
+  digest, expiry, and fact that root is inside the credential trust boundary;
+- no credential appears in persistent volumes, instance metadata, process
+  arguments, shell history, structured output, or platform logs;
+- revoking one profile terminates only runs using that profile and prevents
+  resume without silently switching identities;
+- an interrupted Spot run resumes from stored provider/session and workspace
+  state only after fresh admission and credential resolution;
+- disabling resident execution leaves the Phase 3A secretless path operational.
+
+This phase does not claim to hide credentials from malicious root. Its security
+boundary is the authenticated owner's consent plus provider terms, with strong
+controls against accidental leakage and cross-account use.
 
 ### Phase 4: PAYG and egress enforcement
 
@@ -1655,10 +2554,21 @@ Cover:
 - idempotent create/delete;
 - worker lock recovery;
 - provider timeout adoption;
+- fresh/fork/resume context-mode validation and mutual exclusion;
+- provider-native fork propagation of `lastTurnId`;
+- source ACP session ownership and completed-turn checks;
+- independent compute and Codex concurrency admission;
+- compute owner versus Codex actor/payment-source attribution;
+- multi-profile uniqueness, duplicate provider-account detection, selection,
+  per-profile concurrency, refresh, expiry, and independent revocation;
+- redaction of Codex auth, SSH keys, and environment values from run records;
 - no-service-account request construction;
 - Standard Tier and IPv4-only request construction;
 - forbidden metadata keys;
 - volume attachment generation;
+- grow-only resize admission, aggregate limits, idempotency, billing changes,
+  and shrink rejection;
+- provider-resize/database-commit recovery and filesystem-pending retries;
 - delete-while-attached rejection;
 - VM deletion preserving volume;
 - egress delta deduplication;
@@ -1695,7 +2605,32 @@ Run against the dedicated untrusted staging project:
 22. create 20 VMs concurrently;
 23. exercise grant max-count, fixed-compute-cost, and egress rejection;
 24. revoke a grant during active work;
-25. verify existing SSH continues but new VM operations stop.
+25. verify existing SSH continues but new VM operations stop;
+26. run a fresh Codex child and verify it inherited no conversation history;
+27. fork a Codex thread through an earlier completed turn and prove later
+    turns are absent;
+28. resume the child on the same VM/workspace assignment;
+29. run four children on four independent work directories;
+30. cancel during SSH execution and during provider streaming;
+31. attempt to use the compute-grant owner's personal Codex auth from another
+    collaborator account and confirm denial;
+32. connect two subscription profiles to one CoCalc account and alternate
+    explicit runs without credential overwrite;
+33. exercise automatic profile selection as rate-limit status changes;
+34. revoke one profile and verify the other remains usable;
+35. verify compute cost and model usage have distinct attribution.
+36. fill an attached ext4 volume close to capacity and grow it online;
+37. disconnect the initiating SSH and ACP sessions during a durable build,
+    reconnect, and verify logs and final exit status;
+38. lose the provider resize response and verify reconciliation adopts the
+    actual larger disk without a second growth or incorrect charge;
+39. replace the VM, reattach the volume, and verify Docker layers, compiler
+    caches, and durable job evidence survived;
+40. attempt agent resize beyond per-volume, aggregate-GiB, and monthly-cost
+    limits and confirm transactional rejection.
+41. generate repeated native core dumps and prove the configured quota keeps
+    the disposable root filesystem below its safety threshold while retaining
+    any requested bounded evidence under `/work`.
 
 ### Adversarial tests
 
@@ -1712,6 +2647,12 @@ As root inside the VM, attempt to:
   namespaces;
 - keep the VM running after TTL;
 - detach or delete the provider disk through GCP APIs;
+- locate or exfiltrate `auth.json`, API keys, access tokens, a general CoCalc
+  bearer, or SSH private keys;
+- forge `session_id`, `lastTurnId`, `run_id`, and `vm_id` across accounts and
+  projects;
+- return malicious output asking the coordinator to override policy, allocate
+  more compute, change payment source, or reveal hidden context;
 - expose port 443.
 
 The expected result is either denial outside the guest or harmless compromise
@@ -1727,9 +2668,14 @@ of only that guest and its attached user volume.
 6. Enable one administrator production canary after explicit approval.
 7. Verify billing, TTL, volume persistence, and egress for at least several
    days.
-8. Enable a small administrator allowlist.
-9. Add explicit membership-tier configuration with zero defaults.
-10. Offer opt-in Pro access only after reviewing abuse, support, and billing
+8. Review the then-current Codex auth/automation guidance, contact OpenAI about
+   App Server known-client/compliance registration, and record the approved
+   auth/placement matrix.
+9. Canary fresh, fork-through-turn, resume, and four-way fan-out with no
+   provider credential present in any guest.
+10. Enable a small administrator allowlist.
+11. Add explicit membership-tier configuration with zero defaults.
+12. Offer opt-in Pro access only after reviewing abuse, support, and billing
     evidence.
 
 Rollback means:
@@ -1756,7 +2702,7 @@ Rollback means:
 - add narrow GCP compute provider;
 - add isolated work queue;
 - implement create/status/stop/delete;
-- implement disk create/attach/detach/delete;
+- implement disk create/attach/detach/grow/delete;
 - add invariant verification;
 - add reconciler and expiry worker.
 
@@ -1780,10 +2726,24 @@ Rollback means:
 ### CLI
 
 - add `compute`, `vm`, and `volume` command modules;
+- add volume resize, build-worker bootstrap, and durable job commands;
 - add stable JSON output;
 - add local SSH key management;
 - add direct SSH/exec/cp/rsync;
 - add LRO progress and fresh-auth guidance.
+
+### Codex and agent orchestration
+
+- extend ACP fork requests and the App Server bridge with `lastTurnId`;
+- add compute-target configuration and durable run links;
+- reuse existing account auth resolution, payment-source accounting, session
+  storage, quota governor, interrupt, resume, and fork paths;
+- add project CLI context modes and JSON request/result contracts;
+- add a secretless compute tool/skill using direct SSH commands;
+- add bounded fan-out and structured child result manifests;
+- add provider-policy placement gates and a kill switch;
+- keep the design agent-provider-neutral at the compute boundary even though
+  Codex is the first deep integration.
 
 ### Frontend
 
@@ -1802,13 +2762,30 @@ The MVP is complete only when:
   grant;
 - the project agent can create an x86 or ARM64 Ubuntu VM and obtain root;
 - Docker works normally;
+- Docker layers and documented package/compiler caches persist on `/work`
+  across VM replacement;
+- native crashes cannot accumulate unbounded data on the disposable root, and
+  any retained crash evidence is quota-bounded and manifest-recorded;
 - the agent can use direct SSH, `scp`, and `rsync`;
+- the agent can run and reconcile durable jobs across SSH and coordinator
+  disconnects;
+- an authenticated Codex account can start a fresh child, fork through a
+  specified completed turn, or resume a child against a selected ready VM;
+- parallel child runs have independent threads and writable workspaces;
+- the compute grant and Codex auth/payment-source envelope are enforced and
+  reported independently;
+- no Codex subscription credential, API key, access token, general CoCalc
+  bearer, or SSH private key is present in the hostile guest;
 - VM creation requires fresh human authorization directly or an active bounded
   grant;
 - every VM has a hard control-plane TTL;
 - VM expiry deletes its disposable boot disk;
 - an explicit persistent volume survives VM expiry;
 - that volume attaches to exactly one VM;
+- an authorized agent can grow that volume online inside a human-set size and
+  recurring-cost envelope, while shrink and excess growth are rejected;
+- provider resize, ext4 growth, billing, and partial-failure reconciliation
+  pass the staging tests;
 - volume deletion always requires fresh human authentication;
 - no VM has a service account or platform secret;
 - no VM has private network access to CoCalc infrastructure;
@@ -1827,7 +2804,6 @@ The MVP is complete only when:
 Possible later work, each requiring a separate decision:
 
 - snapshots and volume cloning;
-- grow-only volume resize;
 - trusted Docker-cached boot images;
 - automatic Spot replacement;
 - additional providers;
@@ -1836,10 +2812,19 @@ Possible later work, each requiring a separate decision:
 - OpenSSH host and user certificates;
 - a platform egress gateway with hard byte policing;
 - persistent server leases;
-- website hosting through a distinct ingress product.
+- website hosting through a distinct ingress product;
+- a transparent SSH-backed remote workspace adapter for all Codex file and
+  process tools;
+- managed VM-resident Codex runners with a per-run provider proxy;
+- enterprise Codex access-token support for explicitly trusted private
+  runners;
+- provider adapters for agents other than Codex;
+- a higher-level fleet scheduler, task graph, automatic merge service, or
+  correctness judge above independent child runs.
 
-None of these are prerequisites for solving the immediate "an agent just needs
-a root VM with persistent work storage" problem.
+None of these are prerequisites for the first-release Linux package-building
+contract, which includes grow-only volume resize, persistent build caches, and
+durable remote jobs.
 
 ## Reference Material
 
@@ -1853,3 +2838,10 @@ a root VM with persistent work storage" problem.
 - [GCP Standard Tier pricing](https://cloud.google.com/network-tiers/pricing)
 - [GCP Compute Engine network metrics](https://docs.cloud.google.com/monitoring/api/metrics_gcp_c)
 - [Cloud NAT pricing](https://cloud.google.com/nat/pricing)
+- [GCP Spot VM behavior](https://docs.cloud.google.com/compute/docs/instances/spot)
+- [GCP Spot VM pricing](https://cloud.google.com/spot-vms/pricing)
+- [OpenAI Codex pricing and usage limits](https://learn.chatgpt.com/docs/pricing)
+- [OpenAI Codex authentication](https://learn.chatgpt.com/docs/auth)
+- [OpenAI Codex non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)
+- [OpenAI Codex App Server](https://learn.chatgpt.com/docs/app-server)
+- [OpenAI Codex remote connections and SSH hosts](https://learn.chatgpt.com/docs/remote-connections)
