@@ -84,6 +84,9 @@ export function getProjectHostCustomizePayload(opts?: {
       ...(opts?.exam_mode
         ? {
             exam_mode: true,
+            ...(opts.exam_session?.delete_at
+              ? { scratchpad_delete_at: opts.exam_session.delete_at }
+              : {}),
             registration: false,
             terminal_enabled: opts.terminal_enabled === true,
             stripe_enabled: false,

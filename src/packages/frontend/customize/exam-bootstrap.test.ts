@@ -23,7 +23,19 @@ describe("applyExamSessionBootstrap", () => {
     const redux = {
       getStore: (name: string) => {
         if (name === "account") {
-          return { get: () => false, emit };
+          return {
+            get: (key: string) => {
+              if (key === "is_ready") return false;
+              if (key === "editor_settings") {
+                return Map({ smart_indent: true, tab_size: 4 });
+              }
+              if (key === "other_settings") {
+                return Map({ dark_mode: false, katex: true });
+              }
+              return undefined;
+            },
+            emit,
+          };
         }
         return { get: () => undefined };
       },
@@ -44,6 +56,14 @@ describe("applyExamSessionBootstrap", () => {
       1,
       expect.objectContaining({
         account_id: "account-1",
+        editor_settings: expect.objectContaining({
+          smart_indent: true,
+          tab_size: 4,
+        }),
+        other_settings: expect.objectContaining({
+          dark_mode: false,
+          katex: true,
+        }),
         is_logged_in: true,
         user_type: "signed_in",
       }),

@@ -13,6 +13,7 @@ describe("exam browser bootstrap", () => {
         project_id: "project-1",
         run_id: "run-1",
         expires_at_ms: 1234,
+        scheduled_stop_at_ms: 1000,
       },
       account: {
         first_name: "Exam",
@@ -30,6 +31,7 @@ describe("exam browser bootstrap", () => {
     });
 
     expect(bootstrap).toEqual({
+      delete_at: "1970-01-01T00:00:01.000Z",
       account: {
         account_id: "account-1",
         first_name: "Exam",

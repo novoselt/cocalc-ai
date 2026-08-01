@@ -29,6 +29,7 @@ describe("project-host customize payload", () => {
 
   it("restricts the full frontend for an admitted exam session", () => {
     const exam_session = {
+      delete_at: "2026-08-01T04:00:00.000Z",
       account: { account_id: "00000000-1000-4000-8000-000000000001" },
       project: { project_id: "00000000-1000-4000-8000-000000000002" },
     } as any;
@@ -49,6 +50,7 @@ describe("project-host customize payload", () => {
       agent_openai_codex_enabled: false,
       account_id: "00000000-1000-4000-8000-000000000001",
       project_id: "00000000-1000-4000-8000-000000000002",
+      scratchpad_delete_at: "2026-08-01T04:00:00.000Z",
     });
     expect(payload.exam_session).toBe(exam_session);
   });

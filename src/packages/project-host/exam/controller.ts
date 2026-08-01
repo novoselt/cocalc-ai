@@ -729,6 +729,7 @@ export interface ExamBrowserSession {
   project_id: string;
   run_id: string;
   expires_at_ms: number;
+  scheduled_stop_at_ms: number;
 }
 
 export function getExamBrowserSession(
@@ -755,6 +756,7 @@ export function getExamBrowserSession(
     project_id: session.project_id,
     run_id: session.run_id,
     expires_at_ms: session.expires_at_ms,
+    scheduled_stop_at_ms: row.scheduled_stop_at_ms,
   };
 }
 
@@ -804,6 +806,7 @@ export async function joinExamRun({
     project_id,
     run_id: row.run_id,
     expires_at_ms: row.cleanup_deadline_at_ms,
+    scheduled_stop_at_ms: row.scheduled_stop_at_ms,
   };
 }
 

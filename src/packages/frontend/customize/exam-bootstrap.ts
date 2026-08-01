@@ -25,10 +25,22 @@ export function applyExamSessionBootstrap({
   // normal-site account id before Conat and account persistence initialize.
   webapp_client.account_id = session.account.account_id;
   const accountStore = redux.getStore("account");
+  const editorSettings = accountStore?.get("editor_settings")?.toJS?.() ?? {};
+  const otherSettings = accountStore?.get("other_settings")?.toJS?.() ?? {};
   applyAccountPatch({
     redux,
     patch: {
       ...session.account,
+      // The normal account store is initialized with CoCalc's schema defaults.
+      // Preserve them when the host-local scratchpad account has no overrides.
+      editor_settings: {
+        ...editorSettings,
+        ...(session.account.editor_settings ?? {}),
+      },
+      other_settings: {
+        ...otherSettings,
+        ...(session.account.other_settings ?? {}),
+      },
       user_type: "signed_in",
       is_logged_in: true,
       is_admin: false,
