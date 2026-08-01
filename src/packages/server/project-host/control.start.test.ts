@@ -563,6 +563,9 @@ describe("startProjectOnHost placement", () => {
       ) {
         return { rows: [{ backup_repo_id: "repo-1", provisioned: true }] };
       }
+      if (sql.includes("FROM project_copies")) {
+        return { rows: [{ exists: false }] };
+      }
       throw new Error(`unexpected query: ${sql}`);
     });
     poolConnectMock = jest.fn(async () => ({
@@ -592,6 +595,7 @@ describe("startProjectOnHost placement", () => {
         run_quota_revision: 0,
         image: "sagemathinc/sagemath-x86_64:10.7",
         restore: "none",
+        apply_pending_copies: false,
         lro_op_id: "op-1",
       }),
     );
@@ -601,7 +605,9 @@ describe("startProjectOnHost placement", () => {
       image: "sagemathinc/sagemath-x86_64:10.7",
       run_quota_revision: 0,
     });
-    expect(assertCanRestoreProvisionedProjectStorageMock).not.toHaveBeenCalled();
+    expect(
+      assertCanRestoreProvisionedProjectStorageMock,
+    ).not.toHaveBeenCalled();
     expect(notifyProjectHostUpdateMock).toHaveBeenCalledWith({
       project_id: "proj-1",
       host_id: "host-1",

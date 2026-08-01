@@ -1768,6 +1768,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     image,
     restore,
     restore_backup_id,
+    apply_pending_copies = true,
     lro_op_id,
     autostart,
     managed_egress_override,
@@ -1781,6 +1782,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
+    apply_pending_copies?: boolean;
     lro_op_id?: string;
     autostart?: boolean;
     managed_egress_override?: ManagedProjectEgressOverride;
@@ -1974,9 +1976,13 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         progress: 5,
         message: "preparing project state",
       });
-      await timings.measure("apply_pending_copies", async () => {
-        await applyPendingCopies({ project_id });
-      });
+      if (apply_pending_copies) {
+        await timings.measure("apply_pending_copies", async () => {
+          await applyPendingCopies({ project_id });
+        });
+      } else {
+        timings.phase_timings_ms.apply_pending_copies = 0;
+      }
       publishStartProgress({
         activity_id,
         project_id,

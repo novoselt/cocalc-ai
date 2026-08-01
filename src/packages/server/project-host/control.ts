@@ -71,6 +71,35 @@ type StartProjectInFlight = {
 };
 const startProjectInFlight = new Map<string, StartProjectInFlight>();
 
+async function projectNeedsPendingCopyCheck(
+  project_id: string,
+): Promise<boolean> {
+  try {
+    const { rows } = await pool().query<{ exists: boolean }>(
+      `
+        SELECT EXISTS (
+          SELECT 1
+          FROM project_copies
+          WHERE dest_project_id=$1
+            AND status IN ('queued', 'applying')
+            AND expires_at > now()
+        ) AS exists
+      `,
+      [project_id],
+    );
+    return rows[0]?.exists !== false;
+  } catch (err) {
+    // Mixed-schema or temporarily unavailable copy state must retain the
+    // conservative host-side claim. This optimization may fail open only for
+    // latency, never for copy correctness.
+    log.warn("unable to establish pending-copy warm-start fast path", {
+      project_id,
+      err: `${err}`,
+    });
+    return true;
+  }
+}
+
 function isIdempotentStartUnavailable(err: unknown): boolean {
   const text = `${(err as any)?.message ?? err ?? ""}`.toLowerCase();
   const namesMethod =
@@ -1015,12 +1044,17 @@ export async function startProjectOnHost(
     );
     markHostControl("runtime_policy", phaseStarted);
     phaseStarted = Date.now();
-    const { rows } = await pool().query<{
-      backup_repo_id: string | null;
-      provisioned: boolean | null;
-    }>("SELECT backup_repo_id, provisioned FROM projects WHERE project_id=$1", [
-      project_id,
+    const [projectStorage, applyPendingCopies] = await Promise.all([
+      pool().query<{
+        backup_repo_id: string | null;
+        provisioned: boolean | null;
+      }>(
+        "SELECT backup_repo_id, provisioned FROM projects WHERE project_id=$1",
+        [project_id],
+      ),
+      projectNeedsPendingCopyCheck(project_id),
     ]);
+    const { rows } = projectStorage;
     if (rows[0]?.backup_repo_id && rows[0]?.provisioned === false) {
       await assertCanRestoreProvisionedProjectStorage({ project_id });
     }
@@ -1043,6 +1077,7 @@ export async function startProjectOnHost(
       image: meta.image,
       restore,
       restore_backup_id: explicitRestoreBackupId || undefined,
+      apply_pending_copies: applyPendingCopies,
       lro_op_id: opts?.lro_op_id,
       start_metadata: {
         title: meta.title,

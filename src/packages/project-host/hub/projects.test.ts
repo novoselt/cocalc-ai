@@ -459,6 +459,28 @@ describe("project host start ACP rehydrate ordering", () => {
     expect(runnerApi.start).toHaveBeenCalledTimes(1);
   });
 
+  it("skips the remote pending-copy claim after an authoritative empty check", async () => {
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({
+      project_id,
+      apply_pending_copies: false,
+    });
+
+    expect(applyPendingCopies).not.toHaveBeenCalled();
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
+  });
+
   it("does not skip an explicit restore when the runtime is active", async () => {
     const runnerApi = {
       start: jest.fn(async () => ({

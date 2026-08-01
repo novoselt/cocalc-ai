@@ -583,6 +583,7 @@ export interface HostControlApi {
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
+    apply_pending_copies?: boolean;
     lro_op_id?: string;
     managed_egress_override?: ManagedProjectEgressOverride;
     start_metadata?: HostProjectStartMetadata;
@@ -597,6 +598,7 @@ export interface HostControlApi {
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
+    apply_pending_copies?: boolean;
     lro_op_id?: string;
     managed_egress_override?: ManagedProjectEgressOverride;
     start_metadata?: HostProjectStartMetadata;
