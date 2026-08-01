@@ -192,7 +192,7 @@ try {
       await sleep(options.settle_ms);
       const requestedAtMs = Date.now();
       const started = performance.now();
-      await startButton.click();
+      await startButton.click({ force: true });
       const starting = page.getByText("Starting", { exact: true });
       await starting.waitFor({ state: "visible", timeout: 5_000 });
       await starting.waitFor({ state: "hidden", timeout: 30_000 });

@@ -3956,8 +3956,24 @@ export class ProjectsActions extends Actions<ProjectsState> {
         "host_id",
       ]) as string | undefined;
       if (assignedHostId) {
-        const hostInfo = await this.ensure_host_info(assignedHostId);
-        const hostState = evaluateHostOperational(hostInfo as any);
+        const cachedHostInfo = store.get("host_info")?.get(assignedHostId);
+        let hostInfo = cachedHostInfo;
+        let hostState = evaluateHostOperational(hostInfo as any);
+        if (hostState.state === "unavailable") {
+          const updatedAt = cachedHostInfo?.get?.("updated_at");
+          const fresh =
+            typeof updatedAt === "number" &&
+            Date.now() - updatedAt < ProjectsActions.HOST_INFO_TTL_MS;
+          if (!fresh) {
+            hostInfo = await this.ensure_host_info(assignedHostId, true);
+            hostState = evaluateHostOperational(hostInfo as any);
+          }
+        } else {
+          // Host availability is also enforced by the start RPC. Refresh an
+          // operational or missing cache in parallel instead of adding a
+          // control-plane round trip to every normal start.
+          void this.ensure_host_info(assignedHostId);
+        }
         if (hostState.state === "unavailable") {
           const hostName = hostLabel(hostInfo as any, assignedHostId);
           const reason = hostState.reason ?? "Assigned host is unavailable.";

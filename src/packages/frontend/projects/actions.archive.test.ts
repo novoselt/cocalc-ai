@@ -931,6 +931,32 @@ describe("ProjectsActions archive flow", () => {
     }
   });
 
+  it("does not wait for a normal host-info refresh before starting", async () => {
+    configureProject({
+      state: "opened",
+      lastEdited: new Date("2026-04-25T15:55:00.000Z"),
+      hostId: "host-1",
+    });
+    const { actions } = makeActions();
+    const unresolvedHostRefresh = new Promise<never>(() => undefined);
+    const ensureHostInfo = jest
+      .spyOn(actions, "ensure_host_info" as any)
+      .mockReturnValue(unresolvedHostRefresh);
+    jest
+      .spyOn(actions as any, "project_log")
+      .mockImplementation(async () => {});
+
+    await expect(actions.start_project(project_id)).resolves.toBe(true);
+
+    expect(ensureHostInfo).toHaveBeenCalledWith("host-1");
+    expect(
+      mockedWebappClient.conat_client.hub.projects.start,
+    ).toHaveBeenCalledWith({
+      project_id,
+      wait: false,
+    });
+  });
+
   it("logs project_started only after the project is observed running", async () => {
     jest.useFakeTimers();
     try {
