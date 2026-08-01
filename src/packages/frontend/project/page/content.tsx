@@ -14,12 +14,13 @@ and it displays the file as an editor associated with that path in the project,
 or Loading... if the file is still being loaded.
 */
 
-import { Alert } from "antd";
+import { Alert, Button } from "antd";
 import { Map } from "immutable";
 import { debounce } from "lodash";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import Draggable from "react-draggable";
 import { React, redux, useTypedRedux } from "@cocalc/frontend/app-framework";
+import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
 import { KioskModeBanner } from "@cocalc/frontend/app/kiosk-mode-banner";
 import { getExternalSideChatDesc } from "@cocalc/frontend/chat/external-side-chat-selection";
 import { chatMetaFile } from "@cocalc/frontend/chat/paths";
@@ -383,16 +384,31 @@ const EditorContent: React.FC<EditorContentProps> = ({
 
   // Render this here, since it is used in multiple places below.
   const editor = (
-    <Editor
-      key={`${component.redux_name ?? "loading"}:${
-        component.runtime_generation ?? 0
-      }`}
-      project_id={project_id}
-      path={path}
-      is_visible={is_visible}
-      isViewer={projectAccess.role === "viewer"}
-      component={component}
-    />
+    <CocalcErrorBoundary
+      autoRetry={false}
+      resetKeys={[component.redux_name, component.runtime_generation]}
+      scope="project.editor"
+      fallback={({ retry }) => (
+        <Alert
+          action={<Button onClick={retry}>Reload editor</Button>}
+          description="The error was reported automatically. Other project tools remain available."
+          message="This editor could not be displayed"
+          showIcon
+          type="warning"
+        />
+      )}
+    >
+      <Editor
+        key={`${component.redux_name ?? "loading"}:${
+          component.runtime_generation ?? 0
+        }`}
+        project_id={project_id}
+        path={path}
+        is_visible={is_visible}
+        isViewer={projectAccess.role === "viewer"}
+        component={component}
+      />
+    </CocalcErrorBoundary>
   );
 
   let content: React.JSX.Element;

@@ -56,7 +56,7 @@ export class CocalcErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: unknown, _info: ErrorInfo): void {
     markCaughtReactError(error, this.props.scope);
-    if (this.props.autoRetry !== false && this.state.retries === 0) {
+    if (this.props.autoRetry === true && this.state.retries === 0) {
       this.retryTimer = setTimeout(() => {
         this.retryTimer = undefined;
         this.setState(({ generation }) => ({

@@ -441,6 +441,7 @@ export const Page: React.FC = () => {
         <ProjectsNav height={pageStyle.height} style={projectsNavStyle} />
       )}
       <CocalcErrorBoundary
+        autoRetry={false}
         scope="app.active-content"
         resetKeys={[active_top_tab]}
       >
