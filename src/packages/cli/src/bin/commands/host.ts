@@ -1793,6 +1793,34 @@ export function registerHostCommand(
     });
 
   host
+    .command("machine-type <host> <machine-type>")
+    .description("change the provider machine type of a stopped host")
+    .action(
+      async (hostIdentifier: string, machineType: string, command: Command) => {
+        await withContext(command, "host machine-type", async (ctx) => {
+          const h = await resolveHost(ctx, hostIdentifier, {
+            admin_view: true,
+          });
+          const requestedMachineType = `${machineType}`.trim();
+          if (!requestedMachineType) {
+            throw new Error("machine type must not be empty");
+          }
+          const updated = await ctx.hub.hosts.updateHostMachine({
+            id: h.id,
+            machine_type: requestedMachineType,
+          });
+          return {
+            host_id: updated.id,
+            name: updated.name ?? h.name ?? null,
+            status: updated.status ?? null,
+            machine_type: updated.machine?.machine_type ?? updated.size ?? null,
+            pricing_model: updated.pricing_model ?? null,
+          };
+        });
+      },
+    );
+
+  host
     .command("cloud-refresh <host>")
     .description("force cloud-provider reconciliation for one host")
     .option(
