@@ -561,7 +561,7 @@ describe("startProjectOnHost placement", () => {
         sql ===
         "SELECT backup_repo_id, provisioned FROM projects WHERE project_id=$1"
       ) {
-        return { rows: [{ backup_repo_id: null, provisioned: true }] };
+        return { rows: [{ backup_repo_id: "repo-1", provisioned: true }] };
       }
       throw new Error(`unexpected query: ${sql}`);
     });
@@ -601,6 +601,7 @@ describe("startProjectOnHost placement", () => {
       image: "sagemathinc/sagemath-x86_64:10.7",
       run_quota_revision: 0,
     });
+    expect(assertCanRestoreProvisionedProjectStorageMock).not.toHaveBeenCalled();
     expect(notifyProjectHostUpdateMock).toHaveBeenCalledWith({
       project_id: "proj-1",
       host_id: "host-1",

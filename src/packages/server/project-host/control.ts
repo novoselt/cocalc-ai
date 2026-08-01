@@ -1025,7 +1025,16 @@ export async function startProjectOnHost(
       await assertCanRestoreProvisionedProjectStorage({ project_id });
     }
     markHostControl("restore_metadata", phaseStarted);
-    const restore = rows[0]?.backup_repo_id ? "auto" : "none";
+    // A provisioned project already has authoritative local storage. Asking
+    // the runner to auto-restore still performs a file-server round trip even
+    // when there is nothing to restore, adding latency to every warm start.
+    // Preserve automatic restore for unprovisioned/unknown storage and every
+    // explicit restore request.
+    const restore =
+      explicitRestoreBackupId ||
+      (rows[0]?.backup_repo_id && rows[0]?.provisioned !== true)
+        ? "auto"
+        : "none";
     const startRequest: Parameters<HostControlApi["startProject"]>[0] = {
       project_id,
       authorized_keys: meta.authorized_keys,
@@ -1090,6 +1099,15 @@ export async function startProjectOnHost(
         response = await client.startProject(startRequest);
       }
       markHostControl("start_rpc", phaseStarted);
+      const projectHostWallMs = Number(
+        response.phase_timings_ms?.["project_host.wall_total"],
+      );
+      if (Number.isFinite(projectHostWallMs)) {
+        hostControlTimings["host_control.start_rpc_transport"] = Math.max(
+          0,
+          hostControlTimings["host_control.start_rpc"] - projectHostWallMs,
+        );
+      }
       const saveRunningStateStarted = Date.now();
       await saveProjectStateSnapshot(project_id, response.state ?? "running", {
         runtime_started: true,

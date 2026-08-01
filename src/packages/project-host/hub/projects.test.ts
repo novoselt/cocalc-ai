@@ -434,6 +434,31 @@ describe("project host start ACP rehydrate ordering", () => {
     expect(applyPendingCopies).not.toHaveBeenCalled();
   });
 
+  it("does not probe Podman twice when local state records a stopped runtime", async () => {
+    getProject.mockReturnValue({
+      image: DEFAULT_PROJECT_IMAGE,
+      run_quota: undefined,
+      state: "opened",
+    });
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      status: jest.fn(async () => ({ state: "opened" })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({ project_id, skip_if_running: true });
+
+    expect(runnerApi.status).not.toHaveBeenCalled();
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
+  });
+
   it("does not skip an explicit restore when the runtime is active", async () => {
     const runnerApi = {
       start: jest.fn(async () => ({

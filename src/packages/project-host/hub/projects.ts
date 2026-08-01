@@ -583,6 +583,14 @@ function createPhaseTimingRecorder() {
         phase_timings_ms[phase] = Date.now() - started;
       }
     },
+    measureSync<T>(phase: string, fn: () => T): T {
+      const started = Date.now();
+      try {
+        return fn();
+      } finally {
+        phase_timings_ms[phase] = Date.now() - started;
+      }
+    },
   };
 }
 
@@ -1791,6 +1799,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     const op_id = lro_op_id ?? uuid();
     const activity_id = `start:${op_id}`;
     const timings = createPhaseTimingRecorder();
+    const projectHostStarted = Date.now();
     let runnerPhaseTimings: Record<string, number> | undefined;
     let volumePreparation = {
       storage_quota_prepared: false,
@@ -1799,7 +1808,22 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     beginProjectHostActivity(activity_id, "start");
     let resolved: StartMetadata | undefined;
     try {
-      if (skip_if_running && !restore_backup_id && runnerApi.status) {
+      const cachedLifecycleState = `${getProject(project_id)?.state ?? ""}`;
+      // A successful stop durably records "opened" locally. In that normal
+      // warm-start case, avoid a redundant Podman status round trip: the
+      // runner's container preflight remains authoritative and fail-safe. If
+      // local state is absent or says the runtime may be live, retain the
+      // explicit idempotency probe.
+      const shouldProbeExistingRuntime =
+        !cachedLifecycleState ||
+        cachedLifecycleState === "running" ||
+        cachedLifecycleState === "starting";
+      if (
+        skip_if_running &&
+        !restore_backup_id &&
+        runnerApi.status &&
+        shouldProbeExistingRuntime
+      ) {
         try {
           const current = await timings.measure(
             "check_existing_runtime",
@@ -1835,19 +1859,23 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           );
         }
       }
-      await assertManagedRawNetworkStartAllowedBestEffort({
-        project_id,
-        managed_egress_override,
+      await timings.measure("managed_network_admission", async () => {
+        await assertManagedRawNetworkStartAllowedBestEffort({
+          project_id,
+          managed_egress_override,
+        });
       });
-      resolved = await resolveStartMetadata({
-        project_id,
-        authorized_keys,
-        run_quota,
-        run_quota_revision,
-        image,
-        autostart,
-        start_metadata,
-      });
+      resolved = await timings.measure("resolve_start_metadata", async () =>
+        resolveStartMetadata({
+          project_id,
+          authorized_keys,
+          run_quota,
+          run_quota_revision,
+          image,
+          autostart,
+          start_metadata,
+        }),
+      );
       const startMetadata = resolved;
       if (autostart && startMetadata.autostart_enabled === false) {
         throw new Error(
@@ -1917,23 +1945,26 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           },
         );
       });
-      upsertProjectStopState({
-        project_id,
-        last_started_ms: Date.now(),
-      });
-      // Mark as starting immediately so hub/clients see progress even if image pulls are slow.
-      ensureProjectRow({
-        project_id,
-        opts: {
-          title: startMetadata.title,
-          users: startMetadata.users,
-          authorized_keys: startMetadata.authorized_keys,
-          run_quota: startMetadata.run_quota,
-          run_quota_revision: startMetadata.run_quota_revision,
-          image: startMetadata.image,
-        },
-        state: "starting",
-        secret_names: startMetadata.secret_names,
+      timings.measureSync("mark_starting_state", () => {
+        upsertProjectStopState({
+          project_id,
+          last_started_ms: Date.now(),
+        });
+        // Mark as starting immediately so hub/clients see progress even if
+        // image pulls are slow.
+        ensureProjectRow({
+          project_id,
+          opts: {
+            title: startMetadata.title,
+            users: startMetadata.users,
+            authorized_keys: startMetadata.authorized_keys,
+            run_quota: startMetadata.run_quota,
+            run_quota_revision: startMetadata.run_quota_revision,
+            image: startMetadata.image,
+          },
+          state: "starting",
+          secret_names: startMetadata.secret_names,
+        });
       });
       publishStartProgress({
         activity_id,
@@ -2063,21 +2094,23 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         });
       }
       runnerPhaseTimings = (status as any)?.phase_timings_ms;
-      ensureProjectRow({
-        project_id,
-        opts: {
-          title: startMetadata.title,
-          users: startMetadata.users,
-          authorized_keys: startMetadata.authorized_keys,
-          run_quota: startMetadata.run_quota,
-          image: getImage(config),
-        },
-        state: status?.state ?? "running",
-        http_port: (status as any)?.http_port,
-        ssh_port: (status as any)?.ssh_port,
-        project_bundle_version: (status as any)?.project_bundle_version,
-        tools_version: (status as any)?.tools_version,
-        secret_names: startMetadata.secret_names,
+      timings.measureSync("mark_running_state", () => {
+        ensureProjectRow({
+          project_id,
+          opts: {
+            title: startMetadata.title,
+            users: startMetadata.users,
+            authorized_keys: startMetadata.authorized_keys,
+            run_quota: startMetadata.run_quota,
+            image: getImage(config),
+          },
+          state: status?.state ?? "running",
+          http_port: (status as any)?.http_port,
+          ssh_port: (status as any)?.ssh_port,
+          project_bundle_version: (status as any)?.project_bundle_version,
+          tools_version: (status as any)?.tools_version,
+          secret_names: startMetadata.secret_names,
+        });
       });
       // During move/restore the destination project root may not exist until
       // runnerApi.start has created or restored it, so ACP rehydrate must wait.
@@ -2101,6 +2134,22 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
       timings.phase_timings_ms.total = Object.entries(timings.phase_timings_ms)
         .filter(([phase]) => !phase.startsWith("runner_start."))
         .reduce((sum, [_phase, value]) => sum + value, 0);
+      timings.phase_timings_ms["project_host.wall_total"] =
+        Date.now() - projectHostStarted;
+      const attributedProjectHostMs = Object.entries(timings.phase_timings_ms)
+        .filter(
+          ([phase]) =>
+            phase !== "total" &&
+            phase !== "project_host.wall_total" &&
+            phase !== "project_host.unattributed" &&
+            !phase.startsWith("runner_start."),
+        )
+        .reduce((sum, [_phase, value]) => sum + value, 0);
+      timings.phase_timings_ms["project_host.unattributed"] = Math.max(
+        0,
+        timings.phase_timings_ms["project_host.wall_total"] -
+          attributedProjectHostMs,
+      );
       publishStartProgress({
         activity_id,
         project_id,
