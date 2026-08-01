@@ -2250,7 +2250,6 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           `project stop did not converge; runner still reports state='${finalState}'`,
         );
       }
-      scheduleStoppedVolumePreparation(project_id);
       if (!syntheticRuntimeProbeProjects.has(project_id)) {
         try {
           const base = getMountPoint();
@@ -2269,6 +2268,11 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           resetProjectLastChangedRunning(project_id);
         }
       }
+      // Start the destructive scratch reset only after stop bookkeeping. The
+      // reset is deliberately fire-and-forget, but a concurrent Btrfs mutation
+      // can otherwise block the generation read above and keep the lifecycle
+      // lock in `stopping` for tens of seconds under storage pressure.
+      scheduleStoppedVolumePreparation(project_id);
       logger.debug("stop: project-host request finished", {
         project_id,
         force,

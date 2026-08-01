@@ -143,7 +143,19 @@ async function ensureProjectStopped(api, projectId) {
   const deadline = Date.now() + 180_000;
   let lastState = "unknown";
   while (Date.now() < deadline) {
-    await runCli(api, ["project", "stop", "-w", projectId, "--wait"]);
+    const before = await runCli(api, ["project", "status", "-w", projectId]);
+    lastState = `${before.data?.state ?? "unknown"}`;
+    if (!new Set(["running", "starting", "stopping"]).has(lastState)) {
+      return;
+    }
+    try {
+      await runCliOnce(api, ["project", "stop", "-w", projectId, "--wait"]);
+    } catch (err) {
+      if (!isTransientCliFailure(err)) throw err;
+      process.stderr.write(
+        `project stop response was transient; polling authoritative state: ${err}\n`,
+      );
+    }
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const status = await runCli(api, ["project", "status", "-w", projectId]);
       lastState = `${status.data?.state ?? "unknown"}`;
@@ -253,17 +265,33 @@ try {
     for (const projectId of options.projects) {
       await ensureProjectStopped(options.api, projectId);
       // Establish the qualified cohort with one foreground page whose initial
-      // state already reflects the stopped project. External stop propagation
-      // and background-tab throttling are measured separately.
+      // state already reflects the stopped project. The apps route exposes the
+      // title-bar Start control without implicitly autostarting a stopped
+      // project, unlike a file route. External stop propagation and
+      // background-tab throttling are measured separately.
       const startButton = await waitForStoppedProjectPage(
         page,
-        `${options.api}/projects/${projectId}/files/`,
+        `${options.api}/projects/${projectId}/apps`,
       );
       // Navigation preserves the synthetic pointer position. Move it away
       // from the toolbar so a tooltip from the prior project cannot intercept
       // the next real user-path click.
       await page.mouse.move(0, 0);
       await sleep(options.settle_ms);
+      const priorOperations = await runCli(options.api, [
+        "op",
+        "list",
+        "--scope-type",
+        "project",
+        "--scope-id",
+        projectId,
+        "--include-completed",
+        "--limit",
+        "5",
+      ]);
+      const priorOperationIds = new Set(
+        priorOperations.data.map((operation) => operation.op_id),
+      );
       browserConsole = [];
       await page.evaluate(() => {
         const state = globalThis.__cocalcProjectStartBenchmark;
@@ -333,13 +361,20 @@ try {
           { cause: err },
         );
       }
-      const browserElapsedMs = Math.round(performance.now() - started);
+      const browserWaiterElapsedMs = Math.round(performance.now() - started);
       const failed = await startButton.isVisible();
       const browserStateTransitions = await page.evaluate(() => {
         const state = globalThis.__cocalcProjectStartBenchmark;
         state?.observer?.disconnect();
         return state?.transitions ?? [];
       });
+      const runningTransition = browserStateTransitions.findLast(
+        (transition) =>
+          !transition.start_visible && !transition.starting_visible,
+      );
+      const browserObservedAtMs =
+        runningTransition?.at_ms ?? requestedAtMs + browserWaiterElapsedMs;
+      const browserElapsedMs = Math.max(0, browserObservedAtMs - requestedAtMs);
       const operations = await runCli(options.api, [
         "op",
         "list",
@@ -354,6 +389,7 @@ try {
       const operation = operations.data.find(
         (candidate) =>
           candidate.kind === "project-start" &&
+          !priorOperationIds.has(candidate.op_id) &&
           Date.parse(candidate.created_at) >= requestedAtMs - 2_000,
       );
       if (operation == null) {
@@ -370,6 +406,7 @@ try {
         op_id: operation.op_id,
         requested_at: new Date(requestedAtMs).toISOString(),
         browser_elapsed_ms: browserElapsedMs,
+        browser_waiter_elapsed_ms: browserWaiterElapsedMs,
         browser_failed: failed,
         browser_state_transitions: browserStateTransitions,
         browser_console: [...browserConsole],
@@ -380,6 +417,8 @@ try {
         observation_lag_ms: browserElapsedMs - backendElapsedMs,
         post_backend_observation_ms:
           browserElapsedMs - requestDispatchMs - backendElapsedMs,
+        authoritative_state_observation_ms:
+          browserObservedAtMs - Date.parse(operation.finished_at),
         phase_timings_ms: phaseTimings,
       };
       samples.push(sample);
@@ -415,6 +454,12 @@ process.stdout.write(
       ),
       post_backend_observation_ms: distribution(
         samples.map((sample) => sample.post_backend_observation_ms),
+      ),
+      authoritative_state_observation_ms: distribution(
+        samples.map((sample) => sample.authoritative_state_observation_ms),
+      ),
+      browser_waiter_ms: distribution(
+        samples.map((sample) => sample.browser_waiter_elapsed_ms),
       ),
     },
     null,
