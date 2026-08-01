@@ -827,7 +827,7 @@ describe("ProjectsActions archive flow", () => {
     );
   });
 
-  it("reconciles a start on LRO completion and retains scheduled fallbacks", async () => {
+  it("converges from a successful start LRO and retains projection fallbacks", async () => {
     jest.useFakeTimers();
     try {
       configureProject({
@@ -864,6 +864,21 @@ describe("ProjectsActions archive flow", () => {
               "state",
               "state",
             ]) === "starting",
+        ),
+      ).toBe(true);
+      expect(
+        redux._set_state.mock.calls.some(
+          ([state]) =>
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "state",
+            ]) === "running" &&
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "source",
+            ]) === "project-start-lro",
         ),
       ).toBe(true);
       expect(reconcile).toHaveBeenCalledTimes(1);

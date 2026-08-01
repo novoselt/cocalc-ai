@@ -4034,15 +4034,23 @@ export class ProjectsActions extends Actions<ProjectsState> {
         const startConvergence = this.waitForProjectStartOp({
           op: resp,
           timeout_ms: opts.waitTimeoutMs,
-        }).then(async (summary) => {
+        }).then((summary) => {
           if (summary.status === "succeeded") {
             // The bay saves authoritative running state before publishing the
-            // terminal LRO summary. Repair once at that causal boundary rather
-            // than waiting for the cumulative periodic fallback (1s + 5s).
-            await this.repairProjectProjection({
+            // terminal LRO summary. Use that causal acknowledgement directly
+            // for lifecycle convergence; the projection read repairs the rest
+            // of the row in the background.
+            this.projectStartSucceededStateUpdate(project_id, summary);
+            void this.repairProjectProjection({
               kind: "project-ids",
               project_ids: [project_id],
               reason: "project-start",
+            }).catch((err) => {
+              logger.debug("project start projection repair failed", {
+                project_id,
+                op_id: resp?.op_id,
+                error: `${err}`,
+              });
             });
           }
           return summary;
@@ -4297,6 +4305,35 @@ export class ProjectsActions extends Actions<ProjectsState> {
         });
       }
     }
+  };
+
+  private projectStartSucceededStateUpdate = (
+    project_id: string,
+    summary: LroSummary,
+  ) => {
+    const project_map = store.get("project_map");
+    const project = project_map?.get(project_id);
+    if (project_map == null || project == null) {
+      return;
+    }
+    const time =
+      summary.finished_at ??
+      summary.updated_at ??
+      summary.created_at ??
+      new Date();
+    this.setState({
+      project_map: project_map.set(
+        project_id,
+        project.set(
+          "state",
+          fromJS({
+            state: "running",
+            time,
+            source: "project-start-lro",
+          }),
+        ),
+      ),
+    });
   };
 
   public mark_project_hard_delete_accepted = (
