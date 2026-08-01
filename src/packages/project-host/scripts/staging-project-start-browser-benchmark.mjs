@@ -196,16 +196,40 @@ try {
       await sleep(options.settle_ms);
       const requestedAtMs = Date.now();
       const started = performance.now();
-      const starting = page.getByText("Starting", { exact: true });
-      // Arm the observer before dispatch: sufficiently fast starts can render
-      // and remove the optimistic state before an after-click waiter attaches.
-      const startingVisible = starting.waitFor({
+      const startingButton = page.getByTitle("Project is starting");
+      // Arm the transition observer before dispatch so a fast optimistic
+      // render cannot occur between the click and waiter registration.
+      const startingVisible = startingButton.waitFor({
         state: "visible",
         timeout: 5_000,
       });
       await startButton.click();
-      await startingVisible;
-      await starting.waitFor({ state: "hidden", timeout: 30_000 });
+      // Measure the browser's authoritative project state rather than a
+      // generic text label. The title is the frontend's explicit starting
+      // state and remains until the start action accepts terminal state.
+      try {
+        await startingVisible;
+        await startingButton.waitFor({ state: "hidden", timeout: 30_000 });
+      } catch (err) {
+        const diagnostic = await page.evaluate(() => {
+          return {
+            start_button_visible: document.querySelector(
+              '[title="Start Project"]',
+            )?.clientHeight
+              ? true
+              : false,
+            starting_button_visible: document.querySelector(
+              '[title="Project is starting"]',
+            )?.clientHeight
+              ? true
+              : false,
+          };
+        });
+        throw new Error(
+          `browser did not observe running state: ${JSON.stringify(diagnostic)}`,
+          { cause: err },
+        );
+      }
       const browserElapsedMs = Math.round(performance.now() - started);
       const failed = await startButton.isVisible();
       const operations = await runCli(options.api, [
