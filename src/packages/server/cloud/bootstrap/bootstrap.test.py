@@ -1675,6 +1675,19 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
             self.assertEqual(row["limits"]["riops"], 172)
             self.assertEqual(row["limits"]["wiops"], 86)
 
+        startup = self.run_calculation(devices, "startup")
+        self.assertEqual(startup.returncode, 0, startup.stderr)
+        for row in json.loads(startup.stdout)["rows"]:
+            self.assertEqual(
+                row["limits"],
+                {
+                    "rbps": 60 * 1024**2,
+                    "wbps": 25 * 1024**2,
+                    "riops": 1725,
+                    "wiops": 862,
+                },
+            )
+
     def test_dynamic_capacity_rejects_unmodeled_storage(self) -> None:
         result = self.run_calculation(
             [
@@ -1916,6 +1929,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("verify-project-io-policy)", script)
             self.assertIn("project-io-status)", script)
             self.assertIn("configure_maintenance_cgroup", script)
+            self.assertIn("configure_project_startup_cgroup", script)
+            self.assertIn("prepare-project-startup-cgroup)", script)
             self.assertIn("attach_maintenance_worker", script)
             self.assertIn("btrfs|btrfs-maintenance)", script)
             self.assertIn(
@@ -1930,6 +1945,15 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'apply_io_max "$MAINTENANCE_CGROUP_DEFAULT" "maintenance" "$mode"',
                 script,
             )
+            self.assertIn(
+                'apply_io_max "$PROJECT_STARTUP_CGROUP_DEFAULT" "startup" "$mode"',
+                script,
+            )
+            self.assertIn(
+                'PROJECT_STARTUP_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-project-startup"',
+                script,
+            )
+            self.assertIn("cocalc-project-network-startup", script)
             self.assertIn(
                 '"maintenance_process_count": len(maintenance_processes.split())',
                 script,

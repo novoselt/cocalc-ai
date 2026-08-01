@@ -654,6 +654,7 @@ describe("project-runner podman orphan fallback", () => {
     expect(getPort).not.toHaveBeenCalled();
     expect(mockPodman).toHaveBeenCalledWith(
       expect.arrayContaining([
+        "create",
         "--cgroups=disabled",
         "-p",
         "127.0.0.1:30123:22",
@@ -667,6 +668,18 @@ describe("project-runner podman orphan fallback", () => {
         "--init",
         ".local/share/cocalc/startup.sh",
       ]),
+      expect.objectContaining({
+        launcher: expect.objectContaining({
+          command: "bash",
+          argsPrefix: expect.arrayContaining([
+            "cocalc-project-podman-create",
+            project1,
+          ]),
+        }),
+      }),
+    );
+    expect(mockPodman).toHaveBeenCalledWith(
+      ["start", `project-${project1}`],
       expect.objectContaining({
         launcher: expect.objectContaining({
           command: "bash",
@@ -756,6 +769,70 @@ describe("project-runner podman orphan fallback", () => {
         },
       }),
     ).rejects.toThrow("failed to finalize project runtime cgroup");
+    expect(mockPodman).toHaveBeenCalledWith(
+      ["rm", "-f", "-t", "0", `project-${project1}`],
+      { timeout: 10 },
+    );
+  });
+
+  it("removes a partial container when podman create fails", async () => {
+    mockProjectStartPodman(project1);
+    const defaultPodman = mockPodman.getMockImplementation()!;
+    mockPodman.mockImplementation(async (args: string[]) => {
+      if (args[0] === "create") {
+        throw Error("create failed");
+      }
+      return await defaultPodman(args);
+    });
+
+    await expect(
+      start({
+        project_id: project1,
+        localPath: async () => ({
+          home: `/tmp/project-${project1}`,
+          quota_applied: true,
+        }),
+        config: {
+          image: "docker.io/library/ubuntu:latest",
+          ssh_port: 30123,
+          http_port: 45123,
+        },
+      }),
+    ).rejects.toThrow("create failed");
+    expect(mockPodman).not.toHaveBeenCalledWith(
+      ["start", `project-${project1}`],
+      expect.anything(),
+    );
+    expect(mockPodman).toHaveBeenCalledWith(
+      ["rm", "-f", "-t", "0", `project-${project1}`],
+      { timeout: 10 },
+    );
+  });
+
+  it("removes a created container when podman start fails", async () => {
+    mockProjectStartPodman(project1);
+    const defaultPodman = mockPodman.getMockImplementation()!;
+    mockPodman.mockImplementation(async (args: string[]) => {
+      if (args[0] === "start") {
+        throw Error("start failed");
+      }
+      return await defaultPodman(args);
+    });
+
+    await expect(
+      start({
+        project_id: project1,
+        localPath: async () => ({
+          home: `/tmp/project-${project1}`,
+          quota_applied: true,
+        }),
+        config: {
+          image: "docker.io/library/ubuntu:latest",
+          ssh_port: 30123,
+          http_port: 45123,
+        },
+      }),
+    ).rejects.toThrow("start failed");
     expect(mockPodman).toHaveBeenCalledWith(
       ["rm", "-f", "-t", "0", `project-${project1}`],
       { timeout: 10 },

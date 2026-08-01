@@ -30,6 +30,7 @@ const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 const REQUIRED_PROJECT_CGROUP_COMMANDS = [
   "enter-project-cgroup",
   "attach-prepared-project-runtime",
+  "prepare-project-startup-cgroup",
   "verify-project-io-limits",
   "verify-project-network-limits",
 ] as const;

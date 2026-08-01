@@ -122,6 +122,10 @@ const PROJECT_POOL_LAUNCHER_SCRIPT = `set -euo pipefail
 sudo -n /usr/local/sbin/cocalc-runtime-storage enter-project-cgroup "$1" "$$"
 shift
 exec podman "$@"`;
+const PROJECT_STARTUP_LAUNCHER_SCRIPT = `set -euo pipefail
+sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-startup-cgroup "$1" "$$"
+shift
+exec /usr/bin/ionice -c 2 -n 0 podman "$@"`;
 const PROJECT_CGROUP_LAUNCHER_SCRIPT = `set -euo pipefail
 sudo -n /usr/local/sbin/cocalc-runtime-storage prepare-project-cgroup "$1" "$$" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "\${10}" "\${11}" "\${12}"
 shift 12
@@ -800,6 +804,18 @@ function projectCgroupPodmanLauncher(
       limits.io_weight,
       limits.io_class,
       PROJECT_STARTUP_IO_WEIGHT,
+    ],
+  };
+}
+
+function projectStartupPodmanLauncher(project_id: string) {
+  return {
+    command: "bash",
+    argsPrefix: [
+      "-c",
+      PROJECT_STARTUP_LAUNCHER_SCRIPT,
+      "cocalc-project-podman-create",
+      project_id,
     ],
   };
 }
@@ -2251,7 +2267,7 @@ async function startUnlocked({
     );
 
     const args: string[] = [];
-    args.push("run");
+    args.push("create");
     args.push(
       ...(await timings.measure(
         "resolve_podman_runtime",
@@ -2268,7 +2284,6 @@ async function startUnlocked({
       `--userns=keep-id:uid=${DEFAULT_PROJECT_RUNTIME_UID},gid=${DEFAULT_PROJECT_RUNTIME_GID}`,
     );
     args.push("--user", "0:0");
-    args.push("--detach");
     args.push("--label", `project_id=${project_id}`, "--label", `role=project`);
     args.push("--replace");
     const originalConatServer = env.CONAT_SERVER;
@@ -2435,16 +2450,33 @@ async function startUnlocked({
     args.push(projectScript, "--sshd", "--init", PROJECT_STARTUP_SCRIPT_PATH);
 
     logger.debug("start: launching container - ", name);
-    await timings.measure(
-      "podman_run",
-      async () =>
-        await podman(args, {
-          launcher: projectCgroupPodmanLauncher(project_id, {
-            ...projectCgroupLimits,
-            cpu_weight: PROJECT_STARTUP_CPU_WEIGHT,
+    try {
+      // Creation executes no image command, so it can safely use the bounded
+      // host-level startup reserve. The first project instruction runs only
+      // after podman start enters the fully contained per-project cgroup.
+      await timings.measure(
+        "podman_create",
+        async () =>
+          await podman(args, {
+            launcher: projectStartupPodmanLauncher(project_id),
           }),
-        }),
-    );
+      );
+      await timings.measure(
+        "podman_start",
+        async () =>
+          await podman(["start", name], {
+            launcher: projectCgroupPodmanLauncher(project_id, {
+              ...projectCgroupLimits,
+              cpu_weight: PROJECT_STARTUP_CPU_WEIGHT,
+            }),
+          }),
+      );
+    } catch (err) {
+      await podman(["rm", "-f", "-t", "0", name], { timeout: 10 }).catch(
+        () => {},
+      );
+      throw err;
+    }
     const runtime = await timings.measure(
       "verify_container_running",
       async () => await waitForStartedContainer(name),
