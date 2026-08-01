@@ -282,6 +282,26 @@ describe("projects.start", () => {
     );
   });
 
+  it("does not delay foreground acknowledgement for historical LRO cleanup", async () => {
+    supersedeOlderProjectStartLrosMock.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    const { start } = await import("./projects");
+
+    await expect(
+      start({
+        account_id: "acct-1",
+        project_id: "proj-1",
+        wait: false,
+        foreground_wait_ms: 5_000,
+      }),
+    ).resolves.toMatchObject({ terminal_status: "succeeded" });
+    expect(supersedeOlderProjectStartLrosMock).toHaveBeenCalledWith({
+      project_id: "proj-1",
+      keep_op_id: "op-1",
+    });
+  });
+
   it("returns the LRO while a bounded foreground start continues", async () => {
     let finishStart: (() => void) | undefined;
     interBayStartMock = jest.fn(

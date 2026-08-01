@@ -4864,9 +4864,18 @@ async function runProjectStartLikeAction({
           context: `${kind}: succeeded`,
         });
       }
-      await supersedeOlderProjectStartLros({
+      // The current operation is already durably terminal. Historical cleanup
+      // must not delay the foreground acknowledgement that converges browser
+      // state to running.
+      void supersedeOlderProjectStartLros({
         project_id,
         keep_op_id: op.op_id,
+      }).catch((err) => {
+        log.warn("unable to supersede older project-start operations", {
+          project_id,
+          keep_op_id: op.op_id,
+          err: `${err}`,
+        });
       });
     } catch (err) {
       const runtimeSponsorDenial = extractRuntimeSponsorDenial(err);
