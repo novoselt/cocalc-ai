@@ -120,6 +120,7 @@ function normalizeExamConfig(
   const legacy = raw as Record<string, any>;
   return {
     ...raw,
+    title: `${raw.title ?? "Exam Scratchpad"}`.trim() || "Exam Scratchpad",
     max_projects: Number(raw.max_projects ?? legacy.max_workspaces),
     project_cpu: Number(raw.project_cpu ?? legacy.workspace_cpu),
     project_memory_mb: Number(
@@ -244,6 +245,7 @@ function runtimeStatus(row?: LocalExamRunRow): HostExamRuntimeStatus {
     stop_host_at_deadline: run.stop_host_at_deadline,
     cleanup_deadline_at: new Date(row.cleanup_deadline_at_ms).toISOString(),
     hostname: config.hostname,
+    title: config.title,
     terminal_enabled: run.terminal_enabled,
     network_mode: run.network_mode,
     last_error: row.last_error ?? undefined,
@@ -310,7 +312,7 @@ function reserveProject({
       current.admission_open !== 1 ||
       current.scheduled_stop_at_ms <= Date.now()
     ) {
-      throw new Error("exam admission is closed");
+      throw new Error("scratchpad access is closed");
     }
     if (activeProjectCount(row.run_id) >= run.max_projects) {
       throw new Error("exam project capacity has been reached");
@@ -416,7 +418,7 @@ async function provisionProject({
   account_id: string;
   project_id: string;
 }): Promise<void> {
-  const { run } = decodeRun(row);
+  const { config, run } = decodeRun(row);
   upsertRow("accounts", JSON.stringify({ account_id }), {
     account_id,
     first_name: "Exam",
@@ -431,7 +433,7 @@ async function provisionProject({
   try {
     await hubApi.projects.createProject({
       project_id,
-      title: "Exam Scratchpad",
+      title: config.title,
       image: run.rootfs_image,
       start: true,
       ensure_volume: true,
@@ -785,12 +787,12 @@ export async function joinExamRun({
     row.admission_open !== 1 ||
     row.scheduled_stop_at_ms <= Date.now()
   ) {
-    throw new Error("exam admission is closed");
+    throw new Error("scratchpad access is closed");
   }
   assertTokenRateLimit(source);
   if (!verifyExamTokenHash(token.trim(), row.token_hash)) {
     noteTokenFailure(source);
-    throw new Error("invalid exam token");
+    throw new Error("invalid access token");
   }
   tokenFailures.delete(source);
   const account_id = randomUUID();

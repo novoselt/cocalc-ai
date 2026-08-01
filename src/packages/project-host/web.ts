@@ -42,15 +42,31 @@ const DEFAULT_CONFIGURATION = {
 
 const EXAM_ADMISSION_SCRIPT = `(() => {
   const token = new URLSearchParams(window.location.hash.slice(1)).get("token");
-  if (!token) return;
-  const input = document.querySelector('input[name="token"]');
-  if (!(input instanceof HTMLInputElement)) return;
-  input.value = token;
-  window.history.replaceState(
-    null,
-    document.title,
-    window.location.pathname + window.location.search,
-  );
+  if (token) {
+    const input = document.querySelector('input[name="token"]');
+    if (input instanceof HTMLInputElement) input.value = token;
+    window.history.replaceState(
+      null,
+      document.title,
+      window.location.pathname + window.location.search,
+    );
+  }
+  const deadline = document.querySelector('time[data-deadline-ms]');
+  if (!(deadline instanceof HTMLTimeElement)) return;
+  const deadlineMs = Number(deadline.dataset.deadlineMs);
+  if (!Number.isFinite(deadlineMs)) return;
+  const updateDeadline = () => {
+    const remaining = Math.max(0, deadlineMs - Date.now());
+    const minutes = Math.max(1, Math.round(remaining / 60000));
+    if (minutes >= 90) {
+      const hours = Math.round(minutes / 60);
+      deadline.textContent = hours + " hour" + (hours === 1 ? "" : "s") + " from now";
+    } else {
+      deadline.textContent = minutes + " minute" + (minutes === 1 ? "" : "s") + " from now";
+    }
+  };
+  updateDeadline();
+  window.setInterval(updateDeadline, 30000);
 })();`;
 
 export function getProjectHostCustomizePayload(opts?: {
@@ -211,22 +227,36 @@ function requestSource(req: express.Request): string {
 export function getExamJoinPage({
   error,
   admission_open,
+  title = "Exam Scratchpad",
+  scheduled_stop_at,
 }: {
   error?: string;
   admission_open: boolean;
+  title?: string;
+  scheduled_stop_at?: string;
 }): string {
-  const escaped = `${error ?? ""}`
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  const escapeHtml = (value: unknown) =>
+    `${value ?? ""}`
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  const escaped = escapeHtml(error);
+  const escapedTitle = escapeHtml(title);
+  const deadline = new Date(`${scheduled_stop_at ?? ""}`);
+  const hasDeadline = Number.isFinite(deadline.valueOf());
+  const deadlineIso = hasDeadline ? deadline.toISOString() : "";
+  const deadlineText = hasDeadline
+    ? `<time data-deadline-ms="${deadline.valueOf()}" datetime="${deadlineIso}" title="${deadlineIso}">at ${escapeHtml(deadline.toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" }))}</time>`
+    : "at the configured deletion time";
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="cocalc-scratchpad" content="exam">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="same-origin">
-  <title>CoCalc Exam Scratchpad</title>
+  <title>${escapedTitle} - CoCalc</title>
   <script src="/exam/admission.js" defer></script>
   <style>
     :root { color-scheme: light; font-family: "Avenir Next", "Segoe UI", sans-serif; }
@@ -257,18 +287,19 @@ export function getExamJoinPage({
   </style>
 </head>
 <body><main>
-  <div class="eyebrow">Private computational project</div>
-  <h1>Exam Scratchpad</h1>
+  <div class="eyebrow">Temporary private computational project</div>
+  <h1>${escapedTitle}</h1>
   ${
     admission_open
-      ? `<p>Enter the token provided by your instructor. Your temporary project is erased automatically after the exam.</p>
+      ? `<p>Enter the token provided to you.</p>
+  <p>This temporary project will be completely erased automatically <strong>${deadlineText}</strong>, with nothing retained.</p>
   <form method="post" action="/exam/join">
-    <label for="token">Exam token</label>
+    <label for="token">Access token</label>
     <input id="token" name="token" type="password" autocomplete="off" required autofocus>
     <button type="submit">Open scratchpad</button>
   </form>`
-      : `<p>Your instructor has prepared this exam environment, but admission is not open yet.</p>
-  <div class="closed">Wait for your instructor to open admission, then refresh this page.</div>`
+      : `<p>This temporary scratchpad has been prepared, but access is not open yet.</p>
+  <div class="closed">Wait for access to open, then refresh this page.</div>`
   }
   ${escaped ? `<div class="error" role="alert">${escaped}</div>` : ""}
 </main></body></html>`;
@@ -306,6 +337,8 @@ export async function initHttp({
     res.type("html").send(
       getExamJoinPage({
         admission_open: runtime.admission_open,
+        title: runtime.title,
+        scheduled_stop_at: runtime.scheduled_stop_at,
       }),
     );
   });
@@ -322,6 +355,8 @@ export async function initHttp({
     res.type("html").send(
       getExamJoinPage({
         admission_open: runtime.admission_open,
+        title: runtime.title,
+        scheduled_stop_at: runtime.scheduled_stop_at,
       }),
     );
   });
@@ -375,6 +410,8 @@ export async function initHttp({
         .send(
           getExamJoinPage({
             admission_open: runtime.admission_open,
+            title: runtime.title,
+            scheduled_stop_at: runtime.scheduled_stop_at,
             error: `${(err as Error)?.message ?? err}`,
           }),
         );

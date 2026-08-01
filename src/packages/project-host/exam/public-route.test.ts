@@ -8,7 +8,7 @@ import { verifyExamPublicRoute } from "./public-route";
 describe("exam public route readiness", () => {
   it("requires the host-served exam page", async () => {
     const fetchImpl = jest.fn(async () => {
-      return new Response("<title>CoCalc Exam Scratchpad</title>", {
+      return new Response('<meta name="cocalc-scratchpad" content="exam">', {
         status: 200,
       });
     }) as unknown as typeof fetch;

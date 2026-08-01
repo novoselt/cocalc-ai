@@ -53,6 +53,7 @@ import {
 
 const DEFAULT_CONFIG: HostExamConfigInput = {
   enabled: false,
+  title: "Exam Scratchpad",
   max_projects: 100,
   project_cpu: 1,
   project_memory_mb: 2_000,
@@ -82,6 +83,7 @@ function defaultExamDeadline(projectTtlMinutes: number): Dayjs {
 function editableExamConfig(config: HostExamConfig): HostExamConfigInput {
   return {
     enabled: config.enabled,
+    title: config.title,
     max_projects: config.max_projects,
     project_cpu: config.project_cpu,
     project_memory_mb: config.project_memory_mb,
@@ -99,6 +101,8 @@ function sameExamConfig(
 ): boolean {
   return (
     left.enabled === right.enabled &&
+    (left.title ?? "Exam Scratchpad").trim() ===
+      (right.title ?? "Exam Scratchpad").trim() &&
     left.max_projects === right.max_projects &&
     left.project_cpu === right.project_cpu &&
     left.project_memory_mb === right.project_memory_mb &&
@@ -513,6 +517,20 @@ export function HostExamPanel({
               />
               <Typography.Text strong>Enable exam mode</Typography.Text>
             </Space>
+            <label>
+              Public scratchpad title
+              <Input
+                maxLength={100}
+                value={config.title}
+                placeholder="Exam Scratchpad"
+                onChange={(event) =>
+                  setConfig((value) => ({
+                    ...value,
+                    title: event.target.value,
+                  }))
+                }
+              />
+            </label>
             <Space wrap>
               <label>
                 Maximum projects (students)

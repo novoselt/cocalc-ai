@@ -37,6 +37,7 @@ const ACTIVE_RUN_STATUSES: HostExamRunStatus[] = [
 ];
 const PROJECT_HOST_RPC_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_EXAM_CONFIG: Omit<HostExamConfigInput, "enabled"> = {
+  title: "Exam Scratchpad",
   max_projects: 100,
   project_cpu: 1,
   project_memory_mb: 2_000,
@@ -69,6 +70,7 @@ function mapConfig(row: any): HostExamConfig {
   return {
     host_id: row.host_id,
     enabled: row.enabled === true,
+    title: `${row.title ?? "Exam Scratchpad"}`,
     hostname: row.hostname,
     dns_record_id: row.dns_record_id ?? null,
     dns_target: row.dns_target ?? null,
@@ -159,6 +161,7 @@ async function ensureSchema(): Promise<void> {
         CREATE TABLE IF NOT EXISTS ${CONFIG_TABLE} (
           host_id UUID PRIMARY KEY,
           enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          title TEXT NOT NULL DEFAULT 'Exam Scratchpad',
           hostname TEXT NOT NULL UNIQUE,
           dns_record_id TEXT,
           dns_target TEXT,
@@ -207,6 +210,20 @@ async function ensureSchema(): Promise<void> {
         )
       `);
       await migrateLegacyExamColumnNames();
+      await getPool().query(`
+        ALTER TABLE ${CONFIG_TABLE}
+          ADD COLUMN IF NOT EXISTS title TEXT DEFAULT 'Exam Scratchpad'
+      `);
+      await getPool().query(`
+        UPDATE ${CONFIG_TABLE}
+        SET title='Exam Scratchpad'
+        WHERE title IS NULL OR BTRIM(title)=''
+      `);
+      await getPool().query(`
+        ALTER TABLE ${CONFIG_TABLE}
+          ALTER COLUMN title SET DEFAULT 'Exam Scratchpad',
+          ALTER COLUMN title SET NOT NULL
+      `);
       await getPool().query(`
         ALTER TABLE ${CONFIG_TABLE}
           ALTER COLUMN max_projects SET NOT NULL,
@@ -315,6 +332,7 @@ function normalizeConfig(input: HostExamConfigInput): HostExamConfigInput {
   }
   return {
     enabled: input.enabled === true,
+    title: normalizeScratchpadTitle(input.title),
     max_projects: requireFiniteRange(
       input.max_projects ?? legacy.max_workspaces,
       {
@@ -365,6 +383,14 @@ function normalizeConfig(input: HostExamConfigInput): HostExamConfigInput {
     terminal_enabled: input.terminal_enabled === true,
     network_mode: "disabled",
   };
+}
+
+function normalizeScratchpadTitle(value: unknown): string {
+  const title = `${value ?? "Exam Scratchpad"}`.trim();
+  if (!title || title.length > 100) {
+    throw new Error("title must contain 1 to 100 characters");
+  }
+  return title;
 }
 
 function publicHostname(host: ExamHostRow): string {
@@ -723,16 +749,17 @@ export async function setExamConfigLocal({
   const { rows } = await getPool().query(
     `
       INSERT INTO ${CONFIG_TABLE} (
-        host_id, enabled, hostname, generation, max_projects,
+        host_id, enabled, title, hostname, generation, max_projects,
         project_cpu, project_memory_mb, project_disk_mb,
         project_ttl_minutes, cleanup_grace_minutes, terminal_enabled,
         network_mode, created_by, updated_by
       )
       VALUES (
-        $1, $2, $3, 1, $4, $5, $6, $7, $8, $9, $10, 'disabled', $11, $11
+        $1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11, 'disabled', $12, $12
       )
       ON CONFLICT (host_id) DO UPDATE SET
         enabled=EXCLUDED.enabled,
+        title=EXCLUDED.title,
         max_projects=EXCLUDED.max_projects,
         project_cpu=EXCLUDED.project_cpu,
         project_memory_mb=EXCLUDED.project_memory_mb,
@@ -749,6 +776,7 @@ export async function setExamConfigLocal({
     [
       host.id,
       config.enabled,
+      config.title,
       hostname,
       config.max_projects,
       config.project_cpu,

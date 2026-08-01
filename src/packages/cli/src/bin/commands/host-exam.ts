@@ -15,6 +15,7 @@ import { durationToMs } from "../../core/utils";
 
 const DEFAULT_CONFIG: HostExamConfigInput = {
   enabled: false,
+  title: "Exam Scratchpad",
   max_projects: 100,
   project_cpu: 1,
   project_memory_mb: 2_000,
@@ -234,6 +235,7 @@ export function registerHostExamCommands({
     .description("create or update the host exam configuration")
     .option("--enable", "enable exam mode")
     .option("--disable", "disable exam mode")
+    .option("--title <title>", "public scratchpad title")
     .option("--max-projects <count>", "maximum simultaneous student projects")
     .option("--project-cpu <cores>", "CPU limit for each student project")
     .option("--project-memory-mb <mb>", "memory limit for each student project")
@@ -250,6 +252,7 @@ export function registerHostExamCommands({
         opts: ExamCommandOptions & {
           enable?: boolean;
           disable?: boolean;
+          title?: string;
           maxProjects?: string;
           projectCpu?: string;
           projectMemoryMb?: string;
@@ -283,6 +286,7 @@ export function registerHostExamCommands({
               : opts.disable
                 ? false
                 : current.enabled,
+            title: opts.title?.trim() || current.title || "Exam Scratchpad",
             max_projects: parseNumber(
               opts.maxProjects,
               current.max_projects,

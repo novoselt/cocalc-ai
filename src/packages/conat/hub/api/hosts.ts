@@ -634,6 +634,7 @@ export type HostExamRunStatus =
 export interface HostExamConfig {
   host_id: string;
   enabled: boolean;
+  title: string;
   hostname: string;
   dns_record_id?: string | null;
   dns_target?: string | null;
@@ -707,6 +708,7 @@ export interface HostExamRuntimeStatus {
   stop_host_at_deadline?: boolean;
   cleanup_deadline_at?: string;
   hostname?: string;
+  title?: string;
   terminal_enabled?: boolean;
   network_mode?: HostExamNetworkMode;
   last_error?: string;
@@ -726,6 +728,7 @@ export interface HostExamState {
 
 export interface HostExamConfigInput {
   enabled: boolean;
+  title?: string;
   max_projects: number;
   project_cpu: number;
   project_memory_mb: number;

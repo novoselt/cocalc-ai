@@ -61,6 +61,7 @@ describe("HostExamPanel", () => {
   const savedConfig = {
     host_id: "host-1",
     enabled: true,
+    title: "Exam Scratchpad",
     hostname: "exam-host-1.example.test",
     generation: 1,
     max_projects: 100,

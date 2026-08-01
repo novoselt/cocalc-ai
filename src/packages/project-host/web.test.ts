@@ -80,19 +80,29 @@ describe("project-host exam admission page", () => {
   });
 
   it("only asks for the token while admission is open", () => {
-    const open = getExamJoinPage({ admission_open: true });
+    const open = getExamJoinPage({
+      admission_open: true,
+      title: "Linear Algebra Scratchpad",
+      scheduled_stop_at: "2026-08-01T04:00:00.000Z",
+    });
     expect(open).toContain('<meta name="referrer" content="same-origin">');
     expect(open).toContain('<script src="/exam/admission.js" defer></script>');
-    expect(open).toContain("Enter the token provided by your instructor");
+    expect(open).toContain("Temporary private computational project");
+    expect(open).toContain("Linear Algebra Scratchpad");
+    expect(open).toContain("Enter the token provided to you");
+    expect(open).toContain("completely erased automatically");
+    expect(open).toContain('datetime="2026-08-01T04:00:00.000Z"');
+    expect(open).toContain("with nothing retained");
+    expect(open).toContain("Access token");
     expect(open).toContain('name="token"');
     expect(open).not.toContain("admission is not open yet");
   });
 
   it("tells students to wait without asking for a token while closed", () => {
     const closed = getExamJoinPage({ admission_open: false });
-    expect(closed).toContain("admission is not open yet");
-    expect(closed).toContain("Wait for your instructor to open admission");
-    expect(closed).not.toContain("Enter the token provided by your instructor");
+    expect(closed).toContain("access is not open yet");
+    expect(closed).toContain("Wait for access to open");
+    expect(closed).not.toContain("Enter the token provided to you");
     expect(closed).not.toContain('name="token"');
   });
 });

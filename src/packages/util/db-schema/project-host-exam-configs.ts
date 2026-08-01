@@ -20,6 +20,10 @@ Table({
       type: "boolean",
       desc: "Whether exam mode may be prepared on this host.",
     },
+    title: {
+      type: "string",
+      desc: "Public title shown on the temporary scratchpad admission page.",
+    },
     hostname: {
       type: "string",
       desc: "Stable single-origin hostname used by exam browsers.",

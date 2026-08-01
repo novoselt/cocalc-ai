@@ -104,6 +104,21 @@ describe("project-host exam configuration", () => {
     ).toBe(true);
   });
 
+  it("normalizes the public scratchpad title", () => {
+    expect(
+      __test__.normalizeConfig({
+        ...__test__.DEFAULT_EXAM_CONFIG,
+        title: "  Linear Algebra Scratchpad  ",
+      }).title,
+    ).toBe("Linear Algebra Scratchpad");
+    expect(() =>
+      __test__.normalizeConfig({
+        ...__test__.DEFAULT_EXAM_CONFIG,
+        title: "x".repeat(101),
+      }),
+    ).toThrow("1 to 100 characters");
+  });
+
   it("rejects unsupported exam network modes", () => {
     expect(() =>
       __test__.normalizeConfig({

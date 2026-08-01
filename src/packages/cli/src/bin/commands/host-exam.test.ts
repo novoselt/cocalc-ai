@@ -23,6 +23,7 @@ function initialState(): HostExamState {
     config: {
       host_id: host.id,
       enabled: false,
+      title: "Exam Scratchpad",
       hostname: "exam-test.example.test",
       generation: 1,
       max_projects: 100,
@@ -178,6 +179,8 @@ describe("host exam commands", () => {
       "configure",
       "exam-test",
       "--enable",
+      "--title",
+      "Linear Algebra Scratchpad",
       "--max-projects",
       "20",
       "--project-cpu",
@@ -198,12 +201,14 @@ describe("host exam commands", () => {
     assert.deepEqual(
       {
         enabled: configureCall.config.enabled,
+        title: configureCall.config.title,
         max_projects: configureCall.config.max_projects,
         terminal_enabled: configureCall.config.terminal_enabled,
         network_mode: configureCall.config.network_mode,
       },
       {
         enabled: true,
+        title: "Linear Algebra Scratchpad",
         max_projects: 20,
         terminal_enabled: true,
         network_mode: "disabled",
