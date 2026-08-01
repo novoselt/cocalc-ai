@@ -2516,13 +2516,14 @@ def prune_bundle_versions(
         return
     keep_resolved: set[Path] = set()
     live_versions = live_mounted_bundle_versions(root)
+    live_versions.update(live_process_bundle_versions(root))
     for version in sorted(live_versions):
         live_dir = root / version
         if live_dir.exists() and live_dir.is_dir():
             keep_resolved.add(live_dir.resolve())
             log_line(
                 cfg,
-                f"bootstrap: preserving live-mounted bundle dir {live_dir}",
+                f"bootstrap: preserving live-referenced bundle dir {live_dir}",
             )
     desired_dir = Path(bundle.dir)
     if desired_dir.exists() and desired_dir.is_dir():
@@ -2647,6 +2648,49 @@ def live_mounted_bundle_versions(root: Path) -> set[str]:
             version = remainder.split("/", 1)[0]
             if version and version != "current":
                 versions.add(version)
+    return versions
+
+
+def live_process_bundle_versions(root: Path) -> set[str]:
+    """Return version directories referenced by live process command lines.
+
+    Component-scoped rollouts can intentionally leave project-host services on
+    different artifact versions. Those services do not bind mount their own
+    bundle, so mountinfo alone cannot protect their supervisor path.
+    """
+    try:
+        root_abs = root.resolve()
+    except Exception:
+        root_abs = root.absolute()
+    root_prefix = f"{root_abs}/"
+    versions: set[str] = set()
+    try:
+        proc_entries = list(PROC_ROOT.iterdir())
+    except Exception:
+        return versions
+    for proc in proc_entries:
+        if not proc.name.isdigit():
+            continue
+        try:
+            cmdline = (proc / "cmdline").read_bytes().replace(b"\0", b" ")
+            text = os.fsdecode(cmdline)
+        except Exception:
+            continue
+        offset = 0
+        while True:
+            start = text.find(root_prefix, offset)
+            if start < 0:
+                break
+            remainder = text[start + len(root_prefix) :]
+            version = remainder.split("/", 1)[0].split(None, 1)[0]
+            if version and version not in {"current", "."}:
+                candidate = root_abs / version
+                try:
+                    if candidate.is_dir() and not candidate.is_symlink():
+                        versions.add(version)
+                except OSError:
+                    pass
+            offset = start + len(root_prefix)
     return versions
 
 
