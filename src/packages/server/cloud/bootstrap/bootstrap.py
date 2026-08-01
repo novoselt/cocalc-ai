@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260801-v18"
+HELPER_SCHEMA_VERSION = "20260801-v19"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -3721,13 +3721,23 @@ configure_project_cgroup() {
   printf '0\n' > "$cgroup/memory.oom.group"
 }
 
-verify_project_pid_in_pool() {
+project_pid_is_in_pool() {
   local project_id="$1" pid="$2" actual expected
   actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
   expected="$(project_cgroup_relative_path "$project_id")"
   case "$actual" in
     "$expected"|"$expected"/*) return 0 ;;
   esac
+  return 1
+}
+
+verify_project_pid_in_pool() {
+  local project_id="$1" pid="$2" actual expected
+  if project_pid_is_in_pool "$project_id" "$pid"; then
+    return 0
+  fi
+  actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
+  expected="$(project_cgroup_relative_path "$project_id")"
   echo "project cgroup verification failed: pid=${pid} expected=${expected} actual=${actual:-missing}" >&2
   return 1
 }
@@ -4708,14 +4718,15 @@ case "$cmd" in
     fi
     ;;
   attach-prepared-project-runtime)
-    if [ "$#" -ne 2 ] && [ "$#" -ne 4 ]; then
-      echo "usage: cocalc-runtime-storage attach-prepared-project-runtime <project-id> <podman-netns-path|-> [<init-pid> <conmon-pid>]" >&2
+    if [ "$#" -ne 2 ] && [ "$#" -ne 4 ] && [ "$#" -ne 5 ]; then
+      echo "usage: cocalc-runtime-storage attach-prepared-project-runtime <project-id> <podman-netns-path|-> [<init-pid> <conmon-pid> [<final-cpu-weight>]]" >&2
       exit 2
     fi
     project_id="$1"
     netns_path="$2"
     init_pid="${3:-}"
     conmon_pid="${4:-}"
+    final_cpu_weight="${5:-}"
     if ! is_project_uuid "$project_id"; then
       deny "project-id-invalid" "$project_id"
     fi
@@ -4745,7 +4756,10 @@ case "$cmd" in
         *" -n project-${project_id} "*) ;;
         *) deny "project-conmon-name-mismatch" "pid=${conmon_pid},project=${project_id}" ;;
       esac
-      attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
+      if ! project_pid_is_in_pool "$project_id" "$init_pid" ||
+        ! project_pid_is_in_pool "$project_id" "$conmon_pid"; then
+        attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
+      fi
     else
       # Compatibility with project-host versions deployed before helper v18.
       while IFS= read -r discovered_conmon_pid; do
@@ -4761,6 +4775,15 @@ case "$cmd" in
     if [ -n "$init_pid" ]; then
       verify_project_pid_in_pool "$project_id" "$init_pid" ||
         deny "project-cgroup-verification-failed" "pid=${init_pid},project=${project_id}"
+    fi
+    if [ -n "$final_cpu_weight" ]; then
+      if ! valid_positive_cgroup_limit "$final_cpu_weight" || [ "$final_cpu_weight" -gt 10000 ]; then
+        deny "project-cgroup-cpu-weight-invalid" "$final_cpu_weight"
+      fi
+      printf '%s\n' "$final_cpu_weight" > "$pool/cpu.weight"
+      actual_cpu_weight="$(cat "$pool/cpu.weight" 2>/dev/null || true)"
+      [ "$actual_cpu_weight" = "$final_cpu_weight" ] ||
+        deny "project-cgroup-cpu-weight-mismatch" "expected=${final_cpu_weight},actual=${actual_cpu_weight:-missing}"
     fi
     ;;
   finish-project-startup-cgroup)

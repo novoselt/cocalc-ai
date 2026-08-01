@@ -112,7 +112,6 @@ const START_FAILURE_DETAIL_MAX_BYTES = 12_000;
 const VERIFY_PROJECT_POOL_TIMEOUT_S = 10;
 const VERIFY_PROJECT_IO_TIMEOUT_S = 10;
 const ATTACH_PROJECT_CGROUP_TIMEOUT_S = 10;
-const FINISH_PROJECT_STARTUP_CGROUP_TIMEOUT_S = 10;
 const RECONCILE_PROJECT_NETWORK_TIMEOUT_S = 30;
 const DEFAULT_PROJECT_POOL_CGROUP = "/sys/fs/cgroup/cocalc-project-pool";
 const PROJECT_STARTUP_CPU_WEIGHT = "10000";
@@ -1149,9 +1148,11 @@ async function attachProjectToCgroup({
 async function attachPreparedProjectRuntime({
   project_id,
   runtime,
+  cpu_weight,
 }: {
   project_id: string;
   runtime: StartedContainerRuntime;
+  cpu_weight: string;
 }): Promise<void> {
   const result = await executeCode({
     command: "sudo",
@@ -1163,39 +1164,14 @@ async function attachPreparedProjectRuntime({
       runtime.sandbox_path ?? "-",
       `${runtime.init_pid}`,
       `${runtime.conmon_pid}`,
+      cpu_weight,
     ],
     timeout: ATTACH_PROJECT_CGROUP_TIMEOUT_S,
     err_on_exit: false,
   });
   if (result.exit_code != null && result.exit_code !== 0) {
     throw Error(
-      `failed to attach and verify project runtime processes for ${project_id}: ${result.stderr || result.stdout || `helper exited ${result.exit_code}`}`,
-    );
-  }
-}
-
-async function finishProjectStartupCgroup({
-  project_id,
-  cpu_weight,
-}: {
-  project_id: string;
-  cpu_weight: string;
-}): Promise<void> {
-  const result = await executeCode({
-    command: "sudo",
-    args: [
-      "-n",
-      "/usr/local/sbin/cocalc-runtime-storage",
-      "finish-project-startup-cgroup",
-      project_id,
-      cpu_weight,
-    ],
-    timeout: FINISH_PROJECT_STARTUP_CGROUP_TIMEOUT_S,
-    err_on_exit: false,
-  });
-  if (result.exit_code != null && result.exit_code !== 0) {
-    throw Error(
-      `failed to restore runtime CPU weight for ${project_id}: ${result.stderr || result.stdout || `helper exited ${result.exit_code}`}`,
+      `failed to finalize project runtime cgroup for ${project_id}: ${result.stderr || result.stdout || `helper exited ${result.exit_code}`}`,
     );
   }
 }
@@ -2487,18 +2463,11 @@ async function startUnlocked({
     }
     try {
       await timings.measure(
-        "attach_project_cgroup",
+        "finalize_project_cgroup",
         async () =>
           await attachPreparedProjectRuntime({
             project_id,
             runtime,
-          }),
-      );
-      await timings.measure(
-        "finish_startup_cgroup",
-        async () =>
-          await finishProjectStartupCgroup({
-            project_id,
             cpu_weight: projectCgroupLimits.cpu_weight,
           }),
       );

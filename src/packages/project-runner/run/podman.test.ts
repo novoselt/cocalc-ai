@@ -263,6 +263,11 @@ describe("project-runner podman orphan fallback", () => {
         ]),
       }),
     );
+    expect(mockExecuteCode).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["finish-project-startup-cgroup"]),
+      }),
+    );
     expect(mockPodman).not.toHaveBeenCalledWith(
       expect.arrayContaining(["rm", `project-${project1}`]),
       expect.anything(),
@@ -684,17 +689,6 @@ describe("project-runner podman orphan fallback", () => {
           "-",
           "4242",
           "4241",
-        ],
-      }),
-    );
-    expect(mockExecuteCode).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "sudo",
-        args: [
-          "-n",
-          "/usr/local/sbin/cocalc-runtime-storage",
-          "finish-project-startup-cgroup",
-          project1,
           "100",
         ],
       }),
@@ -737,7 +731,7 @@ describe("project-runner podman orphan fallback", () => {
   it("fails closed when the startup CPU weight cannot be restored", async () => {
     mockProjectStartPodman(project1);
     mockExecuteCode.mockImplementation(async ({ args }) =>
-      args?.includes("finish-project-startup-cgroup")
+      args?.includes("attach-prepared-project-runtime")
         ? {
             exit_code: 1,
             stdout: "",
@@ -759,7 +753,7 @@ describe("project-runner podman orphan fallback", () => {
           http_port: 45123,
         },
       }),
-    ).rejects.toThrow("failed to restore runtime CPU weight");
+    ).rejects.toThrow("failed to finalize project runtime cgroup");
     expect(mockPodman).toHaveBeenCalledWith(
       ["rm", "-f", "-t", "0", `project-${project1}`],
       { timeout: 10 },

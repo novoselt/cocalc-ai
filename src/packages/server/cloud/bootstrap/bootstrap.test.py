@@ -1887,11 +1887,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("attach-prepared-project-runtime)", script)
             self.assertIn("finish-project-startup-cgroup)", script)
             finish_startup_body = script.split(
-                "  finish-project-startup-cgroup)", 1
+                "  attach-prepared-project-runtime)", 1
             )[1].split("\n    ;;", 1)[0]
             self.assertIn('> "$pool/cpu.weight"', finish_startup_body)
             self.assertIn("project-cgroup-cpu-weight-mismatch", finish_startup_body)
-            self.assertIn("[<init-pid> <conmon-pid>]", script)
+            self.assertIn("[<init-pid> <conmon-pid> [<final-cpu-weight>]]", script)
+            self.assertIn("project_pid_is_in_pool", finish_startup_body)
             self.assertIn('require_runtime_owned_pid "$conmon_pid"', script)
             self.assertIn(
                 'deny "project-conmon-executable-invalid"',
