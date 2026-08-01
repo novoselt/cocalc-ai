@@ -172,24 +172,24 @@ const browser = await chromium.launch({
 });
 const context = await browser.newContext();
 await context.addCookies(cookies);
-const pages = new Map();
+const page = await context.newPage();
 const samples = [];
 
 try {
   for (let round = 1; round <= options.rounds; round += 1) {
     for (const projectId of options.projects) {
       await runCli(options.api, ["project", "stop", "-w", projectId, "--wait"]);
-      let page = pages.get(projectId);
-      if (page == null) {
-        page = await context.newPage();
-        await page.goto(`${options.api}/projects/${projectId}/files/`, {
-          waitUntil: "domcontentloaded",
-          timeout: 60_000,
-        });
-        pages.set(projectId, page);
-      }
+      // Establish the qualified cohort with one foreground page whose initial
+      // state already reflects the stopped project. External stop propagation
+      // and background-tab throttling are measured separately.
+      await page.goto(`${options.api}/projects/${projectId}/files/`, {
+        waitUntil: "domcontentloaded",
+        timeout: 60_000,
+      });
+      await page.bringToFront();
       const startButton = page.getByTitle("Start Project");
       await startButton.waitFor({ state: "visible", timeout: 30_000 });
+      await sleep(options.settle_ms);
       const requestedAtMs = Date.now();
       const started = performance.now();
       await startButton.click();
@@ -236,7 +236,6 @@ try {
       samples.push(sample);
       await appendFile(options.output, `${JSON.stringify(sample)}\n`, "utf8");
       if (failed) throw new Error(`browser start failed for ${projectId}`);
-      await sleep(options.settle_ms);
     }
     process.stderr.write(
       `completed ${round}/${options.rounds} rounds (${samples.length} samples)\n`,
