@@ -139,6 +139,45 @@ async function runCli(api, args) {
   throw lastError;
 }
 
+async function ensureProjectStopped(api, projectId) {
+  const deadline = Date.now() + 180_000;
+  let lastState = "unknown";
+  while (Date.now() < deadline) {
+    await runCli(api, ["project", "stop", "-w", projectId, "--wait"]);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const status = await runCli(api, ["project", "status", "-w", projectId]);
+      lastState = `${status.data?.state ?? "unknown"}`;
+      if (!new Set(["running", "starting", "stopping"]).has(lastState)) {
+        return;
+      }
+      await sleep(500);
+    }
+  }
+  throw new Error(
+    `project ${projectId} did not stop during benchmark setup (state=${lastState})`,
+  );
+}
+
+async function waitForStoppedProjectPage(page, url) {
+  const deadline = Date.now() + 120_000;
+  const startButton = page.getByTitle("Start Project");
+  while (Date.now() < deadline) {
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await page.bringToFront();
+    try {
+      await startButton.waitFor({ state: "visible", timeout: 10_000 });
+      return startButton;
+    } catch (err) {
+      if (Date.now() >= deadline) throw err;
+      await sleep(1_000);
+    }
+  }
+  throw new Error(`stopped project page did not become visible: ${url}`);
+}
+
 function percentile(values, fraction) {
   if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
@@ -212,17 +251,14 @@ page.on("console", (message) => {
 try {
   for (let round = 1; round <= options.rounds; round += 1) {
     for (const projectId of options.projects) {
-      await runCli(options.api, ["project", "stop", "-w", projectId, "--wait"]);
+      await ensureProjectStopped(options.api, projectId);
       // Establish the qualified cohort with one foreground page whose initial
       // state already reflects the stopped project. External stop propagation
       // and background-tab throttling are measured separately.
-      await page.goto(`${options.api}/projects/${projectId}/files/`, {
-        waitUntil: "domcontentloaded",
-        timeout: 60_000,
-      });
-      await page.bringToFront();
-      const startButton = page.getByTitle("Start Project");
-      await startButton.waitFor({ state: "visible", timeout: 30_000 });
+      const startButton = await waitForStoppedProjectPage(
+        page,
+        `${options.api}/projects/${projectId}/files/`,
+      );
       // Navigation preserves the synthetic pointer position. Move it away
       // from the toolbar so a tooltip from the prior project cannot intercept
       // the next real user-path click.
