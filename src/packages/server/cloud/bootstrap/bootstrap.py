@@ -6910,8 +6910,11 @@ def configured_podman_runroot(path: Path) -> str | None:
 
 def configure_podman(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: configuring podman storage")
-    root_run = Path("/run/cocalc/containers/root")
-    rootless_run = Path(f"/run/cocalc/containers/rootless/{cfg.ssh_user}")
+    runtime_run_root = Path("/run/cocalc")
+    container_run_root = runtime_run_root / "containers"
+    rootless_run_root = container_run_root / "rootless"
+    root_run = container_run_root / "root"
+    rootless_run = rootless_run_root / cfg.ssh_user
     user_config_root = Path(runtime_home(cfg)) / ".config"
     user_config = user_config_root / "containers"
     user_storage_conf = user_config / "storage.conf"
@@ -6936,7 +6939,26 @@ def configure_podman(cfg: BootstrapConfig) -> None:
         return
 
     Path("/mnt/cocalc/data/containers/root/storage").mkdir(parents=True, exist_ok=True)
+    runtime_run_root.mkdir(parents=True, exist_ok=True)
+    container_run_root.mkdir(parents=True, exist_ok=True)
+    rootless_run_root.mkdir(parents=True, exist_ok=True)
     root_run.mkdir(parents=True, exist_ok=True)
+    run_best_effort(
+        cfg,
+        [
+            "chmod",
+            "0711",
+            str(runtime_run_root),
+            str(container_run_root),
+            str(rootless_run_root),
+        ],
+        "make Podman runroot parents traversable",
+    )
+    run_best_effort(
+        cfg,
+        ["chmod", "0700", str(root_run)],
+        "restrict root Podman runroot",
+    )
     Path("/etc/containers").mkdir(parents=True, exist_ok=True)
     Path("/etc/containers/storage.conf").write_text(
         '[storage]\n'
@@ -6990,6 +7012,11 @@ def configure_podman(cfg: BootstrapConfig) -> None:
                 str(rootless_run),
             ],
             "chown rootless podman runroot",
+        )
+        run_best_effort(
+            cfg,
+            ["chmod", "0700", str(rootless_run)],
+            "restrict rootless Podman runroot",
         )
         (user_config / "storage.conf").write_text(
             '[storage]\n'

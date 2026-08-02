@@ -1281,6 +1281,30 @@ class BootstrapRootlessPodmanResetTest(unittest.TestCase):
             self.assertIn(
                 (
                     [
+                        "chmod",
+                        "0711",
+                        "/run/cocalc",
+                        "/run/cocalc/containers",
+                        "/run/cocalc/containers/rootless",
+                    ],
+                    "make Podman runroot parents traversable",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "chmod",
+                        "0700",
+                        "/run/cocalc/containers/rootless/missing-runtime-user",
+                    ],
+                    "restrict rootless Podman runroot",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
                         "chown",
                         "missing-runtime-user:missing-runtime-user",
                         str(
