@@ -18,6 +18,10 @@ import {
   type ProjectStopPolicyRow,
   upsertProjectStopState,
 } from "./sqlite/stop-policy";
+import {
+  ProjectWorkloadActivityTracker,
+  sampleProjectWorkloads,
+} from "./project-workload-activity";
 
 const logger = getLogger("project-host:host-pressure");
 
@@ -145,6 +149,26 @@ const IO_EMERGENCY_MIN_IDLE_MS = Math.max(
   Number(
     process.env.COCALC_PROJECT_HOST_IO_EMERGENCY_MIN_IDLE_MS ?? 60 * 60_000,
   ),
+);
+const IO_WORKLOAD_PROTECTION_MS = Math.max(
+  CONTROLLER_INTERVAL_MS * 2,
+  Number(
+    process.env.COCALC_PROJECT_HOST_IO_WORKLOAD_PROTECTION_MS ?? 15 * 60_000,
+  ),
+);
+const IO_ACTIVE_CPU_CORES = Math.max(
+  0,
+  Number(process.env.COCALC_PROJECT_HOST_IO_ACTIVE_CPU_CORES ?? 0.05),
+);
+const IO_ACTIVE_BYTES_PER_SECOND = Math.max(
+  0,
+  Number(
+    process.env.COCALC_PROJECT_HOST_IO_ACTIVE_BYTES_PER_SECOND ?? 64 * 1024,
+  ),
+);
+const IO_ACTIVE_OPERATIONS_PER_SECOND = Math.max(
+  0,
+  Number(process.env.COCALC_PROJECT_HOST_IO_ACTIVE_OPS_PER_SECOND ?? 1),
 );
 const DEFAULT_PROJECT_INOTIFY_INSTANCES_WARN = 512;
 const DEFAULT_PROJECT_INOTIFY_INSTANCES_STOP = 1024;
@@ -765,6 +789,7 @@ export function buildStopCandidates({
   minimumIdleMs,
   requireActivityPolicy = false,
   preserveEmergencyProtections = false,
+  workloadProtectedProjects,
 }: {
   projects: ProjectRow[];
   policies: Map<string, ProjectStopPolicyRow>;
@@ -775,6 +800,7 @@ export function buildStopCandidates({
   minimumIdleMs?: number;
   requireActivityPolicy?: boolean;
   preserveEmergencyProtections?: boolean;
+  workloadProtectedProjects?: ReadonlySet<string>;
 }): StopCandidate[] {
   const candidates: StopCandidate[] = [];
   for (const row of projects) {
@@ -788,6 +814,7 @@ export function buildStopCandidates({
     }
     const project_id = `${row.project_id ?? ""}`.trim();
     if (!project_id) continue;
+    if (workloadProtectedProjects?.has(project_id)) continue;
     const directResourceOffender = directResourceOffenders?.get(project_id);
     const policy = policies.get(project_id);
     if (requireActivityPolicy && !policy) {
@@ -948,6 +975,12 @@ export function startHostPressureController({
   let lastActionStatus: StopActionStatus | undefined;
   let lastActionReason: string | undefined;
   const recentPressureStopsMs: number[] = [];
+  const workloadTracker = new ProjectWorkloadActivityTracker({
+    protectionMs: IO_WORKLOAD_PROTECTION_MS,
+    activeCpuCores: IO_ACTIVE_CPU_CORES,
+    activeBytesPerSecond: IO_ACTIVE_BYTES_PER_SECOND,
+    activeOperationsPerSecond: IO_ACTIVE_OPERATIONS_PER_SECOND,
+  });
 
   const trimRecentStops = (now: number) => {
     while (
@@ -1001,6 +1034,21 @@ export function startHostPressureController({
     const metrics = (await refreshMetrics()) ?? getCurrentMetrics();
     const resourcePressureMode = RESOURCE_PRESSURE_MODE;
     const ioPressureMode = IO_PRESSURE_MODE;
+    let workloadProtectedProjects: ReadonlySet<string> | undefined;
+    let workloadSampleHealthy = true;
+    if (ioPressureMode === "enforce") {
+      try {
+        workloadProtectedProjects = workloadTracker.update(
+          await sampleProjectWorkloads({ now }),
+          now,
+        );
+      } catch (err) {
+        workloadSampleHealthy = false;
+        logger.warn("unable to sample project workload activity", {
+          err: `${err}`,
+        });
+      }
+    }
     const storageAdmission = metrics?.storage_admission;
     if (
       !storageAdmission ||
@@ -1076,6 +1124,15 @@ export function startHostPressureController({
       });
       return;
     }
+    if (ioOnlyPressure && !workloadSampleHealthy) {
+      publishState({
+        zone: "observe",
+        reason: `${classified.reason},workload_activity_unavailable`,
+        evaluated_at_ms: now,
+        candidate_count: 0,
+      });
+      return;
+    }
     const projects = listProjectsByStates(["running"]);
     const policies = new Map(
       listProjectStopPolicies().map((row) => [row.project_id, row]),
@@ -1095,6 +1152,7 @@ export function startHostPressureController({
                 : IO_PRESSURE_MIN_IDLE_MS,
             requireActivityPolicy: true,
             preserveEmergencyProtections: true,
+            workloadProtectedProjects,
           }
         : {}),
     });

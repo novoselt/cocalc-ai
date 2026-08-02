@@ -304,6 +304,40 @@ describe("host pressure controller helpers", () => {
     ]);
   });
 
+  it("excludes projects with recent cgroup workload activity", () => {
+    const now = 10 * 60 * 60_000;
+    const policies = new Map(
+      ["proj-active", "proj-idle"].map((project_id) => [
+        project_id,
+        {
+          project_id,
+          owner_account_id: "owner",
+          shared_compute_priority: 0,
+          authoritative_last_edited_ms: now - 8 * 60 * 60_000,
+          policy_updated_ms: now,
+          stop_override: "default" as const,
+        },
+      ]),
+    );
+    const candidates = buildStopCandidates({
+      zone: "pressure",
+      now,
+      minimumIdleMs: 6 * 60 * 60_000,
+      requireActivityPolicy: true,
+      workloadProtectedProjects: new Set(["proj-active"]),
+      projects: [
+        { project_id: "proj-active", state: "running" },
+        { project_id: "proj-idle", state: "running" },
+      ],
+      policies,
+      getStopState: () => undefined,
+    });
+
+    expect(candidates.map(({ project_id }) => project_id)).toEqual([
+      "proj-idle",
+    ]);
+  });
+
   it("ranks lower priority and older activity first", () => {
     const now = 2_000_000;
     const candidates = buildStopCandidates({
