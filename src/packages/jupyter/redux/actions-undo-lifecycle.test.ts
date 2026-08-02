@@ -23,8 +23,9 @@ describe("JupyterActions undo lifecycle", () => {
         [operation]: invoke,
       });
 
-      actions[operation]();
+      const changed = actions[operation]();
 
+      expect(changed).toBe(false);
       expect(invoke).not.toHaveBeenCalled();
     },
   );
@@ -38,8 +39,9 @@ describe("JupyterActions undo lifecycle", () => {
         [operation]: invoke,
       });
 
-      actions[operation]();
+      const changed = actions[operation]();
 
+      expect(changed).toBe(true);
       expect(invoke).toHaveBeenCalledTimes(1);
     },
   );

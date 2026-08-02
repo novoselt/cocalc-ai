@@ -6,6 +6,10 @@
 import { NotebookFrameActions } from "./actions";
 
 describe("NotebookFrameActions lifecycle", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it("ignores cell callbacks retained after frame teardown", () => {
     const target = {
       is_closed: () => true,
@@ -44,4 +48,34 @@ describe("NotebookFrameActions lifecycle", () => {
     expect(target.setState).toHaveBeenCalledWith({ mode: "escape" });
     expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   });
+
+  it.each(["undo", "redo"] as const)(
+    "routes %s through the lifecycle-aware Jupyter action",
+    (operation) => {
+      jest.useFakeTimers();
+      const invoke = jest.fn(() => false);
+      let cells;
+      const frameTreeActions = {
+        jupyter_actions: {
+          store: {
+            get: jest.fn(() => cells),
+            on: jest.fn(),
+          },
+          [operation]: invoke,
+        },
+        _get_frame_data: jest.fn((_id, _key, fallback) => fallback),
+        set_frame_data: jest.fn(),
+      } as any;
+      const actions = new NotebookFrameActions(frameTreeActions, "frame-id");
+      cells = {};
+      const focusFirstChangedCell = jest.fn();
+      (actions as any).focusFirstChangedCell = focusFirstChangedCell;
+
+      actions[operation]();
+      jest.runAllTimers();
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(focusFirstChangedCell).not.toHaveBeenCalled();
+    },
+  );
 });
