@@ -66,6 +66,9 @@ contention policy.
 6. Treat sustained inability to meet the SLO as an admission or capacity
    problem, not only a code-performance problem.
 7. Record staging evidence before each design decision and production gate.
+8. Keep free service genuinely useful: membership priority may decide who
+   yields during measured overload, but must not create an artificial
+   permanently degraded execution lane while capacity is available.
 
 ## Strategy
 
@@ -145,6 +148,13 @@ resource-intensive projects while protecting recent interactive activity,
 active lifecycle operations, and a configurable startup window. Use hysteresis,
 settle periods, and cooldowns to prevent churn. Shared and dedicated hosts may
 need different policy profiles, but both must preserve host survival.
+
+A lower-priority project receives the same available host capacity in normal
+operation. It may be stopped only to recover from measured host pressure, not
+merely because it is free or has run for a long time. The product must explain
+that pressure stop, identify upgrading as a way to receive stronger overload
+priority, preserve the project state, and restart automatically when the host
+has recovered or the user requests it and admission is safe.
 
 The tests must expose the product and cost tradeoffs explicitly: required idle
 headroom, maximum running-project density, amount of throttling, eviction rate,
