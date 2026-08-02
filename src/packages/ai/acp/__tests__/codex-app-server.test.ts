@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
+import { DEFAULT_SITE_FUNDED_CODEX_POLICY } from "@cocalc/util/ai/site-funded-codex";
 const getCodexSiteKeyGovernorMock: jest.Mock<any, []> = jest.fn(() => null);
 const loggerMock = {
   debug: jest.fn(),
@@ -4459,6 +4460,119 @@ describe("CodexAppServerAgent", () => {
       },
       totalTimeS: expect.any(Number),
       path: "root/demo.chat",
+    });
+  });
+
+  it("forces site-funded policy and settles the reservation", async () => {
+    const requests: any[] = [];
+    const finish = jest.fn(async () => {});
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      requests.push(message);
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, { thread: { id: "thr-funded-1" } });
+          break;
+        case "turn/start":
+          fake.sendResponse(message.id, { turn: { id: "turn-funded-1" } });
+          setImmediate(() => {
+            fake.sendNotification("turn/started", {
+              turn: { id: "turn-funded-1", status: "inProgress" },
+            });
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-funded-1", status: "completed" },
+            });
+          });
+          break;
+        default:
+          if (typeof message.id === "number") fake.sendResponse(message.id, {});
+      }
+    });
+    const spawnCodexAppServer = jest.fn(async () => ({
+      proc: proc as any,
+      cmd: "fake-codex",
+      args: ["app-server"],
+      cwd: "/tmp/project",
+      authSource: "site-api-key",
+      siteFundedTurn: {
+        reservation: {
+          reservationId: "reservation-1",
+          fundedTurnId: "funded-turn-1",
+          poolId: "site-funded-codex-free" as const,
+          policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+          reservedMicrousd:
+            DEFAULT_SITE_FUNDED_CODEX_POLICY.maxTurnCostMicrousd,
+          committedMicrousd: 0,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          heartbeatIntervalMs: 10_000,
+          status: "active" as const,
+        },
+        policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+        providerBaseUrl: "http://host.containers.internal:1234/v1",
+        providerToken: "proxy-token",
+        finish,
+      },
+    }));
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer,
+    });
+    const streamPayloads: any[] = [];
+
+    await new CodexAppServerAgent().evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      prompt: "say hello",
+      stream: async (payload) => streamPayloads.push(payload),
+      config: {
+        workingDirectory: "/tmp/project",
+        model: "gpt-5.6-sol",
+        reasoning: "high",
+        serviceTier: "fast",
+      } as any,
+    });
+
+    expect(spawnCodexAppServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        siteFundedTurn: {
+          fundedTurnId: expect.any(String),
+          idempotencyKey: expect.any(String),
+        },
+      }),
+    );
+    expect(
+      requests.find(({ method }) => method === "thread/start")?.params,
+    ).toMatchObject({
+      model: "gpt-5.6-luna",
+      serviceTier: null,
+    });
+    expect(
+      requests.find(({ method }) => method === "turn/start")?.params,
+    ).toMatchObject({
+      model: "gpt-5.6-luna",
+      effort: "low",
+      serviceTier: null,
+    });
+    expect(streamPayloads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "event",
+          event: expect.objectContaining({
+            type: "config",
+            model: "gpt-5.6-luna",
+            reasoning: "low",
+            serviceTier: "standard",
+          }),
+        }),
+      ]),
+    );
+    expect(finish).toHaveBeenCalledWith({
+      status: "committed",
+      outcome: "turn completed",
     });
   });
 

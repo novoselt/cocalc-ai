@@ -3,6 +3,13 @@ import callHub from "@cocalc/conat/hub/call-hub";
 import { setCodexSiteKeyGovernor } from "@cocalc/ai/acp";
 import { getMasterConatClient } from "../master-status";
 import { getLocalHostId } from "../sqlite/hosts";
+import { getDatabase, initDatabase } from "@cocalc/lite/hub/sqlite/database";
+import type { CodexSiteFundedTurnRuntime } from "@cocalc/ai/acp";
+import type {
+  SiteFundedCodexAdmission,
+  SiteFundedCodexUsageEvent,
+} from "@cocalc/util/ai/site-funded-codex";
+import { startSiteFundedCodexProxySession } from "./site-funded-proxy";
 
 const logger = getLogger("project-host:codex-site-metering");
 
@@ -144,10 +151,7 @@ export function initCodexSiteKeyGovernor(): void {
             project_id: projectId,
             model,
             path,
-            prompt_tokens: Math.max(
-              0,
-              usage.input_tokens + (usage.cached_input_tokens ?? 0),
-            ),
+            prompt_tokens: Math.max(0, usage.input_tokens),
             completion_tokens: Math.max(0, usage.output_tokens),
             total_time_s: Math.max(0, totalTimeS),
           },
@@ -156,4 +160,166 @@ export function initCodexSiteKeyGovernor(): void {
       });
     },
   });
+  void flushSiteFundedCodexOutbox();
+}
+
+type OutboxRecord = {
+  id: number;
+  kind: "usage" | "finish";
+  payload: string;
+};
+
+function ensureOutbox(): void {
+  initDatabase().exec(`
+    CREATE TABLE IF NOT EXISTS site_funded_codex_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL CHECK (kind IN ('usage', 'finish')),
+      payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+}
+
+function enqueueOutbox(kind: OutboxRecord["kind"], payload: unknown): void {
+  ensureOutbox();
+  getDatabase()
+    .prepare(
+      `INSERT INTO site_funded_codex_outbox(kind, payload, created_at)
+       VALUES (?, ?, ?)`,
+    )
+    .run(kind, JSON.stringify(payload), Date.now());
+}
+
+let flushingOutbox = false;
+
+export async function flushSiteFundedCodexOutbox(): Promise<void> {
+  if (flushingOutbox) return;
+  const caller = getHubCaller();
+  if (!caller) return;
+  ensureOutbox();
+  flushingOutbox = true;
+  try {
+    while (true) {
+      const row = getDatabase()
+        .prepare(
+          `SELECT id, kind, payload FROM site_funded_codex_outbox
+           ORDER BY id LIMIT 1`,
+        )
+        .get() as OutboxRecord | undefined;
+      if (!row) return;
+      const payload = JSON.parse(row.payload);
+      if (row.kind === "usage") {
+        await callHub({
+          ...caller,
+          name: "hosts.recordSiteFundedCodexUsageEvent",
+          args: [{ event: payload }],
+          timeout: 15_000,
+        });
+      } else {
+        await callHub({
+          ...caller,
+          name: "hosts.finishSiteFundedCodexTurn",
+          args: [payload],
+          timeout: 15_000,
+        });
+      }
+      getDatabase()
+        .prepare(`DELETE FROM site_funded_codex_outbox WHERE id = ?`)
+        .run(row.id);
+    }
+  } catch (err) {
+    logger.warn("site-funded Codex outbox flush failed", { err: `${err}` });
+  } finally {
+    flushingOutbox = false;
+  }
+}
+
+async function persistUsageEvent(
+  event: SiteFundedCodexUsageEvent,
+): Promise<void> {
+  enqueueOutbox("usage", event);
+  await flushSiteFundedCodexOutbox();
+}
+
+export async function beginSiteFundedCodexTurn({
+  accountId,
+  projectId,
+  fundedTurnId,
+  idempotencyKey,
+  path,
+  apiKey,
+}: {
+  accountId: string;
+  projectId: string;
+  fundedTurnId: string;
+  idempotencyKey: string;
+  path?: string;
+  apiKey: string;
+}): Promise<CodexSiteFundedTurnRuntime> {
+  const caller = getHubCaller();
+  if (!caller) {
+    throw Object.assign(
+      new Error("Site-funded Codex admission is temporarily unavailable."),
+      { code: "unavailable" },
+    );
+  }
+  const admission = (await callHub({
+    ...caller,
+    name: "hosts.reserveSiteFundedCodexTurn",
+    args: [
+      {
+        account_id: accountId,
+        project_id: projectId,
+        funded_turn_id: fundedTurnId,
+        idempotency_key: idempotencyKey,
+        path,
+      },
+    ],
+    timeout: 20_000,
+  })) as SiteFundedCodexAdmission;
+  if (!admission.allowed) {
+    throw Object.assign(new Error(admission.reason), { code: admission.code });
+  }
+  const proxySession = await startSiteFundedCodexProxySession({
+    reservation: admission.reservation,
+    apiKey,
+    onUsage: persistUsageEvent,
+  });
+  let finished = false;
+  const heartbeat = setInterval(() => {
+    void callHub({
+      ...caller,
+      name: "hosts.heartbeatSiteFundedCodexTurn",
+      args: [{ reservation_id: admission.reservation.reservationId }],
+      timeout: 15_000,
+    })
+      .then((result) => {
+        if (!result?.active) proxySession.close();
+      })
+      .catch((err) => {
+        logger.warn("site-funded Codex heartbeat failed", {
+          reservationId: admission.reservation.reservationId,
+          err: `${err}`,
+        });
+      });
+  }, admission.reservation.heartbeatIntervalMs);
+  heartbeat.unref();
+  return {
+    reservation: admission.reservation,
+    policy: admission.reservation.policy,
+    providerBaseUrl: proxySession.baseUrl,
+    providerToken: proxySession.token,
+    finish: async ({ status, outcome }) => {
+      if (finished) return;
+      finished = true;
+      clearInterval(heartbeat);
+      proxySession.close();
+      enqueueOutbox("finish", {
+        reservation_id: admission.reservation.reservationId,
+        status,
+        outcome,
+      });
+      await flushSiteFundedCodexOutbox();
+    },
+  };
 }

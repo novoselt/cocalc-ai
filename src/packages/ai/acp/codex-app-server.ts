@@ -29,6 +29,8 @@ import {
   type CodexAppServerLoginHint,
   type CodexProjectContainerPathMap,
   type CodexAppServerRequestHandler,
+  type CodexSiteFundedTurnRequest,
+  type CodexSiteFundedTurnRuntime,
 } from "./codex-project";
 import { getCodexSiteKeyGovernor } from "./codex-site-key-governor";
 import {
@@ -325,6 +327,7 @@ type SpawnedCodexAppServer = {
   appServerLogin?: CodexAppServerLoginHint;
   handleAppServerRequest?: CodexAppServerRequestHandler;
   runtimeEnv?: Record<string, string>;
+  siteFundedTurn?: CodexSiteFundedTurnRuntime;
 };
 
 function authSourceForSpawned(
@@ -1683,7 +1686,7 @@ export class CodexAppServerAgent implements AcpAgent {
     request: AcpEvaluateRequest,
   ): Promise<"completed" | "interrupted"> {
     const { prompt, stream, session_id, config } = request;
-    const session = this.resolveSession(session_id, config);
+    let session = this.resolveSession(session_id, config);
     const runtimeEnv = Object.fromEntries(
       Object.entries({
         ...(this.opts.env ?? {}),
@@ -1696,7 +1699,24 @@ export class CodexAppServerAgent implements AcpAgent {
       accountId: request.account_id,
       cwd,
       env: runtimeEnv,
+      siteFundedTurn: {
+        fundedTurnId: randomUUID(),
+        idempotencyKey: randomUUID(),
+        path: request.chat?.path,
+      },
     });
+    const effectiveConfig: CodexSessionConfig | undefined =
+      spawned.siteFundedTurn
+        ? {
+            ...config,
+            model: spawned.siteFundedTurn.policy.model,
+            reasoning: spawned.siteFundedTurn.policy.reasoning,
+            serviceTier: spawned.siteFundedTurn.policy.serviceTier,
+          }
+        : config;
+    if (effectiveConfig !== config) {
+      session = this.resolveSession(session_id, effectiveConfig);
+    }
     const turnEnv = Object.fromEntries(
       Object.entries({
         ...runtimeEnv,
@@ -1732,6 +1752,7 @@ export class CodexAppServerAgent implements AcpAgent {
     const siteKeyGovernor = getCodexSiteKeyGovernor();
     const siteKeyEnforced =
       spawned.authSource === "site-api-key" &&
+      !spawned.siteFundedTurn &&
       !!siteKeyGovernor &&
       !!request.account_id &&
       !!(request.chat?.project_id ?? request.project_id);
@@ -1740,6 +1761,8 @@ export class CodexAppServerAgent implements AcpAgent {
     let quotaCheckInFlight = false;
     let quotaStopReason: string | undefined;
     const attemptStartedAt = Date.now();
+    let fundedFinishStatus: "committed" | "interrupted" | "failed" = "failed";
+    let fundedFinishOutcome = "turn failed";
 
     let resolveExited: (() => void) | undefined;
     const exited = new Promise<void>((resolve) => {
@@ -1803,7 +1826,7 @@ export class CodexAppServerAgent implements AcpAgent {
         const verdict = await siteKeyGovernor.checkAllowed({
           accountId: request.account_id,
           projectId,
-          model: this.effectiveModel(config),
+          model: this.effectiveModel(effectiveConfig),
           phase,
         });
         if (!verdict.allowed) {
@@ -1859,26 +1882,29 @@ export class CodexAppServerAgent implements AcpAgent {
 
       let threadResult: any;
       const requestedSessionKey =
-        normalizeCodexSessionId(config?.sessionId) ??
+        normalizeCodexSessionId(effectiveConfig?.sessionId) ??
         normalizeCodexSessionId(session_id);
       const resumeId = requestedSessionKey ? session.sessionId : undefined;
-      const model = this.effectiveModel(config);
-      const serviceTier = this.resolveAppServerServiceTier(config, model);
+      const model = this.effectiveModel(effectiveConfig);
+      const serviceTier = this.resolveAppServerServiceTier(
+        effectiveConfig,
+        model,
+      );
       const authSource = authSourceForSpawned(spawned);
       const threadParams = {
         cwd,
         model,
         serviceTier,
         approvalPolicy: "never",
-        sandbox: toSandboxMode(spawned, config),
+        sandbox: toSandboxMode(spawned, effectiveConfig),
       };
-      const sessionMode = resolveCodexSessionMode(config);
+      const sessionMode = resolveCodexSessionMode(effectiveConfig);
       await stream({
         type: "event",
         event: {
           type: "config",
           model,
-          reasoning: config?.reasoning,
+          reasoning: effectiveConfig?.reasoning,
           serviceTier: serviceTier ? "fast" : "standard",
           appServerServiceTier: serviceTier,
           sessionMode,
@@ -1890,11 +1916,16 @@ export class CodexAppServerAgent implements AcpAgent {
       logger.debug("codex app-server: resolved service tier", {
         threadId: resumeId,
         model: threadParams.model,
-        requestedServiceTier: config?.serviceTier ?? "standard",
+        requestedServiceTier: effectiveConfig?.serviceTier ?? "standard",
         appServerServiceTier: serviceTier,
       });
       if (resumeId) {
-        await this.tryEnsureSessionConfig(spawned, resumeId, cwd, config);
+        await this.tryEnsureSessionConfig(
+          spawned,
+          resumeId,
+          cwd,
+          effectiveConfig,
+        );
         try {
           threadResult = await client.request("thread/resume", {
             threadId: resumeId,
@@ -1936,10 +1967,10 @@ export class CodexAppServerAgent implements AcpAgent {
         threadId: actualThreadId,
         cwd,
         approvalPolicy: "never",
-        sandboxPolicy: toTurnSandboxPolicy(spawned, config),
+        sandboxPolicy: toTurnSandboxPolicy(spawned, effectiveConfig),
         model,
         serviceTier,
-        effort: toReasoningEffort(config),
+        effort: toReasoningEffort(effectiveConfig),
         env: Object.keys(turnEnv).length > 0 ? turnEnv : undefined,
         input: buildTurnInput({
           local_images: request.local_images,
@@ -2424,7 +2455,7 @@ export class CodexAppServerAgent implements AcpAgent {
           await siteKeyGovernor.reportUsage({
             accountId: request.account_id,
             projectId: request.chat?.project_id ?? request.project_id,
-            model: this.effectiveModel(config),
+            model: this.effectiveModel(effectiveConfig),
             usage: {
               input_tokens: latestUsage.input_tokens ?? 0,
               cached_input_tokens: latestUsage.cached_input_tokens,
@@ -2441,7 +2472,7 @@ export class CodexAppServerAgent implements AcpAgent {
           logger.warn("codex app-server: failed to report site-key usage", {
             accountId: request.account_id,
             projectId: request.chat?.project_id ?? request.project_id,
-            model: this.effectiveModel(config),
+            model: this.effectiveModel(effectiveConfig),
             err: `${err}`,
           });
         }
@@ -2458,6 +2489,8 @@ export class CodexAppServerAgent implements AcpAgent {
         spawned,
         cwd,
       });
+      fundedFinishStatus = "committed";
+      fundedFinishOutcome = "turn completed";
     } catch (err) {
       if (quotaPollTimer) {
         clearInterval(quotaPollTimer);
@@ -2466,6 +2499,8 @@ export class CodexAppServerAgent implements AcpAgent {
         clearTimeout(maxTurnTimer);
       }
       if (runningEntry?.interrupted && !quotaStopReason) {
+        fundedFinishStatus = "interrupted";
+        fundedFinishOutcome = "turn interrupted";
         logger.info("codex app-server evaluate interrupted", {
           threadId: currentThreadId,
           turnId,
@@ -2475,6 +2510,7 @@ export class CodexAppServerAgent implements AcpAgent {
       }
       const stderrTail = client.getStderrTail();
       const primaryError = (err as Error)?.message ?? `${err}`;
+      fundedFinishOutcome = primaryError.slice(0, 500);
       const userFacingPrimaryError =
         formatCodexAuthError(normalizeErrorMessages([primaryError])) ??
         primaryError;
@@ -2541,6 +2577,20 @@ export class CodexAppServerAgent implements AcpAgent {
       throw new Error(userFacingPrimaryError);
     } finally {
       this.running.delete(currentThreadId);
+      if (spawned.siteFundedTurn) {
+        try {
+          await spawned.siteFundedTurn.finish({
+            status: fundedFinishStatus,
+            outcome: fundedFinishOutcome,
+          });
+        } catch (err) {
+          logger.warn("codex app-server: funded turn settlement failed", {
+            reservationId: spawned.siteFundedTurn.reservation.reservationId,
+            status: fundedFinishStatus,
+            err: `${err}`,
+          });
+        }
+      }
       if (spawned.proc.exitCode == null && !spawned.proc.killed) {
         spawned.proc.kill("SIGKILL");
       }
@@ -2758,11 +2808,13 @@ export class CodexAppServerAgent implements AcpAgent {
     accountId,
     cwd,
     env,
+    siteFundedTurn,
   }: {
     projectId: string;
     accountId?: string;
     cwd: string;
     env?: NodeJS.ProcessEnv;
+    siteFundedTurn?: CodexSiteFundedTurnRequest;
   }): Promise<SpawnedCodexAppServer> {
     const projectSpawner = getCodexProjectSpawner();
     if (projectSpawner && projectId && projectSpawner.spawnCodexAppServer) {
@@ -2771,6 +2823,7 @@ export class CodexAppServerAgent implements AcpAgent {
         accountId,
         cwd,
         env,
+        siteFundedTurn,
       });
       logger.debug("codex app-server: spawning via project container", {
         cmd: spawned.cmd,

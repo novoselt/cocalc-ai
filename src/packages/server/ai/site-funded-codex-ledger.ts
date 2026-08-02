@@ -188,27 +188,43 @@ async function expireCurrentPeriodReservations({
 }): Promise<void> {
   const { rows } = await client.query(
     `
-      UPDATE site_ai_turn_reservations
-      SET status = 'expired', completed_at = NOW(), outcome = 'heartbeat expired'
+      SELECT reservation_id, reserved_microusd
+      FROM site_ai_turn_reservations
       WHERE pool_id = $1 AND period_start = $2 AND status = 'active'
         AND expires_at <= NOW()
-      RETURNING reserved_microusd
+      FOR UPDATE
     `,
     [poolId, periodStart],
   );
-  const released = rows.reduce(
-    (sum, row) => sum + int(row.reserved_microusd),
-    0,
-  );
-  if (released > 0) {
+  let released = 0;
+  let committed = 0;
+  for (const row of rows) {
+    const usage = await client.query(
+      `SELECT COALESCE(SUM(cost_microusd), 0) AS cost
+       FROM site_ai_provider_usage_events WHERE reservation_id = $1`,
+      [row.reservation_id],
+    );
+    const reservationCommitted = int(usage.rows[0]?.cost);
+    released += int(row.reserved_microusd);
+    committed += reservationCommitted;
+    await client.query(
+      `UPDATE site_ai_turn_reservations
+       SET status = 'expired', committed_microusd = $2,
+           completed_at = NOW(), outcome = 'turn reservation expired'
+       WHERE reservation_id = $1`,
+      [row.reservation_id, reservationCommitted],
+    );
+  }
+  if (rows.length > 0) {
     await client.query(
       `
         UPDATE site_ai_funding_periods
         SET reserved_microusd = GREATEST(0, reserved_microusd - $3),
+            committed_microusd = committed_microusd + $4,
             updated_at = NOW()
         WHERE pool_id = $1 AND period_start = $2
       `,
-      [poolId, periodStart, released],
+      [poolId, periodStart, released, committed],
     );
   }
 }
@@ -457,6 +473,23 @@ export async function heartbeatSiteFundedCodexTurn({
     [reservationId],
   );
   return (rowCount ?? 0) > 0;
+}
+
+export async function assertSiteFundedCodexReservationHost({
+  reservationId,
+  hostId,
+}: {
+  reservationId: string;
+  hostId: string;
+}): Promise<void> {
+  await ensureSiteFundedCodexLedgerTables();
+  const { rows } = await getPool().query(
+    `SELECT host_id FROM site_ai_turn_reservations WHERE reservation_id = $1`,
+    [reservationId],
+  );
+  if (`${rows[0]?.host_id ?? ""}` !== hostId) {
+    throw new Error("site-funded Codex reservation does not belong to host");
+  }
 }
 
 export async function recordSiteFundedCodexUsageEvent(

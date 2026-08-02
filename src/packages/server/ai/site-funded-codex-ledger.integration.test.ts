@@ -12,6 +12,7 @@ import {
 import { uuid } from "@cocalc/util/misc";
 import {
   ensureSiteFundedCodexLedgerTables,
+  expireAbandonedSiteFundedCodexReservations,
   finishSiteFundedCodexTurn,
   getSiteFundedCodexPoolStatus,
   recordSiteFundedCodexUsageEvent,
@@ -164,5 +165,40 @@ describe("site-funded Codex seed ledger", () => {
       allowed: false,
       code: "account_limit_5h",
     });
+  });
+
+  it("commits recorded usage when an active reservation expires", async () => {
+    const admission = await reserveSiteFundedCodexTurn(
+      options({ maxTurnCostMicrousd: 50_000 }),
+    );
+    if (!admission.allowed) throw new Error("expected reservation");
+    await recordSiteFundedCodexUsageEvent({
+      eventId: uuid(),
+      reservationId: admission.reservation.reservationId,
+      requestSequence: 1,
+      model: "gpt-5.6-luna",
+      inputTokens: 10_000,
+      cachedInputTokens: 6_000,
+      outputTokens: 500,
+    });
+    await getPool().query(
+      `UPDATE site_ai_turn_reservations SET expires_at = NOW() - INTERVAL '1 second'
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+
+    await expect(expireAbandonedSiteFundedCodexReservations()).resolves.toBe(1);
+    expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
+      reservedMicrousd: 0,
+      committedMicrousd: 1_520,
+      activeReservations: 0,
+    });
+    const { rows } = await getPool().query(
+      `SELECT status, committed_microusd FROM site_ai_turn_reservations
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+    expect(rows[0]?.status).toBe("expired");
+    expect(Number(rows[0]?.committed_microusd)).toBe(1_520);
   });
 });

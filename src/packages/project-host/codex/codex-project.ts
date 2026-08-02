@@ -53,6 +53,11 @@ import {
   resolveSharedCodexHome,
 } from "./codex-auth";
 import { syncSubscriptionAuthToRegistryIfChanged } from "./codex-auth-registry";
+import { beginSiteFundedCodexTurn } from "./codex-site-metering";
+import type {
+  CodexSiteFundedTurnRequest,
+  CodexSiteFundedTurnRuntime,
+} from "@cocalc/ai/acp";
 
 const logger = getLogger("project-host:codex-project");
 // Reusing long-lived Codex rootfs containers has proven flaky on some hosts:
@@ -213,17 +218,19 @@ function getCodexProviderWebsocketConnectTimeoutMs(): number {
 
 function getManagedOpenAiProviderArgs(
   authRuntime: CodexAuthRuntime,
+  fundedProvider?: { baseUrl: string },
 ): string[] | undefined {
   const streamIdleTimeoutMs = getCodexProviderStreamIdleTimeoutMs();
   const websocketConnectTimeoutMs = getCodexProviderWebsocketConnectTimeoutMs();
   if (
+    fundedProvider != null ||
     authRuntime.source === "project-api-key" ||
     authRuntime.source === "account-api-key" ||
     authRuntime.source === "site-api-key"
   ) {
     return [
       "--config",
-      `model_providers.${API_KEY_PROVIDER_ID}={name="OpenAI",base_url="${OPENAI_PROVIDER_BASE_URL}",env_key="OPENAI_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=true,stream_idle_timeout_ms=${streamIdleTimeoutMs},websocket_connect_timeout_ms=${websocketConnectTimeoutMs}}`,
+      `model_providers.${API_KEY_PROVIDER_ID}={name="OpenAI",base_url="${fundedProvider?.baseUrl ?? OPENAI_PROVIDER_BASE_URL}",env_key="OPENAI_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=${fundedProvider ? "false" : "true"},stream_idle_timeout_ms=${streamIdleTimeoutMs},websocket_connect_timeout_ms=${websocketConnectTimeoutMs}}`,
       "--config",
       `model_provider="${API_KEY_PROVIDER_ID}"`,
     ];
@@ -1334,6 +1341,7 @@ type SpawnCodexAppServerInProjectRuntimeOptions = {
   env?: NodeJS.ProcessEnv;
   forceRefreshSiteKey?: boolean;
   touchReason?: string | false;
+  siteFundedTurn?: CodexSiteFundedTurnRequest;
 };
 
 type SpawnCodexAppServerInProjectRuntimeResult = {
@@ -1347,6 +1355,7 @@ type SpawnCodexAppServerInProjectRuntimeResult = {
   appServerLogin?: CodexAppServerLoginHint;
   handleAppServerRequest?: CodexAppServerRequestHandler;
   runtimeEnv?: Record<string, string>;
+  siteFundedTurn?: CodexSiteFundedTurnRuntime;
 };
 
 async function spawnCodexAppServerInProjectRuntime({
@@ -1356,6 +1365,7 @@ async function spawnCodexAppServerInProjectRuntime({
   env: extraEnv,
   forceRefreshSiteKey = false,
   touchReason = "codex",
+  siteFundedTurn: siteFundedTurnRequest,
 }: SpawnCodexAppServerInProjectRuntimeOptions): Promise<SpawnCodexAppServerInProjectRuntimeResult> {
   const authRuntime = await resolveCodexAuthRuntime({
     projectId,
@@ -1363,7 +1373,6 @@ async function spawnCodexAppServerInProjectRuntime({
     forceRefreshSiteKey,
   });
   logResolvedCodexAuthRuntime(projectId, accountId, authRuntime);
-  const appServerLogin = await resolveAppServerLoginHint(authRuntime);
   const handleAppServerRequest = createAppServerRequestHandler({
     projectId,
     accountId,
@@ -1372,6 +1381,24 @@ async function spawnCodexAppServerInProjectRuntime({
   await ensureProjectContainerRunning({ projectId, accountId });
   const { home, scratch } = await localPath({ project_id: projectId });
   await scrubBrokenProjectCodexAuthArtifacts(home, authRuntime);
+  let siteFundedTurn: CodexSiteFundedTurnRuntime | undefined;
+  if (authRuntime.source === "site-api-key" && siteFundedTurnRequest) {
+    if (!accountId)
+      throw new Error("accountId is required for site-funded Codex");
+    const apiKey = authRuntime.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) throw new Error("site OpenAI API key is unavailable");
+    siteFundedTurn = await beginSiteFundedCodexTurn({
+      accountId,
+      projectId,
+      fundedTurnId: siteFundedTurnRequest.fundedTurnId,
+      idempotencyKey: siteFundedTurnRequest.idempotencyKey,
+      path: siteFundedTurnRequest.path,
+      apiKey,
+    });
+  }
+  const appServerLogin = siteFundedTurn
+    ? undefined
+    : await resolveAppServerLoginHint(authRuntime);
   const name = projectContainerName(projectId);
 
   const execArgs: string[] = [
@@ -1389,6 +1416,9 @@ async function spawnCodexAppServerInProjectRuntime({
     `LOGNAME=${DEFAULT_PROJECT_RUNTIME_USER}`,
   ];
   const execEnv = toStringEnv(extraEnv);
+  if (siteFundedTurn) {
+    execEnv.OPENAI_API_KEY = siteFundedTurn.providerToken;
+  }
   const cliBearer = await resolveProjectCliBearer({
     projectId,
     accountId,
@@ -1412,6 +1442,11 @@ async function spawnCodexAppServerInProjectRuntime({
     ...(appServerLogin?.type === "apiKey" ? {} : authRuntime.env),
     ...execEnv,
   };
+  if (siteFundedTurn) {
+    // The proxy credential is only needed by the Codex process itself. Do not
+    // also expose it to commands that Codex starts inside the turn.
+    delete runtimeEnv.OPENAI_API_KEY;
+  }
   applyProjectRuntimeCliEnv(execEnv, accountId);
   execEnv.COCALC_API_URL = resolveProjectRuntimeApiUrl(execEnv.COCALC_API_URL);
   applyProjectRuntimeCliEnv(execEnv, accountId);
@@ -1424,8 +1459,11 @@ async function spawnCodexAppServerInProjectRuntime({
     execArgs.push("-e", `${key}=${execEnv[key]}`);
   }
   const codexArgs: string[] = [];
-  const providerArgs =
-    appServerLogin?.type === "apiKey"
+  const providerArgs = siteFundedTurn
+    ? getManagedOpenAiProviderArgs(authRuntime, {
+        baseUrl: siteFundedTurn.providerBaseUrl,
+      })
+    : appServerLogin?.type === "apiKey"
       ? undefined
       : getManagedOpenAiProviderArgs(authRuntime);
   if (providerArgs) {
@@ -1510,6 +1548,7 @@ async function spawnCodexAppServerInProjectRuntime({
     appServerLogin,
     handleAppServerRequest,
     runtimeEnv,
+    siteFundedTurn,
   };
 }
 
@@ -1559,6 +1598,7 @@ export function initCodexProjectRunner(): void {
       cwd,
       env: extraEnv,
       touchReason,
+      siteFundedTurn,
     }) {
       const spawned = await spawnCodexAppServerInProjectRuntime({
         projectId,
@@ -1566,6 +1606,7 @@ export function initCodexProjectRunner(): void {
         cwd,
         env: extraEnv,
         touchReason: touchReason ?? "codex",
+        siteFundedTurn,
       });
       return {
         proc: spawned.proc,
@@ -1580,6 +1621,7 @@ export function initCodexProjectRunner(): void {
         appServerLogin: spawned.appServerLogin,
         handleAppServerRequest: spawned.handleAppServerRequest,
         runtimeEnv: spawned.runtimeEnv,
+        siteFundedTurn: spawned.siteFundedTurn,
       };
     },
   });

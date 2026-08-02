@@ -21,6 +21,12 @@ import type {
   RootfsReleaseGcStatus,
   RootfsUploadedArtifactResult,
 } from "@cocalc/util/rootfs-images";
+import type {
+  SiteFundedCodexAdmission,
+  SiteFundedCodexPoolStatus,
+  SiteFundedCodexReservation,
+  SiteFundedCodexUsageEvent,
+} from "@cocalc/util/ai/site-funded-codex";
 
 export type HostStatus =
   | "deprovisioned"
@@ -1763,6 +1769,11 @@ export const hosts = {
   getSiteOpenAiApiKey: authFirstRequireHost,
   checkCodexSiteUsageAllowance: authFirstRequireHost,
   recordCodexSiteUsage: authFirstRequireHost,
+  reserveSiteFundedCodexTurn: authFirstRequireHost,
+  heartbeatSiteFundedCodexTurn: authFirstRequireHost,
+  recordSiteFundedCodexUsageEvent: authFirstRequireHost,
+  finishSiteFundedCodexTurn: authFirstRequireHost,
+  getSiteFundedCodexPoolStatus: authFirstRequireHost,
   issueProjectHostAgentAuthToken: authFirstRequireHost,
   getManagedRootfsReleaseArtifact: authFirstRequireHost,
   recordManagedRootfsReleaseReplica: authFirstRequireHost,
@@ -2204,6 +2215,31 @@ export interface Hosts {
   }) => Promise<{
     usage_units: number;
   }>;
+  reserveSiteFundedCodexTurn: (opts: {
+    host_id?: string;
+    project_id: string;
+    account_id: string;
+    funded_turn_id: string;
+    idempotency_key: string;
+    path?: string;
+  }) => Promise<SiteFundedCodexAdmission>;
+  heartbeatSiteFundedCodexTurn: (opts: {
+    host_id?: string;
+    reservation_id: string;
+  }) => Promise<{ active: boolean }>;
+  recordSiteFundedCodexUsageEvent: (opts: {
+    host_id?: string;
+    event: SiteFundedCodexUsageEvent;
+  }) => Promise<{ costMicrousd: number; inserted: boolean }>;
+  finishSiteFundedCodexTurn: (opts: {
+    host_id?: string;
+    reservation_id: string;
+    status: "committed" | "interrupted" | "failed" | "released";
+    outcome?: string;
+  }) => Promise<SiteFundedCodexReservation>;
+  getSiteFundedCodexPoolStatus: (opts: {
+    host_id?: string;
+  }) => Promise<SiteFundedCodexPoolStatus[]>;
   getManagedRootfsReleaseArtifact: (opts: {
     host_id?: string;
     image: string;

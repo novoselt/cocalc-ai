@@ -186,6 +186,21 @@ import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import { getAIUsageStatus } from "@cocalc/server/ai/usage-status";
 import { computeAIUsageUnits } from "@cocalc/server/ai/usage-units";
 import { saveAIResponse } from "@cocalc/server/ai/save-response";
+import {
+  assertSiteFundedCodexReservationHost,
+  finishSiteFundedCodexTurn as finishSiteFundedCodexTurnLedger,
+  getSiteFundedCodexPoolStatus as getSiteFundedCodexPoolStatusLedger,
+  heartbeatSiteFundedCodexTurn as heartbeatSiteFundedCodexTurnLedger,
+  recordSiteFundedCodexUsageEvent as recordSiteFundedCodexUsageEventLedger,
+  reserveSiteFundedCodexTurn as reserveSiteFundedCodexTurnLedger,
+} from "@cocalc/server/ai/site-funded-codex-ledger";
+import { getSiteFundedCodexConfiguration } from "@cocalc/server/ai/site-funded-codex-policy";
+import type {
+  SiteFundedCodexAdmission,
+  SiteFundedCodexPoolStatus,
+  SiteFundedCodexReservation,
+  SiteFundedCodexUsageEvent,
+} from "@cocalc/util/ai/site-funded-codex";
 import { moneyToDbString, type MoneyValue } from "@cocalc/util/money";
 import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
 import {
@@ -3066,6 +3081,178 @@ export async function recordCodexSiteUsage({
   });
 
   return { usage_units };
+}
+
+function usageLimitMicrousd(
+  status: Awaited<ReturnType<typeof getAIUsageStatus>>,
+  window: "5h" | "7d",
+): number | null {
+  const limit = status.windows.find((entry) => entry.window === window)?.limit;
+  if (limit == null || !Number.isFinite(limit)) return null;
+  // Existing AI limits are denominated in one-cent usage units.
+  return Math.max(0, Math.floor(limit * 10_000));
+}
+
+export async function reserveSiteFundedCodexTurn({
+  host_id,
+  project_id,
+  account_id,
+  funded_turn_id,
+  idempotency_key,
+  path,
+}: {
+  host_id?: string;
+  project_id: string;
+  account_id: string;
+  funded_turn_id: string;
+  idempotency_key: string;
+  path?: string;
+}): Promise<SiteFundedCodexAdmission> {
+  if (!host_id) throw new Error("host_id must be specified");
+  if (!project_id) throw new Error("project_id must be specified");
+  if (!account_id) throw new Error("account_id must be specified");
+  if (!isValidUUID(funded_turn_id)) {
+    throw new Error("funded_turn_id must be a UUID");
+  }
+  await assertHostCredentialProjectAccess({
+    host_id,
+    project_id,
+    owner_account_id: account_id,
+  });
+  if (await isAiLaunchDisabled()) {
+    return {
+      allowed: false,
+      code: "disabled",
+      reason:
+        "AI and Codex are temporarily disabled by the site administrator.",
+    };
+  }
+  let configuration;
+  try {
+    configuration = await getSiteFundedCodexConfiguration();
+  } catch (err) {
+    logger.error("invalid site-funded Codex pricing or policy", {
+      err: `${err}`,
+    });
+    return {
+      allowed: false,
+      code: "missing_price",
+      reason: "Site-funded Codex pricing is not configured safely.",
+    };
+  }
+  if (!configuration.enabled) {
+    return {
+      allowed: false,
+      code: "disabled",
+      reason:
+        "Site-funded Codex is disabled. Connect a ChatGPT plan or personal OpenAI API key to continue.",
+    };
+  }
+  const [membership, usageStatus, accounts] = await Promise.all([
+    resolveMembershipForAccount(account_id),
+    getAIUsageStatus({ account_id }),
+    getClusterAccountsByIdsDirect([account_id]),
+  ]);
+  const account = accounts.find((entry) => entry.account_id === account_id);
+  if (!account || account.banned || !account.email_address_verified) {
+    return {
+      allowed: false,
+      code: "ineligible",
+      reason:
+        "A verified, active CoCalc account is required for included Codex usage.",
+    };
+  }
+  const paid = membership.source !== "free";
+  return await reserveSiteFundedCodexTurnLedger({
+    fundedTurnId: funded_turn_id,
+    idempotencyKey: idempotency_key,
+    poolId: paid ? "site-funded-codex-paid" : "site-funded-codex-free",
+    poolLimitMicrousd: paid
+      ? configuration.paidPoolWeeklyLimitMicrousd
+      : configuration.freePoolWeeklyLimitMicrousd,
+    globalConcurrency: configuration.globalConcurrency,
+    accountId: account_id,
+    projectId: project_id,
+    hostId: host_id,
+    homeBayId: account.home_bay_id ?? undefined,
+    membershipTier: membership.class,
+    policy: configuration.policy,
+    accountLimit5hMicrousd: usageLimitMicrousd(usageStatus, "5h"),
+    accountLimit7dMicrousd: usageLimitMicrousd(usageStatus, "7d"),
+    surface: path?.endsWith(".ipynb")
+      ? "jupyter"
+      : path?.endsWith(".chat")
+        ? "chat"
+        : path
+          ? "editor"
+          : "unknown",
+  });
+}
+
+export async function heartbeatSiteFundedCodexTurn({
+  host_id,
+  reservation_id,
+}: {
+  host_id?: string;
+  reservation_id: string;
+}): Promise<{ active: boolean }> {
+  if (!host_id) throw new Error("host_id must be specified");
+  await assertSiteFundedCodexReservationHost({
+    reservationId: reservation_id,
+    hostId: host_id,
+  });
+  return {
+    active: await heartbeatSiteFundedCodexTurnLedger({
+      reservationId: reservation_id,
+    }),
+  };
+}
+
+export async function recordSiteFundedCodexUsageEvent({
+  host_id,
+  event,
+}: {
+  host_id?: string;
+  event: SiteFundedCodexUsageEvent;
+}): Promise<{ costMicrousd: number; inserted: boolean }> {
+  if (!host_id) throw new Error("host_id must be specified");
+  await assertSiteFundedCodexReservationHost({
+    reservationId: event.reservationId,
+    hostId: host_id,
+  });
+  return await recordSiteFundedCodexUsageEventLedger(event);
+}
+
+export async function finishSiteFundedCodexTurn({
+  host_id,
+  reservation_id,
+  status,
+  outcome,
+}: {
+  host_id?: string;
+  reservation_id: string;
+  status: "committed" | "interrupted" | "failed" | "released";
+  outcome?: string;
+}): Promise<SiteFundedCodexReservation> {
+  if (!host_id) throw new Error("host_id must be specified");
+  await assertSiteFundedCodexReservationHost({
+    reservationId: reservation_id,
+    hostId: host_id,
+  });
+  return await finishSiteFundedCodexTurnLedger({
+    reservationId: reservation_id,
+    status,
+    outcome,
+  });
+}
+
+export async function getSiteFundedCodexPoolStatus({
+  host_id,
+}: {
+  host_id?: string;
+}): Promise<SiteFundedCodexPoolStatus[]> {
+  if (!host_id) throw new Error("host_id must be specified");
+  return await getSiteFundedCodexPoolStatusLedger();
 }
 
 type ListHostsOptions = {
