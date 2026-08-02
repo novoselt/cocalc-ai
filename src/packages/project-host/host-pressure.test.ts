@@ -123,6 +123,100 @@ describe("host pressure controller helpers", () => {
     ).toContain("resource_project_inotify");
   });
 
+  it("requires sustained storage emergency before enforcing I/O pressure", () => {
+    const now = Date.parse("2026-08-02T12:00:00.000Z");
+    const metrics = {
+      memory_used_percent: 20,
+      memory_available_bytes: 32 * 1024 ** 3,
+      storage_admission: {
+        schema_version: 1 as const,
+        collected_at: new Date(now).toISOString(),
+        mode: "enforce" as const,
+        pressure_state: "emergency" as const,
+        state_since: new Date(now - 30_000).toISOString(),
+        effective_io_full_avg10: 25,
+        lifecycle_active: 0,
+        starting_projects: 0,
+        stopping_projects: 0,
+        active_by_priority: {
+          lifecycle: 0,
+          interactive: 0,
+          scheduled: 0,
+          scavenger: 0,
+        },
+        btrfs_mutation_locks: 0,
+        btrfs_mutation_waiters: 0,
+        admitted_total: 0,
+        deferred_total: 0,
+        observed_deferral_total: 0,
+        transition_count: 1,
+      },
+    };
+
+    expect(
+      classifyHostPressure(metrics, now, { ioPressureMode: "enforce" }),
+    ).toMatchObject({ zone: "observe" });
+    metrics.storage_admission.state_since = new Date(
+      now - 3 * 60_000,
+    ).toISOString();
+    expect(
+      classifyHostPressure(metrics, now, { ioPressureMode: "enforce" }),
+    ).toMatchObject({ zone: "pressure" });
+    metrics.storage_admission.state_since = new Date(
+      now - 11 * 60_000,
+    ).toISOString();
+    expect(
+      classifyHostPressure(metrics, now, { ioPressureMode: "enforce" }),
+    ).toMatchObject({ zone: "emergency" });
+    expect(
+      classifyHostPressure(metrics, now, { ioPressureMode: "metrics" }),
+    ).toMatchObject({ zone: "normal" });
+  });
+
+  it("keeps I/O eviction candidates old and backed by activity policy", () => {
+    const now = 10 * 60 * 60_000;
+    const candidates = buildStopCandidates({
+      zone: "pressure",
+      now,
+      minimumIdleMs: 6 * 60 * 60_000,
+      requireActivityPolicy: true,
+      projects: [
+        { project_id: "proj-old", state: "running" },
+        { project_id: "proj-recent", state: "running" },
+        { project_id: "proj-unknown", state: "running" },
+      ],
+      policies: new Map([
+        [
+          "proj-old",
+          {
+            project_id: "proj-old",
+            owner_account_id: "owner-1",
+            shared_compute_priority: 0,
+            authoritative_last_edited_ms: now - 8 * 60 * 60_000,
+            policy_updated_ms: now,
+            stop_override: "default",
+          },
+        ],
+        [
+          "proj-recent",
+          {
+            project_id: "proj-recent",
+            owner_account_id: "owner-2",
+            shared_compute_priority: 0,
+            authoritative_last_edited_ms: now - 30 * 60_000,
+            policy_updated_ms: now,
+            stop_override: "default",
+          },
+        ],
+      ]),
+      getStopState: () => undefined,
+    });
+
+    expect(candidates.map(({ project_id }) => project_id)).toEqual([
+      "proj-old",
+    ]);
+  });
+
   it("ranks lower priority and older activity first", () => {
     const now = 2_000_000;
     const candidates = buildStopCandidates({

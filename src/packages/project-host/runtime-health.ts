@@ -6,6 +6,10 @@
 import { executeCode } from "@cocalc/backend/execute-code";
 import getLogger from "@cocalc/backend/logger";
 import { podmanEnv } from "@cocalc/backend/podman/env";
+import type { HostStorageAdmissionMetrics } from "@cocalc/conat/hub/api/hosts";
+import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { getStorageAdmissionStatus } from "./storage-admission";
 
 const logger = getLogger("project-host:runtime-health");
 
@@ -15,9 +19,13 @@ const DIAGNOSTIC_COOLDOWN_MS = 10 * 60_000;
 const DIAGNOSTIC_OUTPUT_LIMIT = 12_000;
 const ERROR_LIMIT = 1000;
 const RUNTIME_FAILURES_BEFORE_DEGRADED = 2;
+const DIAGNOSTIC_HISTORY_LIMIT = 8;
 
 export type ProjectHostRuntimeHealthStatus = "starting" | "ready" | "degraded";
 export type ProjectHostSyntheticProbeFailureKind = "port_bind_collision";
+export type ProjectHostRuntimeFailureKind =
+  | "container_runtime"
+  | "storage_pressure";
 
 export interface ProjectHostRuntimeHealthSnapshot {
   synthetic_probe_supported: true;
@@ -26,10 +34,12 @@ export interface ProjectHostRuntimeHealthSnapshot {
   checked_at?: string;
   podman_latency_ms?: number;
   consecutive_failures: number;
+  failure_kind?: ProjectHostRuntimeFailureKind;
   error?: string;
   diagnostics_requested_at?: string;
   diagnostics_completed_at?: string;
   diagnostics_error?: string;
+  diagnostics_path?: string;
   synthetic_probe?: {
     status: "running" | "passed" | "failed";
     checked_at: string;
@@ -41,7 +51,9 @@ export interface ProjectHostRuntimeHealthSnapshot {
 }
 
 export type ProjectHostRuntimeProbe = () => Promise<void>;
-export type ProjectHostRuntimeDiagnostics = () => Promise<void>;
+export type ProjectHostRuntimeDiagnostics = () => Promise<
+  { path?: string } | undefined | void
+>;
 
 function probeTimeoutSeconds(): number {
   const value = Number(
@@ -79,6 +91,22 @@ function classifySyntheticProbeFailure(
   return undefined;
 }
 
+function classifyRuntimeProbeFailure(
+  err: unknown,
+  storage: HostStorageAdmissionMetrics | undefined,
+): ProjectHostRuntimeFailureKind {
+  const text = `${err ?? ""}`.toLowerCase();
+  const timedOut =
+    text.includes("timeout") ||
+    text.includes("timed out") ||
+    text.includes("killed command") ||
+    text.includes("aborted");
+  if (timedOut && storage?.pressure_state === "emergency") {
+    return "storage_pressure";
+  }
+  return "container_runtime";
+}
+
 export async function probeProjectHostPodmanRuntime(): Promise<void> {
   const { exit_code, stderr, stdout } = await executeCode({
     command: "podman",
@@ -98,7 +126,9 @@ function diagnosticOutput(value: unknown): string {
   return `${value ?? ""}`.trim().slice(0, DIAGNOSTIC_OUTPUT_LIMIT);
 }
 
-export async function captureProjectHostRuntimeDiagnostics(): Promise<void> {
+export async function captureProjectHostRuntimeDiagnostics(): Promise<
+  { path?: string } | undefined
+> {
   const uid =
     typeof process.getuid === "function" ? `${process.getuid()}` : "unknown";
   let runtimeEnv: NodeJS.ProcessEnv;
@@ -166,21 +196,62 @@ export async function captureProjectHostRuntimeDiagnostics(): Promise<void> {
       }
     }),
   );
-  logger.error("project-host runtime forensic snapshot", {
+  const payload = {
     captured_at: new Date().toISOString(),
     pid: process.pid,
+    storage_admission: getStorageAdmissionStatus(),
     results,
-  });
+  };
+  const diagnosticDir =
+    process.env.COCALC_PROJECT_HOST_RUNTIME_DIAGNOSTIC_DIR?.trim() ||
+    "/mnt/cocalc/data/runtime-forensics/project-host";
+  let path: string | undefined;
+  try {
+    await mkdir(diagnosticDir, { recursive: true, mode: 0o700 });
+    const stamp = payload.captured_at.replace(/[:.]/g, "-");
+    path = join(diagnosticDir, `${stamp}.json`);
+    const content = `${JSON.stringify(payload, null, 2)}\n`;
+    const tmp = join(
+      diagnosticDir,
+      `.runtime-diagnostics-${process.pid}-${Date.now()}.tmp`,
+    );
+    await writeFile(tmp, content, { mode: 0o600 });
+    await rename(tmp, path);
+    const latestTmp = join(
+      diagnosticDir,
+      `.latest-${process.pid}-${Date.now()}.tmp`,
+    );
+    await writeFile(latestTmp, content, { mode: 0o600 });
+    await rename(latestTmp, join(diagnosticDir, "latest.json"));
+    const history = (await readdir(diagnosticDir))
+      .filter((name) => name.endsWith(".json") && name !== "latest.json")
+      .sort()
+      .reverse();
+    await Promise.all(
+      history
+        .slice(DIAGNOSTIC_HISTORY_LIMIT)
+        .map(async (name) => await unlink(join(diagnosticDir, name))),
+    );
+  } catch (err) {
+    logger.error("unable to persist project-host runtime forensic snapshot", {
+      diagnostic_dir: diagnosticDir,
+      err: errorText(err),
+    });
+  }
+  logger.error("project-host runtime forensic snapshot", { ...payload, path });
+  return path ? { path } : undefined;
 }
 
 export function createProjectHostRuntimeHealthMonitor({
   isApplicationReady,
   probe = probeProjectHostPodmanRuntime,
   captureDiagnostics = captureProjectHostRuntimeDiagnostics,
+  getStorageStatus = getStorageAdmissionStatus,
 }: {
   isApplicationReady: () => boolean;
   probe?: ProjectHostRuntimeProbe;
   captureDiagnostics?: ProjectHostRuntimeDiagnostics;
+  getStorageStatus?: () => HostStorageAdmissionMetrics | undefined;
 }) {
   let snapshot: ProjectHostRuntimeHealthSnapshot = {
     synthetic_probe_supported: true,
@@ -210,11 +281,14 @@ export function createProjectHostRuntimeHealthMonitor({
       diagnostics_error: undefined,
     };
     void captureDiagnostics()
-      .then(() => {
+      .then((result) => {
+        const diagnosticsPath =
+          result && typeof result === "object" ? result.path : undefined;
         snapshot = {
           ...snapshot,
           diagnostics_completed_at: new Date().toISOString(),
           diagnostics_error: undefined,
+          diagnostics_path: diagnosticsPath,
         };
       })
       .catch((diagnosticErr) => {
@@ -260,6 +334,7 @@ export function createProjectHostRuntimeHealthMonitor({
           checked_at: new Date().toISOString(),
           podman_latency_ms: Date.now() - started,
           consecutive_failures: 0,
+          failure_kind: undefined,
           error: undefined,
         };
       } catch (err) {
@@ -278,6 +353,7 @@ export function createProjectHostRuntimeHealthMonitor({
           checked_at: new Date().toISOString(),
           podman_latency_ms: Date.now() - started,
           consecutive_failures: consecutiveFailures,
+          failure_kind: classifyRuntimeProbeFailure(err, getStorageStatus()),
           error: errorText(err),
         };
         logger.warn("project-host Podman runtime probe failed", snapshot);
@@ -358,6 +434,7 @@ export function createProjectHostRuntimeHealthMonitor({
 }
 
 export const _test = {
+  classifyRuntimeProbeFailure,
   classifySyntheticProbeFailure,
   errorText,
 };

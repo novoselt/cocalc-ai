@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260801-v25"
+HELPER_SCHEMA_VERSION = "20260802-v26"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -6867,15 +6867,68 @@ def ensure_btrfs_data(cfg: BootstrapConfig) -> None:
     repair_host_data_ownership(cfg)
 
 
+def project_host_runtime_is_active() -> bool:
+    markers = (b"project-host:app", b"cocalc-project-podman", b"/conmon")
+    proc = Path("/proc")
+    try:
+        entries = proc.iterdir()
+    except OSError:
+        return True
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes()
+        except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+            continue
+        if any(marker in cmdline for marker in markers):
+            return True
+    return False
+
+
+def configured_podman_runroot(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return None
+    match = re.search(r'^\s*runroot\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
 def configure_podman(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: configuring podman storage")
+    root_run = Path("/run/cocalc/containers/root")
+    rootless_run = Path(f"/run/cocalc/containers/rootless/{cfg.ssh_user}")
+    user_config_root = Path(runtime_home(cfg)) / ".config"
+    user_config = user_config_root / "containers"
+    user_storage_conf = user_config / "storage.conf"
+    current_rootless_run = configured_podman_runroot(user_storage_conf)
+    migration_pending = Path(
+        "/mnt/cocalc/data/containers/runroot-migration-pending"
+    )
+    if (
+        current_rootless_run
+        and current_rootless_run != str(rootless_run)
+        and project_host_runtime_is_active()
+    ):
+        migration_pending.parent.mkdir(parents=True, exist_ok=True)
+        migration_pending.write_text(
+            f"current={current_rootless_run}\ndesired={rootless_run}\n",
+            encoding="utf-8",
+        )
+        log_line(
+            cfg,
+            "bootstrap: deferring Podman runroot migration until the next safe host boot",
+        )
+        return
+
     Path("/mnt/cocalc/data/containers/root/storage").mkdir(parents=True, exist_ok=True)
-    Path("/mnt/cocalc/data/containers/root/run").mkdir(parents=True, exist_ok=True)
+    root_run.mkdir(parents=True, exist_ok=True)
     Path("/etc/containers").mkdir(parents=True, exist_ok=True)
     Path("/etc/containers/storage.conf").write_text(
         '[storage]\n'
         'driver = "overlay"\n'
-        'runroot = "/mnt/cocalc/data/containers/root/run"\n'
+        f'runroot = "{root_run}"\n'
         'graphroot = "/mnt/cocalc/data/containers/root/storage"\n',
         encoding="utf-8",
     )
@@ -6886,11 +6939,8 @@ def configure_podman(cfg: BootstrapConfig) -> None:
     )
     if cfg.ssh_user != "root":
         desired_uid, desired_gid = resolve_runtime_user_identity(cfg)
-        user_config_root = Path(runtime_home(cfg)) / ".config"
-        user_config = user_config_root / "containers"
         rootless_root = Path(f"/mnt/cocalc/data/containers/rootless/{cfg.ssh_user}")
         rootless_storage = rootless_root / "storage"
-        rootless_run = rootless_root / "run"
         user_config_root.mkdir(parents=True, exist_ok=True)
         run_best_effort(
             cfg,
@@ -6916,9 +6966,17 @@ def configure_podman(cfg: BootstrapConfig) -> None:
                 f"{cfg.ssh_user}:{cfg.ssh_user}",
                 str(rootless_root),
                 str(rootless_storage),
+            ],
+            "chown rootless podman persistent paths",
+        )
+        run_best_effort(
+            cfg,
+            [
+                "chown",
+                f"{cfg.ssh_user}:{cfg.ssh_user}",
                 str(rootless_run),
             ],
-            "chown rootless podman path roots",
+            "chown rootless podman runroot",
         )
         (user_config / "storage.conf").write_text(
             '[storage]\n'
@@ -6950,6 +7008,7 @@ def configure_podman(cfg: BootstrapConfig) -> None:
             ],
             "chown containers.conf",
         )
+    migration_pending.unlink(missing_ok=True)
 
 
 def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
@@ -8060,16 +8119,20 @@ remove_safe_runtime_dir() {
 }
 
 cleanup_podman_runtime_state() {
-  local runtime_dir runroot
+  local runtime_dir runroot legacy_runroot
   if project_host_app_running; then
     echo "project-host app is running; refusing to clean Podman runtime state" >&2
     return 1
   fi
   runtime_dir="$(podman_runtime_dir)"
   remove_safe_runtime_dir "${runtime_dir}"
-  runroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/run"
+  runroot="/run/cocalc/containers/rootless/${RUNTIME_USER}"
   if [ -e "${runroot}" ]; then
     rm -rf --one-file-system "${runroot}"
+  fi
+  legacy_runroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/run"
+  if [ -e "${legacy_runroot}" ]; then
+    rm -rf --one-file-system "${legacy_runroot}"
   fi
   repair_runtime_environment
 }

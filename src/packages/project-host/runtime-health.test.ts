@@ -6,6 +6,43 @@
 import { _test, createProjectHostRuntimeHealthMonitor } from "./runtime-health";
 
 describe("project-host runtime health", () => {
+  it("classifies Podman timeouts during emergency I/O as storage incidents", () => {
+    const storage = {
+      schema_version: 1 as const,
+      collected_at: new Date().toISOString(),
+      mode: "enforce" as const,
+      pressure_state: "emergency" as const,
+      state_since: new Date().toISOString(),
+      lifecycle_active: 0,
+      starting_projects: 0,
+      stopping_projects: 0,
+      active_by_priority: {
+        lifecycle: 0,
+        interactive: 0,
+        scheduled: 0,
+        scavenger: 0,
+      },
+      btrfs_mutation_locks: 0,
+      btrfs_mutation_waiters: 0,
+      admitted_total: 0,
+      deferred_total: 0,
+      observed_deferral_total: 0,
+      transition_count: 1,
+    };
+    expect(
+      _test.classifyRuntimeProbeFailure(
+        new Error("killed command 'podman ps -a --format json'"),
+        storage,
+      ),
+    ).toBe("storage_pressure");
+    expect(
+      _test.classifyRuntimeProbeFailure(
+        new Error("podman database corrupt"),
+        storage,
+      ),
+    ).toBe("container_runtime");
+  });
+
   it("preserves both ends of long runtime errors", () => {
     const text = `command=${"x".repeat(1500)}: Address already in use`;
     const truncated = _test.errorText(text);
@@ -138,7 +175,9 @@ describe("project-host runtime health", () => {
     const probe = jest.fn(async () => {
       throw new Error("podman is wedged");
     });
-    const captureDiagnostics = jest.fn(async () => undefined);
+    const captureDiagnostics = jest.fn(async () => ({
+      path: "/mnt/cocalc/data/runtime-forensics/project-host/test.json",
+    }));
     const monitor = createProjectHostRuntimeHealthMonitor({
       isApplicationReady: () => true,
       probe,
@@ -152,6 +191,9 @@ describe("project-host runtime health", () => {
     expect(monitor.getSnapshot().diagnostics_requested_at).toBeDefined();
     await Promise.resolve();
     expect(monitor.getSnapshot().diagnostics_completed_at).toBeDefined();
+    expect(monitor.getSnapshot().diagnostics_path).toBe(
+      "/mnt/cocalc/data/runtime-forensics/project-host/test.json",
+    );
   });
 
   it("keeps a failed synthetic probe quarantined until it passes", async () => {

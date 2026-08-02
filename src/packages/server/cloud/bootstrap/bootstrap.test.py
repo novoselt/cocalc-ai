@@ -1111,6 +1111,45 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
 
 
 class BootstrapRootlessPodmanResetTest(unittest.TestCase):
+    def test_configure_podman_defers_live_runroot_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            home = Path(tmpdir) / "home"
+            storage_conf = home / ".config" / "containers" / "storage.conf"
+            storage_conf.parent.mkdir(parents=True)
+            storage_conf.write_text(
+                '[storage]\nrunroot = "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run"\n',
+                encoding="utf-8",
+            )
+            writes = []
+            original_runtime_home = bootstrap.runtime_home
+            original_runtime_active = bootstrap.project_host_runtime_is_active
+            original_mkdir = Path.mkdir
+            original_write_text = Path.write_text
+            try:
+                bootstrap.runtime_home = lambda _cfg: str(home)
+                bootstrap.project_host_runtime_is_active = lambda: True
+                Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
+                Path.write_text = lambda self, text, encoding="utf-8": writes.append(  # type: ignore[method-assign]
+                    (str(self), text)
+                )
+                bootstrap.configure_podman(cfg)
+            finally:
+                bootstrap.runtime_home = original_runtime_home
+                bootstrap.project_host_runtime_is_active = original_runtime_active
+                Path.mkdir = original_mkdir  # type: ignore[method-assign]
+                Path.write_text = original_write_text  # type: ignore[method-assign]
+
+            self.assertEqual(1, len(writes))
+            self.assertEqual(
+                "/mnt/cocalc/data/containers/runroot-migration-pending",
+                writes[0][0],
+            )
+            self.assertIn(
+                "desired=/run/cocalc/containers/rootless/missing-runtime-user",
+                writes[0][1],
+            )
+
     def test_configure_podman_does_not_clear_rootless_state_on_subuid_ownership(
         self,
     ) -> None:
@@ -1171,14 +1210,37 @@ class BootstrapRootlessPodmanResetTest(unittest.TestCase):
             )
             self.assertIn(
                 (
+                    str(
+                        Path(tmpdir)
+                        / "home"
+                        / ".config"
+                        / "containers"
+                        / "storage.conf"
+                    ),
+                    '[storage]\ndriver = "overlay"\nrunroot = "/run/cocalc/containers/rootless/missing-runtime-user"\ngraphroot = "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage"\n',
+                ),
+                writes,
+            )
+            self.assertIn(
+                (
                     [
                         "chown",
                         "missing-runtime-user:missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage",
-                        "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run",
                     ],
-                    "chown rootless podman path roots",
+                    "chown rootless podman persistent paths",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "chown",
+                        "missing-runtime-user:missing-runtime-user",
+                        "/run/cocalc/containers/rootless/missing-runtime-user",
+                    ],
+                    "chown rootless podman runroot",
                 ),
                 recorded,
             )
@@ -1636,9 +1698,19 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
                         "missing-runtime-user:missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage",
-                        "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run",
                     ],
-                    "chown rootless podman path roots",
+                    "chown rootless podman persistent paths",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "chown",
+                        "missing-runtime-user:missing-runtime-user",
+                        "/run/cocalc/containers/rootless/missing-runtime-user",
+                    ],
+                    "chown rootless podman runroot",
                 ),
                 recorded,
             )

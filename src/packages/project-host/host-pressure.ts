@@ -123,6 +123,29 @@ const RECENT_PRESSURE_STOP_WINDOW_MS = 60 * 60_000;
 const RESOURCE_PRESSURE_MODE = resourcePressureMode(
   process.env.COCALC_PROJECT_HOST_RESOURCE_PRESSURE_MODE,
 );
+const IO_PRESSURE_MODE = resourcePressureMode(
+  process.env.COCALC_PROJECT_HOST_IO_PRESSURE_MODE ?? "enforce",
+);
+const IO_PRESSURE_DWELL_MS = Math.max(
+  30_000,
+  Number(process.env.COCALC_PROJECT_HOST_IO_PRESSURE_DWELL_MS ?? 2 * 60_000),
+);
+const IO_EMERGENCY_DWELL_MS = Math.max(
+  IO_PRESSURE_DWELL_MS,
+  Number(process.env.COCALC_PROJECT_HOST_IO_EMERGENCY_DWELL_MS ?? 10 * 60_000),
+);
+const IO_PRESSURE_MIN_IDLE_MS = Math.max(
+  STARTUP_PROTECTION_MS,
+  Number(
+    process.env.COCALC_PROJECT_HOST_IO_PRESSURE_MIN_IDLE_MS ?? 6 * 60 * 60_000,
+  ),
+);
+const IO_EMERGENCY_MIN_IDLE_MS = Math.max(
+  STARTUP_PROTECTION_MS,
+  Number(
+    process.env.COCALC_PROJECT_HOST_IO_EMERGENCY_MIN_IDLE_MS ?? 60 * 60_000,
+  ),
+);
 const DEFAULT_PROJECT_INOTIFY_INSTANCES_WARN = 512;
 const DEFAULT_PROJECT_INOTIFY_INSTANCES_STOP = 1024;
 const DEFAULT_PROJECT_INOTIFY_WATCHES_WARN = 131_072;
@@ -510,6 +533,55 @@ function hasResourcePressureReason(reason: string | undefined): boolean {
   return !!reason?.split(",").some((part) => part.startsWith("resource_"));
 }
 
+function hasIoPressureReason(reason: string | undefined): boolean {
+  return !!reason?.split(",").some((part) => part.startsWith("storage_io_"));
+}
+
+function storagePressureFindings(
+  metrics: HostCurrentMetrics,
+  now: number,
+): {
+  observeReasons: string[];
+  pressureReasons: string[];
+  emergencyReasons: string[];
+} {
+  const observeReasons: string[] = [];
+  const pressureReasons: string[] = [];
+  const emergencyReasons: string[] = [];
+  const storage = metrics.storage_admission;
+  if (!storage || storage.mode === "disabled") {
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  const stateSinceMs = Date.parse(storage.state_since);
+  const dwellMs = Number.isFinite(stateSinceMs)
+    ? Math.max(0, now - stateSinceMs)
+    : 0;
+  const effectiveFull = parseNonNegativeNumber(storage.effective_io_full_avg10);
+  const detail = `state=${storage.pressure_state},dwell_ms=${Math.floor(
+    dwellMs,
+  )}${effectiveFull == null ? "" : `,full_avg10=${effectiveFull}`}`;
+
+  if (storage.pressure_state === "normal") {
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  if (storage.pressure_state === "recovery") {
+    observeReasons.push(`storage_io_recovery:${detail}`);
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  if (storage.pressure_state === "contended") {
+    observeReasons.push(`storage_io_contended:${detail}`);
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  if (dwellMs >= IO_EMERGENCY_DWELL_MS) {
+    emergencyReasons.push(`storage_io_emergency:${detail}`);
+  } else if (dwellMs >= IO_PRESSURE_DWELL_MS) {
+    pressureReasons.push(`storage_io_sustained:${detail}`);
+  } else {
+    observeReasons.push(`storage_io_transient:${detail}`);
+  }
+  return { observeReasons, pressureReasons, emergencyReasons };
+}
+
 function countsTowardResourceQuarantine(reason: string): boolean {
   return reason.split(",").some((part) => part.startsWith("direct:resource_"));
 }
@@ -581,7 +653,10 @@ function pressureStopStateUpdate({
 export function classifyHostPressure(
   metrics: HostCurrentMetrics | undefined,
   now: number = Date.now(),
-  opts: { resourcePressureMode?: ResourcePressureMode } = {},
+  opts: {
+    resourcePressureMode?: ResourcePressureMode;
+    ioPressureMode?: ResourcePressureMode;
+  } = {},
 ): HostPressureState | undefined {
   if (!metrics) return undefined;
   const usedPercent = parseNonNegativeNumber(metrics.memory_used_percent);
@@ -606,6 +681,7 @@ export function classifyHostPressure(
   const pressureReasons: string[] = [];
   const observeReasons: string[] = [];
   const mode = opts.resourcePressureMode ?? RESOURCE_PRESSURE_MODE;
+  const ioMode = opts.ioPressureMode ?? IO_PRESSURE_MODE;
   if (usedPercent != null && usedPercent >= EMERGENCY_MEMORY_USED_PERCENT) {
     emergencyReasons.push(
       `memory_used_percent>=${EMERGENCY_MEMORY_USED_PERCENT}`,
@@ -633,6 +709,12 @@ export function classifyHostPressure(
     emergencyReasons.push(...resourceFindings.emergencyReasons);
     pressureReasons.push(...resourceFindings.pressureReasons);
     observeReasons.push(...resourceFindings.observeReasons);
+  }
+  if (ioMode !== "metrics") {
+    const storageFindings = storagePressureFindings(metrics, now);
+    emergencyReasons.push(...storageFindings.emergencyReasons);
+    pressureReasons.push(...storageFindings.pressureReasons);
+    observeReasons.push(...storageFindings.observeReasons);
   }
   if (emergencyReasons.length > 0) {
     return {
@@ -670,6 +752,8 @@ export function buildStopCandidates({
   zone,
   now,
   directResourceOffenders,
+  minimumIdleMs,
+  requireActivityPolicy = false,
 }: {
   projects: ProjectRow[];
   policies: Map<string, ProjectStopPolicyRow>;
@@ -677,6 +761,8 @@ export function buildStopCandidates({
   zone: HostPressureZone;
   now: number;
   directResourceOffenders?: Map<string, DirectResourceOffender>;
+  minimumIdleMs?: number;
+  requireActivityPolicy?: boolean;
 }): StopCandidate[] {
   const candidates: StopCandidate[] = [];
   for (const row of projects) {
@@ -689,6 +775,16 @@ export function buildStopCandidates({
     if (!project_id) continue;
     const directResourceOffender = directResourceOffenders?.get(project_id);
     const policy = policies.get(project_id);
+    if (requireActivityPolicy && !policy) {
+      continue;
+    }
+    if (
+      minimumIdleMs != null &&
+      (policy?.authoritative_last_edited_ms == null ||
+        now - policy.authoritative_last_edited_ms < minimumIdleMs)
+    ) {
+      continue;
+    }
     const stopState = getStopState(project_id);
     const startupProtected =
       STARTUP_PROTECTION_MS > 0 &&
@@ -876,8 +972,10 @@ export function startHostPressureController({
     const now = Date.now();
     const metrics = (await refreshMetrics()) ?? getCurrentMetrics();
     const resourcePressureMode = RESOURCE_PRESSURE_MODE;
+    const ioPressureMode = IO_PRESSURE_MODE;
     const classified = classifyHostPressure(metrics, now, {
       resourcePressureMode,
+      ioPressureMode,
     });
     if (!classified) {
       clearLastAction();
@@ -904,6 +1002,10 @@ export function startHostPressureController({
     const resourceOnlyPressure =
       hasResourcePressureReason(classified.reason) &&
       !hasMemoryPressureReason(classified.reason);
+    const ioOnlyPressure =
+      hasIoPressureReason(classified.reason) &&
+      !hasMemoryPressureReason(classified.reason) &&
+      !hasResourcePressureReason(classified.reason);
     const directResourceOffenders =
       resourcePressureMode === "enforce"
         ? resourcePressureFindings(metrics).directOffenders
@@ -923,6 +1025,15 @@ export function startHostPressureController({
       });
       return;
     }
+    if (ioOnlyPressure && ioPressureMode !== "enforce") {
+      publishState({
+        zone: classified.zone,
+        reason: classified.reason,
+        evaluated_at_ms: now,
+        candidate_count: 0,
+      });
+      return;
+    }
     const projects = listProjectsByStates(["running"]);
     const policies = new Map(
       listProjectStopPolicies().map((row) => [row.project_id, row]),
@@ -934,6 +1045,15 @@ export function startHostPressureController({
       zone: classified.zone,
       now,
       directResourceOffenders,
+      ...(ioOnlyPressure
+        ? {
+            minimumIdleMs:
+              classified.zone === "emergency"
+                ? IO_EMERGENCY_MIN_IDLE_MS
+                : IO_PRESSURE_MIN_IDLE_MS,
+            requireActivityPolicy: true,
+          }
+        : {}),
     });
     for (const candidate of candidates) {
       upsertProjectStopState({
@@ -984,7 +1104,9 @@ export function startHostPressureController({
         : PRESSURE_MAX_STOPS_PER_CYCLE;
     let stoppedCount = 0;
     for (const candidate of candidates) {
-      const reason = candidateExplanation(candidate);
+      const reason = [classified.reason, candidateExplanation(candidate)]
+        .filter(Boolean)
+        .join(",");
       upsertProjectStopState({
         project_id: candidate.project_id,
         last_decision_reason: reason,
