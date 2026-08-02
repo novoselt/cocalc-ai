@@ -280,11 +280,22 @@ export async function beginSiteFundedCodexTurn({
   if (!admission.allowed) {
     throw Object.assign(new Error(admission.reason), { code: admission.code });
   }
-  const proxySession = await startSiteFundedCodexProxySession({
-    reservation: admission.reservation,
-    apiKey,
-    onUsage: persistUsageEvent,
-  });
+  let proxySession;
+  try {
+    proxySession = await startSiteFundedCodexProxySession({
+      reservation: admission.reservation,
+      apiKey,
+      onUsage: persistUsageEvent,
+    });
+  } catch (err) {
+    enqueueOutbox("finish", {
+      reservation_id: admission.reservation.reservationId,
+      status: "released",
+      outcome: "provider proxy failed to start",
+    });
+    await flushSiteFundedCodexOutbox();
+    throw err;
+  }
   let finished = false;
   const heartbeat = setInterval(() => {
     void callHub({

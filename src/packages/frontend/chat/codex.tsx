@@ -139,6 +139,11 @@ type LiteCodexLocalStatus = {
   checkedAt?: number;
 };
 
+function formatMicrousd(value: number | undefined): string | undefined {
+  if (value == null || !Number.isFinite(value)) return;
+  return `$${(Math.max(0, value) / 1_000_000).toFixed(3)}`;
+}
+
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
   <Text strong style={{ color: COLORS.GRAY_D }}>
     {children}
@@ -449,6 +454,22 @@ export function CodexConfigButton({
     Form.useWatch("sessionMode", form) ?? value?.sessionMode;
   const selectedServiceTierValue: CodexServiceTier =
     Form.useWatch("serviceTier", form) ?? value?.serviceTier ?? "standard";
+  const siteFundedPolicy =
+    !lite &&
+    paymentSource?.source === "site-api-key" &&
+    paymentSource.siteFundedCodex?.enabled
+      ? paymentSource.siteFundedCodex.policy
+      : undefined;
+  const siteFundedAccountStatus =
+    paymentSource?.siteFundedCodex?.status?.account;
+  const includedRemaining = [
+    formatMicrousd(siteFundedAccountStatus?.remaining5hMicrousd)
+      ? `${formatMicrousd(siteFundedAccountStatus?.remaining5hMicrousd)} remaining in 5 hours`
+      : undefined,
+    formatMicrousd(siteFundedAccountStatus?.remaining7dMicrousd)
+      ? `${formatMicrousd(siteFundedAccountStatus?.remaining7dMicrousd)} remaining in 7 days`
+      : undefined,
+  ].filter(Boolean);
   const allModeOptions = useMemo(() => getModeOptions(), []);
   const availableModeValues = useMemo(
     () => new Set(getCodexNewChatModeOptions().map(({ value }) => value)),
@@ -530,6 +551,9 @@ export function CodexConfigButton({
       ? "fast"
       : "standard";
   const serviceTierLabel = effectiveServiceTier === "fast" ? "Fast" : undefined;
+  const displayedModel = siteFundedPolicy?.model ?? selectedModelValue;
+  const displayedReasoning = siteFundedPolicy ? "Low" : reasoningLabel;
+  const displayedServiceTier = siteFundedPolicy ? "Standard" : serviceTierLabel;
   const paymentNeedsAttention =
     paymentSourceLoading || paymentSource?.source === "none" || !paymentSource;
   const toggleControlsCollapsed = () => {
@@ -754,16 +778,27 @@ export function CodexConfigButton({
               <Text type="secondary" style={{ fontSize: 12 }}>
                 ·
               </Text>
-              <Dropdown menu={modelMenu} trigger={["click"]}>
+              {siteFundedPolicy ? (
                 <button
                   type="button"
-                  title="Change Codex model"
+                  title="Included Codex uses a fixed model"
                   style={pillSegmentStyle("model")}
                   {...pillSegmentHandlers("model")}
                 >
-                  {selectedModelValue}
+                  {displayedModel}
                 </button>
-              </Dropdown>
+              ) : (
+                <Dropdown menu={modelMenu} trigger={["click"]}>
+                  <button
+                    type="button"
+                    title="Change Codex model"
+                    style={pillSegmentStyle("model")}
+                    {...pillSegmentHandlers("model")}
+                  >
+                    {displayedModel}
+                  </button>
+                </Dropdown>
+              )}
               {lite ? (
                 <>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -781,30 +816,41 @@ export function CodexConfigButton({
                   </Dropdown>
                 </>
               ) : null}
-              {reasoningLabel ? (
+              {displayedReasoning ? (
                 <>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     ·
                   </Text>
-                  <Dropdown menu={reasoningMenu} trigger={["click"]}>
+                  {siteFundedPolicy ? (
                     <button
                       type="button"
-                      title="Change Codex thinking level"
+                      title="Included Codex uses low reasoning"
                       style={pillSegmentStyle("reasoning")}
                       {...pillSegmentHandlers("reasoning")}
                     >
-                      {reasoningLabel}
+                      {displayedReasoning}
                     </button>
-                  </Dropdown>
+                  ) : (
+                    <Dropdown menu={reasoningMenu} trigger={["click"]}>
+                      <button
+                        type="button"
+                        title="Change Codex thinking level"
+                        style={pillSegmentStyle("reasoning")}
+                        {...pillSegmentHandlers("reasoning")}
+                      >
+                        {displayedReasoning}
+                      </button>
+                    </Dropdown>
+                  )}
                 </>
               ) : null}
-              {serviceTierLabel ? (
+              {displayedServiceTier ? (
                 <>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     ·
                   </Text>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {serviceTierLabel}
+                    {displayedServiceTier}
                   </Text>
                 </>
               ) : null}
@@ -921,14 +967,22 @@ export function CodexConfigButton({
               }}
             >
               <Space size={6} wrap style={{ justifyContent: "flex-end" }}>
-                <Tag color="blue">{selectedModelValue ?? "Model"}</Tag>
+                <Tag color="blue">{displayedModel ?? "Model"}</Tag>
                 {lite ? (
                   <Tag color={selectedModeOption?.warning ? "red" : "green"}>
                     {modeLabel}
                   </Tag>
                 ) : null}
-                {reasoningLabel ? <Tag>{reasoningLabel}</Tag> : null}
-                {serviceTierLabel ? <Tag color="orange">Fast</Tag> : null}
+                {displayedReasoning ? <Tag>{displayedReasoning}</Tag> : null}
+                {displayedServiceTier ? (
+                  <Tag
+                    color={
+                      displayedServiceTier === "Fast" ? "orange" : undefined
+                    }
+                  >
+                    {displayedServiceTier}
+                  </Tag>
+                ) : null}
               </Space>
               <Tooltip
                 title={`Current source: ${
@@ -961,52 +1015,74 @@ export function CodexConfigButton({
                   Choose the model, session continuity, and directory Codex uses
                   for future turns.
                 </div>
-                <div style={gridTwoColStyle}>
-                  <Form.Item label="Model" name="model" style={formItemStyle}>
-                    <Select
-                      placeholder="e.g., gpt-5.6-sol"
-                      options={models}
-                      optionRender={(option) =>
-                        renderOptionWithDescription({
-                          title: `${option.data.label}`,
-                          description: option.data.description,
-                        })
-                      }
-                      showSearch
-                      allowClear
-                      onChange={(val) => {
-                        const selected = models.find((m) => m.value === val);
-                        if (selected?.reasoning?.length) {
-                          const def =
-                            selected.reasoning.find((r) => r.default)?.id ??
-                            selected.reasoning[0]?.id;
-                          form.setFieldsValue({ reasoning: def });
+                {siteFundedPolicy ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="Included by CoCalc"
+                    description={
+                      <>
+                        Included turns use <b>{siteFundedPolicy.model}</b>, low
+                        reasoning, and standard speed. Connect a personal
+                        ChatGPT plan or OpenAI API key to choose other models,
+                        reasoning levels, or speed.
+                        {includedRemaining.length ? (
+                          <div style={{ marginTop: 6 }}>
+                            Included allowance: {includedRemaining.join(" · ")}.
+                          </div>
+                        ) : null}
+                      </>
+                    }
+                  />
+                ) : (
+                  <div style={gridTwoColStyle}>
+                    <Form.Item label="Model" name="model" style={formItemStyle}>
+                      <Select
+                        placeholder="e.g., gpt-5.6-sol"
+                        options={models}
+                        optionRender={(option) =>
+                          renderOptionWithDescription({
+                            title: `${option.data.label}`,
+                            description: option.data.description,
+                          })
                         }
-                        if (!codexModelSupportsFastMode(val)) {
-                          form.setFieldsValue({ serviceTier: "standard" });
+                        showSearch
+                        allowClear
+                        onChange={(val) => {
+                          const selected = models.find((m) => m.value === val);
+                          if (selected?.reasoning?.length) {
+                            const def =
+                              selected.reasoning.find((r) => r.default)?.id ??
+                              selected.reasoning[0]?.id;
+                            form.setFieldsValue({ reasoning: def });
+                          }
+                          if (!codexModelSupportsFastMode(val)) {
+                            form.setFieldsValue({ serviceTier: "standard" });
+                          }
+                        }}
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="Reasoning level"
+                      name="reasoning"
+                      style={formItemStyle}
+                    >
+                      <Select
+                        placeholder="Select reasoning"
+                        options={reasoningOptions}
+                        optionRender={(option) =>
+                          renderOptionWithDescription({
+                            title: `${option.data.label}${
+                              option.data.default ? " (default)" : ""
+                            }`,
+                            description: option.data.description,
+                          })
                         }
-                      }}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label="Reasoning level"
-                    name="reasoning"
-                    style={formItemStyle}
-                  >
-                    <Select
-                      placeholder="Select reasoning"
-                      options={reasoningOptions}
-                      optionRender={(option) =>
-                        renderOptionWithDescription({
-                          title: `${option.data.label}${
-                            option.data.default ? " (default)" : ""
-                          }`,
-                          description: option.data.description,
-                        })
-                      }
-                    />
-                  </Form.Item>
-                </div>
+                      />
+                    </Form.Item>
+                  </div>
+                )}
                 <div style={gridTwoColStyle}>
                   <Form.Item
                     label="Working directory"
@@ -1028,29 +1104,33 @@ export function CodexConfigButton({
                     />
                   </Form.Item>
                 </div>
-                <Form.Item
-                  label="Speed"
-                  name="serviceTier"
-                  tooltip="Fast mode uses more Codex credits. Standard is the default."
-                  style={{ marginBottom: 0 }}
-                >
-                  <Radio.Group>
-                    <Space wrap>
-                      <Radio value="standard">Standard</Radio>
-                      <Radio value="fast" disabled={!fastModeSupported}>
-                        Fast
-                      </Radio>
-                    </Space>
-                  </Radio.Group>
-                </Form.Item>
-                {effectiveServiceTier === "fast" ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginTop: 10 }}
-                    message="Fast mode uses more Codex credits"
-                    description="Use this only when lower latency is worth the higher cost."
-                  />
+                {!siteFundedPolicy ? (
+                  <>
+                    <Form.Item
+                      label="Speed"
+                      name="serviceTier"
+                      tooltip="Fast mode uses more Codex credits. Standard is the default."
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Radio.Group>
+                        <Space wrap>
+                          <Radio value="standard">Standard</Radio>
+                          <Radio value="fast" disabled={!fastModeSupported}>
+                            Fast
+                          </Radio>
+                        </Space>
+                      </Radio.Group>
+                    </Form.Item>
+                    {effectiveServiceTier === "fast" ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        style={{ marginTop: 10 }}
+                        message="Fast mode uses more Codex credits"
+                        description="Use this only when lower latency is worth the higher cost."
+                      />
+                    ) : null}
+                  </>
                 ) : null}
               </div>
               <div style={sectionStyle}>

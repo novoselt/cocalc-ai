@@ -171,6 +171,34 @@ export type SiteFundedCodexPoolStatus = {
   utilization: number;
 };
 
+export type SiteFundedCodexAccountStatus = {
+  accountId: string;
+  committed5hMicrousd: number;
+  committed7dMicrousd: number;
+  activeReservedMicrousd: number;
+  limit5hMicrousd?: number;
+  limit7dMicrousd?: number;
+  remaining5hMicrousd?: number;
+  remaining7dMicrousd?: number;
+};
+
+export type SiteFundedCodexStatus = {
+  pools: SiteFundedCodexPoolStatus[];
+  account?: SiteFundedCodexAccountStatus;
+  reconciliation?: {
+    available: boolean;
+    checkedAt: string;
+    periodStart: string;
+    periodEnd: string;
+    localCommittedMicrousd: number;
+    providerCostMicrousd?: number;
+    discrepancyMicrousd?: number;
+    discrepancyPercent?: number;
+    projectId?: string;
+    reason?: string;
+  };
+};
+
 function tokenCount(value: number | undefined, name: string): number {
   const normalized = value ?? 0;
   if (!Number.isSafeInteger(normalized) || normalized < 0) {

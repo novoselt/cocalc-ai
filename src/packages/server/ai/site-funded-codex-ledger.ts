@@ -9,6 +9,7 @@ import type { PoolClient } from "@cocalc/database/pool";
 import {
   computeSiteFundedCodexRequestCost,
   type SiteFundedCodexAdmission,
+  type SiteFundedCodexAccountStatus,
   type SiteFundedCodexPoolId,
   type SiteFundedCodexPoolStatus,
   type SiteFundedCodexPolicy,
@@ -633,6 +634,56 @@ export async function getSiteFundedCodexPoolStatus(): Promise<
       utilization: limit > 0 ? (reserved + committed) / limit : 1,
     };
   });
+}
+
+export async function getSiteFundedCodexAccountStatus({
+  accountId,
+  limit5hMicrousd,
+  limit7dMicrousd,
+}: {
+  accountId: string;
+  limit5hMicrousd?: number | null;
+  limit7dMicrousd?: number | null;
+}): Promise<SiteFundedCodexAccountStatus> {
+  await ensureSiteFundedCodexLedgerTables();
+  const { rows } = await getPool().query(
+    `SELECT
+       COALESCE(SUM(committed_microusd) FILTER (
+         WHERE completed_at >= NOW() - INTERVAL '5 hours'
+       ), 0) AS committed_5h,
+       COALESCE(SUM(committed_microusd) FILTER (
+         WHERE completed_at >= NOW() - INTERVAL '7 days'
+       ), 0) AS committed_7d,
+       COALESCE(SUM(reserved_microusd) FILTER (
+         WHERE status = 'active'
+       ), 0) AS active_reserved
+     FROM site_ai_turn_reservations
+     WHERE account_id = $1`,
+    [accountId],
+  );
+  const committed5hMicrousd = int(rows[0]?.committed_5h);
+  const committed7dMicrousd = int(rows[0]?.committed_7d);
+  const activeReservedMicrousd = int(rows[0]?.active_reserved);
+  const normalized5h =
+    limit5hMicrousd == null ? undefined : Math.max(0, limit5hMicrousd);
+  const normalized7d =
+    limit7dMicrousd == null ? undefined : Math.max(0, limit7dMicrousd);
+  return {
+    accountId,
+    committed5hMicrousd,
+    committed7dMicrousd,
+    activeReservedMicrousd,
+    limit5hMicrousd: normalized5h,
+    limit7dMicrousd: normalized7d,
+    remaining5hMicrousd:
+      normalized5h == null
+        ? undefined
+        : Math.max(0, normalized5h - committed5hMicrousd),
+    remaining7dMicrousd:
+      normalized7d == null
+        ? undefined
+        : Math.max(0, normalized7d - committed7dMicrousd),
+  };
 }
 
 export async function expireAbandonedSiteFundedCodexReservations(): Promise<number> {

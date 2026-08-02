@@ -1381,6 +1381,12 @@ async function spawnCodexAppServerInProjectRuntime({
   await ensureProjectContainerRunning({ projectId, accountId });
   const { home, scratch } = await localPath({ project_id: projectId });
   await scrubBrokenProjectCodexAuthArtifacts(home, authRuntime);
+  const initialExecEnv = toStringEnv(extraEnv);
+  const cliBearer = await resolveProjectCliBearer({
+    projectId,
+    accountId,
+    currentEnv: initialExecEnv,
+  });
   let siteFundedTurn: CodexSiteFundedTurnRuntime | undefined;
   if (authRuntime.source === "site-api-key" && siteFundedTurnRequest) {
     if (!accountId)
@@ -1415,15 +1421,10 @@ async function spawnCodexAppServerInProjectRuntime({
     "-e",
     `LOGNAME=${DEFAULT_PROJECT_RUNTIME_USER}`,
   ];
-  const execEnv = toStringEnv(extraEnv);
+  const execEnv = initialExecEnv;
   if (siteFundedTurn) {
     execEnv.OPENAI_API_KEY = siteFundedTurn.providerToken;
   }
-  const cliBearer = await resolveProjectCliBearer({
-    projectId,
-    accountId,
-    currentEnv: execEnv,
-  });
   if (cliBearer) {
     execEnv.COCALC_BEARER_TOKEN = cliBearer;
     execEnv.COCALC_AGENT_TOKEN = cliBearer;

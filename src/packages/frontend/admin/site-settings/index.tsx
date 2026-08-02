@@ -50,6 +50,7 @@ import CloudflareConfigWizard from "./cloudflare-config-wizard";
 import LauncherDefaultsWizard from "./launcher-defaults-wizard";
 import RuntimeRetentionPolicyWizard from "./runtime-retention-policy-wizard";
 import ShowError from "@cocalc/frontend/components/error";
+import SiteFundedCodexStatusCard from "./site-funded-codex-status";
 
 const { CheckableTag } = AntdTag;
 
@@ -1374,6 +1375,7 @@ export default function SiteSettings({ close }) {
       )}
       <Well>
         <Warning />
+        <SiteFundedCodexStatusCard />
         <ShowError
           error={error}
           setError={setError}

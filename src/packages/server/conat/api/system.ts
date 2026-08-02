@@ -94,6 +94,12 @@ import {
 import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { getAIUsageLimits } from "@cocalc/server/ai/usage-status";
+import { getSiteFundedCodexConfiguration } from "@cocalc/server/ai/site-funded-codex-policy";
+import {
+  getSiteFundedCodexAccountStatus,
+  getSiteFundedCodexPoolStatus,
+} from "@cocalc/server/ai/site-funded-codex-ledger";
+import { reconcileSiteFundedCodexCosts } from "@cocalc/server/ai/site-funded-codex-reconciliation";
 import {
   enqueueRootfsPrepullForHost,
   enqueueRootfsPrepullForRunningHosts,
@@ -1345,7 +1351,7 @@ export async function getGlobalConfigPropagationStatus({
   const normalizedScope = `${scope ?? ""}`.trim();
   if (currentBayId !== seedBayId) {
     return await getInterBayBridge()
-      .bayOps(seedBayId, { timeout_ms: 15_000 })
+      .bayOps(seedBayId, { timeout_ms: 30_000 })
       .getGlobalConfigPropagationStatus({
         account_id,
         scope: normalizedScope || undefined,
@@ -6408,6 +6414,69 @@ export async function getCodexPaymentSource({
     siteAiUsageLimits != null
       ? siteAiUsageLimits.units_5h > 0 && siteAiUsageLimits.units_7d > 0
       : undefined;
+  let siteFundedCodex:
+    | import("@cocalc/conat/hub/api/system").CodexPaymentSourceInfo["siteFundedCodex"]
+    | undefined;
+  if (hasSiteApiKey) {
+    try {
+      const configuration = await getSiteFundedCodexConfiguration();
+      if (!configuration.enabled) {
+        siteFundedCodex = { enabled: false };
+      } else {
+        const membership = await resolveMembershipForAccount(account_id);
+        const paid = membership.source !== "free";
+        const legacyLimit5hMicrousd = Math.max(
+          0,
+          Math.floor((siteAiUsageLimits?.units_5h ?? 0) * 10_000),
+        );
+        const legacyLimit7dMicrousd = Math.max(
+          0,
+          Math.floor((siteAiUsageLimits?.units_7d ?? 0) * 10_000),
+        );
+        const limit5hMicrousd =
+          legacyLimit5hMicrousd > 0
+            ? legacyLimit5hMicrousd
+            : paid
+              ? configuration.paidAccount5hLimitMicrousd
+              : configuration.freeAccount5hLimitMicrousd;
+        const limit7dMicrousd =
+          legacyLimit7dMicrousd > 0
+            ? legacyLimit7dMicrousd
+            : paid
+              ? configuration.paidAccount7dLimitMicrousd
+              : configuration.freeAccount7dLimitMicrousd;
+        const seedBayId = getConfiguredClusterSeedBayId();
+        const status =
+          seedBayId === getConfiguredBayId()
+            ? {
+                pools: await getSiteFundedCodexPoolStatus(),
+                account: await getSiteFundedCodexAccountStatus({
+                  accountId: account_id,
+                  limit5hMicrousd,
+                  limit7dMicrousd,
+                }),
+              }
+            : await getInterBayBridge()
+                .bayOps(seedBayId, { timeout_ms: 15_000 })
+                .getSiteFundedCodexStatus({
+                  account_id,
+                  limit5hMicrousd,
+                  limit7dMicrousd,
+                });
+        siteFundedCodex = {
+          enabled: true,
+          policy: configuration.policy,
+          status,
+        };
+      }
+    } catch (err) {
+      logger.warn("failed to read site-funded Codex status", {
+        account_id,
+        err: `${err}`,
+      });
+      siteFundedCodex = { enabled: false };
+    }
+  }
   const [hasSubscription, hasProjectApiKeyStored, hasAccountApiKeyStored] =
     await Promise.all([
       hasExternalCredentialRouted({
@@ -6477,8 +6546,30 @@ export async function getCodexPaymentSource({
     hasSiteApiKey,
     siteAiUsageLimitPositive,
     siteAiUsageLimits,
+    siteFundedCodex,
     sharedHomeMode,
     project_id,
+  };
+}
+
+export async function getSiteFundedCodexAdminStatus({
+  account_id,
+}: {
+  account_id?: string;
+}) {
+  if (!account_id || !(await isAdmin(account_id))) {
+    throw new Error("admin access required");
+  }
+  const seedBayId = getConfiguredClusterSeedBayId();
+  if (seedBayId !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .bayOps(seedBayId, { timeout_ms: 30_000 })
+      .getSiteFundedCodexStatus({ reconcile: true });
+  }
+  const pools = await getSiteFundedCodexPoolStatus();
+  return {
+    pools,
+    reconciliation: await reconcileSiteFundedCodexCosts(pools),
   };
 }
 

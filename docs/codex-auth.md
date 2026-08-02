@@ -9,11 +9,7 @@ This covers:
 - Auth source resolution for Codex turns
 - Credential storage and replication
 - Project-host runtime materialization
-- Site-key metering/throttling checks
-
-This does not cover:
-
-- A site-key proxy architecture (possible future work)
+- Site-funded Codex admission, proxy enforcement, and accounting
 
 ## Current Auth Sources and Precedence
 
@@ -68,7 +64,10 @@ flowchart TD
   ACP --> CE[CodexAppServerAgent]
   CE --> SP[project-host codex spawner]
   SP --> AR[resolve auth runtime]
-  AR -->|subscription/api key/site key/shared-home| CT[podman codex container]
+  AR -->|subscription/api key/shared-home| CT[podman codex container]
+  AR -->|site-funded| FP[host-local funded proxy]
+  FP --> OAI[OpenAI Responses API]
+  FP --> SEED[seed funding ledger]
   CT --> CODEX[upstream codex app-server]
 
   AR --> REG[host RPC: credential pull/check]
@@ -193,26 +192,62 @@ Defaults:
 
 GC skips currently mounted `/root/.codex` paths from active `codex-*` containers.
 
-## Site Key Metering and Throttling
+## Site-Funded Codex
 
-When auth source is `site-api-key`, `CodexAppServerAgent` uses a governor:
+When auth source is `site-api-key`, each turn uses the funded path:
 
-- pre-check allowance before prompt
-- periodic allowance polling during run
-- usage report on successful completion
-- optional hard max runtime (disabled by default, opt-in via env)
+- the project host requests an atomic seed-authoritative reservation;
+- the project runtime receives a short-lived proxy token, never the site API key;
+- a host-local OpenAI-compatible proxy forces the configured model, reasoning,
+  service tier, output limit, request count, duration, and maximum cost;
+- every provider response emits an idempotent exact usage event;
+- completion, interruption, failure, and expiration all settle observed cost;
+- unreported usage and finish events remain in a durable host SQLite outbox.
+
+The initial policy is GPT-5.6 Luna, low reasoning, standard speed, no OpenAI
+hosted paid tools, and a five-cent maximum reservation. All limits are dynamic
+site settings. `site_funded_codex_enabled` disables only included access;
+`launch_disable_ai` remains the complete AI kill switch.
 
 Modules:
 
 - [src/packages/ai/acp/codex-site-key-governor.ts](../src/packages/ai/acp/codex-site-key-governor.ts)
 - [src/packages/project-host/codex/codex-site-metering.ts](../src/packages/project-host/codex/codex-site-metering.ts)
+- [src/packages/project-host/codex/site-funded-proxy.ts](../src/packages/project-host/codex/site-funded-proxy.ts)
+- [src/packages/server/ai/site-funded-codex-ledger.ts](../src/packages/server/ai/site-funded-codex-ledger.ts)
+- [src/packages/server/ai/site-funded-codex-policy.ts](../src/packages/server/ai/site-funded-codex-policy.ts)
 - [src/packages/server/conat/api/hosts.ts](../src/packages/server/conat/api/hosts.ts)
 
-Relevant host RPCs:
+Exact funded host RPCs:
 
-- `hosts.checkCodexSiteUsageAllowance`
-- `hosts.recordCodexSiteUsage`
+- `hosts.reserveSiteFundedCodexTurn`
+- `hosts.heartbeatSiteFundedCodexTurn`
+- `hosts.recordSiteFundedCodexUsageEvent`
+- `hosts.finishSiteFundedCodexTurn`
+- `hosts.getSiteFundedCodexPoolStatus`
 - `hosts.getSiteOpenAiApiKey`
+
+Legacy aggregate allowance/report RPCs remain only for compatibility with old
+site-key runtimes and are deliberately bypassed by exact funded turns.
+
+### Accounting and reconciliation
+
+Funded costs use integer micro-US-dollars and a versioned Luna price catalog.
+The ledger separately records ordinary input, cached input, cache writes,
+output/reasoning, long-context pricing, provider request identity, and tool
+fees. Prompt and response content is not stored in the funded ledger.
+
+The admin Site Settings page shows free/member pool committed and reserved
+exposure. For provider reconciliation, use a dedicated OpenAI project and set:
+
+- `site_funded_codex_openai_project_id`;
+- `site_funded_codex_openai_admin_key` (an organization admin key, not the
+  normal provider API key).
+
+Refresh the pool card to compare current-period local committed cost with the
+OpenAI Costs API. OpenAI billing data can lag, so short-lived discrepancies are
+expected; persistent discrepancies require investigation before widening a
+rollout.
 
 ## Site Key Refresh Behavior
 
@@ -229,14 +264,21 @@ Current intent:
 ## Important Runtime Notes
 
 - The user does not get shell access to the Codex runtime container.
-- For API-key auth, project-host injects provider config and `OPENAI_API_KEY` into the Codex runtime.
+- For personal API-key auth, project-host injects provider config and
+  `OPENAI_API_KEY` into the Codex runtime.
+- For site-funded auth, the runtime only receives a turn-scoped local proxy
+  token. The host forwards the real API key to OpenAI.
 - For subscription auth, Codex reads file-based auth from mounted `/root/.codex/auth.json` and `/root/.codex/config.toml` sourced from host secrets, not from workspace files.
 
 ## Known Limitations / Future Work
 
-- No full site-key proxy yet; site key is injected in project-host runtime path.
-- Mid-turn exact token cutoffs are coarse because upstream app-server usage updates are still asynchronous and coarse-grained.
-- Strong end-to-end project-host websocket authz is still a separate hardening project.
+- OpenAI's Costs API requires a separate organization admin key and reports
+  daily buckets, so reconciliation is not instantaneous.
+- Account-home compatibility projection into the legacy `ai_usage_log` UI is
+  separate from the exact seed ledger; the Codex UI reads exact funded
+  remaining allowance directly.
+- Strong end-to-end project-host websocket authz is still a separate hardening
+  project.
 
 ## Fast Ban / Kill-Switch Approach
 
@@ -244,8 +286,11 @@ When an account must be disabled quickly (abuse, ToS violations, security respon
 
 ### Current behavior
 
-- **New site-key turns can be blocked immediately** by denying allowance in host RPC checks (`hosts.checkCodexSiteUsageAllowance`).
-- **Running site-key turns are cut off on the next governor check** (periodic allowance polling in the Codex site-key governor).
+- **New funded turns can be blocked immediately** with
+  `site_funded_codex_enabled`, the global pool, an account hold, or
+  `launch_disable_ai`.
+- **Running funded turns remain bounded** by their local signed reservation,
+  duration, request count, and cost limit even if the seed is unavailable.
 - **Credential-backed turns (ChatGPT plan / user API key) are not billed to CoCalc**, so the immediate financial risk is lower, but account-level enforcement still depends on connection/session auth controls.
 
 ### Intended end state (with project-host auth hardening)
@@ -268,4 +313,5 @@ If a turn uses the wrong auth source or fails unexpectedly:
 2. Check host logs for resolved auth source (`project-host:codex-auth` and `project-host:codex-project`).
 3. Verify presence/absence of local subscription auth files in `codex-subscriptions/<account_id>`.
 4. Verify central credential existence via `hub.system.listExternalCredentials`.
-5. For site key mode, verify `hosts.getSiteOpenAiApiKey` and allowance check responses.
+5. For site-funded mode, verify the Site Settings pool card, reservation denial
+   code, project-host outbox, and `project-host:site-funded-codex-proxy` logs.

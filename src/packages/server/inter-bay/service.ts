@@ -165,6 +165,16 @@ import {
   readWebappCrashesLocal,
   setWebappCrashResolutionLocal,
 } from "@cocalc/server/webapp-crashes";
+import {
+  assertSiteFundedCodexReservationHost,
+  finishSiteFundedCodexTurn,
+  getSiteFundedCodexAccountStatus,
+  getSiteFundedCodexPoolStatus,
+  heartbeatSiteFundedCodexTurn,
+  recordSiteFundedCodexUsageEvent,
+  reserveSiteFundedCodexTurn,
+} from "@cocalc/server/ai/site-funded-codex-ledger";
+import { reconcileSiteFundedCodexCosts } from "@cocalc/server/ai/site-funded-codex-reconciliation";
 import { createImpersonationGrantLocal } from "@cocalc/server/auth/impersonation";
 import { getAccountIdFromRememberMe as getLocalAccountIdFromRememberMe } from "@cocalc/server/auth/get-account";
 import { verifyFreshAuthCredentials } from "@cocalc/server/auth/two-factor";
@@ -466,6 +476,12 @@ import {
 import { listVisibleRootfsImages } from "@cocalc/server/rootfs/catalog";
 
 const logger = getLogger("server:inter-bay:service");
+
+function assertSiteFundedCodexSeedAuthority(): void {
+  if (getConfiguredBayId() !== getConfiguredClusterSeedBayId()) {
+    throw new Error("site-funded Codex ledger is seed-authoritative");
+  }
+}
 const DIRECTORY_SERVICE_MAX_PARALLEL_HANDLERS = 512;
 
 function isLegacyProjectIdUnavailableError(err: unknown): boolean {
@@ -643,6 +659,61 @@ async function startBayOpsService(): Promise<void> {
         account_id: opts.account_id,
         scope: opts.scope,
       }),
+    reserveSiteFundedCodexTurn: async (opts) => {
+      assertSiteFundedCodexSeedAuthority();
+      return await reserveSiteFundedCodexTurn(opts);
+    },
+    heartbeatSiteFundedCodexTurn: async ({ reservationId, hostId }) => {
+      assertSiteFundedCodexSeedAuthority();
+      await assertSiteFundedCodexReservationHost({ reservationId, hostId });
+      return {
+        active: await heartbeatSiteFundedCodexTurn({ reservationId }),
+      };
+    },
+    recordSiteFundedCodexUsage: async ({ hostId, event }) => {
+      assertSiteFundedCodexSeedAuthority();
+      await assertSiteFundedCodexReservationHost({
+        reservationId: event.reservationId,
+        hostId,
+      });
+      return await recordSiteFundedCodexUsageEvent(event);
+    },
+    finishSiteFundedCodexTurn: async ({
+      reservationId,
+      hostId,
+      status,
+      outcome,
+    }) => {
+      assertSiteFundedCodexSeedAuthority();
+      await assertSiteFundedCodexReservationHost({ reservationId, hostId });
+      return await finishSiteFundedCodexTurn({
+        reservationId,
+        status,
+        outcome,
+      });
+    },
+    getSiteFundedCodexStatus: async ({
+      account_id,
+      limit5hMicrousd,
+      limit7dMicrousd,
+      reconcile,
+    }) => {
+      assertSiteFundedCodexSeedAuthority();
+      const pools = await getSiteFundedCodexPoolStatus();
+      return {
+        pools,
+        account: account_id
+          ? await getSiteFundedCodexAccountStatus({
+              accountId: account_id,
+              limit5hMicrousd,
+              limit7dMicrousd,
+            })
+          : undefined,
+        reconciliation: reconcile
+          ? await reconcileSiteFundedCodexCosts(pools)
+          : undefined,
+      };
+    },
   };
   services.push(
     ...createInterBayBayOpsHandlers({

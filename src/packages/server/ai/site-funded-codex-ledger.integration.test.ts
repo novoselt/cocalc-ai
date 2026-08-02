@@ -14,6 +14,7 @@ import {
   ensureSiteFundedCodexLedgerTables,
   expireAbandonedSiteFundedCodexReservations,
   finishSiteFundedCodexTurn,
+  getSiteFundedCodexAccountStatus,
   getSiteFundedCodexPoolStatus,
   recordSiteFundedCodexUsageEvent,
   reserveSiteFundedCodexTurn,
@@ -128,6 +129,19 @@ describe("site-funded Codex seed ledger", () => {
       reservedMicrousd: 0,
       committedMicrousd: 1_520,
       activeReservations: 0,
+    });
+    await expect(
+      getSiteFundedCodexAccountStatus({
+        accountId: opts.accountId,
+        limit5hMicrousd: 10_000,
+        limit7dMicrousd: 20_000,
+      }),
+    ).resolves.toMatchObject({
+      committed5hMicrousd: 1_520,
+      committed7dMicrousd: 1_520,
+      activeReservedMicrousd: 0,
+      remaining5hMicrousd: 8_480,
+      remaining7dMicrousd: 18_480,
     });
   });
 

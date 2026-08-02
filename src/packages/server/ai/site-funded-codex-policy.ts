@@ -38,6 +38,10 @@ export type SiteFundedCodexConfiguration = {
   policy: SiteFundedCodexPolicy;
   freePoolWeeklyLimitMicrousd: number;
   paidPoolWeeklyLimitMicrousd: number;
+  freeAccount5hLimitMicrousd: number;
+  freeAccount7dLimitMicrousd: number;
+  paidAccount5hLimitMicrousd: number;
+  paidAccount7dLimitMicrousd: number;
   globalConcurrency: number;
 };
 
@@ -88,6 +92,22 @@ export function siteFundedCodexConfigurationFromSettings(
     paidPoolWeeklyLimitMicrousd: positiveUsdMicrousd(
       settings.site_funded_codex_paid_pool_weekly_usd,
       100 * 1_000_000,
+    ),
+    freeAccount5hLimitMicrousd: positiveUsdMicrousd(
+      settings.site_funded_codex_free_account_5h_usd,
+      50_000,
+    ),
+    freeAccount7dLimitMicrousd: positiveUsdMicrousd(
+      settings.site_funded_codex_free_account_7d_usd,
+      100_000,
+    ),
+    paidAccount5hLimitMicrousd: positiveUsdMicrousd(
+      settings.site_funded_codex_paid_account_5h_usd,
+      50_000,
+    ),
+    paidAccount7dLimitMicrousd: positiveUsdMicrousd(
+      settings.site_funded_codex_paid_account_7d_usd,
+      100_000,
     ),
     globalConcurrency: positiveInteger(
       settings.site_funded_codex_global_concurrency,

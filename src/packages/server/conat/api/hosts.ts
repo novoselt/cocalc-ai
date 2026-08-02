@@ -193,6 +193,7 @@ import {
   heartbeatSiteFundedCodexTurn as heartbeatSiteFundedCodexTurnLedger,
   recordSiteFundedCodexUsageEvent as recordSiteFundedCodexUsageEventLedger,
   reserveSiteFundedCodexTurn as reserveSiteFundedCodexTurnLedger,
+  type ReserveSiteFundedCodexTurnOptions,
 } from "@cocalc/server/ai/site-funded-codex-ledger";
 import { getSiteFundedCodexConfiguration } from "@cocalc/server/ai/site-funded-codex-policy";
 import type {
@@ -209,7 +210,10 @@ import {
 } from "@cocalc/util/db-schema/ai-models";
 import { type RootfsUploadedArtifactResult } from "@cocalc/util/rootfs-images";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
-import { getConfiguredClusterBayIdsForStaticEnumerationOnly } from "@cocalc/server/cluster-config";
+import {
+  getConfiguredClusterBayIdsForStaticEnumerationOnly,
+  getConfiguredClusterSeedBayId,
+} from "@cocalc/server/cluster-config";
 import {
   resolveHostBay,
   resolveProjectBay,
@@ -3086,11 +3090,19 @@ export async function recordCodexSiteUsage({
 function usageLimitMicrousd(
   status: Awaited<ReturnType<typeof getAIUsageStatus>>,
   window: "5h" | "7d",
-): number | null {
+  fallbackMicrousd: number,
+): number {
   const limit = status.windows.find((entry) => entry.window === window)?.limit;
-  if (limit == null || !Number.isFinite(limit)) return null;
+  if (limit == null || !Number.isFinite(limit)) return fallbackMicrousd;
   // Existing AI limits are denominated in one-cent usage units.
-  return Math.max(0, Math.floor(limit * 10_000));
+  const legacyLimitMicrousd = Math.max(0, Math.floor(limit * 10_000));
+  return legacyLimitMicrousd > 0 ? legacyLimitMicrousd : fallbackMicrousd;
+}
+
+function remoteSiteFundedCodexSeed() {
+  const seedBayId = getConfiguredClusterSeedBayId();
+  if (seedBayId === getConfiguredBayId()) return;
+  return getInterBayBridge().bayOps(seedBayId, { timeout_ms: 20_000 });
 }
 
 export async function reserveSiteFundedCodexTurn({
@@ -3163,7 +3175,7 @@ export async function reserveSiteFundedCodexTurn({
     };
   }
   const paid = membership.source !== "free";
-  return await reserveSiteFundedCodexTurnLedger({
+  const reservationOptions: ReserveSiteFundedCodexTurnOptions = {
     fundedTurnId: funded_turn_id,
     idempotencyKey: idempotency_key,
     poolId: paid ? "site-funded-codex-paid" : "site-funded-codex-free",
@@ -3175,10 +3187,23 @@ export async function reserveSiteFundedCodexTurn({
     projectId: project_id,
     hostId: host_id,
     homeBayId: account.home_bay_id ?? undefined,
+    owningBayId: getConfiguredBayId(),
     membershipTier: membership.class,
     policy: configuration.policy,
-    accountLimit5hMicrousd: usageLimitMicrousd(usageStatus, "5h"),
-    accountLimit7dMicrousd: usageLimitMicrousd(usageStatus, "7d"),
+    accountLimit5hMicrousd: usageLimitMicrousd(
+      usageStatus,
+      "5h",
+      paid
+        ? configuration.paidAccount5hLimitMicrousd
+        : configuration.freeAccount5hLimitMicrousd,
+    ),
+    accountLimit7dMicrousd: usageLimitMicrousd(
+      usageStatus,
+      "7d",
+      paid
+        ? configuration.paidAccount7dLimitMicrousd
+        : configuration.freeAccount7dLimitMicrousd,
+    ),
     surface: path?.endsWith(".ipynb")
       ? "jupyter"
       : path?.endsWith(".chat")
@@ -3186,7 +3211,11 @@ export async function reserveSiteFundedCodexTurn({
         : path
           ? "editor"
           : "unknown",
-  });
+  };
+  const remoteSeed = remoteSiteFundedCodexSeed();
+  return remoteSeed
+    ? await remoteSeed.reserveSiteFundedCodexTurn(reservationOptions)
+    : await reserveSiteFundedCodexTurnLedger(reservationOptions);
 }
 
 export async function heartbeatSiteFundedCodexTurn({
@@ -3197,6 +3226,13 @@ export async function heartbeatSiteFundedCodexTurn({
   reservation_id: string;
 }): Promise<{ active: boolean }> {
   if (!host_id) throw new Error("host_id must be specified");
+  const remoteSeed = remoteSiteFundedCodexSeed();
+  if (remoteSeed) {
+    return await remoteSeed.heartbeatSiteFundedCodexTurn({
+      reservationId: reservation_id,
+      hostId: host_id,
+    });
+  }
   await assertSiteFundedCodexReservationHost({
     reservationId: reservation_id,
     hostId: host_id,
@@ -3216,6 +3252,13 @@ export async function recordSiteFundedCodexUsageEvent({
   event: SiteFundedCodexUsageEvent;
 }): Promise<{ costMicrousd: number; inserted: boolean }> {
   if (!host_id) throw new Error("host_id must be specified");
+  const remoteSeed = remoteSiteFundedCodexSeed();
+  if (remoteSeed) {
+    return await remoteSeed.recordSiteFundedCodexUsage({
+      hostId: host_id,
+      event,
+    });
+  }
   await assertSiteFundedCodexReservationHost({
     reservationId: event.reservationId,
     hostId: host_id,
@@ -3235,6 +3278,15 @@ export async function finishSiteFundedCodexTurn({
   outcome?: string;
 }): Promise<SiteFundedCodexReservation> {
   if (!host_id) throw new Error("host_id must be specified");
+  const remoteSeed = remoteSiteFundedCodexSeed();
+  if (remoteSeed) {
+    return await remoteSeed.finishSiteFundedCodexTurn({
+      reservationId: reservation_id,
+      hostId: host_id,
+      status,
+      outcome,
+    });
+  }
   await assertSiteFundedCodexReservationHost({
     reservationId: reservation_id,
     hostId: host_id,
@@ -3252,6 +3304,10 @@ export async function getSiteFundedCodexPoolStatus({
   host_id?: string;
 }): Promise<SiteFundedCodexPoolStatus[]> {
   if (!host_id) throw new Error("host_id must be specified");
+  const remoteSeed = remoteSiteFundedCodexSeed();
+  if (remoteSeed) {
+    return (await remoteSeed.getSiteFundedCodexStatus({})).pools;
+  }
   return await getSiteFundedCodexPoolStatusLedger();
 }
 

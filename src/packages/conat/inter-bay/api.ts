@@ -210,6 +210,14 @@ import type {
   ProjectViewerReadPolicy,
 } from "@cocalc/util/project-access";
 import type { RootfsImageManifest } from "@cocalc/util/rootfs-images";
+import type {
+  SiteFundedCodexAdmission,
+  SiteFundedCodexPoolId,
+  SiteFundedCodexStatus,
+  SiteFundedCodexPolicy,
+  SiteFundedCodexReservation,
+  SiteFundedCodexUsageEvent,
+} from "@cocalc/util/ai/site-funded-codex";
 
 export interface BayOwnership {
   bay_id: string;
@@ -1864,6 +1872,46 @@ export interface BayOpsGlobalConfigPropagationStatusRequest {
   source_bay_id?: string | null;
 }
 
+export interface BayOpsReserveSiteFundedCodexTurnRequest {
+  fundedTurnId: string;
+  idempotencyKey: string;
+  poolId: SiteFundedCodexPoolId;
+  poolLimitMicrousd: number;
+  globalConcurrency: number;
+  accountId: string;
+  projectId: string;
+  hostId: string;
+  homeBayId?: string;
+  owningBayId?: string;
+  membershipTier: string;
+  policy: SiteFundedCodexPolicy;
+  accountLimit5hMicrousd?: number | null;
+  accountLimit7dMicrousd?: number | null;
+  surface?: string;
+}
+
+export interface BayOpsSiteFundedCodexReservationRequest {
+  reservationId: string;
+  hostId: string;
+}
+
+export interface BayOpsRecordSiteFundedCodexUsageRequest {
+  hostId: string;
+  event: SiteFundedCodexUsageEvent;
+}
+
+export interface BayOpsFinishSiteFundedCodexTurnRequest extends BayOpsSiteFundedCodexReservationRequest {
+  status: "committed" | "interrupted" | "failed" | "released";
+  outcome?: string;
+}
+
+export interface BayOpsSiteFundedCodexStatusRequest {
+  account_id?: string;
+  limit5hMicrousd?: number | null;
+  limit7dMicrousd?: number | null;
+  reconcile?: boolean;
+}
+
 export interface AuthTokenRequiresRequest {}
 
 export interface AuthTokenRedeemRequest {
@@ -2475,7 +2523,12 @@ export type BayOpsMethod =
   | "set-site-settings"
   | "get-site-settings"
   | "sync-site-settings"
-  | "get-global-config-propagation-status";
+  | "get-global-config-propagation-status"
+  | "reserve-site-funded-codex-turn"
+  | "heartbeat-site-funded-codex-turn"
+  | "record-site-funded-codex-usage"
+  | "finish-site-funded-codex-turn"
+  | "get-site-funded-codex-status";
 export type ProjectCollabInviteMethod =
   | "upsert-inbox"
   | "delete-inbox"
@@ -4088,6 +4141,21 @@ export interface InterBayBayOpsApi {
   getGlobalConfigPropagationStatus: (
     opts: BayOpsGlobalConfigPropagationStatusRequest,
   ) => Promise<GlobalConfigPropagationStatus>;
+  reserveSiteFundedCodexTurn: (
+    opts: BayOpsReserveSiteFundedCodexTurnRequest,
+  ) => Promise<SiteFundedCodexAdmission>;
+  heartbeatSiteFundedCodexTurn: (
+    opts: BayOpsSiteFundedCodexReservationRequest,
+  ) => Promise<{ active: boolean }>;
+  recordSiteFundedCodexUsage: (
+    opts: BayOpsRecordSiteFundedCodexUsageRequest,
+  ) => Promise<{ costMicrousd: number; inserted: boolean }>;
+  finishSiteFundedCodexTurn: (
+    opts: BayOpsFinishSiteFundedCodexTurnRequest,
+  ) => Promise<SiteFundedCodexReservation>;
+  getSiteFundedCodexStatus: (
+    opts: BayOpsSiteFundedCodexStatusRequest,
+  ) => Promise<SiteFundedCodexStatus>;
 }
 
 export interface InterBayAuthTokenApi {
@@ -9190,6 +9258,51 @@ export function createInterBayBayOpsClient({
       method: "get-global-config-propagation-status",
     }),
   });
+  const reserveSiteFundedCodexTurnClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "reserveSiteFundedCodexTurn">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "reserve-site-funded-codex-turn",
+    }),
+  });
+  const heartbeatSiteFundedCodexTurnClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "heartbeatSiteFundedCodexTurn">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "heartbeat-site-funded-codex-turn",
+    }),
+  });
+  const recordSiteFundedCodexUsageClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "recordSiteFundedCodexUsage">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "record-site-funded-codex-usage",
+    }),
+  });
+  const finishSiteFundedCodexTurnClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "finishSiteFundedCodexTurn">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "finish-site-funded-codex-turn",
+    }),
+  });
+  const siteFundedCodexStatusClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getSiteFundedCodexStatus">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-site-funded-codex-status",
+    }),
+  });
   const rootfsQuotaReportClient = createServiceClient<
     Pick<InterBayBayOpsApi, "getRootfsQuotaReport">
   >({
@@ -9356,6 +9469,18 @@ export function createInterBayBayOpsClient({
       await globalConfigPropagationStatusClient.getGlobalConfigPropagationStatus(
         opts,
       ),
+    reserveSiteFundedCodexTurn: async (opts) =>
+      await reserveSiteFundedCodexTurnClient.reserveSiteFundedCodexTurn(opts),
+    heartbeatSiteFundedCodexTurn: async (opts) =>
+      await heartbeatSiteFundedCodexTurnClient.heartbeatSiteFundedCodexTurn(
+        opts,
+      ),
+    recordSiteFundedCodexUsage: async (opts) =>
+      await recordSiteFundedCodexUsageClient.recordSiteFundedCodexUsage(opts),
+    finishSiteFundedCodexTurn: async (opts) =>
+      await finishSiteFundedCodexTurnClient.finishSiteFundedCodexTurn(opts),
+    getSiteFundedCodexStatus: async (opts) =>
+      await siteFundedCodexStatusClient.getSiteFundedCodexStatus(opts),
   };
 }
 
@@ -9477,6 +9602,72 @@ export function createInterBayBayOpsHandlers({
       impl: {
         getGlobalConfigPropagationStatus: async (opts) =>
           await impl.getGlobalConfigPropagationStatus(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "reserveSiteFundedCodexTurn">>(
+      {
+        ...options,
+        service: "inter-bay-bay-ops",
+        subject: bayOpsSubject({
+          dest_bay: bay_id,
+          method: "reserve-site-funded-codex-turn",
+        }),
+        impl: {
+          reserveSiteFundedCodexTurn: async (opts) =>
+            await impl.reserveSiteFundedCodexTurn(opts),
+        },
+      },
+    ),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "heartbeatSiteFundedCodexTurn">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "heartbeat-site-funded-codex-turn",
+      }),
+      impl: {
+        heartbeatSiteFundedCodexTurn: async (opts) =>
+          await impl.heartbeatSiteFundedCodexTurn(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "recordSiteFundedCodexUsage">>(
+      {
+        ...options,
+        service: "inter-bay-bay-ops",
+        subject: bayOpsSubject({
+          dest_bay: bay_id,
+          method: "record-site-funded-codex-usage",
+        }),
+        impl: {
+          recordSiteFundedCodexUsage: async (opts) =>
+            await impl.recordSiteFundedCodexUsage(opts),
+        },
+      },
+    ),
+    createServiceHandler<Pick<InterBayBayOpsApi, "finishSiteFundedCodexTurn">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "finish-site-funded-codex-turn",
+      }),
+      impl: {
+        finishSiteFundedCodexTurn: async (opts) =>
+          await impl.finishSiteFundedCodexTurn(opts),
+      },
+    }),
+    createServiceHandler<Pick<InterBayBayOpsApi, "getSiteFundedCodexStatus">>({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-site-funded-codex-status",
+      }),
+      impl: {
+        getSiteFundedCodexStatus: async (opts) =>
+          await impl.getSiteFundedCodexStatus(opts),
       },
     }),
     createServiceHandler<Pick<InterBayBayOpsApi, "getMembershipTiers">>({

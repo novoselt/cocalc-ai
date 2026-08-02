@@ -303,12 +303,18 @@ export type SiteSettingsExtrasKeys =
   | "site_funded_codex_service_tier"
   | "site_funded_codex_free_pool_weekly_usd"
   | "site_funded_codex_paid_pool_weekly_usd"
+  | "site_funded_codex_free_account_5h_usd"
+  | "site_funded_codex_free_account_7d_usd"
+  | "site_funded_codex_paid_account_5h_usd"
+  | "site_funded_codex_paid_account_7d_usd"
   | "site_funded_codex_max_turn_usd"
   | "site_funded_codex_max_turn_seconds"
   | "site_funded_codex_max_input_tokens_per_request"
   | "site_funded_codex_max_output_tokens_per_request"
   | "site_funded_codex_max_requests_per_turn"
   | "site_funded_codex_global_concurrency"
+  | "site_funded_codex_openai_admin_key"
+  | "site_funded_codex_openai_project_id"
   | "google_vertexai_key"
   | "ollama_configuration"
   | "custom_openai_configuration"
@@ -963,6 +969,46 @@ export const EXTRAS: SettingsExtras = {
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
   },
+  site_funded_codex_free_account_5h_usd: {
+    name: "Free Account 5-Hour Allowance (USD)",
+    desc: "Fallback included allowance for a verified free account when its membership does not define a positive AI limit.",
+    default: "0.05",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_free_account_7d_usd: {
+    name: "Free Account 7-Day Allowance (USD)",
+    desc: "Fallback weekly included allowance for a verified free account when its membership does not define a positive AI limit.",
+    default: "0.10",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_paid_account_5h_usd: {
+    name: "Member Account 5-Hour Allowance (USD)",
+    desc: "Fallback included allowance for a paid member when its membership does not define a positive AI limit.",
+    default: "0.05",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_paid_account_7d_usd: {
+    name: "Member Account 7-Day Allowance (USD)",
+    desc: "Fallback weekly included allowance for a paid member when its membership does not define a positive AI limit.",
+    default: "0.10",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
   site_funded_codex_max_turn_usd: {
     name: "Maximum Funded Turn Cost (USD)",
     desc: "Maximum provider-cost exposure reserved before one funded turn starts.",
@@ -1020,6 +1066,24 @@ export const EXTRAS: SettingsExtras = {
     valid: only_pos_int,
     to_val: to_int,
     tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_openai_admin_key: {
+    name: "OpenAI Admin Key for Reconciliation",
+    desc: "Optional OpenAI organization admin key used only on the seed to compare the local funded ledger with the Costs API. This is distinct from the provider API key.",
+    default: "",
+    password: true,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_openai_project_id: {
+    name: "OpenAI Project ID for Reconciliation",
+    desc: "Dedicated OpenAI project ID used by site-funded Codex. Reconciliation remains disabled until both this and the OpenAI admin key are set.",
+    default: "",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
   },
