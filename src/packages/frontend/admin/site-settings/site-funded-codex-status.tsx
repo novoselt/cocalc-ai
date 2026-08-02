@@ -13,6 +13,12 @@ function dollars(microusd: number): string {
   return `$${(microusd / 1_000_000).toFixed(2)}`;
 }
 
+function poolLabel(poolId: string): string {
+  if (poolId.endsWith("global")) return "Combined site budget";
+  if (poolId.endsWith("paid")) return "Paid/member sub-pool";
+  return "Free sub-pool";
+}
+
 export default function SiteFundedCodexStatusCard() {
   const [status, setStatus] = useState<SiteFundedCodexStatus>();
   const [error, setError] = useState("");
@@ -78,7 +84,7 @@ export default function SiteFundedCodexStatusCard() {
           return (
             <div key={pool.poolId}>
               <Space wrap style={{ marginBottom: 6 }}>
-                <b>{pool.poolId.endsWith("paid") ? "Paid/member" : "Free"}</b>
+                <b>{poolLabel(pool.poolId)}</b>
                 <Tag>{pool.activeReservations} active turns</Tag>
                 <span>
                   {new Date(pool.periodStart).toLocaleDateString()} through{" "}

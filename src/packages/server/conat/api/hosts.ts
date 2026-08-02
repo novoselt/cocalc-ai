@@ -3191,6 +3191,7 @@ export async function reserveSiteFundedCodexTurn({
     poolLimitMicrousd: paid
       ? configuration.paidPoolWeeklyLimitMicrousd
       : configuration.freePoolWeeklyLimitMicrousd,
+    globalPoolLimitMicrousd: configuration.globalPoolWeeklyLimitMicrousd,
     globalConcurrency: configuration.globalConcurrency,
     accountId: account_id,
     projectId: project_id,

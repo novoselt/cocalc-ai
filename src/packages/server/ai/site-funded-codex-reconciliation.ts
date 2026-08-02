@@ -29,10 +29,12 @@ export async function reconcileSiteFundedCodexCosts(
     pools[0]?.periodStart ??
     new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
   const periodEnd = pools[0]?.periodEnd ?? new Date().toISOString();
-  const localCommittedMicrousd = pools.reduce(
-    (sum, pool) => sum + pool.committedMicrousd,
-    0,
+  const globalPool = pools.find(
+    ({ poolId }) => poolId === "site-funded-codex-global",
   );
+  const localCommittedMicrousd =
+    globalPool?.committedMicrousd ??
+    pools.reduce((sum, pool) => sum + pool.committedMicrousd, 0);
   const settings = (await getServerSettings()) as Record<string, unknown>;
   const adminKey =
     `${settings.site_funded_codex_openai_admin_key ?? ""}`.trim();

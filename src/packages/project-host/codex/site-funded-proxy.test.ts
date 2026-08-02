@@ -24,6 +24,7 @@ function reservation(): SiteFundedCodexReservation {
     poolId: "site-funded-codex-free",
     policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
     reservedMicrousd: DEFAULT_SITE_FUNDED_CODEX_POLICY.maxTurnCostMicrousd,
+    poolReservedMicrousd: 400_000,
     committedMicrousd: 0,
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     heartbeatIntervalMs: 30_000,
@@ -88,7 +89,9 @@ describe("site-funded Codex provider proxy", () => {
         reasoning: { effort: "high" },
         service_tier: "priority",
         tools: [{ type: "function", name: "shell" }],
-        input: "hello",
+        // This is intentionally larger than the old byte-based pseudo-token
+        // cap. Codex context management, not JSON byte length, owns compaction.
+        input: "x".repeat(200_000),
       }),
     });
     expect(result.status).toBe(200);
@@ -100,7 +103,7 @@ describe("site-funded Codex provider proxy", () => {
       service_tier: "default",
     });
     expect(upstreamBody.max_output_tokens).toBeGreaterThan(0);
-    expect(upstreamBody.max_output_tokens).toBeLessThanOrEqual(8_000);
+    expect(upstreamBody.max_output_tokens).toBeLessThanOrEqual(32_000);
     expect(events).toEqual([
       expect.objectContaining({
         reservationId: session.reservationId,

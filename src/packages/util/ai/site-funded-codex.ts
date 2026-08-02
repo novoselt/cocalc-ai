@@ -6,7 +6,7 @@
 import Decimal from "decimal.js-light";
 
 export const MICROUSD_PER_USD = 1_000_000;
-export const SITE_FUNDED_CODEX_POLICY_VERSION = 1;
+export const SITE_FUNDED_CODEX_POLICY_VERSION = 2;
 export const SITE_FUNDED_CODEX_PRICE_VERSION = "openai-2026-07-30";
 
 export type SiteFundedCodexPolicy = {
@@ -17,7 +17,8 @@ export type SiteFundedCodexPolicy = {
   maxConcurrentTurnsPerAccount: number;
   maxTurnCostMicrousd: number;
   maxTurnDurationMs: number;
-  maxInputTokensPerRequest: number;
+  contextWindowTokens: number;
+  autoCompactTokenLimit: number;
   maxOutputTokensPerRequest: number;
   maxRequestsPerTurn: number;
   allowFastMode: false;
@@ -31,11 +32,12 @@ export const DEFAULT_SITE_FUNDED_CODEX_POLICY: SiteFundedCodexPolicy = {
   reasoning: "low",
   serviceTier: "standard",
   maxConcurrentTurnsPerAccount: 1,
-  maxTurnCostMicrousd: 50_000,
-  maxTurnDurationMs: 20 * 60_000,
-  maxInputTokensPerRequest: 128_000,
-  maxOutputTokensPerRequest: 8_000,
-  maxRequestsPerTurn: 64,
+  maxTurnCostMicrousd: 250_000,
+  maxTurnDurationMs: 60 * 60_000,
+  contextWindowTokens: 128_000,
+  autoCompactTokenLimit: 96_000,
+  maxOutputTokensPerRequest: 32_000,
+  maxRequestsPerTurn: 256,
   allowFastMode: false,
   allowUltraOrMultiAgent: false,
   allowedProviderTools: [],
@@ -104,6 +106,7 @@ export type SiteFundedCodexCost = {
 };
 
 export type SiteFundedCodexPoolId =
+  | "site-funded-codex-global"
   | "site-funded-codex-free"
   | "site-funded-codex-paid";
 
@@ -121,6 +124,7 @@ export type SiteFundedCodexReservation = {
   poolId: SiteFundedCodexPoolId;
   policy: SiteFundedCodexPolicy;
   reservedMicrousd: number;
+  poolReservedMicrousd: number;
   committedMicrousd: number;
   expiresAt: string;
   heartbeatIntervalMs: number;

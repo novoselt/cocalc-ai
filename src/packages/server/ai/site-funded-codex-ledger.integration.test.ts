@@ -29,23 +29,31 @@ afterAll(after);
 
 function options({
   accountId = uuid(),
+  poolId = "site-funded-codex-free",
   poolLimitMicrousd = 100_000,
+  globalPoolLimitMicrousd = poolLimitMicrousd,
   maxTurnCostMicrousd = 60_000,
 }: {
   accountId?: string;
+  poolId?: "site-funded-codex-free" | "site-funded-codex-paid";
   poolLimitMicrousd?: number;
+  globalPoolLimitMicrousd?: number;
   maxTurnCostMicrousd?: number;
 } = {}) {
   const fundedTurnId = uuid();
   const policy: SiteFundedCodexPolicy = {
     ...DEFAULT_SITE_FUNDED_CODEX_POLICY,
     maxTurnCostMicrousd,
+    contextWindowTokens: 10_000,
+    autoCompactTokenLimit: 7_500,
+    maxOutputTokensPerRequest: 1_000,
   };
   return {
     fundedTurnId,
     idempotencyKey: fundedTurnId,
-    poolId: "site-funded-codex-free" as const,
+    poolId,
     poolLimitMicrousd,
+    globalPoolLimitMicrousd,
     globalConcurrency: 100,
     accountId,
     projectId: uuid(),
@@ -77,10 +85,38 @@ describe("site-funded Codex seed ledger", () => {
     ).toEqual(["global_pool", "global_pool"]);
     const status = await getSiteFundedCodexPoolStatus();
     expect(status[0]).toMatchObject({
+      poolId: "site-funded-codex-global",
       limitMicrousd: 100_000,
-      reservedMicrousd: 60_000,
+      reservedMicrousd: 63_700,
       committedMicrousd: 0,
       activeReservations: 1,
+    });
+  });
+
+  it("shares one hard parent budget across free and paid sub-pools", async () => {
+    const [free, paid] = await Promise.all([
+      reserveSiteFundedCodexTurn(
+        options({
+          poolId: "site-funded-codex-free",
+          poolLimitMicrousd: 200_000,
+          globalPoolLimitMicrousd: 100_000,
+        }),
+      ),
+      reserveSiteFundedCodexTurn(
+        options({
+          poolId: "site-funded-codex-paid",
+          poolLimitMicrousd: 200_000,
+          globalPoolLimitMicrousd: 100_000,
+        }),
+      ),
+    ]);
+    expect([free, paid].filter(({ allowed }) => allowed)).toHaveLength(1);
+    expect([free, paid].filter(({ allowed }) => !allowed)[0]).toMatchObject({
+      code: "global_pool",
+    });
+    expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
+      poolId: "site-funded-codex-global",
+      reservedMicrousd: 63_700,
     });
   });
 
@@ -117,6 +153,7 @@ describe("site-funded Codex seed ledger", () => {
     expect(finished).toMatchObject({
       status: "committed",
       reservedMicrousd: 50_000,
+      poolReservedMicrousd: 53_700,
       committedMicrousd: 1_520,
     });
     await expect(
@@ -176,6 +213,22 @@ describe("site-funded Codex seed ledger", () => {
       accountLimit5hMicrousd: 5_000,
     });
     expect(limited).toMatchObject({
+      allowed: true,
+      reservation: {
+        reservedMicrousd: 3_000,
+        policy: { maxTurnCostMicrousd: 3_000 },
+      },
+    });
+    if (!limited.allowed) throw new Error("expected a partial reservation");
+    await finishSiteFundedCodexTurn({
+      reservationId: limited.reservation.reservationId,
+      status: "released",
+    });
+    const exhausted = await reserveSiteFundedCodexTurn({
+      ...options({ accountId, maxTurnCostMicrousd: 10_000 }),
+      accountLimit5hMicrousd: 2_000,
+    });
+    expect(exhausted).toMatchObject({
       allowed: false,
       code: "account_limit_5h",
     });

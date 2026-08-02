@@ -12,7 +12,7 @@ import type {
 import type { Client as ConatClient } from "@cocalc/conat/core/client";
 
 export type CodexTurnTerminalState = "complete" | "error";
-const CODEX_TURN_NOTICE_TIMEOUT_MS = 5_000;
+const CODEX_TURN_NOTICE_TIMEOUT_MS = 20_000;
 
 function normalizeThreadLabel(value?: string | null): string {
   const label = `${value ?? ""}`.trim();
@@ -32,12 +32,13 @@ export function shouldNotifyOnCodexTurnFinish(
 }
 
 export function codexTurnNotifyPreference(
-  config?: CodexThreadConfig | null,
+  config?: CodexThreadConfig | { get: (key: string) => unknown } | null,
 ): boolean | undefined {
+  const getter = (config as { get?: (key: string) => unknown } | null)?.get;
   const value =
-    config && typeof (config as any).get === "function"
-      ? (config as any).get("notifyOnTurnFinish")
-      : config?.notifyOnTurnFinish;
+    typeof getter === "function"
+      ? getter.call(config, "notifyOnTurnFinish")
+      : (config as CodexThreadConfig | null | undefined)?.notifyOnTurnFinish;
   return typeof value === "boolean" ? value : undefined;
 }
 

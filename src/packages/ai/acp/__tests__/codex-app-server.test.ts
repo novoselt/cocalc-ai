@@ -4504,6 +4504,7 @@ describe("CodexAppServerAgent", () => {
           policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
           reservedMicrousd:
             DEFAULT_SITE_FUNDED_CODEX_POLICY.maxTurnCostMicrousd,
+          poolReservedMicrousd: 400_000,
           committedMicrousd: 0,
           expiresAt: new Date(Date.now() + 60_000).toISOString(),
           heartbeatIntervalMs: 10_000,

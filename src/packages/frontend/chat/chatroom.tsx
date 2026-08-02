@@ -120,6 +120,7 @@ import {
   resolveCodexSessionMode,
 } from "@cocalc/util/ai/codex";
 import { CodexPaymentCredentialsModal } from "./codex";
+import { showLocalCodexTurnCompletionToast } from "@cocalc/frontend/notifications/codex-turn-toast";
 import {
   ensureProjectRunningForCodex,
   isCodexPaymentSourceNeedsUserConfiguration,
@@ -190,6 +191,9 @@ type ChatThreadCompletionSnapshot = {
   active: boolean;
   interrupted: boolean;
   newestMessageDate?: string;
+  stableSourceId?: string;
+  threadLabel: string;
+  notifyOnTurnFinish: boolean;
 };
 
 export function getLatestCodexActivityDate(
@@ -288,9 +292,27 @@ export function appendCompletedCodexTurnNotifications({
 }
 
 function threadNotifyOnTurnFinishEnabled(
-  config?: Partial<CodexThreadConfig> | null,
+  config?: Partial<CodexThreadConfig> | immutable.Map<string, unknown> | null,
 ): boolean {
-  return config?.notifyOnTurnFinish === true;
+  const value =
+    config && immutable.Map.isMap(config)
+      ? config.get("notifyOnTurnFinish")
+      : config?.notifyOnTurnFinish;
+  return value === true;
+}
+
+function latestAcpStableSourceId(
+  messages: readonly ChatMessage[],
+): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!isAcpAssistantMessage(message)) continue;
+    const messageId = `${field<string>(message, "message_id") ?? ""}`.trim();
+    if (messageId) return messageId;
+    const date = dateValue(message);
+    if (date) return `${date.valueOf()}`;
+  }
+  return undefined;
 }
 
 function buildChatThreadCompletionSnapshots({
@@ -308,6 +330,7 @@ function buildChatThreadCompletionSnapshots({
     const threadId = normalizeThreadKey(thread.key);
     if (!threadId) continue;
     const threadMessages = actions.getMessagesInThread(threadId) ?? [];
+    const metadata = actions.getThreadMetadata?.(thread.key, { threadId });
     snapshots.set(thread.key, {
       active: hasActiveAcpTurnForComposer({
         isSelectedThreadAI: true,
@@ -317,6 +340,11 @@ function buildChatThreadCompletionSnapshots({
       }),
       interrupted: latestThreadAcpInterrupted(threadMessages),
       newestMessageDate: getLatestThreadMessageDate(threadMessages),
+      stableSourceId: latestAcpStableSourceId(threadMessages),
+      threadLabel:
+        `${thread.displayLabel ?? thread.label ?? metadata?.name ?? ""}`.trim() ||
+        "this chat",
+      notifyOnTurnFinish: threadNotifyOnTurnFinishEnabled(metadata?.acp_config),
     });
   }
   return snapshots;
@@ -1413,17 +1441,6 @@ export function ChatPanel({
     const previousSnapshots = priorThreadCompletionSnapshotsRef.current;
     priorThreadCompletionSnapshotsRef.current = currentSnapshots;
 
-    if (isChatForeground) {
-      return;
-    }
-
-    const anyActive = Array.from(currentSnapshots.values()).some(
-      (snapshot) => snapshot.active,
-    );
-    if (anyActive) {
-      return;
-    }
-
     let newestCompletedAt = 0;
     for (const [threadKey, current] of currentSnapshots) {
       const previous = previousSnapshots.get(threadKey);
@@ -1432,7 +1449,22 @@ export function ChatPanel({
       if (Number.isFinite(completedAt) && completedAt > newestCompletedAt) {
         newestCompletedAt = completedAt;
       }
+      if (previous.notifyOnTurnFinish || current.notifyOnTurnFinish) {
+        showLocalCodexTurnCompletionToast({
+          project_id,
+          path,
+          thread_label: current.threadLabel,
+          newest_message_date: current.newestMessageDate,
+          stable_source_id: current.stableSourceId,
+        });
+      }
     }
+    if (isChatForeground) return;
+
+    const anyActive = Array.from(currentSnapshots.values()).some(
+      (snapshot) => snapshot.active,
+    );
+    if (anyActive) return;
     if (newestCompletedAt <= 0) return;
 
     void setWorkspaceReadyForReviewNotice({

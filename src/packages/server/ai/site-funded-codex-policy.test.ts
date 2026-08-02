@@ -15,6 +15,7 @@ describe("site-funded Codex policy", () => {
       site_funded_codex_max_input_tokens_per_request: "90000",
       site_funded_codex_max_output_tokens_per_request: "4000",
       site_funded_codex_max_requests_per_turn: "20",
+      site_funded_codex_global_pool_weekly_usd: "90",
       site_funded_codex_free_pool_weekly_usd: "25",
       site_funded_codex_paid_pool_weekly_usd: "75",
       site_funded_codex_global_concurrency: "12",
@@ -26,10 +27,12 @@ describe("site-funded Codex policy", () => {
       serviceTier: "standard",
       maxTurnCostMicrousd: 25_000,
       maxTurnDurationMs: 600_000,
-      maxInputTokensPerRequest: 90_000,
+      contextWindowTokens: 90_000,
+      autoCompactTokenLimit: 67_500,
       maxOutputTokensPerRequest: 4_000,
       maxRequestsPerTurn: 20,
     });
+    expect(config.globalPoolWeeklyLimitMicrousd).toBe(90_000_000);
     expect(config.freePoolWeeklyLimitMicrousd).toBe(25_000_000);
     expect(config.paidPoolWeeklyLimitMicrousd).toBe(75_000_000);
     expect(config.globalConcurrency).toBe(12);

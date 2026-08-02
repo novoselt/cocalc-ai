@@ -1879,6 +1879,7 @@ export interface BayOpsReserveSiteFundedCodexTurnRequest {
   idempotencyKey: string;
   poolId: SiteFundedCodexPoolId;
   poolLimitMicrousd: number;
+  globalPoolLimitMicrousd: number;
   globalConcurrency: number;
   accountId: string;
   projectId: string;

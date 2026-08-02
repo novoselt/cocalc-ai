@@ -21,6 +21,7 @@ import { uuid } from "@cocalc/util/misc";
 
 const logger = getLogger("server:ai:site-funded-codex-ledger");
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const GLOBAL_POOL_ID = "site-funded-codex-global" as const;
 
 type DbClient = PoolClient;
 
@@ -29,6 +30,7 @@ export type ReserveSiteFundedCodexTurnOptions = {
   idempotencyKey: string;
   poolId: SiteFundedCodexPoolId;
   poolLimitMicrousd: number;
+  globalPoolLimitMicrousd: number;
   globalConcurrency: number;
   accountId: string;
   projectId: string;
@@ -81,6 +83,9 @@ function reservationFromRow(row: any): SiteFundedCodexReservation {
     poolId: row.pool_id,
     policy: row.policy,
     reservedMicrousd: int(row.reserved_microusd),
+    poolReservedMicrousd: int(
+      row.pool_reserved_microusd ?? row.reserved_microusd,
+    ),
     committedMicrousd: int(row.committed_microusd),
     expiresAt: iso(row.expires_at),
     heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
@@ -123,6 +128,7 @@ export async function ensureSiteFundedCodexLedgerTables(): Promise<void> {
       policy JSONB NOT NULL,
       surface TEXT,
       reserved_microusd BIGINT NOT NULL CHECK (reserved_microusd >= 0),
+      pool_reserved_microusd BIGINT NOT NULL CHECK (pool_reserved_microusd >= 0),
       committed_microusd BIGINT NOT NULL DEFAULT 0 CHECK (committed_microusd >= 0),
       status TEXT NOT NULL CHECK (status IN ('active','committed','released','expired','interrupted','failed')),
       started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -136,6 +142,11 @@ export async function ensureSiteFundedCodexLedgerTables(): Promise<void> {
     `
     CREATE INDEX IF NOT EXISTS site_ai_turn_reservations_account_started_idx
       ON site_ai_turn_reservations(account_id, started_at DESC)`,
+    `ALTER TABLE site_ai_turn_reservations
+       ADD COLUMN IF NOT EXISTS pool_reserved_microusd BIGINT NOT NULL DEFAULT 0`,
+    `UPDATE site_ai_turn_reservations
+       SET pool_reserved_microusd = reserved_microusd
+       WHERE status = 'active' AND pool_reserved_microusd = 0`,
     `
     CREATE INDEX IF NOT EXISTS site_ai_turn_reservations_active_idx
       ON site_ai_turn_reservations(status, expires_at)
@@ -189,7 +200,7 @@ async function expireCurrentPeriodReservations({
 }): Promise<void> {
   const { rows } = await client.query(
     `
-      SELECT reservation_id, reserved_microusd
+      SELECT reservation_id, reserved_microusd, pool_reserved_microusd
       FROM site_ai_turn_reservations
       WHERE pool_id = $1 AND period_start = $2 AND status = 'active'
         AND expires_at <= NOW()
@@ -206,7 +217,7 @@ async function expireCurrentPeriodReservations({
       [row.reservation_id],
     );
     const reservationCommitted = int(usage.rows[0]?.cost);
-    released += int(row.reserved_microusd);
+    released += int(row.pool_reserved_microusd ?? row.reserved_microusd);
     committed += reservationCommitted;
     await client.query(
       `UPDATE site_ai_turn_reservations
@@ -223,11 +234,22 @@ async function expireCurrentPeriodReservations({
         SET reserved_microusd = GREATEST(0, reserved_microusd - $3),
             committed_microusd = committed_microusd + $4,
             updated_at = NOW()
-        WHERE pool_id = $1 AND period_start = $2
+        WHERE pool_id = ANY($1::TEXT[]) AND period_start = $2
       `,
-      [poolId, periodStart, released, committed],
+      [[poolId, GLOBAL_POOL_ID], periodStart, released, committed],
     );
   }
+}
+
+function finalRequestHeadroomMicrousd(policy: SiteFundedCodexPolicy): number {
+  return computeSiteFundedCodexRequestCost({
+    model: policy.model,
+    usage: {
+      inputTokens: policy.contextWindowTokens,
+      cacheWriteInputTokens: policy.contextWindowTokens,
+      outputTokens: policy.maxOutputTokensPerRequest,
+    },
+  }).costMicrousd;
 }
 
 async function committedInWindow({
@@ -293,40 +315,62 @@ export async function reserveSiteFundedCodexTurn(
     }
 
     const { start, end } = periodBounds();
-    await client.query(
-      `
-        INSERT INTO site_ai_funding_periods
-          (pool_id, period_start, period_end, limit_microusd, policy_version)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (pool_id, period_start) DO UPDATE SET
-          limit_microusd = EXCLUDED.limit_microusd,
-          policy_version = EXCLUDED.policy_version,
-          updated_at = NOW()
-      `,
-      [opts.poolId, start, end, opts.poolLimitMicrousd, opts.policy.version],
-    );
-    await client.query(
-      `
-        SELECT pool_id FROM site_ai_funding_periods
-        WHERE pool_id = $1 AND period_start = $2
-        FOR UPDATE
-      `,
-      [opts.poolId, start],
-    );
+    for (const [poolId, limit] of [
+      [GLOBAL_POOL_ID, opts.globalPoolLimitMicrousd],
+      [opts.poolId, opts.poolLimitMicrousd],
+    ] as const) {
+      await client.query(
+        `
+          INSERT INTO site_ai_funding_periods
+            (pool_id, period_start, period_end, limit_microusd,
+             reserved_microusd, committed_microusd, policy_version)
+          SELECT $1, $2, $3, $4,
+            CASE WHEN $1 = $6 THEN COALESCE(SUM(reserved_microusd), 0) ELSE 0 END,
+            CASE WHEN $1 = $6 THEN COALESCE(SUM(committed_microusd), 0) ELSE 0 END,
+            $5
+          FROM site_ai_funding_periods
+          WHERE period_start = $2 AND pool_id <> $6
+          ON CONFLICT (pool_id, period_start) DO UPDATE SET
+            limit_microusd = EXCLUDED.limit_microusd,
+            policy_version = EXCLUDED.policy_version,
+            updated_at = NOW()
+        `,
+        [poolId, start, end, limit, opts.policy.version, GLOBAL_POOL_ID],
+      );
+    }
+    // Every reservation locks the parent first, so free and paid admissions
+    // cannot race past the combined site budget.
+    for (const poolId of [GLOBAL_POOL_ID, opts.poolId]) {
+      await client.query(
+        `
+          SELECT pool_id FROM site_ai_funding_periods
+          WHERE pool_id = $1 AND period_start = $2
+          FOR UPDATE
+        `,
+        [poolId, start],
+      );
+    }
     await expireCurrentPeriodReservations({
       client,
       poolId: opts.poolId,
       periodStart: start,
     });
 
-    const period = await client.query(
+    const periods = await client.query(
       `
         SELECT * FROM site_ai_funding_periods
-        WHERE pool_id = $1 AND period_start = $2
+        WHERE pool_id = ANY($1::TEXT[]) AND period_start = $2
       `,
-      [opts.poolId, start],
+      [[GLOBAL_POOL_ID, opts.poolId], start],
     );
-    const periodRow = period.rows[0];
+    const periodRows = new Map(
+      periods.rows.map((row) => [`${row.pool_id}`, row] as const),
+    );
+    const globalPeriodRow = periodRows.get(GLOBAL_POOL_ID);
+    const periodRow = periodRows.get(opts.poolId);
+    if (!globalPeriodRow || !periodRow) {
+      throw new Error("site-funded Codex funding period was not initialized");
+    }
     const active = await client.query(
       `
         SELECT
@@ -354,20 +398,6 @@ export async function reserveSiteFundedCodexTurn(
         "Site-funded Codex is temporarily at its global concurrency limit.",
       );
     }
-    const requested = opts.policy.maxTurnCostMicrousd;
-    if (
-      int(periodRow.committed_microusd) +
-        int(periodRow.reserved_microusd) +
-        requested >
-      int(periodRow.limit_microusd)
-    ) {
-      await client.query("ROLLBACK");
-      return denied(
-        "global_pool",
-        "The site-funded Codex weekly pool is temporarily exhausted.",
-      );
-    }
-
     const [used5h, used7d] = await Promise.all([
       committedInWindow({
         client,
@@ -380,39 +410,75 @@ export async function reserveSiteFundedCodexTurn(
         interval: "7 days",
       }),
     ]);
+    const remaining5h =
+      opts.accountLimit5hMicrousd == null
+        ? Number.MAX_SAFE_INTEGER
+        : Math.max(0, opts.accountLimit5hMicrousd - used5h);
+    const remaining7d =
+      opts.accountLimit7dMicrousd == null
+        ? Number.MAX_SAFE_INTEGER
+        : Math.max(0, opts.accountLimit7dMicrousd - used7d);
+    const requested = Math.min(
+      opts.policy.maxTurnCostMicrousd,
+      remaining5h,
+      remaining7d,
+    );
+    if (requested <= 0) {
+      await client.query("ROLLBACK");
+      const weeklyExhausted = remaining7d <= 0;
+      return denied(
+        weeklyExhausted ? "account_limit_7d" : "account_limit_5h",
+        weeklyExhausted
+          ? "You have used your weekly included Codex allowance. Wait for usage to reset, upgrade your CoCalc membership, or connect a ChatGPT plan or personal OpenAI API key."
+          : "You have used your 5-hour included Codex allowance. Wait for usage to reset, upgrade your CoCalc membership, or connect a ChatGPT plan or personal OpenAI API key.",
+      );
+    }
+    const effectivePolicy: SiteFundedCodexPolicy = {
+      ...opts.policy,
+      maxTurnCostMicrousd: requested,
+    };
+    const poolRequested =
+      requested + finalRequestHeadroomMicrousd(effectivePolicy);
     if (
-      opts.accountLimit5hMicrousd != null &&
-      used5h + requested > opts.accountLimit5hMicrousd
+      int(globalPeriodRow.committed_microusd) +
+        int(globalPeriodRow.reserved_microusd) +
+        poolRequested >
+      int(globalPeriodRow.limit_microusd)
     ) {
       await client.query("ROLLBACK");
       return denied(
-        "account_limit_5h",
-        "This account has reached its 5-hour included Codex allowance.",
+        "global_pool",
+        "CoCalc's included Codex capacity is temporarily exhausted. Try again after the weekly pool resets, upgrade your CoCalc membership for more included Luna usage, or connect a ChatGPT plan or personal OpenAI API key.",
       );
     }
     if (
-      opts.accountLimit7dMicrousd != null &&
-      used7d + requested > opts.accountLimit7dMicrousd
+      int(periodRow.committed_microusd) +
+        int(periodRow.reserved_microusd) +
+        poolRequested >
+      int(periodRow.limit_microusd)
     ) {
       await client.query("ROLLBACK");
       return denied(
-        "account_limit_7d",
-        "This account has reached its 7-day included Codex allowance.",
+        "global_pool",
+        opts.poolId === "site-funded-codex-free"
+          ? "Free included Codex capacity is temporarily exhausted. Try again after the weekly pool resets, upgrade your CoCalc membership for more included Luna usage, or connect a ChatGPT plan or personal OpenAI API key."
+          : "Included Codex capacity for paid memberships is temporarily exhausted. Try again after the weekly pool resets or connect a ChatGPT plan or personal OpenAI API key.",
       );
     }
 
     const reservationId = uuid();
-    const expiresAt = new Date(Date.now() + opts.policy.maxTurnDurationMs);
+    const expiresAt = new Date(Date.now() + effectivePolicy.maxTurnDurationMs);
     const inserted = await client.query(
       `
         INSERT INTO site_ai_turn_reservations (
           reservation_id, funded_turn_id, idempotency_key, pool_id,
           period_start, account_id, project_id, host_id, home_bay_id,
           owning_bay_id, membership_tier, policy_version, model, reasoning,
-          service_tier, policy, surface, reserved_microusd, status, expires_at
+          service_tier, policy, surface, reserved_microusd,
+          pool_reserved_microusd, status, expires_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-          $14, $15, $16::jsonb, $17, $18, 'active', $19
+          $14, $15, $16::jsonb, $17, $18, $19, 'active', $20
         )
         RETURNING *
       `,
@@ -428,13 +494,14 @@ export async function reserveSiteFundedCodexTurn(
         opts.homeBayId ?? null,
         opts.owningBayId ?? null,
         opts.membershipTier,
-        opts.policy.version,
-        opts.policy.model,
-        opts.policy.reasoning,
-        opts.policy.serviceTier,
-        JSON.stringify(opts.policy),
+        effectivePolicy.version,
+        effectivePolicy.model,
+        effectivePolicy.reasoning,
+        effectivePolicy.serviceTier,
+        JSON.stringify(effectivePolicy),
         opts.surface ?? null,
         requested,
+        poolRequested,
         expiresAt,
       ],
     );
@@ -442,9 +509,9 @@ export async function reserveSiteFundedCodexTurn(
       `
         UPDATE site_ai_funding_periods
         SET reserved_microusd = reserved_microusd + $3, updated_at = NOW()
-        WHERE pool_id = $1 AND period_start = $2
+        WHERE pool_id = ANY($1::TEXT[]) AND period_start = $2
       `,
-      [opts.poolId, start, requested],
+      [[opts.poolId, GLOBAL_POOL_ID], start, poolRequested],
     );
     await client.query("COMMIT");
     return {
@@ -579,15 +646,22 @@ export async function finishSiteFundedCodexTurn(
         SET reserved_microusd = GREATEST(0, reserved_microusd - $3),
             committed_microusd = committed_microusd + $4,
             updated_at = NOW()
-        WHERE pool_id = $1 AND period_start = $2
+        WHERE pool_id = ANY($1::TEXT[]) AND period_start = $2
       `,
-      [row.pool_id, row.period_start, row.reserved_microusd, committed],
+      [
+        [row.pool_id, GLOBAL_POOL_ID],
+        row.period_start,
+        row.pool_reserved_microusd ?? row.reserved_microusd,
+        committed,
+      ],
     );
     await client.query("COMMIT");
-    if (committed > int(row.reserved_microusd)) {
+    if (committed > int(row.pool_reserved_microusd ?? row.reserved_microusd)) {
       logger.error("site-funded Codex reservation exceeded its hard bound", {
         reservationId: opts.reservationId,
-        reservedMicrousd: int(row.reserved_microusd),
+        reservedMicrousd: int(
+          row.pool_reserved_microusd ?? row.reserved_microusd,
+        ),
         committedMicrousd: committed,
       });
     }
@@ -608,16 +682,19 @@ export async function getSiteFundedCodexPoolStatus(): Promise<
   const { rows } = await getPool().query(
     `
       SELECT p.*,
-        COUNT(r.reservation_id) FILTER (WHERE r.status = 'active')::int
-          AS active_reservations
+        CASE WHEN p.pool_id = $2 THEN (
+          SELECT COUNT(*)::int FROM site_ai_turn_reservations r
+          WHERE r.period_start = p.period_start AND r.status = 'active'
+        ) ELSE (
+          SELECT COUNT(*)::int FROM site_ai_turn_reservations r
+          WHERE r.pool_id = p.pool_id AND r.period_start = p.period_start
+            AND r.status = 'active'
+        ) END AS active_reservations
       FROM site_ai_funding_periods p
-      LEFT JOIN site_ai_turn_reservations r
-        ON r.pool_id = p.pool_id AND r.period_start = p.period_start
       WHERE p.period_start = $1
-      GROUP BY p.pool_id, p.period_start
-      ORDER BY p.pool_id
+      ORDER BY CASE WHEN p.pool_id = $2 THEN 0 ELSE 1 END, p.pool_id
     `,
-    [start],
+    [start, GLOBAL_POOL_ID],
   );
   return rows.map((row) => {
     const limit = int(row.limit_microusd);
@@ -697,11 +774,13 @@ export async function expireAbandonedSiteFundedCodexReservations(): Promise<numb
     const client = await getPool().connect();
     try {
       await client.query("BEGIN");
-      await client.query(
-        `SELECT pool_id FROM site_ai_funding_periods
-         WHERE pool_id = $1 AND period_start = $2 FOR UPDATE`,
-        [row.pool_id, row.period_start],
-      );
+      for (const poolId of [GLOBAL_POOL_ID, row.pool_id]) {
+        await client.query(
+          `SELECT pool_id FROM site_ai_funding_periods
+           WHERE pool_id = $1 AND period_start = $2 FOR UPDATE`,
+          [poolId, row.period_start],
+        );
+      }
       const before = await client.query(
         `SELECT COUNT(*)::int AS count FROM site_ai_turn_reservations
          WHERE pool_id = $1 AND period_start = $2 AND status = 'active'

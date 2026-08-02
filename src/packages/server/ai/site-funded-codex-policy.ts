@@ -36,6 +36,7 @@ function positiveUsdMicrousd(value: unknown, fallback: number): number {
 export type SiteFundedCodexConfiguration = {
   enabled: boolean;
   policy: SiteFundedCodexPolicy;
+  globalPoolWeeklyLimitMicrousd: number;
   freePoolWeeklyLimitMicrousd: number;
   paidPoolWeeklyLimitMicrousd: number;
   globalConcurrency: number;
@@ -62,9 +63,9 @@ export function siteFundedCodexConfigurationFromSettings(
         DEFAULT_SITE_FUNDED_CODEX_POLICY.maxTurnDurationMs / 1_000,
         24 * 60 * 60,
       ) * 1_000,
-    maxInputTokensPerRequest: positiveInteger(
+    contextWindowTokens: positiveInteger(
       settings.site_funded_codex_max_input_tokens_per_request,
-      DEFAULT_SITE_FUNDED_CODEX_POLICY.maxInputTokensPerRequest,
+      DEFAULT_SITE_FUNDED_CODEX_POLICY.contextWindowTokens,
       272_000,
     ),
     maxOutputTokensPerRequest: positiveInteger(
@@ -78,9 +79,17 @@ export function siteFundedCodexConfigurationFromSettings(
       10_000,
     ),
   };
+  policy.autoCompactTokenLimit = Math.min(
+    policy.contextWindowTokens - 1,
+    Math.floor(policy.contextWindowTokens * 0.75),
+  );
   return {
     enabled: to_bool(settings.site_funded_codex_enabled),
     policy,
+    globalPoolWeeklyLimitMicrousd: positiveUsdMicrousd(
+      settings.site_funded_codex_global_pool_weekly_usd,
+      100 * 1_000_000,
+    ),
     freePoolWeeklyLimitMicrousd: positiveUsdMicrousd(
       settings.site_funded_codex_free_pool_weekly_usd,
       100 * 1_000_000,
@@ -91,7 +100,7 @@ export function siteFundedCodexConfigurationFromSettings(
     ),
     globalConcurrency: positiveInteger(
       settings.site_funded_codex_global_concurrency,
-      100,
+      50,
       100_000,
     ),
   };

@@ -2178,7 +2178,6 @@ export class ChatStreamWriter {
     if (this.completionNoticePublished) {
       return;
     }
-    this.completionNoticePublished = true;
     try {
       const threadId = this.resolvedThreadId();
       if (!threadId || !this.syncdb) {
@@ -2190,7 +2189,8 @@ export class ChatStreamWriter {
         | null;
       const currentPreference = codexTurnNotifyPreference(config);
       const shouldNotify =
-        currentPreference ?? this.metadata.notify_on_turn_finish === true;
+        currentPreference === true ||
+        this.metadata.notify_on_turn_finish === true;
       if (!shouldNotify) {
         return;
       }
@@ -2217,6 +2217,7 @@ export class ChatStreamWriter {
         project_id: this.metadata.project_id,
         notice,
       });
+      this.completionNoticePublished = true;
     } catch (err) {
       logger.warn("failed to publish codex turn completion notice", {
         chatKey: this.chatKey,

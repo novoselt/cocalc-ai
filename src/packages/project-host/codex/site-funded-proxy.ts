@@ -144,11 +144,9 @@ function assertAllowedTools(tools: unknown): void {
 
 function boundedProviderRequest({
   body,
-  bodyBytes,
   session,
 }: {
   body: any;
-  bodyBytes: number;
   session: Session;
 }): any {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -166,55 +164,28 @@ function boundedProviderRequest({
   }
   if (Date.now() - session.startedAt >= session.policy.maxTurnDurationMs) {
     throw Object.assign(
-      new Error("site-funded Codex turn reached its duration limit"),
+      new Error(
+        "This included Codex turn reached its emergency duration limit. Start a new turn, upgrade your CoCalc membership, or connect a ChatGPT plan or personal OpenAI API key.",
+      ),
       { statusCode: 403 },
     );
   }
   if (session.requestSequence >= session.policy.maxRequestsPerTurn) {
     throw Object.assign(
-      new Error("site-funded Codex turn reached its provider request limit"),
+      new Error(
+        "This included Codex turn reached its emergency request limit. Start a new turn, upgrade your CoCalc membership, or connect a ChatGPT plan or personal OpenAI API key.",
+      ),
       { statusCode: 403 },
     );
   }
   assertAllowedTools(body.tools);
-
-  // UTF-8 tokens cannot exceed the number of request bytes. JSON overhead
-  // makes this a deliberately conservative pre-provider context bound.
-  if (bodyBytes > session.policy.maxInputTokensPerRequest) {
-    throw Object.assign(
-      new Error(
-        "This funded request is too large. Start a fresh thread or connect personal OpenAI funding.",
-      ),
-      { statusCode: 413 },
-    );
-  }
-
-  const remaining = session.policy.maxTurnCostMicrousd - session.costMicrousd;
-  const worstInputCost = computeSiteFundedCodexRequestCost({
-    model: session.policy.model,
-    usage: {
-      inputTokens: bodyBytes,
-      cacheWriteInputTokens: bodyBytes,
-      outputTokens: 0,
-    },
-  }).costMicrousd;
-  const affordableOutputTokens = Math.floor(
-    Math.max(0, remaining - worstInputCost) / 1.2,
-  );
   const requestedOutput = Number(body.max_output_tokens);
   const outputLimit = Math.min(
     session.policy.maxOutputTokensPerRequest,
     Number.isSafeInteger(requestedOutput) && requestedOutput > 0
       ? requestedOutput
       : session.policy.maxOutputTokensPerRequest,
-    affordableOutputTokens,
   );
-  if (outputLimit < 1) {
-    throw Object.assign(
-      new Error("site-funded Codex turn reached its cost limit"),
-      { statusCode: 403 },
-    );
-  }
 
   return {
     ...body,
@@ -356,7 +327,8 @@ class SiteFundedCodexProxy {
     });
     session.costMicrousd += cost.costMicrousd;
     if (session.costMicrousd >= session.policy.maxTurnCostMicrousd) {
-      session.blockedReason = "site-funded Codex turn reached its cost limit";
+      session.blockedReason =
+        "This included Codex turn reached its emergency cost limit. Start a new turn, upgrade your CoCalc membership, or connect a ChatGPT plan or personal OpenAI API key.";
     }
     try {
       await session.onUsage(event);
@@ -393,7 +365,6 @@ class SiteFundedCodexProxy {
       bodyBuffer = await readBody(request);
       body = boundedProviderRequest({
         body: JSON.parse(bodyBuffer.toString("utf8")),
-        bodyBytes: bodyBuffer.length,
         session,
       });
     } catch (err: any) {

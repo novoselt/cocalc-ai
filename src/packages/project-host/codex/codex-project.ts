@@ -218,7 +218,11 @@ function getCodexProviderWebsocketConnectTimeoutMs(): number {
 
 function getManagedOpenAiProviderArgs(
   authRuntime: CodexAuthRuntime,
-  fundedProvider?: { baseUrl: string },
+  fundedProvider?: {
+    baseUrl: string;
+    contextWindowTokens: number;
+    autoCompactTokenLimit: number;
+  },
 ): string[] | undefined {
   const streamIdleTimeoutMs = getCodexProviderStreamIdleTimeoutMs();
   const websocketConnectTimeoutMs = getCodexProviderWebsocketConnectTimeoutMs();
@@ -228,12 +232,23 @@ function getManagedOpenAiProviderArgs(
     authRuntime.source === "account-api-key" ||
     authRuntime.source === "site-api-key"
   ) {
-    return [
+    const args = [
       "--config",
       `model_providers.${API_KEY_PROVIDER_ID}={name="OpenAI",base_url="${fundedProvider?.baseUrl ?? OPENAI_PROVIDER_BASE_URL}",env_key="OPENAI_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=${fundedProvider ? "false" : "true"},stream_idle_timeout_ms=${streamIdleTimeoutMs},websocket_connect_timeout_ms=${websocketConnectTimeoutMs}}`,
       "--config",
       `model_provider="${API_KEY_PROVIDER_ID}"`,
     ];
+    if (fundedProvider) {
+      args.push(
+        "--config",
+        `model_context_window=${fundedProvider.contextWindowTokens}`,
+        "--config",
+        `model_auto_compact_token_limit=${fundedProvider.autoCompactTokenLimit}`,
+        "--config",
+        'model_auto_compact_token_limit_scope="total"',
+      );
+    }
+    return args;
   }
   return;
 }
@@ -1463,6 +1478,8 @@ async function spawnCodexAppServerInProjectRuntime({
   const providerArgs = siteFundedTurn
     ? getManagedOpenAiProviderArgs(authRuntime, {
         baseUrl: siteFundedTurn.providerBaseUrl,
+        contextWindowTokens: siteFundedTurn.policy.contextWindowTokens,
+        autoCompactTokenLimit: siteFundedTurn.policy.autoCompactTokenLimit,
       })
     : appServerLogin?.type === "apiKey"
       ? undefined
