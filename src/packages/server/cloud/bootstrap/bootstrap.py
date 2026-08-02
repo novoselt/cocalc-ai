@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260802-v28"
+HELPER_SCHEMA_VERSION = "20260802-v29"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -3466,6 +3466,7 @@ PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
 PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
 PROJECT_IO_RESERVATION_LOCK="/run/lock/cocalc-project-io-reservation.lock"
+PROJECT_IO_NORMAL_LIMITS_SNAPSHOT="/run/cocalc-project-pool-normal-io.max"
 PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"
 PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"
 PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"
@@ -3656,7 +3657,7 @@ clear_stale_io_max() {
 
 apply_io_max() {
   local cgroup="$1" scope="$2" mode="$3" io_class="${4:-standard}"
-  local rows devices device rbps wbps riops wiops line snapshot
+  local rows="${5:-}" devices device rbps wbps riops wiops line snapshot
   if [ ! -w "$cgroup/io.max" ]; then
     [ "$mode" = "enforce" ] && deny "project-io-max-unavailable" "$cgroup"
     return 0
@@ -3672,8 +3673,10 @@ apply_io_max() {
     done <<< "$snapshot"
     return 0
   fi
-  if ! rows="$(project_io_limit_rows "$scope" "$io_class")"; then
-    deny "project-io-device-unavailable" "$scope"
+  if [ -z "$rows" ]; then
+    if ! rows="$(project_io_limit_rows "$scope" "$io_class")"; then
+      deny "project-io-device-unavailable" "$scope"
+    fi
   fi
   devices="$(cut -f1 <<< "$rows")"
   [ -n "$devices" ] || {
@@ -3689,10 +3692,12 @@ apply_io_max() {
 
 verify_io_max() {
   local cgroup="$1" scope="$2" io_class="${3:-standard}"
-  local rows device rbps wbps riops wiops line
+  local rows="${4:-}" device rbps wbps riops wiops line
   [ -r "$cgroup/io.max" ] || deny "project-io-max-unavailable" "$cgroup"
-  rows="$(project_io_limit_rows "$scope" "$io_class")" ||
-    deny "project-io-device-unavailable" "$scope"
+  if [ -z "$rows" ]; then
+    rows="$(project_io_limit_rows "$scope" "$io_class")" ||
+      deny "project-io-device-unavailable" "$scope"
+  fi
   [ -n "$rows" ] || deny "project-io-device-unavailable" "$scope"
   while IFS=$'\t' read -r device rbps wbps riops wiops _rest; do
     [ -n "$device" ] || continue
@@ -3724,25 +3729,84 @@ current_project_pool_io_scope() {
 }
 
 apply_project_pool_io_policy() {
-  local scope="${1:-}" fields mode
+  local scope="${1:-}" fields mode rows=""
   [ -n "$scope" ] || scope="$(current_project_pool_io_scope)"
   fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
   IFS=$'\t' read -r mode _rest <<< "$fields"
-  apply_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$scope" "$mode"
   if [ "$mode" = "enforce" ]; then
-    verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$scope"
+    rows="$(project_io_limit_rows "$scope")" ||
+      deny "project-io-device-unavailable" "$scope"
+  fi
+  apply_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$scope" "$mode" standard "$rows"
+  if [ "$mode" = "enforce" ]; then
+    verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$scope" standard "$rows"
   fi
 }
 
+apply_project_pool_io_snapshot() {
+  local snapshot="$1" line
+  [ -s "$snapshot" ] || deny "project-io-normal-snapshot-missing" "$snapshot"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s\n' "$line" > "${PROJECT_POOL_CGROUP_DEFAULT}/io.max"
+  done < "$snapshot"
+}
+
+verify_project_pool_io_snapshot() {
+  local snapshot="$1" device expected line
+  [ -s "$snapshot" ] || deny "project-io-normal-snapshot-missing" "$snapshot"
+  while read -r device expected; do
+    [ -n "$device" ] || continue
+    line="$(awk -v device="$device" '$1 == device {print; exit}' "${PROJECT_POOL_CGROUP_DEFAULT}/io.max")"
+    for expected in $expected; do
+      grep -qw "$expected" <<< "$line" ||
+        deny "project-io-normal-snapshot-mismatch" \
+          "device=${device},expected=${expected},actual=${line:-missing}"
+    done
+  done < "$snapshot"
+}
+
 reserve_project_startup_io_capacity() {
+  local snapshot_tmp
   acquire_project_io_reservation_lock
+  if [ -s "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT" ]; then
+    release_project_io_reservation_lock
+    return 0
+  fi
+  snapshot_tmp="${PROJECT_IO_NORMAL_LIMITS_SNAPSHOT}.$$"
+  umask 077
+  cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.max" > "$snapshot_tmp"
+  [ -s "$snapshot_tmp" ] || deny "project-io-normal-snapshot-empty" "$snapshot_tmp"
+  mv -f "$snapshot_tmp" "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
   apply_project_pool_io_policy "lifecycle-pool"
   release_project_io_reservation_lock
 }
 
-reconcile_project_pool_io_reservation() {
+release_project_startup_io_capacity() {
   acquire_project_io_reservation_lock
-  apply_project_pool_io_policy "$(current_project_pool_io_scope)"
+  if [ "$(project_startup_runtime_active_count)" -gt 0 ]; then
+    release_project_io_reservation_lock
+    return 0
+  fi
+  if [ -s "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT" ]; then
+    apply_project_pool_io_snapshot "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+    verify_project_pool_io_snapshot "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+    rm -f "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+  else
+    # Recover safely after an interrupted helper upgrade or manual cgroup edit.
+    apply_project_pool_io_policy "pool"
+  fi
+  release_project_io_reservation_lock
+}
+
+reconcile_project_pool_io_reservation() {
+  local scope
+  acquire_project_io_reservation_lock
+  scope="$(current_project_pool_io_scope)"
+  apply_project_pool_io_policy "$scope"
+  if [ "$scope" = "pool" ]; then
+    rm -f "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+  fi
   release_project_io_reservation_lock
 }
 
@@ -5347,7 +5411,7 @@ case "$cmd" in
       startup_pool="$(project_startup_runtime_cgroup "$project_id")"
       if [ -d "$startup_pool" ]; then
         move_project_startup_runtime_to_pool "$project_id" "$pool"
-        reconcile_project_pool_io_reservation
+        release_project_startup_io_capacity
       elif ! project_pid_is_in_pool "$project_id" "$init_pid" ||
         ! project_pid_is_in_pool "$project_id" "$conmon_pid"; then
         attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
@@ -5624,7 +5688,7 @@ PY
       if [ -d "$startup_pool" ]; then
         deny "project-startup-runtime-cleanup-failed" "$1"
       fi
-      reconcile_project_pool_io_reservation
+      release_project_startup_io_capacity
     fi
     if [ -d "$pool" ]; then
       if [ -w "$pool/cgroup.kill" ]; then

@@ -2205,7 +2205,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("move_project_startup_runtime_to_pool", script)
             self.assertIn("project_startup_runtime_active_count", script)
             self.assertIn("reserve_project_startup_io_capacity", script)
+            self.assertIn("release_project_startup_io_capacity", script)
             self.assertIn("reconcile_project_pool_io_reservation", script)
+            self.assertIn("apply_project_pool_io_snapshot", script)
+            self.assertIn("verify_project_pool_io_snapshot", script)
+            self.assertIn(
+                'PROJECT_IO_NORMAL_LIMITS_SNAPSHOT="/run/cocalc-project-pool-normal-io.max"',
+                script,
+            )
             self.assertIn('"pool_limit_scope": pool_scope', script)
             self.assertIn(
                 '"startup_runtime_active_count": int(startup_runtime_active_count)',
@@ -2226,7 +2233,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertLess(
                 finish_startup_body.index("move_project_startup_runtime_to_pool"),
-                finish_startup_body.index("reconcile_project_pool_io_reservation"),
+                finish_startup_body.index("release_project_startup_io_capacity"),
             )
             self.assertIn("attach_maintenance_worker", script)
             self.assertIn("btrfs|btrfs-maintenance)", script)
