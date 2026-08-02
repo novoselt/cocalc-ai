@@ -296,6 +296,19 @@ export type SiteSettingsExtrasKeys =
   | "email_smtp_password"
   | "openai_section"
   | "openai_api_key"
+  | "site_funded_codex_heading"
+  | "site_funded_codex_enabled"
+  | "site_funded_codex_model"
+  | "site_funded_codex_reasoning"
+  | "site_funded_codex_service_tier"
+  | "site_funded_codex_free_pool_weekly_usd"
+  | "site_funded_codex_paid_pool_weekly_usd"
+  | "site_funded_codex_max_turn_usd"
+  | "site_funded_codex_max_turn_seconds"
+  | "site_funded_codex_max_input_tokens_per_request"
+  | "site_funded_codex_max_output_tokens_per_request"
+  | "site_funded_codex_max_requests_per_turn"
+  | "site_funded_codex_global_concurrency"
   | "google_vertexai_key"
   | "ollama_configuration"
   | "custom_openai_configuration"
@@ -880,6 +893,135 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI"],
     group: "AI & Agents",
     subgroup: "OpenAI",
+  },
+  site_funded_codex_heading: {
+    name: "Site-Funded Codex",
+    desc: "Hard financial and policy controls for Codex turns paid for by the site's OpenAI API key.",
+    default: "",
+    type: "header",
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_enabled: {
+    name: "Enable Site-Funded Codex",
+    desc: "Allow eligible accounts to use the site OpenAI key through the bounded funded proxy. Disabling this leaves personal ChatGPT and API-key access unchanged.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_model: {
+    name: "Funded Codex Model",
+    desc: "Exact model permitted for site-funded turns. Models without a verified funded price fail closed.",
+    default: "gpt-5.6-luna",
+    valid: (value) => value === "gpt-5.6-luna",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_reasoning: {
+    name: "Funded Codex Reasoning",
+    desc: "Reasoning level forced at the backend and provider proxy for site-funded turns.",
+    default: "low",
+    valid: (value) => value === "low",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_service_tier: {
+    name: "Funded Codex Speed",
+    desc: "Provider service tier forced for site-funded turns.",
+    default: "standard",
+    valid: (value) => value === "standard",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_free_pool_weekly_usd: {
+    name: "Free Pool Weekly Limit (USD)",
+    desc: "Hard seed-authoritative weekly ceiling for free-account site-funded Codex reservations.",
+    default: "100",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_paid_pool_weekly_usd: {
+    name: "Paid Pool Weekly Limit (USD)",
+    desc: "Separate hard weekly ceiling for paid-member site-funded Codex reservations.",
+    default: "100",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_max_turn_usd: {
+    name: "Maximum Funded Turn Cost (USD)",
+    desc: "Maximum provider-cost exposure reserved before one funded turn starts.",
+    default: "0.05",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_max_turn_seconds: {
+    name: "Maximum Funded Turn Duration (seconds)",
+    desc: "Hard elapsed-time limit for one site-funded Codex turn.",
+    default: "1200",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_max_input_tokens_per_request: {
+    name: "Maximum Input Tokens per Request",
+    desc: "Reject funded provider requests above this input/context estimate. Keep this below the provider long-context pricing threshold.",
+    default: "128000",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_max_output_tokens_per_request: {
+    name: "Maximum Output Tokens per Request",
+    desc: "Output-token cap forced on each site-funded provider request.",
+    default: "8000",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_max_requests_per_turn: {
+    name: "Maximum Provider Requests per Turn",
+    desc: "Stops low-cost infinite agent loops even before the financial cap is reached.",
+    default: "64",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+  },
+  site_funded_codex_global_concurrency: {
+    name: "Global Funded Turn Concurrency",
+    desc: "Maximum active site-funded turns across the global pool, independent of its dollar limit.",
+    default: "100",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
   },
   google_vertexai_key: {
     name: "Google Generative AI API Key",
