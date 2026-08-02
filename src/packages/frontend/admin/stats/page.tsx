@@ -161,7 +161,10 @@ function metricHelp(metric: string, segment?: string): string {
     return "Observed in the user's browser. This segment starts from a project that is archived or not provisioned, so it can include backup restore, rootfs restore, or other storage preparation and can legitimately be much slower than a normal start.";
   }
   if (segment === "warm_provisioned") {
-    return "Observed in the user's browser. This segment is for a project that already has an assigned host and provisioned project storage/rootfs, so it is the quick-start path admins should watch closely.";
+    return "Observed in the user's browser. This segment is limited to successful starts with an assigned host, provisioned project storage, and no material RootFS preparation, so it is the quick-start path admins should watch closely.";
+  }
+  if (segment === "rootfs_prepare") {
+    return "Observed in the user's browser. The successful start spent at least one second preparing the selected RootFS on the project host, so it is excluded from the warm-start objective.";
   }
   if (segment === "host_start_or_unknown") {
     return "Observed in the user's browser. This segment is for starts where the frontend could not classify the project as already provisioned on a host; it may include placement, host startup, or stale frontend state.";

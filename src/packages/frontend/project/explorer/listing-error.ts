@@ -6,6 +6,7 @@
 import { parseRetryInAboutSeconds } from "@cocalc/conat/auth/retry-window";
 import {
   getErrorMessage,
+  isProjectRootfsUnavailable,
   isProjectHostTemporarilyUnavailable,
 } from "@cocalc/frontend/project/listing/project-host-errors";
 
@@ -24,6 +25,9 @@ export function getUserFacingListingError(error: unknown): unknown {
   const retrySeconds = parseRetryInAboutSeconds(message);
   if (retrySeconds != null) {
     return `The project host is temporarily retrying authentication. Please wait about ${retrySeconds}s and refresh.`;
+  }
+  if (isProjectRootfsUnavailable(error)) {
+    return "The project image is still being prepared. Files will appear automatically when the RootFS is ready.";
   }
   if (isTransientProjectHostListingError(error)) {
     return "The project connection closed while the file listing was loading. Please wait a moment.";

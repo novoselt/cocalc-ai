@@ -193,9 +193,66 @@ type ProjectIndexBootstrapRow = AccountProjectListWindowRow & {
 
 type ProjectStartUxSegment =
   | "warm_provisioned"
+  | "rootfs_prepare"
   | "project_restore"
   | "host_start_or_unknown"
   | "unknown";
+
+type ProjectStartCompletion = {
+  status: LroSummary["status"];
+  error?: LroSummary["error"];
+  finished_at?: LroSummary["finished_at"];
+  updated_at?: LroSummary["updated_at"];
+  created_at?: LroSummary["created_at"];
+  result?: LroSummary["result"];
+  progress_summary?: LroSummary["progress_summary"];
+};
+
+const ROOTFS_PREPARE_SEGMENT_MIN_MS = 1_000;
+
+function classifyCompletedProjectStartUxSegment({
+  initialSegment,
+  completion,
+}: {
+  initialSegment: ProjectStartUxSegment;
+  completion?: ProjectStartCompletion;
+}): {
+  segment: ProjectStartUxSegment;
+  lro_status?: LroSummary["status"];
+  rootfs_cache_ms?: number;
+} {
+  if (initialSegment !== "warm_provisioned") {
+    return { segment: initialSegment, lro_status: completion?.status };
+  }
+  if (completion?.status !== "succeeded") {
+    return {
+      segment: "host_start_or_unknown",
+      lro_status: completion?.status,
+    };
+  }
+  const phaseTimings =
+    completion.result?.phase_timings_ms ??
+    completion.progress_summary?.phase_timings_ms;
+  const rootfsCacheMs = Number(phaseTimings?.cache_rootfs);
+  if (Number.isFinite(rootfsCacheMs)) {
+    if (rootfsCacheMs >= ROOTFS_PREPARE_SEGMENT_MIN_MS) {
+      return {
+        segment: "rootfs_prepare",
+        lro_status: completion.status,
+        rootfs_cache_ms: rootfsCacheMs,
+      };
+    }
+    return {
+      segment: initialSegment,
+      lro_status: completion.status,
+      rootfs_cache_ms: rootfsCacheMs,
+    };
+  }
+  return {
+    segment: "host_start_or_unknown",
+    lro_status: completion.status,
+  };
+}
 
 function buildProjectRecordFromProjectIndexRow({
   row,
@@ -3697,6 +3754,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     client_event_id,
     segment,
     op_id,
+    completion,
     details,
     deadline_ms = 20 * 60 * 1000,
     stuck_after_ms = ProjectsActions.PROJECT_START_USER_OBSERVED_STUCK_MS,
@@ -3706,6 +3764,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     client_event_id: string;
     segment: ProjectStartUxSegment;
     op_id?: string;
+    completion?: Promise<ProjectStartCompletion | undefined>;
     details?: Record<string, unknown>;
     deadline_ms?: number;
     stuck_after_ms?: number;
@@ -3736,27 +3795,43 @@ export class ProjectsActions extends Actions<ProjectsState> {
     };
     const recordRunning = ({ observed_state }: { observed_state?: string }) => {
       const duration_ms = elapsedUxMs(timer);
-      recordUxLatencyEvent({
-        event_type: "project_start",
-        metric: "project_start_running",
-        duration_ms,
-        project_id,
-        host_id: projectHostId(),
-        client_event_id,
-        segment,
-        details: {
-          ...details,
-          observed_state,
-          state_source: "project_stream",
-        },
-      });
-      void this.project_log(project_id, {
-        event: "project_started",
-        duration_ms,
-        op_id,
-        stage: segment,
-        ...store.classify_project(project_id),
-      });
+      void (async () => {
+        let terminal: ProjectStartCompletion | undefined;
+        try {
+          terminal = completion
+            ? await withTimeout(completion, 5_000)
+            : undefined;
+        } catch {
+          // Missing LRO telemetry must not manufacture a warm-start sample.
+        }
+        const classification = classifyCompletedProjectStartUxSegment({
+          initialSegment: segment,
+          completion: terminal,
+        });
+        recordUxLatencyEvent({
+          event_type: "project_start",
+          metric: "project_start_running",
+          duration_ms,
+          project_id,
+          host_id: projectHostId(),
+          client_event_id,
+          segment: classification.segment,
+          details: {
+            ...details,
+            observed_state,
+            state_source: "project_stream",
+            lro_status: classification.lro_status,
+            rootfs_cache_ms: classification.rootfs_cache_ms,
+          },
+        });
+        void this.project_log(project_id, {
+          event: "project_started",
+          duration_ms,
+          op_id,
+          stage: classification.segment,
+          ...store.classify_project(project_id),
+        });
+      })();
     };
     const recordProjectStreamStale = ({
       observed_state,
@@ -4032,13 +4107,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
         });
         actions.trackStartOp(resp);
         opts.onStartOp?.(resp);
-        type ProjectStartCompletion = {
-          status: LroSummary["status"];
-          error?: LroSummary["error"];
-          finished_at?: LroSummary["finished_at"];
-          updated_at?: LroSummary["updated_at"];
-          created_at?: LroSummary["created_at"];
-        };
         const applySucceededStart = (summary: ProjectStartCompletion) => {
           if (summary.status === "succeeded") {
             // The bay saves authoritative running state before publishing the
@@ -4071,12 +4139,19 @@ export class ProjectsActions extends Actions<ProjectsState> {
                 op: resp,
                 timeout_ms: opts.waitTimeoutMs,
               }).then(applySucceededStart);
+        const telemetryCompletion =
+          resp.terminal_status === "succeeded" && resp.op_id
+            ? webapp_client.conat_client.hub.lro
+                .get({ op_id: resp.op_id })
+                .catch(() => undefined)
+            : startConvergence;
         this.recordProjectStartUxLatencyWhenRunning({
           project_id,
           timer: uxTimer,
           client_event_id: uxClientEventId,
           segment: uxSegment,
           op_id: resp?.op_id,
+          completion: telemetryCompletion,
           details: {
             ...uxDetails,
             op_id: resp?.op_id,

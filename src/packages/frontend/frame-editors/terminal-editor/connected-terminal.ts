@@ -38,6 +38,8 @@ import {
   classifyProjectReadinessUxSegment,
   ensure_project_running,
 } from "@cocalc/frontend/project/project-start-warning";
+import { isProjectRootfsUnavailable } from "@cocalc/frontend/project/listing/project-host-errors";
+import { getProjectRuntimePreparation } from "@cocalc/frontend/project/runtime-start-readiness";
 import {
   PROJECT_RUNTIME_RECOVERY_EVENT,
   type RuntimeRecoveryNotice,
@@ -230,6 +232,23 @@ function connectingTerminalMessage(cols: number | undefined): string {
   });
 }
 
+function projectPreparingTerminalMessage(
+  cols: number | undefined,
+  phase?: string,
+): string {
+  const preparingImage = phase === "cache_rootfs";
+  return terminalStatusBox(cols, {
+    title: preparingImage ? "Preparing project image" : "Starting project",
+    primary: preparingImage
+      ? "Making the selected RootFS available..."
+      : "Preparing the project runtime...",
+    secondary: [
+      "This terminal will connect automatically",
+      "when the project is ready.",
+    ],
+  });
+}
+
 function projectRuntimeRestartedTerminalMessage(
   cols: number | undefined,
 ): string {
@@ -344,6 +363,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
   private lastRuntimeRecoveryId?: string;
   private pendingRuntimeRecoveryNotice?: RuntimeRecoveryNotice;
   private projectStartingRetryTimer?: ReturnType<typeof setTimeout>;
+  private projectPreparationMessageShown = false;
   private autoStartProjectOnNextConnect = false;
   private connectGeneration = 0;
   private initialOutputTimer?: ReturnType<typeof setTimeout>;
@@ -969,6 +989,14 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     if (notice.reason === "project_runtime_lost") {
       this.autoStartProjectOnNextConnect = true;
     }
+    const preparation = this.getRuntimePreparation();
+    if (preparation.active) {
+      this.pendingRuntimeRecoveryNotice = undefined;
+      void this.showProjectPreparationMessage(preparation.phase).then(() => {
+        this.scheduleProjectStartingRetry();
+      });
+      return;
+    }
     void this.showRuntimeRecoveryMessage(
       notice.reason === "project_runtime_lost"
         ? projectRuntimeLostTerminalMessage(this.terminal.cols)
@@ -1100,6 +1128,31 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     );
   };
 
+  private getRuntimePreparation = (projectState?: string) => {
+    return getProjectRuntimePreparation({
+      projectState:
+        projectState ??
+        this.projectsStore?.get_state?.(this.project_id) ??
+        redux.getProjectsStore?.()?.get_state?.(this.project_id),
+      startLro: this.projectStore?.get?.("start_lro"),
+    });
+  };
+
+  private showProjectPreparationMessage = async (
+    phase?: string,
+  ): Promise<void> => {
+    this.setTransientReconnectStyle(false);
+    this.set_connection_status("disconnected");
+    if (this.projectPreparationMessageShown) {
+      return;
+    }
+    this.projectPreparationMessageShown = true;
+    this.terminal.reset();
+    await this.handleDataFromProject(
+      projectPreparingTerminalMessage(this.terminal.cols, phase),
+    );
+  };
+
   private showRuntimeRecoveryMessage = async (
     message: string,
   ): Promise<void> => {
@@ -1139,10 +1192,10 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     });
 
     try {
-      await this.showPendingRuntimeRecoveryMessage();
       const projectState =
         redux.getProjectsStore?.()?.get_state?.(this.project_id) ??
         redux.getStore("projects")?.get_state?.(this.project_id);
+      const preparation = this.getRuntimePreparation(projectState);
       const readiness = classifyProjectReadinessUxSegment(
         this.project_id,
         projectState,
@@ -1151,13 +1204,19 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
         generation,
         projectState,
         readiness,
+        runtime_preparation: preparation,
       });
-      if (projectState === "starting") {
-        this.set_connection_status("disconnected");
+      if (preparation.active) {
+        this.pendingRuntimeRecoveryNotice = undefined;
+        await this.showProjectPreparationMessage(preparation.phase);
         this.scheduleProjectStartingRetry();
-        this.debug("connect:wait-project-starting", { generation });
+        this.debug("connect:wait-project-preparation", {
+          generation,
+          phase: preparation.phase,
+        });
         return;
       }
+      await this.showPendingRuntimeRecoveryMessage();
       if (projectState !== "running") {
         this.set_connection_status("disconnected");
         if (!autoStartProject) {
@@ -1189,6 +1248,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       this.autoStartProjectOnNextConnect = false;
       this.clearProjectStartingRetry();
       this.manualStartMessageShown = false;
+      this.projectPreparationMessageShown = false;
       const preserveVisibleContent = (this.history?.length ?? 0) > 0;
       this.debug("connect:prepare-pty", {
         generation,
@@ -1431,6 +1491,13 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
         generation,
         error: `${err}`,
       });
+      if (isProjectRootfsUnavailable(err)) {
+        this.pty?.close();
+        this.pty = null;
+        await this.showProjectPreparationMessage("cache_rootfs");
+        this.scheduleProjectStartingRetry();
+        return;
+      }
       this.reconnectResource?.requestReconnect({
         reason: "terminal_connect_failed",
       });

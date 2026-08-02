@@ -28,6 +28,8 @@ export interface HomeBayRetryClaims {
   email?: string;
   account_id?: string;
   challenge_id?: string;
+  factor_level?: "none" | "totp" | "recovery_code" | "passkey" | "google_oidc";
+  fresh_auth_until?: string;
   primary_auth_method?: "email_code" | "email_link";
   primary_verified_at?: string;
   home_bay_id: string;
@@ -104,6 +106,8 @@ export function issueHomeBayRetryToken({
   email,
   account_id,
   challenge_id,
+  factor_level,
+  fresh_auth_until,
   primary_auth_method,
   primary_verified_at,
   home_bay_id,
@@ -115,6 +119,8 @@ export function issueHomeBayRetryToken({
   email?: string;
   account_id?: string;
   challenge_id?: string;
+  factor_level?: "none" | "totp" | "recovery_code" | "passkey" | "google_oidc";
+  fresh_auth_until?: string;
   primary_auth_method?: "email_code" | "email_link";
   primary_verified_at?: string;
   home_bay_id: string;
@@ -171,6 +177,8 @@ export function issueHomeBayRetryToken({
     ...(normalizedEmail ? { email: normalizedEmail } : {}),
     ...(normalizedAccountId ? { account_id: normalizedAccountId } : {}),
     ...(normalizedChallengeId ? { challenge_id: normalizedChallengeId } : {}),
+    ...(factor_level ? { factor_level } : {}),
+    ...(fresh_auth_until ? { fresh_auth_until } : {}),
     ...(primary_auth_method ? { primary_auth_method } : {}),
     ...(primary_verified_at ? { primary_verified_at } : {}),
     home_bay_id: normalizedBay,

@@ -13,11 +13,15 @@ export default async function cliLoginStart(req, res) {
   }
 
   try {
-    const { email } = getParams(req);
+    const { email, elevated_login, duration } = getParams(req);
+    const elevatedLogin = elevated_login === true || elevated_login === "true";
+    const requestedDuration = duration === "extended" ? "extended" : "default";
     res.json(
       await startCliLoginChallenge({
         req,
         email: `${email ?? ""}`.trim() || undefined,
+        elevated_login: elevatedLogin,
+        duration: elevatedLogin ? requestedDuration : undefined,
       }),
     );
   } catch (err) {

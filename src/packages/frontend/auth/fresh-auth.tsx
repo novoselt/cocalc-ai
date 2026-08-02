@@ -83,11 +83,13 @@ export function isFreshAuthRequiredError(err: unknown): boolean {
 }
 
 export function FreshAuthModal({
+  defaultExtended = false,
   open,
   onCancel,
   onSuccess,
   origin,
 }: {
+  defaultExtended?: boolean;
   open: boolean;
   onCancel: () => void;
   onSuccess: () => Promise<void>;
@@ -207,6 +209,12 @@ export function FreshAuthModal({
       setExtended(false);
     }
   }, [canUseExtended]);
+
+  useEffect(() => {
+    if (open && defaultExtended && canUseExtended) {
+      setExtended(true);
+    }
+  }, [canUseExtended, defaultExtended, open]);
 
   function getExpectedPopupOrigin(): string {
     if (authOrigin) {
@@ -580,7 +588,10 @@ export function FreshAuthModal({
   );
 }
 
-export function useFreshAuthAction({ origin }: { origin?: string } = {}) {
+export function useFreshAuthAction({
+  defaultExtended,
+  origin,
+}: { defaultExtended?: boolean; origin?: string } = {}) {
   // Frontend counterpart to backend requireFreshAuth checks. Any browser UI
   // action that can hit a fresh-auth-protected HTTP route or Conat RPC should
   // run the mutation through runFreshAuthAction and render FreshAuthModal with
@@ -641,6 +652,7 @@ export function useFreshAuthAction({ origin }: { origin?: string } = {}) {
   return {
     runFreshAuthAction,
     freshAuthModalProps: {
+      defaultExtended,
       open,
       origin,
       onCancel: cancelFreshAuth,

@@ -20,14 +20,16 @@ export default async function cliLoginApprove(req, res) {
   try {
     const { challenge_id } = getParams(req);
     const cleanedChallengeId = `${challenge_id ?? ""}`.trim();
-    const account_id = await getApprovingAccountId({
+    const approval = await getApprovingAccount({
       req,
       challenge_id: cleanedChallengeId,
     });
     res.json(
       await approveCliLoginChallenge({
         challenge_id: cleanedChallengeId,
-        account_id,
+        account_id: approval.account_id,
+        factor_level: approval.factor_level,
+        fresh_auth_until: approval.fresh_auth_until,
       }),
     );
   } catch (err) {
@@ -41,13 +43,17 @@ export default async function cliLoginApprove(req, res) {
   }
 }
 
-async function getApprovingAccountId({
+async function getApprovingAccount({
   req,
   challenge_id,
 }: {
   req;
   challenge_id: string;
-}): Promise<string> {
+}): Promise<{
+  account_id: string;
+  factor_level?: "none" | "totp" | "recovery_code" | "passkey" | "google_oidc";
+  fresh_auth_until?: string | null;
+}> {
   const { approval_token, approval_home_bay_id } = getParams(req);
   const token = `${approval_token ?? ""}`.trim();
   if (token) {
@@ -66,13 +72,21 @@ async function getApprovingAccountId({
     if (`${account?.home_bay_id ?? ""}`.trim() !== claims.home_bay_id) {
       throw new Error("CLI login approval token account home bay mismatch");
     }
-    return account_id;
+    return {
+      account_id,
+      factor_level: claims.factor_level,
+      fresh_auth_until: claims.fresh_auth_until,
+    };
   }
 
   const account_id = await getAccountId(req);
   if (!account_id || !getRememberMeHash(req)) {
     throw new Error("must be signed in");
   }
-  await requireFreshAuth({ req, account_id });
-  return account_id;
+  const session = await requireFreshAuth({ req, account_id });
+  return {
+    account_id,
+    factor_level: session.factor_level ?? "none",
+    fresh_auth_until: session.fresh_auth_until?.toISOString() ?? null,
+  };
 }
