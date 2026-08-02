@@ -53,6 +53,7 @@ import {
   resolveCodexSessionMode,
   type CodexReasoningLevel,
   type CodexReasoningId,
+  type CodexPaymentSourcePreference,
   type CodexServiceTier,
   type CodexSessionMode,
 } from "@cocalc/util/ai/codex";
@@ -67,6 +68,7 @@ import { CodexFullAccessNotice } from "./codex-full-access";
 import { getLatestAcpThreadIdForThread } from "./thread-session";
 import {
   getCodexPaymentSourceShortLabel,
+  getCodexPaymentSourceOptions,
   getCodexPaymentSourceTooltip,
 } from "./use-codex-payment-source";
 
@@ -163,7 +165,13 @@ const sectionStyle: React.CSSProperties = {
   background: "white",
   padding: 14,
 };
-type PillSegment = "codex" | "expand" | "model" | "mode" | "reasoning";
+type PillSegment =
+  | "codex"
+  | "expand"
+  | "source"
+  | "model"
+  | "mode"
+  | "reasoning";
 
 const pillSegmentBaseStyle: React.CSSProperties = {
   alignItems: "center",
@@ -318,8 +326,9 @@ export function CodexPaymentCredentialsModal({
             onPaymentSourceChanged={refreshPaymentSource}
           />
           <Text type="secondary">
-            CoCalc can show which source Codex will use. To check remaining
-            ChatGPT Codex usage,{" "}
+            Choose the payment source for each chat in Codex settings.
+            Credentials connected here remain available without overriding an
+            explicit choice. To check remaining ChatGPT Codex usage,{" "}
             <a href={CODEX_USAGE_URL} target="_blank" rel="noreferrer">
               {CODEX_USAGE_LABEL}
             </a>
@@ -401,6 +410,7 @@ export function CodexConfigButton({
       reasoning: baseReasoning,
       serviceTier: "standard",
       sessionMode: defaultSessionMode,
+      paymentSource: "auto",
     };
     const saved = threadConfig ?? actions?.getCodexConfig?.(threadId);
     const liveSessionId = getLatestAcpThreadIdForThread({
@@ -452,6 +462,8 @@ export function CodexConfigButton({
     Form.useWatch("reasoning", form) ?? value?.reasoning;
   const currentSessionMode =
     Form.useWatch("sessionMode", form) ?? value?.sessionMode;
+  const selectedPaymentSource =
+    Form.useWatch("paymentSource", form) ?? value?.paymentSource ?? "auto";
   const selectedServiceTierValue: CodexServiceTier =
     Form.useWatch("serviceTier", form) ?? value?.serviceTier ?? "standard";
   const siteFundedPolicy =
@@ -496,6 +508,7 @@ export function CodexConfigButton({
     ? "Checking…"
     : getCodexPaymentSourceShortLabel(paymentSource?.source);
   const sourceTooltip = getCodexPaymentSourceTooltip(paymentSource);
+  const paymentSourceOptions = getCodexPaymentSourceOptions(paymentSource);
 
   useEffect(() => {
     if (!open || paymentSource?.source !== "subscription") {
@@ -653,6 +666,28 @@ export function CodexConfigButton({
     },
   };
 
+  const availablePaymentSources = paymentSourceOptions.filter(
+    ({ value, disabled }) => value !== "auto" && !disabled,
+  );
+  const showPaymentSourceSelector = !lite && availablePaymentSources.length > 1;
+  const paymentSourceMenu: MenuProps = {
+    selectedKeys: [selectedPaymentSource],
+    items: paymentSourceOptions.map((option) => ({
+      key: option.value,
+      label: option.label,
+      disabled: option.disabled,
+      title: option.description,
+    })),
+    onClick: ({ domEvent, key }) => {
+      domEvent.stopPropagation();
+      const next = key as CodexPaymentSourcePreference;
+      applyQuickConfigPatch({
+        paymentSource: next,
+        ...(next === selectedPaymentSource ? {} : { sessionId: undefined }),
+      });
+    },
+  };
+
   const pillSegmentStyle = (segment: PillSegment): React.CSSProperties => ({
     ...pillSegmentBaseStyle,
     background:
@@ -775,6 +810,23 @@ export function CodexConfigButton({
               >
                 Codex
               </button>
+              {showPaymentSourceSelector ? (
+                <>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    ·
+                  </Text>
+                  <Dropdown menu={paymentSourceMenu} trigger={["click"]}>
+                    <button
+                      type="button"
+                      title="Change Codex payment source"
+                      style={pillSegmentStyle("source")}
+                      {...pillSegmentHandlers("source")}
+                    >
+                      {sourceShortLabel}
+                    </button>
+                  </Dropdown>
+                </>
+              ) : null}
               <Text type="secondary" style={{ fontSize: 12 }}>
                 ·
               </Text>
@@ -1003,6 +1055,48 @@ export function CodexConfigButton({
           </div>
           <Form form={form} layout="vertical">
             <Space orientation="vertical" style={{ width: "100%" }} size={12}>
+              {!lite ? (
+                <div style={sectionStyle}>
+                  <SectionTitle>Payment source</SectionTitle>
+                  <div
+                    style={{
+                      color: COLORS.GRAY_M,
+                      fontSize: 12,
+                      margin: "3px 0 10px",
+                    }}
+                  >
+                    Choose how future turns in this thread are funded. This
+                    choice is independent of which credentials are connected.
+                  </div>
+                  <Form.Item name="paymentSource" style={{ marginBottom: 0 }}>
+                    <Select
+                      style={{ width: "100%" }}
+                      options={paymentSourceOptions}
+                      optionRender={(option) =>
+                        renderOptionWithDescription({
+                          title: `${option.data.label}`,
+                          description: option.data.description,
+                        })
+                      }
+                      onChange={(next: CodexPaymentSourcePreference) => {
+                        if (next !== selectedPaymentSource) {
+                          form.setFieldValue("sessionId", "");
+                        }
+                      }}
+                    />
+                  </Form.Item>
+                  {selectedPaymentSource === "subscription" &&
+                  paymentSource?.source === "none" ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      style={{ marginTop: 10 }}
+                      message="Reconnect your ChatGPT Plan"
+                      description="This thread is configured to use ChatGPT, but that credential is unavailable. Choose Included by CoCalc or reconnect ChatGPT under Payment & Credentials."
+                    />
+                  ) : null}
+                </div>
+              ) : null}
               <div style={sectionStyle}>
                 <SectionTitle>Model and session</SectionTitle>
                 <div
@@ -1305,6 +1399,7 @@ export function codexThreadConfigKey(
     envPath: config.envPath,
     model: config.model,
     notifyOnTurnFinish: config.notifyOnTurnFinish,
+    paymentSource: config.paymentSource,
     reasoning: config.reasoning,
     serviceTier: config.serviceTier,
     sessionId: config.sessionId,

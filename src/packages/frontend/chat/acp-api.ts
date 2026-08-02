@@ -897,6 +897,9 @@ function buildAcpConfig({
   if (config?.codexPathOverride) {
     opts.codexPathOverride = config.codexPathOverride;
   }
+  if (config?.paymentSource) {
+    opts.paymentSource = config.paymentSource;
+  }
   const sessionId = normalizeCodexSessionId(config?.sessionId);
   if (sessionId) {
     opts.sessionId = sessionId;

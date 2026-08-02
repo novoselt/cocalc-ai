@@ -1202,6 +1202,7 @@ export type SpawnCodexInProjectContainerOptions = {
   authRuntime?: CodexAuthRuntime;
   touchReason?: string | false;
   forceRefreshSiteKey?: boolean;
+  paymentSource?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
 };
 
 export type SpawnCodexInProjectContainerResult = {
@@ -1224,6 +1225,7 @@ export async function spawnCodexInProjectContainer({
   authRuntime: explicitAuthRuntime,
   touchReason = "codex",
   forceRefreshSiteKey = false,
+  paymentSource = "auto",
 }: SpawnCodexInProjectContainerOptions): Promise<SpawnCodexInProjectContainerResult> {
   const authRuntime =
     explicitAuthRuntime ??
@@ -1231,6 +1233,7 @@ export async function spawnCodexInProjectContainer({
       projectId,
       accountId,
       forceRefreshSiteKey,
+      preference: paymentSource,
     }));
   let codexArgs = args;
   const providerArgs = getManagedOpenAiProviderArgs(authRuntime);
@@ -1357,6 +1360,7 @@ type SpawnCodexAppServerInProjectRuntimeOptions = {
   forceRefreshSiteKey?: boolean;
   touchReason?: string | false;
   siteFundedTurn?: CodexSiteFundedTurnRequest;
+  paymentSource?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
 };
 
 type SpawnCodexAppServerInProjectRuntimeResult = {
@@ -1381,11 +1385,13 @@ async function spawnCodexAppServerInProjectRuntime({
   forceRefreshSiteKey = false,
   touchReason = "codex",
   siteFundedTurn: siteFundedTurnRequest,
+  paymentSource = "auto",
 }: SpawnCodexAppServerInProjectRuntimeOptions): Promise<SpawnCodexAppServerInProjectRuntimeResult> {
   const authRuntime = await resolveCodexAuthRuntime({
     projectId,
     accountId,
     forceRefreshSiteKey,
+    preference: paymentSource,
   });
   logResolvedCodexAuthRuntime(projectId, accountId, authRuntime);
   const handleAppServerRequest = createAppServerRequestHandler({
@@ -1617,6 +1623,7 @@ export function initCodexProjectRunner(): void {
       env: extraEnv,
       touchReason,
       siteFundedTurn,
+      paymentSource,
     }) {
       const spawned = await spawnCodexAppServerInProjectRuntime({
         projectId,
@@ -1625,6 +1632,7 @@ export function initCodexProjectRunner(): void {
         env: extraEnv,
         touchReason: touchReason ?? "codex",
         siteFundedTurn,
+        paymentSource,
       });
       return {
         proc: spawned.proc,

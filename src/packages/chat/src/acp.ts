@@ -6,6 +6,7 @@ import type {
   CodexSessionMode,
   CodexReasoningLevel,
   CodexServiceTier,
+  CodexPaymentSourcePreference,
 } from "@cocalc/util/ai/codex";
 
 // Configuration stored on the chat thread root for Codex/ACP turns.
@@ -22,6 +23,7 @@ export interface CodexThreadConfig {
   allowWrite?: boolean;
   codexPathOverride?: string;
   notifyOnTurnFinish?: boolean;
+  paymentSource?: CodexPaymentSourcePreference;
 }
 
 export function appendStreamMessage(

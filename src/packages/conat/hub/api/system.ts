@@ -710,6 +710,8 @@ export interface CodexPaymentSourceInfo {
   };
   sharedHomeMode: "disabled" | "fallback" | "prefer" | "always";
   project_id?: string;
+  preference?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
+  unavailableReason?: string;
 }
 
 export interface CodexUsageStatusInfo {
@@ -2580,6 +2582,7 @@ export interface System {
   getCodexPaymentSource: (opts: {
     account_id?: string;
     project_id?: string;
+    preference?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
   }) => Promise<CodexPaymentSourceInfo>;
 
   getSiteFundedCodexAdminStatus: (opts: {

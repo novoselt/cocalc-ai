@@ -6386,9 +6386,11 @@ export async function getOpenAiApiKeyStatus({
 export async function getCodexPaymentSource({
   account_id,
   project_id,
+  preference = "auto",
 }: {
   account_id?: string;
   project_id?: string;
+  preference?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
 }) {
   if (!account_id) {
     throw Error("must be signed in");
@@ -6509,7 +6511,22 @@ export async function getCodexPaymentSource({
     | "site-api-key"
     | "shared-home"
     | "none";
-  if (hasSubscription) {
+  const sourceAvailable = {
+    subscription: hasSubscription,
+    "project-api-key": hasProjectApiKey,
+    "account-api-key": hasAccountApiKey,
+    "site-api-key": hasSiteApiKey,
+    "shared-home": sharedHomeMode !== "disabled",
+  } as const;
+  let unavailableReason: string | undefined;
+  if (preference !== "auto") {
+    if (sourceAvailable[preference]) {
+      source = preference;
+    } else {
+      source = "none";
+      unavailableReason = `The selected Codex payment source (${preference}) is not configured.`;
+    }
+  } else if (hasSubscription) {
     source = "subscription";
   } else if (hasProjectApiKey) {
     source = "project-api-key";
@@ -6534,6 +6551,8 @@ export async function getCodexPaymentSource({
     siteFundedCodex,
     sharedHomeMode,
     project_id,
+    preference,
+    unavailableReason,
   };
 }
 

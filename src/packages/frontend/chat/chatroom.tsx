@@ -1628,6 +1628,10 @@ export function ChatPanel({
     refresh: refreshCodexPaymentSource,
   } = useCodexPaymentSource({
     projectId: project_id,
+    preference:
+      (isSelectedThreadAI
+        ? selectedThreadMetadata?.acp_config?.paymentSource
+        : newThreadSetup.codexConfig.paymentSource) ?? "auto",
     enabled:
       aiAgentPolicyAllowed &&
       !readOnly &&

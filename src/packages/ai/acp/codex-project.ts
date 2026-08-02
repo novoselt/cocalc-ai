@@ -3,6 +3,7 @@ import type {
   SiteFundedCodexPolicy,
   SiteFundedCodexReservation,
 } from "@cocalc/util/ai/site-funded-codex";
+import type { CodexPaymentSourcePreference } from "@cocalc/util/ai/codex";
 
 export type CodexSiteFundedTurnRequest = {
   fundedTurnId: string;
@@ -73,6 +74,7 @@ export type CodexProjectSpawner = {
     env?: NodeJS.ProcessEnv;
     touchReason?: string | false;
     siteFundedTurn?: CodexSiteFundedTurnRequest;
+    paymentSource?: CodexPaymentSourcePreference;
   }) => Promise<{
     proc: ChildProcess;
     cmd: string;

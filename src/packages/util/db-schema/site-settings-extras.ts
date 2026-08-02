@@ -905,6 +905,7 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization", "Security"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 10,
   },
   site_funded_codex_enabled: {
     name: "Enable Site-Funded Codex",
@@ -915,6 +916,7 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization", "Security"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 20,
   },
   site_funded_codex_model: {
     name: "Funded Codex Model",
@@ -925,6 +927,7 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 30,
   },
   site_funded_codex_reasoning: {
     name: "Funded Codex Reasoning",
@@ -935,6 +938,7 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 40,
   },
   site_funded_codex_service_tier: {
     name: "Funded Codex Speed",
@@ -945,6 +949,7 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 50,
   },
   site_funded_codex_global_pool_weekly_usd: {
     name: "Combined Weekly Budget (USD)",
@@ -955,6 +960,7 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization", "Security"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 60,
   },
   site_funded_codex_free_pool_weekly_usd: {
     name: "Free Sub-Pool Weekly Limit (USD)",
@@ -965,6 +971,7 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization", "Security"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 70,
   },
   site_funded_codex_paid_pool_weekly_usd: {
     name: "Paid Sub-Pool Weekly Limit (USD)",
@@ -975,6 +982,7 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization", "Security"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 80,
   },
   site_funded_codex_max_turn_usd: {
     name: "Emergency Maximum Funded Turn Cost (USD)",
@@ -985,6 +993,7 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization", "Security"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 200,
   },
   site_funded_codex_max_turn_seconds: {
     name: "Emergency Maximum Turn Duration (seconds)",
@@ -996,6 +1005,7 @@ export const EXTRAS: SettingsExtras = {
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
     advanced: true,
+    order: 210,
   },
   site_funded_codex_max_input_tokens_per_request: {
     name: "Funded Codex Context Window (tokens)",
@@ -1007,6 +1017,7 @@ export const EXTRAS: SettingsExtras = {
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
     advanced: true,
+    order: 220,
   },
   site_funded_codex_max_output_tokens_per_request: {
     name: "Emergency Maximum Output Tokens per Request",
@@ -1018,6 +1029,7 @@ export const EXTRAS: SettingsExtras = {
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
     advanced: true,
+    order: 230,
   },
   site_funded_codex_max_requests_per_turn: {
     name: "Emergency Maximum Provider Requests per Turn",
@@ -1029,6 +1041,7 @@ export const EXTRAS: SettingsExtras = {
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
     advanced: true,
+    order: 240,
   },
   site_funded_codex_global_concurrency: {
     name: "Global Funded Turn Concurrency",
@@ -1039,24 +1052,27 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI", "Commercialization", "Security"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 90,
   },
   site_funded_codex_openai_admin_key: {
-    name: "OpenAI Admin Key for Reconciliation",
-    desc: "Optional OpenAI organization admin key used only on the seed to compare the local funded ledger with the Costs API. This is distinct from the provider API key.",
+    name: "OpenAI Organization Admin Key",
+    desc: "Optional organization-level OpenAI admin key used only to compare CoCalc's funded-usage ledger with OpenAI's Costs API. It is not used to run Codex turns and is distinct from the OpenAI API key above.",
     default: "",
     password: true,
     tags: ["AI", "OpenAI", "Commercialization", "Security"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 110,
   },
   site_funded_codex_openai_project_id: {
-    name: "OpenAI Project ID for Reconciliation",
-    desc: "Dedicated OpenAI project ID used by site-funded Codex. Reconciliation remains disabled until both this and the OpenAI admin key are set.",
+    name: "OpenAI Platform Project ID (proj_...)",
+    desc: "Optional OpenAI Platform project that owns the API key used for included Codex turns. Set this together with the organization admin key to compare OpenAI's reported project costs with CoCalc's ledger.",
     default: "",
     to_val: to_trimmed_str,
     tags: ["AI", "OpenAI", "Commercialization"],
     group: "AI & Agents",
     subgroup: "Site-Funded Codex",
+    order: 100,
   },
   google_vertexai_key: {
     name: "Google Generative AI API Key",

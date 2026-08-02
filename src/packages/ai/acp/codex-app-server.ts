@@ -1704,6 +1704,7 @@ export class CodexAppServerAgent implements AcpAgent {
         idempotencyKey: randomUUID(),
         path: request.chat?.path,
       },
+      paymentSource: config?.paymentSource,
     });
     const effectiveConfig: CodexSessionConfig | undefined =
       spawned.siteFundedTurn
@@ -2809,12 +2810,14 @@ export class CodexAppServerAgent implements AcpAgent {
     cwd,
     env,
     siteFundedTurn,
+    paymentSource,
   }: {
     projectId: string;
     accountId?: string;
     cwd: string;
     env?: NodeJS.ProcessEnv;
     siteFundedTurn?: CodexSiteFundedTurnRequest;
+    paymentSource?: CodexSessionConfig["paymentSource"];
   }): Promise<SpawnedCodexAppServer> {
     const projectSpawner = getCodexProjectSpawner();
     if (projectSpawner && projectId && projectSpawner.spawnCodexAppServer) {
@@ -2824,6 +2827,7 @@ export class CodexAppServerAgent implements AcpAgent {
         cwd,
         env,
         siteFundedTurn,
+        paymentSource,
       });
       logger.debug("codex app-server: spawning via project container", {
         cmd: spawned.cmd,
