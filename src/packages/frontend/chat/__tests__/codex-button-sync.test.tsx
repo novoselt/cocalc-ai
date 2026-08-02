@@ -124,6 +124,31 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
 
 jest.mock("../use-codex-payment-source", () => ({
   getCodexPaymentSourceShortLabel: () => "ChatGPT",
+  getCodexPaymentSourceOptions: (source: any) => [
+    {
+      value: "auto",
+      label: "Automatic",
+      description: "Choose automatically",
+    },
+    ...(source?.hasSubscription
+      ? [
+          {
+            value: "subscription",
+            label: "ChatGPT Plan",
+            description: "Use ChatGPT",
+          },
+        ]
+      : []),
+    ...(source?.hasSiteApiKey
+      ? [
+          {
+            value: "site-api-key",
+            label: "Included by CoCalc",
+            description: "Use included allowance",
+          },
+        ]
+      : []),
+  ],
   getCodexPaymentSourceTooltip: () => "ChatGPT",
 }));
 
@@ -256,6 +281,47 @@ describe("CodexConfigButton", () => {
         }),
       );
     });
+  });
+
+  it("locks the payment source after a Codex session starts", async () => {
+    const actions = {
+      getCodexConfig: jest.fn(() => undefined),
+      setCodexConfig: jest.fn(),
+    } as any;
+
+    render(
+      <CodexConfigButton
+        threadKey="thread-1"
+        chatPath="foo.chat"
+        actions={actions}
+        threadConfig={{
+          model: "gpt-5.4",
+          paymentSource: "subscription",
+          sessionId: "thr-established",
+        }}
+        paymentSource={{
+          source: "subscription",
+          hasSubscription: true,
+          hasProjectApiKey: false,
+          hasAccountApiKey: false,
+          hasSiteApiKey: true,
+          siteAiUsageLimitPositive: true,
+          siteFundedCodex: { enabled: true },
+          sharedHomeMode: "disabled",
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-5.4")).toBeTruthy();
+    });
+    expect(screen.queryByTitle("Change Codex payment source")).toBeNull();
+
+    fireEvent.click(screen.getByText("Codex"));
+    expect(document.body.textContent).toContain(
+      "This source is fixed for the lifetime of the Codex session",
+    );
+    expect(actions.setCodexConfig).not.toHaveBeenCalled();
   });
 
   it("uses a stable thread config key independent of object identity", () => {

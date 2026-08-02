@@ -1519,7 +1519,6 @@ export function ChatRoomThreadPanel({
                         codexConfig: {
                           ...newThreadSetup.codexConfig,
                           paymentSource: value,
-                          sessionId: undefined,
                         },
                       })
                     }

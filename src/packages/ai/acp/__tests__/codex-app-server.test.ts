@@ -1526,12 +1526,18 @@ describe("CodexAppServerAgent", () => {
             fake.sendResponse(message.id, { ok: true });
             break;
           case "thread/resume":
-            fake.stdout.write(
-              `${JSON.stringify({
-                id: message.id,
-                error: { message: "thread not found" },
-              })}\n`,
-            );
+            if (spawn === 1) {
+              fake.stdout.write(
+                `${JSON.stringify({
+                  id: message.id,
+                  error: { message: "thread not found" },
+                })}\n`,
+              );
+            } else {
+              fake.sendResponse(message.id, {
+                thread: { id: "thr-compact-1" },
+              });
+            }
             break;
           case "thread/start":
             fake.sendResponse(message.id, {
@@ -2532,6 +2538,64 @@ describe("CodexAppServerAgent", () => {
         }),
       }),
     ]);
+  });
+
+  it("never replaces an established session when resume fails", async () => {
+    const appServerCalls: string[] = [];
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      appServerCalls.push(message.method);
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/resume":
+          fake.stdout.write(
+            `${JSON.stringify({
+              id: message.id,
+              error: { message: "thread not found" },
+            })}\n`,
+          );
+          break;
+        default:
+          if (typeof message.id === "number") {
+            fake.sendResponse(message.id, {});
+          }
+      }
+    });
+
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+
+    const agent = new CodexAppServerAgent();
+    const streamPayloads: any[] = [];
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      session_id: "chat-thread-established",
+      prompt: "continue",
+      stream: async (payload) => {
+        if (payload) streamPayloads.push(payload);
+      },
+      config: {
+        workingDirectory: "/tmp/project",
+        sessionId: "thr-established",
+      } as any,
+    });
+
+    expect(appServerCalls).toContain("thread/resume");
+    expect(appServerCalls).not.toContain("thread/start");
+    expect(
+      streamPayloads.find((payload) => payload.type === "error")?.error,
+    ).toContain("did not start a replacement session");
   });
 
   it("turns completed app-server file changes into diff activity events", async () => {

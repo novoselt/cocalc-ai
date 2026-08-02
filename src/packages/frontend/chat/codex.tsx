@@ -464,6 +464,10 @@ export function CodexConfigButton({
     Form.useWatch("sessionMode", form) ?? value?.sessionMode;
   const selectedPaymentSource =
     Form.useWatch("paymentSource", form) ?? value?.paymentSource ?? "auto";
+  const activeSessionId = normalizeCodexSessionId(
+    Form.useWatch("sessionId", form) ?? value?.sessionId,
+  );
+  const paymentSourceLocked = activeSessionId != null;
   const selectedServiceTierValue: CodexServiceTier =
     Form.useWatch("serviceTier", form) ?? value?.serviceTier ?? "standard";
   const siteFundedPolicy =
@@ -680,11 +684,9 @@ export function CodexConfigButton({
     })),
     onClick: ({ domEvent, key }) => {
       domEvent.stopPropagation();
+      if (paymentSourceLocked) return;
       const next = key as CodexPaymentSourcePreference;
-      applyQuickConfigPatch({
-        paymentSource: next,
-        ...(next === selectedPaymentSource ? {} : { sessionId: undefined }),
-      });
+      applyQuickConfigPatch({ paymentSource: next });
     },
   };
 
@@ -815,16 +817,32 @@ export function CodexConfigButton({
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     ·
                   </Text>
-                  <Dropdown menu={paymentSourceMenu} trigger={["click"]}>
-                    <button
-                      type="button"
-                      title="Change Codex payment source"
-                      style={pillSegmentStyle("source")}
-                      {...pillSegmentHandlers("source")}
-                    >
-                      {sourceShortLabel}
-                    </button>
-                  </Dropdown>
+                  {paymentSourceLocked ? (
+                    <Tooltip title="The payment source is fixed after a Codex session starts, so its model context is never discarded. Start a new chat to choose another source.">
+                      <button
+                        type="button"
+                        aria-disabled="true"
+                        style={{
+                          ...pillSegmentStyle("source"),
+                          cursor: "default",
+                        }}
+                        {...pillSegmentHandlers("source")}
+                      >
+                        {sourceShortLabel}
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <Dropdown menu={paymentSourceMenu} trigger={["click"]}>
+                      <button
+                        type="button"
+                        title="Change Codex payment source"
+                        style={pillSegmentStyle("source")}
+                        {...pillSegmentHandlers("source")}
+                      >
+                        {sourceShortLabel}
+                      </button>
+                    </Dropdown>
+                  )}
                 </>
               ) : null}
               <Text type="secondary" style={{ fontSize: 12 }}>
@@ -1065,12 +1083,14 @@ export function CodexConfigButton({
                       margin: "3px 0 10px",
                     }}
                   >
-                    Choose how future turns in this thread are funded. This
-                    choice is independent of which credentials are connected.
+                    {paymentSourceLocked
+                      ? "This source is fixed for the lifetime of the Codex session so its accumulated context is never discarded. Start a new chat to choose another source."
+                      : "Choose how future turns in this thread are funded. This choice is independent of which credentials are connected."}
                   </div>
                   <Form.Item name="paymentSource" style={{ marginBottom: 0 }}>
                     <Select
                       style={{ width: "100%" }}
+                      disabled={paymentSourceLocked}
                       options={paymentSourceOptions}
                       optionRender={(option) =>
                         renderOptionWithDescription({
@@ -1078,11 +1098,6 @@ export function CodexConfigButton({
                           description: option.data.description,
                         })
                       }
-                      onChange={(next: CodexPaymentSourcePreference) => {
-                        if (next !== selectedPaymentSource) {
-                          form.setFieldValue("sessionId", "");
-                        }
-                      }}
                     />
                   </Form.Item>
                   {selectedPaymentSource === "subscription" &&
@@ -1092,7 +1107,11 @@ export function CodexConfigButton({
                       showIcon
                       style={{ marginTop: 10 }}
                       message="Reconnect your ChatGPT Plan"
-                      description="This thread is configured to use ChatGPT, but that credential is unavailable. Choose Included by CoCalc or reconnect ChatGPT under Payment & Credentials."
+                      description={
+                        paymentSourceLocked
+                          ? "This session is pinned to ChatGPT. Reconnect it under Payment & Credentials, or start a new Codex chat and choose Included by CoCalc."
+                          : "This thread is configured to use ChatGPT, but that credential is unavailable. Choose Included by CoCalc or reconnect ChatGPT under Payment & Credentials."
+                      }
                     />
                   ) : null}
                 </div>

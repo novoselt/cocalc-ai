@@ -1686,6 +1686,11 @@ export class CodexAppServerAgent implements AcpAgent {
     request: AcpEvaluateRequest,
   ): Promise<"completed" | "interrupted"> {
     const { prompt, stream, session_id, config } = request;
+    const requestedSessionKey = normalizeCodexSessionId(session_id);
+    const persistedSessionId = normalizeCodexSessionId(config?.sessionId);
+    const hasEstablishedSession =
+      persistedSessionId != null ||
+      (requestedSessionKey != null && this.sessions.has(requestedSessionKey));
     let session = this.resolveSession(session_id, config);
     const runtimeEnv = Object.fromEntries(
       Object.entries({
@@ -1882,10 +1887,10 @@ export class CodexAppServerAgent implements AcpAgent {
       await stream({ type: "status", state: "queued" });
 
       let threadResult: any;
-      const requestedSessionKey =
+      const requestedThreadKey =
         normalizeCodexSessionId(effectiveConfig?.sessionId) ??
         normalizeCodexSessionId(session_id);
-      const resumeId = requestedSessionKey ? session.sessionId : undefined;
+      const resumeId = requestedThreadKey ? session.sessionId : undefined;
       const model = this.effectiveModel(effectiveConfig);
       const serviceTier = this.resolveAppServerServiceTier(
         effectiveConfig,
@@ -1933,15 +1938,29 @@ export class CodexAppServerAgent implements AcpAgent {
             ...threadParams,
           });
         } catch (err) {
-          logger.info(
-            "codex app-server: resume failed; starting fresh thread",
-            {
-              threadId: resumeId,
-              cwd,
-              err: `${err}`,
-            },
-          );
-          threadResult = await client.request("thread/start", threadParams);
+          if (!hasEstablishedSession) {
+            logger.info(
+              "codex app-server: initial thread alias was not a Codex session; starting the first session",
+              {
+                threadId: resumeId,
+                cwd,
+                err: `${err}`,
+              },
+            );
+            threadResult = await client.request("thread/start", threadParams);
+          } else {
+            logger.warn(
+              "codex app-server: refusing to replace failed session",
+              {
+                threadId: resumeId,
+                cwd,
+                err: `${err}`,
+              },
+            );
+            throw new Error(
+              `Unable to resume Codex session ${resumeId}. CoCalc did not start a replacement session because that would discard its accumulated context. ${err}`,
+            );
+          }
         }
       } else {
         threadResult = await client.request("thread/start", threadParams);
@@ -1954,8 +1973,8 @@ export class CodexAppServerAgent implements AcpAgent {
       setRunningKey(actualThreadId);
       const sessionEntry = { sessionId: actualThreadId, cwd };
       this.sessions.set(actualThreadId, sessionEntry);
-      if (requestedSessionKey && requestedSessionKey !== actualThreadId) {
-        this.sessions.set(requestedSessionKey, sessionEntry);
+      if (requestedThreadKey && requestedThreadKey !== actualThreadId) {
+        this.sessions.set(requestedThreadKey, sessionEntry);
       }
 
       await stream({
