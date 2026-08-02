@@ -312,9 +312,23 @@ export async function claimComputeWork(opts: {
        WHERE state='in_progress' AND locked_at < NOW() - interval '10 minutes'`,
     );
     const { rows } = await client.query<ComputeWorkRow>(
-      `SELECT * FROM compute_resource_work
-       WHERE state='queued' AND (not_before IS NULL OR not_before <= NOW())
-       ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED`,
+      `SELECT work.* FROM compute_resource_work AS work
+       WHERE work.state='queued'
+         AND (work.not_before IS NULL OR work.not_before <= NOW())
+         AND NOT EXISTS (
+           SELECT 1 FROM compute_resource_work AS active
+           WHERE active.resource_id=work.resource_id
+             AND active.state='in_progress'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM compute_resource_work AS earlier
+           WHERE earlier.resource_id=work.resource_id
+             AND earlier.state='queued'
+             AND (earlier.not_before IS NULL OR earlier.not_before <= NOW())
+             AND (earlier.created_at, earlier.id) < (work.created_at, work.id)
+         )
+       ORDER BY work.created_at, work.id
+       LIMIT $1 FOR UPDATE OF work SKIP LOCKED`,
       [opts.limit],
     );
     if (rows.length) {

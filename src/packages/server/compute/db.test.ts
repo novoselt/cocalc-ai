@@ -9,6 +9,7 @@ import {
   claimComputeWork,
   enqueueComputeWork,
   enqueueExpiredComputeVms,
+  finishComputeWork,
   insertComputeVm,
   listOwnedComputeVms,
 } from "./db";
@@ -101,6 +102,52 @@ describe("compute VM durable state", () => {
       resource_id: vm.id,
       action: "provision",
       state: "queued",
+    });
+  });
+
+  it("serializes different actions for one VM across workers", async () => {
+    const firstVm = await insertComputeVm(vmInput({ name: "first-vm" }));
+    const secondVm = await insertComputeVm(vmInput({ name: "second-vm" }));
+    await enqueueComputeWork({
+      resource_id: firstVm.id,
+      action: "reconcile",
+      idempotency_key: "first-reconcile",
+    });
+    await enqueueComputeWork({
+      resource_id: firstVm.id,
+      action: "stop",
+      idempotency_key: "first-stop",
+    });
+    await enqueueComputeWork({
+      resource_id: secondVm.id,
+      action: "provision",
+      idempotency_key: "second-provision",
+    });
+
+    const firstClaim = await claimComputeWork({
+      worker_id: "worker-a",
+      limit: 3,
+    });
+    expect(firstClaim).toHaveLength(2);
+    expect(new Set(firstClaim.map(({ resource_id }) => resource_id))).toEqual(
+      new Set([firstVm.id, secondVm.id]),
+    );
+    expect(await claimComputeWork({ worker_id: "worker-b", limit: 3 })).toEqual(
+      [],
+    );
+
+    const claimedFirstVm = firstClaim.find(
+      ({ resource_id }) => resource_id === firstVm.id,
+    )!;
+    await finishComputeWork({ id: claimedFirstVm.id, state: "done" });
+    const nextClaim = await claimComputeWork({
+      worker_id: "worker-b",
+      limit: 3,
+    });
+    expect(nextClaim).toHaveLength(1);
+    expect(nextClaim[0]).toMatchObject({
+      resource_id: firstVm.id,
+      action: "stop",
     });
   });
 
