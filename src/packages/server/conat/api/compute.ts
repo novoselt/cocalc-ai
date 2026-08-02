@@ -23,6 +23,7 @@ import {
 import { getComputeMachine } from "@cocalc/server/compute/catalog";
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import { DEFAULT_SPOT_RECOVERY_POLICY } from "@cocalc/server/cloud/spot-restore";
+import { computeLeaseAuthorization } from "@cocalc/server/compute/pricing";
 
 const MAX_STAGING_TTL_MINUTES = 24 * 60;
 const MIN_BOOT_DISK_GB = 10;
@@ -157,18 +158,19 @@ export async function createVm(opts: CreateComputeVmRequest) {
       `boot_disk_gb must be an integer from ${MIN_BOOT_DISK_GB} to ${MAX_BOOT_DISK_GB}`,
     );
   }
-  const hourly =
-    pricingModel === "spot"
-      ? machine.spot_hourly_usd
-      : machine.on_demand_hourly_usd;
-  const fallbackHours =
-    pricingModel === "spot" && opts.allow_on_demand_fallback ? 24 : 0;
-  const worstCase =
-    hourly * (ttlMinutes / 60) + fallbackHours * machine.on_demand_hourly_usd;
+  const { authorizedFallbackHours, maximumCostUsd } = computeLeaseAuthorization(
+    {
+      pricingModel,
+      allowOnDemandFallback: opts.allow_on_demand_fallback === true,
+      ttlMinutes,
+      spotHourlyUsd: machine.spot_hourly_usd,
+      onDemandHourlyUsd: machine.on_demand_hourly_usd,
+    },
+  );
   const authorizedCost = Number(opts.authorized_cost);
-  if (!Number.isFinite(authorizedCost) || authorizedCost < worstCase) {
+  if (!Number.isFinite(authorizedCost) || authorizedCost < maximumCostUsd) {
     throw new Error(
-      `authorized_cost must be at least ${worstCase.toFixed(4)} USD for this staging lease`,
+      `authorized_cost must be at least ${maximumCostUsd.toFixed(4)} USD for this staging lease`,
     );
   }
   const id = randomUUID();
@@ -197,7 +199,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
     ssh_public_key: normalizeSshPublicKey(opts.ssh_public_key),
     expires_at: new Date(Date.now() + ttlMinutes * 60_000),
     allow_on_demand_fallback: opts.allow_on_demand_fallback === true,
-    authorized_fallback_hours: fallbackHours,
+    authorized_fallback_hours: authorizedFallbackHours,
     spot_hourly_price: machine.spot_hourly_usd.toFixed(6),
     on_demand_hourly_price: machine.on_demand_hourly_usd.toFixed(6),
     authorized_cost: authorizedCost.toFixed(6),
