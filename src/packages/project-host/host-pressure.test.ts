@@ -156,6 +156,12 @@ describe("host pressure controller helpers", () => {
     expect(
       classifyHostPressure(metrics, now, { ioPressureMode: "enforce" }),
     ).toMatchObject({ zone: "observe" });
+    expect(
+      classifyHostPressure(metrics, now, {
+        ioPressureMode: "enforce",
+        ioPressureSinceMs: now - 11 * 60_000,
+      }),
+    ).toMatchObject({ zone: "emergency" });
     metrics.storage_admission.state_since = new Date(
       now - 3 * 60_000,
     ).toISOString();
@@ -210,6 +216,87 @@ describe("host pressure controller helpers", () => {
         ],
       ]),
       getStopState: () => undefined,
+    });
+
+    expect(candidates.map(({ project_id }) => project_id)).toEqual([
+      "proj-old",
+    ]);
+  });
+
+  it("preserves project protections during an I/O emergency", () => {
+    const now = 10 * 60 * 60_000;
+    const policies = new Map([
+      [
+        "proj-startup",
+        {
+          project_id: "proj-startup",
+          owner_account_id: "owner-1",
+          shared_compute_priority: 0,
+          authoritative_last_edited_ms: now - 8 * 60 * 60_000,
+          policy_updated_ms: now,
+          stop_override: "default" as const,
+        },
+      ],
+      [
+        "proj-protected",
+        {
+          project_id: "proj-protected",
+          owner_account_id: "owner-2",
+          shared_compute_priority: 0,
+          authoritative_last_edited_ms: now - 8 * 60 * 60_000,
+          policy_updated_ms: now,
+          stop_override: "protect" as const,
+        },
+      ],
+      [
+        "proj-cooldown",
+        {
+          project_id: "proj-cooldown",
+          owner_account_id: "owner-3",
+          shared_compute_priority: 0,
+          authoritative_last_edited_ms: now - 8 * 60 * 60_000,
+          policy_updated_ms: now,
+          stop_override: "default" as const,
+        },
+      ],
+      [
+        "proj-old",
+        {
+          project_id: "proj-old",
+          owner_account_id: "owner-4",
+          shared_compute_priority: 0,
+          authoritative_last_edited_ms: now - 8 * 60 * 60_000,
+          policy_updated_ms: now,
+          stop_override: "default" as const,
+        },
+      ],
+    ]);
+    const candidates = buildStopCandidates({
+      zone: "emergency",
+      now,
+      minimumIdleMs: 60 * 60_000,
+      requireActivityPolicy: true,
+      preserveEmergencyProtections: true,
+      projects: [
+        { project_id: "proj-starting", state: "starting" },
+        { project_id: "proj-startup", state: "running" },
+        { project_id: "proj-protected", state: "running" },
+        { project_id: "proj-cooldown", state: "running" },
+        { project_id: "proj-old", state: "running" },
+      ],
+      policies,
+      getStopState: (project_id) => {
+        if (project_id === "proj-startup") {
+          return { project_id, last_started_ms: now - 60_000 };
+        }
+        if (project_id === "proj-cooldown") {
+          return {
+            project_id,
+            pressure_cooldown_until_ms: now + 60_000,
+          };
+        }
+        return undefined;
+      },
     });
 
     expect(candidates.map(({ project_id }) => project_id)).toEqual([

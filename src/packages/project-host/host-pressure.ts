@@ -540,6 +540,7 @@ function hasIoPressureReason(reason: string | undefined): boolean {
 function storagePressureFindings(
   metrics: HostCurrentMetrics,
   now: number,
+  ioPressureSinceMs?: number,
 ): {
   observeReasons: string[];
   pressureReasons: string[];
@@ -553,8 +554,12 @@ function storagePressureFindings(
     return { observeReasons, pressureReasons, emergencyReasons };
   }
   const stateSinceMs = Date.parse(storage.state_since);
-  const dwellMs = Number.isFinite(stateSinceMs)
-    ? Math.max(0, now - stateSinceMs)
+  const episodeSinceMs =
+    ioPressureSinceMs != null && Number.isFinite(ioPressureSinceMs)
+      ? ioPressureSinceMs
+      : stateSinceMs;
+  const dwellMs = Number.isFinite(episodeSinceMs)
+    ? Math.max(0, now - episodeSinceMs)
     : 0;
   const effectiveFull = parseNonNegativeNumber(storage.effective_io_full_avg10);
   const detail = `state=${storage.pressure_state},dwell_ms=${Math.floor(
@@ -656,6 +661,7 @@ export function classifyHostPressure(
   opts: {
     resourcePressureMode?: ResourcePressureMode;
     ioPressureMode?: ResourcePressureMode;
+    ioPressureSinceMs?: number;
   } = {},
 ): HostPressureState | undefined {
   if (!metrics) return undefined;
@@ -711,7 +717,11 @@ export function classifyHostPressure(
     observeReasons.push(...resourceFindings.observeReasons);
   }
   if (ioMode !== "metrics") {
-    const storageFindings = storagePressureFindings(metrics, now);
+    const storageFindings = storagePressureFindings(
+      metrics,
+      now,
+      opts.ioPressureSinceMs,
+    );
     emergencyReasons.push(...storageFindings.emergencyReasons);
     pressureReasons.push(...storageFindings.pressureReasons);
     observeReasons.push(...storageFindings.observeReasons);
@@ -754,6 +764,7 @@ export function buildStopCandidates({
   directResourceOffenders,
   minimumIdleMs,
   requireActivityPolicy = false,
+  preserveEmergencyProtections = false,
 }: {
   projects: ProjectRow[];
   policies: Map<string, ProjectStopPolicyRow>;
@@ -763,11 +774,15 @@ export function buildStopCandidates({
   directResourceOffenders?: Map<string, DirectResourceOffender>;
   minimumIdleMs?: number;
   requireActivityPolicy?: boolean;
+  preserveEmergencyProtections?: boolean;
 }): StopCandidate[] {
   const candidates: StopCandidate[] = [];
   for (const row of projects) {
     const state = `${row.state ?? ""}`.trim();
-    const canConsiderStarting = zone === "emergency" && state === "starting";
+    const emergencyBypassesProtections =
+      zone === "emergency" && !preserveEmergencyProtections;
+    const canConsiderStarting =
+      emergencyBypassesProtections && state === "starting";
     if (state !== "running" && !canConsiderStarting) {
       continue;
     }
@@ -790,17 +805,29 @@ export function buildStopCandidates({
       STARTUP_PROTECTION_MS > 0 &&
       stopState?.last_started_ms != null &&
       now - stopState.last_started_ms < STARTUP_PROTECTION_MS;
-    if (startupProtected && zone !== "emergency" && !directResourceOffender) {
+    if (
+      startupProtected &&
+      !emergencyBypassesProtections &&
+      !directResourceOffender
+    ) {
       continue;
     }
     const protectOverride = policy?.stop_override === "protect";
-    if (protectOverride && zone !== "emergency" && !directResourceOffender) {
+    if (
+      protectOverride &&
+      !emergencyBypassesProtections &&
+      !directResourceOffender
+    ) {
       continue;
     }
     const cooldownActive =
       stopState?.pressure_cooldown_until_ms != null &&
       stopState.pressure_cooldown_until_ms > now;
-    if (cooldownActive && zone !== "emergency" && !directResourceOffender) {
+    if (
+      cooldownActive &&
+      !emergencyBypassesProtections &&
+      !directResourceOffender
+    ) {
       continue;
     }
     const runQuota = parseRunQuota(row.run_quota);
@@ -914,6 +941,7 @@ export function startHostPressureController({
   let timer: NodeJS.Timeout | undefined;
   let running = false;
   let pressureSinceMs: number | undefined;
+  let ioPressureSinceMs: number | undefined;
   let settleUntilMs = 0;
   let lastActionAtMs: number | undefined;
   let lastActionProjectId: string | undefined;
@@ -973,9 +1001,23 @@ export function startHostPressureController({
     const metrics = (await refreshMetrics()) ?? getCurrentMetrics();
     const resourcePressureMode = RESOURCE_PRESSURE_MODE;
     const ioPressureMode = IO_PRESSURE_MODE;
+    const storageAdmission = metrics?.storage_admission;
+    if (
+      !storageAdmission ||
+      storageAdmission.mode === "disabled" ||
+      storageAdmission.pressure_state === "normal"
+    ) {
+      ioPressureSinceMs = undefined;
+    } else if (ioPressureSinceMs == null) {
+      const stateSinceMs = Date.parse(storageAdmission.state_since);
+      ioPressureSinceMs = Number.isFinite(stateSinceMs)
+        ? Math.min(now, stateSinceMs)
+        : now;
+    }
     const classified = classifyHostPressure(metrics, now, {
       resourcePressureMode,
       ioPressureMode,
+      ioPressureSinceMs,
     });
     if (!classified) {
       clearLastAction();
@@ -1052,6 +1094,7 @@ export function startHostPressureController({
                 ? IO_EMERGENCY_MIN_IDLE_MS
                 : IO_PRESSURE_MIN_IDLE_MS,
             requireActivityPolicy: true,
+            preserveEmergencyProtections: true,
           }
         : {}),
     });
