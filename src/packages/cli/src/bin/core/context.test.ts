@@ -134,6 +134,31 @@ test("createHubApiForContext exposes the adminCrashes hub group", async () => {
   ]);
 });
 
+test("createHubApiForContext exposes the compute hub group", async () => {
+  const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
+  const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
+    calls.push({ name, args, timeout });
+    return [] as T;
+  });
+
+  const result = await hub.compute.listVms({
+    project_id: "11111111-1111-4111-8111-111111111111",
+  });
+
+  assert.deepEqual(result, []);
+  assert.deepEqual(calls, [
+    {
+      name: "compute.listVms",
+      args: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+        },
+      ],
+      timeout: undefined,
+    },
+  ]);
+});
+
 test("createHubApiForContext forwards explicit per-call timeout", async () => {
   const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
   const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
