@@ -625,11 +625,12 @@ mechanism:
 - `site_funded_codex_global_concurrency`
 - reconciliation warning thresholds.
 
-Membership `ai_limits` should continue defining account 5-hour and 7-day
-allowances, but migrate their authoritative representation to dollars/microusd
-rather than legacy rounded units. Add an explicit feature entitlement for
-site-funded Codex eligibility so a zero budget is distinguishable from a
-disabled feature.
+Membership `ai_limits` define the authoritative account 5-hour and 7-day
+allowances, including account entitlement overrides. The current representation
+uses one-cent units (100 units = US$1), converted exactly to microusd at funded
+admission and status boundaries. Do not add separate free/member fallback
+allowances to site settings. An explicit feature entitlement could be added
+later if the product must distinguish a zero budget from a disabled feature.
 
 Dangerous policy changes and pool-limit increases require the existing fresh
 admin authentication used for global site settings.

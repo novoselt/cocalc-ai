@@ -26,8 +26,7 @@ export function isCodexPaymentSourceNeedsUserConfiguration(
     paymentSource?.source === "none" ||
     (paymentSource?.source === "site-api-key" &&
       (paymentSource.siteFundedCodex?.enabled === false ||
-        (paymentSource.siteFundedCodex == null &&
-          paymentSource.siteAiUsageLimitPositive === false)))
+        paymentSource.siteAiUsageLimitPositive === false))
   );
 }
 

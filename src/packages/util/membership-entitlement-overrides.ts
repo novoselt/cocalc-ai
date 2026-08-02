@@ -33,14 +33,14 @@ export const MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS = {
       label: "AI units, 5-hour window",
       unit: "units",
       adminDescription:
-        "Rolling 5-hour AI usage limit. One unit is the platform's normalized AI accounting unit.",
+        "Rolling 5-hour included AI spending limit. 100 units equals US$1 of provider spend.",
       userDescription: "AI usage limit over a rolling 5-hour window.",
     },
     units_7d: {
       label: "AI units, 7-day window",
       unit: "units",
       adminDescription:
-        "Rolling 7-day AI usage limit. One unit is the platform's normalized AI accounting unit.",
+        "Rolling 7-day included AI spending limit. 100 units equals US$1 of provider spend.",
       userDescription: "AI usage limit over a rolling 7-day window.",
     },
   },

@@ -94,6 +94,7 @@ import {
 import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { getAIUsageLimits } from "@cocalc/server/ai/usage-status";
+import { aiUsageUnitsToMicrousd } from "@cocalc/server/ai/usage-units";
 import { getSiteFundedCodexConfiguration } from "@cocalc/server/ai/site-funded-codex-policy";
 import {
   getSiteFundedCodexAccountStatus,
@@ -6423,28 +6424,12 @@ export async function getCodexPaymentSource({
       if (!configuration.enabled) {
         siteFundedCodex = { enabled: false };
       } else {
-        const membership = await resolveMembershipForAccount(account_id);
-        const paid = membership.source !== "free";
-        const legacyLimit5hMicrousd = Math.max(
-          0,
-          Math.floor((siteAiUsageLimits?.units_5h ?? 0) * 10_000),
+        const limit5hMicrousd = aiUsageUnitsToMicrousd(
+          siteAiUsageLimits?.units_5h,
         );
-        const legacyLimit7dMicrousd = Math.max(
-          0,
-          Math.floor((siteAiUsageLimits?.units_7d ?? 0) * 10_000),
+        const limit7dMicrousd = aiUsageUnitsToMicrousd(
+          siteAiUsageLimits?.units_7d,
         );
-        const limit5hMicrousd =
-          legacyLimit5hMicrousd > 0
-            ? legacyLimit5hMicrousd
-            : paid
-              ? configuration.paidAccount5hLimitMicrousd
-              : configuration.freeAccount5hLimitMicrousd;
-        const limit7dMicrousd =
-          legacyLimit7dMicrousd > 0
-            ? legacyLimit7dMicrousd
-            : paid
-              ? configuration.paidAccount7dLimitMicrousd
-              : configuration.freeAccount7dLimitMicrousd;
         const seedBayId = getConfiguredClusterSeedBayId();
         const status =
           seedBayId === getConfiguredBayId()

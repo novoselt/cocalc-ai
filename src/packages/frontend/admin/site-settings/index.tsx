@@ -1375,7 +1375,9 @@ export default function SiteSettings({ close }) {
       )}
       <Well>
         <Warning />
-        <SiteFundedCodexStatusCard />
+        {to_bool(data?.site_funded_codex_enabled) && (
+          <SiteFundedCodexStatusCard />
+        )}
         <ShowError
           error={error}
           setError={setError}

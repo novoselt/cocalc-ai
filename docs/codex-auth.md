@@ -209,6 +209,13 @@ hosted paid tools, and a five-cent maximum reservation. All limits are dynamic
 site settings. `site_funded_codex_enabled` disables only included access;
 `launch_disable_ai` remains the complete AI kill switch.
 
+Per-account 5-hour and 7-day allowances come exclusively from the account's
+resolved membership `ai_limits`, including any account entitlement override.
+There are no separate free/member fallback allowances in site settings. One AI
+unit represents one cent of provider spend, so 100 units equals US$1; either
+limit being zero disables included Codex for that account. The separate free
+and paid weekly pools are aggregate site-wide spending circuit breakers.
+
 Modules:
 
 - [src/packages/ai/acp/codex-site-key-governor.ts](../src/packages/ai/acp/codex-site-key-governor.ts)

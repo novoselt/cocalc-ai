@@ -184,7 +184,10 @@ import { to_bool } from "@cocalc/util/db-schema/site-defaults";
 import { is_valid_email_address, isValidUUID } from "@cocalc/util/misc";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import { getAIUsageStatus } from "@cocalc/server/ai/usage-status";
-import { computeAIUsageUnits } from "@cocalc/server/ai/usage-units";
+import {
+  aiUsageUnitsToMicrousd,
+  computeAIUsageUnits,
+} from "@cocalc/server/ai/usage-units";
 import { saveAIResponse } from "@cocalc/server/ai/save-response";
 import {
   assertSiteFundedCodexReservationHost,
@@ -3090,13 +3093,9 @@ export async function recordCodexSiteUsage({
 function usageLimitMicrousd(
   status: Awaited<ReturnType<typeof getAIUsageStatus>>,
   window: "5h" | "7d",
-  fallbackMicrousd: number,
 ): number {
   const limit = status.windows.find((entry) => entry.window === window)?.limit;
-  if (limit == null || !Number.isFinite(limit)) return fallbackMicrousd;
-  // Existing AI limits are denominated in one-cent usage units.
-  const legacyLimitMicrousd = Math.max(0, Math.floor(limit * 10_000));
-  return legacyLimitMicrousd > 0 ? legacyLimitMicrousd : fallbackMicrousd;
+  return aiUsageUnitsToMicrousd(limit);
 }
 
 function remoteSiteFundedCodexSeed() {
@@ -3175,6 +3174,16 @@ export async function reserveSiteFundedCodexTurn({
     };
   }
   const paid = membership.source !== "free";
+  const accountLimit5hMicrousd = usageLimitMicrousd(usageStatus, "5h");
+  const accountLimit7dMicrousd = usageLimitMicrousd(usageStatus, "7d");
+  if (accountLimit5hMicrousd <= 0 || accountLimit7dMicrousd <= 0) {
+    return {
+      allowed: false,
+      code: "ineligible",
+      reason:
+        "Your CoCalc membership does not include site-funded Codex usage. Connect a ChatGPT plan or personal OpenAI API key to continue.",
+    };
+  }
   const reservationOptions: ReserveSiteFundedCodexTurnOptions = {
     fundedTurnId: funded_turn_id,
     idempotencyKey: idempotency_key,
@@ -3190,20 +3199,8 @@ export async function reserveSiteFundedCodexTurn({
     owningBayId: getConfiguredBayId(),
     membershipTier: membership.class,
     policy: configuration.policy,
-    accountLimit5hMicrousd: usageLimitMicrousd(
-      usageStatus,
-      "5h",
-      paid
-        ? configuration.paidAccount5hLimitMicrousd
-        : configuration.freeAccount5hLimitMicrousd,
-    ),
-    accountLimit7dMicrousd: usageLimitMicrousd(
-      usageStatus,
-      "7d",
-      paid
-        ? configuration.paidAccount7dLimitMicrousd
-        : configuration.freeAccount7dLimitMicrousd,
-    ),
+    accountLimit5hMicrousd,
+    accountLimit7dMicrousd,
     surface: path?.endsWith(".ipynb")
       ? "jupyter"
       : path?.endsWith(".chat")

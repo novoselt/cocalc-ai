@@ -303,10 +303,6 @@ export type SiteSettingsExtrasKeys =
   | "site_funded_codex_service_tier"
   | "site_funded_codex_free_pool_weekly_usd"
   | "site_funded_codex_paid_pool_weekly_usd"
-  | "site_funded_codex_free_account_5h_usd"
-  | "site_funded_codex_free_account_7d_usd"
-  | "site_funded_codex_paid_account_5h_usd"
-  | "site_funded_codex_paid_account_7d_usd"
   | "site_funded_codex_max_turn_usd"
   | "site_funded_codex_max_turn_seconds"
   | "site_funded_codex_max_input_tokens_per_request"
@@ -963,46 +959,6 @@ export const EXTRAS: SettingsExtras = {
     name: "Paid Pool Weekly Limit (USD)",
     desc: "Separate hard weekly ceiling for paid-member site-funded Codex reservations.",
     default: "100",
-    valid: onlyPosFloat,
-    to_val: toFloat,
-    tags: ["AI", "OpenAI", "Commercialization", "Security"],
-    group: "AI & Agents",
-    subgroup: "Site-Funded Codex",
-  },
-  site_funded_codex_free_account_5h_usd: {
-    name: "Free Account 5-Hour Allowance (USD)",
-    desc: "Fallback included allowance for a verified free account when its membership does not define a positive AI limit.",
-    default: "0.05",
-    valid: onlyPosFloat,
-    to_val: toFloat,
-    tags: ["AI", "OpenAI", "Commercialization", "Security"],
-    group: "AI & Agents",
-    subgroup: "Site-Funded Codex",
-  },
-  site_funded_codex_free_account_7d_usd: {
-    name: "Free Account 7-Day Allowance (USD)",
-    desc: "Fallback weekly included allowance for a verified free account when its membership does not define a positive AI limit.",
-    default: "0.10",
-    valid: onlyPosFloat,
-    to_val: toFloat,
-    tags: ["AI", "OpenAI", "Commercialization", "Security"],
-    group: "AI & Agents",
-    subgroup: "Site-Funded Codex",
-  },
-  site_funded_codex_paid_account_5h_usd: {
-    name: "Member Account 5-Hour Allowance (USD)",
-    desc: "Fallback included allowance for a paid member when its membership does not define a positive AI limit.",
-    default: "0.05",
-    valid: onlyPosFloat,
-    to_val: toFloat,
-    tags: ["AI", "OpenAI", "Commercialization", "Security"],
-    group: "AI & Agents",
-    subgroup: "Site-Funded Codex",
-  },
-  site_funded_codex_paid_account_7d_usd: {
-    name: "Member Account 7-Day Allowance (USD)",
-    desc: "Fallback weekly included allowance for a paid member when its membership does not define a positive AI limit.",
-    default: "0.10",
     valid: onlyPosFloat,
     to_val: toFloat,
     tags: ["AI", "OpenAI", "Commercialization", "Security"],

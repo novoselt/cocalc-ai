@@ -1986,7 +1986,7 @@ export function MembershipTiers() {
                 })}
                 {fieldGroup({
                   title: "AI",
-                  note: "Included AI units are a hard-cost budget. Free tier defaults should stay at 0 unless intentionally changed.",
+                  note: "Included AI units are the authoritative site-funded AI budget. 100 units equals US$1 of provider spend. A zero limit disables included AI usage for the tier.",
                   children: (
                     <Row gutter={16}>
                       <Col {...wideFieldCol}>
@@ -1994,7 +1994,7 @@ export function MembershipTiers() {
                           name="ai_limit_units_5h"
                           label="AI units, rolling 5 hours"
                           extra={fieldHelp(
-                            "Short-window normalized AI allowance.",
+                            "Short-window included AI allowance. 100 units equals US$1 of provider spend.",
                           )}
                         >
                           <InputNumber
@@ -2010,7 +2010,7 @@ export function MembershipTiers() {
                           name="ai_limit_units_7d"
                           label="AI units, rolling 7 days"
                           extra={fieldHelp(
-                            "Weekly normalized AI allowance used to bound included AI spend.",
+                            "Weekly included AI allowance. 100 units equals US$1 of provider spend.",
                           )}
                         >
                           <InputNumber
