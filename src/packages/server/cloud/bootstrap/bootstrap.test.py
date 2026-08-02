@@ -2802,6 +2802,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "ensure_podman_runroot()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "install -d -o root -g root -m 0711",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'runroot="/run/cocalc/containers/rootless/${RUNTIME_USER}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "  ensure_podman_runroot\n",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 'systemctl start "${service}"',
                 rootctl.read_text(encoding="utf-8"),
             )

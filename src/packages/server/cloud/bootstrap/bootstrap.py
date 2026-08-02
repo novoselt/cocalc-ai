@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260802-v26"
+HELPER_SCHEMA_VERSION = "20260802-v27"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -8097,6 +8097,20 @@ ensure_owned_runtime_dir() {
   chmod 0700 "${path}"
 }
 
+ensure_podman_runroot() {
+  local uid gid runroot
+  uid="$(runtime_uid)"
+  gid="$(runtime_gid)"
+  install -d -o root -g root -m 0711 \
+    /run/cocalc \
+    /run/cocalc/containers \
+    /run/cocalc/containers/rootless
+  runroot="/run/cocalc/containers/rootless/${RUNTIME_USER}"
+  install -d -o "${uid}" -g "${gid}" -m 0700 "${runroot}"
+  chown "${uid}:${gid}" "${runroot}"
+  chmod 0700 "${runroot}"
+}
+
 repair_runtime_environment() {
   local uid run_dir runtime_dir service
   uid="$(runtime_uid)"
@@ -8112,6 +8126,7 @@ repair_runtime_environment() {
   fi
   ensure_owned_runtime_dir "${run_dir}"
   ensure_owned_runtime_dir "${run_dir}/containers"
+  ensure_podman_runroot
   runtime_dir="$(podman_runtime_dir)"
   if [ -n "${runtime_dir}" ]; then
     ensure_owned_runtime_dir "${runtime_dir}"
