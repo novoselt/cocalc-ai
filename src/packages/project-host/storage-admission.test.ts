@@ -45,6 +45,20 @@ describe("storage admission controller", () => {
     expect(controller.sample()).toMatchObject({
       pressure_state: "emergency",
       transition_count: 2,
+      host_io_full_avg10: 10,
+      project_pool_io_full_avg10: 5,
+      uncontained_io_full_avg10: 5,
+    });
+  });
+
+  it("separates intentional project-pool throttling from uncontained pressure", () => {
+    const controller = create();
+    full = 10;
+    const status = controller.sample();
+    expect(status).toMatchObject({
+      pressure_state: "emergency",
+      effective_io_full_avg10: 10,
+      uncontained_io_full_avg10: 5,
     });
   });
 

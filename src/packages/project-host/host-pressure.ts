@@ -138,6 +138,11 @@ const IO_EMERGENCY_DWELL_MS = Math.max(
   IO_PRESSURE_DWELL_MS,
   Number(process.env.COCALC_PROJECT_HOST_IO_EMERGENCY_DWELL_MS ?? 10 * 60_000),
 );
+const IO_EVICTION_FULL_AVG10 = clampPercent(
+  process.env.COCALC_PROJECT_HOST_IO_EVICTION_FULL_AVG10 ??
+    process.env.COCALC_PROJECT_HOST_STORAGE_IO_EMERGENCY_FULL_AVG10,
+  10,
+);
 const IO_PRESSURE_MIN_IDLE_MS = Math.max(
   STARTUP_PROTECTION_MS,
   Number(
@@ -561,6 +566,17 @@ function hasIoPressureReason(reason: string | undefined): boolean {
   return !!reason?.split(",").some((part) => part.startsWith("storage_io_"));
 }
 
+function storagePressureCanEvict(
+  storage: HostCurrentMetrics["storage_admission"],
+): boolean {
+  if (!storage || storage.pressure_state !== "emergency") return false;
+  const uncontained = parseNonNegativeNumber(storage.uncontained_io_full_avg10);
+  // Older project-host versions do not publish the split signal. Preserve
+  // their behavior during rolling upgrades, then require the signal once it
+  // is available.
+  return uncontained == null || uncontained >= IO_EVICTION_FULL_AVG10;
+}
+
 function storagePressureFindings(
   metrics: HostCurrentMetrics,
   now: number,
@@ -586,9 +602,14 @@ function storagePressureFindings(
     ? Math.max(0, now - episodeSinceMs)
     : 0;
   const effectiveFull = parseNonNegativeNumber(storage.effective_io_full_avg10);
+  const uncontainedFull = parseNonNegativeNumber(
+    storage.uncontained_io_full_avg10,
+  );
   const detail = `state=${storage.pressure_state},dwell_ms=${Math.floor(
     dwellMs,
-  )}${effectiveFull == null ? "" : `,full_avg10=${effectiveFull}`}`;
+  )}${effectiveFull == null ? "" : `,full_avg10=${effectiveFull}`}${
+    uncontainedFull == null ? "" : `,uncontained_full_avg10=${uncontainedFull}`
+  }`;
 
   if (storage.pressure_state === "normal") {
     return { observeReasons, pressureReasons, emergencyReasons };
@@ -599,6 +620,10 @@ function storagePressureFindings(
   }
   if (storage.pressure_state === "contended") {
     observeReasons.push(`storage_io_contended:${detail}`);
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  if (!storagePressureCanEvict(storage)) {
+    observeReasons.push(`storage_io_pool_throttled:${detail}`);
     return { observeReasons, pressureReasons, emergencyReasons };
   }
   if (dwellMs >= IO_EMERGENCY_DWELL_MS) {
@@ -1059,7 +1084,7 @@ export function startHostPressureController({
     if (
       !storageAdmission ||
       storageAdmission.mode === "disabled" ||
-      storageAdmission.pressure_state === "normal"
+      !storagePressureCanEvict(storageAdmission)
     ) {
       ioPressureSinceMs = undefined;
     } else if (ioPressureSinceMs == null) {

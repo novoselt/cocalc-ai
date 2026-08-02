@@ -125,6 +125,18 @@ function maxDefined(...values: Array<number | undefined>): number | undefined {
   return defined.length > 0 ? Math.max(...defined) : undefined;
 }
 
+function uncontainedIoFullAvg10(
+  host: number | undefined,
+  projectPool: number | undefined,
+): number | undefined {
+  if (host == null || !Number.isFinite(host)) return undefined;
+  if (projectPool == null || !Number.isFinite(projectPool)) return host;
+  // Root PSI includes project-pool stalls caused by our own io.max limits.
+  // The non-negative difference estimates pressure from work outside that
+  // intentionally throttled pool, which can justify shedding project load.
+  return Math.max(0, host - projectPool);
+}
+
 function emptyActiveCounts(): Record<StorageOperationPriority, number> {
   return {
     lifecycle: 0,
@@ -276,6 +288,10 @@ export function createStorageAdmissionController(
       lastInputs.host_io_full_avg10,
       lastInputs.project_pool_io_full_avg10,
     );
+    const uncontained = uncontainedIoFullAvg10(
+      lastInputs.host_io_full_avg10,
+      lastInputs.project_pool_io_full_avg10,
+    );
     return {
       schema_version: 1,
       collected_at: iso(lastInputs.sampled_at_ms),
@@ -289,6 +305,9 @@ export function createStorageAdmissionController(
         ? {
             project_pool_io_full_avg10: lastInputs.project_pool_io_full_avg10,
           }
+        : {}),
+      ...(uncontained != null
+        ? { uncontained_io_full_avg10: uncontained }
         : {}),
       ...(effective != null ? { effective_io_full_avg10: effective } : {}),
       lifecycle_active:

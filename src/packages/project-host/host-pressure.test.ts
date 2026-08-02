@@ -135,6 +135,7 @@ describe("host pressure controller helpers", () => {
         pressure_state: "emergency" as const,
         state_since: new Date(now - 30_000).toISOString(),
         effective_io_full_avg10: 25,
+        uncontained_io_full_avg10: 25,
         lifecycle_active: 0,
         starting_projects: 0,
         stopping_projects: 0,
@@ -177,6 +178,47 @@ describe("host pressure controller helpers", () => {
     expect(
       classifyHostPressure(metrics, now, { ioPressureMode: "metrics" }),
     ).toMatchObject({ zone: "normal" });
+  });
+
+  it("does not evict projects for pressure caused by project-pool throttling", () => {
+    const now = Date.parse("2026-08-02T12:00:00.000Z");
+    const metrics = {
+      memory_used_percent: 20,
+      memory_available_bytes: 32 * 1024 ** 3,
+      storage_admission: {
+        schema_version: 1 as const,
+        collected_at: new Date(now).toISOString(),
+        mode: "enforce" as const,
+        pressure_state: "emergency" as const,
+        state_since: new Date(now - 60 * 60_000).toISOString(),
+        host_io_full_avg10: 45,
+        project_pool_io_full_avg10: 60,
+        effective_io_full_avg10: 60,
+        uncontained_io_full_avg10: 0,
+        lifecycle_active: 0,
+        starting_projects: 0,
+        stopping_projects: 0,
+        active_by_priority: {
+          lifecycle: 0,
+          interactive: 0,
+          scheduled: 0,
+          scavenger: 0,
+        },
+        btrfs_mutation_locks: 0,
+        btrfs_mutation_waiters: 0,
+        admitted_total: 0,
+        deferred_total: 0,
+        observed_deferral_total: 0,
+        transition_count: 1,
+      },
+    };
+
+    expect(
+      classifyHostPressure(metrics, now, {
+        ioPressureMode: "enforce",
+        ioPressureSinceMs: now - 60 * 60_000,
+      }),
+    ).toMatchObject({ zone: "observe" });
   });
 
   it("keeps I/O eviction candidates old and backed by activity policy", () => {
