@@ -406,6 +406,33 @@ export const TABLE_OWNERSHIP = {
     rebuild:
       "Recreate from a later browser presence observation or durable worker source state.",
   }),
+
+  ...entries(["compute_vms", "compute_vm_instances"], {
+    ownership: "account-home",
+    authority: "owner_account_id",
+    portability: "stable",
+    secondary_reference_fields: {
+      project_id: "Project attachment controls discovery but not authority.",
+    },
+    notes:
+      "Account-owned managed compute state. Project attachment controls discovery but does not transfer ownership.",
+  }),
+
+  ...entries(["compute_resource_work"], {
+    ownership: "ephemeral",
+    authority: "local",
+    portability: "rebuildable",
+    notes:
+      "Account-home-bay provider work. Desired resource state remains the durable source of truth.",
+    rebuild: "Reconcile desired compute resource state against the provider.",
+  }),
+
+  ...entries(["compute_resource_events"], {
+    ownership: "audit-local",
+    authority: "local",
+    portability: "stable",
+    notes: "Append-only managed compute lifecycle and authorization audit.",
+  }),
 } satisfies Record<string, TableOwnershipEntry>;
 
 export interface AdHocPostgresTableOwnershipEntry extends TableOwnershipEntry {

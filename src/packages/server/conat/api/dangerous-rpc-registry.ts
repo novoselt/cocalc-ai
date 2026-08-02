@@ -23,6 +23,22 @@ const TELEMETRY_ONLY =
 // public hub API exports with destructive/admin-looking names and fails until
 // new RPCs are added here with a fresh-auth decision.
 export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
+  "compute.createVm": {
+    decision: "fresh-auth-required",
+    reason: "creates billable managed compute infrastructure",
+  },
+  "compute.deleteVm": {
+    decision: "fresh-auth-required",
+    reason: "deletes a managed compute VM and its persistent root disk",
+  },
+  "compute.startVm": {
+    decision: "fresh-auth-not-required",
+    reason: "starts an owned VM inside its existing TTL and cost envelope",
+  },
+  "compute.stopVm": {
+    decision: "fresh-auth-not-required",
+    reason: "stops an owned managed compute VM",
+  },
   "adminDb.diagnostic": {
     decision: "fresh-auth-not-required",
     reason:

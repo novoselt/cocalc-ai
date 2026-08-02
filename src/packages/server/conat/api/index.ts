@@ -52,6 +52,7 @@ import * as adminSupport from "./admin-support";
 import * as adminCrashes from "./admin-crashes";
 import * as aiSessions from "./ai-sessions";
 import * as legacyMigration from "./legacy-migration";
+import * as compute from "./compute";
 import * as publicDirectoryShares from "./public-directory-shares";
 
 import getLogger from "@cocalc/backend/logger";
@@ -94,6 +95,7 @@ export const hubApi: HubApi = {
   adminCrashes,
   aiSessions,
   legacyMigration,
+  compute,
   publicDirectoryShares,
   ssh,
   reflect,

@@ -53,8 +53,8 @@ The product should make this workflow ordinary:
 5. An agent turn started by that user can discover and use the same VM.
 6. The user or agent installs packages, runs Docker, and uses `tmux`, systemd,
    or another ordinary Unix tool for work that must survive an SSH disconnect.
-7. Spot interruption causes automatic VM recovery, preserving `/work` and the
-   original lease deadline.
+7. Spot interruption causes automatic VM recovery, preserving the root disk,
+   `/work`, and the original lease deadline.
 8. The VM stops and is deleted at its deadline even if every client is
    disconnected.
 9. The persistent volume remains until its owner explicitly deletes it.
@@ -97,7 +97,7 @@ These commands are a proposed contract, not current behavior.
 - a small explicit machine-type catalog;
 - Spot and on-demand pricing;
 - automatic Spot restart and bounded on-demand fallback;
-- disposable boot disks;
+- persistent VM-owned boot disks that survive stop, start, and Spot recovery;
 - at most one persistent zonal `pd-balanced` volume per VM;
 - one read-write ext4 mount at `/work`;
 - grow-only volume resize;
@@ -115,8 +115,8 @@ These commands are a proposed contract, not current behavior.
 - Codex-specific compute runs, thread forks, or context management;
 - VM-resident Codex or ACP workers;
 - subscription-profile pooling or scheduling;
-- agent-created VMs without a prior human lifecycle action;
-- agent changes to machine size, TTL, pricing, or storage spend;
+- unbounded agent spending or lifecycle authority without a durable spend
+  envelope or explicit user approval;
 - more than one attached volume;
 - volume snapshots, cloning, shrinking, backups, or cross-zone migration;
 - automatic project file synchronization or remote mounts;
@@ -267,19 +267,29 @@ compute capability bound to:
 - current `project_id`;
 - turn or session identifier;
 - expiration no later than the turn authority;
-- read and use scopes only.
+- scopes and a durable spend envelope no broader than the initiating user's
+  explicit authorization.
 
-The capability permits the turn to:
+The capability permits the turn to use existing resources and, within a
+durable authorization envelope, perform lifecycle mutations on behalf of the
+initiating user. It may:
 
 - list VMs owned by that account and attached to that project;
 - inspect state and wait for readiness;
 - obtain short-lived SSH access;
 - run commands and transfer files over direct SSH.
+- create and delete VMs and volumes;
+- start, stop, and resize VMs;
+- extend TTL, enable fallback, and grow storage;
+- alter billing choices that remain inside the approved envelope.
 
-It does not permit the turn to create or delete VMs, extend TTL, enable
-fallback, resize storage, alter billing, or access another account's VM.
-
-USER: actually I definitely _do_ want the turn to be able to do all of those things.  The main idea is that the agents _can_ craete VM's, storage, etc., since they need it to carry out tasks.  The key is that the amount of money that the agent can spend on VM is limited and/or requires an approval.
+Every spend-increasing mutation must either fit inside a durable per-turn or
+per-request authorization envelope or pause for explicit user approval. The
+envelope includes maximum hourly cost, maximum total cost, expiration, allowed
+machine/storage classes, fallback limits, and an idempotency scope. It never
+permits access to another account's VM. Agent authority is intentionally the
+same lifecycle API as human authority with a narrower actor-bound budget, not
+a second compute orchestration system.
 
 Do not write a reusable account token or permanent private key into the shared
 project filesystem. The preferred access design is:
@@ -319,7 +329,7 @@ Required logical fields:
 - `boot_disk_gb`;
 - `state`, `desired_state`;
 - `instance_generation`;
-- current provider instance ID and public IP;
+- current provider instance ID, persistent boot disk ID, and public IP;
 - optional `attached_volume_id`;
 - `created_at`, `ready_at`, `expires_at`, `stopped_at`, `deleted_at`;
 - immutable Spot and on-demand hourly price snapshots;
@@ -435,8 +445,8 @@ show structured progress.
 
 ### Stop and start
 
-Stopping uses the provider API and preserves the logical lease, disposable
-boot disk where supported, and persistent volume. Starting is allowed only
+Stopping uses the provider API and preserves the logical lease, persistent
+VM-owned boot disk, and persistent volume. Starting is allowed only
 before `expires_at` and inside the existing cost envelope.
 
 An agent can run `shutdown` as root, but provider state and billing remain
@@ -450,7 +460,7 @@ TTL is enforced outside the guest:
 1. set desired state to `deleted` at expiration;
 2. stop the provider instance;
 3. detach the persistent volume safely;
-4. delete the instance and disposable boot disk;
+4. delete the instance and its VM-owned persistent boot disk;
 5. finalize fixed-cost accounting;
 6. preserve the volume;
 7. mark the logical lease deleted.
@@ -497,32 +507,20 @@ All replacement candidates must:
 7. Leave the logical VM in a clear failed/interrupted state if no authorized
    replacement is possible.
 
-Automatic recovery restores the VM primitive, not the lost process tree. Work
-on the disposable root disk may also be lost. Users and agents should keep
-source, caches, checkpoints, and artifacts on `/work`, and use ordinary restart
-scripts or service definitions when automatic workload resumption matters.
-
-USER: I see no reason that the root disk can be lost on spot recover.  We maintain the root disk without ever losing it for project-hosts.   Let's preserve the root disk on spot recovery just like with project hosts.
+Automatic recovery restores the VM primitive using the same VM-owned boot
+disk, but not the lost process tree. Root filesystem contents therefore
+survive Spot recovery. Users and agents should still use ordinary restart
+scripts or service definitions when automatic workload resumption matters,
+and keep independently durable artifacts on `/work` when requested.
 
 ### Safe return from on-demand
 
-Project hosts can tolerate an orchestrated return from on-demand to Spot. A
-user VM may be running a long research computation, so replacing a healthy
-fallback VM merely because Spot capacity returned is not safe by default.
-
-The MVP default is `return_to_spot = next_start`:
-
-- probe and record available Spot capacity;
-- keep the current on-demand generation running while its authorized fallback
-  envelope remains valid;
-- select Spot on the next user-requested start or provider replacement;
-- stop at the fallback authorization boundary rather than overspend.
-
-An explicit `return_to_spot = after_probe` option may permit disruptive
-replacement for workloads designed to restart. The UI must label that option
-as disruptive. Do not silently migrate a healthy running computation.
-
-USER:  I think we should just stick with exactly the same policy as with project-hosts.  Nobody should use a spot instance at all unless it is for a computation that can withstand disruption.  If it can't, don't use a spot instance.
+Compute VMs use exactly the project-host return policy. After the bounded
+on-demand hold, the control plane probes Spot capacity and disruptively returns
+the VM to Spot after a successful probe. Selecting Spot is an explicit contract
+that the workload tolerates interruption; workloads that cannot tolerate this
+must use on-demand pricing. The UI and CLI must state this rather than adding a
+second, non-disruptive Spot policy.
 
 ## Persistent Volume Lifecycle
 
@@ -700,7 +698,7 @@ Do not add:
 - a durable jobs UI;
 - Codex-specific controls.
 
-The page explains that the root disk is disposable, `/work` is persistent, a
+The page explains that the VM-owned root disk and `/work` are persistent, a
 Spot recovery restarts the VM but not its processes, and persistent storage
 continues to incur cost while detached.
 
@@ -751,6 +749,15 @@ closes stale intervals using provider-observed state. Starting or replacing a
 VM is rejected when the remaining envelope cannot cover the minimum useful
 interval.
 
+The customer authorization snapshot is a maximum charge, not permission for
+CoCalc to absorb unlimited provider price drift. Before every start, recovery,
+or fallback transition, refresh the provider estimate and compare it with both
+the customer's remaining envelope and a configured platform subsidy ceiling.
+If the estimate exceeds either bound, do not start a new provider generation;
+stop at the next safe boundary and require a new explicit authorization.
+Short beta TTLs, per-account quotas, and an aggregate provider-project budget
+provide independent exposure bounds if price data is delayed or unavailable.
+
 Volumes have independent recurring storage billing and remain billable while
 detached. Their UI must show both hourly and approximate monthly cost.
 
@@ -759,8 +766,6 @@ monitor aggregate provider cost. Before general availability, add per-VM
 host-level egress measurement, delayed-metric exposure bounds, customer
 pricing, enforcement, and final reconciliation as a separately reviewed
 change set.
-
-USER: in theory a spot instance can change price by a huge factor -- it could be 90% off when the user starts the VM, and the price could change to only 60% off.  We can eat part of the hit, but it has to be bounded.  Imagine a user gets a \$10000 machine for \$1000 on day 1, but then it goes up to \$6000 the next day and they use it for a year -- that would be bad. 
 
 ## Observability
 
@@ -822,10 +827,11 @@ interruption followed by successful recovery is an event, not a page.
 - implement compatible Spot retries and alternate types;
 - implement explicitly authorized on-demand fallback;
 - implement provider-confirmed preemption deduplication;
-- implement non-disruptive `next_start` return and optional disruptive return;
+- implement the project-host-compatible disruptive return after a successful
+  Spot probe;
 - prove with fault injection and an actual Spot canary that recovery stays
-  inside the original TTL/cost envelope, preserves `/work`, counts each event
-  once, and does not replace healthy fallback work by default.
+  inside the original TTL/cost envelope, preserves the root disk and `/work`,
+  counts each event once, and follows the project-host return policy.
 
 ### Phase 4: project and agent access
 
@@ -840,7 +846,7 @@ interruption followed by successful recovery is an event, not a page.
 
 - add the project settings VM list and create dialog;
 - add compact volume controls;
-- show price, TTL, SSH command, recovery, and disposable-root warnings;
+- show price, TTL, SSH command, recovery, and persistent-root semantics;
 - verify discovery and lifecycle management without CLI setup while adding no
   terminal, file manager, job system, or cloud-console scope.
 
@@ -849,7 +855,7 @@ interruption followed by successful recovery is an event, not a page.
 - run concurrent create/start/stop/delete and volume attach/detach tests;
 - restart workers during every provider operation;
 - inject provider timeouts, stale reads, preemptions, and quota failures;
-- fill disposable root disks and verify `/work` remains safe;
+- fill root disks and verify recovery and `/work` remain safe;
 - test project deletion and account/project cross-bay routing;
 - run long computations through Spot fallback and safe return behavior;
 - canary with administrators, then selected trusted paid accounts;
@@ -920,4 +926,3 @@ The MVP is complete when:
 
 Anything beyond these criteria is a follow-up product, not unfinished MVP
 work.
-

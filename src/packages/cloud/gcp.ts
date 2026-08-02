@@ -564,6 +564,22 @@ export class GcpProvider implements CloudProvider {
       spec.metadata?.boot_disk_gb ??
       spec.metadata?.bootDiskGb ??
       (spec.gpu ? 20 : 10);
+    const persistentBootDisk = spec.metadata?.persistent_boot_disk === true;
+    const bootDiskName = spec.metadata?.boot_disk_name ?? `${spec.name}-boot`;
+    let bootDiskSource: string | undefined;
+    if (persistentBootDisk) {
+      const diskClient = new DisksClient(credentials);
+      try {
+        const [disk] = await diskClient.get({
+          project: credentials.projectId,
+          zone,
+          disk: bootDiskName,
+        });
+        bootDiskSource = disk?.selfLink ?? undefined;
+      } catch (err) {
+        if (!isNotFoundError(err)) throw err;
+      }
+    }
 
     const storageMode = spec.metadata?.storage_mode;
     type Disk = {
@@ -582,13 +598,19 @@ export class GcpProvider implements CloudProvider {
     };
     const disks: Disk[] = [
       {
-        autoDelete: true,
+        autoDelete: !persistentBootDisk,
         boot: true,
-        initializeParams: {
-          diskSizeGb: `${bootDiskGb}`,
-          diskType,
-          sourceImage,
-        },
+        deviceName: persistentBootDisk ? bootDiskName : undefined,
+        ...(bootDiskSource
+          ? { source: bootDiskSource }
+          : {
+              initializeParams: {
+                diskName: persistentBootDisk ? bootDiskName : undefined,
+                diskSizeGb: `${bootDiskGb}`,
+                diskType,
+                sourceImage,
+              },
+            }),
       },
     ];
     const dataDiskName = spec.metadata?.data_disk_name ?? `${spec.name}-data`;
@@ -607,7 +629,7 @@ export class GcpProvider implements CloudProvider {
           diskType: `projects/${credentials.projectId}/zones/${zone}/diskTypes/local-ssd`,
         },
       });
-    } else {
+    } else if (storageMode !== "boot-only") {
       const diskClient = new DisksClient(credentials);
       try {
         const [disk] = await diskClient.get({
@@ -686,6 +708,9 @@ export class GcpProvider implements CloudProvider {
     ];
 
     const metadataItems: { key: string; value: string }[] = [];
+    if (spec.metadata?.block_project_ssh_keys === true) {
+      metadataItems.push({ key: "block-project-ssh-keys", value: "TRUE" });
+    }
     const startupScript = startupScriptFor(spec);
     if (startupScript) {
       metadataItems.push({ key: "startup-script", value: startupScript });
@@ -725,6 +750,11 @@ export class GcpProvider implements CloudProvider {
       guestAccelerators,
       tags: spec.tags ? { items: spec.tags } : undefined,
       scheduling,
+      labels: spec.metadata?.labels,
+      canIpForward: false,
+      deletionProtection: false,
+      serviceAccounts:
+        spec.metadata?.disable_service_account === true ? [] : undefined,
     };
 
     const runtimeFromInstance = (instance: any): HostRuntime => {
@@ -749,6 +779,13 @@ export class GcpProvider implements CloudProvider {
           gpu_count: spec.gpu?.count ?? 0,
           disk_type: diskType,
           boot_disk_gb: bootDiskGb,
+          boot_disk_name: persistentBootDisk ? bootDiskName : undefined,
+          boot_disk_uri:
+            bootDiskSource ??
+            attachedDiskSource(
+              (instance?.disks ?? []).find((disk) => disk.boot),
+            ),
+          persistent_boot_disk: persistentBootDisk,
           data_disk_gb: spec.disk_gb,
           data_disk_name: dataDiskName,
           data_disk_uri: dataDiskSource ?? dataDiskUriFromInstance(instance),
@@ -1437,6 +1474,17 @@ export class GcpProvider implements CloudProvider {
           guestAccelerators,
           tags: spec.tags ? { items: spec.tags } : undefined,
           scheduling: spotScheduling(),
+          labels: spec.metadata?.labels,
+          metadata:
+            spec.metadata?.block_project_ssh_keys === true
+              ? {
+                  items: [{ key: "block-project-ssh-keys", value: "TRUE" }],
+                }
+              : undefined,
+          canIpForward: false,
+          deletionProtection: false,
+          serviceAccounts:
+            spec.metadata?.disable_service_account === true ? [] : undefined,
         },
       });
       await waitUntilOperationComplete({
@@ -1665,6 +1713,35 @@ export class GcpProvider implements CloudProvider {
         return;
       }
       throw err;
+    }
+  }
+
+  async deletePersistentBootDisk(
+    runtime: HostRuntime,
+    creds: any,
+  ): Promise<void> {
+    const credentials = parseCredentials(creds ?? {});
+    if (!runtime.zone) {
+      throw new Error("gcp.deletePersistentBootDisk requires zone");
+    }
+    const diskName = `${runtime.metadata?.boot_disk_name ?? ""}`.trim();
+    if (!diskName) {
+      throw new Error("gcp.deletePersistentBootDisk requires boot_disk_name");
+    }
+    const diskClient = new DisksClient(credentials);
+    try {
+      const [response] = await diskClient.delete({
+        project: credentials.projectId,
+        zone: runtime.zone,
+        disk: diskName,
+      });
+      await waitUntilOperationComplete({
+        response,
+        zone: runtime.zone,
+        credentials,
+      });
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
     }
   }
 

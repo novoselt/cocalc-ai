@@ -477,6 +477,68 @@ describe("GcpProvider", () => {
     });
   });
 
+  it("creates a hostile-guest VM with a persistent boot-only disk", async () => {
+    insertMock.mockResolvedValueOnce([
+      { latestResponse: { name: "op-compute", status: "DONE" } },
+    ]);
+    diskGetMock.mockRejectedValueOnce({ code: 404 });
+    getMock.mockResolvedValueOnce([
+      {
+        name: "ph-test",
+        disks: [
+          {
+            boot: true,
+            deviceName: "ph-test-boot",
+            source: "projects/proj-1/zones/us-west1-a/disks/ph-test-boot",
+          },
+        ],
+        networkInterfaces: [],
+      },
+    ]);
+
+    const provider = new GcpProvider();
+    const runtime = await provider.createHost(
+      buildSpec({
+        metadata: {
+          storage_mode: "boot-only",
+          persistent_boot_disk: true,
+          boot_disk_name: "ph-test-boot",
+          disable_service_account: true,
+          block_project_ssh_keys: true,
+          ssh_public_key: "ssh-ed25519 AAAATEST owner",
+          labels: { "managed-by": "cocalc-compute" },
+        },
+      }),
+      {
+        project_id: "proj-1",
+        client_email: "svc@example.com",
+        private_key: "key",
+      },
+    );
+
+    const resource = insertMock.mock.calls[0][0].instanceResource;
+    expect(resource.disks).toHaveLength(1);
+    expect(resource.disks[0]).toMatchObject({
+      autoDelete: false,
+      boot: true,
+      deviceName: "ph-test-boot",
+      initializeParams: { diskName: "ph-test-boot" },
+    });
+    expect(resource.serviceAccounts).toEqual([]);
+    expect(resource.canIpForward).toBe(false);
+    expect(resource.deletionProtection).toBe(false);
+    expect(resource.labels).toEqual({ "managed-by": "cocalc-compute" });
+    expect(resource.metadata.items).toEqual(
+      expect.arrayContaining([
+        { key: "block-project-ssh-keys", value: "TRUE" },
+      ]),
+    );
+    expect(runtime.metadata).toMatchObject({
+      persistent_boot_disk: true,
+      boot_disk_name: "ph-test-boot",
+    });
+  });
+
   it("recovers a created host when insert times out after GCP accepts it", async () => {
     insertMock.mockRejectedValueOnce(
       Object.assign(new Error("read ETIMEDOUT"), { code: "ETIMEDOUT" }),

@@ -22,6 +22,7 @@ const SOURCE_MODULES: SourceModule[] = [
   { filename: "admin-data-explorer.ts", hubGroup: "adminData" },
   { filename: "admin-db.ts", hubGroup: "adminDb" },
   { filename: "admin-host.ts", hubGroup: "adminHost" },
+  { filename: "compute.ts", hubGroup: "compute" },
   { filename: "db.ts", hubGroup: "db" },
   { filename: "lro.ts", hubGroup: "lro" },
   { filename: "messages.ts", hubGroup: "messages" },

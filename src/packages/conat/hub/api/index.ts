@@ -21,6 +21,7 @@ import { type AdminSupportApi, adminSupport } from "./admin-support";
 import { type AdminCrashesApi, adminCrashes } from "./admin-crashes";
 import { type AiSessionsApi, aiSessions } from "./ai-sessions";
 import { type LegacyMigration, legacyMigration } from "./legacy-migration";
+import { type ComputeApi, compute } from "./compute";
 import {
   type PublicDirectoryShares,
   publicDirectoryShares,
@@ -48,6 +49,7 @@ export interface HubApi {
   adminCrashes: AdminCrashesApi;
   aiSessions: AiSessionsApi;
   legacyMigration: LegacyMigration;
+  compute: ComputeApi;
   publicDirectoryShares: PublicDirectoryShares;
 }
 
@@ -73,6 +75,7 @@ const HubApiStructure = {
   adminCrashes,
   aiSessions,
   legacyMigration,
+  compute,
   publicDirectoryShares,
 } as const;
 

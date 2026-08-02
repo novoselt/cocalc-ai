@@ -22,6 +22,7 @@ import { startRootfsPublishLroWorker } from "@cocalc/server/projects/rootfs-publ
 import { startRestoreLroWorker } from "@cocalc/server/projects/restore-worker";
 import { startHostLroWorker } from "@cocalc/server/hosts/start-worker";
 import { startHostRuntimeFleetRolloutWorker } from "@cocalc/server/hosts/runtime-fleet-rollout-worker";
+import { startComputeVmWorker } from "@cocalc/server/compute/worker";
 import { startLegacyMigrationProjectRestoreWorker } from "@cocalc/server/legacy-migration/restore-worker";
 import { startLegacyMigrationArtifactRefreshMaintenance } from "@cocalc/server/legacy-migration/artifact-refresh-maintenance";
 import { getProjectRuntimeMode } from "@cocalc/server/launchpad/project-runtime";
@@ -120,6 +121,7 @@ export function startConatApiBackgroundWorkers(): void {
   }
   startHostLroWorker();
   if (isPrimaryBayWorker()) {
+    startComputeVmWorker();
     startLroExpirationMaintenance();
     startUsageRetentionMaintenance();
     startHostRuntimeFleetRolloutWorker();
