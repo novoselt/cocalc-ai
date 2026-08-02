@@ -279,6 +279,8 @@ The capability permits the turn to:
 It does not permit the turn to create or delete VMs, extend TTL, enable
 fallback, resize storage, alter billing, or access another account's VM.
 
+USER: actually I definitely _do_ want the turn to be able to do all of those things.  The main idea is that the agents _can_ craete VM's, storage, etc., since they need it to carry out tasks.  The key is that the amount of money that the agent can spend on VM is limited and/or requires an approval.
+
 Do not write a reusable account token or permanent private key into the shared
 project filesystem. The preferred access design is:
 
@@ -500,6 +502,8 @@ on the disposable root disk may also be lost. Users and agents should keep
 source, caches, checkpoints, and artifacts on `/work`, and use ordinary restart
 scripts or service definitions when automatic workload resumption matters.
 
+USER: I see no reason that the root disk can be lost on spot recover.  We maintain the root disk without ever losing it for project-hosts.   Let's preserve the root disk on spot recovery just like with project hosts.
+
 ### Safe return from on-demand
 
 Project hosts can tolerate an orchestrated return from on-demand to Spot. A
@@ -517,6 +521,8 @@ The MVP default is `return_to_spot = next_start`:
 An explicit `return_to_spot = after_probe` option may permit disruptive
 replacement for workloads designed to restart. The UI must label that option
 as disruptive. Do not silently migrate a healthy running computation.
+
+USER:  I think we should just stick with exactly the same policy as with project-hosts.  Nobody should use a spot instance at all unless it is for a computation that can withstand disruption.  If it can't, don't use a spot instance.
 
 ## Persistent Volume Lifecycle
 
@@ -754,6 +760,8 @@ host-level egress measurement, delayed-metric exposure bounds, customer
 pricing, enforcement, and final reconciliation as a separately reviewed
 change set.
 
+USER: in theory a spot instance can change price by a huge factor -- it could be 90% off when the user starts the VM, and the price could change to only 60% off.  We can eat part of the hit, but it has to be bounded.  Imagine a user gets a \$10000 machine for \$1000 on day 1, but then it goes up to \$6000 the next day and they use it for a year -- that would be bad. 
+
 ## Observability
 
 Operator status should include:
@@ -912,3 +920,4 @@ The MVP is complete when:
 
 Anything beyond these criteria is a follow-up product, not unfinished MVP
 work.
+
