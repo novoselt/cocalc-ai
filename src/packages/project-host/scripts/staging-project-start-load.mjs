@@ -117,6 +117,8 @@ marker_path = ${JSON.stringify(MARKER_PATH)}
 marker_kind = ${JSON.stringify(MARKER_KIND)}
 data_prefix = ${JSON.stringify(DATA_PREFIX)}
 
+owned = {}
+
 try:
     with open(marker_path, "r", encoding="utf-8") as f:
         marker = json.load(f)
@@ -126,28 +128,50 @@ except (FileNotFoundError, json.JSONDecodeError, OSError):
 if marker and marker.get("kind") == marker_kind:
     pid = int(marker.get("pid", 0))
     token = str(marker.get("token", ""))
+    if pid > 1 and token:
+        owned[pid] = token
+
+# A newer load must not make an older tagged process unreachable merely by
+# replacing the marker. The dedicated environment key is set only by this
+# staging harness, so discover every surviving owned process before cleanup.
+for environ_path in glob.glob("/proc/[0-9]*/environ"):
+    try:
+        pid = int(environ_path.split("/")[2])
+        environ = open(environ_path, "rb").read().split(b"\\0")
+    except (OSError, ValueError):
+        continue
+    prefix = b"COCALC_P95_LOAD_TOKEN="
+    token_entry = next((entry for entry in environ if entry.startswith(prefix)), None)
+    if token_entry is not None:
+        token = token_entry[len(prefix):].decode("utf-8", errors="ignore")
+        if pid > 1 and token:
+            owned[pid] = token
+
+for pid, token in owned.items():
     try:
         environ = open(f"/proc/{pid}/environ", "rb").read()
     except OSError:
         environ = b""
-    owned = bool(token) and f"COCALC_P95_LOAD_TOKEN={token}".encode() in environ
-    if pid > 1 and owned:
+    is_owned = bool(token) and f"COCALC_P95_LOAD_TOKEN={token}".encode() in environ
+    if is_owned:
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.1)
-        else:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+
+deadline = time.monotonic() + 5
+for pid, token in owned.items():
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 for path in [marker_path, *glob.glob(f"{data_prefix}*.bin")]:
     try:
@@ -248,6 +272,14 @@ for (const project_id of options.projects) {
     results.push({ project_id, cleaned: response.data?.exit_code === 0 });
     continue;
   }
+  await runCli(options.api, [
+    "project",
+    "exec",
+    "-w",
+    project_id,
+    "--bash",
+    cleanupCommand(),
+  ]);
   const token = randomUUID();
   const response = await runCli(options.api, [
     "project",
