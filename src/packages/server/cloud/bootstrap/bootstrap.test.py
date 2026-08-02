@@ -2209,8 +2209,18 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("reconcile_project_pool_io_reservation", script)
             self.assertIn("apply_project_pool_io_snapshot", script)
             self.assertIn("verify_project_pool_io_snapshot", script)
+            self.assertIn("set_project_pool_pressure_mode", script)
+            self.assertIn("set-project-pool-pressure-mode)", script)
             self.assertIn(
                 'PROJECT_IO_NORMAL_LIMITS_SNAPSHOT="/run/cocalc-project-pool-normal-io.max"',
+                script,
+            )
+            self.assertIn(
+                'PROJECT_IO_PRESSURE_MODE_STATE="/run/cocalc-project-pool-pressure-mode"',
+                script,
+            )
+            self.assertIn(
+                '"pressure_protection_enabled": pressure_protection_enabled == "true"',
                 script,
             )
             self.assertIn('"pool_limit_scope": pool_scope', script)

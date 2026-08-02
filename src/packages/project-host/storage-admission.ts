@@ -11,6 +11,7 @@ import type {
   HostStoragePressureState,
 } from "@cocalc/conat/hub/api/hosts";
 import { getBtrfsMutationLockStatus } from "@cocalc/file-server/btrfs/operation-cache";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseIoPressure } from "./io-metrics";
@@ -25,6 +26,7 @@ const logger = getLogger("project-host:storage-admission");
 
 const PROJECT_POOL_IO_PRESSURE =
   "/sys/fs/cgroup/cocalc-project-pool/io.pressure";
+const RUNTIME_STORAGE = "/usr/local/sbin/cocalc-runtime-storage";
 const DEFAULT_SAMPLE_MS = 5_000;
 const DEFAULT_CONTENDED_FULL_AVG10 = 5;
 const DEFAULT_EMERGENCY_FULL_AVG10 = 10;
@@ -65,6 +67,7 @@ type StorageAdmissionControllerOptions = {
   recoveryFullAvg10?: number;
   recoveryMs?: number;
   contendedSamples?: number;
+  onPressureStateChange?: (state: HostStoragePressureState) => void;
 };
 
 export interface StorageAdmissionController {
@@ -229,6 +232,7 @@ export function createStorageAdmissionController(
     stateSince = at;
     transitionCount += 1;
     lastTransitionReason = reason;
+    options.onPressureStateChange?.(next);
   };
 
   const updateState = (inputs: StorageAdmissionInputs) => {
@@ -405,10 +409,56 @@ export function createStorageAdmissionController(
 
 let activeController: StorageAdmissionController | undefined;
 let activeTimer: ReturnType<typeof setInterval> | undefined;
+let pressurePolicyQueue: Promise<void> = Promise.resolve();
+let lastRequestedPressureMode: "normal" | "protect" | undefined;
+
+function setProjectPoolPressurePolicy(state: HostStoragePressureState): void {
+  const mode = state === "normal" ? "normal" : "protect";
+  if (mode === lastRequestedPressureMode) return;
+  lastRequestedPressureMode = mode;
+  pressurePolicyQueue = pressurePolicyQueue
+    .catch(() => {})
+    .then(
+      () =>
+        new Promise<void>((resolve) => {
+          execFile(
+            "/usr/bin/sudo",
+            ["-n", RUNTIME_STORAGE, "set-project-pool-pressure-mode", mode],
+            { timeout: 5_000, maxBuffer: 1024 * 1024 },
+            (err, _stdout, stderr) => {
+              if (err) {
+                logger.warn(
+                  "failed to reconcile project pool pressure policy",
+                  {
+                    mode,
+                    err: `${err}`,
+                    stderr: `${stderr ?? ""}`.trim().slice(0, 2_000),
+                  },
+                );
+                if (lastRequestedPressureMode === mode) {
+                  lastRequestedPressureMode = undefined;
+                  const retry = setTimeout(
+                    () => setProjectPoolPressurePolicy(state),
+                    5_000,
+                  );
+                  retry.unref?.();
+                }
+              }
+              resolve();
+            },
+          );
+        }),
+    );
+}
 
 export function startStorageAdmissionController(): () => void {
   if (activeController) return () => {};
-  activeController = createStorageAdmissionController();
+  activeController = createStorageAdmissionController({
+    onPressureStateChange: setProjectPoolPressurePolicy,
+  });
+  // Reconcile even when the initial sample is normal; /run state may have
+  // survived a project-host restart but not the controller's in-memory state.
+  setProjectPoolPressurePolicy(activeController.getStatus().pressure_state);
   const sampleMs = positiveInteger(
     process.env.COCALC_PROJECT_HOST_STORAGE_IO_SAMPLE_MS,
     DEFAULT_SAMPLE_MS,
@@ -423,11 +473,17 @@ export function startStorageAdmissionController(): () => void {
     if (activeTimer) clearInterval(activeTimer);
     activeTimer = undefined;
     activeController = undefined;
+    lastRequestedPressureMode = undefined;
   };
 }
 
 function controller(): StorageAdmissionController {
-  activeController ??= createStorageAdmissionController();
+  if (!activeController) {
+    activeController = createStorageAdmissionController({
+      onPressureStateChange: setProjectPoolPressurePolicy,
+    });
+    setProjectPoolPressurePolicy(activeController.getStatus().pressure_state);
+  }
   return activeController;
 }
 

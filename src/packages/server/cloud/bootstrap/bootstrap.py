@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260802-v29"
+HELPER_SCHEMA_VERSION = "20260802-v30"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -3467,6 +3467,7 @@ PROJECT_NETWORK_CHAIN="output"
 PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
 PROJECT_IO_RESERVATION_LOCK="/run/lock/cocalc-project-io-reservation.lock"
 PROJECT_IO_NORMAL_LIMITS_SNAPSHOT="/run/cocalc-project-pool-normal-io.max"
+PROJECT_IO_PRESSURE_MODE_STATE="/run/cocalc-project-pool-pressure-mode"
 PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"
 PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"
 PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"
@@ -3721,11 +3722,16 @@ project_startup_runtime_active_count() {
 }
 
 current_project_pool_io_scope() {
-  if [ "$(project_startup_runtime_active_count)" -gt 0 ]; then
+  if project_io_pressure_protection_enabled ||
+    [ "$(project_startup_runtime_active_count)" -gt 0 ]; then
     printf 'lifecycle-pool\n'
   else
     printf 'pool\n'
   fi
+}
+
+project_io_pressure_protection_enabled() {
+  [ "$(cat "$PROJECT_IO_PRESSURE_MODE_STATE" 2>/dev/null || true)" = "protect" ]
 }
 
 apply_project_pool_io_policy() {
@@ -3769,6 +3775,10 @@ verify_project_pool_io_snapshot() {
 reserve_project_startup_io_capacity() {
   local snapshot_tmp
   acquire_project_io_reservation_lock
+  if project_io_pressure_protection_enabled; then
+    release_project_io_reservation_lock
+    return 0
+  fi
   if [ -s "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT" ]; then
     release_project_io_reservation_lock
     return 0
@@ -3788,6 +3798,11 @@ release_project_startup_io_capacity() {
     release_project_io_reservation_lock
     return 0
   fi
+  if project_io_pressure_protection_enabled; then
+    rm -f "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+    release_project_io_reservation_lock
+    return 0
+  fi
   if [ -s "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT" ]; then
     apply_project_pool_io_snapshot "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
     verify_project_pool_io_snapshot "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
@@ -3796,6 +3811,31 @@ release_project_startup_io_capacity() {
     # Recover safely after an interrupted helper upgrade or manual cgroup edit.
     apply_project_pool_io_policy "pool"
   fi
+  release_project_io_reservation_lock
+}
+
+set_project_pool_pressure_mode() {
+  local mode="$1" state_tmp
+  acquire_project_io_reservation_lock
+  case "$mode" in
+    protect)
+      state_tmp="${PROJECT_IO_PRESSURE_MODE_STATE}.$$"
+      umask 077
+      printf 'protect\n' > "$state_tmp"
+      mv -f "$state_tmp" "$PROJECT_IO_PRESSURE_MODE_STATE"
+      apply_project_pool_io_policy "lifecycle-pool"
+      ;;
+    normal)
+      rm -f "$PROJECT_IO_PRESSURE_MODE_STATE"
+      if [ "$(project_startup_runtime_active_count)" -gt 0 ]; then
+        apply_project_pool_io_policy "lifecycle-pool"
+      else
+        apply_project_pool_io_policy "pool"
+        rm -f "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+      fi
+      ;;
+    *) deny "project-io-pressure-mode-invalid" "$mode" ;;
+  esac
   release_project_io_reservation_lock
 }
 
@@ -5516,6 +5556,8 @@ case "$cmd" in
     acquire_project_io_reservation_shared_lock
     pool_scope="$(current_project_pool_io_scope)"
     startup_runtime_active_count="$(project_startup_runtime_active_count)"
+    pressure_protection_enabled="false"
+    project_io_pressure_protection_enabled && pressure_protection_enabled="true"
     if [ "$io_mode" = "enforce" ]; then
       verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$pool_scope"
     fi
@@ -5532,7 +5574,7 @@ case "$cmd" in
     maintenance_memory_high="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/memory.high" 2>/dev/null || true)"
     maintenance_memory_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)"
     maintenance_pids_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/pids.max" 2>/dev/null || true)"
-    /usr/bin/python3 - "$policy_status" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" "$maintenance_io_max" "$maintenance_io_weight" "$maintenance_pressure" "$maintenance_processes" "$maintenance_cpu_max" "$maintenance_memory_high" "$maintenance_memory_max" "$maintenance_pids_max" "$pool_scope" "$startup_runtime_active_count" <<'PY'
+    /usr/bin/python3 - "$policy_status" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" "$maintenance_io_max" "$maintenance_io_weight" "$maintenance_pressure" "$maintenance_processes" "$maintenance_cpu_max" "$maintenance_memory_high" "$maintenance_memory_max" "$maintenance_pids_max" "$pool_scope" "$startup_runtime_active_count" "$pressure_protection_enabled" <<'PY'
 import json
 import sys
 
@@ -5552,6 +5594,7 @@ import sys
     maintenance_pids_max,
     pool_scope,
     startup_runtime_active_count,
+    pressure_protection_enabled,
 ) = sys.argv[1:]
 result = json.loads(status_json)
 discovery_error = result.pop("discovery_error", None)
@@ -5593,6 +5636,7 @@ result.update({
     "pool_io_weight": io_weight.strip(),
     "pool_limit_scope": pool_scope,
     "startup_runtime_active_count": int(startup_runtime_active_count),
+    "pressure_protection_enabled": pressure_protection_enabled == "true",
     "legacy_process_count": len(legacy.split()),
     "maintenance_cgroup": "/sys/fs/cgroup/cocalc-maintenance",
     "maintenance_io_max": maintenance_io_max.strip(),
@@ -5614,6 +5658,13 @@ PY
       exit 2
     fi
     reconcile_project_io_policy
+    ;;
+  set-project-pool-pressure-mode)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage set-project-pool-pressure-mode <normal|protect>" >&2
+      exit 2
+    fi
+    set_project_pool_pressure_mode "$1"
     ;;
   verify-project-network-limits)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then

@@ -75,6 +75,33 @@ describe("storage admission controller", () => {
     expect(controller.sample().pressure_state).toBe("normal");
   });
 
+  it("keeps protective I/O policy through recovery hysteresis", () => {
+    const transitions: string[] = [];
+    const controller = createStorageAdmissionController({
+      mode: "enforce",
+      now: () => now,
+      readInputs: () => ({
+        sampled_at_ms: now,
+        host_io_full_avg10: full,
+        project_pool_io_full_avg10: full / 2,
+        starting_projects: 0,
+        stopping_projects: 0,
+        btrfs_mutation_locks: 0,
+        btrfs_mutation_waiters: 0,
+      }),
+      recoveryMs: 60_000,
+      onPressureStateChange: (state) => transitions.push(state),
+    });
+    full = 10;
+    controller.sample();
+    full = 0;
+    now += 5_000;
+    controller.sample();
+    now += 60_000;
+    controller.sample();
+    expect(transitions).toEqual(["emergency", "recovery", "normal"]);
+  });
+
   it("keeps recovery blocked while lifecycle work is active", () => {
     const controller = create();
     full = 10;
