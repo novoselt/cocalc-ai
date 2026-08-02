@@ -1,6 +1,121 @@
 import { SimpleInputMerge } from "../simple-input-merge";
 
 describe("SimpleInputMerge", () => {
+  it("does not rebase a stale rendered value while a remote update is pending", () => {
+    const original = "%time a = random_matrix(GF(7),300)^2";
+    const firstRemote =
+      "%time a = random_matrix(GF(7),300)*random_matrix(GF(7),300)";
+    const secondRemote =
+      "a = random_matrix(GF(7),300)*random_matrix(GF(7),300)";
+    const merge = new SimpleInputMerge(original);
+    let rendered = original;
+    const requested: string[] = [];
+
+    const applyMerged = (value: string) => {
+      requested.push(value);
+      merge.noteSaved(value);
+      // React and CodeMirror do not necessarily render this synchronously.
+    };
+    merge.handleRemote({
+      remote: firstRemote,
+      getLocal: () => rendered,
+      applyMerged,
+    });
+    merge.handleRemote({
+      remote: secondRemote,
+      getLocal: () => rendered,
+      applyMerged,
+    });
+
+    expect(requested).toEqual([firstRemote, secondRemote]);
+    expect(rendered).toBe(original);
+  });
+
+  it("recognizes an intermediate value from multiple pending renders", () => {
+    const original = "base";
+    const firstRemote = "one\nbase";
+    const secondRemote = "two\nbase";
+    const thirdRemote = "three\nbase";
+    const merge = new SimpleInputMerge(original);
+    let rendered = original;
+    const requested: string[] = [];
+    const applyMerged = (value: string) => {
+      requested.push(value);
+      merge.noteSaved(value);
+    };
+
+    merge.handleRemote({
+      remote: firstRemote,
+      getLocal: () => rendered,
+      applyMerged,
+    });
+    merge.handleRemote({
+      remote: secondRemote,
+      getLocal: () => rendered,
+      applyMerged,
+    });
+    rendered = firstRemote;
+    merge.handleRemote({
+      remote: thirdRemote,
+      getLocal: () => rendered,
+      applyMerged,
+    });
+
+    expect(requested).toEqual([firstRemote, secondRemote, thirdRemote]);
+  });
+
+  it("preserves a user edit made from the pre-update rendered value", () => {
+    const original = "base";
+    const firstRemote = "remote 1\nbase";
+    const secondRemote = "remote 2\nbase";
+    const merge = new SimpleInputMerge(original);
+    let rendered = original;
+    let requested = "";
+    const applyMerged = (value: string) => {
+      requested = value;
+    };
+
+    merge.handleRemote({
+      remote: firstRemote,
+      getLocal: () => rendered,
+      applyMerged,
+    });
+    rendered = `${original}\nlocal`;
+    merge.handleRemote({
+      remote: secondRemote,
+      getLocal: () => rendered,
+      applyMerged,
+    });
+
+    expect(requested).toBe(`${secondRemote}\nlocal`);
+  });
+
+  it("preserves a user edit made from the post-update rendered value", () => {
+    const original = "base";
+    const firstRemote = "remote 1\nbase";
+    const secondRemote = "remote 2\nbase";
+    const merge = new SimpleInputMerge(original);
+    let rendered = original;
+    let requested = "";
+    const applyMerged = (value: string) => {
+      requested = value;
+    };
+
+    merge.handleRemote({
+      remote: firstRemote,
+      getLocal: () => rendered,
+      applyMerged,
+    });
+    rendered = `${firstRemote}\nlocal`;
+    merge.handleRemote({
+      remote: secondRemote,
+      getLocal: () => rendered,
+      applyMerged,
+    });
+
+    expect(requested).toBe(`${secondRemote}\nlocal`);
+  });
+
   it("adopts remote directly when there are no local edits", () => {
     const merge = new SimpleInputMerge("a");
     let local = "a";
