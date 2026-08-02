@@ -1867,7 +1867,22 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
         startup = self.run_calculation(devices, "startup")
         self.assertEqual(startup.returncode, 0, startup.stderr)
         self.assertEqual(
-            json.loads(startup.stdout)["rows"], calculated["rows"]
+            json.loads(startup.stdout)["rows"][0]["limits"],
+            {
+                "rbps": 91 * 1024**2,
+                "wbps": 95_420_416,
+                "riops": 1950,
+                "wiops": 1950,
+            },
+        )
+        self.assertEqual(
+            json.loads(startup.stdout)["rows"][1]["limits"],
+            {
+                "rbps": 120 * 1024**2,
+                "wbps": 100 * 1024**2,
+                "riops": 3000,
+                "wiops": 3000,
+            },
         )
 
     def test_dynamic_capacity_rejects_unmodeled_storage(self) -> None:
@@ -2361,6 +2376,17 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn(
                 "configure_project_startup_runtime_leaf",
                 startup_prepare_body,
+            )
+            startup_leaf_body = script.split(
+                "configure_project_startup_runtime_leaf() {", 1
+            )[1].split("\n}\n", 1)[0]
+            self.assertIn(
+                'apply_io_max "$cgroup" "startup" "$mode" "$io_class"',
+                startup_leaf_body,
+            )
+            self.assertIn(
+                'verify_io_max "$cgroup" "startup" "$io_class"',
+                startup_leaf_body,
             )
             self.assertIn(
                 'ensure_project_network_rule "$project_id"',

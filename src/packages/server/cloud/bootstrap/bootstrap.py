@@ -507,13 +507,15 @@ def effective_limits(
             {**row, "limits": {key: limits[key] for key in METRICS}}
             for row in devices
         ], None
-    factor = {
-        "pool": 100,
-        "maintenance": 10,
-        "startup": 100,
-        "standard": 25,
-        "member": 50,
-        "premium": 75,
+    factors = {
+        "pool": {key: 100 for key in METRICS},
+        "maintenance": {key: 10 for key in METRICS},
+        # Ordinary projects reserve 25% of write capacity. Give lifecycle
+        # work 50%, leaving 25% uncommitted while a start is active.
+        "startup": {"rbps": 100, "wbps": 200, "riops": 100, "wiops": 200},
+        "standard": {key: 25 for key in METRICS},
+        "member": {key: 50 for key in METRICS},
+        "premium": {key: 75 for key in METRICS},
     }[scope]
     # Each Persistent Disk has its own size-derived limits; combining capacities
     # before applying the formula loses the baseline capacity of every extra disk.
@@ -530,7 +532,7 @@ def effective_limits(
             {
                 **row,
                 "limits": {
-                    key: max(1, (pool[key] * factor) // 100)
+                    key: max(1, (pool[key] * factors[key]) // 100)
                     for key in METRICS
                 },
             }
@@ -4051,13 +4053,20 @@ configure_project_startup_runtime_leaf() {
   local memory_swap_max="$5" pids_max="$6" cpu_quota="$7"
   local cpu_period="$8" startup_cpu_weight="$9"
   local startup_io_weight="${10}" io_class="${11:-standard}"
+  local fields mode
   configure_project_cgroup \
     "$cgroup" "$memory_max" "$memory_high" "$memory_low" \
     "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
     "$startup_cpu_weight" "$startup_io_weight" "$io_class"
-  # Enforced policy normally replaces the caller's requested weight. During
-  # startup the leaf is also bounded by the two-CPU/tight-I/O parent, so give
-  # it first service within that reserve without weakening any hard cap.
+  fields="$(project_io_policy_fields "$io_class")" ||
+    deny "project-io-policy-invalid" "$io_class"
+  IFS=$'\t' read -r mode _rest <<< "$fields"
+  apply_io_max "$cgroup" "startup" "$mode" "$io_class"
+  if [ "$mode" = "enforce" ]; then
+    verify_io_max "$cgroup" "startup" "$io_class"
+  fi
+  # Enforced policy normally replaces the caller's requested weight. Give a
+  # starting runtime first service inside the bounded startup parent.
   printf '%s\n' "$startup_cpu_weight" > "$cgroup/cpu.weight"
   if [ -w "$cgroup/io.weight" ]; then
     printf 'default %s\n' "$startup_io_weight" > "$cgroup/io.weight"
