@@ -2,8 +2,8 @@
 
 Date: 2026-08-01
 
-Status: implementation approved; automatic production full snapshots are
-temporarily disabled while this plan is completed.
+Status: implemented, validated on staging, and deployed to production. Daily
+production full snapshots are enabled on primary worker 1.
 
 ## Goal
 
@@ -165,8 +165,9 @@ Automatic full snapshots remain disabled throughout migration.
    remote-only restore metadata, WAL synchronization, retention, and disk
    headroom.
 7. Re-enable the 24-hour scheduler and roll workers individually.
-8. Observe through the next scheduled run. Once restore evidence is sound,
-   delete the old backup repository from the PostgreSQL disk.
+8. Observe health after the scheduler roll. Once restore evidence is sound,
+   delete the old backup repository from the PostgreSQL disk and verify the
+   reclaimed PostgreSQL-disk headroom.
 
 The old repository remains untouched until the first backup and restore checks
 on the new volume pass, making rollback an environment change and worker roll.
@@ -183,6 +184,43 @@ on the new volume pass, making rollback an environment change and worker roll.
 - A remote-only restore test passes for a snapshot created after migration.
 - PostgreSQL, router, persist, and public hub health remain available during
   every injected backup failure.
+
+## Completion Evidence
+
+Staging used a separate 500 GiB `pd-balanced` disk and passed successful backup
+and remote restore, missing-mount fail-closed, capacity refusal, four-worker
+scheduler convergence, killed-backup cleanup, and bounded retry tests. Hub
+health remained normal through every injected failure.
+
+Production completed the migration on 2026-08-02 UTC:
+
+- `prod-bay-0-backups` is mounted at `/mnt/cocalc-backups` on a filesystem
+  distinct from `/mnt/cocalc`.
+- Backup set `e52d24d9-8dcf-43ab-9a64-7a295e5d0a31` committed 21.6 GB of
+  local artifacts and Rustic snapshot
+  `7c9f851853c0f310b33b30344ecbec8b1c2ae1eb09f05fd8f2bafdd6fbca694d`.
+- A remote-only restore of that exact Rustic snapshot started as an isolated
+  PostgreSQL cluster, passed schema dump, had zero invalid indexes, and restored
+  all 66,397 Conat SQLite databases with successful `PRAGMA quick_check`.
+- All four hub workers remained healthy during backup, remote restore, and the
+  rolling scheduler activation.
+- The retired 273 GiB repository was deleted from the PostgreSQL disk only
+  after remote restore validation. Free space on that disk increased from
+  99 GiB to 371 GiB.
+- Production keeps two local committed snapshots, requires 64 GiB free after
+  admission, and schedules snapshots every 24 hours only on worker 1.
+
+Two follow-ups are intentionally separate from this incident mitigation:
+
+- Long `bay backup` and `bay restore` RPCs require CLI timeout values that
+  exceed the work duration; the default operator timeout can expire while the
+  server-side operation continues safely.
+- Startup WAL-state publication can overwrite the persisted
+  `maintenance_next_run_at` field with `null`. The primary worker's in-memory
+  timer remains active and restart scheduling is recomputed from the last
+  successful backup, but state-file updates should be serialized for accurate
+  status. PostgreSQL WAL archiving also remains disabled, so this rollout
+  validates full-snapshot recovery rather than PITR.
 
 ## Explicit Non-Goal
 
