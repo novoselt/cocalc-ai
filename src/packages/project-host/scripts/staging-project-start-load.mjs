@@ -254,6 +254,8 @@ for (const project_id of options.projects) {
     "exec",
     "-w",
     project_id,
+    "--timeout",
+    `${options.duration_s + 30}`,
     "--async",
     "--bash",
     loadCommand({
