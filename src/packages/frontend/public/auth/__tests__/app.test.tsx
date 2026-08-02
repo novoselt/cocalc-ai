@@ -1730,7 +1730,12 @@ describe("PublicAuthApp", () => {
       state: "pending",
       expires_at: "2026-05-08T18:00:00.000Z",
     } as any);
-    mockedPostAuthApi.mockResolvedValueOnce({ approved: true } as any);
+    mockedPostAuthApi
+      .mockResolvedValueOnce({
+        token: "approval-token",
+        home_bay_id: "bay-0",
+      } as any)
+      .mockResolvedValueOnce({ approved: true } as any);
 
     render(
       <PublicAuthApp
@@ -1754,9 +1759,67 @@ describe("PublicAuthApp", () => {
     await waitFor(() =>
       expect(mockedPostAuthApi).toHaveBeenCalledWith({
         endpoint: "auth/cli/login/approve",
-        body: { challenge_id: "challenge-1" },
+        body: {
+          challenge_id: "challenge-1",
+          approval_token: "approval-token",
+          approval_home_bay_id: "bay-0",
+        },
       }),
     );
+  });
+
+  it("clearly approves an elevated CLI login in one browser flow", async () => {
+    mockedPostAuthApi
+      .mockResolvedValueOnce({
+        challenge_id: "challenge-1",
+        kind: "login",
+        account_id: null,
+        current_account_id: "acct-viewer",
+        current_email_address: "alice@example.com",
+        current_display_name: "Alice Example",
+        current_matches_account: true,
+        elevated_login: true,
+        requested_duration: "extended",
+        state: "pending",
+        expires_at: "2026-05-08T18:00:00.000Z",
+      } as any)
+      .mockResolvedValueOnce({
+        token: "approval-token",
+        home_bay_id: "bay-0",
+      } as any)
+      .mockResolvedValueOnce({ approved: true } as any);
+
+    render(
+      <PublicAuthApp
+        config={config({ is_authenticated: true })}
+        initialRoute={{ challengeId: "challenge-1", kind: "auth-cli-login" }}
+      />,
+    );
+
+    expect(
+      await screen.findByText(/Approve an elevated CLI sign-in/),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Approve Elevated CLI Login" }),
+    ).not.toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve Elevated CLI Login" }),
+    );
+
+    await waitFor(() =>
+      expect(mockedPostAuthApi).toHaveBeenCalledWith({
+        endpoint: "auth/cli/login/approval-token",
+        origin: expect.anything(),
+        body: {
+          challenge_id: "challenge-1",
+          elevated_login: true,
+          requested_duration: "extended",
+        },
+      }),
+    );
+    expect(
+      await screen.findByText(/Elevated CLI login approved/),
+    ).not.toBeNull();
   });
 
   it("does not ask for or submit a password when CLI elevation uses a second factor", async () => {

@@ -97,6 +97,15 @@ describe("bootstrap-host promoted artifact defaults", () => {
         });
         return;
       }
+      if (path === "/software/container-runtime/latest-linux-amd64.json") {
+        sendJson({
+          url: `${softwareBaseUrl}/container-runtime/runtime-latest/container-runtime-linux-amd64.tar.xz`,
+          sha256: "e".repeat(64),
+          os: "linux",
+          arch: "amd64",
+        });
+        return;
+      }
       if (path.endsWith(".sha256")) {
         if (path.includes("/missing-build/")) {
           res.statusCode = 404;
@@ -236,6 +245,13 @@ describe("bootstrap-host promoted artifact defaults", () => {
         scope_type: "global",
         scope_id: "global",
         target_type: "artifact",
+        target: "container-runtime",
+        desired_version: "runtime-v6",
+      },
+      {
+        scope_type: "global",
+        scope_id: "global",
+        target_type: "artifact",
         target: "bootstrap-environment",
         desired_version: "bootstrap-v5",
       },
@@ -257,6 +273,10 @@ describe("bootstrap-host promoted artifact defaults", () => {
     );
     expect(scripts.toolsVersion).toBe("tools-v4");
     expect(scripts.toolsManifestUrl).toBe("");
+    expect(scripts.containerRuntimeUrl).toBe(
+      `${softwareBaseUrl}/container-runtime/runtime-v6/container-runtime-linux-amd64.tar.xz`,
+    );
+    expect(scripts.containerRuntimeVersion).toBe("runtime-v6");
     expect(scripts.bootstrapSelector).toBe("bootstrap-v5");
     expect(scripts.bootstrapPyUrl).toBe(
       `${softwareBaseUrl}/bootstrap/bootstrap-v5/bootstrap.py`,
@@ -273,6 +293,10 @@ describe("bootstrap-host promoted artifact defaults", () => {
     expect(scripts.toolsManifestUrl).toBe(
       `${softwareBaseUrl}/tools/latest-linux-amd64.json`,
     );
+    expect(scripts.containerRuntimeUrl).toBe(
+      `${softwareBaseUrl}/container-runtime/runtime-latest/container-runtime-linux-amd64.tar.xz`,
+    );
+    expect(scripts.containerRuntimeVersion).toBe("runtime-latest");
     expect(scripts.bootstrapSelector).toBe("latest");
   });
 

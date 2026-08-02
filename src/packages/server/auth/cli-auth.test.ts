@@ -158,6 +158,34 @@ describe("CLI auth login redemption", () => {
     });
   });
 
+  it("creates an already-elevated CLI session from an elevated login", async () => {
+    mockApprovedChallenge({
+      requested_duration: "extended",
+      metadata: {
+        redeem_token,
+        elevated_login: true,
+        factor_level: "passkey",
+        fresh_auth_until: "2099-06-21T08:00:00.000Z",
+      },
+    });
+    const { redeemCliLoginChallenge } = await import("./cli-auth");
+
+    await expect(
+      redeemCliLoginChallenge({ challenge_id, redeem_token }),
+    ).resolves.toMatchObject({
+      factor_level: "passkey",
+      fresh_auth_until: new Date("2099-06-21T08:00:00.000Z"),
+    });
+    expect(createClusterCliLoginSessionMock).toHaveBeenCalledWith({
+      account_id,
+      approved_challenge_id: challenge_id,
+      factor_level: "passkey",
+      fresh_auth_until: new Date("2099-06-21T08:00:00.000Z"),
+      ip_address: null,
+      user_agent: null,
+    });
+  });
+
   it("surfaces an already redeemed challenge update failure", async () => {
     mockApprovedChallenge();
     queryMock.mockImplementation(async (sql) => {
@@ -191,5 +219,89 @@ describe("CLI auth login redemption", () => {
     ).rejects.toThrow("cli auth challenge has already been redeemed");
 
     expect(createClusterCliLoginSessionMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("CLI elevated login approval", () => {
+  const account_id = "00000000-1000-4000-8000-000000000001";
+  const challenge_id = "00000000-1000-4000-8000-000000000010";
+
+  beforeEach(() => {
+    jest.resetModules();
+    withAccountRehomeWriteFenceMock = jest.fn(
+      async ({ fn }) =>
+        await fn({ query: (...args: any[]) => queryMock(...args) }),
+    );
+    createClusterCliLoginSessionMock = jest.fn();
+    getClusterAccountByIdMock = jest.fn();
+  });
+
+  it("persists signed fresh-auth proof on an elevated login challenge", async () => {
+    const freshAuthUntil = new Date(Date.now() + 5 * 60_000);
+    queryMock = jest.fn(async (sql) => {
+      if (`${sql}`.includes("SELECT *")) {
+        return {
+          rows: [
+            {
+              id: challenge_id,
+              account_id,
+              kind: "login",
+              status: "pending",
+              poll_token_hash: hashToken("poll-token"),
+              requested_duration: "default",
+              expire: new Date("2099-06-22T00:00:00.000Z"),
+              created: new Date("2099-06-21T00:00:00.000Z"),
+              metadata: { elevated_login: true },
+            },
+          ],
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    const { approveCliLoginChallenge } = await import("./cli-auth");
+
+    await expect(
+      approveCliLoginChallenge({
+        challenge_id,
+        account_id,
+        factor_level: "passkey",
+        fresh_auth_until: freshAuthUntil,
+      }),
+    ).resolves.toEqual({ approved: true });
+
+    const update = queryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("SET status = 'approved'"),
+    );
+    expect(update).toBeTruthy();
+    expect(JSON.parse(update?.[1][2])).toMatchObject({
+      elevated_login: true,
+      factor_level: "passkey",
+      fresh_auth_until: freshAuthUntil.toISOString(),
+    });
+  });
+
+  it("rejects elevated approval without fresh-auth proof", async () => {
+    queryMock = jest.fn(async (sql) => ({
+      rows: `${sql}`.includes("SELECT *")
+        ? [
+            {
+              id: challenge_id,
+              account_id,
+              kind: "login",
+              status: "pending",
+              poll_token_hash: hashToken("poll-token"),
+              requested_duration: "default",
+              expire: new Date("2099-06-22T00:00:00.000Z"),
+              created: new Date("2099-06-21T00:00:00.000Z"),
+              metadata: { elevated_login: true },
+            },
+          ]
+        : [],
+    }));
+    const { approveCliLoginChallenge } = await import("./cli-auth");
+
+    await expect(
+      approveCliLoginChallenge({ challenge_id, account_id }),
+    ).rejects.toThrow("valid factor level");
   });
 });

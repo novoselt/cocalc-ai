@@ -13,6 +13,7 @@ import {
   projectRuntimeId,
   shouldDismissRuntimeRecoveryNotice,
   shouldDisplayRuntimeRecoveryNotice,
+  shouldShowProjectRuntimeRecoveryBanner,
   shouldRecoverFromProjectRuntimeExit,
 } from "./runtime-recovery";
 
@@ -111,6 +112,26 @@ describe("project runtime recovery", () => {
         occurred_at: Date.now(),
       }),
     ).toBe(false);
+  });
+
+  it("does not label an active project start as reconnecting tools", () => {
+    const notice = {
+      id: "lost-during-start",
+      reason: "project_runtime_lost" as const,
+      occurred_at: Date.now(),
+    };
+    expect(
+      shouldShowProjectRuntimeRecoveryBanner({
+        notice,
+        runtimePreparing: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowProjectRuntimeRecoveryBanner({
+        notice,
+        runtimePreparing: false,
+      }),
+    ).toBe(true);
   });
 
   it("deduplicates explicit runtime exits without requiring a running transition", () => {

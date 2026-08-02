@@ -109,6 +109,8 @@ import { lite } from "@cocalc/frontend/lite";
 import { shouldBypassWorkspaceStartupGuardForTab } from "./workspace-startup";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import ProjectVersionUpdate from "./project-version-update";
+import { isProjectRuntimePreparing } from "@cocalc/frontend/project/runtime-start-readiness";
+import { shouldShowProjectRuntimeRecoveryBanner } from "@cocalc/frontend/project/runtime-recovery";
 
 const START_BANNER = false;
 
@@ -225,6 +227,12 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     { project_id },
     "runtime_recovery_notice",
   ) as any;
+  const startLroRecord = useTypedRedux({ project_id }, "start_lro");
+  const projectState = `${project?.getIn(["state", "state"]) ?? ""}`;
+  const runtimePreparing = isProjectRuntimePreparing({
+    projectState,
+    startLro: startLroRecord,
+  });
   const moveStatusVisible = shouldRenderMoveStatus(moveLro, moveReopenRequired);
   const hostUnavailable = !!host_id && hostOperational.state === "unavailable";
   const lifecycle = useMemo(
@@ -943,8 +951,15 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
 
   function renderRuntimeRecoveryBanner() {
     if (runtimeRecoveryNotice == null || hardDeleteBlocked) return;
-    const reason = runtimeRecoveryNotice?.get?.("reason");
-    if (reason !== "project_runtime_lost") return;
+    const notice = runtimeRecoveryNotice?.toJS?.() ?? runtimeRecoveryNotice;
+    if (
+      !shouldShowProjectRuntimeRecoveryBanner({
+        notice,
+        runtimePreparing,
+      })
+    ) {
+      return;
+    }
     return (
       <Alert
         showIcon

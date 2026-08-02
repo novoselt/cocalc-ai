@@ -216,6 +216,8 @@ export const TABLE_OWNERSHIP = {
     [
       "project_host_access",
       "project_host_bootstrap_tokens",
+      "project_host_exam_configs",
+      "project_host_exam_runs",
       "project_host_route_invalidations",
       "project_hosts",
       "project_runtime_slots",
@@ -227,6 +229,8 @@ export const TABLE_OWNERSHIP = {
       secondary_reference_fields: {
         account_id:
           "Account reference for access or allocation, not host placement authority.",
+        owner_account_id:
+          "Host owner or billing account reference, not host placement authority.",
         project_id:
           "Project reference for access or allocation, not host placement authority.",
       },
