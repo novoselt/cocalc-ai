@@ -98,6 +98,14 @@ async function maybeRedirectToRemoteSoftware(
 ): Promise<boolean> {
   const remoteBase = await remoteSoftwareBaseFromReq(req);
   if (!remoteBase) return false;
+  return redirectSoftwareRequest(req, res, remoteBase);
+}
+
+function redirectSoftwareRequest(
+  req: Request,
+  res: Response,
+  remoteBase: string,
+): boolean {
   const originalUrl = req.originalUrl || req.url || "";
   const [pathPart, queryPart] = originalUrl.split("?", 2);
   const softwareIndex = pathPart.indexOf("/software/");
@@ -520,6 +528,20 @@ async function redirectContainerRuntime(
   req: Request,
   res: Response,
 ): Promise<void> {
+  const configuredFallback = `${
+    process.env.COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL ?? ""
+  }`.trim();
+  if (
+    configuredFallback &&
+    !isSameSoftwareBaseUrl(configuredFallback, softwareBaseFromReq(req)) &&
+    redirectSoftwareRequest(
+      req,
+      res,
+      normalizeSoftwareBaseUrl(configuredFallback),
+    )
+  ) {
+    return;
+  }
   if (await maybeRedirectToRemoteSoftware(req, res)) return;
   sendNotFound(
     res,
