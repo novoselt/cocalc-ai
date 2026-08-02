@@ -1,6 +1,7 @@
 export {};
 
 import {
+  chmodSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -245,7 +246,10 @@ describe("bay-backup runner", () => {
     oldEnv = { ...process.env };
     backupRoot = await mkdtemp(join(tmpdir(), "cocalc-bay-backup-"));
     process.env.COCALC_BACKUP_ROOT = backupRoot;
+    process.env.COCALC_BAY_BACKUP_MIN_FREE_BYTES = "0";
+    process.env.COCALC_BAY_BACKUP_ESTIMATED_WORKSPACE_BYTES = "0";
     process.env.COCALC_DATA_DIR = join(backupRoot, "app-data");
+    process.env.DATA = process.env.COCALC_DATA_DIR;
     process.env.PGHOST = "/tmp/cocalc-test-pg";
     process.env.PGUSER = "smc";
     process.env.PGDATABASE = "smc";
@@ -626,6 +630,74 @@ describe("bay-backup runner", () => {
     expect(pool.client.release).toHaveBeenCalledTimes(1);
   });
 
+  it("fails before backup work when strict mode does not have a separate filesystem", async () => {
+    process.env.COCALC_BAY_BACKUP_REQUIRE_SEPARATE_FILESYSTEM = "1";
+
+    const { getBayBackupStatus, runBayBackup } = await import("./index");
+
+    await expect(runBayBackup()).rejects.toThrow(
+      "is not a separate filesystem",
+    );
+    expect(unwrappedExecCommands()).not.toContain("pg_dumpall");
+    expect(unwrappedExecCommands()).not.toContain("pg_basebackup");
+    const status = await getBayBackupStatus();
+    expect(status.bay_backup.filesystem.valid).toBe(false);
+    expect(status.bay_backup.filesystem.admission_allowed).toBe(false);
+  });
+
+  it("fails before backup work when the filesystem reserve would be consumed", async () => {
+    process.env.COCALC_BAY_BACKUP_MIN_FREE_BYTES = "9007199254740991";
+
+    const { getBayBackupStatus, runBayBackup } = await import("./index");
+
+    await expect(runBayBackup()).rejects.toThrow(
+      "insufficient backup filesystem capacity",
+    );
+    expect(unwrappedExecCommands()).not.toContain("pg_dumpall");
+    expect(unwrappedExecCommands()).not.toContain("pg_basebackup");
+    const status = await getBayBackupStatus();
+    expect(status.bay_backup.filesystem.valid).toBe(true);
+    expect(status.bay_backup.filesystem.admission_allowed).toBe(false);
+  });
+
+  it("removes abandoned uncommitted archives before starting a backup", async () => {
+    const orphan = join(
+      backupRoot,
+      "bay-backups",
+      "bay-0",
+      "archives",
+      "orphan-backup",
+    );
+    mkdirSync(orphan, { recursive: true });
+    writeFileSync(join(orphan, "base.tar.gz"), "orphan");
+
+    const { runBayBackup } = await import("./index");
+    const result = await runBayBackup();
+
+    expect(
+      readdirSync(join(backupRoot, "bay-backups", "bay-0", "archives")),
+    ).not.toContain("orphan-backup");
+    expect(
+      result.bay_backup.last_pruned_local_archive_count,
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("removes an archive when final manifest persistence fails", async () => {
+    const bayRoot = join(backupRoot, "bay-backups", "bay-0");
+    const manifestsDir = join(bayRoot, "manifests");
+    mkdirSync(manifestsDir, { recursive: true });
+    chmodSync(manifestsDir, 0o500);
+
+    const { runBayBackup } = await import("./index");
+    try {
+      await expect(runBayBackup()).rejects.toThrow();
+    } finally {
+      chmodSync(manifestsDir, 0o700);
+    }
+
+    expect(readdirSync(join(bayRoot, "archives"))).toEqual([]);
+  });
+
   it("backs up snapshots to rustic and restores from rustic when local archives are absent", async () => {
     rusticMissingConfigFailuresRemaining = 1;
     getServerSettingsMock = jest.fn(async () => ({
@@ -678,6 +750,31 @@ describe("bay-backup runner", () => {
     expect(
       readFileSync(join(restoreTargetDir, "secrets", "conat-password"), "utf8"),
     ).toBe("secret\n");
+  });
+
+  it("retries a failed rustic upload without taking another postgres backup", async () => {
+    rusticMissingConfigFailuresRemaining = 2;
+    getServerSettingsMock = jest.fn(async () => ({
+      r2_account_id: "acct-1",
+      r2_access_key_id: "key-1",
+      r2_secret_access_key: "secret-1",
+      r2_bucket_prefix: "lite4-dev",
+    }));
+
+    const { runBayBackup, syncBayWalArchive } = await import("./index");
+
+    const backup = await runBayBackup();
+    expect(backup.storage_backend).toBe("local");
+    expect(
+      unwrappedExecCommands().filter((cmd) => cmd === "pg_dumpall"),
+    ).toHaveLength(1);
+
+    const retried = await syncBayWalArchive();
+    expect(retried.state.latest_storage_backend).toBe("rustic");
+    expect(retried.state.latest_remote_snapshot_id).toBe("snap-1");
+    expect(
+      unwrappedExecCommands().filter((cmd) => cmd === "pg_dumpall"),
+    ).toHaveLength(1);
   });
 
   it("falls back from pg_basebackup to pg_dumpall when replication is blocked", async () => {
@@ -2008,8 +2105,12 @@ describe("bay-backup runner", () => {
     process.env.COCALC_BAY_WAL_LOCAL_RETENTION_COUNT = "17";
     process.env.COCALC_BAY_WAL_REMOTE_RETENTION_BACKUPS = "4";
 
-    const { getBayBackupStatus, runBayBackup, startBayBackupMaintenance } =
-      await import("./index");
+    const {
+      computeBayBackupRetryDelayMs,
+      getBayBackupStatus,
+      runBayBackup,
+      startBayBackupMaintenance,
+    } = await import("./index");
 
     await runBayBackup();
     startBayBackupMaintenance();
@@ -2021,11 +2122,27 @@ describe("bay-backup runner", () => {
     expect(status.bay_backup.full_snapshot_scheduler_enabled).toBe(true);
     expect(status.bay_backup.full_snapshot_interval_ms).toBe(600000);
     expect(status.bay_backup.full_snapshot_retry_interval_ms).toBe(12345);
+    expect(status.bay_backup.full_snapshot_retry_max_ms).toBe(21600000);
+    expect(status.bay_backup.maintenance_consecutive_failures).toBe(0);
     expect(status.bay_backup.full_snapshot_retention_count).toBe(9);
     expect(status.bay_backup.restore_workspace_retention_days).toBe(5);
     expect(status.bay_backup.local_wal_retention_count).toBe(17);
     expect(status.bay_backup.remote_wal_retention_backups).toBe(4);
     expect(status.bay_backup.maintenance_running).toBe(false);
     expect(status.bay_backup.maintenance_next_run_at).toBeTruthy();
+    expect(
+      computeBayBackupRetryDelayMs({
+        retry_interval_ms: 15 * 60 * 1000,
+        retry_max_ms: 6 * 60 * 60 * 1000,
+        consecutive_failures: 1,
+      }),
+    ).toBe(15 * 60 * 1000);
+    expect(
+      computeBayBackupRetryDelayMs({
+        retry_interval_ms: 15 * 60 * 1000,
+        retry_max_ms: 6 * 60 * 60 * 1000,
+        consecutive_failures: 20,
+      }),
+    ).toBe(6 * 60 * 60 * 1000);
   });
 });
