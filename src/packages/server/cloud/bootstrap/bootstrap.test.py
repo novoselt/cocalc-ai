@@ -1796,50 +1796,79 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
             {
                 "total_bytes": 650 * 1024**3,
                 "device_count": 2,
-                "physical_read_bps": 240 * 1024**2,
-                "physical_write_bps": 200 * 1024**2,
-                "physical_iops": 6900,
+                "physical_read_bps": 422 * 1024**2,
+                "physical_write_bps": 382 * 1024**2,
+                "physical_iops": 9900,
             },
         )
-        for row in calculated["rows"]:
-            self.assertEqual(
-                row["limits"],
-                {
-                    "rbps": 60 * 1024**2,
-                    "wbps": 25 * 1024**2,
-                    "riops": 1725,
-                    "wiops": 862,
-                },
-            )
+        self.assertEqual(
+            calculated["rows"][0]["limits"],
+            {
+                "rbps": 91 * 1024**2,
+                "wbps": 47_710_208,
+                "riops": 1950,
+                "wiops": 975,
+            },
+        )
+        self.assertEqual(
+            calculated["rows"][1]["limits"],
+            {
+                "rbps": 120 * 1024**2,
+                "wbps": 50 * 1024**2,
+                "riops": 3000,
+                "wiops": 1500,
+            },
+        )
 
         premium = self.run_calculation(devices, "premium")
         self.assertEqual(premium.returncode, 0, premium.stderr)
-        for row in json.loads(premium.stdout)["rows"]:
-            self.assertEqual(row["limits"]["rbps"], 45 * 1024**2)
-            self.assertEqual(row["limits"]["wbps"], 19_660_800)
-            self.assertEqual(row["limits"]["riops"], 1293)
-            self.assertEqual(row["limits"]["wiops"], 646)
+        premium_rows = json.loads(premium.stdout)["rows"]
+        self.assertEqual(
+            premium_rows[0]["limits"],
+            {
+                "rbps": 71_565_312,
+                "wbps": 35_782_656,
+                "riops": 1462,
+                "wiops": 731,
+            },
+        )
+        self.assertEqual(
+            premium_rows[1]["limits"],
+            {
+                "rbps": 90 * 1024**2,
+                "wbps": 39_321_600,
+                "riops": 2250,
+                "wiops": 1125,
+            },
+        )
 
         maintenance = self.run_calculation(devices, "maintenance")
         self.assertEqual(maintenance.returncode, 0, maintenance.stderr)
-        for row in json.loads(maintenance.stdout)["rows"]:
-            self.assertEqual(row["limits"]["rbps"], 6 * 1024**2)
-            self.assertEqual(row["limits"]["wbps"], 2_621_440)
-            self.assertEqual(row["limits"]["riops"], 172)
-            self.assertEqual(row["limits"]["wiops"], 86)
+        maintenance_rows = json.loads(maintenance.stdout)["rows"]
+        self.assertEqual(
+            maintenance_rows[0]["limits"],
+            {
+                "rbps": 9_542_041,
+                "wbps": 4_771_020,
+                "riops": 195,
+                "wiops": 97,
+            },
+        )
+        self.assertEqual(
+            maintenance_rows[1]["limits"],
+            {
+                "rbps": 12 * 1024**2,
+                "wbps": 5 * 1024**2,
+                "riops": 300,
+                "wiops": 150,
+            },
+        )
 
         startup = self.run_calculation(devices, "startup")
         self.assertEqual(startup.returncode, 0, startup.stderr)
-        for row in json.loads(startup.stdout)["rows"]:
-            self.assertEqual(
-                row["limits"],
-                {
-                    "rbps": 60 * 1024**2,
-                    "wbps": 25 * 1024**2,
-                    "riops": 1725,
-                    "wiops": 862,
-                },
-            )
+        self.assertEqual(
+            json.loads(startup.stdout)["rows"], calculated["rows"]
+        )
 
     def test_dynamic_capacity_rejects_unmodeled_storage(self) -> None:
         result = self.run_calculation(

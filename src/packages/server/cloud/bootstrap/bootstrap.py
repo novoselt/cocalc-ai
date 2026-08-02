@@ -465,28 +465,21 @@ def discover_devices(
     return sorted(devices.values(), key=lambda row: row["major_minor"])
 
 
-def dynamic_pool_limits(devices: list[dict[str, Any]]) -> dict[str, int]:
-    if any(
-        row["provider"] != "gcp" or row["disk_type"] != "balanced"
-        for row in devices
-    ):
+def balanced_device_capacity(device: dict[str, Any]) -> dict[str, int]:
+    if device["provider"] != "gcp" or device["disk_type"] != "balanced":
         raise ValueError(
             "gcp-pd-balanced capacity requires GCP balanced disks only"
         )
-    total_bytes = sum(row["size_bytes"] for row in devices)
-    count = len(devices)
-    physical_iops = min(15000, 3000 + (6 * total_bytes) // GIB)
+    size_bytes = device["size_bytes"]
+    physical_iops = min(15000, 3000 + (6 * size_bytes) // GIB)
     size_throughput = (
-        140 * MIB + (28 * total_bytes * MIB) // (100 * GIB)
+        140 * MIB + (28 * size_bytes * MIB) // (100 * GIB)
     )
-    physical_read_bps = min(240 * MIB, size_throughput)
-    # 200 MiB/s is below the smallest documented pd-balanced write cap.
-    physical_write_bps = min(200 * MIB, size_throughput)
     return {
-        "rbps": max(1, (physical_read_bps * 50) // (100 * count)),
-        "wbps": max(1, (physical_write_bps * 25) // (100 * count)),
-        "riops": max(1, (physical_iops * 50) // (100 * count)),
-        "wiops": max(1, (physical_iops * 25) // (100 * count)),
+        "physical_read_bps": min(240 * MIB, size_throughput),
+        # 200 MiB/s is below the smallest documented pd-balanced write cap.
+        "physical_write_bps": min(200 * MIB, size_throughput),
+        "physical_iops": physical_iops,
     }
 
 
@@ -514,7 +507,6 @@ def effective_limits(
             {**row, "limits": {key: limits[key] for key in METRICS}}
             for row in devices
         ], None
-    pool = dynamic_pool_limits(devices)
     factor = {
         "pool": 100,
         "maintenance": 10,
@@ -523,27 +515,37 @@ def effective_limits(
         "member": 50,
         "premium": 75,
     }[scope]
-    rows = [
-        {
-            **row,
-            "limits": {
-                key: max(1, (pool[key] * factor) // 100)
-                for key in METRICS
-            },
+    # Each Persistent Disk has its own size-derived limits; combining capacities
+    # before applying the formula loses the baseline capacity of every extra disk.
+    capacities = [balanced_device_capacity(row) for row in devices]
+    rows = []
+    for row, capacity in zip(devices, capacities):
+        pool = {
+            "rbps": max(1, (capacity["physical_read_bps"] * 50) // 100),
+            "wbps": max(1, (capacity["physical_write_bps"] * 25) // 100),
+            "riops": max(1, (capacity["physical_iops"] * 50) // 100),
+            "wiops": max(1, (capacity["physical_iops"] * 25) // 100),
         }
-        for row in devices
-    ]
+        rows.append(
+            {
+                **row,
+                "limits": {
+                    key: max(1, (pool[key] * factor) // 100)
+                    for key in METRICS
+                },
+            }
+        )
     total_bytes = sum(row["size_bytes"] for row in devices)
-    physical_iops = min(15000, 3000 + (6 * total_bytes) // GIB)
-    size_throughput = (
-        140 * MIB + (28 * total_bytes * MIB) // (100 * GIB)
-    )
     return rows, {
         "total_bytes": total_bytes,
         "device_count": len(devices),
-        "physical_read_bps": min(240 * MIB, size_throughput),
-        "physical_write_bps": min(200 * MIB, size_throughput),
-        "physical_iops": physical_iops,
+        "physical_read_bps": sum(
+            row["physical_read_bps"] for row in capacities
+        ),
+        "physical_write_bps": sum(
+            row["physical_write_bps"] for row in capacities
+        ),
+        "physical_iops": sum(row["physical_iops"] for row in capacities),
     }
 
 
