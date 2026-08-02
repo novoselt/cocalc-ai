@@ -11,6 +11,7 @@ const mockGetAccountId = jest.fn();
 const mockGetParams = jest.fn();
 const mockGetRememberMeHash = jest.fn();
 const mockRequireFreshAuth = jest.fn();
+const mockResolveFreshAuthDurationMs = jest.fn();
 const mockApproveCliLoginChallenge = jest.fn();
 const mockVerifyHomeBayRetryToken = jest.fn();
 const mockGetClusterAccountById = jest.fn();
@@ -32,6 +33,8 @@ jest.mock("@cocalc/server/auth/remember-me", () => ({
 
 jest.mock("@cocalc/server/auth/auth-sessions", () => ({
   requireFreshAuth: (...args: any[]) => mockRequireFreshAuth(...args),
+  resolveFreshAuthDurationMs: (...args: any[]) =>
+    mockResolveFreshAuthDurationMs(...args),
 }));
 
 jest.mock("@cocalc/server/auth/cli-auth", () => ({
@@ -60,7 +63,11 @@ describe("/api/v2/auth/cli/login/approve fresh auth", () => {
     mockGetAccountId.mockReset().mockResolvedValue("acct-1");
     mockGetParams.mockReset().mockReturnValue({ challenge_id: "challenge-1" });
     mockGetRememberMeHash.mockReset().mockReturnValue("session-hash");
-    mockRequireFreshAuth.mockReset().mockResolvedValue(undefined);
+    mockRequireFreshAuth.mockReset().mockResolvedValue({
+      factor_level: "passkey",
+      fresh_auth_until: new Date("2099-05-08T18:00:00.000Z"),
+    });
+    mockResolveFreshAuthDurationMs.mockReset().mockReturnValue(8 * 60 * 60_000);
     mockApproveCliLoginChallenge
       .mockReset()
       .mockResolvedValue({ approved: true });
@@ -69,6 +76,8 @@ describe("/api/v2/auth/cli/login/approve fresh auth", () => {
       home_bay_id: "bay-2",
       purpose: "cli-login",
       challenge_id: "challenge-1",
+      factor_level: "passkey",
+      fresh_auth_until: "2099-05-08T18:00:00.000Z",
     });
     mockGetClusterAccountById.mockReset().mockResolvedValue({
       account_id: "acct-remote",
@@ -116,6 +125,8 @@ describe("/api/v2/auth/cli/login/approve fresh auth", () => {
     expect(mockApproveCliLoginChallenge).toHaveBeenCalledWith({
       challenge_id: "challenge-1",
       account_id: "acct-1",
+      factor_level: "passkey",
+      fresh_auth_until: "2099-05-08T18:00:00.000Z",
     });
   });
 
@@ -141,6 +152,8 @@ describe("/api/v2/auth/cli/login/approve fresh auth", () => {
     expect(mockApproveCliLoginChallenge).toHaveBeenCalledWith({
       challenge_id: "challenge-1",
       account_id: "acct-remote",
+      factor_level: "passkey",
+      fresh_auth_until: "2099-05-08T18:00:00.000Z",
     });
   });
 });
@@ -151,7 +164,11 @@ describe("/api/v2/auth/cli/login/approval-token", () => {
     mockGetAccountId.mockReset().mockResolvedValue("acct-remote");
     mockGetParams.mockReset().mockReturnValue({ challenge_id: "challenge-1" });
     mockGetRememberMeHash.mockReset().mockReturnValue("session-hash");
-    mockRequireFreshAuth.mockReset().mockResolvedValue(undefined);
+    mockRequireFreshAuth.mockReset().mockResolvedValue({
+      factor_level: "passkey",
+      fresh_auth_until: new Date("2099-05-08T18:00:00.000Z"),
+    });
+    mockResolveFreshAuthDurationMs.mockReset().mockReturnValue(8 * 60 * 60_000);
     mockGetClusterAccountById.mockReset().mockResolvedValue({
       account_id: "acct-remote",
       home_bay_id: "bay-2",
@@ -174,6 +191,8 @@ describe("/api/v2/auth/cli/login/approval-token", () => {
       expires_at: 123456,
       account_id: "acct-remote",
       home_bay_id: "bay-2",
+      factor_level: "passkey",
+      fresh_auth_until: "2099-05-08T18:00:00.000Z",
     });
     expect(mockRequireFreshAuth).toHaveBeenCalledWith({
       req,
@@ -182,9 +201,34 @@ describe("/api/v2/auth/cli/login/approval-token", () => {
     expect(mockIssueHomeBayRetryToken).toHaveBeenCalledWith({
       account_id: "acct-remote",
       challenge_id: "challenge-1",
+      factor_level: "passkey",
+      fresh_auth_until: "2099-05-08T18:00:00.000Z",
       home_bay_id: "bay-2",
       purpose: "cli-login",
       ttl_seconds: 5 * 60,
     });
+  });
+
+  it("rejects an elevated login when the browser proof is too short", async () => {
+    mockGetParams.mockReturnValue({
+      challenge_id: "challenge-1",
+      elevated_login: true,
+      requested_duration: "extended",
+    });
+    mockRequireFreshAuth.mockResolvedValue({
+      factor_level: "passkey",
+      fresh_auth_until: new Date(Date.now() + 15 * 60_000),
+    });
+    const { req, res } = createMocks({ method: "POST" });
+
+    const { default: handler } =
+      await import("./auth/cli/login/approval-token");
+    await handler(req, res);
+
+    expect(res._getJSONData()).toEqual({
+      error: "fresh auth is required for elevated cli login",
+      code: "fresh_auth_required",
+    });
+    expect(mockIssueHomeBayRetryToken).not.toHaveBeenCalled();
   });
 });

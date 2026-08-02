@@ -313,6 +313,8 @@ export const LogEntry: React.FC<Props> = React.memo(
           return "restore/dearchive path";
         case "warm_provisioned":
           return "provisioned start path";
+        case "rootfs_prepare":
+          return "RootFS preparation path";
         case "host_start_or_unknown":
           return "host start or unknown path";
         default:

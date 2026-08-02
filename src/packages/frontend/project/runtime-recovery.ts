@@ -18,6 +18,23 @@ export function shouldDisplayRuntimeRecoveryNotice(
   return notice.reason === "project_runtime_lost";
 }
 
+export function shouldShowProjectRuntimeRecoveryBanner({
+  notice,
+  runtimePreparing,
+}: {
+  notice?: RuntimeRecoveryNotice;
+  runtimePreparing: boolean;
+}): boolean {
+  // Startup progress is the more accurate explanation while a start operation
+  // is active. A delayed runtime-loss notice must not turn image preparation
+  // into a misleading "reconnecting tools" warning.
+  return (
+    !runtimePreparing &&
+    notice != null &&
+    shouldDisplayRuntimeRecoveryNotice(notice)
+  );
+}
+
 export function shouldDismissRuntimeRecoveryNotice({
   projectState,
   notice,

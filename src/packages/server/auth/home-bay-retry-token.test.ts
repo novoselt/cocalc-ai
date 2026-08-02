@@ -91,6 +91,8 @@ describe("auth/home-bay-retry-token", () => {
     const issued = issueHomeBayRetryToken({
       account_id: "33333333-3333-4333-8333-333333333333",
       challenge_id: "44444444-4444-4444-8444-444444444444",
+      factor_level: "passkey",
+      fresh_auth_until: "2099-05-08T18:00:00.000Z",
       home_bay_id: "bay-2",
       purpose: "cli-login",
     });
@@ -106,6 +108,8 @@ describe("auth/home-bay-retry-token", () => {
     ).toMatchObject({
       account_id: "33333333-3333-4333-8333-333333333333",
       challenge_id: "44444444-4444-4444-8444-444444444444",
+      factor_level: "passkey",
+      fresh_auth_until: "2099-05-08T18:00:00.000Z",
       home_bay_id: "bay-2",
       purpose: "cli-login",
     });

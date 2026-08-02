@@ -101,7 +101,7 @@ describe("getUserFacingListingError", () => {
         ),
       ),
     ).toBe(
-      "The project connection closed while the file listing was loading. Please wait a moment.",
+      "The project image is still being prepared. Files will appear automatically when the RootFS is ready.",
     );
   });
 

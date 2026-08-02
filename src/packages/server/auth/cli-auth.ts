@@ -90,6 +90,49 @@ function cleanSessionHash(session_hash: string): string {
   return value;
 }
 
+function cleanFactorLevel(value: unknown): AuthSessionFactorLevel {
+  if (
+    value === "none" ||
+    value === "totp" ||
+    value === "recovery_code" ||
+    value === "passkey" ||
+    value === "google_oidc"
+  ) {
+    return value;
+  }
+  throw new Error("elevated cli login is missing a valid factor level");
+}
+
+function cleanFutureDate(value: unknown): Date | null {
+  const date = value ? new Date(value as any) : null;
+  return date != null &&
+    Number.isFinite(date.valueOf()) &&
+    date.valueOf() > Date.now()
+    ? date
+    : null;
+}
+
+function requireFreshAuthUntil({
+  factor_level,
+  fresh_auth_until,
+  duration,
+}: {
+  factor_level: AuthSessionFactorLevel;
+  fresh_auth_until?: Date | string | null;
+  duration: FreshAuthDuration;
+}): Date {
+  const until = cleanFutureDate(fresh_auth_until);
+  const requiredMs = resolveFreshAuthDurationMs({ duration, factor_level });
+  // Account for the few seconds between browser verification and approval.
+  if (until == null || until.valueOf() < Date.now() + requiredMs - 60_000) {
+    throw Object.assign(
+      new Error("fresh auth is required for elevated cli login"),
+      { code: "fresh_auth_required" },
+    );
+  }
+  return until;
+}
+
 function hashToken(token: string): string {
   return createHash("sha256")
     .update(`${token ?? ""}`, "utf8")
@@ -411,9 +454,13 @@ async function ensureChallengeOwnedByAccount({
 export async function startCliLoginChallenge({
   req,
   email,
+  elevated_login = false,
+  duration,
 }: {
   req: any;
   email?: string;
+  elevated_login?: boolean;
+  duration?: FreshAuthDuration;
 }): Promise<{
   challenge_id: string;
   poll_token: string;
@@ -432,9 +479,11 @@ export async function startCliLoginChallenge({
     account_id: PENDING_CLI_LOGIN_ACCOUNT_ID,
     kind: "login",
     poll_token,
+    requested_duration: elevated_login ? (duration ?? "default") : null,
     metadata: {
       ...(emailHint ? { email_hint: emailHint } : undefined),
       auth_client: "cli",
+      elevated_login,
       ip_key: ipKey || "unknown",
     },
   });
@@ -538,7 +587,7 @@ export async function getCliAuthChallengeStatus({
     metadata.redeem_token
       ? { redeem_token: `${metadata.redeem_token}` }
       : {}),
-    ...(row.kind === "elevate"
+    ...(row.kind === "elevate" || row.metadata?.elevated_login === true
       ? {
           fresh_auth_until: metadata.fresh_auth_until
             ? new Date(metadata.fresh_auth_until)
@@ -570,6 +619,8 @@ export async function redeemCliLoginChallenge({
   display_name?: string | null;
   first_name?: string | null;
   last_name?: string | null;
+  factor_level: AuthSessionFactorLevel;
+  fresh_auth_until?: Date | null;
 }> {
   const row = await getChallengeRow(cleanChallengeId(challenge_id));
   if (!row || row.kind !== "login") {
@@ -585,9 +636,20 @@ export async function redeemCliLoginChallenge({
   if (!expectedHash || !tokenMatches(`${redeem_token ?? ""}`, expectedHash)) {
     throw new Error("invalid cli auth redeem token");
   }
+  const elevatedLogin = row.metadata?.elevated_login === true;
+  const factor_level = elevatedLogin
+    ? cleanFactorLevel(row.metadata?.factor_level)
+    : "none";
+  const fresh_auth_until = elevatedLogin
+    ? cleanFutureDate(row.metadata?.fresh_auth_until)
+    : null;
+  if (elevatedLogin && fresh_auth_until == null) {
+    throw new Error("elevated cli login approval has expired");
+  }
   const session = await createClusterCliLoginSession({
     account_id: row.account_id,
     approved_challenge_id: row.id,
+    ...(elevatedLogin ? { factor_level, fresh_auth_until } : {}),
     ip_address: ip_address ?? null,
     user_agent: user_agent ?? null,
   });
@@ -615,6 +677,8 @@ export async function redeemCliLoginChallenge({
       }) || null,
     first_name: account?.first_name ?? null,
     last_name: account?.last_name ?? null,
+    factor_level,
+    fresh_auth_until,
   };
 }
 
@@ -658,6 +722,7 @@ export async function getCliAuthApprovalInfo({
   display_name?: string | null;
   email_hint?: string | null;
   requested_duration?: FreshAuthDuration | null;
+  elevated_login: boolean;
   state: CliAuthChallengeStatus;
   expires_at: Date;
 }> {
@@ -679,6 +744,7 @@ export async function getCliAuthApprovalInfo({
         ? `${row.metadata.email_hint}`
         : null,
     requested_duration: row.requested_duration ?? null,
+    elevated_login: row.metadata?.elevated_login === true,
     state: row.status,
     expires_at: new Date(row.expire),
   };
@@ -687,9 +753,13 @@ export async function getCliAuthApprovalInfo({
 export async function approveCliLoginChallenge({
   challenge_id,
   account_id,
+  factor_level,
+  fresh_auth_until,
 }: {
   challenge_id: string;
   account_id: string;
+  factor_level?: AuthSessionFactorLevel | null;
+  fresh_auth_until?: Date | string | null;
 }): Promise<{ approved: true }> {
   const row = await getChallengeRow(cleanChallengeId(challenge_id));
   if (!row || row.kind !== "login") {
@@ -710,9 +780,26 @@ export async function approveCliLoginChallenge({
       ? `${row.metadata.redeem_token}`
       : undefined;
   const redeem_token = existingRedeemToken ?? createOpaqueToken();
+  const elevatedLogin = row.metadata?.elevated_login === true;
+  const approvedFactorLevel = elevatedLogin
+    ? cleanFactorLevel(factor_level)
+    : "none";
+  const approvedFreshAuthUntil = elevatedLogin
+    ? requireFreshAuthUntil({
+        factor_level: approvedFactorLevel,
+        fresh_auth_until,
+        duration: row.requested_duration ?? "default",
+      })
+    : null;
   const metadata = {
     ...(row.metadata ?? {}),
     redeem_token,
+    ...(elevatedLogin
+      ? {
+          factor_level: approvedFactorLevel,
+          fresh_auth_until: approvedFreshAuthUntil?.toISOString(),
+        }
+      : {}),
   };
   await updateChallengeApprovalWithDb({
     db: getPool(),

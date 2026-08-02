@@ -1959,6 +1959,17 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("project-cgroup-io-weight-mismatch", finish_startup_body)
             self.assertIn("project_pid_is_in_pool", finish_startup_body)
             self.assertIn('require_runtime_owned_pid "$conmon_pid"', script)
+            self.assertIn("is_trusted_conmon_executable()", script)
+            self.assertIn(
+                "/opt/cocalc/container-runtime/*/bin/conmon)",
+                script,
+            )
+            self.assertIn(
+                'is_trusted_conmon_executable "$conmon_exe"',
+                script,
+            )
+            self.assertIn('runtime_uid="${SUDO_UID:-0}"', script)
+            self.assertIn('[ "$owner_uid" = "$runtime_uid" ]', script)
             self.assertIn(
                 'deny "project-conmon-executable-invalid"',
                 script,
@@ -3955,6 +3966,17 @@ class BootstrapModesTest(unittest.TestCase):
                             "dir": str(Path(tmpdir) / "project-host" / "v1"),
                             "current": str(Path(tmpdir) / "project-host" / "current"),
                         },
+                        "container_runtime_bundle": {
+                            "url": "",
+                            "sha256": None,
+                            "remote": "",
+                            "root": str(Path(tmpdir) / "container-runtime"),
+                            "dir": str(Path(tmpdir) / "container-runtime" / "v1"),
+                            "current": str(
+                                Path(tmpdir) / "container-runtime" / "current"
+                            ),
+                            "version": "v1",
+                        },
                         "project_bundle": {
                             "url": "",
                             "sha256": None,
@@ -3978,6 +4000,7 @@ class BootstrapModesTest(unittest.TestCase):
             )
 
             originals = {}
+            events: list[str] = []
 
             def patch(name: str, replacement) -> None:
                 originals[name] = getattr(bootstrap, name)
@@ -3999,13 +4022,19 @@ class BootstrapModesTest(unittest.TestCase):
             patch("ensure_cocalc_mount", lambda _cfg: None)
             patch("ensure_btrfs_data", lambda _cfg: None)
             patch("ensure_subuids", lambda _cfg: None)
-            patch("configure_podman", lambda _cfg: None)
+            patch("configure_podman", lambda _cfg: events.append("configure_podman"))
             patch("verify_runtime_user_contract", lambda _cfg: None)
             patch("write_env", lambda _cfg, _size: None)
             patch("ensure_runtime_user_manager", lambda _cfg: None)
             patch("configure_runtime_shell_env", lambda _cfg: None)
             patch("setup_master_conat_token", lambda _cfg: None)
-            patch("extract_bundle", lambda _cfg, bundle: bundle)
+            patch(
+                "extract_bundle",
+                lambda _cfg, bundle: (
+                    events.append(f"extract:{bundle.root}"),
+                    bundle,
+                )[1],
+            )
             patch("install_node", lambda _cfg: None)
             patch("write_wrapper", lambda _cfg: None)
             patch("write_helpers", lambda _cfg: None)
@@ -4026,6 +4055,10 @@ class BootstrapModesTest(unittest.TestCase):
                     setattr(bootstrap, name, original)
 
             self.assertEqual(result, 0)
+            self.assertLess(
+                events.index(f"extract:{Path(tmpdir) / 'container-runtime'}"),
+                events.index("configure_podman"),
+            )
             state = json.loads(
                 (Path(cfg.bootstrap_dir) / "bootstrap-state.json").read_text(
                     encoding="utf-8"

@@ -459,7 +459,7 @@ test("auth elevate approves the current CLI session via browser polling", async 
   }
 });
 
-test("auth bootstrap runs login, elevation, and session check", async () => {
+test("auth bootstrap runs one elevated login and checks the session", async () => {
   const capture: { data?: any } = {};
   let config: any = { profiles: {} };
   const fetchCalls: Array<{ url: string; init: any }> = [];
@@ -498,28 +498,6 @@ test("auth bootstrap runs login, elevation, and session check", async () => {
           display_name: "User Example",
           first_name: "User",
           last_name: "Example",
-        }),
-      } as any;
-    }
-    if (`${url}`.endsWith("/api/v2/auth/cli/elevate/start")) {
-      assert.equal(init?.headers?.Cookie, "remember_me=remember-cookie-1");
-      return {
-        json: async () => ({
-          challenge_id: "elevate-challenge",
-          poll_token: "elevate-poll",
-          approval_url:
-            "https://hub.example.test/auth/cli-elevate/elevate-challenge",
-          expires_at: "2026-05-08T10:00:00.000Z",
-        }),
-      } as any;
-    }
-    if (`${url}`.endsWith("/api/v2/auth/cli/elevate/status")) {
-      return {
-        json: async () => ({
-          challenge_id: "elevate-challenge",
-          kind: "elevate",
-          state: "approved",
-          expires_at: "2026-05-08T10:00:00.000Z",
           factor_level: "passkey",
           fresh_auth_until: "2026-05-08T18:00:00.000Z",
         }),
@@ -594,16 +572,15 @@ test("auth bootstrap runs login, elevation, and session check", async () => {
         "/api/v2/auth/cli/login/start",
         "/api/v2/auth/cli/login/status",
         "/api/v2/auth/cli/login/redeem",
-        "/api/v2/auth/cli/elevate/start",
-        "/api/v2/auth/cli/elevate/status",
         "/api/v2/accounts/profile",
         "/api/v2/auth/cli/session-status",
       ],
     );
     assert.deepEqual(JSON.parse(fetchCalls[0].init.body), {
       email: "user@example.com",
+      elevated_login: true,
+      duration: "extended",
     });
-    assert.equal(JSON.parse(fetchCalls[3].init.body).duration, "extended");
   } finally {
     global.fetch = originalFetch;
   }

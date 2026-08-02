@@ -1187,6 +1187,8 @@ export interface AccountLocalVerifySignInPasswordResult {
 export interface AccountLocalCreateCliLoginSessionRequest {
   account_id: string;
   approved_challenge_id: string;
+  factor_level?: "none" | "totp" | "recovery_code" | "passkey" | "google_oidc";
+  fresh_auth_until?: Date | string | number | null;
   ip_address?: string | null;
   user_agent?: string | null;
 }
