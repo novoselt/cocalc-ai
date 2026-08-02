@@ -2374,9 +2374,11 @@ def ensure_runtime_user_manager(cfg: BootstrapConfig) -> None:
     ensure_owned_runtime_dir(run_dir, uid, gid)
     env = read_env_assignments(cfg.env_file)
     configured_runtime = (
-        env.get("COCALC_PODMAN_RUNTIME_DIR") or env.get("XDG_RUNTIME_DIR") or ""
+        env.get("COCALC_PODMAN_RUNTIME_DIR")
+        or env.get("XDG_RUNTIME_DIR")
+        or default_podman_runtime_dir(uid)
     ).strip()
-    if configured_runtime and Path(configured_runtime).is_absolute():
+    if Path(configured_runtime).is_absolute():
         ensure_owned_runtime_dir(Path(configured_runtime), uid, gid)
 
 

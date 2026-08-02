@@ -1008,6 +1008,40 @@ class BootstrapStateFilesTest(unittest.TestCase):
 
 
 class BootstrapRuntimeUserContractTest(unittest.TestCase):
+    def test_runtime_manager_prepares_default_podman_runtime_dir(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        cfg = replace(cfg, ssh_user="runtime-user")
+        prepared = []
+        original_getpwnam = bootstrap.pwd.getpwnam
+        original_which = bootstrap.shutil.which
+        original_read_env = bootstrap.read_env_assignments
+        original_ensure_dir = bootstrap.ensure_owned_runtime_dir
+        try:
+            bootstrap.pwd.getpwnam = lambda _user: type(
+                "Pwd", (), {"pw_uid": 2000, "pw_gid": 2000}
+            )()
+            bootstrap.shutil.which = lambda _name: None
+            bootstrap.read_env_assignments = lambda _path: {}
+            bootstrap.ensure_owned_runtime_dir = (
+                lambda path, uid, gid: prepared.append((str(path), uid, gid))
+            )
+
+            bootstrap.ensure_runtime_user_manager(cfg)
+        finally:
+            bootstrap.pwd.getpwnam = original_getpwnam
+            bootstrap.shutil.which = original_which
+            bootstrap.read_env_assignments = original_read_env
+            bootstrap.ensure_owned_runtime_dir = original_ensure_dir
+
+        self.assertEqual(
+            prepared,
+            [
+                ("/run/user/2000", 2000, 2000),
+                ("/run/user/2000", 2000, 2000),
+                ("/mnt/cocalc/data/tmp/cocalc-podman-runtime-2000", 2000, 2000),
+            ],
+        )
+
     def test_bounded_capture_kills_hung_process_group(self) -> None:
         started = time.monotonic()
         result = bootstrap.run_bounded_capture(
