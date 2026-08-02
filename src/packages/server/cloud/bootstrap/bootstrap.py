@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260802-v27"
+HELPER_SCHEMA_VERSION = "20260802-v28"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -123,7 +123,7 @@ POLICY_VERSION = 1
 CAPACITY_VERSION = 1
 DYNAMIC_CAPACITY_MODE = "gcp-pd-balanced"
 CLASSES = ("standard", "member", "premium")
-SCOPES = ("pool", "maintenance", "startup", *CLASSES)
+SCOPES = ("pool", "lifecycle-pool", "maintenance", "startup", *CLASSES)
 METRICS = ("rbps", "wbps", "riops", "wiops")
 
 DEFAULTS = {
@@ -490,10 +490,10 @@ def effective_limits(
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     if scope not in SCOPES:
         raise ValueError(
-            "scope must be pool, maintenance, startup, standard, member, or premium"
+            "scope must be pool, lifecycle-pool, maintenance, startup, standard, member, or premium"
         )
     if policy["capacity_mode"] == "static":
-        if scope == "pool":
+        if scope in ("pool", "lifecycle-pool"):
             limits = policy["pool"]
         elif scope == "maintenance":
             limits = {
@@ -509,6 +509,16 @@ def effective_limits(
         ], None
     factors = {
         "pool": {key: 100 for key in METRICS},
+        # While a lifecycle operation is active, ordinary projects yield a
+        # small part of their write budget. The startup sibling can use 50%
+        # of physical write capacity, while the ordinary pool temporarily
+        # drops from 25% to 20% and retains its full read budget.
+        "lifecycle-pool": {
+            "rbps": 100,
+            "wbps": 80,
+            "riops": 100,
+            "wiops": 80,
+        },
         "maintenance": {key: 10 for key in METRICS},
         # Ordinary projects reserve 25% of write capacity. Give lifecycle
         # work 50%, leaving 25% uncommitted while a start is active.
@@ -3455,6 +3465,7 @@ PROJECT_NETWORK_NFT="/usr/sbin/nft"
 PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
 PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
+PROJECT_IO_RESERVATION_LOCK="/run/lock/cocalc-project-io-reservation.lock"
 PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"
 PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"
 PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"
@@ -3488,6 +3499,25 @@ acquire_project_cgroup_shared_lock() {
 release_project_lock() {
   flock -u 9 || true
   exec 9>&-
+}
+
+acquire_project_io_reservation_lock() {
+  exec 8>"$PROJECT_IO_RESERVATION_LOCK"
+  if ! flock -x -w "$PROJECT_CGROUP_LOCK_WAIT_SECONDS" 8; then
+    deny "project-io-reservation-lock-timeout" "$PROJECT_CGROUP_LOCK_WAIT_SECONDS"
+  fi
+}
+
+acquire_project_io_reservation_shared_lock() {
+  exec 8>"$PROJECT_IO_RESERVATION_LOCK"
+  if ! flock -s -w "$PROJECT_CGROUP_LOCK_WAIT_SECONDS" 8; then
+    deny "project-io-reservation-lock-timeout" "$PROJECT_CGROUP_LOCK_WAIT_SECONDS"
+  fi
+}
+
+release_project_io_reservation_lock() {
+  flock -u 8 || true
+  exec 8>&-
 }
 
 is_project_uuid() {
@@ -3673,14 +3703,47 @@ verify_io_max() {
   done <<< "$rows"
 }
 
+project_startup_runtime_active_count() {
+  local cgroup count=0
+  for cgroup in "${PROJECT_STARTUP_CGROUP_DEFAULT}"/project-*; do
+    [ -d "$cgroup" ] || continue
+    if grep -q '^populated 1$' "$cgroup/cgroup.events" 2>/dev/null ||
+      [ -n "$(cat "$cgroup/cgroup.procs" 2>/dev/null || true)" ]; then
+      count="$((count + 1))"
+    fi
+  done
+  printf '%s\n' "$count"
+}
+
+current_project_pool_io_scope() {
+  if [ "$(project_startup_runtime_active_count)" -gt 0 ]; then
+    printf 'lifecycle-pool\n'
+  else
+    printf 'pool\n'
+  fi
+}
+
 apply_project_pool_io_policy() {
-  local fields mode
+  local scope="${1:-}" fields mode
+  [ -n "$scope" ] || scope="$(current_project_pool_io_scope)"
   fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
   IFS=$'\t' read -r mode _rest <<< "$fields"
-  apply_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool" "$mode"
+  apply_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$scope" "$mode"
   if [ "$mode" = "enforce" ]; then
-    verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+    verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$scope"
   fi
+}
+
+reserve_project_startup_io_capacity() {
+  acquire_project_io_reservation_lock
+  apply_project_pool_io_policy "lifecycle-pool"
+  release_project_io_reservation_lock
+}
+
+reconcile_project_pool_io_reservation() {
+  acquire_project_io_reservation_lock
+  apply_project_pool_io_policy "$(current_project_pool_io_scope)"
+  release_project_io_reservation_lock
 }
 
 configure_maintenance_cgroup() {
@@ -3945,7 +4008,7 @@ configure_project_pool_hierarchy() {
     deny "project-pool-internal-processes-remain" "$remaining"
   fi
   enable_cgroup_controllers "$PROJECT_POOL_CGROUP_DEFAULT"
-  apply_project_pool_io_policy
+  reconcile_project_pool_io_reservation
   # The startup cgroup is a root-level sibling so container creation can use
   # capacity reserved from ordinary projects without executing project code.
   configure_project_startup_cgroup
@@ -5163,6 +5226,10 @@ case "$cmd" in
     printf '%s\n' "$launcher_pid" > "$startup_pool/cgroup.procs"
     printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
     verify_project_pid_in_startup_runtime "$project_id" "$launcher_pid"
+    # The launcher cannot exec Podman until this helper returns. Mark it as
+    # active first so concurrent finalization cannot release the reservation
+    # between the active-start check and applying the reduced pool ceiling.
+    reserve_project_startup_io_capacity
     release_project_lock
     # This also repairs the startup deny rule before the launcher can exec.
     ensure_project_network_rule "$project_id"
@@ -5280,6 +5347,7 @@ case "$cmd" in
       startup_pool="$(project_startup_runtime_cgroup "$project_id")"
       if [ -d "$startup_pool" ]; then
         move_project_startup_runtime_to_pool "$project_id" "$pool"
+        reconcile_project_pool_io_reservation
       elif ! project_pid_is_in_pool "$project_id" "$init_pid" ||
         ! project_pid_is_in_pool "$project_id" "$conmon_pid"; then
         attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
@@ -5351,7 +5419,10 @@ case "$cmd" in
     fields="$(project_io_policy_fields "$2")" || deny "project-io-policy-invalid" "$2"
     IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops _weight io_class _policy_version _policy_profile _capacity_source _capacity_mode <<< "$fields"
     if [ "$io_mode" = "enforce" ]; then
-      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+      acquire_project_io_reservation_shared_lock
+      pool_scope="$(current_project_pool_io_scope)"
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$pool_scope"
+      release_project_io_reservation_lock
       verify_io_max "$(project_cgroup "$1")" "$io_class" "$io_class"
     fi
     ;;
@@ -5363,7 +5434,10 @@ case "$cmd" in
     fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
     IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _leaf_rbps _leaf_wbps _leaf_riops _leaf_wiops _weight _class policy_version policy_profile capacity_source capacity_mode <<< "$fields"
     if [ "$io_mode" = "enforce" ]; then
-      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+      acquire_project_io_reservation_shared_lock
+      pool_scope="$(current_project_pool_io_scope)"
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$pool_scope"
+      release_project_io_reservation_lock
       verify_io_max "$MAINTENANCE_CGROUP_DEFAULT" "maintenance"
     fi
     ;;
@@ -5375,9 +5449,13 @@ case "$cmd" in
     fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "status"
     IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _rest <<< "$fields"
     policy_status="$(project_io_policy_status)" || deny "project-io-policy-invalid" "status"
+    acquire_project_io_reservation_shared_lock
+    pool_scope="$(current_project_pool_io_scope)"
+    startup_runtime_active_count="$(project_startup_runtime_active_count)"
     if [ "$io_mode" = "enforce" ]; then
-      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$pool_scope"
     fi
+    release_project_io_reservation_lock
     pool_io_max="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.max" 2>/dev/null || true)"
     pool_pressure="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.pressure" 2>/dev/null || true)"
     legacy_processes="$(cat "$(project_legacy_cgroup)/cgroup.procs" 2>/dev/null || true)"
@@ -5390,7 +5468,7 @@ case "$cmd" in
     maintenance_memory_high="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/memory.high" 2>/dev/null || true)"
     maintenance_memory_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)"
     maintenance_pids_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/pids.max" 2>/dev/null || true)"
-    /usr/bin/python3 - "$policy_status" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" "$maintenance_io_max" "$maintenance_io_weight" "$maintenance_pressure" "$maintenance_processes" "$maintenance_cpu_max" "$maintenance_memory_high" "$maintenance_memory_max" "$maintenance_pids_max" <<'PY'
+    /usr/bin/python3 - "$policy_status" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" "$maintenance_io_max" "$maintenance_io_weight" "$maintenance_pressure" "$maintenance_processes" "$maintenance_cpu_max" "$maintenance_memory_high" "$maintenance_memory_max" "$maintenance_pids_max" "$pool_scope" "$startup_runtime_active_count" <<'PY'
 import json
 import sys
 
@@ -5408,6 +5486,8 @@ import sys
     maintenance_memory_high,
     maintenance_memory_max,
     maintenance_pids_max,
+    pool_scope,
+    startup_runtime_active_count,
 ) = sys.argv[1:]
 result = json.loads(status_json)
 discovery_error = result.pop("discovery_error", None)
@@ -5447,6 +5527,8 @@ result.update({
     "pool_cgroup": "/sys/fs/cgroup/cocalc-project-pool",
     "pool_io_max": io_max.strip(),
     "pool_io_weight": io_weight.strip(),
+    "pool_limit_scope": pool_scope,
+    "startup_runtime_active_count": int(startup_runtime_active_count),
     "legacy_process_count": len(legacy.split()),
     "maintenance_cgroup": "/sys/fs/cgroup/cocalc-maintenance",
     "maintenance_io_max": maintenance_io_max.strip(),
@@ -5542,6 +5624,7 @@ PY
       if [ -d "$startup_pool" ]; then
         deny "project-startup-runtime-cleanup-failed" "$1"
       fi
+      reconcile_project_pool_io_reservation
     fi
     if [ -d "$pool" ]; then
       if [ -w "$pool/cgroup.kill" ]; then

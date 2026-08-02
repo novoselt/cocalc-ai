@@ -1909,6 +1909,28 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
             },
         )
 
+        lifecycle_pool = self.run_calculation(devices, "lifecycle-pool")
+        self.assertEqual(lifecycle_pool.returncode, 0, lifecycle_pool.stderr)
+        lifecycle_rows = json.loads(lifecycle_pool.stdout)["rows"]
+        self.assertEqual(
+            lifecycle_rows[0]["limits"],
+            {
+                "rbps": 91 * 1024**2,
+                "wbps": 38_168_166,
+                "riops": 1950,
+                "wiops": 780,
+            },
+        )
+        self.assertEqual(
+            lifecycle_rows[1]["limits"],
+            {
+                "rbps": 120 * 1024**2,
+                "wbps": 40 * 1024**2,
+                "riops": 3000,
+                "wiops": 1200,
+            },
+        )
+
     def test_dynamic_capacity_rejects_unmodeled_storage(self) -> None:
         result = self.run_calculation(
             [
@@ -2181,6 +2203,31 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn("project-startup-runtime-cgroup-verification-failed", script)
             self.assertIn("move_project_startup_runtime_to_pool", script)
+            self.assertIn("project_startup_runtime_active_count", script)
+            self.assertIn("reserve_project_startup_io_capacity", script)
+            self.assertIn("reconcile_project_pool_io_reservation", script)
+            self.assertIn('"pool_limit_scope": pool_scope', script)
+            self.assertIn(
+                '"startup_runtime_active_count": int(startup_runtime_active_count)',
+                script,
+            )
+            prepare_runtime_body = script.split(
+                "  prepare-project-startup-runtime-cgroup)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertLess(
+                prepare_runtime_body.index(
+                    'verify_project_pid_in_startup_runtime "$project_id" "$launcher_pid"'
+                ),
+                prepare_runtime_body.index("reserve_project_startup_io_capacity"),
+            )
+            self.assertLess(
+                prepare_runtime_body.index("reserve_project_startup_io_capacity"),
+                prepare_runtime_body.rindex("release_project_lock"),
+            )
+            self.assertLess(
+                finish_startup_body.index("move_project_startup_runtime_to_pool"),
+                finish_startup_body.index("reconcile_project_pool_io_reservation"),
+            )
             self.assertIn("attach_maintenance_worker", script)
             self.assertIn("btrfs|btrfs-maintenance)", script)
             self.assertIn(
