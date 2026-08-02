@@ -1481,18 +1481,22 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     this.deprecated("move_selected_cells", delta);
   };
 
-  undo = (): void => {
+  undo = (): boolean => {
     const syncdb = this.syncdb;
-    if (syncdb?.isReady()) {
-      syncdb.undo();
+    if (!syncdb?.isReady()) {
+      return false;
     }
+    syncdb.undo();
+    return true;
   };
 
-  redo = (): void => {
+  redo = (): boolean => {
     const syncdb = this.syncdb;
-    if (syncdb?.isReady()) {
-      syncdb.redo();
+    if (!syncdb?.isReady()) {
+      return false;
     }
+    syncdb.redo();
+    return true;
   };
 
   in_undo_mode(): boolean {

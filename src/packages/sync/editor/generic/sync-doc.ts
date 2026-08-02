@@ -3476,6 +3476,12 @@ export class SyncDoc extends EventEmitter {
     allowDuplicate?: boolean;
     meta?: { [key: string]: JSONValue };
   } = {}): boolean => {
+    // UI callbacks can briefly retain a sync document while it is opening or
+    // after teardown. A disconnected ready document still has patchflow and
+    // must continue accepting offline edits; only a missing session is a no-op.
+    if (!this.patchflowReady() || this.patchflowSession == null) {
+      return false;
+    }
     return this.commitWithPatchflow({
       emitChangeImmediately,
       file,

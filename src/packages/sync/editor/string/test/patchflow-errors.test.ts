@@ -89,4 +89,58 @@ describe("patchflow commit failures", () => {
     expect(calls).toBeGreaterThan(1);
     expect(syncstring.to_str()).toBe("");
   });
+
+  it("ignores a commit while the patchflow session is initializing", async () => {
+    jest.setTimeout(10_000);
+    const originalInit = PatchflowSession.prototype.init;
+    let releaseInit!: () => void;
+    let initStarted!: () => void;
+    const initGate = new Promise<void>((resolve) => {
+      releaseInit = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      initStarted = resolve;
+    });
+    jest
+      .spyOn(PatchflowSession.prototype, "init")
+      .mockImplementation(async function (this: PatchflowSession) {
+        initStarted();
+        await initGate;
+        return await originalInit.call(this);
+      });
+
+    client = new AlertingClient(init_queries, client_id);
+    syncstring = new SyncString({
+      project_id,
+      path,
+      client,
+      fs,
+      noAutosave: true,
+    });
+    const ready = once(syncstring, "ready");
+    await started;
+
+    expect(syncstring.commit()).toBe(false);
+
+    releaseInit();
+    await ready;
+  });
+
+  it("continues committing locally while the live connection is offline", async () => {
+    client = new AlertingClient(init_queries, client_id);
+    syncstring = new SyncString({
+      project_id,
+      path,
+      client,
+      fs,
+      noAutosave: true,
+    });
+    await once(syncstring, "ready");
+    (syncstring as any).liveConnected = false;
+
+    syncstring.from_str("offline edit");
+
+    expect(syncstring.commit()).toBe(true);
+    expect(syncstring.to_str()).toBe("offline edit");
+  });
 });
