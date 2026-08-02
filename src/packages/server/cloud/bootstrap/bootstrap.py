@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260802-v30"
+HELPER_SCHEMA_VERSION = "20260802-v31"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -510,14 +510,16 @@ def effective_limits(
     factors = {
         "pool": {key: 100 for key in METRICS},
         # While a lifecycle operation is active, ordinary projects yield a
-        # small part of their write budget. The startup sibling can use 50%
-        # of physical write capacity, while the ordinary pool temporarily
-        # drops from 25% to 20% and retains its full read budget.
+        # part of their write budget. The startup sibling can use 50% of
+        # physical write capacity, while the ordinary pool temporarily drops
+        # from 25% to 15% and retains its full read budget. Staging showed that
+        # 20% left too little margin for Podman metadata work under sustained
+        # buffered writes.
         "lifecycle-pool": {
             "rbps": 100,
-            "wbps": 80,
+            "wbps": 60,
             "riops": 100,
-            "wiops": 80,
+            "wiops": 60,
         },
         "maintenance": {key: 10 for key in METRICS},
         # Ordinary projects reserve 25% of write capacity. Give lifecycle

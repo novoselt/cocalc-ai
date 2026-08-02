@@ -1916,18 +1916,18 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
             lifecycle_rows[0]["limits"],
             {
                 "rbps": 91 * 1024**2,
-                "wbps": 38_168_166,
+                "wbps": 28_626_124,
                 "riops": 1950,
-                "wiops": 780,
+                "wiops": 585,
             },
         )
         self.assertEqual(
             lifecycle_rows[1]["limits"],
             {
                 "rbps": 120 * 1024**2,
-                "wbps": 40 * 1024**2,
+                "wbps": 30 * 1024**2,
                 "riops": 3000,
-                "wiops": 1200,
+                "wiops": 900,
             },
         )
 
