@@ -56,7 +56,17 @@ export function projectRuntimeExitReason(project: unknown): string | undefined {
 
 export function shouldRecoverFromProjectRuntimeExit(project: unknown): boolean {
   const reason = projectRuntimeExitReason(project);
-  return reason === "container_missing" || reason === "host_pressure";
+  return (
+    reason === "container_missing" ||
+    reason === "host_pressure" ||
+    reason === "host_pressure_free"
+  );
+}
+
+export function isFreeTierPressureRecovery(
+  notice: RuntimeRecoveryNotice | undefined,
+): boolean {
+  return notice?.runtime_exit_reason === "host_pressure_free";
 }
 
 export function projectRuntimeExitKey(project: unknown): string | undefined {

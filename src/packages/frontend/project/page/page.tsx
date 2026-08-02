@@ -110,7 +110,10 @@ import { shouldBypassWorkspaceStartupGuardForTab } from "./workspace-startup";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import ProjectVersionUpdate from "./project-version-update";
 import { isProjectRuntimePreparing } from "@cocalc/frontend/project/runtime-start-readiness";
-import { shouldShowProjectRuntimeRecoveryBanner } from "@cocalc/frontend/project/runtime-recovery";
+import {
+  isFreeTierPressureRecovery,
+  shouldShowProjectRuntimeRecoveryBanner,
+} from "@cocalc/frontend/project/runtime-recovery";
 
 const START_BANNER = false;
 
@@ -960,6 +963,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     ) {
       return;
     }
+    const freeTierPressure = isFreeTierPressureRecovery(notice);
     return (
       <Alert
         showIcon
@@ -967,7 +971,19 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         type="info"
         banner
         message="Reconnecting project tools..."
-        description="CoCalc is restarting the project automatically. Files and collaborative documents remain available. Previous terminal sessions and notebook kernels ended; active tools will reconnect automatically."
+        description={
+          freeTierPressure ? (
+            <>
+              This free shared-compute project was paused to preserve host
+              responsiveness. CoCalc is restarting it automatically; previous
+              terminal sessions and notebook kernels ended. Higher membership
+              tiers receive stronger shared-compute priority.{" "}
+              <a href="/settings/membership">Upgrade membership</a>
+            </>
+          ) : (
+            "CoCalc is restarting the project automatically. Files and collaborative documents remain available. Previous terminal sessions and notebook kernels ended; active tools will reconnect automatically."
+          )
+        }
         onClose={() => actions?.dismissRuntimeRecoveryNotice?.()}
       />
     );

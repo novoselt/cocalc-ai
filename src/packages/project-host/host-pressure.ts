@@ -814,9 +814,14 @@ export function buildStopCandidates({
     }
     const project_id = `${row.project_id ?? ""}`.trim();
     if (!project_id) continue;
-    if (workloadProtectedProjects?.has(project_id)) continue;
     const directResourceOffender = directResourceOffenders?.get(project_id);
     const policy = policies.get(project_id);
+    if (
+      workloadProtectedProjects?.has(project_id) &&
+      (policy?.shared_compute_priority ?? 0) > 0
+    ) {
+      continue;
+    }
     if (requireActivityPolicy && !policy) {
       continue;
     }
@@ -951,6 +956,7 @@ export function startHostPressureController({
     force?: boolean;
     pressure_zone: HostPressureZone;
     reason: string;
+    shared_compute_priority: number;
   }) => Promise<void>;
   reportPressureAction?: (opts: {
     project_id: string;
@@ -1220,6 +1226,7 @@ export function startHostPressureController({
           force: true,
           pressure_zone: classified.zone,
           reason,
+          shared_compute_priority: candidate.shared_compute_priority,
         });
         upsertProjectStopState({
           ...pressureStopStateUpdate({

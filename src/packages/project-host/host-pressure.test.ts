@@ -304,29 +304,47 @@ describe("host pressure controller helpers", () => {
     ]);
   });
 
-  it("excludes projects with recent cgroup workload activity", () => {
+  it("protects active member workloads but keeps priority zero evictable", () => {
     const now = 10 * 60 * 60_000;
-    const policies = new Map(
-      ["proj-active", "proj-idle"].map((project_id) => [
-        project_id,
+    const policies = new Map([
+      [
+        "proj-active-member",
         {
-          project_id,
-          owner_account_id: "owner",
-          shared_compute_priority: 0,
+          project_id: "proj-active-member",
+          owner_account_id: "owner-1",
+          shared_compute_priority: 1,
           authoritative_last_edited_ms: now - 8 * 60 * 60_000,
           policy_updated_ms: now,
           stop_override: "default" as const,
         },
-      ]),
-    );
+      ],
+      ...["proj-active-free", "proj-idle"].map(
+        (project_id) =>
+          [
+            project_id,
+            {
+              project_id,
+              owner_account_id: "owner-2",
+              shared_compute_priority: 0,
+              authoritative_last_edited_ms: now - 8 * 60 * 60_000,
+              policy_updated_ms: now,
+              stop_override: "default" as const,
+            },
+          ] as const,
+      ),
+    ]);
     const candidates = buildStopCandidates({
       zone: "pressure",
       now,
       minimumIdleMs: 6 * 60 * 60_000,
       requireActivityPolicy: true,
-      workloadProtectedProjects: new Set(["proj-active"]),
+      workloadProtectedProjects: new Set([
+        "proj-active-member",
+        "proj-active-free",
+      ]),
       projects: [
-        { project_id: "proj-active", state: "running" },
+        { project_id: "proj-active-member", state: "running" },
+        { project_id: "proj-active-free", state: "running" },
         { project_id: "proj-idle", state: "running" },
       ],
       policies,
@@ -334,6 +352,7 @@ describe("host pressure controller helpers", () => {
     });
 
     expect(candidates.map(({ project_id }) => project_id)).toEqual([
+      "proj-active-free",
       "proj-idle",
     ]);
   });
