@@ -2,14 +2,61 @@
 
 Date: 2026-08-01
 
-Status: proposed implementation plan; this document does not change runtime or
-production behavior.
+Status: implementation in progress. The staging-admin CLI checkpoint described
+below is deployed only to staging; production behavior is unchanged.
 
 Supersedes
 [Agent Compute VM Leases And Volumes Plan](./agent-compute-vm-leases-and-volumes-plan-2026-07-29.md).
 The earlier document remains useful design history, but it combines VM leases,
 storage, exact egress billing, durable jobs, and Codex orchestration into a
 scope that is too large for the first product.
+
+## Implementation Checkpoint: 2026-08-02
+
+Commits `0e64194d34`, `15ebf592f9`, `bd29046453`, and `f70f357edc` implement
+and harden the staging-admin VM lifecycle slice. The final staging hub artifact
+is `20260802T090127Z-f70f357e-compute-vm-cli-f70f357e`.
+
+Implemented now:
+
+- durable VM, provider-generation, work-queue, and audit tables;
+- an admin-only, account-owned Conat API with project-membership checks and
+  fresh authentication for create and delete;
+- `vm create`, `list`, `get`, `wait`, `start`, `stop`, `delete`, `ssh`, and
+  `exec` CLI commands;
+- a small GCP machine catalog, on-demand and Spot provisioning, a persistent
+  named root disk, direct SSH, hard TTL, and explicitly authorized on-demand
+  fallback state;
+- reuse of the project-host Spot recovery/circuit-breaker policy, including a
+  provider probe before disruptive return to Spot;
+- guest isolation settings for no service account, blocked project SSH keys,
+  no agent forwarding, no IP forwarding, and no deletion protection;
+- fixed-cost staging authorization bounded by the hard lease deadline; and
+- durable work claims serialized per VM while retaining concurrency between
+  VMs.
+
+Staging evidence:
+
+- an on-demand `e2-standard-2` completed create, SSH/exec, stop, restart,
+  persistent-root verification, explicit delete, and provider inventory
+  cleanup;
+- two Spot `e2-standard-2` VMs were provider-confirmed as Spot with
+  `instanceTerminationAction=STOP`, `autoDelete=false` roots, no service
+  account, and blocked project-wide SSH keys;
+- a five-minute Spot lease with fallback accepted a TTL-bounded `$0.01`
+  authorization and rejected `$0.001`;
+- both Spot VMs were selected for deletion within approximately two seconds of
+  their hard deadlines, and both instances and persistent roots disappeared;
+- one expiry deletion overlapped a rolling four-worker hub deployment and
+  still converged without a leaked provider resource; and
+- final hub smoke checks passed for the homepage, static shell, auth shell,
+  favicon, and every worker-to-project-host route.
+
+This checkpoint intentionally uses staging's existing `projecthosts` GCP
+project and provider credentials. It remains admin-only and unbilled. It does
+not yet implement persistent `/work`, customer billing, turn-scoped agent
+capabilities, minimal UI, an isolated hostile-guest GCP project/VPC, full
+cross-bay routing, or the complete Spot preemption/fallback fault matrix.
 
 ## Decision
 
