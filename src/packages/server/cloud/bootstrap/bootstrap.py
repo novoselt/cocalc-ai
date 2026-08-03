@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260803-v34"
+HELPER_SCHEMA_VERSION = "20260803-v35"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -8400,17 +8400,12 @@ cleanup_podman_runtime_state() {
 }
 
 project_runtime_processes_active() {
-  local proc comm cmdline
+  local proc comm
   for proc in /proc/[0-9]*; do
     comm="$(cat "${proc}/comm" 2>/dev/null || true)"
     case "${comm}" in
-      conmon|crun|podman|podman-init)
-        return 0
-        ;;
-    esac
-    cmdline="$(tr '\\0' ' ' < "${proc}/cmdline" 2>/dev/null || true)"
-    case "${cmdline}" in
-      *project-host:app*|*cocalc-project-podman*)
+      conmon|crun|podman|podman-init|project-host:ap*|project-host:ho*)
+        echo "project runtime process active: pid=${proc##*/} comm=${comm}" >&2
         return 0
         ;;
     esac
@@ -9286,6 +9281,7 @@ WantedBy=timers.target
 Description=Prepare CoCalc Podman runtime after boot
 After=mnt-cocalc.mount
 Before=cocalc-project-host-start.service
+Before=google-startup-scripts.service
 RequiresMountsFor=/mnt/cocalc
 
 [Service]

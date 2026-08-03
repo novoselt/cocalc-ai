@@ -3407,6 +3407,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 ],
             )
             self.assertIn(
+                "Before=google-startup-scripts.service",
+                written[
+                    "/etc/systemd/system/cocalc-project-host-prepare.service"
+                ],
+            )
+            self.assertIn(
                 "Requires=cocalc-project-host-prepare.service",
                 written["/etc/systemd/system/cocalc-project-host-start.service"],
             )
