@@ -13,14 +13,14 @@ verify:
   - command -v jupyter-lab
   - command -v rserver
   - python3 -c 'import ipykernel, jupyterlab'
-  - Rscript --vanilla -e 'stopifnot(requireNamespace("IRkernel", quietly=TRUE))'
+  - Rscript --vanilla -e 'stopifnot(requireNamespace("IRkernel", quietly=TRUE), requireNamespace("ggplot2", quietly=TRUE), requireNamespace("dplyr", quietly=TRUE), requireNamespace("tidyverse", quietly=TRUE))'
   - Rscript --vanilla -e 'stopifnot(requireNamespace("shiny", quietly=TRUE))'
   - jupyter kernelspec list | grep -qi ir
 
 publish:
   label: R
   slug: r
-  description: R with common development libraries, JupyterLab, an IRkernel Jupyter kernel, RStudio Server, and a Shiny example app.
+  description: R with the tidyverse and common data-science libraries, JupyterLab, an IRkernel Jupyter kernel, RStudio Server, and a Shiny example app.
   family: r
   version: stable
   channel: stable
