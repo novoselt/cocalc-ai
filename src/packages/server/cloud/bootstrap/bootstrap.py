@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260803-v32"
+HELPER_SCHEMA_VERSION = "20260803-v33"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -8264,10 +8264,17 @@ container_runtime_current() {
 run_podman_as_runtime() {
   local timeout_value="$1" runtime_dir="$2" cgroup_manager="$3"
   local container_runtime podman_bin
-  local -a timeout_args=()
+  local -a timeout_args=() podman_prefix=()
   shift 3
   if [ "${timeout_value}" != "0" ]; then
     timeout_args=(/usr/bin/timeout "${timeout_value}")
+  fi
+  # Ubuntu's unprivileged-userns restriction grants Podman access through the
+  # distro AppArmor profile. Our versioned Podman binary lives under /opt, so
+  # explicitly enter that profile when it is available.
+  if command -v aa-exec >/dev/null 2>&1 && \
+     grep -q '^podman ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+    podman_prefix=(aa-exec -p podman --)
   fi
   container_runtime="$(container_runtime_current)"
   if [ -n "${container_runtime}" ]; then
@@ -8278,14 +8285,14 @@ run_podman_as_runtime() {
       CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
       CONTAINERS_CONF_OVERRIDE="${container_runtime}/etc/containers/containers.conf" \
       PATH="${container_runtime}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-      "${podman_bin}" "$@"
+      "${podman_prefix[@]}" "${podman_bin}" "$@"
     return
   fi
   "${timeout_args[@]}" sudo -n -u "${RUNTIME_USER}" -H env \
     XDG_RUNTIME_DIR="${runtime_dir}" \
     COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
     CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-    podman "$@"
+    "${podman_prefix[@]}" podman "$@"
 }
 
 ensure_owned_runtime_dir() {

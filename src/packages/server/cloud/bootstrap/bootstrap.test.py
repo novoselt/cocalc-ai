@@ -2954,6 +2954,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "podman_prefix=(aa-exec -p podman --)",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "capture-forensics)",
                 rootctl.read_text(encoding="utf-8"),
             )
