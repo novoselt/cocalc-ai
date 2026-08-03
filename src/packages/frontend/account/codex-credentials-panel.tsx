@@ -28,6 +28,7 @@ import {
 import {
   CODEX_USAGE_LABEL,
   CODEX_USAGE_URL,
+  getChatGptAccountInfo,
   getLiveCodexUsageStatus,
 } from "@cocalc/frontend/account/codex-usage";
 import { Icon, Loading } from "@cocalc/frontend/components";
@@ -114,22 +115,6 @@ function parseDeviceAuthUserCode(output?: string): string | undefined {
 
 function parseDeviceAuthVerificationUrl(output?: string): string | undefined {
   return output?.match(/https?:\/\/[^\s)]+/)?.[0];
-}
-
-function getChatGptAccount(
-  status?: CodexUsageStatusInfo,
-): { email?: string; planType?: string } | undefined {
-  const account = (status?.account as any)?.account;
-  if (account?.type !== "chatgpt") return undefined;
-  return {
-    email: typeof account.email === "string" ? account.email : undefined,
-    planType:
-      typeof account.planType === "string"
-        ? account.planType
-        : typeof account.plan_type === "string"
-          ? account.plan_type
-          : undefined,
-  };
 }
 
 function getCodexRateLimit(status?: CodexUsageStatusInfo): any {
@@ -948,7 +933,7 @@ function CodexCredentialsPanelBody({
 
   const renderCodexUsageStatusDetails = () => {
     if (paymentSource?.source !== "subscription") return null;
-    const chatgptAccount = getChatGptAccount(codexUsageStatus);
+    const chatgptAccount = getChatGptAccountInfo(codexUsageStatus);
     const rateLimit = getCodexRateLimit(codexUsageStatus);
     const planType =
       formatPlanType(chatgptAccount?.planType) ??

@@ -4,6 +4,7 @@ jest.mock("@cocalc/frontend/lite", () => ({ lite: false }));
 
 import {
   getCodexPaymentSourceOptions,
+  getCodexPaymentSourceShortLabel,
   getCodexPaymentSourceTooltip,
 } from "../use-codex-payment-source";
 
@@ -55,5 +56,9 @@ describe("Codex payment source choices", () => {
         preference: "site-api-key",
       }),
     ).not.toContain("Automatic order");
+  });
+
+  it("uses a compact label for included usage", () => {
+    expect(getCodexPaymentSourceShortLabel("site-api-key")).toBe("Included");
   });
 });

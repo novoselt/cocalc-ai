@@ -176,7 +176,7 @@ export function getCodexPaymentSourceShortLabel(
     case "account-api-key":
       return "API Key";
     case "site-api-key":
-      return "Included by CoCalc";
+      return "Included";
     case "shared-home":
       return "Shared Home";
     case "none":

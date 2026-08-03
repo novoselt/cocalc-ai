@@ -6,6 +6,7 @@ import {
   Form,
   Input,
   Modal,
+  Progress,
   Radio,
   Select,
   Space,
@@ -18,6 +19,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useTypedRedux,
 } from "@cocalc/frontend/app-framework";
 import { Icon } from "@cocalc/frontend/components/icon";
 import { Tooltip } from "@cocalc/frontend/components/tip";
@@ -30,6 +32,7 @@ import CodexSessionsPanel from "@cocalc/frontend/account/codex-sessions-panel";
 import {
   CODEX_USAGE_LABEL,
   CODEX_USAGE_URL,
+  getChatGptAccountInfo,
   getLiveCodexUsageStatus,
   readCachedCodexUsageStatus,
   writeCachedCodexUsageStatus,
@@ -144,6 +147,83 @@ type LiteCodexLocalStatus = {
 function formatMicrousd(value: number | undefined): string | undefined {
   if (value == null || !Number.isFinite(value)) return;
   return `$${(Math.max(0, value) / 1_000_000).toFixed(3)}`;
+}
+
+function IncludedAllowanceMeters({
+  status,
+  tooltip = false,
+}: {
+  status: NonNullable<
+    NonNullable<CodexPaymentSourceInfo["siteFundedCodex"]>["status"]
+  >["account"];
+  tooltip?: boolean;
+}) {
+  if (!status) return null;
+  const meters = [
+    {
+      label: "5-hour allowance",
+      limit: status.limit5hMicrousd,
+      remaining: status.remaining5hMicrousd,
+    },
+    {
+      label: "7-day allowance",
+      limit: status.limit7dMicrousd,
+      remaining: status.remaining7dMicrousd,
+    },
+  ].filter(
+    ({ limit, remaining }) =>
+      typeof limit === "number" &&
+      Number.isFinite(limit) &&
+      limit > 0 &&
+      typeof remaining === "number" &&
+      Number.isFinite(remaining),
+  );
+  if (!meters.length) return null;
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 8,
+        marginTop: tooltip ? 4 : 10,
+        minWidth: tooltip ? 260 : undefined,
+      }}
+    >
+      {meters.map(({ label, limit = 0, remaining = 0 }) => {
+        const remainingPercent = Math.max(
+          0,
+          Math.min(100, Math.round((remaining / limit) * 100)),
+        );
+        return (
+          <div key={label}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                fontSize: 12,
+              }}
+            >
+              <Text style={tooltip ? { color: "inherit" } : undefined}>
+                {label}
+              </Text>
+              <Text strong style={tooltip ? { color: "inherit" } : undefined}>
+                {formatMicrousd(remaining)} of {formatMicrousd(limit)} remaining
+              </Text>
+            </div>
+            <Progress
+              aria-label={`${label}: ${remainingPercent}% remaining`}
+              percent={remainingPercent}
+              showInfo={false}
+              size="small"
+              strokeColor={COLORS.ANTD_LINK_BLUE}
+              trailColor={tooltip ? "rgba(255,255,255,0.25)" : undefined}
+              style={{ margin: "2px 0 0" }}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
@@ -351,6 +431,7 @@ export function CodexConfigButton({
   refreshPaymentSource,
 }: CodexConfigButtonProps): React.ReactElement {
   const defaultSessionMode = getDefaultCodexSessionMode();
+  const accountId = useTypedRedux("account", "account_id");
   const workspaceWorkingDirectory = useWorkspaceChatWorkingDirectory(chatPath);
   const [open, setOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -366,6 +447,7 @@ export function CodexConfigButton({
   >(undefined);
   const [codexUsageLoading, setCodexUsageLoading] = useState(false);
   const [codexUsageStale, setCodexUsageStale] = useState(false);
+  const [codexUsageRequested, setCodexUsageRequested] = useState(false);
   const [hoveredPillSegment, setHoveredPillSegment] = useState<
     PillSegment | undefined
   >(undefined);
@@ -467,7 +549,7 @@ export function CodexConfigButton({
   const activeSessionId = normalizeCodexSessionId(
     Form.useWatch("sessionId", form) ?? value?.sessionId,
   );
-  const paymentSourceLocked = activeSessionId != null;
+  const hasEstablishedSession = activeSessionId != null;
   const selectedServiceTierValue: CodexServiceTier =
     Form.useWatch("serviceTier", form) ?? value?.serviceTier ?? "standard";
   const siteFundedPolicy =
@@ -478,14 +560,6 @@ export function CodexConfigButton({
       : undefined;
   const siteFundedAccountStatus =
     paymentSource?.siteFundedCodex?.status?.account;
-  const includedRemaining = [
-    formatMicrousd(siteFundedAccountStatus?.remaining5hMicrousd)
-      ? `${formatMicrousd(siteFundedAccountStatus?.remaining5hMicrousd)} remaining in 5 hours`
-      : undefined,
-    formatMicrousd(siteFundedAccountStatus?.remaining7dMicrousd)
-      ? `${formatMicrousd(siteFundedAccountStatus?.remaining7dMicrousd)} remaining in 7 days`
-      : undefined,
-  ].filter(Boolean);
   const allModeOptions = useMemo(() => getModeOptions(), []);
   const availableModeValues = useMemo(
     () => new Set(getCodexNewChatModeOptions().map(({ value }) => value)),
@@ -512,17 +586,69 @@ export function CodexConfigButton({
     ? "Checking…"
     : getCodexPaymentSourceShortLabel(paymentSource?.source);
   const sourceTooltip = getCodexPaymentSourceTooltip(paymentSource);
-  const paymentSourceOptions = getCodexPaymentSourceOptions(paymentSource);
+  const chatgptAccount = getChatGptAccountInfo(codexUsageStatus);
+  const sourceTooltipDetails =
+    paymentSource?.source === "site-api-key" && siteFundedAccountStatus ? (
+      <Space orientation="vertical" size={0}>
+        <span>{sourceTooltip}</span>
+        <IncludedAllowanceMeters status={siteFundedAccountStatus} tooltip />
+      </Space>
+    ) : paymentSource?.source === "subscription" && codexUsageStatus ? (
+      <Space orientation="vertical" size={4}>
+        <span>{sourceTooltip}</span>
+        {chatgptAccount?.email ? (
+          <Text style={{ color: "inherit" }}>{chatgptAccount.email}</Text>
+        ) : null}
+        <div style={{ marginTop: 2, width: 360 }}>
+          <CodexUsageMeters
+            compact
+            status={codexUsageStatus}
+            stale={codexUsageStale}
+            updating={codexUsageLoading}
+          />
+        </div>
+      </Space>
+    ) : (
+      sourceTooltip
+    );
+  const paymentSourceOptions = getCodexPaymentSourceOptions(paymentSource).map(
+    (option) => {
+      if (!hasEstablishedSession) return option;
+      if (
+        option.value === "site-api-key" &&
+        paymentSource?.source !== "site-api-key"
+      ) {
+        return {
+          ...option,
+          disabled: true,
+          description:
+            "Start a new chat to use Included mode; its constrained model profile may not fit this existing session.",
+        };
+      }
+      if (option.value === "auto" && selectedPaymentSource !== "auto") {
+        return {
+          ...option,
+          disabled: true,
+          description:
+            "Automatic fallback is disabled after a session starts because it could switch into an incompatible constrained profile.",
+        };
+      }
+      return option;
+    },
+  );
 
   useEffect(() => {
-    if (!open || paymentSource?.source !== "subscription") {
+    if (
+      (!open && !codexUsageRequested) ||
+      paymentSource?.source !== "subscription"
+    ) {
       setCodexUsageStatus(undefined);
       setCodexUsageLoading(false);
       setCodexUsageStale(false);
       return;
     }
     let cancelled = false;
-    const cached = readCachedCodexUsageStatus({ projectId });
+    const cached = readCachedCodexUsageStatus({ accountId });
     if (cached) {
       setCodexUsageStatus(cached.status);
       setCodexUsageStale(true);
@@ -536,7 +662,7 @@ export function CodexConfigButton({
         if (cancelled) return;
         setCodexUsageStatus(status);
         setCodexUsageStale(false);
-        writeCachedCodexUsageStatus({ projectId, status });
+        writeCachedCodexUsageStatus({ accountId, status });
       })
       .catch(() => {
         if (cancelled) return;
@@ -551,7 +677,7 @@ export function CodexConfigButton({
     return () => {
       cancelled = true;
     };
-  }, [open, paymentSource?.source, projectId]);
+  }, [accountId, codexUsageRequested, open, paymentSource?.source, projectId]);
 
   const modeLabel =
     modeOptions.find((option) => option.value === currentSessionMode)?.label ??
@@ -630,6 +756,20 @@ export function CodexConfigButton({
     actions?.setCodexConfig?.(threadKey, finalValues);
   };
 
+  const paymentSourcePatch = (
+    next: CodexPaymentSourcePreference,
+  ): Partial<CodexThreadConfig> => {
+    if (hasEstablishedSession && siteFundedPolicy && next !== "site-api-key") {
+      return {
+        paymentSource: next,
+        model: siteFundedPolicy.model,
+        reasoning: siteFundedPolicy.reasoning,
+        serviceTier: siteFundedPolicy.serviceTier,
+      };
+    }
+    return { paymentSource: next };
+  };
+
   const modelMenu: MenuProps = {
     selectedKeys: selectedModelValue ? [selectedModelValue] : [],
     items: models.map((model) => ({
@@ -670,10 +810,11 @@ export function CodexConfigButton({
     },
   };
 
-  const availablePaymentSources = paymentSourceOptions.filter(
-    ({ value, disabled }) => value !== "auto" && !disabled,
+  const configuredPaymentSources = paymentSourceOptions.filter(
+    ({ value }) => value !== "auto",
   );
-  const showPaymentSourceSelector = !lite && availablePaymentSources.length > 1;
+  const showPaymentSourceSelector =
+    !lite && configuredPaymentSources.length > 1;
   const paymentSourceMenu: MenuProps = {
     selectedKeys: [selectedPaymentSource],
     items: paymentSourceOptions.map((option) => ({
@@ -684,9 +825,8 @@ export function CodexConfigButton({
     })),
     onClick: ({ domEvent, key }) => {
       domEvent.stopPropagation();
-      if (paymentSourceLocked) return;
       const next = key as CodexPaymentSourcePreference;
-      applyQuickConfigPatch({ paymentSource: next });
+      applyQuickConfigPatch(paymentSourcePatch(next));
     },
   };
 
@@ -704,7 +844,12 @@ export function CodexConfigButton({
     onClick: (event: React.MouseEvent) => {
       event.stopPropagation();
     },
-    onMouseEnter: () => setHoveredPillSegment(segment),
+    onMouseEnter: () => {
+      setHoveredPillSegment(segment);
+      if (segment === "source" && paymentSource?.source === "subscription") {
+        setCodexUsageRequested(true);
+      }
+    },
     onMouseLeave: () => setHoveredPillSegment(undefined),
   });
 
@@ -817,24 +962,18 @@ export function CodexConfigButton({
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     ·
                   </Text>
-                  {paymentSourceLocked ? (
-                    <Tooltip title="The payment source is fixed after a Codex session starts, so its model context is never discarded. Start a new chat to choose another source.">
-                      <button
-                        type="button"
-                        aria-disabled="true"
-                        style={{
-                          ...pillSegmentStyle("source"),
-                          cursor: "default",
-                        }}
-                        {...pillSegmentHandlers("source")}
-                      >
-                        {sourceShortLabel}
-                      </button>
-                    </Tooltip>
-                  ) : (
+                  <Tooltip
+                    title={sourceTooltipDetails}
+                    styles={{ root: { maxWidth: 420 } }}
+                  >
                     <Dropdown menu={paymentSourceMenu} trigger={["click"]}>
                       <button
                         type="button"
+                        aria-label={
+                          chatgptAccount?.email
+                            ? `Change Codex payment source. Connected ChatGPT account: ${chatgptAccount.email}`
+                            : "Change Codex payment source"
+                        }
                         title="Change Codex payment source"
                         style={pillSegmentStyle("source")}
                         {...pillSegmentHandlers("source")}
@@ -842,7 +981,7 @@ export function CodexConfigButton({
                         {sourceShortLabel}
                       </button>
                     </Dropdown>
-                  )}
+                  </Tooltip>
                 </>
               ) : null}
               <Text type="secondary" style={{ fontSize: 12 }}>
@@ -1083,14 +1222,13 @@ export function CodexConfigButton({
                       margin: "3px 0 10px",
                     }}
                   >
-                    {paymentSourceLocked
-                      ? "This source is fixed for the lifetime of the Codex session so its accumulated context is never discarded. Start a new chat to choose another source."
+                    {hasEstablishedSession
+                      ? "You can continue this session with ChatGPT or a personal API key without losing context. Switching an established personal session into constrained Included mode is disabled."
                       : "Choose how future turns in this thread are funded. This choice is independent of which credentials are connected."}
                   </div>
                   <Form.Item name="paymentSource" style={{ marginBottom: 0 }}>
                     <Select
                       style={{ width: "100%" }}
-                      disabled={paymentSourceLocked}
                       options={paymentSourceOptions}
                       optionRender={(option) =>
                         renderOptionWithDescription({
@@ -1098,6 +1236,9 @@ export function CodexConfigButton({
                           description: option.data.description,
                         })
                       }
+                      onChange={(next: CodexPaymentSourcePreference) => {
+                        form.setFieldsValue(paymentSourcePatch(next));
+                      }}
                     />
                   </Form.Item>
                   {selectedPaymentSource === "subscription" &&
@@ -1108,7 +1249,7 @@ export function CodexConfigButton({
                       style={{ marginTop: 10 }}
                       message="Reconnect your ChatGPT Plan"
                       description={
-                        paymentSourceLocked
+                        hasEstablishedSession
                           ? "This session is pinned to ChatGPT. Reconnect it under Payment & Credentials, or start a new Codex chat and choose Included by CoCalc."
                           : "This thread is configured to use ChatGPT, but that credential is unavailable. Choose Included by CoCalc or reconnect ChatGPT under Payment & Credentials."
                       }
@@ -1140,11 +1281,9 @@ export function CodexConfigButton({
                         reasoning, and standard speed. Connect a personal
                         ChatGPT plan or OpenAI API key to choose other models,
                         reasoning levels, or speed.
-                        {includedRemaining.length ? (
-                          <div style={{ marginTop: 6 }}>
-                            Included allowance: {includedRemaining.join(" · ")}.
-                          </div>
-                        ) : null}
+                        <IncludedAllowanceMeters
+                          status={siteFundedAccountStatus}
+                        />
                       </>
                     }
                   />

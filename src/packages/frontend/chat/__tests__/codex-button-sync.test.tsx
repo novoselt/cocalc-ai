@@ -44,6 +44,7 @@ jest.mock("antd", () => {
               {menu?.items?.map((item: any) => (
                 <button
                   key={item.key}
+                  disabled={item.disabled}
                   onClick={(event) =>
                     menu?.onClick?.({ domEvent: event, key: item.key })
                   }
@@ -58,6 +59,9 @@ jest.mock("antd", () => {
     },
     Input: () => <input />,
     Modal: ({ open, children }: any) => (open ? <div>{children}</div> : null),
+    Progress: ({ "aria-label": ariaLabel }: any) => (
+      <div aria-label={ariaLabel} />
+    ),
     Radio,
     Select: ({ value }: any) => <div>{String(value ?? "")}</div>,
     Space: ({ children }: any) => <div>{children}</div>,
@@ -123,7 +127,8 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
 }));
 
 jest.mock("../use-codex-payment-source", () => ({
-  getCodexPaymentSourceShortLabel: () => "ChatGPT",
+  getCodexPaymentSourceShortLabel: (source: string) =>
+    source === "site-api-key" ? "Included" : "ChatGPT",
   getCodexPaymentSourceOptions: (source: any) => [
     {
       value: "auto",
@@ -283,7 +288,7 @@ describe("CodexConfigButton", () => {
     });
   });
 
-  it("locks the payment source after a Codex session starts", async () => {
+  it("does not let an established personal session enter Included mode", async () => {
     const actions = {
       getCodexConfig: jest.fn(() => undefined),
       setCodexConfig: jest.fn(),
@@ -315,13 +320,149 @@ describe("CodexConfigButton", () => {
     await waitFor(() => {
       expect(screen.getByText("gpt-5.4")).toBeTruthy();
     });
-    expect(screen.queryByTitle("Change Codex payment source")).toBeNull();
+    fireEvent.click(screen.getByTitle("Change Codex payment source"));
+    expect(
+      (screen.getByText("Included by CoCalc") as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     fireEvent.click(screen.getByText("Codex"));
     expect(document.body.textContent).toContain(
-      "This source is fixed for the lifetime of the Codex session",
+      "Switching an established personal session into constrained Included mode is disabled",
     );
+    await waitFor(() => {
+      expect(
+        screen.getByText("compact usage meters usage loaded"),
+      ).toBeTruthy();
+    });
     expect(actions.setCodexConfig).not.toHaveBeenCalled();
+  });
+
+  it("loads and exposes the connected ChatGPT email when Plan is hovered", async () => {
+    getCodexUsageStatus.mockResolvedValue({
+      available: true,
+      account: {
+        account: {
+          type: "chatgpt",
+          email: "member@example.com",
+        },
+      },
+    });
+
+    render(
+      <CodexConfigButton
+        threadKey="thread-1"
+        chatPath="foo.chat"
+        projectId="project-1"
+        actions={
+          {
+            getCodexConfig: jest.fn(() => undefined),
+            setCodexConfig: jest.fn(),
+          } as any
+        }
+        threadConfig={{ paymentSource: "subscription" }}
+        paymentSource={{
+          source: "subscription",
+          hasSubscription: true,
+          hasProjectApiKey: false,
+          hasAccountApiKey: false,
+          hasSiteApiKey: true,
+          siteAiUsageLimitPositive: true,
+          siteFundedCodex: { enabled: true },
+          sharedHomeMode: "disabled",
+        }}
+      />,
+    );
+
+    fireEvent.mouseEnter(screen.getByLabelText("Change Codex payment source"));
+
+    await waitFor(() => {
+      expect(getCodexUsageStatus).toHaveBeenCalledWith({
+        project_id: "project-1",
+        timeout: 60_000,
+      });
+      expect(
+        screen.getByLabelText(
+          "Change Codex payment source. Connected ChatGPT account: member@example.com",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("upgrades an Included session to ChatGPT without losing its context", async () => {
+    const actions = {
+      getCodexConfig: jest.fn(() => undefined),
+      setCodexConfig: jest.fn(),
+    } as any;
+
+    render(
+      <CodexConfigButton
+        threadKey="thread-1"
+        chatPath="foo.chat"
+        actions={actions}
+        threadConfig={{
+          model: "gpt-5.6-sol",
+          paymentSource: "site-api-key",
+          sessionId: "thr-established",
+        }}
+        paymentSource={
+          {
+            source: "site-api-key",
+            hasSubscription: true,
+            hasProjectApiKey: false,
+            hasAccountApiKey: false,
+            hasSiteApiKey: true,
+            siteAiUsageLimitPositive: true,
+            siteFundedCodex: {
+              enabled: true,
+              policy: {
+                model: "gpt-5.6-luna",
+                reasoning: "low",
+                serviceTier: "standard",
+              },
+              status: {
+                pools: [],
+                account: {
+                  accountId: "account-1",
+                  committed5hMicrousd: 50_000,
+                  committed7dMicrousd: 100_000,
+                  activeReservedMicrousd: 0,
+                  limit5hMicrousd: 200_000,
+                  limit7dMicrousd: 500_000,
+                  remaining5hMicrousd: 150_000,
+                  remaining7dMicrousd: 400_000,
+                },
+              },
+            },
+            sharedHomeMode: "disabled",
+          } as any
+        }
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-5.6-luna")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTitle("Change Codex payment source"));
+    fireEvent.click(screen.getByText("ChatGPT Plan"));
+
+    expect(actions.setCodexConfig).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        model: "gpt-5.6-luna",
+        paymentSource: "subscription",
+        reasoning: "low",
+        serviceTier: "standard",
+        sessionId: "thr-established",
+      }),
+    );
+
+    fireEvent.click(screen.getByText("Codex"));
+    expect(
+      screen.getByLabelText("5-hour allowance: 75% remaining"),
+    ).toBeTruthy();
+    expect(
+      screen.getByLabelText("7-day allowance: 80% remaining"),
+    ).toBeTruthy();
   });
 
   it("uses a stable thread config key independent of object identity", () => {
@@ -538,7 +679,6 @@ describe("CodexConfigButton", () => {
     });
     getCodexUsageStatus.mockReturnValue(liveUsagePromise);
     writeCachedCodexUsageStatus({
-      projectId: "project-1",
       status: {
         available: true,
         checkedAt: "2026-06-20T00:00:00.000Z",
