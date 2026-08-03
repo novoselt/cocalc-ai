@@ -15,12 +15,13 @@ import {
 
 function harness() {
   const sshCalls: string[][] = [];
+  const callbackResults: unknown[] = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
   registerVmCommand(program, {
-    withContext: async (_command, _name, callback) =>
-      await callback({
+    withContext: async (_command, _name, callback) => {
+      const result = await callback({
         globals: {},
         hub: {
           compute: {
@@ -33,21 +34,25 @@ function harness() {
             }),
           },
         },
-      }),
+      });
+      callbackResults.push(result);
+      return result;
+    },
     runSsh: (args) => sshCalls.push(args),
   });
-  return { program, sshCalls };
+  return { program, sshCalls, callbackResults };
 }
 
 describe("vm ssh", () => {
   it("opens an interactive SSH session when no command is supplied", async () => {
-    const { program, sshCalls } = harness();
+    const { program, sshCalls, callbackResults } = harness();
     await program.parseAsync(["node", "cocalc", "vm", "ssh", "build-vm"]);
     assert.deepEqual(sshCalls[0]?.slice(-1), ["ubuntu@203.0.113.10"]);
+    assert.deepEqual(callbackResults, [undefined]);
   });
 
   it("passes a remote command and option-like arguments through to SSH", async () => {
-    const { program, sshCalls } = harness();
+    const { program, sshCalls, callbackResults } = harness();
     await program.parseAsync([
       "node",
       "cocalc",
@@ -62,6 +67,7 @@ describe("vm ssh", () => {
       "ls",
       "-la",
     ]);
+    assert.deepEqual(callbackResults, [undefined]);
   });
 });
 
