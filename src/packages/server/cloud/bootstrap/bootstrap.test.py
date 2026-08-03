@@ -2201,6 +2201,27 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'PROJECT_STARTUP_CREATE_CGROUP_DEFAULT="${PROJECT_STARTUP_CGROUP_DEFAULT}/create"',
                 script,
             )
+            self.assertIn('PROJECT_STARTUP_CGROUP_MEMORY_HIGH="max"', script)
+            self.assertIn('PROJECT_STARTUP_CGROUP_MEMORY_MAX="max"', script)
+            self.assertIn(
+                'PROJECT_STARTUP_CREATE_CGROUP_MEMORY_HIGH="$((4 * 1024 * 1024 * 1024))"',
+                script,
+            )
+            self.assertIn(
+                'PROJECT_STARTUP_CREATE_CGROUP_MEMORY_MAX="$((8 * 1024 * 1024 * 1024))"',
+                script,
+            )
+            startup_cgroup_body = script.split(
+                "configure_project_startup_cgroup() {", 1
+            )[1].split("\n}\n", 1)[0]
+            self.assertIn(
+                '"$PROJECT_STARTUP_CGROUP_MEMORY_HIGH" > "${PROJECT_STARTUP_CGROUP_DEFAULT}/memory.high"',
+                startup_cgroup_body,
+            )
+            self.assertIn(
+                '"$PROJECT_STARTUP_CREATE_CGROUP_MEMORY_HIGH" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high"',
+                startup_cgroup_body,
+            )
             self.assertIn("project-startup-runtime-cgroup-verification-failed", script)
             self.assertIn("move_project_startup_runtime_to_pool", script)
             self.assertIn("project_startup_runtime_active_count", script)
