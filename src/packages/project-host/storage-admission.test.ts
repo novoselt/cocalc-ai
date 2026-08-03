@@ -147,6 +147,21 @@ describe("storage admission controller", () => {
     expect(controller.getStatus().active_by_priority.interactive).toBe(0);
   });
 
+  it("keeps a short quiet window after lifecycle work finishes", () => {
+    const controller = create("enforce");
+    starting = 1;
+    controller.sample();
+    starting = 0;
+    now += 1_000;
+    expect(
+      controller.admit({ operation_kind: "scheduled_snapshot" }),
+    ).toMatchObject({ admitted: false, reason: "lifecycle_settle" });
+    now += 1_000;
+    expect(
+      controller.admit({ operation_kind: "scheduled_snapshot" }),
+    ).toMatchObject({ admitted: true });
+  });
+
   it("reports would-defer decisions without blocking in observe mode", () => {
     const controller = create("observe");
     stopping = 1;

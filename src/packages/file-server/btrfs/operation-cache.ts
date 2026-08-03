@@ -3,6 +3,7 @@ import {
   type BtrfsMutationContext,
   type BtrfsMutationPriority,
   effectiveBtrfsMutationContext,
+  withBtrfsMutationContext,
 } from "./mutation-context";
 import { btrfs } from "./util";
 
@@ -70,6 +71,10 @@ export type BtrfsMutationLockStatus = {
 };
 
 const mutationLocks = new Map<string, MutationLockState>();
+type BackgroundMutationGuard = (
+  context: BtrfsMutationContext,
+) => string | undefined;
+let backgroundMutationGuard: BackgroundMutationGuard | undefined;
 const MUTATION_PRIORITY_ORDER: Record<BtrfsMutationPriority, number> = {
   lifecycle: 0,
   interactive: 1,
@@ -208,17 +213,54 @@ export async function withBtrfsMutationLock<T>({
   run: () => Promise<T>;
   wait_ms?: number;
 }): Promise<T> {
+  const effectiveContext = effectiveBtrfsMutationContext(context);
+  const priority = mutationPriority(effectiveContext);
+  const assertBackgroundMutationAllowed = () => {
+    if (priority !== "scheduled" && priority !== "scavenger") return;
+    const reason = backgroundMutationGuard?.(effectiveContext);
+    if (reason) {
+      logger.info("deferred background btrfs mutation at lock boundary", {
+        mount,
+        operation,
+        reason,
+        ...effectiveContext,
+      });
+      throw new BtrfsMutationDeferredError(reason);
+    }
+  };
+  // Avoid joining the queue when background work is already ineligible.
+  assertBackgroundMutationAllowed();
   const release = await acquireBtrfsMutationLock({
     mount,
     operation,
-    context: effectiveBtrfsMutationContext(context),
+    context: effectiveContext,
     wait_ms,
   });
   try {
-    return await run();
+    // Lifecycle state may have changed while this operation waited. The lock
+    // is now ours, so this is the final race-free eligibility check before the
+    // indivisible transaction begins.
+    assertBackgroundMutationAllowed();
+    return await withBtrfsMutationContext(
+      { ...effectiveContext, mutation_lock_held: true },
+      run,
+    );
   } finally {
     release();
   }
+}
+
+export class BtrfsMutationDeferredError extends Error {
+  constructor(public readonly reason: string) {
+    super(`background btrfs mutation deferred: ${reason}`);
+    this.name = "BtrfsMutationDeferredError";
+  }
+}
+
+export function configureBtrfsBackgroundMutationGuard(
+  guard?: BackgroundMutationGuard,
+): void {
+  backgroundMutationGuard = guard;
 }
 
 async function acquireBtrfsMutationLock({
@@ -386,4 +428,5 @@ export function clearBtrfsOperationCachesForTest(): void {
     }
   }
   mutationLocks.clear();
+  backgroundMutationGuard = undefined;
 }

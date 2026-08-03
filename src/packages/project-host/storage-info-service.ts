@@ -25,6 +25,7 @@ import type {
 import { dstream, type DStream } from "@cocalc/conat/sync/dstream";
 import { PROJECT_IMAGE_PATH } from "@cocalc/util/db-schema/defaults";
 import { fileServerClient, getSharedScratchMountpoint } from "./file-server";
+import { getStorageAdmissionStatus } from "./storage-admission";
 
 const logger = getLogger("project-host:storage-info");
 
@@ -57,6 +58,11 @@ const STORAGE_HISTORY_SAMPLE_INTERVAL_MS = 5 * 60_000;
 const STORAGE_HISTORY_TTL_MS = 35 * 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOW_MINUTES = 24 * 60;
 const DEFAULT_MAX_POINTS = 96;
+const PROJECT_STORAGE_HOST_SCAN_MAX = positiveIntegerEnv(
+  "COCALC_PROJECT_STORAGE_HOST_SCAN_MAX",
+  1,
+);
+let projectStorageHostScansActive = 0;
 
 const projectStorageOverviewCache = new TTL<string, ProjectStorageOverview>({
   ttl: PROJECT_STORAGE_CACHE_TTL_MS,
@@ -246,6 +252,22 @@ function storageScanBudgetMessage(path: string): string {
 
 function storageScanBudgetExhaustedMessage(): string {
   return `Disk usage scan budget for this project is exhausted. Showing quota-based or cached usage so storage limits remain visible. Try again later or browse into a smaller folder for a cheaper scan.`;
+}
+
+function storageScanDeferredMessage(reason: string): string {
+  return `Disk usage scan is deferred while the host protects project lifecycle latency (${reason}). Showing quota-based or cached usage; retry after current project starts or storage pressure finish.`;
+}
+
+function storageScanDeferralReason(): string | undefined {
+  const status = getStorageAdmissionStatus();
+  if ((status?.lifecycle_active ?? 0) > 0) return "project lifecycle active";
+  if (status && status.pressure_state !== "normal") {
+    return `storage pressure ${status.pressure_state}`;
+  }
+  if (projectStorageHostScansActive >= PROJECT_STORAGE_HOST_SCAN_MAX) {
+    return "host scan capacity in use";
+  }
+  return undefined;
 }
 
 function storageScanFailedMessage(path: string): string {
@@ -690,6 +712,16 @@ async function getStorageBreakdownImpl({
   if (cached) return cached;
   let scan = projectStorageBreakdownInflight.get(cacheKey);
   if (!scan) {
+    const deferred = storageScanDeferralReason();
+    if (deferred) {
+      return fallbackStorageBreakdown({
+        cacheKey,
+        normalizedPath,
+        fallback_bytes,
+        warning: storageScanDeferredMessage(deferred),
+        scan_status: "budget_exhausted",
+      });
+    }
     const budget = claimProjectScanBudget(project_id);
     if (!budget) {
       logger.warn("getStorageBreakdown: project scan budget exhausted", {
@@ -704,6 +736,7 @@ async function getStorageBreakdownImpl({
         scan_status: "budget_exhausted",
       });
     }
+    projectStorageHostScansActive += 1;
     scan = (async () => {
       try {
         const fs = localFs({ client, project_id });
@@ -732,6 +765,10 @@ async function getStorageBreakdownImpl({
         projectStorageBreakdownStaleCache.set(cacheKey, breakdown);
         return breakdown;
       } finally {
+        projectStorageHostScansActive = Math.max(
+          0,
+          projectStorageHostScansActive - 1,
+        );
         budget.finish();
         if (projectStorageBreakdownInflight.get(cacheKey) === scan) {
           projectStorageBreakdownInflight.delete(cacheKey);
@@ -854,27 +891,33 @@ async function getStorageOverviewImpl({
         return undefined;
       }),
     ]);
-    const [homeUsage, environmentUsage] = await Promise.all([
-      getStorageBreakdownImpl({
-        client,
-        project_id,
-        path: homePath,
-        force_sample: forced && forceAllowed,
-        fallback_bytes: quota.used,
-      }),
-      getStorageBreakdownImpl({
-        client,
-        project_id,
-        path: environmentPath,
-        force_sample: forced && forceAllowed,
-      }).catch((err) => {
-        const text = `${err ?? ""}`.toLowerCase();
-        if (text.includes("no such file") || text.includes("not found")) {
-          return null;
-        }
-        throw err;
-      }),
-    ]);
+    // A project overview previously launched two host-wide `du` traversals at
+    // once. Serialize them so the host-wide scan cap can remain one without
+    // making the environment scan contend with the home scan from the same
+    // request.
+    const homeUsage = await getStorageBreakdownImpl({
+      client,
+      project_id,
+      path: homePath,
+      force_sample: forced && forceAllowed,
+      fallback_bytes: quota.used,
+    });
+    const environmentUsage = await getStorageBreakdownImpl({
+      client,
+      project_id,
+      path: environmentPath,
+      force_sample: forced && forceAllowed,
+      // Environment usage is optional detail. If the serialized home scan is
+      // still running, report a zero estimate rather than failing the whole
+      // storage overview while waiting for host scan capacity.
+      fallback_bytes: 0,
+    }).catch((err) => {
+      const text = `${err ?? ""}`.toLowerCase();
+      if (text.includes("no such file") || text.includes("not found")) {
+        return null;
+      }
+      throw err;
+    });
 
     const environmentBytes = Math.max(0, environmentUsage?.bytes ?? 0);
     const liveBytes = Math.max(0, homeUsage.bytes);

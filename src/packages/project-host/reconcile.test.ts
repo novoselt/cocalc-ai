@@ -243,6 +243,19 @@ describe("reconcileOnce", () => {
     expect(reconcileProjectCgroup).toHaveBeenCalledTimes(1);
   });
 
+  it("reconciles again when the container identity changes", async () => {
+    upsertProject({ project_id, state: "running" });
+    const reconcileProjectCgroup = jest.fn(async () => ({ status: "ok" }));
+    mockPodmanPs(`project-${project_id}|container-old|running|\n`);
+    await reconcileOnce({ reconcileProjectCgroup });
+    await reconcileOnce({ reconcileProjectCgroup });
+    expect(reconcileProjectCgroup).toHaveBeenCalledTimes(1);
+
+    mockPodmanPs(`project-${project_id}|container-new|running|\n`);
+    await reconcileOnce({ reconcileProjectCgroup });
+    expect(reconcileProjectCgroup).toHaveBeenCalledTimes(2);
+  });
+
   it("serializes cgroup repairs by default", async () => {
     const secondProjectId = "815a6760-358e-46bc-a4fe-c43d1ed5c729";
     upsertProject({ project_id, state: "running" });

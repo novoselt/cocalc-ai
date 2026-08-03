@@ -4,6 +4,8 @@ import {
   performance,
   PerformanceObserver,
 } from "node:perf_hooks";
+import { getBtrfsMutationLockStatus } from "@cocalc/file-server/btrfs/operation-cache";
+import { getStorageAdmissionStatus } from "./storage-admission";
 
 const SAMPLE_INTERVAL_MS = 100;
 const WARN_THRESHOLDS_MS = [250, 1000, 4000] as const;
@@ -135,6 +137,23 @@ export function startProjectHostEventLoopStallMonitor(): () => void {
     loggerName: "project-host:event-loop-stalls",
     label: "project-host",
     onStall: (snapshot) => {
+      const mutationLocks = getBtrfsMutationLockStatus();
+      const storageAdmission = getStorageAdmissionStatus();
+      snapshot.storage_pressure_state =
+        storageAdmission?.pressure_state ?? "unknown";
+      snapshot.lifecycle_active = storageAdmission?.lifecycle_active ?? 0;
+      snapshot.btrfs_mutation_locks = mutationLocks.length;
+      snapshot.btrfs_mutation_waiters = mutationLocks.reduce(
+        (sum, lock) => sum + lock.queued,
+        0,
+      );
+      snapshot.btrfs_mutation_holders = mutationLocks.map((lock) => ({
+        mount: lock.mount,
+        operation: lock.holder_operation,
+        held_ms: lock.held_ms,
+        priority: lock.priority,
+        project_id: lock.project_id,
+      }));
       projectHostStatus = {
         ...projectHostStatus,
         last_stall_at: new Date().toISOString(),
