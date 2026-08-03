@@ -2812,11 +2812,23 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl_text,
             )
             self.assertIn(
+                "migrate_podman_database_runroot()",
+                rootctl_text,
+            )
+            self.assertIn(
+                '"UPDATE DBConfig SET RunRoot = ? WHERE ID = 1 AND RunRoot = ?"',
+                rootctl_text,
+            )
+            self.assertIn(
+                'if [ "${reported_runroot}" != "${desired_runroot}" ]',
+                rootctl_text,
+            )
+            self.assertIn(
                 'run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" system migrate',
                 rootctl_text,
             )
             self.assertIn(
-                'run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" info',
+                "info --format '{{.Store.RunRoot}}'",
                 rootctl_text,
             )
             self.assertIn("prepare-podman-boot)", rootctl_text)

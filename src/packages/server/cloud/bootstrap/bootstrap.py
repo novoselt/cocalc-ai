@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260803-v35"
+HELPER_SCHEMA_VERSION = "20260803-v36"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -8413,6 +8413,62 @@ project_runtime_processes_active() {
   return 1
 }
 
+migrate_podman_database_runroot() {
+  local db_path="$1" desired_runroot="$2" legacy_runroot="$3"
+  if [ ! -f "${db_path}" ]; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to migrate the Podman database runroot" >&2
+    return 1
+  fi
+  (
+    cd /tmp
+    sudo -n -u "${RUNTIME_USER}" -H python3 - \
+      "${db_path}" "${desired_runroot}" "${legacy_runroot}" <<'PY'
+import sqlite3
+import sys
+
+db_path, desired_runroot, legacy_runroot = sys.argv[1:]
+conn = sqlite3.connect(f"file:{db_path}?mode=rw", uri=True, timeout=30)
+try:
+    conn.execute("PRAGMA busy_timeout = 30000")
+    if conn.execute("PRAGMA quick_check").fetchone() != ("ok",):
+        raise RuntimeError("Podman database quick_check failed")
+    conn.execute("BEGIN IMMEDIATE")
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(DBConfig)").fetchall()
+    }
+    if "ID" not in columns or "RunRoot" not in columns:
+        raise RuntimeError("Podman DBConfig schema does not contain ID and RunRoot")
+    rows = conn.execute("SELECT ID, RunRoot FROM DBConfig").fetchall()
+    if len(rows) != 1 or rows[0][0] != 1:
+        raise RuntimeError(f"unexpected Podman DBConfig rows: {rows!r}")
+    current_runroot = rows[0][1]
+    if current_runroot == desired_runroot:
+        conn.commit()
+    elif current_runroot == legacy_runroot:
+        cursor = conn.execute(
+            "UPDATE DBConfig SET RunRoot = ? WHERE ID = 1 AND RunRoot = ?",
+            (desired_runroot, legacy_runroot),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Podman DBConfig runroot update did not affect one row")
+        conn.commit()
+        print(
+            f"migrated Podman database runroot from {legacy_runroot} "
+            f"to {desired_runroot}"
+        )
+    else:
+        raise RuntimeError(
+            f"refusing unexpected Podman database runroot {current_runroot!r}"
+        )
+finally:
+    conn.close()
+PY
+  )
+}
+
 require_podman_boot_preparation_not_failed() {
   if command -v systemctl >/dev/null 2>&1 && \
      systemctl is-failed --quiet cocalc-project-host-prepare.service; then
@@ -8423,7 +8479,7 @@ require_podman_boot_preparation_not_failed() {
 
 prepare_podman_boot() {
   local home config_dir storage_conf desired_runroot legacy_runroot current_runroot
-  local runtime_dir cgroup_manager tmp
+  local runtime_dir cgroup_manager tmp graphroot db_path reported_runroot
   if ! mountpoint -q /mnt/cocalc; then
     echo "/mnt/cocalc is not mounted; refusing Podman boot preparation" >&2
     return 1
@@ -8441,6 +8497,8 @@ prepare_podman_boot() {
   storage_conf="${config_dir}/storage.conf"
   desired_runroot="/run/cocalc/containers/rootless/${RUNTIME_USER}"
   legacy_runroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/run"
+  graphroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/storage"
+  db_path="${graphroot}/db.sql"
   current_runroot="$(sed -n 's/^[[:space:]]*runroot[[:space:]]*=[[:space:]]*"\\([^"]*\\)".*/\\1/p' "${storage_conf}" 2>/dev/null | head -n1)"
   case "${current_runroot}" in
     ""|"${desired_runroot}"|"${legacy_runroot}")
@@ -8463,19 +8521,29 @@ prepare_podman_boot() {
 [storage]
 driver = "overlay"
 runroot = "${desired_runroot}"
-graphroot = "/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/storage"
+graphroot = "${graphroot}"
 EOF
   chown "${RUNTIME_USER}:${RUNTIME_USER}" "${tmp}"
   chmod 0600 "${tmp}"
   mv -f "${tmp}" "${storage_conf}"
   rm -f /mnt/cocalc/data/containers/runroot-migration-pending
 
+  migrate_podman_database_runroot \
+    "${db_path}" "${desired_runroot}" "${legacy_runroot}"
+
   cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
   if [ -z "${cgroup_manager}" ]; then
     cgroup_manager="cgroupfs"
   fi
   run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" system migrate
-  run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" info >/dev/null
+  reported_runroot="$(
+    run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" \
+      info --format '{{.Store.RunRoot}}'
+  )"
+  if [ "${reported_runroot}" != "${desired_runroot}" ]; then
+    echo "Podman runroot validation failed: expected=${desired_runroot} reported=${reported_runroot}" >&2
+    return 1
+  fi
   podman_ps_once "${runtime_dir}" "${cgroup_manager}"
 }
 
