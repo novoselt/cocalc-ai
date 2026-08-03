@@ -416,6 +416,29 @@ export async function enqueueExpiredComputeVms(limit = 100) {
   return rows.length;
 }
 
+export async function enqueueComputeEmergencyStops(limit = 100) {
+  const { rows } = await pool().query<{ id: string }>(
+    `UPDATE compute_vms
+     SET desired_state='stopped', updated_at=NOW(),
+         error='site-wide emergency stop requested'
+     WHERE id IN (
+       SELECT id FROM compute_vms
+       WHERE deleted_at IS NULL AND desired_state='running'
+       ORDER BY updated_at ASC LIMIT $1 FOR UPDATE SKIP LOCKED
+     )
+     RETURNING id`,
+    [limit],
+  );
+  for (const { id } of rows) {
+    await enqueueComputeWork({
+      resource_id: id,
+      action: "reconcile",
+      idempotency_key: `emergency-stop:${id}:${Date.now()}`,
+    });
+  }
+  return rows.length;
+}
+
 export async function enqueueComputeReconciliation(limit = 100) {
   const { rows } = await pool().query<{ id: string }>(
     `SELECT id FROM compute_vms

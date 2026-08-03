@@ -324,6 +324,7 @@ export type SiteSettingsExtrasKeys =
   | "pay_as_you_go_section"
   | "pay_as_you_go_min_payment"
   | "compute_vm_mode"
+  | "compute_vm_emergency_stop"
   | "compute_vm_admin_allowlist"
   | "compute_vm_gcp_service_account_json"
   | "compute_vm_gcp_subnetwork"
@@ -1438,6 +1439,16 @@ export const EXTRAS: SettingsExtras = {
         "admin_canary",
         "enabled",
       ].includes(`${value ?? ""}`.trim().toLowerCase()),
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Admission",
+  },
+  compute_vm_emergency_stop: {
+    name: "Managed Compute VMs: Emergency Stop",
+    desc: "Immediately reject VM create/start and durably request every active managed VM to stop. Deletion and hard-TTL cleanup remain enabled.",
+    default: "no",
+    to_val: to_bool,
+    valid: only_booleans,
     tags: ["Cloud", "Security"],
     group: "Compute / Managed VMs",
     subgroup: "Admission",

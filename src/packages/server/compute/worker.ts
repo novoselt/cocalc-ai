@@ -18,6 +18,7 @@ import {
   appendComputeEvent,
   claimComputeWork,
   enqueueComputeReconciliation,
+  enqueueComputeEmergencyStops,
   enqueueComputeWork,
   enqueueExpiredComputeVms,
   finishComputeWork,
@@ -26,6 +27,7 @@ import {
   updateComputeInstance,
   updateComputeVm,
 } from "./db";
+import { getComputeVmConfig } from "./config";
 import {
   createProviderComputeVm,
   deleteProviderComputeVm,
@@ -113,6 +115,10 @@ async function markReady(vm: ComputeVmRow, publicIp?: string) {
 
 async function provision(vm: ComputeVmRow) {
   if (vm.desired_state === "deleted") return await remove(vm);
+  if (vm.desired_state === "stopped") {
+    await updateComputeVm(vm.id, { state: "stopped", error: null });
+    return;
+  }
   const provisioning = (await updateComputeVm(vm.id, {
     state: "provisioning",
     error: null,
@@ -133,6 +139,7 @@ async function provision(vm: ComputeVmRow) {
 
 async function start(vm: ComputeVmRow) {
   if (vm.expires_at.valueOf() <= Date.now()) return await remove(vm);
+  if (vm.desired_state === "stopped") return await reconcile(vm);
   await updateComputeVm(vm.id, { state: "starting", error: null });
   try {
     await startProviderComputeVm(vm);
@@ -383,6 +390,10 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
       await enqueueExpiredComputeVms();
       if (Date.now() - lastReconcile >= 15_000) {
         lastReconcile = Date.now();
+        const config = await getComputeVmConfig();
+        if (config.emergency_stop) {
+          await enqueueComputeEmergencyStops();
+        }
         await enqueueComputeReconciliation();
       }
       const rows = await claimComputeWork({ worker_id: workerId, limit: 2 });

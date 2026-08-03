@@ -41,6 +41,17 @@ describe("managed compute VM configuration", () => {
     ).not.toThrow();
   });
 
+  it("rejects admission while emergency stop is active", () => {
+    const config = resolveComputeVmConfig({
+      dns: "staging.cocalc.ai",
+      compute_vm_emergency_stop: "yes",
+    });
+    expect(config.emergency_stop).toBe(true);
+    expect(() => requireComputeVmCreateAllowed(config, "account-1")).toThrow(
+      "emergency stop is active",
+    );
+  });
+
   it("requires an allowlisted account for an explicit canary", () => {
     const config = resolveComputeVmConfig({
       dns: "staging.cocalc.ai",

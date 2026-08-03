@@ -16,6 +16,7 @@ export type ComputeEnvironment = "development" | "staging" | "production";
 export interface ComputeVmConfig {
   mode: ComputeVmMode;
   environment: ComputeEnvironment;
+  emergency_stop: boolean;
   admin_allowlist: Set<string>;
   gcp_service_account_json?: string;
   gcp_project_id?: string;
@@ -39,6 +40,10 @@ function positiveNumber(value: unknown, fallback: number): number {
 
 function positiveInteger(value: unknown, fallback: number): number {
   return Math.floor(positiveNumber(value, fallback));
+}
+
+function booleanValue(value: unknown): boolean {
+  return value === true || `${value ?? ""}`.trim().toLowerCase() === "yes";
 }
 
 function environmentFromSettings(settings: Settings): ComputeEnvironment {
@@ -119,6 +124,7 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
   return {
     mode,
     environment,
+    emergency_stop: booleanValue(settings.compute_vm_emergency_stop),
     admin_allowlist: parseAllowlist(settings.compute_vm_admin_allowlist),
     gcp_service_account_json: serviceAccount.json,
     gcp_project_id: serviceAccount.project_id,
@@ -156,6 +162,12 @@ export function requireComputeVmCreateAllowed(
   config: ComputeVmConfig,
   accountId: string,
 ): void {
+  if (config.emergency_stop) {
+    throw Object.assign(
+      new Error("managed compute VM emergency stop is active"),
+      { code: 503 },
+    );
+  }
   if (config.mode !== "admin_canary") {
     throw Object.assign(
       new Error(

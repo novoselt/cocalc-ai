@@ -8,6 +8,7 @@ import { after, before, getPool } from "@cocalc/server/test";
 import {
   claimComputeWork,
   enqueueComputeWork,
+  enqueueComputeEmergencyStops,
   enqueueExpiredComputeVms,
   finishComputeWork,
   insertComputeVm,
@@ -204,5 +205,23 @@ describe("compute VM durable state", () => {
       [vm.id],
     );
     expect(work.rows).toEqual([{ action: "delete", state: "queued" }]);
+  });
+
+  it("turns running leases into durable emergency-stop reconciliation", async () => {
+    const vm = await insertComputeVm(vmInput());
+    expect(await enqueueComputeEmergencyStops()).toBe(1);
+    const current = await getPool().query(
+      "SELECT desired_state, error FROM compute_vms WHERE id=$1",
+      [vm.id],
+    );
+    expect(current.rows[0]).toEqual({
+      desired_state: "stopped",
+      error: "site-wide emergency stop requested",
+    });
+    const work = await getPool().query(
+      "SELECT action, state FROM compute_resource_work WHERE resource_id=$1",
+      [vm.id],
+    );
+    expect(work.rows).toEqual([{ action: "reconcile", state: "queued" }]);
   });
 });
