@@ -8465,7 +8465,7 @@ EOF
     cgroup_manager="cgroupfs"
   fi
   run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" system migrate
-  podman_info_once "${runtime_dir}" "${cgroup_manager}"
+  run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" info >/dev/null
   podman_ps_once "${runtime_dir}" "${cgroup_manager}"
 }
 

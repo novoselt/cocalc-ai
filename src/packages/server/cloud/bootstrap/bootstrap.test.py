@@ -2807,6 +2807,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" system migrate',
                 rootctl_text,
             )
+            self.assertIn(
+                'run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" info',
+                rootctl_text,
+            )
             self.assertIn("prepare-podman-boot)", rootctl_text)
             self.assertIn(
                 'COCALC_PROJECT_HOST_OOM_SCORE_ADJ:--900',
