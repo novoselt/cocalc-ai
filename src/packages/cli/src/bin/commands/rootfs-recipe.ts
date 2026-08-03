@@ -57,6 +57,7 @@ type RootfsRecipePublish = {
   family?: string;
   version?: string;
   channel?: string;
+  supersedes_image_id?: string;
   default_jupyter_kernel?: string;
   visibility?: string;
   tags?: string[];
@@ -1722,6 +1723,7 @@ function emptyRecipeConfig(recipe: RootfsRecipe): RootfsConfigExport {
       family: publish.family,
       version: publish.version,
       channel: publish.channel,
+      supersedes_image_id: publish.supersedes_image_id,
       visibility: publish.visibility as any,
       default_jupyter_kernel: publish.default_jupyter_kernel,
       tags: publish.tags,
@@ -1810,6 +1812,9 @@ function recipeConfigToCatalogPayload(config: RootfsConfigExport) {
     family: config.metadata?.family,
     version: config.metadata?.version,
     channel: config.metadata?.channel,
+    ...(config.metadata?.supersedes_image_id != null
+      ? { supersedes_image_id: config.metadata.supersedes_image_id }
+      : {}),
     visibility: config.metadata?.visibility,
     tags: config.metadata?.tags,
     theme: config.theme,

@@ -7,6 +7,7 @@ import { useProjectContext } from "./context";
 import { CourseMembershipBanner } from "./course-membership-banner";
 import { ProjectDiskQuotaWarningBanner } from "./disk-usage/quota-warning-banner";
 import { LegacyMigrationRestoreBanner } from "./legacy-migration-restore-banner";
+import { ProjectRootfsUpgradeBanner } from "./rootfs-upgrade-banner";
 
 export function ProjectWarningBanner() {
   const { project_id } = useProjectContext();
@@ -14,6 +15,7 @@ export function ProjectWarningBanner() {
   return (
     <>
       <ProjectDiskQuotaWarningBanner project_id={project_id} />
+      <ProjectRootfsUpgradeBanner project_id={project_id} />
       <LegacyMigrationRestoreBanner project_id={project_id} />
       <CourseMembershipBanner project_id={project_id} />
     </>

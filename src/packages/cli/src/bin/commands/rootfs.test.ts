@@ -804,7 +804,11 @@ test("rootfs recipe explain parses bundled cocalc base recipe", async () => {
   assert.equal(harness.captured.steps[0].uses, "cocalc/apt");
   assert.equal(harness.captured.steps[1].kind, "run");
   assert.equal(harness.captured.steps[2].uses, "cocalc/jupyter-python");
-  assert.equal(harness.captured.publish.slug, "cocalc-minimal-base");
+  assert.equal(harness.captured.publish.slug, "basic-1-7");
+  assert.equal(
+    harness.captured.publish.supersedes_image_id,
+    "81e9a519-d8f2-4a47-8c60-05b263d1dedf",
+  );
 });
 
 test("rootfs recipe explain resolves bundled recipe examples by name", async () => {
@@ -823,7 +827,7 @@ test("rootfs recipe explain resolves bundled recipe examples by name", async () 
 
   assert.equal(harness.captured.recipe, "cocalc-base");
   assert.equal(harness.captured.steps[2].uses, "cocalc/jupyter-python");
-  assert.equal(harness.captured.publish.slug, "cocalc-minimal-base");
+  assert.equal(harness.captured.publish.slug, "basic-1-7");
 });
 
 test("rootfs recipe explain resolves bundled example recipe.name aliases", async () => {
@@ -2212,6 +2216,7 @@ test("rootfs recipe run creates project, executes modules, and publishes", async
           label: "Demo image",
           slug: "demo-image",
           family: "demo",
+          supersedes_image_id: "previous-demo-image",
           tags: ["demo"],
         },
       }),
@@ -2309,6 +2314,7 @@ test("rootfs recipe run creates project, executes modules, and publishes", async
       family: "demo",
       version: undefined,
       channel: undefined,
+      supersedes_image_id: "previous-demo-image",
       visibility: undefined,
       tags: ["demo", "module"],
       theme: {},
