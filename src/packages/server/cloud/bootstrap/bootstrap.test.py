@@ -2800,6 +2800,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl_text,
             )
             self.assertIn(
+                "Podman boot preparation failed; refusing to start project-host",
+                rootctl_text,
+            )
+            self.assertIn(
+                "require_podman_boot_preparation_not_failed",
+                rootctl_text,
+            )
+            self.assertIn(
                 'runroot = "${desired_runroot}"',
                 rootctl_text,
             )

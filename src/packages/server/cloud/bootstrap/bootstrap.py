@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260803-v33"
+HELPER_SCHEMA_VERSION = "20260803-v34"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -8408,7 +8408,7 @@ project_runtime_processes_active() {
         return 0
         ;;
     esac
-    cmdline="$(tr '\0' ' ' < "${proc}/cmdline" 2>/dev/null || true)"
+    cmdline="$(tr '\\0' ' ' < "${proc}/cmdline" 2>/dev/null || true)"
     case "${cmdline}" in
       *project-host:app*|*cocalc-project-podman*)
         return 0
@@ -8416,6 +8416,14 @@ project_runtime_processes_active() {
     esac
   done
   return 1
+}
+
+require_podman_boot_preparation_not_failed() {
+  if command -v systemctl >/dev/null 2>&1 && \
+     systemctl is-failed --quiet cocalc-project-host-prepare.service; then
+    echo "Podman boot preparation failed; refusing to start project-host" >&2
+    return 1
+  fi
 }
 
 prepare_podman_boot() {
@@ -8992,6 +9000,7 @@ esac
 
 case "${cmd}" in
   start|ensure)
+    require_podman_boot_preparation_not_failed
     repair_runtime_environment
     preflight_podman_runtime
     reconcile_app_core_dumps
@@ -9000,6 +9009,7 @@ case "${cmd}" in
     attach_running_project_processes || true
     ;;
   restart)
+    require_podman_boot_preparation_not_failed
     repair_runtime_environment
     preflight_podman_runtime
     reconcile_app_core_dumps
