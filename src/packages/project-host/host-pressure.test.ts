@@ -221,6 +221,60 @@ describe("host pressure controller helpers", () => {
     ).toMatchObject({ zone: "observe" });
   });
 
+  it("does not evict unrelated projects for lifecycle-only I/O pressure", () => {
+    const now = Date.parse("2026-08-03T19:51:00.000Z");
+    const metrics = {
+      memory_used_percent: 20,
+      memory_available_bytes: 32 * 1024 ** 3,
+      storage_admission: {
+        schema_version: 1 as const,
+        collected_at: new Date(now).toISOString(),
+        mode: "enforce" as const,
+        pressure_state: "emergency" as const,
+        state_since: new Date(now - 5 * 60_000).toISOString(),
+        host_io_full_avg10: 25,
+        project_pool_io_full_avg10: 0,
+        effective_io_full_avg10: 25,
+        uncontained_io_full_avg10: 25,
+        lifecycle_active: 1,
+        starting_projects: 1,
+        stopping_projects: 0,
+        active_by_priority: {
+          lifecycle: 1,
+          interactive: 0,
+          scheduled: 0,
+          scavenger: 0,
+        },
+        btrfs_mutation_locks: 0,
+        btrfs_mutation_waiters: 0,
+        admitted_total: 0,
+        deferred_total: 0,
+        observed_deferral_total: 0,
+        transition_count: 1,
+      },
+    };
+
+    expect(
+      classifyHostPressure(metrics, now, {
+        ioPressureMode: "enforce",
+        ioPressureSinceMs: now - 5 * 60_000,
+      }),
+    ).toMatchObject({
+      zone: "observe",
+      reason: expect.stringContaining("storage_io_lifecycle_active"),
+    });
+
+    metrics.storage_admission.lifecycle_active = 0;
+    metrics.storage_admission.starting_projects = 0;
+    metrics.storage_admission.active_by_priority.lifecycle = 0;
+    expect(
+      classifyHostPressure(metrics, now, {
+        ioPressureMode: "enforce",
+        ioPressureSinceMs: now - 5 * 60_000,
+      }),
+    ).toMatchObject({ zone: "pressure" });
+  });
+
   it("keeps I/O eviction candidates old and backed by activity policy", () => {
     const now = 10 * 60 * 60_000;
     const candidates = buildStopCandidates({
