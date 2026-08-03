@@ -1528,7 +1528,7 @@ export function ChatRoomThreadPanel({
                       type="info"
                       showIcon
                       style={{ marginTop: 8 }}
-                      message={`Included turns use ${siteFundedPolicy.model}, low reasoning, and standard speed.`}
+                      message={`Your CoCalc Membership uses ${siteFundedPolicy.model} with low reasoning.`}
                     />
                   ) : null}
                 </div>

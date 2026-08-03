@@ -13,7 +13,6 @@ import {
   Input,
   message,
   Popconfirm,
-  Progress,
   Space,
   Table,
   Tag,
@@ -34,6 +33,10 @@ import {
 import { Icon, Loading } from "@cocalc/frontend/components";
 import Password from "@cocalc/frontend/components/password";
 import { TimeAgo } from "@cocalc/frontend/components/time-ago";
+import {
+  UsageWindowMeters,
+  type UsageWindowMeter,
+} from "@cocalc/frontend/account/usage-window-meters";
 import { lite } from "@cocalc/frontend/lite";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { SelectProject } from "@cocalc/frontend/projects/select-project";
@@ -59,19 +62,6 @@ const deviceAuthCodeStyle: CSSProperties = {
   borderRadius: 8,
   background: COLORS.GRAY_LLL,
   padding: 12,
-};
-
-const usageLimitStyle: CSSProperties = {
-  background: "white",
-  border: `1px solid ${COLORS.GRAY_LL}`,
-  borderRadius: 8,
-  minWidth: 0,
-  padding: 14,
-};
-
-const compactUsageLimitStyle: CSSProperties = {
-  ...usageLimitStyle,
-  padding: "8px 10px",
 };
 
 function sourceLabel(source: CodexPaymentSourceInfo["source"]): string {
@@ -171,12 +161,7 @@ function formatWindowLabel(limit: any, fallback: string): string {
   return `${mins}-minute limit`;
 }
 
-function getUsageWindows(rateLimit: any): Array<{
-  key: "primary" | "secondary";
-  label: string;
-  remainingPercent?: number;
-  resetAt?: Date;
-}> {
+function getUsageWindows(rateLimit: any): UsageWindowMeter[] {
   return (["primary", "secondary"] as const)
     .map((key) => {
       const limit = rateLimit?.[key];
@@ -206,119 +191,14 @@ export function CodexUsageMeters({
   updating?: boolean;
 }): React.JSX.Element | null {
   const usageWindows = getUsageWindows(getCodexRateLimit(status));
-  if (!usageWindows.length) return null;
-  const showStaleState = stale || updating;
   return (
-    <div
-      style={{
-        display: "grid",
-        gap: compact ? 8 : 12,
-        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-        position: "relative",
-        width: "100%",
-      }}
-    >
-      {showStaleState ? (
-        <div
-          aria-label={updating ? "Updating Codex usage" : "Stale Codex usage"}
-          style={{
-            alignItems: "center",
-            background: COLORS.GRAY_LLL,
-            border: `1px solid ${COLORS.GRAY_LL}`,
-            borderRadius: 999,
-            boxShadow: "0 1px 3px rgba(0, 0, 0, 0.06)",
-            display: "inline-flex",
-            gap: 5,
-            lineHeight: 1,
-            padding: compact ? "3px 7px" : "4px 8px",
-            pointerEvents: "none",
-            position: "absolute",
-            right: compact ? 6 : 10,
-            top: compact ? 6 : 10,
-            zIndex: 1,
-          }}
-        >
-          <span
-            style={{
-              background: updating ? COLORS.ANTD_LINK_BLUE : COLORS.GRAY_M,
-              borderRadius: "50%",
-              display: "inline-block",
-              height: 6,
-              width: 6,
-            }}
-          />
-          <Text type="secondary" style={{ fontSize: compact ? 10 : 11 }}>
-            {updating ? "Updating..." : "Stale"}
-          </Text>
-        </div>
-      ) : null}
-      {usageWindows.map((window) => (
-        <div
-          key={window.key}
-          style={{
-            ...(compact ? compactUsageLimitStyle : usageLimitStyle),
-            opacity: showStaleState ? 0.58 : 1,
-            transition: "opacity 120ms ease",
-          }}
-        >
-          <div
-            style={{
-              alignItems: "baseline",
-              display: "flex",
-              gap: 8,
-              justifyContent: "space-between",
-            }}
-          >
-            <Text style={{ fontSize: compact ? 12 : 14 }}>{window.label}</Text>
-            {compact && window.resetAt ? (
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                <TimeAgo date={window.resetAt} />
-              </Text>
-            ) : null}
-          </div>
-          {typeof window.remainingPercent === "number" ? (
-            <>
-              <div
-                style={{
-                  alignItems: "baseline",
-                  display: "flex",
-                  gap: compact ? 4 : 6,
-                  marginTop: compact ? 2 : 6,
-                }}
-              >
-                <Text
-                  strong
-                  style={{
-                    fontSize: compact ? 18 : 26,
-                    lineHeight: compact ? "22px" : "30px",
-                  }}
-                >
-                  {`${window.remainingPercent}%`}
-                </Text>
-                <Text style={{ fontSize: compact ? 12 : 14 }}>Remaining</Text>
-              </div>
-              <Progress
-                percent={window.remainingPercent}
-                showInfo={false}
-                size="small"
-                strokeColor={COLORS.ANTD_LINK_BLUE}
-                style={{ margin: compact ? "3px 0 0" : "6px 0 2px" }}
-              />
-            </>
-          ) : null}
-          {!compact ? (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Resets{" "}
-              {window.resetAt ? (
-                <TimeAgo date={window.resetAt} />
-              ) : (
-                "when OpenAI updates this limit"
-              )}
-            </Text>
-          ) : null}
-        </div>
-      ))}
-    </div>
+    <UsageWindowMeters
+      compact={compact}
+      stale={stale}
+      statusLabel="Codex usage"
+      updating={updating}
+      windows={usageWindows}
+    />
   );
 }
 

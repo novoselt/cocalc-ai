@@ -845,6 +845,56 @@ describe("CodexAppServerAgent", () => {
     expect(error?.error).toContain("/opt/cocalc/bin2/codex: not found");
   });
 
+  it("surfaces a command rejection instead of the routine bubblewrap warning", async () => {
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      if (message.method !== "initialize") return;
+      fake.stderr.write(
+        "ERROR codex_app_server: Codex could not find bubblewrap on PATH. Codex will use the bundled bubblewrap in the meantime.\n",
+      );
+      fake.stderr.write(
+        'ERROR codex_core::tools::router: CreateProcess { message: "command rejected: rm -f style commands are not permitted. Use a safer approach" }\n',
+      );
+      fake.stderr.write(
+        "Error: no container with ID test-container found in database\n",
+      );
+      fake.exitCode = 255;
+      setImmediate(() => fake.emit("exit", 255, null));
+    });
+
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+
+    const agent = new CodexAppServerAgent();
+    const streamPayloads: any[] = [];
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      prompt: "run a command",
+      stream: async (payload) => {
+        if (payload) streamPayloads.push(payload);
+      },
+      config: {
+        workingDirectory: "/tmp/project",
+      } as any,
+    });
+
+    const error = streamPayloads.find((payload) => payload.type === "error");
+    expect(error?.error).toContain(
+      "Codex blocked a command: rm -f style commands are not permitted. Use a safer approach",
+    );
+    expect(error?.error).not.toContain("bubblewrap");
+    expect(error?.error).not.toContain("no container with ID");
+  });
+
   it("summarizes missing API authentication failures", async () => {
     const proc = new FakeCodexAppServerProc((fake, message) => {
       switch (message.method) {

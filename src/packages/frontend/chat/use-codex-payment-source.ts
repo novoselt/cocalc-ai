@@ -32,14 +32,14 @@ export function getCodexPaymentSourceOptions(
       value: "auto",
       label: "Automatic",
       description:
-        "Prefer your ChatGPT Plan, then project or account API keys, then CoCalc's included allowance.",
+        "Prefer your ChatGPT Plan, then project or account API keys, then your CoCalc Membership.",
     },
     {
       value: "site-api-key",
-      label: "Included by CoCalc",
+      label: "CoCalc Membership",
       description: includedAvailable
-        ? "Use your membership allowance with the model and limits set by CoCalc."
-        : "Included Codex usage is not currently available for this account.",
+        ? "Use the Codex allowance provided by your CoCalc membership."
+        : "Membership-funded Codex usage is not currently available for this account.",
       disabled: !includedAvailable,
     },
     ...(paymentSource?.hasSubscription
@@ -176,7 +176,7 @@ export function getCodexPaymentSourceShortLabel(
     case "account-api-key":
       return "API Key";
     case "site-api-key":
-      return "Included";
+      return "Membership";
     case "shared-home":
       return "Shared Home";
     case "none":
@@ -213,7 +213,7 @@ export function getCodexPaymentSourceLongLabel(
     case "account-api-key":
       return "Account OpenAI API Key";
     case "site-api-key":
-      return "Included by CoCalc (site-funded Codex)";
+      return "your CoCalc Membership";
     case "shared-home":
       return "Shared ~/.codex";
     case "none":
@@ -251,25 +251,27 @@ export function getCodexPaymentSourceTooltip(
   ];
   if ((paymentSource.preference ?? "auto") === "auto") {
     parts.push(
-      "Automatic order: ChatGPT Plan → Project OpenAI API key → Account OpenAI API key → Included by CoCalc.",
+      "Automatic order: ChatGPT Plan → Project OpenAI API key → Account OpenAI API key → CoCalc Membership.",
     );
   }
   if (paymentSource.unavailableReason) {
     parts.push(paymentSource.unavailableReason);
   }
-  if (paymentSource.hasSubscription) {
-    parts.push(
-      "A ChatGPT subscription is connected; ChatGPT shows the exact plan and remaining Codex usage.",
-    );
-  }
   if (paymentSource.source === "site-api-key") {
-    const policy = paymentSource.siteFundedCodex?.policy;
-    if (paymentSource.siteFundedCodex?.enabled && policy) {
-      parts.push(
-        `Included turns use ${policy.model}, ${policy.reasoning} reasoning, and ${policy.serviceTier} speed. Connect a personal ChatGPT plan or API key to choose other settings.`,
-      );
+    if (paymentSource.siteFundedCodex?.enabled) {
+      if (
+        !paymentSource.hasSubscription &&
+        !paymentSource.hasProjectApiKey &&
+        !paymentSource.hasAccountApiKey
+      ) {
+        parts.push(
+          "Connect a personal ChatGPT plan or API key to choose other settings.",
+        );
+      }
     } else {
-      parts.push("Included Codex usage is currently unavailable on this site.");
+      parts.push(
+        "Membership-funded Codex usage is currently unavailable on this site.",
+      );
     }
   }
   return parts.join(" ");

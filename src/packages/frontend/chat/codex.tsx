@@ -6,7 +6,6 @@ import {
   Form,
   Input,
   Modal,
-  Progress,
   Radio,
   Select,
   Space,
@@ -38,6 +37,7 @@ import {
   writeCachedCodexUsageStatus,
 } from "@cocalc/frontend/account/codex-usage";
 import LiteAISettings from "@cocalc/frontend/account/lite-ai-settings";
+import { AIUsageStatus } from "@cocalc/frontend/misc/ai-usage-status";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
   defaultWorkingDirectoryForChat,
@@ -143,88 +143,6 @@ type LiteCodexLocalStatus = {
   error?: string;
   checkedAt?: number;
 };
-
-function formatMicrousd(value: number | undefined): string | undefined {
-  if (value == null || !Number.isFinite(value)) return;
-  return `$${(Math.max(0, value) / 1_000_000).toFixed(3)}`;
-}
-
-function IncludedAllowanceMeters({
-  status,
-  tooltip = false,
-}: {
-  status: NonNullable<
-    NonNullable<CodexPaymentSourceInfo["siteFundedCodex"]>["status"]
-  >["account"];
-  tooltip?: boolean;
-}) {
-  if (!status) return null;
-  const meters = [
-    {
-      label: "5-hour allowance",
-      limit: status.limit5hMicrousd,
-      remaining: status.remaining5hMicrousd,
-    },
-    {
-      label: "7-day allowance",
-      limit: status.limit7dMicrousd,
-      remaining: status.remaining7dMicrousd,
-    },
-  ].filter(
-    ({ limit, remaining }) =>
-      typeof limit === "number" &&
-      Number.isFinite(limit) &&
-      limit > 0 &&
-      typeof remaining === "number" &&
-      Number.isFinite(remaining),
-  );
-  if (!meters.length) return null;
-  return (
-    <div
-      style={{
-        display: "grid",
-        gap: 8,
-        marginTop: tooltip ? 4 : 10,
-        minWidth: tooltip ? 260 : undefined,
-      }}
-    >
-      {meters.map(({ label, limit = 0, remaining = 0 }) => {
-        const remainingPercent = Math.max(
-          0,
-          Math.min(100, Math.round((remaining / limit) * 100)),
-        );
-        return (
-          <div key={label}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 12,
-                fontSize: 12,
-              }}
-            >
-              <Text style={tooltip ? { color: "inherit" } : undefined}>
-                {label}
-              </Text>
-              <Text strong style={tooltip ? { color: "inherit" } : undefined}>
-                {formatMicrousd(remaining)} of {formatMicrousd(limit)} remaining
-              </Text>
-            </div>
-            <Progress
-              aria-label={`${label}: ${remainingPercent}% remaining`}
-              percent={remainingPercent}
-              showInfo={false}
-              size="small"
-              strokeColor={COLORS.ANTD_LINK_BLUE}
-              trailColor={tooltip ? "rgba(255,255,255,0.25)" : undefined}
-              style={{ margin: "2px 0 0" }}
-            />
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
   <Text strong style={{ color: COLORS.GRAY_D }}>
@@ -558,8 +476,6 @@ export function CodexConfigButton({
     paymentSource.siteFundedCodex?.enabled
       ? paymentSource.siteFundedCodex.policy
       : undefined;
-  const siteFundedAccountStatus =
-    paymentSource?.siteFundedCodex?.status?.account;
   const allModeOptions = useMemo(() => getModeOptions(), []);
   const availableModeValues = useMemo(
     () => new Set(getCodexNewChatModeOptions().map(({ value }) => value)),
@@ -588,10 +504,12 @@ export function CodexConfigButton({
   const sourceTooltip = getCodexPaymentSourceTooltip(paymentSource);
   const chatgptAccount = getChatGptAccountInfo(codexUsageStatus);
   const sourceTooltipDetails =
-    paymentSource?.source === "site-api-key" && siteFundedAccountStatus ? (
+    paymentSource?.source === "site-api-key" ? (
       <Space orientation="vertical" size={0}>
         <span>{sourceTooltip}</span>
-        <IncludedAllowanceMeters status={siteFundedAccountStatus} tooltip />
+        <div style={{ marginTop: 4, width: 390 }}>
+          <AIUsageStatus variant="full" showHelp={false} />
+        </div>
       </Space>
     ) : paymentSource?.source === "subscription" && codexUsageStatus ? (
       <Space orientation="vertical" size={4}>
@@ -622,7 +540,7 @@ export function CodexConfigButton({
           ...option,
           disabled: true,
           description:
-            "Start a new chat to use Included mode; its constrained model profile may not fit this existing session.",
+            "Start a new chat to use your CoCalc Membership; its constrained model profile may not fit this existing session.",
         };
       }
       if (option.value === "auto" && selectedPaymentSource !== "auto") {
@@ -630,7 +548,7 @@ export function CodexConfigButton({
           ...option,
           disabled: true,
           description:
-            "Automatic fallback is disabled after a session starts because it could switch into an incompatible constrained profile.",
+            "Automatic fallback is disabled after a session starts because it could switch into an incompatible membership-funded profile.",
         };
       }
       return option;
@@ -696,7 +614,7 @@ export function CodexConfigButton({
   const serviceTierLabel = effectiveServiceTier === "fast" ? "Fast" : undefined;
   const displayedModel = siteFundedPolicy?.model ?? selectedModelValue;
   const displayedReasoning = siteFundedPolicy ? "Low" : reasoningLabel;
-  const displayedServiceTier = siteFundedPolicy ? "Standard" : serviceTierLabel;
+  const displayedServiceTier = siteFundedPolicy ? undefined : serviceTierLabel;
   const paymentNeedsAttention =
     paymentSourceLoading || paymentSource?.source === "none" || !paymentSource;
   const toggleControlsCollapsed = () => {
@@ -990,7 +908,7 @@ export function CodexConfigButton({
               {siteFundedPolicy ? (
                 <button
                   type="button"
-                  title="Included Codex uses a fixed model"
+                  title="CoCalc Membership uses a fixed model"
                   style={pillSegmentStyle("model")}
                   {...pillSegmentHandlers("model")}
                 >
@@ -1033,7 +951,7 @@ export function CodexConfigButton({
                   {siteFundedPolicy ? (
                     <button
                       type="button"
-                      title="Included Codex uses low reasoning"
+                      title="CoCalc Membership uses low reasoning"
                       style={pillSegmentStyle("reasoning")}
                       {...pillSegmentHandlers("reasoning")}
                     >
@@ -1223,7 +1141,7 @@ export function CodexConfigButton({
                     }}
                   >
                     {hasEstablishedSession
-                      ? "You can continue this session with ChatGPT or a personal API key without losing context. Switching an established personal session into constrained Included mode is disabled."
+                      ? "You can continue this session with ChatGPT or a personal API key without losing context. Switching an established personal session into membership-funded mode is disabled."
                       : "Choose how future turns in this thread are funded. This choice is independent of which credentials are connected."}
                   </div>
                   <Form.Item name="paymentSource" style={{ marginBottom: 0 }}>
@@ -1250,8 +1168,8 @@ export function CodexConfigButton({
                       message="Reconnect your ChatGPT Plan"
                       description={
                         hasEstablishedSession
-                          ? "This session is pinned to ChatGPT. Reconnect it under Payment & Credentials, or start a new Codex chat and choose Included by CoCalc."
-                          : "This thread is configured to use ChatGPT, but that credential is unavailable. Choose Included by CoCalc or reconnect ChatGPT under Payment & Credentials."
+                          ? "This session is pinned to ChatGPT. Reconnect it under Payment & Credentials, or start a new Codex chat and choose CoCalc Membership."
+                          : "This thread is configured to use ChatGPT, but that credential is unavailable. Choose CoCalc Membership or reconnect ChatGPT under Payment & Credentials."
                       }
                     />
                   ) : null}
@@ -1274,16 +1192,19 @@ export function CodexConfigButton({
                     type="info"
                     showIcon
                     style={{ marginBottom: 12 }}
-                    message="Included by CoCalc"
+                    message="CoCalc Membership"
                     description={
                       <>
-                        Included turns use <b>{siteFundedPolicy.model}</b>, low
-                        reasoning, and standard speed. Connect a personal
-                        ChatGPT plan or OpenAI API key to choose other models,
-                        reasoning levels, or speed.
-                        <IncludedAllowanceMeters
-                          status={siteFundedAccountStatus}
-                        />
+                        Membership-funded Codex turns use settings selected by
+                        CoCalc.
+                        {!paymentSource?.hasSubscription &&
+                        !paymentSource?.hasProjectApiKey &&
+                        !paymentSource?.hasAccountApiKey
+                          ? " Connect a personal ChatGPT plan or OpenAI API key to choose other settings."
+                          : null}
+                        <div style={{ marginTop: 10 }}>
+                          <AIUsageStatus variant="full" showHelp={false} />
+                        </div>
                       </>
                     }
                   />

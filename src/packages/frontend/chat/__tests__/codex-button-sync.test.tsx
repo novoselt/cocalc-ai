@@ -111,6 +111,15 @@ jest.mock("@cocalc/frontend/account/codex-credentials-panel", () => ({
 
 jest.mock("@cocalc/frontend/account/lite-ai-settings", () => () => null);
 
+jest.mock("@cocalc/frontend/misc/ai-usage-status", () => ({
+  AIUsageStatus: () => (
+    <div>
+      <div aria-label="5-hour limit: 75% remaining" />
+      <div aria-label="7-day limit: 80% remaining" />
+    </div>
+  ),
+}));
+
 jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
     conat_client: {
@@ -128,7 +137,7 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
 
 jest.mock("../use-codex-payment-source", () => ({
   getCodexPaymentSourceShortLabel: (source: string) =>
-    source === "site-api-key" ? "Included" : "ChatGPT",
+    source === "site-api-key" ? "Membership" : "ChatGPT",
   getCodexPaymentSourceOptions: (source: any) => [
     {
       value: "auto",
@@ -148,8 +157,8 @@ jest.mock("../use-codex-payment-source", () => ({
       ? [
           {
             value: "site-api-key",
-            label: "Included by CoCalc",
-            description: "Use included allowance",
+            label: "CoCalc Membership",
+            description: "Use membership allowance",
           },
         ]
       : []),
@@ -288,7 +297,7 @@ describe("CodexConfigButton", () => {
     });
   });
 
-  it("does not let an established personal session enter Included mode", async () => {
+  it("does not let an established personal session enter Membership mode", async () => {
     const actions = {
       getCodexConfig: jest.fn(() => undefined),
       setCodexConfig: jest.fn(),
@@ -322,12 +331,12 @@ describe("CodexConfigButton", () => {
     });
     fireEvent.click(screen.getByTitle("Change Codex payment source"));
     expect(
-      (screen.getByText("Included by CoCalc") as HTMLButtonElement).disabled,
+      (screen.getByText("CoCalc Membership") as HTMLButtonElement).disabled,
     ).toBe(true);
 
     fireEvent.click(screen.getByText("Codex"));
     expect(document.body.textContent).toContain(
-      "Switching an established personal session into constrained Included mode is disabled",
+      "Switching an established personal session into membership-funded mode is disabled",
     );
     await waitFor(() => {
       expect(
@@ -388,7 +397,7 @@ describe("CodexConfigButton", () => {
     });
   });
 
-  it("upgrades an Included session to ChatGPT without losing its context", async () => {
+  it("upgrades a Membership session to ChatGPT without losing its context", async () => {
     const actions = {
       getCodexConfig: jest.fn(() => undefined),
       setCodexConfig: jest.fn(),
@@ -442,6 +451,7 @@ describe("CodexConfigButton", () => {
     await waitFor(() => {
       expect(screen.getByText("gpt-5.6-luna")).toBeTruthy();
     });
+    expect(screen.queryByText("Standard")).toBeNull();
     fireEvent.click(screen.getByTitle("Change Codex payment source"));
     fireEvent.click(screen.getByText("ChatGPT Plan"));
 
@@ -457,12 +467,8 @@ describe("CodexConfigButton", () => {
     );
 
     fireEvent.click(screen.getByText("Codex"));
-    expect(
-      screen.getByLabelText("5-hour allowance: 75% remaining"),
-    ).toBeTruthy();
-    expect(
-      screen.getByLabelText("7-day allowance: 80% remaining"),
-    ).toBeTruthy();
+    expect(screen.getByLabelText("5-hour limit: 75% remaining")).toBeTruthy();
+    expect(screen.getByLabelText("7-day limit: 80% remaining")).toBeTruthy();
   });
 
   it("uses a stable thread config key independent of object identity", () => {

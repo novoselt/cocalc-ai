@@ -93,6 +93,44 @@ describe("usage meter presentation", () => {
     expect(html).toContain("Dedicated-host actions are blocked.");
   });
 
+  it("shows AI allowances as percentage remaining without internal units", () => {
+    const html = renderToStaticMarkup(
+      <UsageMeterDashboard
+        meters={[
+          meter({
+            id: "ai-5h",
+            category: "ai",
+            label: "AI usage, 5 hours",
+            limit: 100,
+            remaining: 75,
+            reset_in: "3 hours",
+            unit: "units",
+            used: 25,
+            window: "5h",
+          }),
+          meter({
+            id: "ai-7d",
+            category: "ai",
+            label: "AI usage, 7 days",
+            limit: 1000,
+            remaining: 900,
+            unit: "units",
+            used: 100,
+            window: "7d",
+          }),
+        ]}
+      />,
+    );
+
+    expect(html).toContain("5-hour limit");
+    expect(html).toContain("7-day limit");
+    expect(html).toContain("75%");
+    expect(html).toContain("90%");
+    expect(html).toContain("Remaining");
+    expect(html).not.toContain("units");
+    expect(html).not.toContain("25 of 100");
+  });
+
   it("distinguishes a missing allowance from zero usage", () => {
     const html = renderToStaticMarkup(
       <UsageMeterDashboard

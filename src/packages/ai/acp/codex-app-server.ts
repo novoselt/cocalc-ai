@@ -463,10 +463,17 @@ class AppServerClient {
       this.exited = true;
       this.exitDetail = signal ? `signal:${signal}` : `${code ?? "?"}`;
       const stderrTail = this.getStderrTail();
+      const userFacingStderrTail = getUserFacingStderrTail(stderrTail);
       const stderrDetail =
-        stderrTail.length > 0 ? `; stderr tail: ${stderrTail.join("\n")}` : "";
+        userFacingStderrTail.length > 0
+          ? `; stderr: ${userFacingStderrTail.join("\n")}`
+          : "";
+      const blockedCommandError = userFacingStderrTail.find((line) =>
+        line.startsWith("Codex blocked a command:"),
+      );
       const err = new Error(
-        `codex app-server exited unexpectedly: ${this.exitDetail}${stderrDetail}`,
+        blockedCommandError ??
+          `codex app-server exited unexpectedly: ${this.exitDetail}${stderrDetail}`,
       ) as Error & { stderrTail?: string[] };
       err.stderrTail = stderrTail;
       for (const [, pending] of this.pendingRequests) {
@@ -664,6 +671,29 @@ function normalizeErrorMessages(errors: string[]): string[] {
     normalized.push(value);
   }
   return normalized;
+}
+
+function isRoutineBundledBubblewrapWarning(line: string): boolean {
+  const normalized = stripAnsi(line).toLowerCase();
+  return (
+    normalized.includes("codex could not find bubblewrap on path") &&
+    normalized.includes("will use the bundled bubblewrap")
+  );
+}
+
+function getUserFacingStderrTail(lines: string[]): string[] {
+  const filtered = normalizeErrorMessages(lines).filter(
+    (line) => !isRoutineBundledBubblewrapWarning(line),
+  );
+  const rejected = filtered
+    .join("\n")
+    .match(/\brejected:\s*([^"\n]+)/i)?.[1]
+    ?.trim();
+  if (rejected) {
+    const message = rejected.replace(/[\s)}]+$/, "");
+    return [`Codex blocked a command: ${message}`];
+  }
+  return filtered;
 }
 
 function formatAppServerError(errors: string[]): string {
